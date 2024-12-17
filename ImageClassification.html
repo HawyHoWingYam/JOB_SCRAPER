@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <meta name="author" content="LI, Qimai; Zhong, Yongfeng" />
+  <meta name="dcterms.date" content="November 4, 2021; November 9,
+2022" />
+  <title>Image Classification via CNN</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    ul.task-list{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <link rel="stylesheet" href="image/github-pandoc.css" />
+  <script
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js"
+  type="text/javascript"></script>
+  <!--[if lt IE 9]>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
+  <![endif]-->
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Image Classification via CNN</h1>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#pytorch-installation" id="toc-pytorch-installation"><span
+class="toc-section-number">1</span> PyTorch Installation</a>
+<ul>
+<li><a href="#installation-on-macos"
+id="toc-installation-on-macos"><span
+class="toc-section-number">1.1</span> Installation on macOS</a></li>
+<li><a href="#installation-on-windows"
+id="toc-installation-on-windows"><span
+class="toc-section-number">1.2</span> Installation on Windows</a></li>
+</ul></li>
+<li><a href="#utilizing-cifar10-dataset"
+id="toc-utilizing-cifar10-dataset"><span
+class="toc-section-number">2</span> Utilizing CIFAR10 Dataset</a></li>
+<li><a href="#constructing-a-cnn-model"
+id="toc-constructing-a-cnn-model"><span
+class="toc-section-number">3</span> Constructing a CNN Model</a>
+<ul>
+<li><a href="#convolutional-layers" id="toc-convolutional-layers"><span
+class="toc-section-number">3.1</span> Convolutional layers</a></li>
+<li><a href="#activation-functions" id="toc-activation-functions"><span
+class="toc-section-number">3.2</span> Activation Functions</a></li>
+<li><a href="#pooling-layers-subsampling"
+id="toc-pooling-layers-subsampling"><span
+class="toc-section-number">3.3</span> Pooling Layers
+(Subsampling)</a></li>
+<li><a href="#fully-connected-fc-layers"
+id="toc-fully-connected-fc-layers"><span
+class="toc-section-number">3.4</span> Fully Connected (FC)
+Layers</a></li>
+<li><a href="#creation-of-lenet-5" id="toc-creation-of-lenet-5"><span
+class="toc-section-number">3.5</span> Creation of LeNet-5</a></li>
+</ul></li>
+<li><a href="#model-training" id="toc-model-training"><span
+class="toc-section-number">4</span> Model Training</a></li>
+<li><a href="#model-testing" id="toc-model-testing"><span
+class="toc-section-number">5</span> Model Testing</a></li>
+<li><a href="#integration-of-predefined-cnns"
+id="toc-integration-of-predefined-cnns"><span
+class="toc-section-number">6</span> Integration of Predefined
+CNNs</a></li>
+<li><a href="#utilizing-gpu-acceleration"
+id="toc-utilizing-gpu-acceleration"><span
+class="toc-section-number">7</span> Utilizing GPU Acceleration</a>
+<ul>
+<li><a href="#cuda-installation" id="toc-cuda-installation"><span
+class="toc-section-number">7.1</span> CUDA Installation</a></li>
+<li><a href="#code-adaptation-for-gpu-implementation"
+id="toc-code-adaptation-for-gpu-implementation"><span
+class="toc-section-number">7.2</span> Code Adaptation for GPU
+Implementation</a></li>
+</ul></li>
+<li><a href="#assignment" id="toc-assignment"><span
+class="toc-section-number">8</span> Assignment</a>
+<ul>
+<li><a href="#handwritten-digit-recognition-16-points"
+id="toc-handwritten-digit-recognition-16-points"><span
+class="toc-section-number">8.1</span> Handwritten Digit Recognition (16
+points)</a></li>
+<li><a href="#bonus-fashion-mnist-2-points"
+id="toc-bonus-fashion-mnist-2-points"><span
+class="toc-section-number">8.2</span> Bonus: Fashion-MNIST (2
+points)</a></li>
+<li><a href="#submission-instructions"
+id="toc-submission-instructions"><span
+class="toc-section-number">8.3</span> Submission Instructions</a></li>
+</ul></li>
+</ul>
+</nav>
+<!-- # Image Classification via CNN -->
+<p>This tutorial provides instruction on image classification using a
+convolutional neural network (CNN). It covers the creation, training,
+and evaluation of a CNN using PyTorch. Some parts of this tutorial are
+derived from the <a
+href="https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html#sphx-glr-beginner-blitz-cifar10-tutorial-py">Deep
+Learning with PyTorch: A 60 Minute Blitz</a> tutorial.</p>
+<h1 data-number="1" id="pytorch-installation"><span
+class="header-section-number">1</span> PyTorch Installation</h1>
+<p>PyTorch is an open-source machine learning library primarily used for
+computer vision and natural language processing applications. It is
+primarily developed by Facebook’s AI Research lab. To install PyTorch,
+please use the following commands.</p>
+<h2 data-number="1.1" id="installation-on-macos"><span
+class="header-section-number">1.1</span> Installation on macOS</h2>
+<p>Open your terminal and install PyTorch using the command:</p>
+<pre><code>$ conda install pytorch torchvision torchaudio -c pytorch</code></pre>
+<p>After installation, test your PyTorch version by running the
+following command:</p>
+<pre><code>$ python -c &quot;import torch; print(torch.__version__)&quot;
+1.10.0</code></pre>
+<h2 data-number="1.2" id="installation-on-windows"><span
+class="header-section-number">1.2</span> Installation on Windows</h2>
+<p>To install PyTorch, please open your Anaconda prompt from the Start
+menu and use the following command:</p>
+<pre><code>(base) C:\Users\%USERNAME%&gt; conda install pytorch torchvision torchaudio cpuonly -c pytorch</code></pre>
+<p>After installation, you can test it by checking the PyTorch version
+using the following command:</p>
+<pre><code>(base) C:\Users\%USERNAME%&gt; python -c &quot;import torch; print(torch.__version__)&quot;
+1.10.0</code></pre>
+<h1 data-number="2" id="utilizing-cifar10-dataset"><span
+class="header-section-number">2</span> Utilizing CIFAR10 Dataset</h1>
+<p>For this tutorial, we will be using the CIFAR10 dataset, which
+comprises 60,000 32x32 color images categorized into 10 classes, with
+6,000 images per class. The dataset includes 50,000 training images and
+10,000 test images. The images in CIFAR-10 are in the form of 3-channel
+color images, each 32x32 pixels in size. It’s important to note that by
+convention, PyTorch places channels as the first dimension, which
+differs from other platforms such as Pillow, Matlab, and skimage wherein
+channels are positioned at the last dimension.</p>
+<center>
+<img src="https://pytorch.org/tutorials/_images/cifar10.png">
+<p>
+Figure 1. CIFAR10 dataset
+</p>
+</center>
+<p>We can load CIFAR10 from torchvision. It may take several minutes to
+download the dataset.</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> torchvision.datasets <span class="im">import</span> CIFAR10</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> torchvision.transforms <span class="im">import</span> ToTensor</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>trainset <span class="op">=</span> CIFAR10(root<span class="op">=</span><span class="st">&#39;./data&#39;</span>, train<span class="op">=</span><span class="va">True</span>,</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>                   download<span class="op">=</span><span class="va">True</span>, transform<span class="op">=</span>ToTensor())</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>testset <span class="op">=</span> CIFAR10(root<span class="op">=</span><span class="st">&#39;./data&#39;</span>, train<span class="op">=</span><span class="va">False</span>,</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>                  download<span class="op">=</span><span class="va">True</span>, transform<span class="op">=</span>ToTensor())</span></code></pre></div>
+<p>The CIFAR10 dataset comprises two distinct parts: the training set
+and the test set. Generally, the model, is trained using the images from
+the training set and then evaluated using the test set.</p>
+<ul>
+<li>Training set: During the training phase, the CNN is presented with
+images from the training set and informed about their respective
+classes. This process facilitates the teaching of the CNN to
+differentiate between the various classes within the dataset.</li>
+<li>Testing set: Conversely, during the testing phase, the CNN is shown
+images from the test set and asked to classify them based on their
+respective classes. This allows for the evaluation of how effectively
+the CNN has learned to distinguish between the different classes in the
+dataset.</li>
+</ul>
+<p>The variable <code>trainset.classes</code> contains all the class
+names in a specific order.</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>trainset.classes</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="co"># [&#39;airplane&#39;, &#39;automobile&#39;, &#39;bird&#39;, &#39;cat&#39;, &#39;deer&#39;, &#39;dog&#39;, &#39;frog&#39;, &#39;horse&#39;, &#39;ship&#39;, &#39;truck&#39;]</span></span></code></pre></div>
+<p>The training set comprises 50,000 images. Let’s proceed to fetch the
+first image from the training set and display it.</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="bu">len</span>(trainset)              <span class="co"># 50000 images</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>image, label <span class="op">=</span> trainset[<span class="dv">0</span>] <span class="co"># get first image and its class id</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>image.shape                <span class="co"># 3 x 32 x 32</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>imshow(image)              <span class="co"># `imshow` is in cifar10.py</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>trainset.classes[label]    <span class="co"># &#39;frog&#39;</span></span></code></pre></div>
+<p>The image has a shape of <span
+class="math inline">\(3\times32\times32\)</span>, indicating that it
+consists of <span class="math inline">\(3\)</span> channels and <span
+class="math inline">\(32\times32\)</span> pixels.</p>
+<p>The script <code>dataset.py</code> already contains all the necessary
+code for loading the dataset. In your program, all you need to do the
+following:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> dataset <span class="im">import</span> load_cifar10, imshow</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>trainset, testset <span class="op">=</span> load_cifar10()</span></code></pre></div>
+<p>In addition to the dataset, we also require <code>DataLoader</code>
+objects to facilitate the random loading of image batches. A batch
+refers to a small collection of images. In this case, we’ve set the
+<code>batch_size</code> to 4, meaning each batch contains 4 images.</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> torch.utils.data <span class="im">import</span> DataLoader</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>trainloader <span class="op">=</span> DataLoader(trainset, batch_size<span class="op">=</span><span class="dv">4</span>, shuffle<span class="op">=</span><span class="va">True</span>)</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>testloader <span class="op">=</span> DataLoader(testset, batch_size<span class="op">=</span><span class="dv">4</span>, shuffle<span class="op">=</span><span class="va">False</span>)</span></code></pre></div>
+<p>Then we may iterate over the <code>DataLoader</code>, to get batches
+until the dataset is exhausted.</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> batch <span class="kw">in</span> trainloader:</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    images, labels <span class="op">=</span> batch</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(images.shape) <span class="co"># [4, 3, 32, 32]</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    <span class="bu">print</span>(labels.shape) <span class="co"># [4]</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">break</span></span></code></pre></div>
+<p><code>images</code> is of shape <code>[4, 3, 32, 32]</code>, which
+means it contains 4 images, each has 3 channels, and is of size 32x32.
+<code>labels</code> contains 4 scalars, which are the class IDs of this
+batch.</p>
+<h1 data-number="3" id="constructing-a-cnn-model"><span
+class="header-section-number">3</span> Constructing a CNN Model</h1>
+<p>In this tutorial, we are implementing the widely renowned simple CNN
+model, LeNet-5, which comprises 5 layers, encompassing both
+convolutional and fully-connected layers.</p>
+<center>
+<img src="https://www.researchgate.net/profile/Vladimir_Golovko3/publication/313808170/figure/fig3/AS:552880910618630@1508828489678/Architecture-of-LeNet-5.png">
+<p>
+Figure 2. Architecture of LeNet-5
+</p>
+</center>
+<p>Indeed, a typical CNN architecture is composed of three main types of
+layers: convolutional layers, max pooling layers, and fully connected
+layers.</p>
+<h2 data-number="3.1" id="convolutional-layers"><span
+class="header-section-number">3.1</span> Convolutional layers</h2>
+<p>Convolutional layers are typically the initial layers in a CNN. They
+perform convolutions on the input to extract features from the image.
+Each convolutional layer has the following architecture parameters:</p>
+<ul>
+<li>kernel_size <span class="math inline">\(h\times w\)</span>:
+Specifies the dimensions of the convolutional kernel.</li>
+<li>in_channels: Denotes the number of input channels</li>
+<li>out_channels: Represents the number of output channels.</li>
+</ul>
+<center>
+<img src="https://user-images.githubusercontent.com/62511046/84712471-4cf7ad00-af86-11ea-92a6-ea3cacab3403.png" style="width: 90%">
+</center>
+<p>In this layer, along with the convolutional kernel <span
+class="math inline">\(K\)</span>, a bias <span
+class="math inline">\(b\)</span> is incorporated into each output
+channel. The output can be expressed as <span
+class="math display">\[X&#39; = K * X + b,\]</span> where <span
+class="math inline">\(*\)</span> signifies convolution, and <span
+class="math inline">\(X\)</span> and <span
+class="math inline">\(X&#39;\)</span> correspond to the input and
+output. The total number of trainable parameters in a convolutional
+layer can be calculated using the formula:</p>
+<p><span class="math display">\[\underbrace{h\times w \times
+\text{in\_channels}\times\text{out\_channels}}_\text{kernel}
++ \underbrace{\text{out\_channels}}_\text{bias}\]</span></p>
+<p>By default, the convolution is performed without padding, resulting
+in a reduction in image size post convolution. If the input image size
+is <span class="math inline">\(H\times W\)</span> and the kernel size is
+<span class="math inline">\(h\times w\)</span>, the output will have
+dimensions of <span class="math display">\[(H+1-h) \times
+(W+1-w).\]</span> Taking into account the channels and batch size,
+assuming the input tensor has the shape [batch_size, in_channels, H, W],
+the output tensor’s dimensions will be:</p>
+<ul>
+<li>input shape: [batch_size, in_channels, H, W]</li>
+<li>output shape: [batch_size, out_channels, H+1-h, W+1-w]</li>
+</ul>
+<h2 data-number="3.2" id="activation-functions"><span
+class="header-section-number">3.2</span> Activation Functions</h2>
+<p>The output of the convolutional layer and fully connected layer is
+typically “activated,” meaning it is transformed by a non-linear
+function, such as ReLU, sigmoid, tanh, etc. These activation functions
+are scalar functions that do not alter the tensor shape, but rather map
+each element to a new value. Importantly, these functions generally do
+not contain any trainable parameters.</p>
+<p>For this tutorial, we will specifically employ the widely popular
+activation function, ReLU, denoted as <span
+class="math inline">\(ReLU(x) = \max(0, x)\)</span>.</p>
+<center>
+<img src="https://user-images.githubusercontent.com/13168096/49909393-11c47b80-fec2-11e8-8fcd-d9d54b8b0258.png" style="
+    width: 500px; /* width of container */
+    height: 220px; /* height of container */
+    object-fit: cover;
+    object-position: 0px -30px; /* try 20px 10px */
+    <!-- border: 5px solid black; -->
+    ">
+<p>
+Figure 3. Activation Functions
+</p>
+</center>
+<p>Here, we illustrate how to construct the initial convolutional layer
+of LeNet-5 using PyTorch. This layer possesses a kernel size of 5x5 and
+yields an output comprising 6 channels. Considering that the input
+consists of the original RGB images, we set <code>in_channels=3</code>.
+Additionally, the output is activated by ReLU, although it’s worth
+noting that the original paper employs tanh for this purpose.</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> torch.nn <span class="im">as</span> nn</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="co"># convolutional layer 1</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>conv_layer1 <span class="op">=</span> nn.Sequential(</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    nn.Conv2d(in_channels<span class="op">=</span><span class="dv">3</span>, out_channels<span class="op">=</span><span class="dv">6</span>, kernel_size<span class="op">=</span>(<span class="dv">5</span>,<span class="dv">5</span>)),</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>    nn.ReLU(),</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 data-number="3.3" id="pooling-layers-subsampling"><span
+class="header-section-number">3.3</span> Pooling Layers
+(Subsampling)</h2>
+<p>Pooling typically follows a convolutional layer. There are two main
+types of pooling layers: maximum pooling, which computes the maximum
+value within small local patches, and average pooling, which computes
+the average value within small local patches.</p>
+<center>
+<img src="https://computersciencewiki.org/images/8/8a/MaxpoolSample2.png" style="width:50%">
+<p>
+Figure 4. Max pooling with kernel size 2x2
+</p>
+</center>
+<p>The kernel size of a pooling layer determines the size of local
+patches. Assuming the input image is of size <span
+class="math inline">\(H\times W\)</span>, and the kernel size is <span
+class="math inline">\(h\times w\)</span>, the output of the pooling
+layer will be of size <span class="math display">\[\frac{H}{h} \times
+\frac{W}{w}.\]</span> When considering channels and batch size, the
+input tensor and output tensor will have the following shapes:</p>
+<ul>
+<li>input shape: [batch_size, in_channels, H, W],</li>
+<li>output shape: [batch_size, in_channels, H/h, W/w].</li>
+</ul>
+<p>It’s crucial to note that pooling layers do not alter the number of
+channels and do not contain any trainable parameters.</p>
+<p>Below is a code snippet that demonstrates how to create a 2x2 max
+pooling layer:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>max_pool <span class="op">=</span> nn.MaxPool2d(kernel_size<span class="op">=</span>(<span class="dv">2</span>,<span class="dv">2</span>))</span></code></pre></div>
+<h2 data-number="3.4" id="fully-connected-fc-layers"><span
+class="header-section-number">3.4</span> Fully Connected (FC)
+Layers</h2>
+<p>Fully connected (FC) layers typically constitute the final layers in
+a CNN architecture. They accept the features produced by the
+convolutional layers as input and are responsible for generating the
+final classification results. Before proceeding to the fully connected
+(FC) layers, it’s necessary to “flatten” the intermediate representation
+produced by the convolutional layers. The output of the CNN is a 4D
+tensor of shape [batch_size, channels, H, W]. After flattening, it
+transforms into a 2D tensor of shape [batch_size, channels*H*W]. which
+is precisely what the FC layers consume as input.</p>
+<center>
+<p>4D tensor of shape [batch_size, channels, H, W]</p>
+|<br/> flatten<br/> |<br/> v<br/> 2D tensor of shape [batch_size,
+channels*H*W]
+</center>
+<p>A FC layer has two architecture parameters:</p>
+<ul>
+<li>in_features: the number of input features,</li>
+<li>out_features: the number of output features.</li>
+</ul>
+<center>
+<img src="https://www.researchgate.net/profile/Srikanth_Tammina/publication/337105858/figure/fig3/AS:822947157643267@1573217300519/Types-of-pooling-d-Fully-Connected-Layer-At-the-end-of-a-convolutional-neural-network.jpg" style="width:30%">
+<p>
+Figure 5. FC layer with 7 input features and 5 output features
+</p>
+</center>
+<p>The input and output of FC layers adhere to the following shapes:</p>
+<ul>
+<li>input shape: [batch_size, in_features]</li>
+<li>output shape: [batch_size, out_features]</li>
+</ul>
+<p>The formula for the output is expressed as <span
+class="math display">\[X&#39; = \Theta X + b\]</span> where <span
+class="math inline">\(\Theta\)</span> represents the weights, and <span
+class="math inline">\(b\)</span> signifies the biases. Because there
+exists a weight connecting each input feature to every output feature,
+<span class="math inline">\(\Theta\)</span> possesses a shape of <span
+class="math inline">\(\text{in\_features} \times
+\text{out\_features}\)</span>. The number of biases is equal to the
+number of output features, with each output feature being added by a
+bias. The total number of trainable parameters in an FC layer is denoted
+as: <span class="math display">\[\underbrace{\text{in\_features} \times
+\text{out\_features}}_{\text{weights}~\Theta}
++\underbrace{\text{out\_features}}_\text{bias}.\]</span></p>
+<p>Below is an example demonstrating how to create an FC layer in
+PyTorch. In this case, the created FC layer possesses 120 input features
+and 84 output features, and its output is activated by ReLU.</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>fc_layer <span class="op">=</span> nn.Sequential(</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    nn.Linear(in_features<span class="op">=</span><span class="dv">120</span>, out_features<span class="op">=</span><span class="dv">84</span>),</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    nn.ReLU(),</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<p>The last layer of our CNN is a little bit special. First, it is not
+activated, i.e., no ReLU. Second, its output features must be equal to
+the number of classes. Here, we have 10 classes in total, so its output
+features must be 10.</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>output_layer <span class="op">=</span> nn.Linear(in_features<span class="op">=</span><span class="dv">84</span>, out_features<span class="op">=</span><span class="dv">10</span>)</span></code></pre></div>
+<h2 data-number="3.5" id="creation-of-lenet-5"><span
+class="header-section-number">3.5</span> Creation of LeNet-5</h2>
+<p>LeNet-5 is a widely recognized CNN model known for its simplicity and
+influence. It’s composed of 5 layers, combining both convolutional and
+fully-connected layers. We have opted to utilize this model for our CNN
+architecture. The visual representation of its architecture is depicted
+in figure 6.</p>
+<center>
+<img src="https://www.researchgate.net/profile/Vladimir_Golovko3/publication/313808170/figure/fig3/AS:552880910618630@1508828489678/Architecture-of-LeNet-5.png">
+<p>
+Figure 6. Architecture of LeNet-5
+</p>
+</center>
+<p>The layers of LeNet-5 are summarized here:</p>
+<ol start="0" type="1">
+<li>Input image: 3x32x32</li>
+<li>Conv layer:
+<ul>
+<li>kernel_size: 5x5</li>
+<li>in_channels: 3</li>
+<li>out_channels: 6</li>
+<li>activation: ReLU</li>
+</ul></li>
+<li>Max pooling:
+<ul>
+<li>kernel_size: 2x2</li>
+</ul></li>
+<li>Conv layer:
+<ul>
+<li>kernel_size: 5x5</li>
+<li>in_channels: 6</li>
+<li>out_channels: 16</li>
+<li>activation: ReLU</li>
+</ul></li>
+<li>Max pooling:
+<ul>
+<li>kernel_size: 2x2</li>
+</ul></li>
+<li>FC layer:
+<ul>
+<li>in_features: 16*5*5</li>
+<li>out_features: 120</li>
+<li>activation: ReLU</li>
+</ul></li>
+<li>FC layer:
+<ul>
+<li>in_features: 120</li>
+<li>out_features: 84</li>
+<li>activation: ReLU</li>
+</ul></li>
+<li>FC layer:
+<ul>
+<li>in_features: 84</li>
+<li>out_features: 10 (number of classes)</li>
+</ul></li>
+</ol>
+<p>The script <code>model.py</code> create a LeNet-5 by PyTorch. First,
+we create the 2 convolutional layers as follows:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> torch.nn <span class="im">as</span> nn</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="co"># convolutional layer 1</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>conv_layer1 <span class="op">=</span> nn.Sequential(</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>    nn.Conv2d(in_channels<span class="op">=</span><span class="dv">3</span>, out_channels<span class="op">=</span><span class="dv">6</span>, kernel_size<span class="op">=</span>(<span class="dv">5</span>,<span class="dv">5</span>)),</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>    nn.ReLU()),</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="co"># convolutional layer 2</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>conv_layer2 <span class="op">=</span> nn.Sequential(</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>    nn.Conv2d(in_channels<span class="op">=</span><span class="dv">6</span>, out_channels<span class="op">=</span><span class="dv">16</span>, kernel_size<span class="op">=</span>(<span class="dv">5</span>,<span class="dv">5</span>)),</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>    nn.ReLU()),</span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<p>Then follows 3 fully connected layers:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co"># fully connected layer 1</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>fc_layer1 <span class="op">=</span> nn.Sequential(</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>    nn.Linear(in_features<span class="op">=</span><span class="dv">16</span><span class="op">*</span><span class="dv">5</span><span class="op">*</span><span class="dv">5</span>, out_features<span class="op">=</span><span class="dv">120</span>),</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>    nn.ReLU(),</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="co"># fully connected layer 2</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>fc_layer2 <span class="op">=</span> nn.Sequential(</span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>    nn.Linear(in_features<span class="op">=</span><span class="dv">120</span>, out_features<span class="op">=</span><span class="dv">84</span>),</span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>    nn.ReLU(),</span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a><span class="co"># fully connected layer 3</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>fc_layer3 <span class="op">=</span> nn.Linear(in_features<span class="op">=</span><span class="dv">84</span>, out_features<span class="op">=</span><span class="dv">10</span>)</span></code></pre></div>
+<p>Finally, apply <code>nn.Sequential</code> to combine the above layers
+to form the complete LeNet-5. Additionally, the flattening layer before
+the FC layer is an important step in this process.</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>LeNet5 <span class="op">=</span> nn.Sequential(</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    conv_layer1,</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    nn.MaxPool2d(kernel_size<span class="op">=</span>(<span class="dv">2</span>,<span class="dv">2</span>)),</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>    conv_layer2,</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>    nn.MaxPool2d(kernel_size<span class="op">=</span>(<span class="dv">2</span>,<span class="dv">2</span>)),</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>    nn.Flatten(), <span class="co"># flatten</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>    fc_layer1,</span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    fc_layer2,</span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>    fc_layer3</span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h1 data-number="4" id="model-training"><span
+class="header-section-number">4</span> Model Training</h1>
+<p>After creating the network, the next step involves training it to
+recognize images belonging to different classes. This training process
+involves presenting the images in the training set to the network and
+informing it about their respective classes. Over time, the network
+gradually learns to differentiate between concepts such as ‘bird’,
+‘cat’, ‘dog’, and more, akin to how human children learn. The code for
+this segment can be found in <code>train.py</code>.</p>
+<p>We first import our model <code>LeNet5</code>, and then proceed to
+define the loss function and optimization method. In this section, we
+first import our model LeNet5 and then proceed to define the loss
+function and optimization method. Specifically, we utilize the
+cross-entropy loss, which is specifically designed for classification
+tasks. This loss function measures how closely the model’s prediction
+aligns with the ground truth. The smaller the loss, the more accurate
+the model’s predictions. To minimize this loss, an optimizer is
+required, and in this case, we employ the stochastic gradient descent
+(SGD) method as the optimizer.</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> model <span class="im">import</span> LeNet5</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>model <span class="op">=</span> LeNet5</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>loss_fn <span class="op">=</span> nn.CrossEntropyLoss()</span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>optimizer <span class="op">=</span> optim.SGD(model.parameters(), lr<span class="op">=</span><span class="fl">0.001</span>, momentum<span class="op">=</span><span class="fl">0.9</span>)</span></code></pre></div>
+<p>The learning rate is indeed a crucial parameter when training a
+network. In the provided example, the learning rate <code>lr</code> is
+set to 0.001. It’s important to choose an appropriate learning rate for
+successful model training. If the learning rate is too small, the loss
+convergence may occur very slowly, while a learning rate that is too
+large can prevent the loss from converging at all.</p>
+<p>Then we start the training process. Typically, training can last from
+minutes to hours, and upon completing a full loop over the dataset, one
+epoch is finished. A successful training regimen commonly consists of
+multiple epochs. In the given example, the network is trained for 2
+epochs.</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co"># training</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>num_epoch <span class="op">=</span> <span class="dv">2</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> epoch <span class="kw">in</span> <span class="bu">range</span>(num_epoch):  </span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    running_loss <span class="op">=</span> <span class="fl">0.0</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> i, batch <span class="kw">in</span> <span class="bu">enumerate</span>(trainloader, <span class="dv">0</span>):</span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>        <span class="co"># get the images; batch is a list of [images, labels]</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>        images, labels <span class="op">=</span> batch</span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>        optimizer.zero_grad() <span class="co"># zero the parameter gradients</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>        <span class="co"># get prediction</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>        outputs <span class="op">=</span> model(images)</span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>        <span class="co"># compute loss</span></span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>        loss <span class="op">=</span> loss_fn(outputs, labels)</span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>        <span class="co"># reduce loss</span></span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>        loss.backward()</span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>        optimizer.step()</span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>        <span class="co"># print statistics</span></span>
+<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>        running_loss <span class="op">+=</span> loss.item()</span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> i <span class="op">%</span> <span class="dv">500</span> <span class="op">==</span> <span class="dv">499</span>:  <span class="co"># print every 500 mini-batches</span></span>
+<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>            <span class="bu">print</span>(<span class="st">&#39;[</span><span class="sc">%d</span><span class="st">, </span><span class="sc">%5d</span><span class="st">] loss: </span><span class="sc">%.3f</span><span class="st">&#39;</span> <span class="op">%</span></span>
+<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>                  (epoch <span class="op">+</span> <span class="dv">1</span>, i <span class="op">+</span> <span class="dv">1</span>, running_loss <span class="op">/</span> <span class="dv">500</span>))</span>
+<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>            running_loss <span class="op">=</span> <span class="fl">0.0</span></span>
+<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a><span class="co">#save our model to a file:</span></span>
+<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a>torch.save(LeNet5.state_dict(), <span class="st">&#39;model.pth&#39;</span>)</span>
+<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">&#39;Finished Training&#39;</span>)</span></code></pre></div>
+<h1 data-number="5" id="model-testing"><span
+class="header-section-number">5</span> Model Testing</h1>
+<p>After the training process, the model is equipped to classify images.
+As a means of evaluating its performance, several images from the test
+set can be presented to the model to assess its ability to correctly
+recognize and classify them. This provides valuable insight into the
+model’s effectiveness in image classification.</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>dataiter <span class="op">=</span> <span class="bu">iter</span>(testloader)</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>images, labels <span class="op">=</span> dataiter.<span class="bu">next</span>()</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>predictions <span class="op">=</span> model(images).argmax(<span class="dv">1</span>)</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a><span class="co"># show some prediction result</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>classes <span class="op">=</span> trainset.classes</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">&#39;GroundTruth: &#39;</span>, <span class="st">&#39; &#39;</span>.join(<span class="st">&#39;</span><span class="sc">%5s</span><span class="st">&#39;</span> <span class="op">%</span> classes[i] <span class="cf">for</span> i <span class="kw">in</span> labels))</span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">&#39;Prediction: &#39;</span>, <span class="st">&#39; &#39;</span>.join(<span class="st">&#39;</span><span class="sc">%5s</span><span class="st">&#39;</span> <span class="op">%</span> classes[i] <span class="cf">for</span> i <span class="kw">in</span> predictions))</span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>imshow(torchvision.utils.make_grid(images.cpu()))</span></code></pre></div>
+When evaluating the model’s performance on the test images, the output
+can indeed vary due to randomness.
+<center>
+<img src="image/samples.png">
+</center>
+<pre><code>GroundTruth:    cat  ship  ship plane
+Prediction:    cat  ship plane plane</code></pre>
+<p>Next, we will apply the following code to observe how the model
+performs on the complete dataset.</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="at">@torch.no_grad</span>()</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> accuracy(model, data_loader):</span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>    model.<span class="bu">eval</span>()</span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>    correct, total <span class="op">=</span> <span class="dv">0</span>, <span class="dv">0</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> batch <span class="kw">in</span> data_loader:</span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>        images, labels <span class="op">=</span> batch</span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>        outputs <span class="op">=</span> model(images)</span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>        _, predicted <span class="op">=</span> torch.<span class="bu">max</span>(outputs.data, <span class="dv">1</span>)</span>
+<span id="cb22-9"><a href="#cb22-9" aria-hidden="true" tabindex="-1"></a>        total <span class="op">+=</span> labels.size(<span class="dv">0</span>)</span>
+<span id="cb22-10"><a href="#cb22-10" aria-hidden="true" tabindex="-1"></a>        correct <span class="op">+=</span> (predicted <span class="op">==</span> labels).<span class="bu">sum</span>().item()</span>
+<span id="cb22-11"><a href="#cb22-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> correct <span class="op">/</span> total</span>
+<span id="cb22-12"><a href="#cb22-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-13"><a href="#cb22-13" aria-hidden="true" tabindex="-1"></a>train_acc <span class="op">=</span> accuracy(model, trainloader) <span class="co"># accuracy on train set</span></span>
+<span id="cb22-14"><a href="#cb22-14" aria-hidden="true" tabindex="-1"></a>test_acc <span class="op">=</span> accuracy(model, testloader)  <span class="co"># accuracy on test set</span></span>
+<span id="cb22-15"><a href="#cb22-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-16"><a href="#cb22-16" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">&#39;Accuracy on the train set: </span><span class="sc">%f</span><span class="st"> </span><span class="sc">%%</span><span class="st">&#39;</span> <span class="op">%</span> (<span class="dv">100</span> <span class="op">*</span> train_acc))</span>
+<span id="cb22-17"><a href="#cb22-17" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">&#39;Accuracy on the test set: </span><span class="sc">%f</span><span class="st"> </span><span class="sc">%%</span><span class="st">&#39;</span> <span class="op">%</span> (<span class="dv">100</span> <span class="op">*</span> test_acc))</span></code></pre></div>
+<p>The output appears as follows. As we trained for only 2 epochs, the
+accuracy is not particularly high.</p>
+<pre><code>Accuracy on the train set: 62.34 %
+Accuracy on the test set: 57.23 %</code></pre>
+<h1 data-number="6" id="integration-of-predefined-cnns"><span
+class="header-section-number">6</span> Integration of Predefined
+CNNs</h1>
+<p>Besides build our own CNN from scratch, we can also use predefined
+networks in <a
+href="https://pytorch.org/hub/research-models/compact">PyTorch Hub</a>.
+The predefined models have two significant advantages.</p>
+<ul>
+<li>Previous researchers have thoroughly searched and tested these
+models, often resulting in better performance than models built from
+scratch.</li>
+<li>All predefined models are pre-trained for specific vision tasks,
+such as image classification, object detection, and face recognition.
+Typically, we only need to fine-tune the model slightly to fit your
+dataset. In some cases, these models may perfectly suit the task at hand
+without requiring further training.</li>
+</ul>
+<p>Let’s consider ResNet18 as an example to demonstrate how to utilize
+predefined models. You can refer to its <a
+href="https://pytorch.org/hub/pytorch_vision_resnet/">document</a> for
+further information.</p>
+<p>To load ResNet18 from PyTorch Hub, use the following code:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>model <span class="op">=</span> torch.hub.load(<span class="st">&#39;pytorch/vision:v0.10.0&#39;</span>,</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>                       <span class="st">&#39;resnet18&#39;</span>,</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>                        pretrained<span class="op">=</span><span class="va">True</span>)</span></code></pre></div>
+<p>To check the architecture of the model, you can use the following
+code.</p>
+<pre><code>&gt;&gt;&gt; print(model)
+ResNet(
+  (conv1): Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+  (bn1): ...
+  (relu): ...
+  (maxpool): ...
+  (layer1): ...
+  (layer2): ...
+  (layer3): ...
+  (layer4): ...
+  (avgpool): AdaptiveAvgPool2d(output_size=(1, 1))
+  (fc): Linear(in_features=512, out_features=1000, bias=True)
+)</code></pre>
+<p>Since the output is extensive, our primary focus will be exclusively
+on its first layer and output layer. The model’s first layer,
+<code>conv1</code> is configured with <code>in_channels=3</code>,
+indicating it is designed for processing color images. If you intend to
+use it with grayscale images, the first layer should be replaced with
+one having <code>in_channels=1</code>.</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>model.conv1 <span class="op">=</span> nn.Conv2d(<span class="dv">1</span>, <span class="dv">64</span>, kernel_size<span class="op">=</span>(<span class="dv">7</span>, <span class="dv">7</span>), stride<span class="op">=</span>(<span class="dv">2</span>, <span class="dv">2</span>), padding<span class="op">=</span>(<span class="dv">3</span>, <span class="dv">3</span>), bias<span class="op">=</span><span class="va">False</span>)</span></code></pre></div>
+<p>The model’s output layer,<code>fc</code>, is set to have
+<code>out_features=1000</code>, indicating that it was trained on a
+dataset with 1000 classes. If you plan to apply it to a different
+dataset, such as CIFAR10 with only 10 classes, the output layer needs to
+be replaced with one having <code>out_features=10</code>, as
+demonstrated here:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>model.fc <span class="op">=</span> nn.Linear(in_features<span class="op">=</span><span class="dv">512</span>, out_features<span class="op">=</span><span class="dv">10</span>, bias<span class="op">=</span><span class="va">True</span>)</span></code></pre></div>
+<p>As per the <a
+href="https://pytorch.org/hub/pytorch_vision_resnet/">ResNet
+documentation</a>, the model expects input images of size
+<code>224x224</code>. Therefore, before feeding images into the model,
+it’s essential to resize the images to the required dimensions of
+<code>224x224</code>.</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> torchvision <span class="im">import</span> transforms</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>preprocess <span class="op">=</span> transforms.Resize(<span class="dv">224</span>)</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> i, batch <span class="kw">in</span> <span class="bu">enumerate</span>(trainloader, <span class="dv">0</span>):</span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>    images, labels <span class="op">=</span> batch</span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>    <span class="co"># resize to fit the input size of resnet18</span></span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>    images <span class="op">=</span> preprocess(images)</span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>    <span class="co"># feed into model</span></span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>    optimizer.zero_grad()</span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>    outputs <span class="op">=</span> model(images)</span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>    <span class="co"># compute loss, back propagation, etc.</span></span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>    ...</span></code></pre></div>
+<p><strong>Which model should I use?</strong></p>
+<p>First and foremost, it’s essential to identify the specific task you
+are working on. For instance, if your focus is on developing an object
+detection system, then it is advisable to consider models designed
+specifically for object detection, such as YOLOv5. Conversely, for image
+recognition tasks, models like ResNet, AlexNet, and others would be more
+suitable.</p>
+<p>Secondly, predefined models often come in several variants with
+different sizes. Take ResNet, for example, which offers five variants -
+ResNet18, ResNet34, ResNet50, ResNet101, and ResNet152, each consisting
+of 18, 34, 50, 101, and 152 layers, respectively. Larger models tend to
+possess more parameters and higher modeling capability, but they also
+require more memory, computational resources, and power. As a rule of
+thumb, larger models are suitable for challenging tasks and extensive
+datasets, while smaller models are more suitable for simpler tasks and
+smaller datasets.</p>
+<h1 data-number="7" id="utilizing-gpu-acceleration"><span
+class="header-section-number">7</span> Utilizing GPU Acceleration</h1>
+<p>GPU acceleration plays a crucial role in reducing the training time
+of CNNs. Modern CNNs tend to comprise a multitude of trainable
+parameters and demand significant computational resources. Achieving a
+well-trained CNN model can take hours, days, or even weeks. GPU
+acceleration techniques can expedite training times by 10-100 times in
+comparison to CPU-based training. Figure 7 depicts a typical GPU
+acceleration performance, which is particularly pronounced with larger
+batch sizes.</p>
+<center>
+<img src="https://i2.wp.com/raw.githubusercontent.com/dmlc/web-data/master/nnvm-fusion/perf_lenet.png" style="width: 90%">
+<p>
+Figure 7. Typical GPU acceleration against CPU.
+</p>
+</center>
+<h2 data-number="7.1" id="cuda-installation"><span
+class="header-section-number">7.1</span> CUDA Installation</h2>
+<p>To enable GPU acceleration, your computer must be equipped with an
+NVIDIA GPU, and you must have the <code>cudatoolkit</code> installed. If
+your personal computer does not have an NVIDIA GPU, but you still
+require GPU acceleration, you can utilize the computers available in
+COMP laboratories. All PCs in COMP laboratories are fitted with NVIDIA
+GPU. You can use the following command to install the
+<code>cudatoolkit</code>.</p>
+<pre><code>$ conda install cudatoolkit=11.3 -c pytorch</code></pre>
+<p>Then test your <code>PyTorch</code> to check your installation.</p>
+<pre><code>$ python -c &quot;import torch; print(torch.cuda.is_available())&quot;
+True</code></pre>
+<p>You shall see output <code>True</code>.</p>
+<h2 data-number="7.2" id="code-adaptation-for-gpu-implementation"><span
+class="header-section-number">7.2</span> Code Adaptation for GPU
+Implementation</h2>
+<p>To enable GPU acceleration for your code, you will need to modify the
+code to move your model and data to the GPU. Specifically, you can use
+the following commands to achieve this:</p>
+<p>Load model to GPU device:</p>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>device <span class="op">=</span> torch.device(<span class="st">&#39;cuda:0&#39;</span>) <span class="co"># get your GPU No. 0</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>model <span class="op">=</span> model.to(device)        <span class="co"># move model to GPU</span></span></code></pre></div>
+<p>Move data to GPU:</p>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a><span class="co"># get some image from loader</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>dataiter <span class="op">=</span> <span class="bu">iter</span>(testloader)</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>images, labels <span class="op">=</span> dataiter.<span class="bu">next</span>()</span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a><span class="co"># move it to GPU</span></span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>images <span class="op">=</span> images.to(device)</span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>labels <span class="op">=</span> labels.to(device)</span></code></pre></div>
+<p>Once your model and data have been moved to the GPU, you can make
+predictions as usual, and the computations will be performed by the GPU,
+resulting in faster processing.</p>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a><span class="co"># get prediction as usual</span></span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>predictions <span class="op">=</span> model(images).argmax(<span class="dv">1</span>).detach()</span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a><span class="co"># or perform one-step training, if you are training the model</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>optimizer.zero_grad()</span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>outputs <span class="op">=</span> model(images)</span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>loss <span class="op">=</span> loss_fn(outputs, labels)</span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>loss.backward()</span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>optimizer.step()</span></code></pre></div>
+<p>Indeed, if you wish to print the result of your prediction, you may
+transfer the result back to the CPU using the following command:</p>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a><span class="co"># transfer results back to CPU and so we can print it</span></span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>predictions <span class="op">=</span> predictions.cpu()</span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(predictions)</span></code></pre></div>
+<p>To ensure that your code can function regardless of whether a GPU is
+present, it is common practice to define the device as follows:</p>
+<div class="sourceCode" id="cb35"><pre
+class="sourceCode python"><code class="sourceCode python"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> torch.cuda.is_available():</span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>    <span class="co"># If GPU is available, use gpu.</span></span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>    device <span class="op">=</span> torch.device(<span class="st">&#39;cuda:0&#39;</span>)</span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a><span class="cf">else</span>:</span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>    <span class="co"># If not, use cpu.</span></span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>    device <span class="op">=</span> torch.device(<span class="st">&#39;cpu&#39;</span>)</span></code></pre></div>
+<h1 data-number="8" id="assignment"><span
+class="header-section-number">8</span> Assignment</h1>
+<h2 data-number="8.1" id="handwritten-digit-recognition-16-points"><span
+class="header-section-number">8.1</span> Handwritten Digit Recognition
+(16 points)</h2>
+<p>Train a CNN for recognizing hand-written digits in the MNIST dataset
+by modifying <code>train.py</code>, and <code>model.py</code>. The MNIST
+dataset comprises images of hand-written digits ranging from 0 to 9. The
+objective is to identify the specific digit each image represents. All
+images are grayscale, consisting of only 1 channel, and have dimensions
+of 28x28 pixels.</p>
+<center>
+<img src="https://www.researchgate.net/profile/Steven_Young11/publication/306056875/figure/fig1/AS:393921575309346@1470929630835/Example-images-from-the-MNIST-dataset.png" style="width:50%">
+<p>
+Figure 8. Example images from MNIST
+</p>
+</center>
+<p>The CNN model should contain the following layers in order:</p>
+<ol start="0" type="1">
+<li>Input image: 1x28x28</li>
+<li>Conv layer:
+<ul>
+<li>kernel_size: 5x5</li>
+<li>out_channels: 16</li>
+<li>activation: ReLU</li>
+</ul></li>
+<li>Max pooling:
+<ul>
+<li>kernel_size: 2x2</li>
+</ul></li>
+<li>Conv layer:
+<ul>
+<li>kernel_size: 3x3</li>
+<li>out_channels: 32</li>
+<li>activation: ReLU</li>
+</ul></li>
+<li>Max pooling:
+<ul>
+<li>kernel_size: 2x2</li>
+</ul></li>
+<li>Conv layer:
+<ul>
+<li>kernel_size: 1x1</li>
+<li>out_channels: 16</li>
+<li>activation: ReLU</li>
+</ul></li>
+<li>FC layer:
+<ul>
+<li>in_features: ?? (to be inferred by you)</li>
+<li>out_features: 64</li>
+<li>activation: ReLU</li>
+</ul></li>
+<li>FC layer:
+<ul>
+<li>out_features: ?? (to be inferred by you)</li>
+<li>activation: None</li>
+</ul></li>
+</ol>
+<p>Tasks:</p>
+<ul>
+<li>1.1 Answer the questions:
+<ul>
+<li><ol type="1">
+<li>Given a <code>batch_size=16</code>, what are the shapes of the input
+and output for the 7 specified layers? (3.5 points)</li>
+</ol></li>
+<li><ol start="2" type="1">
+<li>How many trainable parameters does each layer contain? (3.5
+points)</li>
+</ol></li>
+</ul></li>
+<li>1.2 Training a CNN to Recognize Hand-written Digits in the MNIST
+Dataset.
+<ul>
+<li><ol type="1">
+<li>Modify <code>model.py</code> to establish a CNN with the
+architecture outlined above. (4 points)</li>
+</ol></li>
+<li><ol start="2" type="1">
+<li>Modify <code>train.py</code> and <code>dataset.py</code> to
+facilitate training on the MNIST dataset.</li>
+</ol>
+<ul>
+<li><ol type="a">
+<li>Implement a preprocessing step by applying
+<code>torchvision.transforms.Grayscale</code> and
+<code>torchvision.transforms.Resize</code> to ensure the input image is
+the correct size. (1 point)</li>
+</ol></li>
+<li><ol start="2" type="a">
+<li>Experiment with different optimizers such as Adam in addition to the
+provided SGD optimizer, and <strong>discuss</strong> their impact on the
+final results. (1 point)
+<!-- Customize the trainloader with various batch sizes and __discuss__ whether the alteration of batch size influences the final results. (1 point) --></li>
+</ol></li>
+<li><ol start="3" type="a">
+<li>Apply <code>optim.lr_scheduler.MultiStepLR</code> to modify the
+learning rate during the training process. Set the final learning rate
+to be 0.01 times the initial learning rate. (1 points)</li>
+</ol></li>
+<li><ol start="4" type="a">
+<li>Set appropriate parameters (e.g., modify the optimizer, learning
+rate, epochs, etc.) to ensure that the model achieves an accuracy higher
+than 95% on the test set. Print the training accuracy, testing accuracy
+and learning rate every 1000 mini-batches. Save the model to the file
+<code>model.pth</code>. (2 points)</li>
+</ol></li>
+</ul></li>
+</ul></li>
+</ul>
+<h2 data-number="8.2" id="bonus-fashion-mnist-2-points"><span
+class="header-section-number">8.2</span> Bonus: Fashion-MNIST (2
+points)</h2>
+<p>The MNIST dataset is known to be relatively easy, with convolutional
+neural networks often achieving accuracy of 99% or more. In contrast,
+Fashion-MNIST, which comprises ten different classes of clothing items,
+presents a more challenging classification task than MNIST.</p>
+<p>Your objective is to utilize the pre-defined CNN - <a
+href="https://pytorch.org/hub/pytorch_vision_resnet/">ResNet18</a> from
+the PyTorch Hub, and train it to achieve a classification accuracy of
+over 90+% on Fashion-MNIST. To accomplish this, you will need to modify
+the <code>fashion_mnist.py</code> file as follows:</p>
+<p>Tasks:</p>
+<ul>
+<li>2.1 Utilize the <code>load_fashion_mnist()</code> in
+<code>dataset.py</code> to load the Fashion-MNIST dataset.</li>
+<li>2.2 Dara preprocess:
+<ul>
+<li><ol type="1">
+<li>Resize the Fashion-MNIST images to fit the input size of ResNet18.
+Additionally, modify the input and output layers of the network to
+accommodate Fashion-MNIST. (0.5 point)</li>
+</ol></li>
+<li><ol start="2" type="1">
+<li>Experiment with data augmentation techniques such as
+<code>torchvision.transforms.RandomHorizontalFlip</code> and
+<code>torchvision.transforms.RandomRotation</code>,
+<strong>discuss</strong> the impact of these data augmentation
+parameters on the final classification accuracy. (0.5 point)</li>
+</ol></li>
+</ul></li>
+<li>2.3 Train the model, and save the final model as
+<code>fashion_mnist.pth</code> (1 points).</li>
+</ul>
+<center>
+<img src="https://github.com/zalandoresearch/fashion-mnist/blob/master/doc/img/fashion-mnist-sprite.png?raw=true" style="width:50%">
+<p>
+Figure 9. Example images from Fashion-MNIST
+</p>
+</center>
+<h2 data-number="8.3" id="submission-instructions"><span
+class="header-section-number">8.3</span> Submission Instructions</h2>
+<p>Your submission must consist of the following:</p>
+<ol type="1">
+<li>A report, encompassing:
+<ul>
+<li>Your responses to the provided questions;</li>
+<li>Screenshots displaying all related program outputs.</li>
+</ul></li>
+<li>All python source files.</li>
+<li>The saved models – <code>model.pth</code> and
+<code>fashion_mnist.pth</code>.</li>
+<li><strong>Do not</strong> include the datasets used for training in
+your submission.</li>
+</ol>
+<p>Kindly ensure that you submit your work before <strong>23:59 on December
+15 (Sunday)</strong>. You are welcome to submit as many times as needed,
+but please note that only your latest submission will be graded.</p>
+<p>Please contact us via email if you have any questions.</p>
+<p><code>Chen, Zaoyu (zaoyu22.chen@connect.polyu.hk),</code><br>
+<code>Zhao, Xiangyu (xiang-yu.zhao@connect.polyu.hk),</code><br>
+<code>Liu, Bo (bokelvin.liu@connect.polyu.hk).</code></p>
+</body>
+</html>
