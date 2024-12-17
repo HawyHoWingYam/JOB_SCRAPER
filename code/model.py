@@ -1,39 +1,40 @@
 import torch.nn as nn
 
-# convolutional layer 1
+# First convolutional layer block
 conv_layer1 = nn.Sequential(
-    nn.Conv2d(in_channels=3, out_channels=6, kernel_size=(5,5)),
+    nn.Conv2d(in_channels=1, out_channels=16, kernel_size=(5,5)),
     nn.ReLU(),
+    nn.MaxPool2d(kernel_size=(2,2))
 )
 
-# convolutional layer 2
+# Second convolutional layer block
 conv_layer2 = nn.Sequential(
-    nn.Conv2d(in_channels=6, out_channels=16, kernel_size=(5,5)),
+    nn.Conv2d(in_channels=16, out_channels=32, kernel_size=(3,3)),
+    nn.ReLU(),
+    nn.MaxPool2d(kernel_size=(2,2))
+)
+
+# Third convolutional layer block
+conv_layer3 = nn.Sequential(
+    nn.Conv2d(in_channels=32, out_channels=16, kernel_size=(1,1)),
     nn.ReLU(),
 )
 
-# fully connected layer 1
+# First fully connected layer
 fc_layer1 = nn.Sequential(
-    nn.Linear(in_features=16*5*5, out_features=120),
+    nn.Linear(in_features=400, out_features=64),
     nn.ReLU(),
 )
 
-# fully connected layer 2
-fc_layer2 = nn.Sequential(
-    nn.Linear(in_features=120, out_features=84),
-    nn.ReLU(),
-)
+# Second fully connected layer (output layer)
+fc_layer2 = nn.Linear(in_features=64, out_features=10)
 
-# fully connected layer 3
-fc_layer3 = nn.Linear(in_features=84, out_features=10)
-
-LeNet5 = nn.Sequential(
+# Combine all layers
+CNN = nn.Sequential(
     conv_layer1,
-    nn.MaxPool2d(kernel_size=(2,2)),
     conv_layer2,
-    nn.MaxPool2d(kernel_size=(2,2)),
-    nn.Flatten(), # flatten
+    conv_layer3,
+    nn.Flatten(),
     fc_layer1,
-    fc_layer2,
-    fc_layer3
+    fc_layer2
 )
