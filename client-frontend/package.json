@@ -7,7 +7,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "check-updates": "npx npm-check-updates",
+    "update-deps": "npx npm-check-updates -u && npm install"
   },
   "keywords": [],
   "author": "",
