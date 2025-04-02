@@ -1,12 +1,15 @@
-Okay, here is the translated and restructured project overview based on the document you provided.
-
+---
+description: 
+globs: 
+alwaysApply: false
+---
 ### Project Overview
 
 This project aims to build a recruitment platform using React.js for the frontend, Nest.js for the backend, PostgreSQL for the database, and Python for web scraping and AI analysis services. The platform includes client and portal frontends, offering features like job searching, resume uploading, and AI matching.
 
 ### Technology Stack
 
-* **Frontend:** React.js (Single Page Application - SPA) 
+* **Frontend:** Next.js(React.js) (Single Page Application - SPA) 
 * **Backend:** Nest.js 
 * **Database:** PostgreSQL 
 * **Crawler/AI:** Python 

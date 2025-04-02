@@ -1,3 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
 ## Phase 4: Integrating AI Matching (Simplified Recommendations)
 
 **Objective & Direction:** Introduce the AI-powered matching component into the system in a basic form. The aim is to leverage the user's uploaded resume to provide job recommendations or match scores using NLP/AI techniques. In this prototype phase, the AI matching will be _simplified_ — focusing on precomputing or calculating a "match score" between resumes and jobs using available tools or simple algorithms (e.g., keyword matching or a third-party API like the mentioned Gemini). The key is to integrate the pipeline so that when a resume is present, the system can analyze it and compare it to job requirements, then surface this information in the UI (e.g., show a percentage match or a list of recommended jobs). This phase will involve adding Python logic and possibly background processing, but at a rudimentary level (not fully automated daily yet, just on-demand or triggered computations).

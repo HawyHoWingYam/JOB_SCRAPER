@@ -1,3 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
 ## Phase 3: Admin Dashboard and Role Management (RBAC)
 
 **Objective & Direction:** Introduce an administrative interface and controls so that an admin user can manage the platform data (jobs, users, etc.). This phase will also solidify the role-based access control (RBAC) mechanism in the system, ensuring that regular users and admins have appropriate permissions. The admin dashboard is typically a separate front-end (or at least a separate section of the app) where an admin can view all users, jobs, and make modifications (edit or delete as needed). The focus is on enabling internal management of the platform's data through a GUI, and protecting those endpoints from unauthorized access.

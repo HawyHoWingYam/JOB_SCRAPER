@@ -1,12 +1,17 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
 ## Phase 2: Core User Features – Job Search & Resume Management
 
 **Objective & Direction:** Implement the primary user-facing features of the MVP: job listings with search capability, and resume upload/view functionality for job seekers. At the end of this phase, a user should be able to browse available jobs and upload their resume to the system. The focus is on getting these core workflows functional end-to-end (front-end UI, back-end API, database persistence). Design the modules and database schema to support jobs and resumes, but keep features simple (e.g., basic search, single resume per user, no complex AI yet). Also, introduce user accounts and authentication if needed for these features (since resume upload likely requires a user login).
 
 **Detailed Tasks:**
 
-- **Jobs Listing Page:** Create a Next.js page that lists all job postings. This should fetch data from the Nest.js back-end (e.g., via an API call to `/api/jobs`). On the back-end, implement a `JobsModule` with a `JobsController` and `JobsService` to retrieve jobs from the database. Start with a simple data model for a Job (e.g., id, title, description, company, location, posted_date). Provide an endpoint like `GET /jobs` returning a list of jobs. In the front-end, create a React component to display the list (e.g., a list of job titles with company names).
+- **Jobs Listing Page:** Create a Next.js page that lists all job postings. This should fetch data from the Nest.js back-end (e.g., via an API call to `/api/jobs`). On the back-end, implement a `JobsModule` with a `JobsController` and `JobsService` to retrieve jobs from the database. Start with a simple data model for a Job (e.g., id, title, description, company, location, posted_date). Provide an endpoint like `GET /jobs` returning a list of jobs. In the front-end, create a React component to display the job titles with company names).
     
-- **Search Functionality:** Implement a basic search on the job listing page. This could be a text input that filters jobs by title or description. For MVP simplicity, you can perform the filtering on the backend via a query parameter (e.g., `GET /jobs?query=developer` to search in title/description) or fetch all jobs and filter on the front-end. A simple approach is to use a case-insensitive `LIKE` SQL query or a full-text search if using PostgreSQL's text search. The Nest `JobsService` can handle this filter and return matching jobs. Update the front-end to call the API with the search term and update the list.
+- **Search Functionality:** Implement a basic search on the job listing page. This could be a text input that filters jobs by title or description. For MVP simplicity, you can perform the filtering on the backend (e.g., `GET /jobs?query=developer` to search in title/description) or fetch all jobs and filter on the front-end. A simple approach is to use a case-insensitive `LIKE` SQL query or a full-text search if using PostgreSQL's text search. The Nest `JobsService` can handle this filter and return matching jobs. Update the front-end to call the API with the search term and update the list.
     
 - **Job Details Page:** Create a Next.js dynamic page for job details (e.g., `/jobs/[id].tsx`). When a user selects a job from the list, navigate to this page and fetch the job details from the API (`GET /jobs/{id}`). The back-end `JobsController` should have a method to return a single job by ID. The page can show the full job description and other details. (For now, these fields can be just text stored in the DB.)
     

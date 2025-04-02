@@ -1,3 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
 ## Phase 1: Initial Setup and Core Architecture
 
 **Objective & Direction:** Establish the foundational project structure and environment. In this phase, set up the monorepo and base applications for the front-end and back-end. The goal is to have a development environment where a Next.js app and a Nest.js API run concurrently, connected to a PostgreSQL database. Focus on creating a clean scaffolding that can be extended in later phases. This phase does _not_ implement core features yet, but ensures the "skeleton" of the application is in place.
@@ -6,9 +11,9 @@
 
 - **Monorepo Setup:** Create a single repository (e.g., using Yarn Workspaces or npm workspaces) containing both the Next.js front-end and Nest.js back-end. For example, have an `apps/` directory with subfolders for `frontend` and `backend`. Set up a root `package.json` with scripts to run both the front-end and back-end simultaneously (e.g., using `concurrently` to run `next dev` and `nest start:dev` together). This allows one command to launch the whole prototype during development.
     
-- **Initialize Next.js Frontend:** Use `npx create-next-app` (TypeScript) to scaffold the front-end. This will create a basic Next.js project in `apps/frontend`. Verify that `apps/frontend` can run on its own (default on [http://localhost:3000](http://localhost:3000/)). Initially, this can be a single-page or minimal app (even just the Next.js welcome page or a "Hello World").
+- **Initialize Next.js Frontend:** Use `npx create-next-app` (TypeScript) to scaffold the front-end. This will create a basic Next.js project in `apps/frontend`. Verify that `apps/frontend` can run on its own (default on [http://localhost:3000](mdc:http:/localhost:3000)). Initially, this can be a single-page or minimal app (even just the Next.js welcome page or a "Hello World").
     
-- **Initialize Nest.js Backend:** Use `nest new` (Nest CLI) to scaffold the back-end API in `apps/backend`. Ensure it runs (e.g., on [http://localhost:3001](http://localhost:3001/)) and connects to a local PostgreSQL database. Set up a simple health check endpoint (e.g., GET `/api/health`) to verify the server is up. The Nest project will include an `AppModule`, a controller, and service by default – keep these for initial testing (e.g., `AppController` can have a base route returning "Hello World").
+- **Initialize Nest.js Backend:** Use `nest new` (Nest CLI) to scaffold the back-end API in `apps/backend`. Ensure it runs (e.g., on [http://localhost:3001](mdc:http:/localhost:3001)) and connects to a local PostgreSQL database. Set up a simple health check endpoint (e.g., GET `/api/health`) to verify the server is up. The Nest project will include an `AppModule`, a controller, and service by default – keep these for initial testing (e.g., `AppController` can have a base route returning "Hello World").
     
 - **Database Connection:** Configure the Nest.js application to connect to PostgreSQL. This might involve setting up an ORM (such as TypeORM or Prisma) or using Nest’s `@nestjs/TypeOrm` module. Create a `.env` file for database credentials. At this phase, you might create a simple test table or use the default provided by an ORM template to verify connectivity (e.g., a simple User entity or even use the Nest default Cat entity in samples).
     
