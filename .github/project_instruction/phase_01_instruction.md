@@ -1,38 +1,85 @@
-## Phase 1: Requirements and Planning
+## Phase 1: Initial Setup and Core Architecture
 
-**Objective & Direction:** Define **what** the web application will do and **who** will use it. This phase sets the project’s scope, features, and user roles. It provides a clear direction before any coding begins, ensuring that the solo developer (you) understands the end goals and necessary features.
+**Objective & Direction:** Establish the foundational project structure and environment. In this phase, set up the monorepo and base applications for the front-end and back-end. The goal is to have a development environment where a Next.js app and a Nest.js API run concurrently, connected to a PostgreSQL database. Focus on creating a clean scaffolding that can be extended in later phases. This phase does _not_ implement core features yet, but ensures the "skeleton" of the application is in place.
 
-**Key Activities:**
+**Detailed Tasks:**
 
-- **Gather Requirements:** List out all features and functionalities the platform needs (e.g. user authentication, job search, resume upload, AI-based job matching, etc.). Identify the different user roles (job seeker, recruiter/HR, administrator) and what each can do.
+- **Monorepo Setup:** Create a single repository (e.g., using Yarn Workspaces or npm workspaces) containing both the Next.js front-end and Nest.js back-end. For example, have an `apps/` directory with subfolders for `frontend` and `backend`. Set up a root `package.json` with scripts to run both the front-end and back-end simultaneously (e.g., using `concurrently` to run `next dev` and `nest start:dev` together). This allows one command to launch the whole prototype during development.
     
-- **Define Scope:** Since this is a prototype with no strict deadline, prioritize core features first (MVP) and note optional nice-to-have features for later.
+- **Initialize Next.js Frontend:** Use `npx create-next-app` (TypeScript) to scaffold the front-end. This will create a basic Next.js project in `apps/frontend`. Verify that `apps/frontend` can run on its own (default on [http://localhost:3000](http://localhost:3000/)). Initially, this can be a single-page or minimal app (even just the Next.js welcome page or a "Hello World").
     
-- **User Stories & Use Cases:** Write short descriptions of how each type of user will interact with the system. For example, “As a job seeker, I can search for jobs and upload my resume.”
+- **Initialize Nest.js Backend:** Use `nest new` (Nest CLI) to scaffold the back-end API in `apps/backend`. Ensure it runs (e.g., on [http://localhost:3001](http://localhost:3001/)) and connects to a local PostgreSQL database. Set up a simple health check endpoint (e.g., GET `/api/health`) to verify the server is up. The Nest project will include an `AppModule`, a controller, and service by default – keep these for initial testing (e.g., `AppController` can have a base route returning "Hello World").
     
-- **Choose Technology Approach:** Confirm the tech stack and how components interact. Decide that the frontend will use **Next.js** (React + TypeScript) for each user interface, the backend will use **Nest.js** (Node + TypeScript) for APIs, **PostgreSQL** for the database, and **Python** for specialized services (web scraping and AI matching).
+- **Database Connection:** Configure the Nest.js application to connect to PostgreSQL. This might involve setting up an ORM (such as TypeORM or Prisma) or using Nest’s `@nestjs/TypeOrm` module. Create a `.env` file for database credentials. At this phase, you might create a simple test table or use the default provided by an ORM template to verify connectivity (e.g., a simple User entity or even use the Nest default Cat entity in samples).
     
-- **Document Everything:** Create a project plan document or notes with the above information. This will serve as a reference throughout development.
+- **Environment & Tools:** Install any necessary dev dependencies (e.g., TypeScript configurations, linters, formatters). Confirm that both apps are using TypeScript and share compatible settings. If using a monorepo, ensure that dependencies are resolved correctly for each app. Optionally, set up a shared directory for common types or interfaces (to share between front-end and back-end, e.g., job post type definitions), although this can also be done later as needed.
     
-
-**Outputs (Files/Artifacts):**
-
-- Project requirements documentation (e.g. a markdown file outlining features, user roles, and use cases).
-    
-- An initial architecture outline or simple diagram showing how frontend, backend, and Python services will interact.
-    
-- A rough timeline or plan (which this document fulfills) breaking the work into phases.
+- **Sequential Development:** Although the monorepo allows running both concurrently, as a solo developer you can start one side at a time. For instance, first get the Nest.js server running and responding, then the Next.js app fetching that response. Test a simple end-to-end call: e.g., Next.js front-end calls the health check API of Nest.js and displays "API OK" on the page, to ensure front-end/back-end communication (you may need to enable CORS on Nest.js or proxy requests in Next.js for local development).
     
 
-**File Structure & Key Files:**
+**Recommended File Structure:** (after Phase 1 initialization)
 
-At this stage, no code is written yet. You will mainly create a documentation folder to store planning docs:
+```plaintext
+project-root/
+├── package.json          # Root scripts (dev, build, etc.) for monorepo
+├── apps/
+│   ├── frontend/         # Next.js application (job seeker client UI)
+│   │   ├── pages/        # Next.js pages (currently only default index)
+│   │   ├── public/       # Static assets (if any)
+│   │   └── ...           # (Node_modules, config files, etc., as generated by create-next-app)
+│   └── backend/          # Nest.js application (API server)
+│       ├── src/
+│       │   ├── main.ts           # Entry point to start the Nest server
+│       │   ├── app.module.ts     # Root module (will import other modules later)
+│       │   ├── app.controller.ts # Sample controller (e.g., health check)
+│       │   └── app.service.ts    # Sample service
+│       └── ...           # (Nest config files, e.g., tsconfig.json, etc.)
+└── package-lock.json or yarn.lock
+```
 
-- **`/docs/`** – (Folder) Contains all planning and design documents.
+_(The structure will expand in later phases; e.g., additional front-end apps for portal/admin and Python service folders will be added in subsequent phases.)_
+
+**File/Module Responsibilities:**
+
+- **Root `package.json`:** Defines workspace management and common scripts. For example, a `"dev"` script might run both front-end and back-end together (using `concurrently` as shown in the monorepo tutorial).
     
-    - `requirements.md`: Detailed requirements, user roles, and feature list for the project.
+- **apps/frontend/**: Holds the Next.js front-end code (initially minimal). Key files include `pages/index.tsx` (the home page) which can be used to test API calls, and configuration files like `next.config.js` or `tsconfig.json`. At this stage, it may simply display a welcome message or data fetched from the back-end health check.
+    
+- **apps/backend/**: Holds the Nest.js back-end code. Important files:
+    
+    - `src/main.ts`: Bootstraps the NestJS application (initializes the app and listens on a port).
         
-    - `architecture.md`: High-level system architecture and module design (to be expanded in Phase 2).
+    - `src/app.module.ts`: The root module where other modules will be registered. Initially, it may import no sub-modules and just use `AppController` and `AppService`.
         
+    - `src/app.controller.ts` / `app.service.ts`: Example controller/service provided by Nest’s default project (e.g., a simple GET that returns a static string). This can be repurposed or kept as a health check endpoint.
+        
+- **Configuration Files:** Each app has its config (for example, `apps/backend/.env` for database creds, and possibly `ormconfig.json` or Prisma schema if using an ORM). Ensure sensitive info (like DB password or JWT secret) is not committed and use `.gitignore` appropriately. Also, set up `tsconfig.json` in each to target a compatible ES version, and consider a root ESLint/Prettier config for code consistency.
+    
+- _(No Python services or additional front-end apps are present yet in this phase, but placeholders for their future inclusion are known.)_
+    
 
-These files clarify **what** you’re building and **how** you’ll approach it, serving as a blueprint for subsequent phases.
+**Solo Development Tips:**
+
+- _Keep it simple:_ At this stage, resist adding any business logic. The goal is to ensure your dev environment is ready. If you encounter issues in setting up the monorepo or sharing code, solve them now when the project is small.
+    
+- _Verify each piece in isolation:_ Run the front-end and back-end separately first to catch any setup mistakes. Then run them together to test interactions. For example, use a tool like Postman or curl to hit the Nest.js API directly, and use the browser to test the Next.js app.
+    
+- _Use source control:_ Initialize a git repository. Commit after this phase with the base structure. This way, you have a rollback point if needed. As a solo dev, frequent commits are your friend when experimenting.
+    
+- _Document setup:_ Write a short README on how to run the project (e.g., "Run `npm run dev` to start both front-end and back-end"). As a solo dev, future you will appreciate clear instructions when coming back to the project after a break.
+    
+- _Prepare for extension:_ Even though you're not adding features yet, think ahead. For instance, consider enabling CORS in Nest.js from the start if the front-end will call it from a different origin during dev, or structure your folders knowing more modules will come. Laying a good foundation will prevent painful refactors later.
+    
+
+**Module-Level Design Focus:** At this initial phase, focus on the broad separation of concerns:
+
+- **Front-End vs Back-End:** Decide what each side will handle. The front-end (Next.js) will manage the user interface and interactions, while the back-end (Nest.js) will handle business logic, data processing, and persistence. Clearly delineate responsibilities: e.g., the front-end should never directly access the database, and the back-end should not assume anything about presentation.
+    
+- **Multi-Frontend Consideration:** Anticipate that eventually there may be multiple front-end apps (job seeker client, recruiter portal, admin dashboard). In this phase, you might start with just one (the main client app). However, structure the repository to allow adding others easily. Using a monorepo and an `apps/` directory sets this expectation. For example, you might leave room to add `apps/admin` in Phase 3.
+    
+- **Back-End Modular Design:** Even with just a basic AppModule now, plan for a modular Nest architecture. Soon you will add modules like `JobsModule`, `UsersModule`, etc. Think of the back-end in terms of feature modules (jobs, resumes, users, etc.) and possibly shared modules (for common utilities like authentication). At this stage, you might sketch out (on paper or mentally) the modules you will implement and how they might interact, but hold off on creating them until needed.
+    
+- **Data Model Planning:** Begin considering the core data entities (without fully implementing them). For instance, you'll have Users, Jobs, Resumes, Applications, Skills, etc. Write down a rough list of these models and their key fields (e.g., _User:_ id, name, email, passwordHash, role; _Job:_ id, title, description, company, location, etc.; _Resume:_ id, user_id, file_path, parsed_text...). This mental model will guide you in upcoming phases when creating database tables. You don't need to create them now, but having a conceptual model early helps ensure consistency later.
+    
+- By the end of **Phase 1**, you should have a running Next.js app (even if just a placeholder page) and a running Nest.js API that can be pinged. This establishes the foundation to start building actual features in subsequent phases.
+    

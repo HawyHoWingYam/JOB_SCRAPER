@@ -1,114 +1,278 @@
-## Phase 4: Back-End Development (Nest.js API Modules)
+## Phase 4: Integrating AI Matching (Simplified Recommendations)
 
-**Objective & Direction:** Implement the back-end logic in Nest.js by building out the planned modules and connecting to the database. This phase focuses on creating a robust, modular API that the front-end can rely on. The architecture will be **modular** – each feature or domain area gets its own Nest module, with controllers (for routing HTTP requests) and providers/services (for business logic and data access). Aim for a clean separation of concerns: authentication, job management, user profiles, etc., each handled in its own module. This will make the backend scalable and maintainable.
+**Objective & Direction:** Introduce the AI-powered matching component into the system in a basic form. The aim is to leverage the user's uploaded resume to provide job recommendations or match scores using NLP/AI techniques. In this prototype phase, the AI matching will be _simplified_ — focusing on precomputing or calculating a "match score" between resumes and jobs using available tools or simple algorithms (e.g., keyword matching or a third-party API like the mentioned Gemini). The key is to integrate the pipeline so that when a resume is present, the system can analyze it and compare it to job requirements, then surface this information in the UI (e.g., show a percentage match or a list of recommended jobs). This phase will involve adding Python logic and possibly background processing, but at a rudimentary level (not fully automated daily yet, just on-demand or triggered computations).
 
-**Key Activities:**
+**Detailed Tasks:**
 
-- **Set Up Database Connection:** Install and configure the database integration. For example, if using TypeORM with PostgreSQL, install `@nestjs/typeorm` and `pg`. In `app.module.ts`, import the TypeORM module with the database connection settings (host, port, credentials, etc., likely loaded from environment variables). Alternatively, set up Prisma or another ORM if preferred. Ensure you have a running PostgreSQL database locally (or in Docker) for development.
+- **Design the Matching Approach (MVP):** Decide how to compute a match between a resume and a job description with minimal complexity:
     
-- **Create Core Modules:** Generate Nest modules for each major feature domain:
+    - A straightforward method: **Keyword/Skill Overlap.** Identify a set of skills or keywords from the resume and from the job description, then compute a similarity score based on overlap. For example, if a resume and a job share 5 keywords out of a total 20 unique keywords combined, you could say the match is 5/20 = 25%. This is simple but provides a basis.
+        
+    - Alternatively, use a **vector-space model**: e.g., use TF-IDF. Combine all resumes and job descriptions in a corpus, compute TF-IDF vectors, and then for each resume-job pair compute cosine similarity. This could yield a numerical score. This can be done with Python libraries (scikit-learn or even manually).
+        
+    - If the Gemini API is available and provides an endpoint for similarity or skill extraction, you might call that for a more semantic result. For instance, send the resume text and job text to the API and get back a score or list of matched skills.
+        
+    - For MVP, a deterministic approach like keyword matching is fine. Make sure to choose an approach that you can implement and adjust easily.
+        
+- **Implement Resume Parsing (Python):** In the Python AI service (create a directory `services/ai` if not existing):
     
-    - **Auth Module:** Handles user authentication (login, registration). Create `auth.module.ts`, `auth.controller.ts`, and `auth.service.ts`. Implement endpoints for user signup and login. Use Nest’s Guards or Passport strategy for JWT or session-based auth (for prototype, simple JWT token authentication can be used).
+    - Write a script or module to extract text from resumes. If resumes are stored as files (PDF/DOCX), use libraries like **pdfplumber, PyPDF2** for PDFs or **python-docx** for Word files. If not, you might have stored the text directly (which simplifies this).
         
-    - **Users Module:** Manages user profiles and accounts. Files: `users.module.ts`, `users.controller.ts`, `users.service.ts`. Implement endpoints to get or update a user profile, perhaps different endpoints for different roles (e.g., an admin could get any user’s profile, a user can only get their own).
+    - Once you have the text, implement a simple parser to extract relevant terms. For example, you could split text into words, normalize (lowercase, strip punctuation), remove stopwords (common words like "and", "the"), and consider the rest as keywords. Perhaps limit to nouns or known skill terms if possible.
         
-    - **Jobs Module:** Manages job postings and searches. Files: `jobs.module.ts`, `jobs.controller.ts`, `jobs.service.ts`. Implement endpoints for CRUD of job postings (create, read/list, update, delete jobs), and for job search (e.g., a GET endpoint that returns jobs filtered by keywords or category). Some endpoints may be public (job seekers searching jobs), while others require HR/admin role (posting or editing jobs).
+    - Similarly, parse the job description text using a similar method to extract keywords.
         
-    - **Applications Module:** (Optional in MVP) Handles job applications. If included, `applications.module.ts` with controller/service for when a job seeker applies to a job and for recruiters to view applications.
+    - A more targeted approach: use a predefined list of technology skills (Java, Python, React, SQL, etc.) and scan both resume and job for those. That might improve focus on meaningful skills and skip generic words.
         
-    - **Admin (Portal) Module:** You might not need a separate module if admin functionality is covered by Users/Jobs modules with admin privileges. However, you can create an `admin.controller.ts` under Users or a separate `admin.module.ts` to group admin-specific endpoints (like viewing system stats, managing any user, etc.).
+    - The output should be something like: ResumeSkillSet = {skill1, skill2, ...}, JobSkillSet = {skillA, skillB, skill2, ...}.
         
-- **Implement Services and Controllers:** For each module, write the service logic and controller routes:
+- **Compute Match Score:** Implement a function to compute similarity given the extracted skills/keywords:
     
-    - In controllers, define RESTful endpoints (e.g., `POST /auth/login`, `POST /auth/register`, `GET /jobs`, `POST /jobs`, `GET /jobs/:id`, etc.). Use Nest’s decorators like `@Get`, `@Post`, `@Body`, `@Param` to handle request data.
+    - If using set overlap: `score = (|Resume ∩ Job| / |Resume ∪ Job|) * 100` to get a percentage. This Jaccard similarity can be a proxy for match.
         
-    - In services, implement the business logic and database calls. For example, `JobsService` might have methods like `createJob`, `findJobs`, `applyToJob` etc., using a repository or ORM to interact with the `Jobs` table.
+    - Alternatively, count how many of the job's required skills are present in the resume and weight them. For example, if a job lists 10 skills and resume has 6 of them, score could be 60%.
         
-    - Ensure to enforce role-based access control (RBAC). You can use Nest guards to restrict routes by role, or simpler, check the user’s role inside controller methods. For instance, allow only admins or recruiters to create jobs, only job seekers to apply, etc.
+    - If using TF-IDF or word vectors, compute cosine similarity and scale it (cosine similarity gives 0 to 1, multiply by 100 for percentage).
         
-- **Data Models and Entities:** Create data entity classes or schemas for each major data model if using an ORM. For example, a `User` entity (with fields id, name, email, role, etc.), `Job` entity (title, description, company, etc.), `Application` entity (linking User and Job), etc. These might reside in an `/entities/` directory or within each module folder if following a domain-driven structure.
+    - The output should be a numeric score (or you can categorize it into High/Medium/Low match, but numeric is more flexible).
+        
+- **Integration Point:** Decide when to perform this matching:
     
-- **Integrate Python Service Hooks:** Though the Python services will be built later, plan and implement how the backend will interact with them:
-    
-    - For the **crawler**: perhaps create an endpoint or a cron job in Nest to trigger the crawler (or simply expect the crawler to populate the database). For now, you might stub an endpoint like `POST /jobs/import` that the admin can call to indicate new external jobs should be fetched. This could later call the Python crawler (via a shell command or HTTP request to a running crawler service).
+    - A logical trigger is when a user uploads a resume. After saving the resume, the system can immediately compute matches between that resume and all (or a subset of) jobs.
         
-    - For the **AI matching**: perhaps create a service or provider in Nest that calls the AI service’s API. For example, `AiService` that makes an HTTP request to the AI matching service (to be built in Phase 7) to get match results. Stub this out (return dummy match data) so you can integrate it once the AI service is ready.
+    - Alternatively, compute on-demand: e.g., when the user visits a "Recommended Jobs" page, compute matches at that moment. This avoids computing for all jobs in advance, but may cause a delay each time.
         
-- **Testing During Development:** As you add each module and endpoint, do quick tests (using Postman or Nest’s e2e testing) to verify they work. For example, test that you can register a user, log in (and maybe get a token), create a job, list jobs, etc. This ensures your backend is solid before hooking up the front-end.
+    - For MVP, doing it right after upload (and maybe updating periodically) is fine, so the user can see results on next visit to job list or a recommendations page.
+        
+- **Database for Match Results:** Create a mechanism to store or cache the computed match scores:
     
-- **Update Documentation:** Document any API routes and data shapes. It might help to maintain an **API spec** document (or at least notes in `docs/` or README) so the front-end phase knows how to use the APIs. List endpoints, required request fields, and sample responses for reference.
+    - Define a new table, e.g., `job_matches` (or `resume_job_match`) with columns: resume_id, job_id, score (and maybe computed_at timestamp). After computing matches for a given resume, insert rows for each job with the calculated score.
+        
+    - This allows quick retrieval later (just query this table for resume_id = X to get all job matches sorted by score).
+        
+    - Alternatively, store the results in memory or as a file (not ideal for a web app). Database approach is straightforward.
+        
+    - If concerned about space (resumes * jobs could be large), you can store only top N matches or those above a threshold. But in MVP, data is small, so storing all pairs is okay.
+        
+- **Extend Backend to Handle Matches:**
+    
+    - Create a `MatchingModule` or integrate into ResumesModule:
+        
+        - A function to trigger match computation for a resume. This could call an external Python script or API.
+            
+        - Possibly an endpoint `POST /resumes/:id/match` for admin or system use (not exposed to normal user) that triggers recomputation.
+            
+    - Alternatively, the ResumesService `uploadResume` after saving the resume file can internally call the matching logic (e.g., invoke a Python script) and then save results to the DB.
+        
+    - Ensure that if a resume is updated or re-uploaded, the old matches are cleared or recalculated.
+        
+- **Python Service/API Integration:** You have two main ways to integrate Python:
+    
+    1. **CLI/Script Invocation:** Use Node's `child_process.spawn` or `fork` to run a Python script with arguments (like resume ID or path). The Python script can then connect to the database (using psycopg2) to read job descriptions and insert match results. This is straightforward but requires the Python environment and dependencies to be installed on the same machine.
+        
+    2. **HTTP API:** Run a small Python web service (Flask/FastAPI) that exposes an endpoint (e.g., `/compute_matches?resume_id=X`). Nest can call this via HTTP, and the service returns the computed scores (which Nest then stores in DB). This decouples the systems but introduces overhead of running another server.
+        
+    
+    - For MVP, the script approach might be simpler (fewer moving parts). You can ensure the script is in the repo and invoked when needed.
+        
+    - Write the Python code to handle: connecting to DB, querying needed data (one resume's text and all jobs or maybe job texts), computing matches, and writing back. Or have it output results to stdout as JSON and let Node capture that and insert via the Node ORM. Either works.
+        
+- **UI: Display Match Information:**
+    
+    - Decide how to present matches to the user. Two possible features:
+        
+        - **Match Score on Job Listings:** If a user is logged in and has a resume, show a match percentage or indicator next to each job in the listings. This means the jobs API should include the score for that user's resume. You could modify `GET /jobs` to, if a user is authenticated and has a resume, join the `job_matches` table to include a `score` field in each job entry.
+            
+        - **Recommended Jobs Page:** Create a page `/jobs/recommended` which lists the top X jobs for the user based on match score. This would explicitly call an endpoint like `GET /users/me/recommendations` that returns jobs sorted by score. The back-end would query `job_matches` for that user’s resume, join with jobs, sort by score, and return perhaps top 10.
+            
+    - For simplicity, showing the score in the existing list is easier to implement (no new page). The user can scan the list and see "Match: 80%" next to each job. You can style it with a small badge or text.
+        
+    - If time permits, also do a dedicated recommendations section that filters high matches.
+        
+- **Implement Back-end Endpoints for Matches:**
+    
+    - In `JobsController`, you could modify the list route to accept a JWT and find the user's resume ID, then use a service to attach scores. Or create a separate controller method `GET /jobs/recommendations` that does the logic (which internally uses resume_id from token).
+        
+    - Alternatively, a `MatchesController` could have `GET /matches/jobs-for-resume/:resumeId` and `GET /matches/resumes-for-job/:jobId` (the latter could be for employer side later).
+        
+    - Ensure that normal users can only get their own matches (so verify `resume.user_id == req.user.id` when querying).
+        
+- **Testing the Matching Feature:**
+    
+    - Put a known resume file (maybe create a dummy resume text listing certain skills).
+        
+    - Create a couple of job entries, some that share skills with the resume, some that don't.
+        
+    - Upload the resume through the UI.
+        
+    - After upload, trigger match computation (if integrated in upload, it runs automatically; if on-demand, maybe click a "Find matches" button that calls the API).
+        
+    - Then go to the Jobs page or Recommendations page. Verify that jobs which share skills have higher scores, and that the scores seem reasonable (e.g., job with many matching skills shows a higher percentage than one with few).
+        
+    - Check the database `job_matches` table to see that scores are stored.
+        
+    - Also, test edge cases: if a user has no resume, the job list should perhaps just not show any scores or show "N/A". Make sure the front-end handles that (e.g., if `score` is null or no field at all).
+        
+- **Admin View of Matching (optional):** While not required, you might let admin see some of this for debugging:
+    
+    - e.g., an admin could have a page to trigger recompute of all matches, or see a specific resume's top matches. This is not necessary for MVP, but think if it helps you manage the AI part (for instance, an admin page listing each resume and its top 3 matches could be interesting to verify the AI is working).
+        
+    - You can skip building UI for it due to time, but maybe have an admin API route to recompute for a given resume id for ease of testing (which you call via something like Swagger or curl).
+        
+- **Logging and Transparency:** AI can be a black box. For clarity, consider logging what the matching algorithm is doing:
+    
+    - In the Python script, print out the extracted skills from resume and job for a couple of samples to verify correctness.
+        
+    - Log the computed score for each pair (or at least the top ones).
+        
+    - This will help in Phase 5 when refining the algorithm (to know if, say, "Node" vs "Node.js" was an issue in matching, hinting at needing standardization).
+        
+
+**Recommended File Structure:** (after Phase 4 additions)
+
+```plaintext
+project-root/
+├── apps/
+│   └── backend/
+│       ├── src/
+│       │   ├── modules/
+│       │   │   ├── matches/                # (Optional new module for match logic)
+│       │   │   │   ├── matches.module.ts   # Nest module for matching/recommendations
+│       │   │   │   ├── matches.service.ts  # Service to handle fetching matches for resumes
+│       │   │   │   ├── matches.controller.ts # Controller for endpoints like /recommendations
+│       │   │   │   └── match.entity.ts     # Entity for resume-job match (resume_id, job_id, score)
+│       │   │   └── ... (other modules unchanged)
+│       │   ├── common/ ...                # (maybe common functions for skill extraction if in TS)
+│       │   └── ... (other files)
+│       └── ...
+├── services/
+│   └── ai/                        # Python AI service code
+│       ├── requirements.txt       # Python dependencies (e.g., numpy, scikit-learn for vector math)
+│       ├── extract_skills.py      # Functions to parse resumes and job descriptions
+│       ├── compute_match.py       # Functions to compute similarity scores
+│       ├── run_match.py           # Script to run matching given a resume (entry point if using CLI)
+│       └── app.py (optional)      # Flask/FastAPI app if using HTTP approach instead of CLI
+└── ...
+```
+
+_(If not creating a separate Nest module for matching, the logic might live in ResumesService or JobsService. But having a Match entity is useful regardless for the DB table.)_
+
+**Key Component Responsibilities:**
+
+- **match.entity.ts:** Defines the table for matches. For instance: resume_id (FK to resumes), job_id (FK to jobs), score (numeric). Set a composite primary key on (resume_id, job_id) or use an ID with unique index on those two to avoid duplicates. This entity allows using TypeORM/Prisma to query matches easily.
+    
+- **matches.service.ts (Nest):** Provides methods like:
+    
+    - `computeMatchesForResume(resumeId: number)`: orchestrates obtaining resume text (maybe via ResumesService or directly from DB), obtaining all jobs (or relevant jobs) and calling the Python logic. It could call an external script or an internal simple matching function if you ported some logic to JS.
+        
+    - `getMatchesForResume(resumeId: number)`: fetches from the `match` table all entries for that resume, possibly joins with jobs to get titles etc., and returns them sorted by score.
+        
+    - Potentially `getTopMatchesForResume(resumeId: number, topN: number)`.
+        
+    - If computing within Node: this service might itself contain a simplified skill extraction and matching logic using JS (for example, using a library or writing a simple one). But since Python is intended for AI, you'll likely delegate heavy lifting there.
+        
+- **matches.controller.ts:** Could have:
+    
+    - `GET /recommendations` (for current user, finds their resume and returns top matches).
+        
+    - `POST /matches/recompute/:resumeId` (admin or system use, triggers recomputation for a resume).
+        
+    - Or it might not exist at all if you incorporate recommendations in existing controllers (like a specialized route in JobsController or ResumesController).
+        
+- **extract_skills.py:** Contains functions like `extract_skills_from_text(text: str) -> List[str]`. Use it for both resumes and job descriptions. Possibly have a list of known skills or use regex to find capitalized words or particular patterns. This can be as sophisticated as time allows.
+    
+- **compute_match.py:** Contains function like `compute_similarity(skills_resume: Set[str], skills_job: Set[str]) -> float`. If using sets, it's straightforward math. If going more advanced:
+    
+    - You could assign weights (e.g., certain skills are more important) or consider years of experience (if you parsed that), but probably unnecessary for MVP.
+        
+    - For now, one simple score calculation is enough.
+        
+- **run_match.py:** A script that ties it together: for a given resume (id or file path), fetch all job descriptions and compute scores, then write to DB or output JSON. This could use a config or arguments for DB connection (which you can pass via environment or config file loaded in Python).
+    
+- **Integration (Nest -> Python):**
+    
+    - If using CLI approach: from Nest, you might do something like
+        
+        ```typescript
+        import { execFile } from 'child_process';
+        execFile('python', ['services/ai/run_match.py', resumeId.toString()], (err, stdout, stderr) => { ... });
+        ```
+        
+        And perhaps `run_match.py` prints results or directly writes to DB. E.g., it could print "DONE" when finished and Nest can then respond to the HTTP request.
+        
+        - Ensure the Nest process can find the Python interpreter and the script path (might need full path).
+            
+    - If using HTTP approach: run `services/ai/app.py` as a separate process (maybe on port 5000). In Nest, inject an HTTP service (like axios) to call `http://localhost:5000/compute?resumeId=X`. The Python service would do the work and respond with JSON of scores. Nest then writes those to DB (or Python could have also written if it had DB access).
+        
+    - Either way, handle errors (if Python fails or returns nothing, maybe log and continue without crashing).
+        
+- **Front-end Adjustments:**
+    
+    - _JobCard.tsx (frontend):_ Add a section to display a match score if available. For example, if job.matchScore prop exists, show a badge "Match: 85%". Use a bit of conditional rendering: only show if user is logged in and has a resume. You might determine that by checking if the job data has `matchScore` field or by some global state like `user.resumeUploaded`.
+        
+    - _Jobs List Fetch:_ When fetching jobs for a logged-in user, call API with auth token, and have API include match scores. If using SWR or similar data fetching, ensure to pass the token.
+        
+    - _Recommended Page:_ If implementing, similar to jobs list but sorted by score. You could reuse the JobList component but feed it fewer jobs. Possibly show only top matches with score >= some threshold or top 5.
+        
+    - _User Guidance:_ Consider adding a note on the resume upload page or somewhere: "After uploading your resume, you'll see a match percentage next to jobs based on your skills." This sets expectations for the user.
+        
+- **Testing & Iteration:** Because AI matching can be tricky, once it's working, test different scenarios:
+    
+    - Resume that is empty (should maybe yield no matches or very low scores for all jobs).
+        
+    - Resume that is very specialized vs jobs that are general, and vice versa.
+        
+    - If results seem off (e.g., you get 100% match for clearly mismatched things due to a common word), note that as an area to improve. You might not fix it now, but Phase 5 will tackle improvements like skill standardization.
+        
+
+**Solo Development Tips:**
+
+- _Don't over-engineer the AI:_ It's tempting to perfect the matching algorithm. But for this phase, ensure the integration works end-to-end with a basic method. You can always refine the algorithm once the pipeline (data flow from resume to UI) is solid.
+    
+- _Use existing libraries if possible:_ If you decide to do TF-IDF or other NLP, consider using libraries like **scikit-learn** for TF-IDF vectorization or **NLTK/spaCy** for more advanced parsing. But weigh the time to learn their APIs vs. the benefit. A simple custom solution might be faster to implement for now.
+    
+- _Data accessibility:_ The Python script might need access to the database or at least the data. If using the DB, you can either:
+    
+    - Directly connect via psycopg2 (need DB creds in a config file or environment accessible to Python).
+        
+    - Or have Node pass the job data to Python (e.g., via a temp JSON file or via stdin). For simplicity, giving Python DB access is okay in dev. Just reuse the same connection info (host, user, password) from a config.
+        
+- _Stay organized:_ The AI part can feel like a mini-project on its own. Manage it with the same discipline: put code in functions, test them independently (run `extract_skills.py` on a sample text in isolation to see output, etc.).
+    
+- _Performance considerations:_ For MVP with small data, performance is no issue. But be mindful if jobs or resumes scale, computing all pairs might be heavy. A quick math: 100 resumes * 1000 jobs = 100k comparisons, which is fine. But if 1000 resumes * 10000 jobs, that's 10 million (borderline for Python in real-time). Phase 5 will handle making this efficient (with background tasks), so don't worry too much now, but design storing of results so you don't have to compute repeatedly what could be cached.
+    
+- _Cater to missing data:_ Some users won't have a resume uploaded. In that case, the match feature simply doesn't apply. Ensure your front-end hides or shows a prompt like "Upload your resume to get job match recommendations!" instead of showing blank scores. This can be a friendly nudge.
+    
+- _Security:_ If you're calling external APIs (like sending resume to Gemini), consider data privacy. For a prototype, it's fine, but be aware of what data leaves your system. Also, if the API requires keys, keep them in config (not in code).
+    
+- _Documentation:_ Describe the approach you used for AI matching in documentation or code comments, because it's an area that likely will be revisited. For example: _"Matching algorithm: current implementation uses simple keyword overlap. This will be improved in future iterations to account for synonyms and context."_ – This will set correct expectations if someone tests it and finds it simplistic.
     
 
-**Types of Files to be Created:**
+**Module-Level Design Focus:**
 
-- **NestJS Module files:** One `.module.ts` file per module (Auth, Users, Jobs, etc.).
+- **Decoupling of AI logic:** By using a Python service or script, you've separated the AI concerns from the main application logic. This is good for modularity – you could replace the entire matching approach later without changing the front-end or core back-end (beyond the way they call the service). Ensure this boundary is well-defined: e.g., "Given a resume, we expect a list of (job_id, score)" as the contract between back-end and AI module.
     
-- **Controller files:** `.controller.ts` files for each module’s routes.
+- **Data Standardization Thinking:** You might notice issues like "Node.js" vs "Node" or "C#" vs "C++" confusion in skill matching. This points to needing a skills taxonomy or normalization (as referenced in Taylor's case: mapping to canonical skills). While you won't fully implement that now, keep the design open to it:
     
-- **Service files:** `.service.ts` files implementing business logic for each module.
+    - For instance, maybe store a list of identified skills for each resume in a separate table `resume_skills`. That can be useful later for standardization. Or at least have the Python output the raw skill strings and later you'll map them.
+        
+    - Similarly for jobs.
+        
+    - If you choose to, you could implement a quick normalization dictionary now (e.g., mapping 'node' -> 'Node.js'), but Phase 5 will cover a more systematic approach.
+        
+- **Asynchronous vs Synchronous:** The current integration might be synchronous (user waits a few seconds on upload for match to complete). As you move forward, you'll want to offload this to background tasks so the user isn't waiting. In designing the code, separate the _trigger_ from the _execution_. For example, `ResumesService.uploadResume` could push a job to a queue or call script asynchronously while immediately returning to the user that upload succeeded. Since building a full queue (like RabbitMQ or BullJS) is beyond prototype, you might simulate as sync for now, but keep in mind how you'd refactor to async (maybe via a Nest Schedule or message broker).
     
-- **Data model/Entity files:** TypeScript classes or interfaces representing database tables (e.g., `user.entity.ts`, `job.entity.ts`). If using an ORM, these are entity definitions; if using a query builder, you might still create interfaces or DTOs.
+- **API design for recommendations:** Ensure consistency in how data is delivered. If adding a recommendations endpoint, decide if it returns full job objects or just IDs that the client then fetches. Probably easier to return full data. If so, reuse a DTO or serializer that the normal jobs endpoint uses, plus an extra score field.
     
-- **DTO (Data Transfer Object) files:** Define shapes for request and response data (e.g., `create-job.dto.ts`, `update-user.dto.ts`) to enforce consistent data validation and typing.
+- **Scalability of Data Model:** If the platform grows:
     
-- **Config files:** e.g., `ormconfig.json` or any Nest config modules usage, plus environment variable files (`.env`) updated with things like database URL, JWT secret, etc.
+    - The `match` table could become large. But it's essentially a many-to-many between resumes and jobs with a score attribute. That's fine as long as indices are in place on resume_id and job_id for querying. If needed, one could prune or limit stored matches.
+        
+    - Alternatively, one might compute matches on the fly for each user, but that gets expensive per request. Storing them is a form of caching results, which is good.
+        
+    - For now, ensure the match table has proper primary key to avoid duplicates and maybe a way to refresh easily (like delete old entries for a resume before inserting new ones).
+        
+- **UX considerations:** Put yourself in the user's shoes: now they have a new piece of info (match score). Does it help them? Perhaps consider showing only "strong matches" explicitly, or color-coding the score (green for high, yellow medium, etc.). Little UX touches can make the feature more intuitive. Since design is not the focus, a simple % is okay, but note ideas for future tweaks (maybe in documentation).
     
-- **Utility classes:** e.g., guards for auth (`roles.guard.ts`), interceptors or filters (for logging or error handling) if needed.
+- By the end of **Phase 4**, the platform becomes intelligent: users get personalized job recommendations. This addresses a key differentiator of the platform (AI-powered matching). Although it's basic now, it sets up the framework to improve upon. Next, you'll automate and refine this system, and integrate it with real data via crawling.
     
-
-**File Structure & Key Files (Backend after this phase):**
-
-The backend `src/` directory will now contain multiple modules and supporting files. For example:
-
-- **`backend/src/auth/`** – Authentication Module
-    
-    - `auth.module.ts`: Defines the Auth module and imports/exports necessary providers.
-        
-    - `auth.controller.ts`: Handles routes like login (`POST /auth/login`) and registration (`POST /auth/register`). It extracts user credentials from requests and uses AuthService.
-        
-    - `auth.service.ts`: Contains auth logic (verify user, hash passwords, generate JWT token, etc.).
-        
-    - `auth.dto.ts` (optional): Data Transfer Object for auth requests (e.g., LoginDto, RegisterDto).
-        
-- **`backend/src/users/`** – Users Module
-    
-    - `users.module.ts`: Defines the Users module.
-        
-    - `users.controller.ts`: Routes for user profiles (e.g., `GET /users/me`, `PUT /users/me`). Admins might have routes like `GET /users/:id`.
-        
-    - `users.service.ts`: Business logic for user accounts (fetching user data from DB, updating profiles).
-        
-    - `user.entity.ts`: Defines the User database model (fields, relations).
-        
-- **`backend/src/jobs/`** – Jobs Module
-    
-    - `jobs.module.ts`: Jobs module definition.
-        
-    - `jobs.controller.ts`: Routes for job postings and search (e.g., `GET /jobs`, `POST /jobs`, `GET /jobs/:id`). May also include endpoints like `GET /jobs/search?query=`.
-        
-    - `jobs.service.ts`: Logic for creating jobs, querying jobs (with filters or full-text search queries to DB), updating and deleting jobs.
-        
-    - `job.entity.ts`: Job entity defining how a job posting is stored (title, description, company, etc.).
-        
-- **`backend/src/applications/`** – Applications Module (if implemented)
-    
-    - `applications.module.ts`, `applications.controller.ts`, `applications.service.ts` for handling job applications (e.g., `POST /applications` when a user applies to a job, `GET /applications?jobId=` for recruiters to see applicants).
-        
-    - `application.entity.ts`: Defines Application model (relation between User and Job, plus status).
-        
-- **`backend/src/common/`** – (Folder for shared utilities across modules)
-    
-    - `guards/roles.guard.ts`: Checks user role for protected routes (for RBAC enforcement).
-        
-    - `decorators/current-user.decorator.ts`: Custom decorator to extract logged-in user info from request (if using JWT strategy).
-        
-    - `filters/http-exception.filter.ts`: (Optional) to format error responses consistently.
-        
-- **`backend/src/main.ts`** – Application entry (already existed, but might be updated to use validation pipes, etc.). For example, enabling `ValidationPipe` globaly to auto-validate DTOs, and setting up global prefix for API (like `/api`).
-    
-- **`backend/src/app.module.ts`** – Root module updated to import all the new feature modules (AuthModule, UsersModule, JobsModule, etc.) so that Nest can assemble the application. It might also import modules like TypeORMModule.forRoot (with DB config).
-    
-- **`backend/.env`** – Contains environment variables like `DATABASE_URL`, `JWT_SECRET`, etc. (Ensure not to commit secrets to version control; use a `.env.example` to document needed vars).
-    
-
-Each of these files has a clear purpose: **Controllers** handle HTTP requests and responses for a module, **Services** encapsulate the logic and interact with the **database** (via Entities/ORM), and **Modules** organize the structure, making the app modular. NestJS’s modular structure “encapsulates a closely related set of capabilities”, which keeps the codebase organized as it grows. By the end of this phase, the backend should be a working API with all necessary endpoints, albeit without the Python-powered features fully plugged in yet.

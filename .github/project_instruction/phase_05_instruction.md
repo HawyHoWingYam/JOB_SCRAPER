@@ -1,147 +1,411 @@
-## Phase 5: Front-End Development (Next.js UI Implementation)
 
-**Objective & Direction:** Build the front-end user interface using Next.js and TypeScript, implementing the pages and components for each part of the application. The front-end will consume the Nest.js API created in Phase 4 and present the data in a user-friendly way. Emphasize a **modular UI architecture**: create reusable components and organize the project so it remains maintainable as it scales. Since the project may have distinct interfaces for job seekers, recruiters, and admins, ensure the design can either handle conditional rendering based on user role or split into separate apps if chosen.
+## Phase 5: Background Tasks, Data Pipeline & Advanced Refinements
 
-**Key Activities:**
+**Objective & Direction:** In this phase, enhance the prototype with automation and data quality improvements. This includes setting up background processes for regularly fetching new job data (web crawler), refining how data is stored (raw vs cleaned data), automatically parsing resumes in detail, precomputing AI insights (rather than doing it synchronously in user requests), and standardizing data such as skills to improve match accuracy. Also, introduce workflows for admin or human-in-the-loop reviews where applicable (for example, reviewing automatically scraped data or AI-generated skill mappings). Essentially, Phase 5 transitions the project from a static MVP to a dynamic system that updates and maintains itself with minimal manual intervention, and improves the intelligence and reliability of the AI features.
 
-- **Set Up Routing and Pages:** Using Next.js file-based routing, create pages for all major views:
+**Detailed Tasks:**
+
+- **Web Crawler Integration (Job Data Ingestion):** Use Python (Scrapy or similar) to build a crawler that fetches job listings from external sources. This will populate the platform with real job data automatically:
     
-    - For job seekers (client interface): pages like Home/Job Listings (to browse jobs), Job Details page (to view a specific job and an “Apply” option), Profile page (to view/edit their profile, upload resume), Login/Register pages, etc.
+    - Create a Scrapy project in `services/crawler`. Choose a target source (for prototype, perhaps a known site with jobs in the public domain or a test RSS feed of jobs). For example, if you use **JobsDB** (as hinted in the Chinese overview), identify if it has an accessible feed or use HTML parsing.
         
-    - For recruiters/HR (portal interface): pages like Candidate Search (to search the resume database), Job Management (to post new jobs or view applicants for their jobs), etc.
+    - Implement a spider (e.g., `JobsSpider`) that navigates the site and yields job items (title, company, location, description, etc.).
         
-    - For admin (admin interface): pages like Dashboard (to view statistics), Manage Users, Manage Jobs (approve or remove listings), and maybe controls for running the crawler or viewing match results.
+    - Use Scrapy's Item Pipeline to save data to PostgreSQL. For instance, define a pipeline that takes each scraped job item and inserts into a `raw_jobs` table. Alternatively, insert directly into the `jobs` table but initially mark them unapproved or not processed.
         
-    - If using one Next.js app for all, organize routes with prefixes or folders (e.g., `/portal/...` for recruiter pages, `/admin/...` for admin pages). If using separate apps, each app will have its own pages directory for its domain.
+    - _Raw vs Cleaned:_ It's often wise to store raw scraped data first (so you have a record of exactly what was scraped). The `raw_jobs` table could have fields like source (e.g., 'JobsDB'), external_id (e.g., job ID or URL from source), raw_title, raw_description, etc., and maybe a processed flag.
         
-- **Implement Navigation and Layout:** Create common layout components such as a navigation bar and footer. For example, a top navbar that shows different menu items depending on the user’s role (or a separate navbar component per interface). Implement a consistent design (possibly using a UI library like Chakra UI, Material UI, or Bootstrap to speed up styling, or simple custom CSS modules).
+    - Then have a process to transform raw data to your standard `jobs` table. This might involve cleaning HTML tags, trimming redundant info, or mapping fields (e.g., source might have separate fields for city, state, which you combine into location).
+        
+    - If the data source is reliable and matches your schema closely, you could skip raw and insert directly. But including raw data is helpful for auditing and avoiding duplicates.
+        
+    - Ensure you handle duplicates: e.g., if you run the crawler daily, it should not reinsert the same job over and over. Use the external_id or a combination of title+company as a key to check if it exists (Scrapy pipelines can drop items if already seen).
+        
+    - Set up Scrapy settings for database connection (you might reuse environment variables).
+        
+- **Scheduling the Crawler:** Decide how to run the crawler regularly:
     
-- **Build Reusable Components:** Identify pieces of UI used in multiple places and implement them as components:
+    - If using a cloud environment, you might set up a cron job or a scheduled task. In development, you can trigger it manually.
+        
+    - Integrate with Nest: NestJS has a **ScheduleModule** (cron jobs). You could create a service in backend that runs at midnight and calls `scrapy crawl jobs_spider` via a shell command (similar to how you invoked the match script).
+        
+    - Alternatively, run the crawler as a separate process (outside the Node app) via OS scheduling (like a cron tab or a simple loop in a Python script that sleeps).
+        
+    - For MVP, perhaps execute it manually to simulate daily run, but ensure the code structure can accommodate periodic execution.
+        
+- **Processing Scraped Data:** If you used a raw_jobs table:
     
-    - Job listing card component (showing job title, company, location, etc.), used in job list pages.
+    - Implement a processing script (maybe as part of the crawler pipeline or a separate step in Nest or Python) to convert raw job data to final jobs.
         
-    - Job search bar/filter component.
+    - This might involve:
         
-    - Resume upload form component.
+        - Removing duplicates (if two sources have the same job, decide whether to keep one).
+            
+        - Standardizing formats (e.g., location "New York, NY" vs "NYC" – these could be normalized if needed).
+            
+        - Extracting skills from job description (for matching improvement). You could run a similar extraction as resumes: find key skills in job postings and store them (perhaps fill a `job_skills` join table linking job to skills).
+            
+        - Once a raw job is processed, insert or update the `jobs` table. Mark it as approved/published only after admin review (see next point).
+            
+        - Mark raw job as processed to avoid reprocessing next time.
+            
+    - You can implement processing in Python or inside the Nest backend. For example, a Nest CronJob could select all raw_jobs where processed=false, do transformations (maybe even call the AI skill extractor for the description), insert into jobs table, and set processed=true.
         
-    - User avatar/profile component for navbar or profile page.
-        
-    - Tables or lists for admin to display statistics or lists of users/jobs.
-        
-    - Modal dialogs for confirmations (like deleting a job posting).
-        
-- **State Management & Context:** Since this is a small-to-medium app, Next.js with React Hooks may be sufficient for state. Use React Context or small state libraries if needed:
+- **Skill Standardization (Taxonomy Integration):** To improve matching quality:
     
-    - Auth context to hold the logged-in user state (and JWT token) globally, so different pages/components can know if user is logged in and their role. This context will also provide functions to log in, log out (making API calls to Nest backend).
+    - Create a `skills` table (if not already from Phase 4) that will hold unique skill names. Populate it with a predefined list of common skills if available (there are public lists like from O*NET for tech skills, or compile from your job data by extracting frequent words).
         
-    - Possibly use SWR or React Query for data fetching to handle caching of API responses (for performance and convenience when managing server state).
+    - When parsing resumes and jobs for skills, instead of treating the skill as just text, map it to an entry in `skills` table.
         
-- **Integrate API Calls:** For each page or action, call the corresponding backend API endpoint:
+        - For example, if resume extraction finds "Node.js" and "Node", map both to a single skill entry "Node.js". You might maintain a synonyms list or a simple normalization function (like lowercase and strip punctuation, maybe unify plural/singular).
+            
+        - If a skill is not in the table, either add it or map it to a closest existing skill (this could be a complex task; for MVP, maybe add all new as separate entries).
+            
+    - Update the matching calculation to use skill IDs (the overlap of sets of skill IDs ensures "Node" vs "Node.js" are treated as match if mapped to same id).
+        
+    - This likely requires populating join tables:
+        
+        - `resume_skills` (resume_id, skill_id)
+            
+        - `job_skills` (job_id, skill_id)
+            
+    - You can populate these when parsing: e.g., after extracting skills from a resume, for each skill string, find or create a skill entry, then insert a row in resume_skills.
+        
+    - Do similarly for job descriptions when processing them.
+        
+    - This structured approach not only improves matching but also gives you data to possibly do skill-based search or recommendations in the future.
+        
+- **Admin Review Workflows:**
     
-    - Use `fetch` or Axios in `getServerSideProps` or inside `useEffect` hooks (for client-side rendering parts) to retrieve data from Nest.js. For example, on the Jobs List page, call GET `/jobs` API to fetch jobs; on the Job Detail page, call GET `/jobs/{id}`.
+    - **Job Approval:** If jobs are auto-imported, an admin might need to verify them (especially if scraping broad sites where content might not all be relevant). Introduce an `approved` flag in `jobs` table. The Jobs that come from crawler can default to `approved=false`.
         
-    - For form submissions (like login or apply to job), call the appropriate POST endpoints (e.g., POST `/auth/login`, POST `/applications`).
+    - Update the user-facing jobs listing to filter only approved jobs (e.g., JobsService.findAll for normal users adds `where approved=true`).
         
-    - Handle loading states and error states in the UI (show spinners while waiting, show error messages if API returns an error).
+    - Provide an admin UI page (e.g., `/admin/jobs/pending`) showing unapproved jobs. Admin can then view details and click "Approve" or "Reject".
         
-    - Ensure to include authentication tokens in API calls when required (e.g., include the JWT in an Authorization header for protected endpoints like posting a job). Next.js can store the token in a cookie or memory via context.
+        - Approve sets `approved=true` (job becomes visible).
+            
+        - Reject could either delete it or mark it rejected (maybe keep it in DB but not show). If you keep it, ensure the crawler doesn't re-add it (mark the raw record or track its external_id in a blacklist table).
+            
+    - This ensures quality control. If your source is high quality, this might be less necessary, but it's a good feature to demonstrate.
         
-- **Client-Side Validation & UX:** Add client-side validation for forms (like check required fields before sending to API) to complement the server-side validation. Ensure the UI is responsive (Next.js setup is mobile-friendly by default; add CSS as needed for different screen sizes).
+    - **Skill Mapping Review:** If the automatic skill mapping isn't perfect, allow admin to merge or alias skills:
+        
+        - Admin page `/admin/skills` listing all skills in the system (from `skills` table). Show how many resumes and jobs have each skill (this can be a query that counts resume_skills and job_skills for each).
+            
+        - If you see duplicates like "node" and "node.js", admin can choose to merge them. Implement a function to merge skill A into skill B:
+            
+            - This means update all resume_skills and job_skills of A to B, then delete A or mark it as alias.
+                
+            - The admin UI can have a merge form: select skill A, select skill B, click merge.
+                
+            - Backend: have an endpoint `POST /skills/merge` with ids, that performs the updates in a transaction.
+                
+        - This is an advanced but valuable tool to continuously improve data quality. It’s a form of human-in-the-loop for AI, as the admin helps maintain the taxonomy.
+            
+        - Also consider preventing trivial differences: e.g., store skills in lowercase to avoid case duplicates.
+            
+    - **Monitoring AI Outputs:** Provide admin insight into the AI matching:
+        
+        - Perhaps a page to see if any resume had very low matches (which might prompt an admin or career coach to suggest the user improve their resume).
+            
+        - Or see if some jobs are getting no matches (maybe they require uncommon skills, indicating a supply/demand gap).
+            
+        - These are optional analytical views. At minimum, maybe log or show in admin dashboard something like "Average match score across all applications" or "Number of recommendations generated".
+            
+- **Precompute and Schedule AI tasks:**
     
-- **Testing the Frontend:** Manually test the pages in a browser as you develop:
+    - Move the heavy AI computations off the user request cycle:
+        
+        - The crawler will add new jobs daily; you should then compute matches for those new jobs against all resumes (or vice versa). Doing this in real-time when the user logs in could be slow if data grows.
+            
+        - Set up a nightly job (via Nest Schedule or separate script) to refresh match scores:
+            
+            - For each resume in the system, compute match with new jobs (or all jobs, possibly overwriting previous scores).
+                
+            - Or for each new job, compute matches with all resumes and insert.
+                
+            - Decide which loop is smaller: if resumes are fewer than jobs, loop resumes and for each get matches. Or maintain incremental: e.g., keep track of last crawled job ID, and for new jobs do matches.
+                
+        - This can reuse the Python matching logic but running in batch. You might adapt `run_match.py` to run for all resumes or all jobs as needed.
+            
+        - Ensure not to duplicate entries in match table: you might clear out match table and recalc fully each time if simpler (assuming manageable size). Or delete only those for resumes that changed and jobs that are new.
+            
+    - **Resume Parsing Improvements:** If not done earlier, schedule resume parsing:
+        
+        - If some users upload resumes but you didn't extract skills or experience from them, you can do it in a batch (maybe immediately at upload as done, but also if you add new parsing logic, re-run on all existing resumes).
+            
+        - For example, if you later decide to extract "years of experience" from resume, you might update code and then want to apply it to all stored resumes. A background task can handle that.
+            
+    - Summarizing, by phase 5 end, ideally no intensive computation (crawling or matching) is happening during a user interaction — it's done offline and results are ready to be served quickly on request.
+        
+- **Performance and Scaling:** With these background tasks, think about concurrency and load:
     
-    - Create a test user by calling your API (you could temporarily allow registration via a page or use a seed script) and log in to verify protected pages.
+    - If crawler runs at 3 AM and pulls 1000 jobs, and match runs at 4 AM for 100 resumes, ensure database can handle the inserts. Use transactions or bulk insert if possible to optimize.
         
-    - Navigate through all flows: a job seeker browsing and applying, a recruiter logging in and viewing candidates, etc. (Some parts might not fully work until Phase 6/7 when Python services data is available; you can stub data for now).
+    - If using Python for heavy loops, ensure it's efficient (maybe using vector operations or efficient data structures).
         
-    - Fix any issues with data display or API integration as they come up.
+    - Memory: if very large data sets, be mindful not to load all jobs into memory at once in Python; you could stream or chunk processing.
         
-- **Refine Based on Backend:** It’s common to adjust either frontend or backend when integrating. If an API needs slight changes (e.g., include extra data in a response to avoid an extra call), you can tweak the Nest backend now as well. This iterative integration ensures the front-end and back-end mesh well.
+    - But for prototype, these concerns are minor. It's more about demonstrating the mechanism.
+        
+- **Housekeeping:** Clean up or archive outdated data:
     
-- **Update Documentation:** Write usage notes or update the README on how to run the frontend and backend together, and maybe document any assumptions or required environment variables (like API base URLs). Also possibly maintain an **API reference** in docs for front-end developers (in this case, yourself) – listing endpoints and expected inputs/outputs, which helps ensure front-end correctly consumes the API.
+    - If a job expires (maybe the source removed it or it's older than X days), you might want to mark it inactive or remove it. The crawler could check if jobs from last run are still present this run, and if not, mark them expired. Alternatively, keep everything and let admin prune.
+        
+    - If a user uploads a new resume, you may want to either keep the old one for record or replace it. In design, maybe only latest is kept (so update resume record instead of adding a new one).
+        
+    - Over time, there could be many raw_jobs entries (if not deleting old ones). Maybe have a policy like "keep last 6 months of raw data".
+        
+    - These are more production concerns, but it's good to note them.
+        
+
+**Recommended File Structure:** (after Phase 5 additions and adjustments)
+
+```plaintext
+project-root/
+├── apps/
+│   └── backend/
+│       ├── src/
+│       │   ├── modules/
+│       │   │   ├── jobs/
+│       │   │   │   ├── job.entity.ts        # Add fields: source, externalId, approved, etc.
+│       │   │   ├── skills/                 # New module for Skill taxonomy
+│       │   │   │   ├── skills.module.ts
+│       │   │   │   ├── skills.controller.ts# Admin endpoints for skills (list, merge)
+│       │   │   │   ├── skills.service.ts   # Logic for finding/merging skills
+│       │   │   │   └── skill.entity.ts     # Skill entity (id, name)
+│       │   │   ├── resume_skill.entity.ts  # Join table entity linking resumes<->skills
+│       │   │   ├── job_skill.entity.ts     # Join table entity linking jobs<->skills
+│       │   │   ├── applications/           # (Optional module for job applications)
+│       │   │   │   ├── applications.module.ts
+│       │   │   │   ├── applications.controller.ts
+│       │   │   │   ├── applications.service.ts
+│       │   │   │   └── application.entity.ts # Application entity (id, job_id, user_id, status, applied_at)
+│       │   ├── tasks/                      # Module or folder for scheduled tasks
+│       │   │   ├── tasks.module.ts         # Import ScheduleModule and providers
+│       │   │   └── crawler.tasks.ts        # Service with @Cron jobs to run crawler and matching
+│       │   └── ...
+│       └── ...
+├── services/
+│   ├── crawler/
+│   │   ├── scrapy.cfg
+│   │   └── jobcrawler/
+│   │       ├── spiders/
+│   │       │   └── jobs_spider.py          # Spider for scraping job listings
+│   │       ├── pipelines.py               # Pipeline to save to DB
+│   │       ├── items.py                   # Define JobItem with fields like title, company, etc.
+│   │       └── settings.py                # Configure pipelines, DB connection
+│   └── ai/
+│       ├── ... (existing AI scripts from Phase 4, possibly enhanced)
+│       ├── taxonomy/ (optional directory)
+│       │   └── skills_taxonomy.json       # a JSON or data file listing known skills for reference
+│       └── ... (no major changes here, maybe improved parsing logic)
+└── ...
+```
+
+**Key New/Updated Components:**
+
+- **job.entity.ts (updated):** Add fields:
+    
+    - `source` (varchar) – e.g., 'JobsDB' or 'Manual' or 'Employer'.
+        
+    - `externalId` (varchar) – unique id from source if available (for deduplication).
+        
+    - `approved` (boolean) – default false for imported jobs, true for admin-created or admin-approved jobs.
+        
+    - `posted_by` (nullable FK to User) – if later employers post jobs, this links the job to the employer account (to differentiate from crawler or admin entries).
+        
+    - Possibly `created_at` and `updated_at` timestamps if not already present.
+        
+- **skill.entity.ts (new):** Fields:
+    
+    - `id` (int PK),
+        
+    - `name` (text, unique).
+        
+    - You could also have a `normalized_name` or `alias_of` (self-referencing FK if this entry is an alias to another skill). But since we're merging by actually updating references, you may not need alias_of; merging physically consolidates entries.
+        
+- **resume_skill.entity.ts (new join table):** Links resume_id to skill_id. If using TypeORM, mark resume_id and skill_id as PKs (composite key). This table is filled whenever a resume is parsed for skills.
+    
+- **job_skill.entity.ts (new join table):** Links job_id to skill_id. Filled during job data processing (either from manual input by admin/employer or automated extraction from description).
+    
+- **applications.module (optional):** If implementing job applications:
+    
+    - _application.entity.ts:_ Fields: id, job_id, user_id, resume_id (maybe store the resume used to apply, though if one resume per user it's same as user_id), status (e.g., 'applied', 'reviewed', 'rejected', 'hired'), applied_at timestamp.
+        
+    - _applications.service.ts:_ Methods like `apply(userId, jobId)` to create an application, `findByJob(jobId)` to list applicants for a job, `findByUser(userId)` to list a user's applications.
+        
+    - _applications.controller.ts:_ Endpoints: `POST /jobs/:id/apply` (user applies to a job), `GET /jobs/:id/applications` (admin or employer views applicants). These would be used in Phase 6 likely.
+        
+- **skills.service.ts (new):** Functions:
+    
+    - `findOrCreate(name: string): Skill` – finds a skill by name (case-insensitive perhaps) or creates it if not exists.
+        
+    - `mergeSkills(sourceId, targetId)` – merges skill with id=sourceId into skill with id=targetId: update all references in resume_skill and job_skill from sourceId to targetId, then delete sourceId entry. Use within a transaction.
+        
+    - `listSkillsWithUsage()` – perhaps returns all skills with counts of resumes/jobs using them (SQL join+count).
+        
+- **skills.controller.ts (new):**
+    
+    - `GET /skills` – returns list of skills (possibly with usage counts) for the admin UI.
+        
+    - `POST /skills/merge` – expects JSON { from: skillId, to: skillId } and calls service to merge. Only admin can call this.
+        
+    - Apply `@Roles('admin')` on all routes, since only admin manages taxonomy.
+        
+- **crawler.tasks.ts (new Service for scheduling):** Use `@Cron` decorators:
+    
+    - e.g., `@Cron('0 0 * * *')` (midnight daily) on a method `runCrawler()` that executes the Scrapy spider. Could call `exec('scrapy runspider jobs_spider.py')` or use Python subprocess call similarly to how matching was done. Alternatively, integrate a python runner or have a REST endpoint in crawler (less typical).
+        
+    - `@Cron('30 0 * * *')` (12:30am) for `processRawJobs()` to process any newly scraped data.
+        
+    - `@Cron('0 1 * * *')` (1am) for `updateMatches()` to recalc matches after new jobs and possibly parse new resumes.
+        
+    - Cron expressions can be adjusted as needed. During development, you might trigger manually or set short intervals for testing.
+        
+- **pipelines.py (Scrapy):** In `process_item`, do something like:
+    
+    ```python
+    # pseudo-code
+    cur.execute("INSERT INTO raw_jobs (external_id, source, raw_title, raw_description, raw_location) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (source, external_id) DO NOTHING", ...)
+    ```
+    
+    Use ON CONFLICT if using Postgres to avoid duplicates by unique (source, external_id). Or check existing first. Mark items with processed=false initially.
+    
+- **Admin UI additions:**
+    
+    - _admin/jobs/index.tsx:_ Add a filter or separate view for unapproved jobs. Maybe show them highlighted or have a tab "Pending Approval". For each pending job, provide Approve/Reject buttons.
+        
+    - Implement Approve by calling `PUT /jobs/{id}/approve` (create this endpoint or reuse update with a field) and updating the UI list (move it to approved section).
+        
+    - Implement Reject by calling `DELETE /jobs/{id}` or `PUT /jobs/{id}/reject` (depending on if you keep record). If keeping record, you might just delete it anyway for simplicity.
+        
+    - _admin/skills/index.tsx:_ New page listing skills from API. Show skill name and counts. Possibly allow sorting by name or count.
+        
+    - Next to each skill, maybe an input to rename or a way to select two skills to merge:
+        
+        - You might allow selecting a checkbox for two skills and then click "Merge Selected" (merging the first into the second). Or a dropdown on a skill row "Merge into..." that pops up a list of other skills.
+            
+    - Simpler: have an input where admin types the name of the skill to merge into and an action button.
+        
+    - _admin/skills_ actions will call the `/skills/merge` API.
+        
+    - This UI can be basic since used by admin only. Even an approach like requiring admin to use a script to merge is okay, but since asked for multi-phase guide, an interface is good to mention.
+        
+- **Portal considerations:** Although Phase 6 will flesh out employer portal, some groundwork in Phase 5 helps:
+    
+    - The `applications` table and module introduced is mainly for employer side. Admin can see them too, but it's more for connecting job seekers and jobs in a transactional way.
+        
+    - By implementing it now or at least planning it, you're ready to support the "Apply" feature. If time permits, you could allow job seekers to click "Apply" on a job (just record in DB, maybe send an email to admin or a placeholder since no employer UI yet).
+        
+    - Admin could see applications in admin panel (maybe under users or jobs).
+        
+    - This sets up for Phase 6 where employers will view these.
+        
+- **Testing End-to-End After Phase 5:**
+    
+    - Run the crawler (maybe manually trigger the cron or call the command). See that new jobs appear in admin pending list.
+        
+    - Approve a couple of scraped jobs. Check they show up on main site.
+        
+    - Upload resumes and see that matching still works with new jobs.
+        
+    - Try the skill merge: if you see redundant skills in admin skills list, use merge and then verify resume_skills and job_skills tables reflect the change (no references to old skill, all moved to target).
+        
+    - Test the scheduled match update by adding a new job (via crawler or admin) and see if the next match run picks it up for existing resumes (if you don't want to wait for actual cron, call the function manually or change cron to every minute for testing).
+        
+    - Ensure everything still works for normal flow: searching jobs (which now includes possibly many jobs), viewing details (make sure description formatting is okay if came with HTML or special chars; you might need to strip tags in processing).
+        
+    - Test performance on pages if you loaded lots of data (1000 jobs list should still load quickly if pagination or lazy loading might be needed in real scenario, but not now).
+        
+- **Documentation & Clean-up:**
+    
+    - Update your README/design doc to note that the system now has an automated data pipeline: "jobs are fetched daily from source X, admin must approve them in admin UI, then they become visible".
+        
+    - Note any config needed (like environment variables for crawler DB connection, or if any API keys for AI).
+        
+    - Clean code: remove debug prints or at least guard them. Make sure secrets (like DB password, API keys) are in config files, not hardcoded in code (especially in Python scripts).
+        
+    - Summarize how matching improved: e.g., "the matching now uses standardized skill mapping, so synonyms are handled better, improving recommendation relevance."
+        
+
+**Solo Development Tips:**
+
+- _Phased rollout of features:_ Phase 5 is big, containing crawling, skill taxonomy, admin workflows, etc. Implement in sensible order:
+    
+    1. Skill system (because it can refine your matching immediately).
+        
+    2. Crawler (to get more data to test scaling).
+        
+    3. Admin approval of jobs (to manage crawler output).
+        
+    4. Applications (if doing, or skip if focusing on data side).
+        
+    5. Final schedule tasks to tie it together (once manual processes work, automate them).
+        
+- _Leverage community resources:_ Writing a Scrapy spider or dealing with job data might have been done by others. Look up Scrapy examples for PostgreSQL pipeline (like the one we found) and adapt. Also, if the site has an API, consider using that instead of scraping HTML (saves time).
+    
+- _Testing scrapes in isolation:_ Run the Scrapy spider alone (e.g., `scrapy crawl jobs_spider -o output.json`) to see if it collects data properly. Only then integrate DB pipeline to reduce debugging complexity.
+    
+- _Be mindful of scraping ethics:_ If you target a real site, do it politely: use a reasonable download delay, identify your bot with a user agent, and respect `robots.txt` unless you have permission. For prototype, one run is fine, but mention that continuous scraping should be mindful of not overloading sources.
+    
+- _Data cleaning focus:_ Garbage in, garbage out. Spend time on the cleaning step. If job descriptions have a lot of extraneous content (like company boilerplate), it could confuse matching. Perhaps trim job descriptions to the "Responsibilities" and "Requirements" sections if possible. If not, it's fine, just note possible future improvement.
+    
+- _Balance automation and control:_ Automating is great, but ensure you (as admin/dev) have control if something goes wrong. For example, log each time the crawler runs and how many jobs it added. If one day it adds 10,000 jobs which seem wrong, admin should catch that. Maybe send a summary email (could configure that later).
+    
+- _Quality vs quantity:_ It's better to have fewer high-quality job listings than thousands of spammy ones. If your source might include duplicates or irrelevant postings, incorporate filters (maybe by keyword or location to focus on a niche in prototype). E.g., only scrape jobs that contain "Engineer" or a certain location to keep data relevant.
+    
+- _Consider using a queue for tasks:_ If Nest's Schedule is too static, a more dynamic approach is using a queue (like Bull for Node) for tasks like matching each resume or sending emails. This might be too advanced to implement fully here, but keep the concept in mind. At least ensure that your scheduled tasks catch exceptions so one failure doesn't stop the next runs.
+    
+- _Final touches to matching:_ With standardized skills, maybe revisit your match scoring. If now both resumes and jobs have skill sets, the score formula might change slightly. Possibly give more weight to certain skills (if you parsed years, maybe weight skills by experience years, etc.). For now, still keep it simple, but ensure the refactoring to skill IDs didn't break logic.
+    
+- _User notifications:_ If new jobs are added daily, maybe email users or notify them. This is a feature beyond prototype scope, but you might note it. Similarly, if a great match job appears, notify the candidate. That’s a potential future enhancement.
     
 
-**Types of Files to be Created:**
+**Module-Level Design Focus:** By now, the system has many moving parts. Reflect on the architecture:
 
-- **Next.js Page files:** `.tsx` files under `pages/` (or `app/` if using Next 13+) corresponding to each route/view (e.g., `jobs/index.tsx`, `jobs/[id].tsx`, `profile.tsx`, `login.tsx`, etc.).
+- **Microservices vs Monolith:** You have essentially a monolithic repo with some microservice-like components (crawler, AI). Consider if in future you'd separate them. The design now keeps them loosely coupled (integration via DB or CLI calls). This is fine. If scaling, you might turn the crawler into a standalone service and the AI into another, communicating via message queues.
     
-- **React Component files:** Reusable UI components in a `components/` directory (e.g., `JobCard.tsx`, `Navbar.tsx`, `LoginForm.tsx`, etc.).
+- **Data Consistency:** With multiple sources writing to DB (crawler, admin, AI scripts), ensure consistency:
     
-- **CSS/Style files:** CSS modules or global CSS for styling components (if not fully using a component library’s styles). Could be in a `styles/` folder or alongside components (e.g., `JobCard.module.css`).
+    - Use transactions in merges and updates to avoid partial updates.
+        
+    - If two processes might update same data (unlikely here, but e.g., if admin approves a job at same time crawler tries to insert it, or two admin merging skills simultaneously), handle locking or constraints properly.
+        
+    - For example, the unique constraint on skills name prevents duplicates even if two processes try to add at same time.
+        
+- **Cross-module interactions:** Modules now interact: e.g., SkillsModule is used by ResumesModule (when parsing a resume, need to call SkillsService.findOrCreate). You might import SkillsModule into ResumesModule. Ensure to avoid circular imports (if any). Perhaps ResumesService can directly use SkillsRepository instead of full module import to reduce coupling.
     
-- **Utility/helper files:** e.g., an `api.ts` or `fetcher.ts` to centralize API calls, context providers (like `AuthContext.tsx` for authentication state), and custom hooks (e.g., `useAuth()`).
+- **Performance strategy:** The architecture should allow horizontal scaling if needed:
     
-- **Config files:** Possibly Next.js environment config like `.env.local` for front-end (to store base API URL or other config), and adjustments in `next.config.js` if needed (for example, enabling images from certain domains or other build settings).
+    - The crawler could run on a different machine or a lambda function.
+        
+    - The matching could be distributed (each resume match in parallel).
+        
+    - The database might become a bottleneck if too many writes at once; batching operations (like inserting match scores in one SQL COPY or transaction) can help.
+        
+    - Identify any potential slow point: e.g., loading all jobs in Python – can the DB handle that query efficiently? Add indexes on text if doing text search.
+        
+    - For now, fine, but highlighting such points means you're aware and can address them if this moves beyond prototype.
+        
+- **Completeness of features:** With Phase 5 done, check against requirements:
     
-- **Testing files:** If doing component tests or integration tests on front-end, you might have files like `__tests__/` or use Cypress for end-to-end tests (this might come in Phase 8, but you can start stubbing tests here if desired).
-    
-
-**File Structure & Key Files (Frontend after this phase):**
-
-The frontend project will now have a more fleshed-out structure. For example, if combining all roles in one Next.js app:
-
-- **`frontend/pages/`** – Contains Next.js page components for each route:
-    
-    - `index.tsx`: Homepage (perhaps a landing page or redirect to jobs list).
+    - Job search ✅
         
-    - `jobs/index.tsx`: Jobs list page, showing available jobs with search filters.
+    - Resume upload ✅
         
-    - `jobs/[id].tsx`: Job detail page for a specific job (uses dynamic route `[id]`).
+    - Admin dashboard (user/job management) ✅
         
-    - `login.tsx` / `register.tsx`: Authentication pages for sign-in and sign-up forms.
+    - Simplified AI matching ✅
         
-    - `profile.tsx`: User profile page (job seeker’s own profile).
+    - Background tasks (crawler, etc.) ✅
         
-    - `applications.tsx`: (If job seeker can view their applications) A page to list jobs they applied to.
+    - Skill standardization ✅
         
-    - `portal/index.tsx`: Recruiter dashboard page (for HR portal home).
+    - Admin reviews (jobs approval, skill merging) ✅
         
-    - `portal/candidates.tsx`: Recruiter page to search/view job seeker profiles or applications.
-        
-    - `admin/index.tsx`: Admin dashboard page (summary of stats).
-        
-    - `admin/users.tsx`: Admin page to manage users.
-        
-    - `admin/jobs.tsx`: Admin page to manage all job postings.  
-        _(Routes and file naming may vary – this is one way to structure by folders for role segments.)_
-        
-- **`frontend/components/`** – Reusable components and possibly sub-folders by feature:
-    
-    - `Navbar.tsx`: Top navigation bar component (displays links appropriate to the logged-in user’s role, or generic links if not logged in).
-        
-    - `Footer.tsx`: Footer component for the site.
-        
-    - `JobCard.tsx`: Component to display a job summary (used in jobs list).
-        
-    - `JobSearchBar.tsx`: Component for the search/filter form on the jobs page.
-        
-    - `ProfileForm.tsx`: Form for updating user profile info.
-        
-    - `ResumeUpload.tsx`: Component to handle file upload for resumes.
-        
-    - (Potential subfolders like `components/admin/`, `components/portal/` if you want to group components specific to those interfaces.)
-        
-- **`frontend/context/`** – Application state contexts (if used):
-    
-    - `AuthContext.tsx`: React Context provider for authentication state (holds current user info and token, provides login/logout functions to components).
-        
-- **`frontend/utils/`** – Utility functions and helpers:
-    
-    - `api.ts`: Functions for calling backend API endpoints (could wrap fetch calls, handle base URL and headers in one place).
-        
-    - `useRequireAuth.tsx`: A custom React Hook that redirects to login if user is not authenticated (to protect certain pages).
-        
-- **`frontend/styles/`** – Styling:
-    
-    - `globals.css`: Global styles (if any) applied to the app.
-        
-    - `JobCard.module.css`: Example CSS module for the `JobCard` component (if using CSS modules for component-scoped styles).
-        
-- **Key configuration files:**
-    
-    - `frontend/next.config.js`: Next.js configuration (might remain default for this prototype, unless you need to set up custom headers or environment variables here).
-        
-    - `frontend/.env.local`: Frontend environment variables (e.g., `NEXT_PUBLIC_API_URL` pointing to the backend API base URL).
+    - The core workflows are solid and even some advanced ones are in place. The next phase will handle the employer side, which is an extension of the same patterns (role-based UI and permissions, using existing data structures like jobs and applications).
         
 
-Each of these files serves a clear purpose in the front-end: **Pages** correspond to the actual routes a user can navigate to, **components** are building blocks used by those pages, **contexts/hooks** manage cross-cutting concerns like auth state, and **utils** help with common tasks (like API calls). The architecture is designed to be modular: for example, if a new feature or section is needed, you add a new page and some components without tangling with unrelated parts. Next.js is unopinionated about structure, so we impose our own logical grouping to keep the code organized. This way, the front-end remains scalable as the app grows (it won’t turn into a jumble of files).
+At this point, the prototype is not only functional but also smart and somewhat autonomous. The solo developer can maintain core workflows (with admin oversight) and the system can grow with new data daily.
