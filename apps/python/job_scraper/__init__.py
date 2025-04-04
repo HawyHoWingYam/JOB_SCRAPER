@@ -193,16 +193,17 @@ def main():
                 page=args.page,
             )
 
-        print(f"Found {len(jobsdb_jobs)} jobs on Jobsdb")
-
+        logger.info(f"Found {len(jobsdb_jobs)} jobs on Jobsdb")
+        logger.info(f"save : {args.save}, db : {db}")
         # Save to database if enabled
         if args.save and db:
+            print(f"Going to save jobs to database")
             saved_count = db.save_jobs(jobsdb_jobs)
             print(f"Saved {saved_count} jobs to database")
 
         # Print job titles
-        for i, job in enumerate(jobsdb_jobs, 1):
-            print(f"{i}. {job.title} - {job.company.name} ({job.location})")
+        # for i, job in enumerate(jobsdb_jobs, 1):
+        #     print(f"{i}. {job}")
 
 
 if __name__ == "__main__":

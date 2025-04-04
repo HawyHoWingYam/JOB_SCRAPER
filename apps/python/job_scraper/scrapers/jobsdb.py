@@ -95,8 +95,8 @@ class JobsdbScraper(BaseScraper):
             soup = self.get_soup(search_url, params=params)
             # logger.info(f"Searching jobs on Jobsdb: {soup}")
             # save soup to file for debugging
-            with open("jobsdb_soup.html", "w", encoding="utf-8") as f:
-                f.write(str(soup))
+            # with open("jobsdb_soup.html", "w", encoding="utf-8") as f:
+            #     f.write(str(soup))
 
             job_listings = []
 
@@ -106,7 +106,7 @@ class JobsdbScraper(BaseScraper):
 
             for card in job_cards:
                 try:
-                    job = self._parse_job_card(card)
+                    job = self._parse_job_card(card, job_category, job_type)
                     if job:
                         job_listings.append(job)
                 except Exception as e:
@@ -153,6 +153,7 @@ class JobsdbScraper(BaseScraper):
 
             # For now, create a minimal job object
             company_name = self._extract_company_name(soup)
+            logger.info(f"Extracted company name 157: {company_name}")
 
             return Job(
                 id=job_id,
@@ -170,7 +171,9 @@ class JobsdbScraper(BaseScraper):
             logger.error(f"Error getting job details for {job_id}: {e}")
             return None
 
-    def _parse_job_card(self, card: BeautifulSoup) -> Optional[Job]:
+    def _parse_job_card(
+        self, card: BeautifulSoup, job_category: str, job_type: str
+    ) -> Optional[Job]:
         """Parse job information from a job card.
 
         Args:
@@ -185,8 +188,6 @@ class JobsdbScraper(BaseScraper):
 
             if not job_id:
                 # Fallback to regex pattern if attribute extraction fails
-                import re
-
                 html_str = str(card)
                 job_id_match = re.search(r'"jobId":"(\d+)"', html_str)
                 job_id = job_id_match.group(1) if job_id_match else None
@@ -194,29 +195,71 @@ class JobsdbScraper(BaseScraper):
             if not job_id:
                 return None
 
-            # Extract job title from h3 element
-            title_element = card.select_one("h3 a")
-            title = (
-                self.clean_text(title_element.get_text())
-                if title_element
-                else "Unknown Title"
-            )
+            title = "N/A"
+            try:
+                # Extract job title from h3 element
+                title_element = card.select_one("h3 a")
+                title = (
+                    self.clean_text(title_element.get_text())
+                    if title_element
+                    else "Unknown Title"
+                )
+                logger.info(f"Extracted jobID & title: {job_id}-{title}")
+            except Exception as e:
+                logger.error(f"Error extracting title: {e}")
+                raise
 
-            # Extract company name - update selector based on the HTML structure
-            company_element = card.select_one('a[data-automation="jobCompany"]')
-            company_name = (
-                self.clean_text(company_element.get_text())
-                if company_element
-                else "Unknown Company"
-            )
+            company_name = "N/A"
+            try:
+                # Extract company name - update selector based on the HTML structure
+                company_element = card.select_one('a[data-automation="jobCompany"]')
+                company_name = (
+                    self.clean_text(company_element.get_text())
+                    if company_element
+                    else "Unknown Company"
+                )
+            except Exception as e:
+                logger.error(f"Error extracting company name: {e}")
+                raise
 
-            # Extract location - update selector based on the HTML structure
-            location_element = card.select_one('span[data-automation="jobLocation"]')
-            location = (
-                self.clean_text(location_element.get_text())
-                if location_element
-                else "Unknown Location"
-            )
+            location = "N/A"
+            try:
+                # Extract location - update selector based on the HTML structure
+                location_element = card.select_one(
+                    'span[data-automation="jobLocation"]'
+                )
+                location = (
+                    self.clean_text(location_element.get_text())
+                    if location_element
+                    else "Unknown Location"
+                )
+            except Exception as e:
+                logger.error(f"Error extracting location: {e}")
+                raise
+
+            # Extract salary information
+            salary = "N/A"
+            try:
+                salary_element = card.select_one('span[data-automation="jobSalary"]')
+                if salary_element:
+                    # Look for the inner span that contains the actual salary text
+                    salary = self.clean_text(salary_element.get_text())
+
+            except Exception as e:
+                logger.error(f"Error extracting salary: {e}")
+                raise
+
+            # Extract job posting date
+            posting_date_text = "N/A"
+            try:
+                date_element = card.select_one('span[data-automation="jobListingDate"]')
+                if date_element:
+                    # Extract text directly from the span element
+                    posting_date_text = self.clean_text(date_element.get_text())
+
+            except Exception as e:
+                logger.error(f"Error extracting posting date: {e}")
+                raise
 
             # Extract job URL
             job_url = f"{self.base_url}job/{job_id}"
@@ -225,17 +268,23 @@ class JobsdbScraper(BaseScraper):
             return Job(
                 id=job_id,
                 title=title,
-                description="",  # Empty description for search results
+                description="",
+                job_class=job_category,
+                job_subclass="",
                 url=job_url,
                 company=Company(name=company_name),
                 location=location,
                 source="Jobsdb",
                 source_id=job_id,
-                date_scraped=datetime.utcnow(),
+                date_scraped=datetime.utcnow().isoformat(),
+                date_posted=posting_date_text,
+                work_type=job_type,
+                salary_description=salary,
             )
         except Exception as e:
             logger.error(f"Error parsing job card: {e}")
-            return None
+            raise
+            # return None
 
     def _extract_job_title(self, soup: BeautifulSoup) -> str:
         """Extract job title from job details page.
