@@ -9,7 +9,7 @@ alwaysApply: false
 
 **Detailed Tasks:**
 
-- **Jobs Listing Page:** Create a Next.js page that lists all job postings. This should fetch data from the Nest.js back-end (e.g., via an API call to `/api/jobs`). On the back-end, implement a `JobsModule` with a `JobsController` and `JobsService` to retrieve jobs from the database. Start with a simple data model for a Job (e.g., id, title, description, company, location, posted_date). Provide an endpoint like `GET /jobs` returning a list of jobs. In the front-end, create a React component to display the job titles with company names).
+- **Jobs Listing Page:** Create a Next.js page that lists all job postings. This should fetch data from the Nest.js back-end (e.g., via an API call to `/api/jobs`). On the back-end, implement a `JobsModule` with a `JobsController` and `JobsService` to retrieve jobs from the database. Start with a simple data model for a Job (e.g., id, title, description, company, location, posted_date). Provide an endpoint like `GET /jobs` returning a list of jobs. In the front-end, create a React component to display the job titles with company names.
     
 - **Search Functionality:** Implement a basic search on the job listing page. This could be a text input that filters jobs by title or description. For MVP simplicity, you can perform the filtering on the backend (e.g., `GET /jobs?query=developer` to search in title/description) or fetch all jobs and filter on the front-end. A simple approach is to use a case-insensitive `LIKE` SQL query or a full-text search if using PostgreSQL's text search. The Nest `JobsService` can handle this filter and return matching jobs. Update the front-end to call the API with the search term and update the list.
     

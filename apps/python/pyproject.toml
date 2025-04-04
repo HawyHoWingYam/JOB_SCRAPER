@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "job-scraper"
+version = "0.1.0"
+description = "Job scraping service for the Job Scraper Platform"
+authors = ["Karas Hawy <karasho62@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+beautifulsoup4 = "^4.12.2"
+requests = "^2.31.0"
+sqlalchemy = "^2.0.23"
+psycopg2-binary = "^2.9.9"
+python-dotenv = "^1.0.0"
+pydantic = "^2.4.2"
+playwright = "^1.38.0"
+schedule = "^1.2.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.3"
+black = "^23.10.1"
+isort = "^5.12.0"
+flake8 = "^6.1.0"
+mypy = "^1.6.1"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"

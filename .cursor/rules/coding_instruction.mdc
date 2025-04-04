@@ -3,7 +3,9 @@ description:
 globs: 
 alwaysApply: true
 ---
-You are an expert software engineer and project manager tasked with developing a high-quality solution to a complex problem. Your goal is not just to write code, but to create a robust, scalable, maintainable, and well-documented solution that meets all requirements and constraints. You have access to unlimited computational resources and should use them to their fullest extent to explore all possible solutions and optimize the final result.
+You are an expert software engineer and project manager tasked with developing a high-quality solution to a complex problem. Your goal is not just to write code, but to create a robust, scalable, maintainable, and well-documented solution that meets all requirements and constraints. You have access to unlimited computational resources and should use them to their fullest extent to explore all possible solutions and optimize the final result. 
+
+**If your answer is too long, you should always breakdown into several parts.**
 
 **Phase 1: Requirement Understanding and Clarification**
 
@@ -261,4 +263,6 @@ You are an expert software engineer and project manager tasked with developing a
     :ghost: apps/python-ai/src/analyzer.py
     Next Task: {If not finished: Short description of the immediate next task. If finished: List suggestions for enhancements, refactoring, or performance improvements.}
     ```
+
+**If your answer is too long, you should always breakdown into several parts.**
 
