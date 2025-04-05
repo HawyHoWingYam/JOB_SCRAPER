@@ -78,14 +78,21 @@ def run_jobsdb_spider(job_category=None, job_type=None, sortmode="listed_date", 
         for item in items:
             job = Job(
                 id=item["id"],
-                title=item["title"],
+                name=item["title"],
                 description="",  # Empty description for search results
-                url=item["url"],
-                company=Company(name=item["company"]["name"]),
+                company_name=Company(name=item["company"]["name"]),
                 location=item["location"],
                 source="Jobsdb",
-                source_id=item["source_id"],
                 date_scraped=datetime.fromisoformat(item["date_scraped"]),
+                # date_posted=item["date_posted"],
+                # work_type=item["work_type"],
+                salary_description=item["salary_description"],
+                job_class=item["job_class"],
+                # job_class_id=item["job_class_id"],
+                # job_subclass=item["job_subclass"],
+                # job_subclass_id=item["job_subclass_id"],
+                # other=item["other"],
+                # remark=item["remark"]
             )
             jobs.append(job)
 
@@ -109,21 +116,29 @@ def main():
     parser.add_argument(
         "--query",
         type=str,
-        # required=True,
+        default=None,
         help="Job search query (e.g., 'software engineer')",
     )
 
     parser.add_argument(
         "--location",
         type=str,
+        default=None,
         help="Job location (e.g., 'New York, NY')",
     )
 
     parser.add_argument(
-        "--page",
+        "--start_page",
         type=int,
         default=1,
         help="Page number to scrape (default: 1)",
+    )
+
+    parser.add_argument(
+        "--end_page",
+        type=int,
+        default=None,
+        help="End page number to scrape (default: same as page)",
     )
 
     parser.add_argument(
@@ -173,33 +188,54 @@ def main():
     if args.save:
         db = DatabaseConnector()
 
+    # Set end_page to page if not specified
+    if args.end_page is None:
+        args.end_page = args.page
+
     # Run appropriate scrapers
     if args.source == "all" or args.source == "jobsdb":
-        if args.method == "scrapy":
-            # Use Scrapy spider
-            jobsdb_jobs = run_jobsdb_spider(
-                job_category=args.job_category,
-                job_type=args.job_type,
-                sortmode=args.sortmode,
-                page=args.page,
-            )
-        else:
-            # Use Selenium-based scraper
-            jobsdb_scraper = JobsdbScraper()
-            jobsdb_jobs = jobsdb_scraper.search_jobs(
-                job_category=args.job_category,
-                job_type=args.job_type,
-                sortmode=args.sortmode,
-                page=args.page,
-            )
+        total_jobs = 0
 
-        logger.info(f"Found {len(jobsdb_jobs)} jobs on Jobsdb")
-        logger.info(f"save : {args.save}, db : {db}")
-        # Save to database if enabled
-        if args.save and db:
-            print(f"Going to save jobs to database")
-            saved_count = db.save_jobs(jobsdb_jobs)
-            print(f"Saved {saved_count} jobs to database")
+        # Loop through pages from start to end
+        for current_page in range(args.start_page, args.end_page + 1):
+            logger.info(f"Scraping page {current_page} of {args.end_page}")
+
+            if args.method == "scrapy":
+                # Use Scrapy spider
+                jobsdb_jobs = run_jobsdb_spider(
+                    job_category=args.job_category,
+                    job_type=args.job_type,
+                    sortmode=args.sortmode,
+                    page=current_page,
+                )
+            else:
+                # Use Selenium-based scraper
+                jobsdb_scraper = JobsdbScraper()
+                jobsdb_jobs = jobsdb_scraper.search_jobs(
+                    job_category=args.job_category,
+                    job_type=args.job_type,
+                    sortmode=args.sortmode,
+                    page=current_page,
+                )
+
+            logger.info(
+                f"Found {len(jobsdb_jobs)} jobs on Jobsdb (page {current_page})"
+            )
+            total_jobs += len(jobsdb_jobs)
+
+            # Save to database if enabled
+            if args.save and db and jobsdb_jobs:
+                logger.info(
+                    f"Saving {len(jobsdb_jobs)} jobs from page {current_page} to database"
+                )
+                saved_count = db.save_jobs(jobsdb_jobs)
+                logger.info(
+                    f"Saved {saved_count} jobs from page {current_page} to database"
+                )
+
+        logger.info(
+            f"Total jobs found across pages {args.start_page} to {args.end_page}: {total_jobs}"
+        )
 
         # Print job titles
         # for i, job in enumerate(jobsdb_jobs, 1):

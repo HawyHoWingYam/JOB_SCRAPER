@@ -56,19 +56,19 @@ class JobsdbScraper(BaseScraper):
         )
 
     def search_jobs(self, **kwargs) -> List[Job]:
-        """Search for jobs on Jobsdb.
+        """Search for jobs on JobsDB.
 
         Args:
+            query: Job search query (e.g., "software engineer")
+            location: Job location (e.g., "Hong Kong")
             **kwargs: Additional search parameters
-                - job_category: Category to search in (e.g., "software")
-                - page: Page number (default: 1)
-                - job_type: Type of job (default: None)
-                - sortmode: Sorting method (default: "ListedDate")
+                - limit: Maximum number of jobs to return (default: 25)
 
         Returns:
             List of Job objects
         """
-        # Get job category from kwargs if provided
+
+        # # Get job category from kwargs if provided
         job_category = kwargs.get("job_category")
         sortmode = kwargs.get("sortmode", "listed_date")
         job_type = kwargs.get("job_type")
@@ -93,16 +93,10 @@ class JobsdbScraper(BaseScraper):
 
         try:
             soup = self.get_soup(search_url, params=params)
-            # logger.info(f"Searching jobs on Jobsdb: {soup}")
-            # save soup to file for debugging
-            # with open("jobsdb_soup.html", "w", encoding="utf-8") as f:
-            #     f.write(str(soup))
-
             job_listings = []
 
-            # Find and parse job cards
-            job_cards = soup.select("article[data-job-id]")
-            logger.info(f"Found {len(job_cards)} job cards.")
+            # Find and parse job cards (update selector based on actual JobsDB HTML)
+            job_cards = soup.select("article[data-job-id]")  # Update this selector
 
             for card in job_cards:
                 try:
@@ -117,7 +111,7 @@ class JobsdbScraper(BaseScraper):
                 search_params={
                     "job_category": job_category,
                     "category_path": category_path,
-                    "sortmode": sortmode,
+                    "sortmode": sortmode_value,
                     # "page": page,
                 },
             )
@@ -125,55 +119,46 @@ class JobsdbScraper(BaseScraper):
             return job_listings
 
         except Exception as e:
-            logger.error(f"Error searching jobs on Jobsdb: {e}")
+            logger.error(f"Error searching jobs on JobsDB: {e}")
             return []
 
     def get_job_details(self, job_id: str) -> Optional[Job]:
         """Get detailed information for a specific job.
 
         Args:
-            job_id: Jobsdb job ID
+            job_id: JobsDB job ID
 
         Returns:
             Job object with detailed information or None if not found
         """
-        job_url = f"{self.base_url}/viewjob?jk={job_id}"
+        job_url = f"{self.base_url}/hk/job/{job_id}"
 
         try:
             soup = self.get_soup(job_url)
 
-            # Extract full job description
-            description_element = soup.select_one("#jobDescriptionText")
-            full_description = (
-                description_element.get_text() if description_element else ""
-            )
+            # Extract job details (update selectors based on actual JobsDB HTML)
+            description_element = soup.select_one(".job-description")
+            description = description_element.get_text() if description_element else ""
 
-            # Parse other job details (company, location, salary, etc.)
-            # This would require more detailed parsing logic for Jobsdb
-
-            # For now, create a minimal job object
+            job_title = self._extract_job_title(soup)
             company_name = self._extract_company_name(soup)
-            logger.info(f"Extracted company name 157: {company_name}")
+            location = self._extract_location(soup)
 
+            # Create job object with new schema
             return Job(
-                id=job_id,
-                title=self._extract_job_title(soup),
-                description=full_description,
-                url=job_url,
-                company=Company(name=company_name),
-                location=self._extract_location(soup),
-                source="Jobsdb",
-                source_id=job_id,
-                date_scraped=datetime.utcnow(),
+                name=job_title,
+                description=description,
+                company_name=company_name,
+                location=location,
+                source="JobsDB",
+                date_scraped=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             )
 
         except Exception as e:
             logger.error(f"Error getting job details for {job_id}: {e}")
             return None
 
-    def _parse_job_card(
-        self, card: BeautifulSoup, job_category: str, job_type: str
-    ) -> Optional[Job]:
+    def _parse_job_card(self, card: BeautifulSoup, job_category: str, job_type: str) -> Optional[Job]:
         """Parse job information from a job card.
 
         Args:
@@ -204,7 +189,6 @@ class JobsdbScraper(BaseScraper):
                     if title_element
                     else "Unknown Title"
                 )
-                logger.info(f"Extracted jobID & title: {job_id}-{title}")
             except Exception as e:
                 logger.error(f"Error extracting title: {e}")
                 raise
@@ -260,31 +244,28 @@ class JobsdbScraper(BaseScraper):
             except Exception as e:
                 logger.error(f"Error extracting posting date: {e}")
                 raise
+            # logger.info(
+            #     f"Extracted jobID & title: {job_id}-{title} - {company_name} - {location} - {salary}"
+            # )
 
-            # Extract job URL
-            job_url = f"{self.base_url}job/{job_id}"
-
-            # Create job object
+            # Create job object with new schema
             return Job(
+                internal_id=job_id,
                 id=job_id,
-                title=title,
-                description="",
-                job_class=job_category,
-                job_subclass="",
-                url=job_url,
-                company=Company(name=company_name),
+                name=title,
+                company_name=company_name,
                 location=location,
-                source="Jobsdb",
-                source_id=job_id,
-                date_scraped=datetime.utcnow().isoformat(),
-                date_posted=posting_date_text,
-                work_type=job_type,
                 salary_description=salary,
+                source="JobsDB",
+                date_scraped=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                date_posted=posting_date_text,
+                job_class=job_category,
+                work_type=job_type,
             )
+
         except Exception as e:
             logger.error(f"Error parsing job card: {e}")
-            raise
-            # return None
+            return None
 
     def _extract_job_title(self, soup: BeautifulSoup) -> str:
         """Extract job title from job details page.
@@ -293,14 +274,11 @@ class JobsdbScraper(BaseScraper):
             soup: BeautifulSoup object for job details page
 
         Returns:
-            Job title or default text if not found
+            Job title or empty string if not found
         """
-        title_element = soup.select_one(".jobsearch-JobInfoHeader-title")
-        return (
-            self.clean_text(title_element.get_text())
-            if title_element
-            else "Unknown Title"
-        )
+        # Update selector based on actual JobsDB HTML
+        title_element = soup.select_one(".job-title")
+        return self.clean_text(title_element.get_text()) if title_element else ""
 
     def _extract_company_name(self, soup: BeautifulSoup) -> str:
         """Extract company name from job details page.
@@ -309,14 +287,11 @@ class JobsdbScraper(BaseScraper):
             soup: BeautifulSoup object for job details page
 
         Returns:
-            Company name or default text if not found
+            Company name or empty string if not found
         """
-        company_element = soup.select_one(".jobsearch-InlineCompanyName")
-        return (
-            self.clean_text(company_element.get_text())
-            if company_element
-            else "Unknown Company"
-        )
+        # Update selector based on actual JobsDB HTML
+        company_element = soup.select_one(".company-name")
+        return self.clean_text(company_element.get_text()) if company_element else ""
 
     def _extract_location(self, soup: BeautifulSoup) -> str:
         """Extract job location from job details page.
@@ -325,13 +300,8 @@ class JobsdbScraper(BaseScraper):
             soup: BeautifulSoup object for job details page
 
         Returns:
-            Job location or default text if not found
+            Job location or empty string if not found
         """
-        location_element = soup.select_one(
-            ".jobsearch-JobInfoHeader-subtitle .jobsearch-JobInfoHeader-locationText"
-        )
-        return (
-            self.clean_text(location_element.get_text())
-            if location_element
-            else "Unknown Location"
-        )
+        # Update selector based on actual JobsDB HTML
+        location_element = soup.select_one(".job-location")
+        return self.clean_text(location_element.get_text()) if location_element else ""

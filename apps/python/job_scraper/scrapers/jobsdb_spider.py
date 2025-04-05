@@ -1,86 +1,118 @@
-"""JobsDB Scrapy spider."""
+"""JobsDB Scrapy spider implementation."""
 
 import logging
-import scrapy
-from scrapy import Request
-from ..models.job import Company, Job
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+import scrapy
+from scrapy.http import Response
+
+from job_scraper.models.job import Job  # Import your updated Job model
+
 
 class JobsDBSpider(scrapy.Spider):
-    name = "jobsdb"
-    allowed_domains = ["hk.jobsdb.com"]
+    """Scrapy spider for JobsDB job listings."""
     
-    def __init__(self, job_category="software", sortmode="listed_date", job_type=None, page=1, *args, **kwargs):
+    name = "jobsdb"
+    allowed_domains = ["jobsdb.com"]
+    
+    def __init__(self, query=None, location=None, *args, **kwargs):
+        """Initialize the spider with search parameters.
+        
+        Args:
+            query: Job search query (e.g., "software engineer")
+            location: Job location (e.g., "Hong Kong")
+        """
         super(JobsDBSpider, self).__init__(*args, **kwargs)
-        self.job_category = job_category
-        self.sortmode = sortmode
-        self.job_type = job_type
-        self.page = page
+        self.query = query
+        self.location = location
         
-        # Map parameters to URL format
-        categories = {
-            "software": "information-communication-technology",
-            "finance": "accounting-finance",
-        }
-        
-        sortmodes = {"listed_date": "ListedDate", "relevance": "KeywordRelevance"}
-        
-        job_types = {
-            "full_time": "full-time",
-            "part_time": "part-time",
-            "contract": "contract-temp",
-            "casual": "casual-vacation",
-        }
-        
-        # Build the start URL
-        self.category_path = categories.get(job_category, "information-communication-technology")
-        self.sortmode_value = sortmodes.get(sortmode, "ListedDate")
-        
-        base_url = "https://hk.jobsdb.com/"
-        url_path = f"jobs-in-{self.category_path}"
-        
-        if job_type and job_type in job_types:
-            url_path += f"/{job_types[job_type]}"
-        
-        self.start_urls = [f"{base_url}{url_path}?sortmode={self.sortmode_value}&page={page}"]
-        
+        # Build start URL
+        self.start_urls = [
+            f"https://hk.jobsdb.com/hk/search-jobs/{query}/{location}"
+        ]
+    
     def parse(self, response):
-        # Parse job listings
-        job_cards = response.css(".jobsearch-ResultsList .result")
+        """Parse the search results page.
         
-        for card in job_cards:
-            job_id = card.css("[data-jk]::attr(data-jk)").get()
-            
-            if not job_id:
-                continue
-                
-            title = self.clean_text(card.css(".jobTitle span::text").get() or "Unknown Title")
-            company_name = self.clean_text(card.css(".companyName::text").get() or "Unknown Company")
-            location = self.clean_text(card.css(".companyLocation::text").get() or "Unknown Location")
-            job_url = f"https://hk.jobsdb.com/viewjob?jk={job_id}"
-            
-            yield {
-                "id": job_id,
-                "title": title,
-                "company": {"name": company_name},
-                "location": location,
-                "url": job_url,
-                "source": "Jobsdb",
-                "source_id": job_id,
-                "date_scraped": datetime.utcnow().isoformat()
-            }
-            
+        Args:
+            response: Scrapy response object
+        
+        Yields:
+            Request objects for job detail pages
+        """
+        # Update these selectors based on actual JobsDB HTML structure
+        job_links = response.css("a.job-card-link::attr(href)").getall()
+        
+        for link in job_links:
+            # Follow the link to the job detail page
+            yield response.follow(link, callback=self.parse_job)
+        
         # Follow pagination if needed
-        next_page = response.css("a.next-page::attr(href)").get()
+        next_page = response.css("a.pagination-next::attr(href)").get()
         if next_page:
-            yield Request(response.urljoin(next_page), callback=self.parse)
+            yield response.follow(next_page, callback=self.parse)
+    
+    def parse_job(self, response):
+        """Parse a job detail page.
+        
+        Args:
+            response: Scrapy response object
+        
+        Yields:
+            Job item with details
+        """
+        # Update these selectors based on actual JobsDB HTML structure
+        job_title = self.clean_text(response.css(".job-title::text").get())
+        company_name = self.clean_text(response.css(".company-name::text").get())
+        location = self.clean_text(response.css(".job-location::text").get())
+        
+        # Get the full description
+        description = " ".join([
+            self.clean_text(text)
+            for text in response.css(".job-description ::text").getall()
+        ])
+        
+        # Extract work type if available
+        work_type = self.clean_text(response.css(".job-type::text").get())
+        
+        # Extract salary if available
+        salary_description = self.clean_text(response.css(".salary::text").get())
+        
+        # Extract posting date if available
+        date_posted = self.clean_text(response.css(".posted-date::text").get())
+        
+        # Create a Job object with the updated schema
+        job = Job(
+            name=job_title,  # Changed from title to name
+            description=description,
+            company_name=company_name,  # Changed from nested company object
+            location=location,
+            work_type=work_type,
+            salary_description=salary_description,  # Changed from salary_min/max to salary_description
+            date_posted=date_posted,
+            date_scraped=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            source="JobsDB",
+            # Fields added to match the schema
+            other=None,
+            remark=None,
+            job_class=None,
+            job_subclass=None
+        )
+        
+        # Yield the job for pipeline processing
+        yield job.dict()
     
     def clean_text(self, text):
-        """Clean and normalize text."""
-        if not text:
-            return ""
+        """Clean and normalize text.
         
+        Args:
+            text: Text to clean
+            
+        Returns:
+            Cleaned text
+        """
+        if not text:
+            return None
+            
         # Remove extra whitespace
         return " ".join(text.strip().split())
