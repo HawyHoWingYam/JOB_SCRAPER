@@ -102,6 +102,52 @@ def run_jobsdb_spider(job_category=None, job_type=None, sortmode="listed_date", 
     return jobs
 
 
+def scrape_job_details_by_internal_id_range(
+    start_id: int, end_id: int, save: bool = False
+):
+    """Scrape job details for jobs within an internal ID range.
+
+    Args:
+        start_id: Starting internal ID
+        end_id: Ending internal ID
+        save: Whether to save the updated job details
+    """
+    # Initialize database connector
+    db = DatabaseConnector()
+
+    # Get job IDs from database
+    job_ids = db.get_jobs_by_internal_id_range(start_id, end_id)
+    logger.info(f"Found {len(job_ids)} jobs to scrape details for")
+
+    # Initialize scraper
+    jobsdb_scraper = JobsdbScraper()
+
+    # Scrape details for each job
+    for job_id in job_ids:
+        try:
+            logger.info(f"Scraping details for job ID: {job_id}")
+            job_details = jobsdb_scraper.get_job_details(job_id)
+
+            if job_details:
+                print(f"\nJob: {job_details.name}")
+                print(
+                    f"Description: {job_details.description[:200]}..."
+                )  # Show first 200 chars
+
+                if save:
+                    save_choice = input("\nSave this job? (y/n): ").lower()
+                    if save_choice == "y":
+                        db.save_jobs([job_details])
+                        logger.info(f"Saved details for job ID: {job_id}")
+                    else:
+                        logger.info(f"Skipped saving job ID: {job_id}")
+            else:
+                logger.warning(f"Could not get details for job ID: {job_id}")
+
+        except Exception as e:
+            logger.error(f"Error processing job ID {job_id}: {e}")
+
+
 def main():
     """Run the CLI application."""
     parser = argparse.ArgumentParser(description="Job Scraper CLI")
@@ -181,6 +227,34 @@ def main():
         help="Scraping method to use (default: selenium)",
     )
 
+    parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Scrape job details (default: False)",
+    )
+
+    parser.add_argument(
+        "--quantity",
+        type=int,
+        default=10,
+        help="Number of jobs to scrape (default: 10)",
+    )
+
+    # Add new arguments for job details scraping
+    parser.add_argument(
+        "--scrape_details_range",
+        action="store_true",
+        help="Scrape job details for a range of internal IDs",
+    )
+
+    parser.add_argument(
+        "--start_id", type=int, help="Starting internal ID for scraping details"
+    )
+
+    parser.add_argument(
+        "--end_id", type=int, help="Ending internal ID for scraping details"
+    )
+
     args = parser.parse_args()
 
     # Initialize database connector if saving is enabled
@@ -192,8 +266,20 @@ def main():
     if args.end_page is None:
         args.end_page = args.page
 
-    # Run appropriate scrapers
-    if args.source == "all" or args.source == "jobsdb":
+    # Add new condition to handle job details scraping
+    if args.scrape_details_range:
+        if not args.start_id or not args.end_id:
+            logger.error(
+                "Both --start_id and --end_id are required for scraping details range"
+            )
+            return
+
+        scrape_job_details_by_internal_id_range(
+            start_id=args.start_id, end_id=args.end_id, save=args.save
+        )
+        return
+
+    elif args.source == "all" or args.source == "jobsdb":
         total_jobs = 0
 
         # Loop through pages from start to end
