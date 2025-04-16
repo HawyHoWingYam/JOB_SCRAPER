@@ -81,7 +81,7 @@ class BaseScraper(ABC):
             else:
                 full_url = url
 
-            logger.info(f"Fetching URL: {full_url}")
+            # logger.info(f"Fetching URL: {full_url}")
             self.driver.get(full_url)
 
             # Wait for page to load

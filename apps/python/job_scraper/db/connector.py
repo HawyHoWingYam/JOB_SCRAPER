@@ -195,6 +195,34 @@ class DatabaseConnector:
         finally:
             session.close()
 
+
+    def get_jobs_with_null_description(self, limit: int = 10) -> List[int]:
+        """Get IDs of jobs with null descriptions.
+
+        Args:
+            limit: Maximum number of jobs to return
+
+        Returns:
+            List of job IDs
+        """
+        session = self.Session()
+        try:
+            jobs = (
+                session.query(JobModel.id)
+                .filter(sa.or_(JobModel.description.is_(None), JobModel.description == ""))
+                .limit(limit)
+                .all()
+            )
+
+            return [job[0] for job in jobs]
+
+        except SQLAlchemyError as e:
+            logger.error(f"Error getting jobs with null descriptions: {e}")
+            return []
+
+        finally:
+            session.close()
+
     def _convert_to_model(self, job: Job) -> JobModel:
         """Convert Pydantic Job model to SQLAlchemy JobModel.
 
@@ -253,3 +281,39 @@ class DatabaseConnector:
             "job_class": job_model.job_class,
             "job_subclass": job_model.job_subclass,
         }
+
+    def update_job_description(self, job_id: str, description: str) -> bool:
+        """Update the description for a specific job.
+
+        Args:
+            job_id: Job ID to update
+            description: New job description
+
+        Returns:
+            True if successful, False otherwise
+        """
+        session = self.Session()
+
+        try:
+            # Find the job by ID
+            job = session.query(JobModel).filter(JobModel.id == job_id).first()
+
+            if not job:
+                logger.error(f"Job with ID {job_id} not found")
+                return False
+
+            # Update the description
+            job.description = description
+
+            # Commit the changes
+            session.commit()
+            logger.info(f"Updated description for job ID {job_id}")
+            return True
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"Error updating job description: {e}")
+            return False
+
+        finally:
+            session.close()

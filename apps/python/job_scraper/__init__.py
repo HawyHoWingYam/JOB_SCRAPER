@@ -102,25 +102,104 @@ def run_jobsdb_spider(job_category=None, job_type=None, sortmode="listed_date", 
     return jobs
 
 
-def scrape_job_details_by_internal_id_range(
-    start_id: int, end_id: int, save: bool = False
+# def scrape_job_details_by_internal_id_range(
+#     start_id: int, end_id: int, save: bool = False
+# ):
+#     """Scrape job details for jobs within an internal ID range."""
+#     # Initialize database connector
+#     db = DatabaseConnector()
+
+#     # Get job IDs from database
+#     job_ids = db.get_jobs_by_internal_id_range(start_id, end_id)
+#     logger.info(f"Found {len(job_ids)} jobs to scrape details for")
+
+#     # Initialize scraper
+#     jobsdb_scraper = JobsdbScraper()
+
+#     # Scrape details for each job
+#     for job_id in job_ids:
+#         try:
+#             logger.info(f"Scraping details for job ID: {job_id}")
+#             job_details = jobsdb_scraper.get_job_details(job_id)
+
+#             if job_details and job_details.description:
+#                 # Show preview of the description
+#                 preview = (
+#                     job_details.description[:200] + "..."
+#                     if len(job_details.description) > 200
+#                     else job_details.description
+#                 )
+#                 # print(f"\nJob ID: {job_id}")
+#                 # print(f"Description preview: {preview}")
+
+#                 if save:
+#                     # Ask for confirmation before saving
+#                     save_choice = input("\nSave this job description? (y/n): ").lower()
+#                     if save_choice == "y":
+#                         # Update only the description field
+#                         success = db.update_job_description(
+#                             job_id, job_details.description
+#                         )
+#                         if success:
+#                             logger.info(f"Saved description for job ID: {job_id}")
+#                         else:
+#                             logger.error(
+#                                 f"Failed to save description for job ID: {job_id}"
+#                             )
+#                     else:
+#                         logger.info(f"Skipped saving description for job ID: {job_id}")
+#             else:
+#                 logger.warning(f"No description found for job ID: {job_id}")
+
+#         except Exception as e:
+#             logger.error(f"Error processing job ID {job_id}: {e}")
+
+
+def scrape_job_details(
+    job_ids: List[int] = None,
+    start_id: int = None,
+    end_id: int = None,
+    quantity: int = None,
+    save: bool = False,
 ):
-    """Scrape job details for jobs within an internal ID range.
+    """Scrape job details for specified jobs.
 
     Args:
-        start_id: Starting internal ID
-        end_id: Ending internal ID
-        save: Whether to save the updated job details
+        job_ids: Specific job IDs to scrape (prioritized if provided)
+        start_id: Starting internal ID for range-based scraping
+        end_id: Ending internal ID for range-based scraping
+        quantity: Number of jobs with null descriptions to scrape
+        save: Whether to save the scraped descriptions
     """
     # Initialize database connector
     db = DatabaseConnector()
 
-    # Get job IDs from database
-    job_ids = db.get_jobs_by_internal_id_range(start_id, end_id)
-    logger.info(f"Found {len(job_ids)} jobs to scrape details for")
+    # Determine which jobs to scrape
+    if job_ids is None:
+        if start_id is not None and end_id is not None:
+            # Get jobs by internal ID range
+            job_ids = db.get_jobs_by_internal_id_range(start_id, end_id)
+            logger.info(f"Found {len(job_ids)} jobs in ID range {start_id}-{end_id}")
+
+        elif quantity is not None:
+            # Get jobs with null descriptions
+            job_ids = db.get_jobs_with_null_description(limit=quantity)
+            logger.info(f"Found {len(job_ids)} jobs with null descriptions")
+
+        else:
+            logger.error("No job selection criteria provided")
+            return
+
+    if not job_ids:
+        logger.warning("No jobs found to scrape")
+        return
 
     # Initialize scraper
     jobsdb_scraper = JobsdbScraper()
+
+    # Track success/failure counts
+    success_count = 0
+    failure_count = 0
 
     # Scrape details for each job
     for job_id in job_ids:
@@ -128,24 +207,76 @@ def scrape_job_details_by_internal_id_range(
             logger.info(f"Scraping details for job ID: {job_id}")
             job_details = jobsdb_scraper.get_job_details(job_id)
 
-            if job_details:
-                print(f"\nJob: {job_details.name}")
-                print(
-                    f"Description: {job_details.description[:200]}..."
-                )  # Show first 200 chars
+            if job_details and job_details.description:
+                # Show preview of the description
+                preview = (
+                    job_details.description[:200] + "..."
+                    if len(job_details.description) > 200
+                    else job_details.description
+                )
+                # print(f"\nJob ID: {job_id}")
+                # print(f"Description preview: {preview}")
 
                 if save:
-                    save_choice = input("\nSave this job? (y/n): ").lower()
-                    if save_choice == "y":
-                        db.save_jobs([job_details])
-                        logger.info(f"Saved details for job ID: {job_id}")
+                    # Ask for confirmation before saving
+                    success = db.update_job_description(job_id, job_details.description)
+                    if success:
+                        logger.info(f"Saved description for job ID: {job_id}")
+                        success_count += 1
                     else:
-                        logger.info(f"Skipped saving job ID: {job_id}")
+                        logger.error(f"Failed to save description for job ID: {job_id}")
+                        failure_count += 1
+                else:
+                    # If no save flag, just show the preview
+                    logger.info(f"Preview only mode (use --save to update database)")
             else:
-                logger.warning(f"Could not get details for job ID: {job_id}")
+                logger.warning(f"No description found for job ID: {job_id}")
+                failure_count += 1
 
         except Exception as e:
             logger.error(f"Error processing job ID {job_id}: {e}")
+            failure_count += 1
+
+    # Log summary
+    logger.info(
+        f"Scraping complete. Success: {success_count}, Failure: {failure_count}"
+    )
+
+
+def update_job_description(job_id: str, description: str = None):
+    """Update job description for a specific job.
+
+    Args:
+        job_id: Job ID to update
+        description: Optional description text. If None, will scrape it.
+    """
+    # Initialize database connector and scraper
+    db = DatabaseConnector()
+    jobsdb_scraper = JobsdbScraper()
+
+    try:
+        # If description not provided, scrape it
+        if description is None:
+            logger.info(f"Scraping description for job ID: {job_id}")
+            job_details = jobsdb_scraper.get_job_details(job_id)
+            if job_details and job_details.description:
+                description = job_details.description
+            else:
+                logger.error(f"Could not scrape description for job ID: {job_id}")
+                return False
+
+        # Update the description in the database
+        success = db.update_job_description(job_id, description)
+        if success:
+            logger.info(f"Successfully updated description for job ID: {job_id}")
+            return True
+        else:
+            logger.error(f"Failed to update description for job ID: {job_id}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Error updating job description: {e}")
+        return False
 
 
 def main():
@@ -236,8 +367,8 @@ def main():
     parser.add_argument(
         "--quantity",
         type=int,
-        default=10,
-        help="Number of jobs to scrape (default: 10)",
+        default=None,
+        help="Number of jobs with NULL descriptions to scrape",
     )
 
     # Add new arguments for job details scraping
@@ -255,6 +386,13 @@ def main():
         "--end_id", type=int, help="Ending internal ID for scraping details"
     )
 
+    # In main() function, add:
+    parser.add_argument(
+        "--update_description",
+        type=str,
+        help="Update description for a specific job ID",
+    )
+
     args = parser.parse_args()
 
     # Initialize database connector if saving is enabled
@@ -262,24 +400,36 @@ def main():
     if args.save:
         db = DatabaseConnector()
 
-    # Set end_page to page if not specified
-    if args.end_page is None:
-        args.end_page = args.page
+    # Then in the main logic:
+    if args.update_description:
+        update_job_description(args.update_description)
+        return
 
     # Add new condition to handle job details scraping
+    # In main() function
     if args.scrape_details_range:
-        if not args.start_id or not args.end_id:
-            logger.error(
-                "Both --start_id and --end_id are required for scraping details range"
+        # Case 1: Range of internal IDs
+        if args.start_id is not None and args.end_id is not None:
+            scrape_job_details(
+                start_id=args.start_id, end_id=args.end_id, save=args.save
             )
-            return
 
-        scrape_job_details_by_internal_id_range(
-            start_id=args.start_id, end_id=args.end_id, save=args.save
-        )
+        # Case 2: Quantity of jobs with null descriptions
+        elif args.quantity is not None:
+            scrape_job_details(quantity=args.quantity, save=args.save)
+
+        # Error case: Invalid parameters
+        else:
+            logger.error(
+                "Either provide both --start_id and --end_id OR provide --quantity"
+            )
+
         return
 
     elif args.source == "all" or args.source == "jobsdb":
+        # Set end_page to page if not specified
+        if args.end_page is None:
+            args.end_page = args.page
         total_jobs = 0
 
         # Loop through pages from start to end

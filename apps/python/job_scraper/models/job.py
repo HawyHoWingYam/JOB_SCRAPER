@@ -20,7 +20,7 @@ class Job(BaseModel):
     """Job listing model."""
 
     # ID will be None for new jobs (auto-increment in DB)
-    internal_id: int
+    internal_id: Optional[int] = None
     id: int
 
     # Basic job info
