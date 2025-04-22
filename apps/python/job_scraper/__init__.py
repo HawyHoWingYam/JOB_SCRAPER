@@ -221,16 +221,19 @@ def scrape_job_details(
                     # Ask for confirmation before saving
                     success = db.update_job_description(job_id, job_details.description)
                     if success:
-                        logger.info(f"Saved description for job ID: {job_id}")
                         success_count += 1
+                        logger.info(f"Saved description {success_count}/{len(job_ids)} for job ID: {job_id}")
+                        
                     else:
-                        logger.error(f"Failed to save description for job ID: {job_id}")
                         failure_count += 1
+                        logger.error(f"Failed to save description {failure_count} for job ID: {job_id}")
+                        
                 else:
                     # If no save flag, just show the preview
                     logger.info(f"Preview only mode (use --save to update database)")
             else:
                 logger.warning(f"No description found for job ID: {job_id}")
+                db.update_job_description(job_id, "N/A")
                 failure_count += 1
 
         except Exception as e:

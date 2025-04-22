@@ -195,7 +195,6 @@ class DatabaseConnector:
         finally:
             session.close()
 
-
     def get_jobs_with_null_description(self, limit: int = 10) -> List[int]:
         """Get IDs of jobs with null descriptions.
 
@@ -209,7 +208,14 @@ class DatabaseConnector:
         try:
             jobs = (
                 session.query(JobModel.id)
-                .filter(sa.or_(JobModel.description.is_(None), JobModel.description == ""))
+                .filter(
+                    sa.or_(
+                        JobModel.description.is_(None),
+                        JobModel.description == "",
+                        JobModel.description == "N/A",
+                    )
+                )
+                .order_by(JobModel.id.desc())  # Descending order by ID
                 .limit(limit)
                 .all()
             )
