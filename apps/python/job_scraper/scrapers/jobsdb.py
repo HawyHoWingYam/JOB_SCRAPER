@@ -1,15 +1,28 @@
+# apps/python/job_scraper/scrapers/jobsdb.py
 """Jobsdb job scraper implementation."""
 
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import re
+import random  # Import random
 from bs4 import BeautifulSoup
 
 from ..base.scraper import BaseScraper
 from ..models.job import Company, Job
 
 logger = logging.getLogger(__name__)
+
+# List of common User-Agent strings
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
+]
 
 
 class JobsdbScraper(BaseScraper):
@@ -22,14 +35,16 @@ class JobsdbScraper(BaseScraper):
 
     def search_filters(
         self, job_category: str = None, sortmode: str = None, job_type: str = None
-    ) -> Tuple[str, str]:
+    ) -> Tuple[str, str, str]:  # Return type corrected
         """Get search filters for Jobsdb.
 
         Args:
-            job_category: Job category to filter by (e.g., "software-engineer")
+            job_category: Job category key (e.g., "software")
+            sortmode: Sort mode key (e.g., "listed_date")
+            job_type: Job type key (e.g., "full_time")
 
         Returns:
-            Tuple of (job_category_path, sortmode)
+            Tuple of (category_path, job_type_path, sortmode_value)
         """
         # Available job types
         job_types = {
@@ -43,226 +58,309 @@ class JobsdbScraper(BaseScraper):
         job_categories = {
             "software": "information-communication-technology",
             "finance": "accounting-finance",
+            # Add more categories as needed
         }
 
         # Available sort modes
         sortmodes = {"listed_date": "ListedDate", "relevance": "KeywordRelevance"}
 
-        # Use ListedDate as the default sorting method
-        return (
-            job_categories[job_category],
-            job_types[job_type] if job_type else None,
-            sortmodes[sortmode],
+        # Default values
+        default_category_path = (
+            "information-communication-technology"  # Or handle None case
         )
+        default_sortmode_value = "ListedDate"
+
+        category_path = job_categories.get(job_category, default_category_path)
+        job_type_path = job_types.get(
+            job_type
+        )  # Returns None if job_type is None or invalid
+        sortmode_value = sortmodes.get(sortmode, default_sortmode_value)
+
+        # Log if defaults were used due to invalid input? Optional.
+        if job_category and job_category not in job_categories:
+            logger.warning(
+                f"Invalid job_category '{job_category}', using default '{default_category_path}'."
+            )
+        if sortmode and sortmode not in sortmodes:
+            logger.warning(
+                f"Invalid sortmode '{sortmode}', using default '{default_sortmode_value}'."
+            )
+        if job_type and job_type not in job_types:
+            logger.warning(
+                f"Invalid job_type '{job_type}', filter will not be applied."
+            )
+
+        return category_path, job_type_path, sortmode_value
 
     def search_jobs(self, **kwargs) -> List[Job]:
-        """Search for jobs on JobsDB.
+        """Search for jobs on JobsDB using the configured method (Selenium/Requests).
 
         Args:
-            query: Job search query (e.g., "software engineer")
-            location: Job location (e.g., "Hong Kong")
-            **kwargs: Additional search parameters
-                - limit: Maximum number of jobs to return (default: 25)
+            **kwargs: Search parameters including:
+                - job_category (str): e.g., "software"
+                - sortmode (str): e.g., "listed_date"
+                - job_type (str): e.g., "full_time"
+                - page (int): Page number (default: 1)
+                - query (str): Optional search query keyword
+                - location (str): Optional location keyword
 
         Returns:
-            List of Job objects
+            List of Job objects found on the page.
         """
-
-        # # Get job category from kwargs if provided
         job_category = kwargs.get("job_category")
         sortmode = kwargs.get("sortmode", "listed_date")
         job_type = kwargs.get("job_type")
+        page = kwargs.get("page", 1)
+        # Potentially use query/location if the URL structure supports it or if using Selenium actions
 
-        # Get filters from search_filters method
         category_path, job_type_path, sortmode_value = self.search_filters(
             job_category, sortmode, job_type
         )
 
-        # Get optional parameters
-        page = kwargs.get("page", 1)
-
-        # Build the URL with the correct format
-        # Only add job_type to URL if it's not None
+        # Build the URL
         if job_type_path:
+            # Example: /jobs-in-cat/job-type?sortmode=X&page=Y
             search_url = f"{self.base_url}jobs-in-{category_path}/{job_type_path}"
         else:
+            # Example: /jobs-in-cat?sortmode=X&page=Y
             search_url = f"{self.base_url}jobs-in-{category_path}"
 
-        # Jobsdb search URL parameters
         params = {"sortmode": sortmode_value, "page": page}
+        # Add query/location to params if the site uses them like ?q=...&l=...
+        # if kwargs.get("query"): params["q"] = kwargs["query"]
+        # if kwargs.get("location"): params["l"] = kwargs["location"]
+
+        # --- Select random User-Agent ---
+        headers = {"User-Agent": random.choice(USER_AGENTS)}
+        logger.debug(
+            f"Searching jobs on page {page} with User-Agent: {headers['User-Agent']}"
+        )
 
         try:
-            soup = self.get_soup(search_url, params=params)
-            job_listings = []
+            # Assumes get_soup accepts headers and params
+            soup = self.get_soup(search_url, params=params, headers=headers)
+            if not soup:
+                logger.error(
+                    f"Failed to get soup object for page {page} of {category_path}"
+                )
+                return []
 
-            # Find and parse job cards (update selector based on actual JobsDB HTML)
-            job_cards = soup.select("article[data-job-id]")  # Update this selector
+            job_listings = []
+            # Find job cards (Selector needs verification against actual JobsDB HTML)
+            # Common patterns: article, div with data-job-id, li elements
+            job_cards = soup.select("article[data-job-id]")
+            if not job_cards:
+                # Try alternative selectors if the primary one fails
+                job_cards = soup.select("div[data-jobid]")  # Example alternative
+                if not job_cards:
+                    logger.warning(
+                        f"Could not find job cards on page {page} using selectors. Check HTML structure."
+                    )
+                    # Maybe log soup.prettify() here for debugging if needed (careful with size)
+
+            logger.info(f"Found {len(job_cards)} potential job cards on page {page}.")
 
             for card in job_cards:
                 try:
                     job = self._parse_job_card(card, job_category, job_type)
                     if job:
-                        job_listings.append(job)
+                        # Basic validation before adding
+                        if job.id and job.name and job.company_name:
+                            job_listings.append(job)
+                        else:
+                            logger.warning(
+                                f"Parsed job card missing essential info (ID/Name/Company): {job.id}, {job.name}"
+                            )
                 except Exception as e:
-                    logger.error(f"Error parsing job card: {e}")
+                    # Log error for specific card parsing failure but continue with others
+                    logger.error(
+                        f"Error parsing a job card on page {page}: {e}", exc_info=True
+                    )  # Include traceback
 
+            # Log stats for the current page
             self.log_scraping_stats(
+                page=page,  # Add page number to stats
                 jobs_found=len(job_listings),
                 search_params={
                     "job_category": job_category,
                     "category_path": category_path,
+                    "job_type": job_type,
                     "sortmode": sortmode_value,
-                    # "page": page,
                 },
             )
 
             return job_listings
 
         except Exception as e:
-            logger.error(f"Error searching jobs on JobsDB: {e}")
+            logger.error(
+                f"Error searching jobs on JobsDB page {page}: {e}", exc_info=True
+            )
             return []
 
     def get_job_details(self, job_id: str) -> Optional[Job]:
-        """Get detailed information for a specific job.
+        """Get detailed information (primarily description) for a specific job.
 
         Args:
             job_id: JobsDB job ID
 
         Returns:
-            Job object with detailed information or None if not found
+            Job object with ID and description, or None if fetching/parsing fails.
         """
+        if not job_id:
+            logger.error("get_job_details called with empty job_id")
+            return None
+
         job_url = f"{self.base_url}job/{job_id}"
+        logger.debug(f"Fetching details for job URL: {job_url}")
+
+        # --- Select random User-Agent ---
+        headers = {"User-Agent": random.choice(USER_AGENTS)}
+        logger.debug(f"Using User-Agent for job {job_id}: {headers['User-Agent']}")
 
         try:
-            soup = self.get_soup(job_url)
+            # Pass headers to get_soup (assuming it's supported)
+            soup = self.get_soup(job_url, headers=headers)
+            if not soup:
+                logger.error(f"Failed to get soup object for job details: {job_id}")
+                return None  # Critical failure if soup is None
 
-            # Extract job details (update selectors based on actual JobsDB HTML)
-            description_element = soup.select_one(".gg45di0._1apz9us0")
+            # Extract job description (Selector needs verification)
+            # Common selectors: div[class*="description"], div[id*="description"], section[class*="content"]
+            description_element = soup.select_one(
+                'div[data-automation="jobAdDetails"] ._1apz9us0'
+            )  # Example selector, needs verification
+            if not description_element:
+                # Try alternative selectors
+                description_element = soup.select_one("div.job-description")
+                if not description_element:
+                    logger.warning(
+                        f"Could not find description element for job ID: {job_id}. Check selectors."
+                    )
+                    description = "N/A"  # Fallback if no description found
+                else:
+                    description = description_element.get_text(
+                        separator="\\n", strip=True
+                    )  # Get text, preserve line breaks somewhat
+            else:
+                description = description_element.get_text(separator="\\n", strip=True)
 
-            description = (
-                description_element.get_text() if description_element else ""
-            )
+            # Basic cleaning (optional)
+            description = self.clean_text(description) if description else "N/A"
 
-            # Create job object with ID and description
+            # Return a minimal Job object containing only the essential info updated
             return Job(
-                id=job_id,  # Important: Include the job_id
-                description=description
+                id=str(job_id),  # Ensure ID is string if needed
+                description=description,
+                # Add other fields only if they are reliably parsed from the details page
             )
 
         except Exception as e:
-            logger.error(f"Error getting job details for {job_id}: {e}")
-            return None
+            # Catch specific exceptions if possible (e.g., requests.exceptions.RequestException)
+            # logger.error(
+            #     f"Error getting job details for {job_id} from {job_url}: {e}",
+            #     exc_info=True,
+            # )
+            return None  # Return None on any exception during detail fetch/parse
 
     def _parse_job_card(
-        self, card: BeautifulSoup, job_category: str, job_type: str
+        self, card: BeautifulSoup, job_category: str, job_type: Optional[str]
     ) -> Optional[Job]:
-        """Parse job information from a job card.
+        """Parse job information from a job card HTML element.
 
         Args:
-            card: BeautifulSoup object for a job card
+            card: BeautifulSoup object for a job card.
+            job_category: The category used for the search (for logging/classification).
+            job_type: The job type used for the search (for logging/classification).
 
         Returns:
-            Job object or None if parsing fails
+            Job object populated with info from the card, or None if essential info is missing.
         """
         try:
-            # Extract job ID from the data-job-id attribute
+            # --- Extract Job ID ---
             job_id = card.get("data-job-id")
+            if not job_id:
+                # Fallback: Check common alternative attributes
+                job_id = card.get("data-jobid") or card.get("id")
+                if job_id and job_id.startswith("job_"):  # Clean prefix if needed
+                    job_id = job_id.replace("job_", "")
+
+                # Fallback: Regex (use cautiously)
+                if not job_id:
+                    html_str = str(card)
+                    # Make regex more specific if possible
+                    job_id_match = re.search(r'"jobId":"?(\d+)"?', html_str)
+                    job_id = job_id_match.group(1) if job_id_match else None
 
             if not job_id:
-                # Fallback to regex pattern if attribute extraction fails
-                html_str = str(card)
-                job_id_match = re.search(r'"jobId":"(\d+)"', html_str)
-                job_id = job_id_match.group(1) if job_id_match else None
+                logger.warning("Could not extract job ID from card.")
+                return None  # Cannot proceed without an ID
 
-            if not job_id:
-                return None
+            # --- Extract Job Title ---
+            title = "Unknown Title"
+            # Prioritize specific selectors, then broader ones
+            title_element = (
+                card.select_one('h3 a[data-automation="jobTitle"]')
+                or card.select_one('div[data-automation="jobTitle"] a')
+                or card.select_one('a[data-automation="jobTitle"]')
+                or card.select_one("h3")
+            )  # General fallback
+            if title_element:
+                title = self.clean_text(title_element.get_text())
 
-            title = "N/A"
-            try:
-                # Extract job title from h3 element
-                title_element = card.select_one("h3 a")
-                title = (
-                    self.clean_text(title_element.get_text())
-                    if title_element
-                    else "Unknown Title"
-                )
-            except Exception as e:
-                logger.error(f"Error extracting title: {e}")
-                raise
+            # --- Extract Company Name ---
+            company_name = "Unknown Company"
+            company_element = card.select_one(
+                'a[data-automation="jobCompany"]'
+            ) or card.select_one(
+                'span[data-automation="jobCompany"]'
+            )  # Alternative
+            if company_element:
+                company_name = self.clean_text(company_element.get_text())
 
-            company_name = "N/A"
-            try:
-                # Extract company name - update selector based on the HTML structure
-                company_element = card.select_one('a[data-automation="jobCompany"]')
-                company_name = (
-                    self.clean_text(company_element.get_text())
-                    if company_element
-                    else "Unknown Company"
-                )
-            except Exception as e:
-                logger.error(f"Error extracting company name: {e}")
-                raise
+            # --- Extract Location ---
+            location = "Unknown Location"
+            location_element = card.select_one('span[data-automation="jobLocation"]')
+            if location_element:
+                location = self.clean_text(location_element.get_text())
 
-            location = "N/A"
-            try:
-                # Extract location - update selector based on the HTML structure
-                location_element = card.select_one(
-                    'span[data-automation="jobLocation"]'
-                )
-                location = (
-                    self.clean_text(location_element.get_text())
-                    if location_element
-                    else "Unknown Location"
-                )
-            except Exception as e:
-                logger.error(f"Error extracting location: {e}")
-                raise
-
-            # Extract salary information
+            # --- Extract Salary ---
             salary = "N/A"
-            try:
-                salary_element = card.select_one('span[data-automation="jobSalary"]')
-                if salary_element:
-                    # Look for the inner span that contains the actual salary text
-                    salary = self.clean_text(salary_element.get_text())
+            salary_element = card.select_one('span[data-automation="jobSalary"]')
+            if salary_element:
+                salary = self.clean_text(salary_element.get_text())
 
-            except Exception as e:
-                logger.error(f"Error extracting salary: {e}")
-                raise
-
-            # Extract job posting date
+            # --- Extract Posting Date ---
             posting_date_text = "N/A"
-            try:
-                date_element = card.select_one('span[data-automation="jobListingDate"]')
-                if date_element:
-                    # Extract text directly from the span element
-                    posting_date_text = self.clean_text(date_element.get_text())
+            date_element = card.select_one('span[data-automation="jobListingDate"]')
+            if date_element:
+                posting_date_text = self.clean_text(date_element.get_text())
+                # Optional: Try parsing date_text into a datetime object here if format is consistent
 
-            except Exception as e:
-                logger.error(f"Error extracting posting date: {e}")
-                raise
-            # logger.info(
-            #     f"Extracted jobID & title: {job_id}-{title} - {company_name} - {location} - {salary}"
-            # )
-
-            # Create job object with new schema
-            return Job(
-                internal_id=job_id,
-                id=job_id,
+            # --- Create Job Object ---
+            job = Job(
+                id=str(job_id),  # Ensure ID is string
                 name=title,
-                company_name=company_name,
+                company_name=company_name,  # Store as string directly
                 location=location,
                 salary_description=salary,
-                source="JobsDB",
-                date_scraped=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                date_posted=posting_date_text,
-                job_class=job_category,
-                work_type=job_type,
+                source="JobsDB",  # Hardcoded source
+                date_scraped=datetime.utcnow(),  # Use UTC time for consistency
+                date_posted=posting_date_text,  # Store raw text, parse later if needed
+                job_class=job_category,  # Store category used for search
+                work_type=job_type,  # Store type used for search
+                description=None,  # Description is fetched later
             )
+            # logger.debug(f"Parsed job card: {job.id} - {job.name}")
+            return job
 
         except Exception as e:
-            logger.error(f"Error parsing job card: {e}")
-            return None
+            # Log the error and the card's HTML (truncated) for debugging
+            card_html_preview = str(card)[:200]  # Preview first 200 chars
+            logger.error(
+                f"Error parsing job card: {e} - Card HTML preview: {card_html_preview}",
+                exc_info=True,
+            )
+            return None  # Return None on parsing failure
 
     def _extract_job_title(self, soup: BeautifulSoup) -> str:
         """Extract job title from job details page.
