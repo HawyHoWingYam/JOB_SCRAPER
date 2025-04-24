@@ -65,7 +65,7 @@ class DatabaseConnector:
 
         # Create tables if they don't exist
         Base.metadata.create_all(self.engine)
-        logger.info("Database connected and tables created if not exist")
+        # logger.info("Database connected and tables created if not exist")
 
     def save_jobs(self, jobs: List[Job]) -> int:
         """Save jobs to database.
@@ -305,7 +305,7 @@ class DatabaseConnector:
             job = session.query(JobModel).filter(JobModel.id == job_id).first()
 
             if not job:
-                logger.error(f"Job with ID {job_id} not found")
+                # logger.error(f"Job with ID {job_id} not found")
                 return False
 
             # Update the description
@@ -313,12 +313,12 @@ class DatabaseConnector:
 
             # Commit the changes
             session.commit()
-            logger.info(f"Updated description for job ID {job_id}")
+            # logger.info(f"Updated description for job ID {job_id}")
             return True
 
         except SQLAlchemyError as e:
             session.rollback()
-            logger.error(f"Error updating job description: {e}")
+            # logger.error(f"Error updating job description: {e}")
             return False
 
         finally:
