@@ -209,11 +209,11 @@ def scrape_job_details(
 
             if job_details and job_details.description:
                 # Show preview of the description
-                preview = (
-                    job_details.description[:200] + "..."
-                    if len(job_details.description) > 200
-                    else job_details.description
-                )
+                # preview = (
+                #     job_details.description[:200] + "..."
+                #     if len(job_details.description) > 200
+                #     else job_details.description
+                # )
                 # print(f"\nJob ID: {job_id}")
                 # print(f"Description preview: {preview}")
 

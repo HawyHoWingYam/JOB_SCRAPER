@@ -213,9 +213,10 @@ class DatabaseConnector:
                         JobModel.description.is_(None),
                         JobModel.description == "",
                         JobModel.description == "N/A",
+                        JobModel.description == "Error: Scrape Failed",
                     )
                 )
-                .order_by(JobModel.id.desc())  # Descending order by ID
+                .order_by(JobModel.internal_id.desc())  # Descending order by ID
                 .limit(limit)
                 .all()
             )
