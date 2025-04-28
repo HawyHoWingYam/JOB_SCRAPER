@@ -59,12 +59,16 @@ class BaseScraper(ABC):
         if self.driver:
             self.driver.quit()
 
-    def get_soup(self, url: str, params: Optional[Dict] = None) -> BeautifulSoup:
+
+    def get_soup(
+        self, url: str, params: Optional[Dict] = None, headers: Optional[Dict] = None
+    ) -> BeautifulSoup:
         """Get BeautifulSoup object from URL using Selenium.
 
         Args:
             url: URL to fetch
             params: Optional query parameters
+            headers: Optional HTTP headers
 
         Returns:
             BeautifulSoup object for parsing
@@ -74,12 +78,18 @@ class BaseScraper(ABC):
             if params:
                 query_string = "&".join(f"{k}={v}" for k, v in params.items())
                 full_url = (
-                    f"{url}?{query_string}"
-                    if "?" not in url
-                    else f"{url}&{query_string}"
+                    f"{url}?{query_string}" if "?" not in url else f"{url}&{query_string}"
                 )
             else:
                 full_url = url
+
+            # Set User-Agent if provided in headers
+            if headers and "User-Agent" in headers:
+                # Execute CDP (Chrome DevTools Protocol) command to set user agent
+                self.driver.execute_cdp_cmd(
+                    "Network.setUserAgentOverride", {"userAgent": headers["User-Agent"]}
+                )
+                logger.debug(f"Using User-Agent: {headers['User-Agent']}")
 
             # logger.info(f"Fetching URL: {full_url}")
             self.driver.get(full_url)

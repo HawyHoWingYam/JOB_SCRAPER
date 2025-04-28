@@ -1,17 +1,10 @@
 """Command-line interface for running job scrapers."""
 
-import argparse
-import logging
-import sys
-from typing import List
-
+import argparse, logging, sys, math, os, tempfile, json, random, time, threading
+from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor
 from .db.connector import DatabaseConnector
-
-# from .scrapers.indeed import IndeedScraper
 from .scrapers.jobsdb import JobsdbScraper
-import os
-import tempfile
-import json
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 from .scrapers.jobsdb_spider import JobsDBSpider
@@ -102,148 +95,161 @@ def run_jobsdb_spider(job_category=None, job_type=None, sortmode="listed_date", 
     return jobs
 
 
-# def scrape_job_details_by_internal_id_range(
-#     start_id: int, end_id: int, save: bool = False
-# ):
-#     """Scrape job details for jobs within an internal ID range."""
-#     # Initialize database connector
-#     db = DatabaseConnector()
-
-#     # Get job IDs from database
-#     job_ids = db.get_jobs_by_internal_id_range(start_id, end_id)
-#     logger.info(f"Found {len(job_ids)} jobs to scrape details for")
-
-#     # Initialize scraper
-#     jobsdb_scraper = JobsdbScraper()
-
-#     # Scrape details for each job
-#     for job_id in job_ids:
-#         try:
-#             logger.info(f"Scraping details for job ID: {job_id}")
-#             job_details = jobsdb_scraper.get_job_details(job_id)
-
-#             if job_details and job_details.description:
-#                 # Show preview of the description
-#                 preview = (
-#                     job_details.description[:200] + "..."
-#                     if len(job_details.description) > 200
-#                     else job_details.description
-#                 )
-#                 # print(f"\nJob ID: {job_id}")
-#                 # print(f"Description preview: {preview}")
-
-#                 if save:
-#                     # Ask for confirmation before saving
-#                     save_choice = input("\nSave this job description? (y/n): ").lower()
-#                     if save_choice == "y":
-#                         # Update only the description field
-#                         success = db.update_job_description(
-#                             job_id, job_details.description
-#                         )
-#                         if success:
-#                             logger.info(f"Saved description for job ID: {job_id}")
-#                         else:
-#                             logger.error(
-#                                 f"Failed to save description for job ID: {job_id}"
-#                             )
-#                     else:
-#                         logger.info(f"Skipped saving description for job ID: {job_id}")
-#             else:
-#                 logger.warning(f"No description found for job ID: {job_id}")
-
-#         except Exception as e:
-#             logger.error(f"Error processing job ID {job_id}: {e}")
-
-
-def scrape_job_details(
-    job_ids: List[int] = None,
-    start_id: int = None,
-    end_id: int = None,
-    quantity: int = None,
-    save: bool = False,
-):
-    """Scrape job details for specified jobs.
+def process_job_batch(job_batch, worker_id, total_workers, save=False):
+    """Process a batch of jobs with a dedicated worker.
 
     Args:
-        job_ids: Specific job IDs to scrape (prioritized if provided)
-        start_id: Starting internal ID for range-based scraping
-        end_id: Ending internal ID for range-based scraping
-        quantity: Number of jobs with null descriptions to scrape
-        save: Whether to save the scraped descriptions
+        job_batch: List of job IDs to process
+        worker_id: ID of this worker (for logging)
+        total_workers: Total number of workers running
+        save: Whether to save results to database
+
+    Returns:
+        Tuple of (success_count, failure_count)
     """
-    # Initialize database connector
+    thread_id = threading.get_ident()
+    log_prefix = f"[Worker-{worker_id}/{total_workers} Thread-{thread_id}]"
+
+    logger.info(f"{log_prefix} Starting batch processing of {len(job_batch)} jobs")
+
     db = DatabaseConnector()
+    scraper = JobsdbScraper()
 
-    # Determine which jobs to scrape
-    if job_ids is None:
-        if start_id is not None and end_id is not None:
-            # Get jobs by internal ID range
-            job_ids = db.get_jobs_by_internal_id_range(start_id, end_id)
-            logger.info(f"Found {len(job_ids)} jobs in ID range {start_id}-{end_id}")
-
-        elif quantity is not None:
-            # Get jobs with null descriptions
-            job_ids = db.get_jobs_with_null_description(limit=quantity)
-            logger.info(f"Found {len(job_ids)} jobs with null descriptions")
-
-        else:
-            logger.error("No job selection criteria provided")
-            return
-
-    if not job_ids:
-        logger.warning("No jobs found to scrape")
-        return
-
-    # Initialize scraper
-    jobsdb_scraper = JobsdbScraper()
-
-    # Track success/failure counts
     success_count = 0
     failure_count = 0
 
-    # Scrape details for each job
-    for job_id in job_ids:
+    for idx, job_id in enumerate(job_batch):
         try:
-            logger.info(f"Scraping details for job ID: {job_id}")
-            job_details = jobsdb_scraper.get_job_details(job_id)
+            # Add random delay to avoid rate limiting
+            delay = random.uniform(1.0, 3.0)
+            logger.debug(f"{log_prefix} Job {job_id} sleeping for {delay:.2f} seconds")
+            time.sleep(delay)
 
-            if job_details and job_details.description:
-                # Show preview of the description
-                # preview = (
-                #     job_details.description[:200] + "..."
-                #     if len(job_details.description) > 200
-                #     else job_details.description
-                # )
-                # print(f"\nJob ID: {job_id}")
-                # print(f"Description preview: {preview}")
+            # Replace the existing logging line (around line 128) with this:
+            if (idx + 1) % 50 == 0 or idx == 0 or idx == len(job_batch) - 1:
+                logger.info(
+                    f"{log_prefix} Processing job {idx+1}/{len(job_batch)}:{job_id} (Success: {success_count}, Failure: {failure_count})"
+                )
+            job_details = scraper.get_job_details(job_id)
 
+            if (
+                job_details
+                and job_details.description
+                and job_details.description != "N/A"
+            ):
                 if save:
-                    # Ask for confirmation before saving
                     success = db.update_job_description(job_id, job_details.description)
                     if success:
                         success_count += 1
-                        logger.info(f"Saved description {success_count}/{len(job_ids)} for job ID: {job_id}")
-                        
                     else:
                         failure_count += 1
-                        logger.error(f"Failed to save description {failure_count} for job ID: {job_id}")
-                        
                 else:
-                    # If no save flag, just show the preview
-                    logger.info(f"Preview only mode (use --save to update database)")
+                    # Preview mode
+                    success_count += 1
+                    logger.info(
+                        f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} description found (preview mode)"
+                    )
             else:
-                logger.warning(f"No description found for job ID: {job_id}")
-                db.update_job_description(job_id, "N/A")
+                logger.warning(
+                    f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} no valid description found"
+                )
+                if save:
+                    db.update_job_description(job_id, "N/A")
                 failure_count += 1
 
         except Exception as e:
-            logger.error(f"Error processing job ID {job_id}: {e}")
             failure_count += 1
+            logger.error(
+                f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} failed: {e}"
+            )
+            if save:
+                try:
+                    db.update_job_description(job_id, f"Error: {type(e).__name__}")
+                except Exception:
+                    pass
 
-    # Log summary
     logger.info(
-        f"Scraping complete. Success: {success_count}, Failure: {failure_count}"
+        f"{log_prefix} Completed batch. Success: {success_count}, Failure: {failure_count}"
     )
+    return success_count, failure_count
+
+
+def scrape_job_details(
+    job_ids: Optional[List[int]] = None,
+    start_id: Optional[int] = None,
+    end_id: Optional[int] = None,
+    quantity: Optional[int] = None,
+    save: bool = False,
+    max_workers: int = 5,
+):
+    """Parallel scrape with evenly distributed workload per worker."""
+    db = DatabaseConnector()
+
+    # Determine job_ids if not provided
+    if not job_ids:
+        if start_id is not None and end_id is not None:
+            job_ids = db.get_jobs_by_internal_id_range(start_id, end_id)
+            logger.info(
+                f"Found {len(job_ids)} job IDs in range {start_id}-{end_id} to scrape."
+            )
+        elif quantity is not None:
+            job_ids = db.get_jobs_with_null_description(limit=quantity)
+            logger.info(f"Found {len(job_ids)} jobs with null descriptions to scrape.")
+        else:
+            default_quantity = 100
+            job_ids = db.get_jobs_with_null_description(limit=default_quantity)
+            logger.info(
+                f"Found {len(job_ids)} jobs with null descriptions (default limit: {default_quantity})."
+            )
+
+    if not job_ids:
+        logger.warning("No job IDs found matching the criteria to scrape details for.")
+        return
+
+    # Adjust worker count if fewer jobs than workers
+    max_workers = min(max_workers, len(job_ids))
+
+    # Calculate batch size (with ceiling division to ensure all jobs are covered)
+    batch_size = math.ceil(len(job_ids) / max_workers)
+
+    # Split jobs into equal-sized batches (last batch may be smaller)
+    job_batches = [
+        job_ids[i : i + batch_size] for i in range(0, len(job_ids), batch_size)
+    ]
+
+    logger.info(
+        f"Starting detail scraping with {max_workers} workers. Each worker will process ~{batch_size} jobs."
+    )
+    logger.info(f"Total jobs: {len(job_ids)}, Save mode: {save}")
+
+    # Create and start workers
+    total_success = 0
+    total_failure = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Create a future for each batch with its worker ID
+        futures = []
+        for worker_id, batch in enumerate(job_batches, 1):
+            future = executor.submit(
+                process_job_batch,
+                job_batch=batch,
+                worker_id=worker_id,
+                total_workers=len(job_batches),
+                save=save,
+            )
+            futures.append(future)
+
+        # Collect results as they complete
+        for future in futures:
+            success, failure = future.result()
+            total_success += success
+            total_failure += failure
+
+    # Log final summary
+    logger.info(
+        f"All workers completed. Total processed: {total_success + total_failure}."
+    )
+    logger.info(f"Final Stats -> Success: {total_success}, Failure: {total_failure}")
 
 
 def update_job_description(job_id: str, description: str = None):
@@ -258,16 +264,6 @@ def update_job_description(job_id: str, description: str = None):
     jobsdb_scraper = JobsdbScraper()
 
     try:
-        # If description not provided, scrape it
-        if description is None:
-            logger.info(f"Scraping description for job ID: {job_id}")
-            job_details = jobsdb_scraper.get_job_details(job_id)
-            if job_details and job_details.description:
-                description = job_details.description
-            else:
-                logger.error(f"Could not scrape description for job ID: {job_id}")
-                return False
-
         # Update the description in the database
         success = db.update_job_description(job_id, description)
         if success:

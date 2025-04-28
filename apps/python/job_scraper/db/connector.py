@@ -314,7 +314,7 @@ class DatabaseConnector:
 
             # Commit the changes
             session.commit()
-            logger.info(f"Updated description for job ID {job_id}")
+            # logger.info(f"Updated description for job ID {job_id}")
             return True
 
         except SQLAlchemyError as e:
