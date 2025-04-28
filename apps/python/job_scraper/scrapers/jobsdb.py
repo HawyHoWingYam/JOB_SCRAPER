@@ -132,13 +132,16 @@ class JobsdbScraper(BaseScraper):
 
         # --- Select random User-Agent ---
         headers = {"User-Agent": random.choice(USER_AGENTS)}
-        logger.debug(
-            f"Searching jobs on page {page} with User-Agent: {headers['User-Agent']}"
-        )
+        # logger.info(
+        #     f"Searching jobs on page {page} with User-Agent: {headers['User-Agent']}"
+        # )
 
         try:
             # Assumes get_soup accepts headers and params
-            soup = self.get_soup(search_url, params=params, headers=headers)
+            # logger.info(f"Fetching URL: {search_url} with params: {params} and headers: {headers}")
+            soup = self.get_soup(search_url, params=params
+                                 #, headers=headers
+                                 )
             if not soup:
                 logger.error(
                     f"Failed to get soup object for page {page} of {category_path}"
@@ -158,7 +161,7 @@ class JobsdbScraper(BaseScraper):
                     )
                     # Maybe log soup.prettify() here for debugging if needed (careful with size)
 
-            logger.info(f"Found {len(job_cards)} potential job cards on page {page}.")
+            # logger.info(f"Found {len(job_cards)} potential job cards on page {page}.")
 
             for card in job_cards:
                 try:
@@ -179,7 +182,7 @@ class JobsdbScraper(BaseScraper):
 
             # Log stats for the current page
             self.log_scraping_stats(
-                page=page,  # Add page number to stats
+                #page=page,  # Add page number to stats
                 jobs_found=len(job_listings),
                 search_params={
                     "job_category": job_category,
@@ -344,7 +347,7 @@ class JobsdbScraper(BaseScraper):
                 location=location,
                 salary_description=salary,
                 source="JobsDB",  # Hardcoded source
-                date_scraped=datetime.utcnow(),  # Use UTC time for consistency
+                date_scraped=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),  # Use UTC time for consistency
                 date_posted=posting_date_text,  # Store raw text, parse later if needed
                 job_class=job_category,  # Store category used for search
                 work_type=job_type,  # Store type used for search
