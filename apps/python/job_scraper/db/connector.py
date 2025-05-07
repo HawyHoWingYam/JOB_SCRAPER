@@ -183,7 +183,7 @@ class DatabaseConnector:
         try:
             jobs = (
                 session.query(JobModel.id)
-                .filter(JobModel.internal_id.between(start_id, end_id))
+                .filter(JobModel.id.between(start_id, end_id))
                 .all()
             )
             return [job[0] for job in jobs]  # Extract IDs from result tuples
@@ -212,8 +212,8 @@ class DatabaseConnector:
                     sa.or_(
                         JobModel.description.is_(None),
                         JobModel.description == "",
-                        JobModel.description == "N/A",
-                        JobModel.description == "Error: Scrape Failed",
+                        # JobModel.description == "N/A",
+                        # JobModel.description == "Error: Scrape Failed",
                     )
                 )
                 .order_by(JobModel.internal_id.desc())  # Descending order by ID
