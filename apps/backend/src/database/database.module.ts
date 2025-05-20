@@ -14,9 +14,10 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
         port: configService.get('DATABASE_PORT', 5432),
         username: configService.get('DATABASE_USER', 'postgres'),
         password: configService.get('DATABASE_PASSWORD', 'admin'),  // Double-check this is loading correctly
-        database: configService.get('DATABASE_NAME', 'postgres'),
+        database: configService.get('DATABASE_NAME', 'job_scraper'),
         entities: [__dirname + '/../**/*.entity{.ts,.js}'],
-        synchronize: configService.get('NODE_ENV', 'development') !== 'production',
+        synchronize: false, // Change to false temporarily
+        // synchronize: configService.get('NODE_ENV', 'development') !== 'production',
       }),
     }),
   ],

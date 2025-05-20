@@ -22,36 +22,23 @@ class Job(BaseModel):
     # ID will be None for new jobs (auto-increment in DB)
     internal_id: Optional[int] = None
     id: int
-
     # Basic job info
     name: Optional[str] = None  # Job title
     description: Optional[str] = None
-
-    # Company information
     company_name: Optional[str] = None
-
-    # Location and work type
     location: Optional[str] = None
     work_type: Optional[str] = None
-
-    # Compensation
     salary_description: Optional[str] = None
-
-    # Dates
     date_posted: Optional[str] = None
     date_scraped: Optional[str] = Field(
         default_factory=lambda: datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     )
-
-    # Source information
     source: Optional[str] = None  # e.g., "Indeed", "LinkedIn"
-
     # Additional information
     job_class: Optional[str] = None
     job_subclass: Optional[str] = None
     other: Optional[str] = None
     remark: Optional[str] = None
-
     # Fields to ignore for now
     company_id: Optional[int] = None
     source_id: Optional[int] = None
