@@ -1,7 +1,7 @@
 // apps/backend/src/jobs/jobs.service.ts
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository,Not,IsNull } from 'typeorm';
 import { Job } from './entities/job.entity';
 import { CreateJobDto, UpdateJobDto } from './dto/job.dto';
 
@@ -10,13 +10,16 @@ export class JobsService {
   constructor(
     @InjectRepository(Job)
     private jobRepository: Repository<Job>,
-  ) {}
+  ) { }
 
   async findAll(): Promise<Job[]> {
     return this.jobRepository.find({
+      where: [
+        { description: Not('N/A') }
+      ],
       order: {
-        dateScraped: 'DESC',
-      },
+        id: 'DESC',
+      }
     });
   }
 

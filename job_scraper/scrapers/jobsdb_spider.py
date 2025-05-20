@@ -80,6 +80,18 @@ class JobsDBSpider(scrapy.Spider):
         
         # Extract posting date if available
         date_posted = self.clean_text(response.css(".posted-date::text").get())
+
+        # current HK date and time in timestamp format
+        current_time = datetime.now(datetime.timezone.utc).timestamp()
+        # if date_posted contains "d ago", then calculate the timestamp
+        if "d ago" in date_posted:
+            date_posted = current_time - int(date_posted.split("d ago")[0]) * 24 * 60 * 60
+        elif "h ago" in date_posted:
+            date_posted = current_time - int(date_posted.split("h ago")[0]) * 60 * 60
+        elif "m ago" in date_posted:
+            date_posted = current_time - int(date_posted.split("m ago")[0]) * 60
+        else:
+            date_posted = current_time
         
         # Create a Job object with the updated schema
         job = Job(
@@ -89,7 +101,7 @@ class JobsDBSpider(scrapy.Spider):
             location=location,
             work_type=work_type,
             salary_description=salary_description,  # Changed from salary_min/max to salary_description
-            date_posted=date_posted,
+            date_posted=datetime.fromtimestamp(date_posted).strftime("%Y-%m-%d"),
             date_scraped=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             source="JobsDB",
             # Fields added to match the schema

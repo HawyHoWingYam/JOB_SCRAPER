@@ -42,9 +42,9 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   };
 
   return (
-    <div className="flex flex-col md:flex-row gap-6">
+    <div className="flex flex-col md:flex-row gap-2">
       {/* Left side - Jobs Table */}
-      <div className="w-full md:w-1/2">
+      <div className="w-full md:w-3/10">
         <div className="bg-white rounded-lg shadow-md overflow-hidden">
           <div className="bg-gray-50 px-4 py-3 border-b flex justify-between items-center">
             <h2 className="text-lg font-semibold">Jobs List</h2>
@@ -75,8 +75,8 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                       onClick={() => handleSelectJob(job)}
                       className={`hover:bg-gray-50 cursor-pointer ${selectedJob?.id === job.id ? 'bg-blue-50' : ''}`}
                     >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">{job.name || 'Unnamed Position'}</div>
+                      <td className="px-6 py-6 whitespace-normal">
+                        <div className="text-sm font-medium text-gray-900 break-words">{job.name || 'Unnamed Position'}</div>
                       </td>
                       {/* <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-500">{job.companyName || 'Unknown Company'}</div>
@@ -158,10 +158,10 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
       </div>
       
       {/* Right side - Job Form */}
-      <div className="w-full md:w-1/2">
+      <div className="w-full md:w-7/10">
         {selectedJob ? (
           <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-lg font-semibold mb-4">Job Details</h2>
+            <h2 className="text-lg font-semibold mb-4">{selectedJob.id || 'N/A'}</h2>
             <form className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">Job Title</label>
