@@ -1,5 +1,5 @@
 // apps/backend/src/jobs/jobs.controller.ts
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
 import { JobsService } from './jobs.service';
 import { CreateJobDto, UpdateJobDto } from './dto/job.dto';
 import { Job } from './entities/job.entity';
@@ -9,10 +9,13 @@ export class JobsController {
   constructor(private readonly jobsService: JobsService) {}
 
   @Get()
-  async findAll(): Promise<Job[]> {
-    console.log('GET /api/jobs endpoint called');
+  async findAll(@Query('query') query?: string): Promise<Job[]> {
+    console.log(`GET /api/jobs endpoint called${query ? ` with search query: ${query}` : ''}`);
     try {
-      const jobs = await this.jobsService.findAll();
+      const jobs = query 
+        ? await this.jobsService.searchJobs(query)
+        : await this.jobsService.findAll();
+      
       console.log(`Found ${jobs.length} jobs`);
       return jobs;
     } catch (error) {

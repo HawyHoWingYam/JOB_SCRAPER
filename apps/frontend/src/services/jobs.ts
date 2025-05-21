@@ -1,7 +1,8 @@
 // apps/frontend/src/services/jobs.ts
 import { Job } from '@/types/job';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+// Use environment variable or fallback with proper port (3001)
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://192.168.10.171:3001/api';
 
 export async function fetchJobs(): Promise<Job[]> {
   try {
@@ -42,3 +43,6 @@ export async function fetchJobById(id: number): Promise<Job | null> {
     return null;
   }
 }
+
+// Export the API URL for direct use in components 
+export { API_URL };

@@ -1,7 +1,7 @@
 // apps/backend/src/jobs/jobs.service.ts
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository,Not,IsNull } from 'typeorm';
+import { Repository, Not, IsNull, Like, ILike } from 'typeorm';
 import { Job } from './entities/job.entity';
 import { CreateJobDto, UpdateJobDto } from './dto/job.dto';
 
@@ -21,6 +21,23 @@ export class JobsService {
         id: 'DESC',
       }
     });
+  }
+
+  async searchJobs(query: string): Promise<Job[]> {
+    // Case-insensitive search in title and description
+    console.log(`Searching jobs with query: ${query}`);
+    const jobs = await this.jobRepository.find({
+      where: [
+        { name: ILike(`%${query}%`) },
+        { description: ILike(`%${query}%`) },
+        { companyName: ILike(`%${query}%`) }
+      ],
+      order: {
+        id: 'DESC',
+      }
+    });
+    console.log(`Found ${jobs.length} jobs matching query: ${query}`);
+    return jobs;
   }
 
   async findOne(id: number): Promise<Job> {
