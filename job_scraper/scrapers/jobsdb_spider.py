@@ -92,7 +92,8 @@ class JobsDBSpider(scrapy.Spider):
             date_posted = current_time - int(date_posted.split("m ago")[0]) * 60
         else:
             date_posted = current_time
-        
+
+        # if date_posted is in the future, set it to current tim
         # Create a Job object with the updated schema
         job = Job(
             name=job_title,  # Changed from title to name

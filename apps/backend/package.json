@@ -73,5 +73,8 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "overrides": {
+    "inflight": "npm:lru-cache@^7.14.1"
   }
 }

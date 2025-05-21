@@ -212,7 +212,7 @@ class DatabaseConnector:
                     sa.or_(
                         JobModel.description.is_(None),
                         JobModel.description == "",
-                        # JobModel.description == "N/A",
+                        JobModel.description == "N/A",
                         # JobModel.description == "Error: Scrape Failed",
                     )
                 )

@@ -13,28 +13,28 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   const [selectedJob, setSelectedJob] = useState<Job | null>(
     initialJobs.length > 0 ? initialJobs[0] : null
   );
-  
+
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const jobsPerPage = 20;
-  
+
   const handleSelectJob = (job: Job) => {
     setSelectedJob(job);
   };
-  
+
   // Calculate pagination values
   const indexOfLastJob = currentPage * jobsPerPage;
   const indexOfFirstJob = indexOfLastJob - jobsPerPage;
   const currentJobs = initialJobs.slice(indexOfFirstJob, indexOfLastJob);
   const totalPages = Math.ceil(initialJobs.length / jobsPerPage);
-  
+
   // Page navigation handlers
   const goToNextPage = () => {
     if (currentPage < totalPages) {
       setCurrentPage(currentPage + 1);
     }
   };
-  
+
   const goToPreviousPage = () => {
     if (currentPage > 1) {
       setCurrentPage(currentPage - 1);
@@ -70,8 +70,8 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                   </tr>
                 ) : (
                   currentJobs.map((job) => (
-                    <tr 
-                      key={job.id} 
+                    <tr
+                      key={job.id}
                       onClick={() => handleSelectJob(job)}
                       className={`hover:bg-gray-50 cursor-pointer ${selectedJob?.id === job.id ? 'bg-blue-50' : ''}`}
                     >
@@ -90,7 +90,7 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
               </tbody>
             </table>
           </div>
-          
+
           {/* Pagination controls */}
           {initialJobs.length > 0 && (
             <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
@@ -98,18 +98,16 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                 <button
                   onClick={goToPreviousPage}
                   disabled={currentPage === 1}
-                  className={`relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md ${
-                    currentPage === 1 ? 'bg-gray-100 text-gray-400' : 'bg-white text-gray-700 hover:bg-gray-50'
-                  }`}
+                  className={`relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md ${currentPage === 1 ? 'bg-gray-100 text-gray-400' : 'bg-white text-gray-700 hover:bg-gray-50'
+                    }`}
                 >
                   Previous
                 </button>
                 <button
                   onClick={goToNextPage}
                   disabled={currentPage === totalPages}
-                  className={`ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md ${
-                    currentPage === totalPages ? 'bg-gray-100 text-gray-400' : 'bg-white text-gray-700 hover:bg-gray-50'
-                  }`}
+                  className={`ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md ${currentPage === totalPages ? 'bg-gray-100 text-gray-400' : 'bg-white text-gray-700 hover:bg-gray-50'
+                    }`}
                 >
                   Next
                 </button>
@@ -129,9 +127,8 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                     <button
                       onClick={goToPreviousPage}
                       disabled={currentPage === 1}
-                      className={`relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 text-sm font-medium ${
-                        currentPage === 1 ? 'bg-gray-100 text-gray-400' : 'bg-white text-gray-500 hover:bg-gray-50'
-                      }`}
+                      className={`relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 text-sm font-medium ${currentPage === 1 ? 'bg-gray-100 text-gray-400' : 'bg-white text-gray-500 hover:bg-gray-50'
+                        }`}
                     >
                       <span className="sr-only">Previous</span>
                       &laquo;
@@ -142,9 +139,8 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                     <button
                       onClick={goToNextPage}
                       disabled={currentPage === totalPages}
-                      className={`relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 text-sm font-medium ${
-                        currentPage === totalPages ? 'bg-gray-100 text-gray-400' : 'bg-white text-gray-500 hover:bg-gray-50'
-                      }`}
+                      className={`relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 text-sm font-medium ${currentPage === totalPages ? 'bg-gray-100 text-gray-400' : 'bg-white text-gray-500 hover:bg-gray-50'
+                        }`}
                     >
                       <span className="sr-only">Next</span>
                       &raquo;
@@ -156,62 +152,80 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
           )}
         </div>
       </div>
-      
+
       {/* Right side - Job Form */}
       <div className="w-full md:w-7/10">
         {selectedJob ? (
           <div className="bg-white rounded-lg shadow-md p-6">
             <h2 className="text-lg font-semibold mb-4">{selectedJob.id || 'N/A'}</h2>
             <form className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Job Title</label>
-                <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
-                  {selectedJob.name || 'N/A'}
+              {/* Grid layout for the form fields */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Job Title</label>
+                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    {selectedJob.name || 'N/A'}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Company</label>
+                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    {selectedJob.companyName || 'N/A'}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Location</label>
+                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    {selectedJob.location || 'N/A'}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Work Type</label>
+                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    {selectedJob.workType || 'N/A'}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Salary</label>
+                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    {selectedJob.salaryDescription || 'N/A'}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Date Posted</label>
+                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    {selectedJob.datePosted || 'N/A'}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Source</label>
+                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    {selectedJob.source || 'N/A'}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Category</label>
+                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    {'N/A'}
+                  </div>
                 </div>
               </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Company</label>
-                <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
-                  {selectedJob.companyName || 'N/A'}
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Location</label>
-                <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
-                  {selectedJob.location || 'N/A'}
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Work Type</label>
-                <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
-                  {selectedJob.workType || 'N/A'}
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Salary</label>
-                <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
-                  {selectedJob.salaryDescription || 'N/A'}
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Date Posted</label>
-                <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
-                  {selectedJob.datePosted || 'N/A'}
-                </div>
-              </div>
-              
-              <div>
+
+              {/* Description field takes full width */}
+              <div className="col-span-2">
                 <label className="block text-sm font-medium text-gray-700">Description</label>
-                <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md h-32 overflow-y-auto">
+                <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md h-100 overflow-y-auto">
                   {selectedJob.description || 'No description available'}
                 </div>
               </div>
-              
+
               <div className="pt-2">
                 <Link href={`/jobs/${selectedJob.id}`} className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
                   View Full Details

@@ -1,6 +1,6 @@
 """Jobsdb job scraper implementation."""
 
-import logging, re, random
+import logging, re, random, pytz, os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from bs4 import BeautifulSoup
@@ -29,6 +29,28 @@ class JobsdbScraper(BaseScraper):
         """Initialize the Jobsdb scraper."""
         super().__init__(name="Jobsdb", base_url="https://hk.jobsdb.com/")
         # Example URL: "https://hk.jobsdb.com/jobs-in-information-communication-technology?sortmode=ListedDate&page=1"
+
+    def save_soup_to_html(self, soup: BeautifulSoup, filename_prefix: str):
+        """Save BeautifulSoup object to an HTML file in the raw_data folder.
+        
+        Args:
+            soup: BeautifulSoup object to save
+            filename_prefix: Prefix for the filename (e.g. 'search', 'job_123')
+        """
+        # Create raw_data directory if it doesn't exist
+        raw_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'raw_data')
+        os.makedirs(raw_data_dir, exist_ok=True)
+        
+        # Generate timestamp for unique filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{filename_prefix}_{timestamp}.html"
+        file_path = os.path.join(raw_data_dir, filename)
+        
+        # Write the HTML content to the file
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(str(soup))
+        
+        logger.info(f"Saved HTML content to {file_path}")
 
     def search_filters(
         self, job_category: str = None, sortmode: str = None, job_type: str = None
@@ -103,6 +125,11 @@ class JobsdbScraper(BaseScraper):
 
         try:
             soup = self.get_soup(search_url, params=params)
+            
+            # Save the soup to HTML file
+            filename_prefix = f"search_{job_category or 'all'}_{job_type or 'all'}_page{page}"
+            self.save_soup_to_html(soup, filename_prefix)
+            
             job_listings = []
 
             # Find and parse job cards (update selector based on actual JobsDB HTML)
@@ -142,20 +169,35 @@ class JobsdbScraper(BaseScraper):
             Job object with detailed information or None if not found
         """
         job_url = f"{self.base_url}job/{job_id}"
-
+        
         try:
-             # Select random user agent
+            # Select random user agent
             user_agent = random.choice(USER_AGENTS)
             headers = {"User-Agent": user_agent}
             
             # Pass headers to get_soup
             soup = self.get_soup(job_url, headers=headers)
-
-            # Extract job details (update selectors based on actual JobsDB HTML)
-            description_element = soup.select_one(".gg45di0._1apz9us0")
-
+            
+            # Save the soup to HTML file
+            # filename_prefix = f"job_details_{job_id}"
+            # self.save_soup_to_html(soup, filename_prefix)
+ 
+            # Try multiple possible selectors
+            description_element = None
+            selectors = [
+                ".x3iy8f0._1xd6mbw0",
+                ".gg45di0._1apz9us0",  # Previous selector
+                "[data-automation='jobAdDetails']",  # More general selector
+                "div[data-automation='jobAdDetails'] > div"  # Child of jobAdDetails
+            ]
+            for selector in selectors:
+                description_element = soup.select_one(selector)
+                if description_element:
+                    break
+                        
             description = description_element.get_text() if description_element else ""
-
+            # description = str(description_element) if description_element else ""
+            
             # Create job object with ID and description
             return Job(
                 id=job_id, description=description  # Important: Include the job_id
@@ -244,11 +286,25 @@ class JobsdbScraper(BaseScraper):
 
             # Extract job posting date
             posting_date_text = "N/A"
+            date_posted = "N/A"
             try:
                 date_element = card.select_one('span[data-automation="jobListingDate"]')
                 if date_element:
                     # Extract text directly from the span element
                     posting_date_text = self.clean_text(date_element.get_text())
+
+                    # current HK date and time in timestamp format
+                    current_time = datetime.now(pytz.timezone('Asia/Hong_Kong')).timestamp()
+                    # if date_posted contains "d ago", then calculate the timestamp
+                    if "d ago" in posting_date_text:
+                        date_posted = current_time - int(posting_date_text.split("d ago")[0]) * 24 * 60 * 60
+                    elif "h ago" in posting_date_text:
+                        date_posted = current_time - int(posting_date_text.split("h ago")[0]) * 60 * 60
+                    elif "m ago" in posting_date_text:
+                        date_posted = current_time - int(posting_date_text.split("m ago")[0]) * 60
+                    else:
+                        date_posted = current_time
+
 
             except Exception as e:
                 logger.error(f"Error extracting posting date: {e}")
@@ -266,8 +322,8 @@ class JobsdbScraper(BaseScraper):
                 location=location,
                 salary_description=salary,
                 source="JobsDB",
-                date_scraped=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                date_posted=posting_date_text,
+                date_scraped=datetime.now(pytz.timezone('Asia/Hong_Kong')).strftime("%Y-%m-%d"),
+                date_posted=datetime.fromtimestamp(date_posted).strftime("%Y-%m-%d"),
                 job_class=job_category,
                 work_type=job_type,
             )
