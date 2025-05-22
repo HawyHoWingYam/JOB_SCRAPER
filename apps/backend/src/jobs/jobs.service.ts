@@ -1,7 +1,7 @@
 // apps/backend/src/jobs/jobs.service.ts
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not, IsNull, Like, ILike } from 'typeorm';
+import { Repository, Not, IsNull, Like, ILike, In, FindOperator, Raw } from 'typeorm';
 import { Job } from './entities/job.entity';
 import { CreateJobDto, UpdateJobDto } from './dto/job.dto';
 
@@ -24,20 +24,42 @@ export class JobsService {
   }
 
   async searchJobs(query: string): Promise<Job[]> {
-    // Case-insensitive search in title and description
     console.log(`Searching jobs with query: ${query}`);
-    const jobs = await this.jobRepository.find({
-      where: [
-        { name: ILike(`%${query}%`) },
-        { description: ILike(`%${query}%`) },
-        { companyName: ILike(`%${query}%`) }
-      ],
-      order: {
-        id: 'DESC',
-      }
-    });
-    console.log(`Found ${jobs.length} jobs matching query: ${query}`);
-    return jobs;
+
+    // Split the query by comma to handle multiple search terms
+    const searchTerms = query.split(',').map(term => term.trim()).filter(term => term);
+
+    if (searchTerms.length === 0) {
+      return this.findAll();
+    }
+
+    // Start with all jobs
+    let filteredJobs = await this.findAll();
+
+    // For each term, filter the results further
+    for (const term of searchTerms) {
+      // Create a condition that matches this term in any field
+      const termCondition = [
+        { name: ILike(`%${term}%`) },
+        { description: ILike(`%${term}%`) },
+        { companyName: ILike(`%${term}%`) }
+      ];
+
+      // Filter current results against this term
+      const termResults = await this.jobRepository.find({
+        where: termCondition,
+        order: { id: 'DESC' }
+      });
+
+      // Get only IDs that match this term
+      const matchingIds = termResults.map(job => job.id);
+
+      // Keep only jobs that exist in both filteredJobs and termResults
+      filteredJobs = filteredJobs.filter(job => matchingIds.includes(job.id));
+    }
+
+    console.log(`Found ${filteredJobs.length} jobs matching all terms in: ${query}`);
+    return filteredJobs;
   }
 
   async findOne(id: number): Promise<Job> {

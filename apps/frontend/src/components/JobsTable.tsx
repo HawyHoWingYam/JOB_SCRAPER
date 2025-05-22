@@ -16,7 +16,8 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   const [selectedJob, setSelectedJob] = useState<Job | null>(
     initialJobs.length > 0 ? initialJobs[0] : null
   );
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerms, setSearchTerms] = useState<string[]>([]);
+  const [currentSearchTerm, setCurrentSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   // Pagination state
@@ -27,19 +28,49 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
     setSelectedJob(job);
   };
 
-  const handleSearch = async () => {
-    if (!searchTerm.trim()) {
-      // If search is empty, reset to initial jobs
-      setJobs(initialJobs);
-      return;
-    }
+  const handleAddSearchTerm = async () => {
+    if (!currentSearchTerm.trim()) return;
 
+    // Add the current term to the search terms array
+    const newSearchTerms = [...searchTerms, currentSearchTerm.trim()];
+    setSearchTerms(newSearchTerms);
+
+    // Clear the input field
+    setCurrentSearchTerm('');
+
+    // Perform the cascading search
+    await performSearch(newSearchTerms);
+  };
+
+  const handleRemoveSearchTerm = async (termToRemove: string) => {
+    const newSearchTerms = searchTerms.filter(term => term !== termToRemove);
+    setSearchTerms(newSearchTerms);
+
+    // If no search terms left, reset to initial jobs
+    if (newSearchTerms.length === 0) {
+      setJobs(initialJobs);
+      if (initialJobs.length > 0) {
+        setSelectedJob(initialJobs[0]);
+      } else {
+        setSelectedJob(null);
+      }
+    } else {
+      // Otherwise perform search with remaining terms
+      await performSearch(newSearchTerms);
+    }
+  };
+
+  const performSearch = async (terms: string[]) => {
     setIsLoading(true);
     try {
-      const response = await fetch(`${API_URL}/jobs?query=${encodeURIComponent(searchTerm)}`);
+      // Join multiple terms with comma for backend query
+      const queryString = terms.join(',');
+      const response = await fetch(`${API_URL}/jobs?query=${encodeURIComponent(queryString)}`);
+
       if (!response.ok) {
         throw new Error('Search failed');
       }
+
       const data = await response.json();
       setJobs(data);
       setCurrentPage(1); // Reset to first page when search results change
@@ -56,6 +87,36 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
       setIsLoading(false);
     }
   };
+
+  // const handleSearch = async () => {
+  //   if (!currentSearchTerm.trim()) {
+  //     // If search is empty, reset to initial jobs
+  //     setJobs(initialJobs);
+  //     return;
+  //   }
+
+  //   setIsLoading(true);
+  //   try {
+  //     const response = await fetch(`${API_URL}/jobs?query=${encodeURIComponent(searchTerm)}`);
+  //     if (!response.ok) {
+  //       throw new Error('Search failed');
+  //     }
+  //     const data = await response.json();
+  //     setJobs(data);
+  //     setCurrentPage(1); // Reset to first page when search results change
+
+  //     // Select the first job from search results if available
+  //     if (data.length > 0) {
+  //       setSelectedJob(data[0]);
+  //     } else {
+  //       setSelectedJob(null);
+  //     }
+  //   } catch (error) {
+  //     console.error('Error searching jobs:', error);
+  //   } finally {
+  //     setIsLoading(false);
+  //   }
+  // };
 
   // Calculate pagination values
   const indexOfLastJob = currentPage * jobsPerPage;
@@ -79,27 +140,66 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   return (
     <div className="flex flex-col space-y-4">
       {/* Search box */}
-      <div className="flex items-center space-x-2">
-        <input
-          type="text"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Search jobs by title, company, or description..."
-          className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              handleSearch();
-            }
-          }}
-        />
-        <button
-          onClick={handleSearch}
-          disabled={isLoading}
-          className={`px-4 py-2 text-white rounded-md ${isLoading ? 'bg-blue-400' : 'bg-blue-600 hover:bg-blue-700'
-            }`}
-        >
-          {isLoading ? 'Searching...' : 'Search'}
-        </button>
+      <div className="flex flex-col space-y-2">
+        <div className="flex items-center space-x-2">
+          <input
+            type="text"
+            value={currentSearchTerm}
+            onChange={(e) => setCurrentSearchTerm(e.target.value)}
+            placeholder="Search jobs by title, company, or description..."
+            className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handleAddSearchTerm();
+              }
+            }}
+          />
+          <button
+            onClick={handleAddSearchTerm}
+            disabled={isLoading || !currentSearchTerm.trim()}
+            className={`px-4 py-2 text-white rounded-md ${isLoading || !currentSearchTerm.trim() ? 'bg-blue-400' : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+          >
+            {isLoading ? 'Searching...' : 'Add Search'}
+          </button>
+        </div>
+
+        {/* Search terms pills/tags */}
+        {searchTerms.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {searchTerms.map((term, index) => (
+              <span
+                key={`${term}-${index}`}
+                className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800"
+              >
+                {term}
+                <button
+                  onClick={() => handleRemoveSearchTerm(term)}
+                  className="ml-1.5 inline-flex items-center justify-center h-4 w-4 rounded-full hover:bg-blue-200"
+                >
+                  <span className="sr-only">Remove search term</span>
+                  <svg className="h-3 w-3 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </span>
+            ))}
+            {searchTerms.length > 0 && (
+              <button
+                onClick={() => {
+                  setSearchTerms([]);
+                  setJobs(initialJobs);
+                  if (initialJobs.length > 0) {
+                    setSelectedJob(initialJobs[0]);
+                  }
+                }}
+                className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+              >
+                Clear All
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col md:flex-row gap-2">
