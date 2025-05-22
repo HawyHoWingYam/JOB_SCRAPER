@@ -63,19 +63,25 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   const performSearch = async (terms: string[]) => {
     setIsLoading(true);
     try {
-      // Join multiple terms with comma for backend query
-      const queryString = terms.join(',');
-      const response = await fetch(`${API_URL}/jobs?query=${encodeURIComponent(queryString)}`);
-
+      // Send search terms as an array directly
+      const response = await fetch(`${API_URL}/jobs/search`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          query: terms // Send as array instead of joining with commas
+        }),
+      });
+  
       if (!response.ok) {
         throw new Error('Search failed');
       }
-
+  
       const data = await response.json();
       setJobs(data);
-      setCurrentPage(1); // Reset to first page when search results change
-
-      // Select the first job from search results if available
+      setCurrentPage(1);
+  
       if (data.length > 0) {
         setSelectedJob(data[0]);
       } else {
@@ -88,35 +94,6 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
     }
   };
 
-  // const handleSearch = async () => {
-  //   if (!currentSearchTerm.trim()) {
-  //     // If search is empty, reset to initial jobs
-  //     setJobs(initialJobs);
-  //     return;
-  //   }
-
-  //   setIsLoading(true);
-  //   try {
-  //     const response = await fetch(`${API_URL}/jobs?query=${encodeURIComponent(searchTerm)}`);
-  //     if (!response.ok) {
-  //       throw new Error('Search failed');
-  //     }
-  //     const data = await response.json();
-  //     setJobs(data);
-  //     setCurrentPage(1); // Reset to first page when search results change
-
-  //     // Select the first job from search results if available
-  //     if (data.length > 0) {
-  //       setSelectedJob(data[0]);
-  //     } else {
-  //       setSelectedJob(null);
-  //     }
-  //   } catch (error) {
-  //     console.error('Error searching jobs:', error);
-  //   } finally {
-  //     setIsLoading(false);
-  //   }
-  // };
 
   // Calculate pagination values
   const indexOfLastJob = currentPage * jobsPerPage;

@@ -23,16 +23,28 @@ export class JobsService {
     });
   }
 
-  async searchJobs(query: string): Promise<Job[]> {
-    console.log(`Searching jobs with query: ${query}`);
+  async searchJobs(query: string, mode: 'AND' | 'OR' = 'AND'): Promise<Job[]> {
+    console.log(`Searching jobs with query: ${query} (mode: ${mode})`);
+
+    // Normalize query string by removing spaces around commas
+    const normalizedQuery = query.replace(/\s*,\s*/g, '/');
 
     // Split the query by comma to handle multiple search terms
-    const searchTerms = query.split(',').map(term => term.trim()).filter(term => term);
+    const orSearchTerms = normalizedQuery.split('/').map(term => term.trim()).filter(term => term);
+    const andSearchTerms = normalizedQuery.split(',').map(term => term.trim()).filter(term => term);
 
-    if (searchTerms.length === 0) {
+    if (orSearchTerms.length === 0) {
       return this.findAll();
     }
 
+    if (mode === 'OR') {
+      return this.searchJobsOr(orSearchTerms);
+    } else {
+      return this.searchJobsAnd(orSearchTerms);
+    }
+  }
+
+  private async searchJobsAnd(searchTerms: string[]): Promise<Job[]> {
     // Start with all jobs
     let filteredJobs = await this.findAll();
 
@@ -58,8 +70,67 @@ export class JobsService {
       filteredJobs = filteredJobs.filter(job => matchingIds.includes(job.id));
     }
 
-    console.log(`Found ${filteredJobs.length} jobs matching all terms in: ${query}`);
+    console.log(`Found ${filteredJobs.length} jobs matching ALL terms`);
     return filteredJobs;
+  }
+
+  private async searchJobsOr(searchTerms: string[]): Promise<Job[]> {
+    // Create where conditions for OR search - each term creates a set of conditions
+    const whereConditions = searchTerms.map(term => [
+      { name: ILike(`%${term}%`) },
+      { description: ILike(`%${term}%`) },
+      { companyName: ILike(`%${term}%`) }
+    ]).flat();
+
+    const jobs = await this.jobRepository.find({
+      where: whereConditions,
+      order: {
+        id: 'DESC',
+      }
+    });
+
+    console.log(`Found ${jobs.length} jobs matching ANY term`);
+    return jobs;
+  }
+
+  async filterByTerm(jobs: Job[], term: string): Promise<Job[]> {
+    if (jobs.length === 0) return jobs;
+    
+    const jobIds = jobs.map(job => job.id);
+    
+    const whereConditions = [
+      { name: ILike(`%${term}%`), id: In(jobIds) },
+      { description: ILike(`%${term}%`), id: In(jobIds) },
+      { companyName: ILike(`%${term}%`), id: In(jobIds) }
+    ];
+    
+    const matchingJobs = await this.jobRepository.find({
+      where: whereConditions
+    });
+    
+    return matchingJobs;
+  }
+
+  async filterByOrTerms(jobs: Job[], terms: string[]): Promise<Job[]> {
+    // If input jobs array is empty, return it immediately
+    if (jobs.length === 0) return jobs;
+    
+    // Get IDs to filter against
+    const jobIds = jobs.map(job => job.id);
+    
+    // Build OR conditions properly with TypeORM structure
+    const whereConditions = terms.map(term => [
+      { name: ILike(`%${term}%`), id: In(jobIds) },
+      { description: ILike(`%${term}%`), id: In(jobIds) },
+      { companyName: ILike(`%${term}%`), id: In(jobIds) }
+    ]).flat();
+    
+    // Find all jobs matching any of the terms (OR condition)
+    const matchingJobs = await this.jobRepository.find({
+      where: whereConditions
+    });
+    
+    return matchingJobs;
   }
 
   async findOne(id: number): Promise<Job> {
