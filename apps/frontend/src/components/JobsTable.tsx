@@ -69,19 +69,19 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           query: terms // Send as array instead of joining with commas
         }),
       });
-  
+
       if (!response.ok) {
         throw new Error('Search failed');
       }
-  
+
       const data = await response.json();
       setJobs(data);
       setCurrentPage(1);
-  
+
       if (data.length > 0) {
         setSelectedJob(data[0]);
       } else {
@@ -286,62 +286,62 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
         <div className="w-full md:w-7/10">
           {selectedJob ? (
             <div className="bg-white rounded-lg shadow-md p-6">
-              <h2 className="text-lg font-semibold mb-4">{selectedJob.id || 'N/A'}</h2>
+              <h2 className="text-lg font-semibold mb-4 text-black">{selectedJob.id || 'N/A'}</h2>
               <form className="space-y-4">
                 {/* Grid layout for the form fields */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Job Title</label>
-                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md text-black">
                       {selectedJob.name || 'N/A'}
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Company</label>
-                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md text-black">
                       {selectedJob.companyName || 'N/A'}
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Location</label>
-                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md text-black">
                       {selectedJob.location || 'N/A'}
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Work Type</label>
-                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md text-black">
                       {selectedJob.workType || 'N/A'}
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Salary</label>
-                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md text-black">
                       {selectedJob.salaryDescription || 'N/A'}
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Date Posted</label>
-                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md text-black">
                       {selectedJob.datePosted || 'N/A'}
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Source</label>
-                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md text-black">
                       {selectedJob.source || 'N/A'}
                     </div>
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Category</label>
-                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md">
+                    <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md text-black">
                       {'N/A'}
                     </div>
                   </div>
@@ -350,8 +350,16 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                 {/* Description field takes full width */}
                 <div className="col-span-2">
                   <label className="block text-sm font-medium text-gray-700">Description</label>
-                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md h-100 overflow-y-auto">
-                    {selectedJob.description || 'No description available'}
+                  <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md h-100 overflow-y-auto text-black">
+                    {selectedJob.description ? (
+                      /<[a-z][\s\S]*>/i.test(selectedJob.description) ? (
+                        <div dangerouslySetInnerHTML={{ __html: selectedJob.description }} />
+                      ) : (
+                        selectedJob.description
+                      )
+                    ) : (
+                      'No description available'
+                    )}
                   </div>
                 </div>
 
