@@ -124,7 +124,7 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
             value={currentSearchTerm}
             onChange={(e) => setCurrentSearchTerm(e.target.value)}
             placeholder="Search jobs by title, company, or description..."
-            className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+            className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-black"
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 handleAddSearchTerm();

@@ -4,11 +4,16 @@ import logging, re, random, pytz, os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from bs4 import BeautifulSoup
+import google.generativeai as genai
+from dotenv import load_dotenv
 
 from ..base.scraper import BaseScraper
 from ..models.job import Company, Job
 
 logger = logging.getLogger(__name__)
+load_dotenv()
+api_key = "AIzaSyDnUHmWDSsrh3X6wImAH4UOgRV1kLUA41E"
+genai.configure(api_key=api_key)
 
 
 # Add this list at the class level or module level
@@ -196,8 +201,7 @@ class JobsdbScraper(BaseScraper):
                     break
                         
             description = description_element.get_text() if description_element else ""
-            # description = str(description_element) if description_element else ""
-            
+            # description_html = self.format_job_description_with_gemini(description)
             # Create job object with ID and description
             return Job(
                 id=job_id, description=description  # Important: Include the job_id
@@ -207,6 +211,56 @@ class JobsdbScraper(BaseScraper):
             logger.error(f"Error getting job details for {job_id}: {e}")
             return None
 
+
+    def read_job_description_prompt(self):
+        prompt_path = "job_scraper/prompt/job_description.txt"
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as file:
+                prompt = file.read()
+            return prompt
+        except FileNotFoundError:
+            print(f"Error: Could not find the prompt file at {prompt_path}")
+            return None
+        except Exception as e:
+            print(f"Error reading prompt file: {str(e)}")
+            return None
+        
+    def format_job_description_with_gemini(self, text):
+        """Format job description as HTML using Gemini API"""
+        if not text or not text.strip():
+            return "<p>No description available</p>"
+        
+        try:
+            # Initialize the model
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            
+            # Create the prompt
+            prompt = self.read_job_description_prompt()
+            
+            # Generate the HTML response
+            response = model.generate_content(prompt)
+            
+            # Extract and sanitize the HTML
+            html_content = response.text.strip()
+            
+            # If the response has markdown code blocks, extract just the HTML
+            if "```html" in html_content:
+                html_content = html_content.split("```html")[1].split("```")[0].strip()
+            elif "```" in html_content:
+                html_content = html_content.split("```")[1].strip()
+                
+            # Wrap in a container if not already wrapped
+            if not html_content.startswith("<div"):
+                html_content = f'<div class="job-description">{html_content}</div>'
+                
+            return html_content
+            
+        except Exception as e:
+            print(f"Error calling Gemini API: {str(e)}")
+            # Fallback to simple formatting if API call fails
+            return f"<div class='job-description'><p>{text}</p></div>"
+        
+        
     def _parse_job_card(
         self, card: BeautifulSoup, job_category: str, job_type: str
     ) -> Optional[Job]:

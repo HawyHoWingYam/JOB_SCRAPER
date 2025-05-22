@@ -210,9 +210,9 @@ class DatabaseConnector:
                 session.query(JobModel.id)
                 .filter(
                     sa.or_(
-                        JobModel.description.is_(None),
-                        JobModel.description == "",
-                        JobModel.description == "N/A",
+                        # JobModel.description.is_(None),
+                        # JobModel.description == "",
+                        # JobModel.description == "N/A",
                         # JobModel.description == "Error: Scrape Failed",
                     )
                 )
