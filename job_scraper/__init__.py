@@ -1,10 +1,20 @@
 """Command-line interface for running job scrapers."""
 
-import argparse, logging, sys, math, os, tempfile, json, random, time, threading
+import argparse
+import logging
+import sys
+import math
+import os
+import tempfile
+import json
+import random
+import time
+import threading
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor
 from .db.connector import DatabaseConnector
 from .scrapers.jobsdb import JobsdbScraper
+from .scrapers.linkedin import LinkedinScraper
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 from .scrapers.jobsdb_spider import JobsDBSpider
@@ -110,7 +120,8 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
     thread_id = threading.get_ident()
     log_prefix = f"[Worker-{worker_id}/{total_workers} Thread-{thread_id}]"
 
-    logger.info(f"{log_prefix} Starting batch processing of {len(job_batch)} jobs")
+    logger.info(
+        f"{log_prefix} Starting batch processing of {len(job_batch)} jobs")
 
     db = DatabaseConnector()
     scraper = JobsdbScraper()
@@ -122,7 +133,8 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
         try:
             # Add random delay to avoid rate limiting
             delay = random.uniform(1.0, 3.0)
-            logger.debug(f"{log_prefix} Job {job_id} sleeping for {delay:.2f} seconds")
+            logger.debug(
+                f"{log_prefix} Job {job_id} sleeping for {delay:.2f} seconds")
             time.sleep(delay)
 
             # Replace the existing logging line (around line 128) with this:
@@ -138,7 +150,8 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
                 and job_details.description != "N/A"
             ):
                 if save:
-                    success = db.update_job_description(job_id, job_details.description)
+                    success = db.update_job_description(
+                        job_id, job_details.description)
                     if success:
                         success_count += 1
                     else:
@@ -164,7 +177,8 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
             )
             if save:
                 try:
-                    db.update_job_description(job_id, f"Error: {type(e).__name__}")
+                    db.update_job_description(
+                        job_id, f"Error: {type(e).__name__}")
                 except Exception:
                     pass
 
@@ -194,7 +208,8 @@ def scrape_job_details(
             )
         elif quantity is not None:
             job_ids = db.get_jobs_with_null_description(limit=quantity)
-            logger.info(f"Found {len(job_ids)} jobs with null descriptions to scrape.")
+            logger.info(
+                f"Found {len(job_ids)} jobs with null descriptions to scrape.")
         else:
             default_quantity = 100
             job_ids = db.get_jobs_with_null_description(limit=default_quantity)
@@ -203,7 +218,8 @@ def scrape_job_details(
             )
 
     if not job_ids:
-        logger.warning("No job IDs found matching the criteria to scrape details for.")
+        logger.warning(
+            "No job IDs found matching the criteria to scrape details for.")
         return
 
     # Adjust worker count if fewer jobs than workers
@@ -214,7 +230,7 @@ def scrape_job_details(
 
     # Split jobs into equal-sized batches (last batch may be smaller)
     job_batches = [
-        job_ids[i : i + batch_size] for i in range(0, len(job_ids), batch_size)
+        job_ids[i: i + batch_size] for i in range(0, len(job_ids), batch_size)
     ]
 
     logger.info(
@@ -249,7 +265,8 @@ def scrape_job_details(
     logger.info(
         f"All workers completed. Total processed: {total_success + total_failure}."
     )
-    logger.info(f"Final Stats -> Success: {total_success}, Failure: {total_failure}")
+    logger.info(
+        f"Final Stats -> Success: {total_success}, Failure: {total_failure}")
 
 
 def update_job_description(job_id: str, description: str = None):
@@ -267,7 +284,8 @@ def update_job_description(job_id: str, description: str = None):
         # Update the description in the database
         success = db.update_job_description(job_id, description)
         if success:
-            logger.info(f"Successfully updated description for job ID: {job_id}")
+            logger.info(
+                f"Successfully updated description for job ID: {job_id}")
             return True
         else:
             logger.error(f"Failed to update description for job ID: {job_id}")
@@ -424,6 +442,40 @@ def main():
             )
 
         return
+    elif args.source == "linkedin":
+        # Set end_page to page if not specified
+        if args.end_page is None:
+            args.end_page = args.page
+        total_jobs = 0
+
+        # Loop through pages from start to end
+        for current_page in range(args.start_page, args.end_page + 1):
+            logger.info(f"Scraping page {current_page} of {args.end_page}")
+
+            # Use Selenium-based scraper
+            linkedin_scraper = LinkedinScraper()
+            linkedin_jobs = linkedin_scraper.search_jobs(
+                page=current_page,
+            )
+
+            logger.info(
+                f"Found {len(linkedin_jobs)} jobs on Jobsdb (page {current_page})"
+            )
+            total_jobs += len(linkedin_jobs)
+
+            # Save to database if enabled
+            if args.save and db and linkedin_jobs:
+                logger.info(
+                    f"Saving {len(linkedin_jobs)} jobs from page {current_page} to database"
+                )
+                saved_count = db.save_jobs(linkedin_jobs)
+                logger.info(
+                    f"Saved {saved_count} jobs from page {current_page} to database"
+                )
+
+        logger.info(
+            f"Total jobs found across pages {args.start_page} to {args.end_page}: {total_jobs}"
+        )
 
     elif args.source == "all" or args.source == "jobsdb":
         # Set end_page to page if not specified
