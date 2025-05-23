@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
-
+from sqlalchemy import create_engine
 from job_scraper.models.job import Job
 
 # Load environment variables
@@ -50,87 +50,57 @@ class JobModel(Base):
     job_class_id = sa.Column(sa.Integer, nullable=True)
     job_subclass_id = sa.Column(sa.Integer, nullable=True)
 
-
-class DatabaseConnector:
-    """Database connection and operations."""
-
-    # job_scraper/db/connector.py
 class DatabaseConnector:
     def __init__(self):
         """Initialize database connection."""
         try:
-            self.connection = psycopg2.connect(
-                host=os.environ.get("DB_HOST", "localhost"),
-                database=os.environ.get("DB_NAME", "job_scraper"),
-                user=os.environ.get("DB_USER", "postgres"),
-                password=os.environ.get("DB_PASSWORD", "admin"),
-                port=os.environ.get("DB_PORT", "5432")
+            # Get database connection string from environment variables or use default
+            db_host = os.environ.get("DB_HOST", "localhost")
+            db_name = os.environ.get("DB_NAME", "job_scraper")
+            db_user = os.environ.get("DB_USER", "postgres")
+            db_password = os.environ.get("DB_PASSWORD", "admin")
+            db_port = os.environ.get("DB_PORT", "5432")
+            
+            # Create SQLAlchemy engine
+            self.engine = create_engine(
+                f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
             )
+            
+            # Create session factory - this was missing
+            self.Session = sessionmaker(bind=self.engine)
+            
+            # Create a raw connection for other operations
+            self.connection = self.engine.raw_connection()
             
             logger.info("Database connection established successfully")
         except Exception as e:
             logger.error(f"Error connecting to database: {e}")
-            # Set connection to None so methods can check for it
             self.connection = None
-        
-        # """Initialize database connection."""
-        # db_uri = os.getenv(
-        #     "DATABASE_URL", "postgresql://postgres:admin@localhost:5432/job_scraper"
-        # )
-
-        # self.engine = sa.create_engine(db_uri)
-        # self.Session = sessionmaker(bind=self.engine)
-
-        # # Create tables if they don't exist
-        # Base.metadata.create_all(self.engine)
-        # logger.info("Database connected and tables created if not exist")
-
+            self.engine = None
+            self.Session = None
+            raise
+           
     def save_jobs(self, jobs: List[Job]) -> int:
-        """Save jobs to database.
-
-        Args:
-            jobs: List of Job objects to save
-
-        Returns:
-            Number of jobs saved
-        """
+        """Save jobs to database."""
+        if not self.Session:
+            logger.error("Cannot save jobs: No database session available")
+            return 0
+            
         session = self.Session()
-        saved_count = 0
-
         try:
+            saved_count = 0
             for job in jobs:
-                # Convert Pydantic model to SQLAlchemy model
+                # Convert to SQLAlchemy model
                 job_model = self._convert_to_model(job)
-
-                # For new jobs (no ID), just add them
-                if job.id is None:
-                    session.add(job_model)
-                else:
-                    # For existing jobs, update them
-                    existing_job = (
-                        session.query(JobModel).filter(JobModel.id == job.id).first()
-                    )
-
-                    if existing_job:
-                        # Update existing job
-                        for key, value in job_model.__dict__.items():
-                            if key != "_sa_instance_state" and key != "id":
-                                setattr(existing_job, key, value)
-                    else:
-                        # If ID doesn't exist, add as new
-                        session.add(job_model)
-
+                session.add(job_model)
                 saved_count += 1
-
+                
             session.commit()
-            logger.info(f"Saved {saved_count} jobs to database")
             return saved_count
-
-        except SQLAlchemyError as e:
+        except Exception as e:
             session.rollback()
             logger.error(f"Error saving jobs to database: {e}")
             return 0
-
         finally:
             session.close()
 

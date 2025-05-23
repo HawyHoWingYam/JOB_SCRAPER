@@ -60,89 +60,35 @@ class JobsdbScraper(BaseScraper):
     def search_filters(
         self, job_category: str = None, sortmode: str = None, job_type: str = None
     ) -> Tuple[str, str]:
-        """Get search filters for Jobsdb.
-
-        Args:
-            job_category: Job category to filter by (e.g., "software-engineer")
-
-        Returns:
-            Tuple of (job_category_path, sortmode)
-        """
-        # Available job types
-        job_types = {
-            "full_time": "full-time",
-            "part_time": "part-time",
-            "contract": "contract-temp",
-            "casual": "casual-vacation",
-        }
-
         # Available categories
         job_categories = {
             "software": "information-communication-technology",
             "finance": "accounting-finance",
         }
-
-        # Available sort modes
-        sortmodes = {"listed_date": "ListedDate", "relevance": "KeywordRelevance"}
-
         # Use ListedDate as the default sorting method
         return (
             job_categories[job_category],
-            job_types[job_type] if job_type else None,
-            sortmodes[sortmode],
         )
 
     def search_jobs(self, **kwargs) -> List[Job]:
-        """Search for jobs on JobsDB.
-
-        Args:
-            query: Job search query (e.g., "software engineer")
-            location: Job location (e.g., "Hong Kong")
-            **kwargs: Additional search parameters
-                - limit: Maximum number of jobs to return (default: 25)
-
-        Returns:
-            List of Job objects
-        """
-
-        # # Get job category from kwargs if provided
-        job_category = kwargs.get("job_category")
-        sortmode = kwargs.get("sortmode", "listed_date")
-        job_type = kwargs.get("job_type")
-
-        # Get filters from search_filters method
-        category_path, job_type_path, sortmode_value = self.search_filters(
-            job_category, sortmode, job_type
-        )
-
-        # Get optional parameters
+        job_class = kwargs.get("job_class")
+        job_class_path = re.sub(r'[^a-z0-9]', '-', str(job_class).lower())
+        job_class_path = re.sub(r'-+', '-', job_class_path)
+        job_class_path = job_class_path.strip('-')
         page = kwargs.get("page", 1)
-
-        # Build the URL with the correct format
-        # Only add job_type to URL if it's not None
-        if job_type_path:
-            search_url = f"{self.base_url}jobs-in-{category_path}/{job_type_path}"
-        else:
-            search_url = f"{self.base_url}jobs-in-{category_path}"
-
-        # Jobsdb search URL parameters
-        params = {"sortmode": sortmode_value, "page": page}
+        search_url = f"{self.base_url}jobs-in-{job_class_path}"
+        params = {"sortmode": "ListedDate", "page": page}
 
         try:
             soup = self.get_soup(search_url, params=params)
-            
-            # Save the soup to HTML file
-            filename_prefix = f"search_{job_category or 'all'}_{job_type or 'all'}_page{page}"
-            self.save_soup_to_html(soup, filename_prefix)
-            
+            # filename_prefix = f"jobsdb_{job_class}_page{page}"
+            # self.save_soup_to_html(soup, filename_prefix)
             job_listings = []
-
-            # Find and parse job cards (update selector based on actual JobsDB HTML)
-            job_cards = soup.select("article[data-job-id]")  # Update this selector
+            job_cards = soup.select("article[data-job-id]")
 
             for card in job_cards:
                 try:
-                    job = self._parse_job_card(card, job_category, job_type)
+                    job = self._parse_job_card(card, job_class)
                     if job:
                         job_listings.append(job)
                 except Exception as e:
@@ -151,9 +97,7 @@ class JobsdbScraper(BaseScraper):
             self.log_scraping_stats(
                 jobs_found=len(job_listings),
                 search_params={
-                    "job_category": job_category,
-                    "category_path": category_path,
-                    "sortmode": sortmode_value,
+                    "job_class": job_class,
                     # "page": page,
                 },
             )
@@ -262,7 +206,7 @@ class JobsdbScraper(BaseScraper):
         
         
     def _parse_job_card(
-        self, card: BeautifulSoup, job_category: str, job_type: str
+        self, card: BeautifulSoup, job_class: str,
     ) -> Optional[Job]:
         """Parse job information from a job card.
 
@@ -378,8 +322,7 @@ class JobsdbScraper(BaseScraper):
                 source="JobsDB",
                 date_scraped=datetime.now(pytz.timezone('Asia/Hong_Kong')).strftime("%Y-%m-%d"),
                 date_posted=datetime.fromtimestamp(date_posted).strftime("%Y-%m-%d"),
-                job_class=job_category,
-                work_type=job_type,
+                job_class=job_class
             )
 
         except Exception as e:

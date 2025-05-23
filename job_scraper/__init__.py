@@ -84,9 +84,6 @@ class JobScraperConfig:
 
     def __post_init__(self):
         """Validate and normalize the configuration after initialization."""
-        # Initialize database connector for validation
-        self._db = DatabaseConnector()
-
         # Determine the configuration type
         if self.quantity is not None:
             self._config_type = 1
@@ -97,8 +94,8 @@ class JobScraperConfig:
             self._config_type = 1
             self.quantity = 1
 
-        # Validate according to type
-        self._validate_config()
+        # # Validation will happen when validate() is called
+        # self._validate_config()
 
     def _validate_config(self):
         """Validate and normalize the configuration."""
@@ -114,34 +111,74 @@ class JobScraperConfig:
         else:
             self._validate_type2_params()
 
+    def validate(self):
+        """Validate and normalize the configuration."""
+        # Validate common parameters
+        self._validate_source_platform()
+        self._validate_job_class()
+        self._validate_method()
+        self._validate_workers()
+
+        # Validate type-specific parameters
+        if self._config_type == 1:
+            self._validate_type1_params()
+        else:
+            self._validate_type2_params()
+
     def _validate_source_platform(self):
         """Validate and normalize the source platform."""
+        # Check if DB is available
+        if not self._db:
+            logger.error("Database not available for source platform validation")
+            raise ValueError(
+                "Database connection required for source platform validation"
+            )
+
         try:
             valid_platforms = self._db.get_all_source_platforms()
-            valid_platform_ids = [int(platform.id) for platform in valid_platforms]
+            if not valid_platforms:
+                logger.error("No source platforms found in database")
+                raise ValueError("No source platforms found in database")
 
-            # Create mapping from ID to platform name
+            valid_platform_ids = [int(platform.id) for platform in valid_platforms]
             platform_id_to_name = {int(p.id): p.name for p in valid_platforms}
 
             # Store both ID and name
             self.source_platform_id = None
             self.source_platform_name = None
 
-            # Check if source_platform is a valid ID
-            platform_id = int(self.source_platform)
-            if platform_id in valid_platform_ids:
-                self.source_platform_id = platform_id
-                self.source_platform = self.source_platform_name = platform_id_to_name[
-                    platform_id
-                ]
-                logger.info(
-                    f"Using source platform: {self.source_platform_name} (ID: {self.source_platform_id})"
-                )
-            else:
-                raise ValueError(f"Invalid source ID: {platform_id}")
+            try:
+                # Check if source_platform is a valid ID
+                platform_id = int(self.source_platform)
+                if platform_id in valid_platform_ids:
+                    self.source_platform_id = platform_id
+                    self.source_platform_name = platform_id_to_name[platform_id]
+                    logger.info(
+                        f"Using source platform: {self.source_platform_name} (ID: {self.source_platform_id})"
+                    )
+                else:
+                    # Don't default to "all", raise an error instead
+                    raise ValueError(f"Invalid source platform ID: {platform_id}")
+            except (ValueError, TypeError):
+                # Check if source_platform is a name
+                platform_name = str(self.source_platform).lower()
+                for p in valid_platforms:
+                    if p.name.lower() == platform_name:
+                        self.source_platform_id = int(p.id)
+                        self.source_platform_name = p.name
+                        logger.info(
+                            f"Using source platform: {self.source_platform_name} (ID: {self.source_platform_id})"
+                        )
+                        break
+                else:
+                    # Don't default to "all", raise an error instead
+                    raise ValueError(f"Invalid source platform: {self.source_platform}")
+
+            # Keep original field updated for compatibility
+            self.source_platform = self.source_platform_name
         except Exception as e:
             logger.error(f"Error validating source platform: {e}")
-            raise e
+            raise ValueError(f"Failed to validate source platform: {e}")
 
     def _validate_job_class(self):
         try:
@@ -286,10 +323,36 @@ class JobScraperConfig:
 class JobScraperManager:
     """Manager class for job scraping operations."""
 
-    def __init__(self, config: JobScraperConfig):
-        """Initialize with a configuration."""
+    def __init__(
+        self, config: JobScraperConfig, db_connector: Optional[DatabaseConnector] = None
+    ):
+        """Initialize with a configuration and optional database connector."""
         self.config = config
-        # self.db = DatabaseConnector()
+
+        # Initialize database connector - now required
+        self.db = db_connector
+        if self.db is None:
+            try:
+                self.db = DatabaseConnector()
+                logger.info("Database connection established")
+            except Exception as e:
+                logger.error(f"Failed to connect to database: {e}")
+                raise ValueError(f"Database connection required but failed: {e}")
+
+        # Inject the same DB connection into the config
+        self.config._db = self.db
+
+        # Now validate config with DB connection
+        try:
+            self.config.validate()
+        except ValueError as e:
+            logger.error(f"Configuration validation failed: {e}")
+            raise
+
+    def needs_db_validation(self):
+        """Check if this configuration needs database validation."""
+        # If we need to validate source_platform or job_class, we need DB
+        return self.config.source_platform != "all" or self.config.job_class is not None
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "JobScraperManager":
@@ -332,13 +395,25 @@ class JobScraperManager:
             f"Running page-based scraping from page {self.config.start_page} to {self.config.end_page}"
         )
 
-        if self.config.source_platform == 1:
-            return self._run_jobsdb_pages()
-        elif self.config.source_platform == 4:
-            return self._run_linkedin_pages()
+        # Convert source platform name to method name
+        platform_name = str(self.config.source_platform_name).lower()
+        platform_method = platform_name.replace(" ", "_").replace("-", "_")
+        method_name = f"_run_{platform_method}_pages"
+
+        # Check if the method exists
+        if hasattr(self, method_name):
+            # Dynamically call the appropriate method
+            method = getattr(self, method_name)
+            return method()
         else:
-            # Default to running all sources
-            return self._run_all_sources_pages()
+            # Fallback if no specific method exists
+            logger.warning(
+                f"No scraping method found for platform: {self.config.source_platform_name}"
+            )
+            return {
+                "success": False,
+                "message": f"Unsupported platform: {self.config.source_platform_name}",
+            }
 
     def _run_jobsdb_quantity(self) -> Dict[str, Any]:
         """Run quantity-based JobsDB scraping."""
@@ -384,7 +459,6 @@ class JobScraperManager:
                 search_params = {
                     "job_class": self.config.job_class,
                     "page": current_page,
-                    "source_platform": self.config.source_platform,
                 }
 
                 jobs = jobsdb_scraper.search_jobs(**search_params)
