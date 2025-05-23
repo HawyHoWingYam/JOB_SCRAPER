@@ -3,7 +3,7 @@
 import logging
 import os
 from typing import Dict, List, Optional
-import psycopg2 
+import psycopg2
 import sqlalchemy as sa
 from dotenv import load_dotenv
 from sqlalchemy.exc import SQLAlchemyError
@@ -11,6 +11,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy import create_engine
 from job_scraper.models.job import Job
+from sqlalchemy import func
 
 # Load environment variables
 load_dotenv()
@@ -50,6 +51,7 @@ class JobModel(Base):
     job_class_id = sa.Column(sa.Integer, nullable=True)
     job_subclass_id = sa.Column(sa.Integer, nullable=True)
 
+
 class DatabaseConnector:
     def __init__(self):
         """Initialize database connection."""
@@ -60,18 +62,18 @@ class DatabaseConnector:
             db_user = os.environ.get("DB_USER", "postgres")
             db_password = os.environ.get("DB_PASSWORD", "admin")
             db_port = os.environ.get("DB_PORT", "5432")
-            
+
             # Create SQLAlchemy engine
             self.engine = create_engine(
                 f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
             )
-            
+
             # Create session factory - this was missing
             self.Session = sessionmaker(bind=self.engine)
-            
+
             # Create a raw connection for other operations
             self.connection = self.engine.raw_connection()
-            
+
             logger.info("Database connection established successfully")
         except Exception as e:
             logger.error(f"Error connecting to database: {e}")
@@ -79,13 +81,13 @@ class DatabaseConnector:
             self.engine = None
             self.Session = None
             raise
-           
+
     def save_jobs(self, jobs: List[Job]) -> int:
         """Save jobs to database."""
         if not self.Session:
             logger.error("Cannot save jobs: No database session available")
             return 0
-            
+
         session = self.Session()
         try:
             saved_count = 0
@@ -94,7 +96,7 @@ class DatabaseConnector:
                 job_model = self._convert_to_model(job)
                 session.add(job_model)
                 saved_count += 1
-                
+
             session.commit()
             return saved_count
         except Exception as e:
@@ -183,38 +185,53 @@ class DatabaseConnector:
         finally:
             session.close()
 
-    def get_jobs_with_null_description(self, limit: int = 10) -> List[int]:
-        """Get IDs of jobs with null descriptions.
+    def get_jobs_with_filters(self, limit=100, filter_type="new", job_class=None):
+        """Get jobs with null descriptions.
 
         Args:
             limit: Maximum number of jobs to return
+            filter_type: Type of filter to apply ("new", "N/A", "all")
 
         Returns:
             List of job IDs
         """
         session = self.Session()
         try:
-            jobs = (
-                session.query(JobModel.id)
-                .filter(
-                    sa.or_(
-                        # JobModel.description.is_(None),
-                        # JobModel.description == "",
-                        # JobModel.description == "N/A",
-                        # JobModel.description == "Error: Scrape Failed",
-                    )
+            # Start building the query
+            query = session.query(JobModel.id)
+
+            # First, build the description filter based on filter_type
+            description_filter = None
+            if filter_type == "new":
+                description_filter = sa.or_(
+                    JobModel.description.is_(None), JobModel.description == ""
                 )
-                .order_by(JobModel.internal_id.desc())  # Descending order by ID
-                .limit(limit)
-                .all()
-            )
+            elif filter_type == "N/A":
+                description_filter = sa.or_(
+                    JobModel.description.is_(None),
+                    JobModel.description == "",
+                    JobModel.description == "N/A",
+                )
 
-            return [job[0] for job in jobs]
+            # Apply filters to the query
+            if description_filter is not None:
+                query = query.filter(description_filter)
 
-        except SQLAlchemyError as e:
-            logger.error(f"Error getting jobs with null descriptions: {e}")
+            # Add job_class filter if provided
+            if job_class is not None:
+                query = query.filter(
+                    func.lower(JobModel.job_class) == job_class.lower()
+                )
+
+            # Order by internal_id descending and apply limit
+            jobs = query.order_by(JobModel.internal_id.desc()).limit(limit).all()
+            # Extract job IDs
+            job_ids = [job[0] for job in jobs]
+            logger.info(f"Found {len(job_ids)} jobs with filter type '{filter_type}'")
+            return job_ids
+        except Exception as e:
+            logger.error(f"Error fetching jobs with null descriptions: {e}")
             return []
-
         finally:
             session.close()
 

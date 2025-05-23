@@ -170,9 +170,11 @@ class JobScraperConfig:
                             f"Using source platform: {self.source_platform_name} (ID: {self.source_platform_id})"
                         )
                         break
-                else:
-                    # Don't default to "all", raise an error instead
-                    raise ValueError(f"Invalid source platform: {self.source_platform}")
+                    else:
+                        # Don't default to "all", raise an error instead
+                        raise ValueError(
+                            f"Invalid source platform: {self.source_platform}"
+                        )
 
             # Keep original field updated for compatibility
             self.source_platform = self.source_platform_name
@@ -369,7 +371,7 @@ class JobScraperManager:
     def run(self) -> Dict[str, Any]:
         """Run the job scraper with the current configuration.
 
-        Returns:
+    Returns:
             Dict: Results of the scraping operation
         """
         if self.config.get_config_type() == 1:
@@ -381,13 +383,25 @@ class JobScraperManager:
         """Run Type 1 (quantity-based) scraping."""
         logger.info(f"Running quantity-based scraping with {self.config.quantity} jobs")
 
-        if self.config.source_platform == "jobsdb":
-            return self._run_jobsdb_quantity()
-        elif self.config.source_platform == "linkedin":
-            return self._run_linkedin_quantity()
+        # Convert source platform name to method name
+        platform_name = str(self.config.source_platform_name).lower()
+        platform_method = platform_name.replace(" ", "_").replace("-", "_")
+        method_name = f"_run_{platform_method}_quantity"
+
+        # Check if the method exists
+        if hasattr(self, method_name):
+            # Dynamically call the appropriate method
+            method = getattr(self, method_name)
+            return method()
         else:
-            # Default to running all sources
-            return self._run_all_sources_quantity()
+            # Fallback if no specific method exists
+            logger.warning(
+                f"No scraping method found for platform: {self.config.source_platform_name}"
+            )
+            return {
+                "success": False,
+                "message": f"Unsupported platform: {self.config.source_platform_name}",
+            }
 
     def _run_page_based(self) -> Dict[str, Any]:
         """Run Type 2 (page-based) scraping."""
@@ -417,11 +431,16 @@ class JobScraperManager:
 
     def _run_jobsdb_quantity(self) -> Dict[str, Any]:
         """Run quantity-based JobsDB scraping."""
-        # Implementation for JobsDB scraping by quantity
-        job_ids = self.db.get_jobs_with_null_description(limit=self.config.quantity)
+        job_ids = self.db.get_jobs_with_filters(
+            limit=self.config.quantity,
+            filter_type=self.config.filter.value,
+            job_class=self.config.job_class,
+        )
 
         if not job_ids:
-            logger.warning("No job IDs found with null descriptions to scrape.")
+            logger.warning(
+                f"No job IDs found with filter '{self.config.filter.value}'."
+            )
             return {"success": False, "message": "No jobs found", "jobs_scraped": 0}
 
         return self._scrape_job_details(job_ids)
@@ -435,14 +454,6 @@ class JobScraperManager:
             "message": "LinkedIn quantity scraping not implemented yet",
             "jobs_scraped": 0,
         }
-
-    def _run_all_sources_quantity(self) -> Dict[str, Any]:
-        """Run quantity-based scraping for all sources."""
-        # Implementation for all sources by quantity
-        results = {}
-        results.update(self._run_jobsdb_quantity())
-        results.update(self._run_linkedin_quantity())
-        return results
 
     def _run_jobsdb_pages(self) -> Dict[str, Any]:
         """Run page-based JobsDB scraping."""
@@ -493,14 +504,6 @@ class JobScraperManager:
             "message": "LinkedIn page-based scraping not implemented yet",
             "jobs_scraped": 0,
         }
-
-    def _run_all_sources_pages(self) -> Dict[str, Any]:
-        """Run page-based scraping for all sources."""
-        # Implementation for all sources by page range
-        results = {}
-        results.update(self._run_jobsdb_pages())
-        results.update(self._run_linkedin_pages())
-        return results
 
     def _scrape_job_details(self, job_ids: List[str]) -> Dict[str, Any]:
         """Scrape details for the given job IDs."""
@@ -557,18 +560,87 @@ class JobScraperManager:
             "failure_count": total_failure,
         }
 
-
-# Keep existing functions for compatibility
-def run_jobsdb_spider(job_category=None, job_type=None, sortmode="listed_date", page=1):
-    """Run JobsDB spider and return the results as Job objects."""
-    # Your existing implementation
-    # ...
-
-
 def process_job_batch(job_batch, worker_id, total_workers, save=False):
-    """Process a batch of jobs with a dedicated worker."""
-    # Your existing implementation
-    # ...
+    """Process a batch of jobs with a dedicated worker.
+
+    Args:
+        job_batch: List of job IDs to process
+        worker_id: ID of this worker (for logging)
+        total_workers: Total number of workers running
+        save: Whether to save results to database
+
+    Returns:
+        Tuple of (success_count, failure_count)
+    """
+    thread_id = threading.get_ident()
+    log_prefix = f"[Worker-{worker_id}/{total_workers} Thread-{thread_id}]"
+
+    logger.info(f"{log_prefix} Starting batch processing of {len(job_batch)} jobs")
+
+    db = DatabaseConnector()
+    scraper = JobsdbScraper()
+
+    success_count = 0
+    failure_count = 0
+
+    for idx, job_id in enumerate(job_batch):
+        try:
+            # Add random delay to avoid rate limiting
+            delay = random.uniform(1.0, 3.0)
+            logger.debug(
+                    f"{log_prefix} Job {job_id} sleeping for {delay:.2f} seconds"
+                )
+            time.sleep(delay)
+
+            # Replace the existing logging line (around line 128) with this:
+            if (idx + 1) % 50 == 0 or idx == 0 or idx == len(job_batch) - 1:
+                logger.info(
+                    f"{log_prefix} Processing job {idx+1}/{len(job_batch)}:{job_id} (Success: {success_count}, Failure: {failure_count})"
+                )
+            job_details = scraper.get_job_details(job_id)
+
+            if (
+                job_details
+                and job_details.description
+                and job_details.description != "N/A"
+            ):
+                if save:
+                    success = db.update_job_description(
+                            job_id, job_details.description
+                        )
+                    if success:
+                        success_count += 1
+                    else:
+                        failure_count += 1
+                else:
+                    # Preview mode
+                    success_count += 1
+                    logger.info(
+                        f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} description found (preview mode)"
+                    )
+            else:
+                logger.warning(
+                    f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} no valid description found"
+                )
+                if save:
+                    db.update_job_description(job_id, "N/A")
+                failure_count += 1
+
+        except Exception as e:
+            failure_count += 1
+            logger.error(
+                f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} failed: {e}"
+            )
+            if save:
+                try:
+                        db.update_job_description(job_id, f"Error: {type(e).__name__}")
+                except Exception:
+                    pass
+
+    logger.info(
+        f"{log_prefix} Completed batch. Success: {success_count}, Failure: {failure_count}"
+    )
+    return success_count, failure_count
 
 
 # Main function for command-line use
