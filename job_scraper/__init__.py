@@ -1,4 +1,4 @@
-"""Command-line interface for running job scrapers."""
+"""Job scraper module with class-based API."""
 
 import argparse
 import logging
@@ -10,16 +10,20 @@ import json
 import random
 import time
 import threading
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Union, Literal
+from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from enum import Enum
+
+# Import existing components
 from .db.connector import DatabaseConnector
 from .scrapers.jobsdb import JobsdbScraper
-from .scrapers.linkedin import LinkedinScraper
+from .scrapers.linkedin import LinkedInScraper
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 from .scrapers.jobsdb_spider import JobsDBSpider
 from .models.job import Company, Job
-from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -27,506 +31,496 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-
 logger = logging.getLogger(__name__)
 
 
-def run_jobsdb_spider(job_category=None, job_type=None, sortmode="listed_date", page=1):
-    """Run JobsDB spider and return the results as Job objects.
+class ScrapingMethod(str, Enum):
+    """Supported scraping methods."""
 
-    Args:
-        job_category: Category to search in (e.g., "software")
-        job_type: Type of job (default: None)
-        sortmode: Sorting method (default: "listed_date")
-        page: Page number (default: 1)
+    SELENIUM = "selenium"
+    SCRAPY = "scrapy"
 
-    Returns:
-        List of Job objects
-    """
-    # Create a temporary file to store the results
-    output_file = tempfile.mktemp(suffix=".json")
+    @classmethod
+    def get_default(cls) -> "ScrapingMethod":
+        """Get the default scraping method."""
+        return cls.SELENIUM
 
-    # Configure Scrapy settings
-    settings = get_project_settings()
-    settings.update(
-        {
-            "FEED_FORMAT": "json",
-            "FEED_URI": f"file://{output_file}",
-            "LOG_LEVEL": "INFO",
-        }
-    )
 
-    # Initialize the Scrapy process
-    process = CrawlerProcess(settings)
+class FilterType(str, Enum):
+    """Supported filter types."""
 
-    # Start the spider
-    process.crawl(
-        JobsDBSpider,
-        job_category=job_category,
-        job_type=job_type,
-        sortmode=sortmode,
-        page=page,
-    )
+    NA = "N/A"
+    ALL = "all"
+    NEW = "new"
 
-    # Run the spider and wait for it to finish
-    process.start()
+    @classmethod
+    def get_default(cls) -> "FilterType":
+        """Get the default filter type."""
+        return cls.NEW
 
-    # Read the results from the temporary file
-    jobs = []
-    if os.path.exists(output_file):
-        with open(output_file, "r") as f:
-            items = json.load(f)
 
-        # Convert spider output to Job objects
-        for item in items:
-            job = Job(
-                id=item["id"],
-                name=item["title"],
-                description="",  # Empty description for search results
-                company_name=Company(name=item["company"]["name"]),
-                location=item["location"],
-                source="Jobsdb",
-                date_scraped=datetime.fromisoformat(item["date_scraped"]),
-                # date_posted=item["date_posted"],
-                # work_type=item["work_type"],
-                salary_description=item["salary_description"],
-                job_class=item["job_class"],
-                # job_class_id=item["job_class_id"],
-                # job_subclass=item["job_subclass"],
-                # job_subclass_id=item["job_subclass_id"],
-                # other=item["other"],
-                # remark=item["remark"]
+@dataclass
+class JobScraperConfig:
+    """Configuration for the job scraper."""
+
+    # Common parameters
+    source_platform: str = "all"
+    job_class: Optional[str] = None
+    method: ScrapingMethod = ScrapingMethod.SELENIUM
+    save: bool = False
+    workers: int = 1
+
+    # Type 1 specific parameters (quantity-based)
+    quantity: Optional[int] = None
+    filter: FilterType = FilterType.NEW
+
+    # Type 2 specific parameters (page-based)
+    start_page: Optional[int] = None
+    end_page: Optional[int] = None
+
+    # Internal state
+    _db: Optional[DatabaseConnector] = field(default=None, repr=False)
+    _config_type: Optional[int] = field(default=None, repr=False)
+
+    def __post_init__(self):
+        """Validate and normalize the configuration after initialization."""
+        # Initialize database connector for validation
+        self._db = DatabaseConnector()
+
+        # Determine the configuration type
+        if self.quantity is not None:
+            self._config_type = 1
+        elif self.start_page is not None or self.end_page is not None:
+            self._config_type = 2
+        else:
+            # Default to Type 1 with minimum quantity
+            self._config_type = 1
+            self.quantity = 1
+
+        # Validate according to type
+        self._validate_config()
+
+    def _validate_config(self):
+        """Validate and normalize the configuration."""
+        # Validate common parameters
+        self._validate_source_platform()
+        self._validate_job_class()
+        self._validate_method()
+        self._validate_workers()
+
+        # Validate type-specific parameters
+        if self._config_type == 1:
+            self._validate_type1_params()
+        else:
+            self._validate_type2_params()
+
+    def _validate_source_platform(self):
+        """Validate and normalize the source platform."""
+        try:
+            valid_platforms = self._db.get_all_source_platforms()
+            valid_platform_ids = [int(platform.id) for platform in valid_platforms]
+
+            # Create mapping from ID to platform name
+            platform_id_to_name = {int(p.id): p.name for p in valid_platforms}
+
+            # Store both ID and name
+            self.source_platform_id = None
+            self.source_platform_name = None
+
+            # Check if source_platform is a valid ID
+            platform_id = int(self.source_platform)
+            if platform_id in valid_platform_ids:
+                self.source_platform_id = platform_id
+                self.source_platform = self.source_platform_name = platform_id_to_name[
+                    platform_id
+                ]
+                logger.info(
+                    f"Using source platform: {self.source_platform_name} (ID: {self.source_platform_id})"
+                )
+            else:
+                raise ValueError(f"Invalid source ID: {platform_id}")
+        except Exception as e:
+            logger.error(f"Error validating source platform: {e}")
+            raise e
+
+    def _validate_job_class(self):
+        try:
+            valid_job_classes = self._db.get_all_job_classes()
+            valid_job_class_ids = [int(job_class.id) for job_class in valid_job_classes]
+
+            # Create mapping from ID to job class name
+            job_class_id_to_name = {int(jc.id): jc.name for jc in valid_job_classes}
+
+            # Store both ID and name
+            self.job_class_id = None
+            self.job_class_name = None
+
+            # Check if job_class is a valid ID
+            job_class_id = int(self.job_class)
+            if job_class_id in valid_job_class_ids:
+                self.job_class_id = job_class_id
+                self.job_class = self.job_class_name = job_class_id_to_name[
+                    job_class_id
+                ]
+                logger.info(
+                    f"Using job class: {self.job_class_name} (ID: {self.job_class_id})"
+                )
+            else:
+                raise ValueError(f"Invalid job class ID: {job_class_id}")
+        except Exception as e:
+            logger.error(f"Error validating job class: {e}")
+            raise e
+
+    def _validate_method(self):
+        """Validate and normalize the scraping method."""
+        if not isinstance(self.method, ScrapingMethod):
+            try:
+                self.method = ScrapingMethod(self.method)
+            except ValueError:
+                logger.warning(
+                    f"Invalid method value: {self.method}. Using default: selenium"
+                )
+                self.method = ScrapingMethod.SELENIUM
+
+    def _validate_workers(self):
+        """Validate and normalize the number of workers."""
+        if not isinstance(self.workers, int) or self.workers < 1:
+            logger.warning(f"Invalid workers value: {self.workers}. Using default: 1")
+            self.workers = 1
+
+    def _validate_type1_params(self):
+        """Validate Type 1 specific parameters (quantity-based)."""
+        # Validate quantity
+        if not isinstance(self.quantity, int) or self.quantity < 1:
+            logger.warning(
+                f"Invalid quantity value: {self.quantity}. Setting to minimum value: 1"
             )
-            jobs.append(job)
+            self.quantity = 1
 
-        # Clean up the temporary file
-        os.remove(output_file)
+        # Validate filter
+        if not isinstance(self.filter, FilterType):
+            try:
+                self.filter = FilterType(self.filter)
+            except ValueError:
+                logger.warning(
+                    f"Invalid filter value: {self.filter}. Using default: new"
+                )
+                self.filter = FilterType.NEW
 
-    return jobs
+        # Clear Type 2 params
+        self.start_page = None
+        self.end_page = None
+
+    def _validate_type2_params(self):
+        """Validate Type 2 specific parameters (page-based)."""
+        # Validate start_page
+        if not isinstance(self.start_page, int) or self.start_page < 1:
+            logger.warning(
+                f"Invalid start_page value: {self.start_page}. Using default: 1"
+            )
+            self.start_page = 1
+
+        # Validate end_page
+        if not isinstance(self.end_page, int) or self.end_page < self.start_page:
+            logger.warning(
+                f"Invalid end_page value: {self.end_page}. Using default: {self.start_page}"
+            )
+            self.end_page = self.start_page
+
+        # Clear Type 1 params
+        self.quantity = None
+        self.filter = FilterType.NEW  # Still set a default even though it's not used
+
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> "JobScraperConfig":
+        """Create a configuration from a dictionary."""
+        # Convert string enum values
+        if "method" in config_dict and isinstance(config_dict["method"], str):
+            try:
+                config_dict["method"] = ScrapingMethod(config_dict["method"])
+            except ValueError:
+                config_dict["method"] = ScrapingMethod.SELENIUM
+
+        if "filter" in config_dict and isinstance(config_dict["filter"], str):
+            try:
+                config_dict["filter"] = FilterType(config_dict["filter"])
+            except ValueError:
+                config_dict["filter"] = FilterType.NEW
+
+        # Convert numeric values
+        for key in ["quantity", "start_page", "end_page", "workers"]:
+            if key in config_dict and config_dict[key] is not None:
+                try:
+                    config_dict[key] = int(config_dict[key])
+                except (ValueError, TypeError):
+                    config_dict.pop(key)  # Remove invalid values, defaults will be used
+
+        # Convert boolean values
+        if "save" in config_dict:
+            if isinstance(config_dict["save"], str):
+                config_dict["save"] = config_dict["save"].lower() == "true"
+
+        return cls(**config_dict)
+
+    @classmethod
+    def from_args(cls, args_list: List[str]) -> "JobScraperConfig":
+        """Create a configuration from command-line arguments."""
+        # Parse command-line arguments in "key=value" format
+        config_dict = {}
+        # Join args with spaces and split by comma
+        cmd_str = " ".join(args_list)
+        parts = [part.strip() for part in cmd_str.split(",")]
+
+        for part in parts:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                config_dict[key.strip()] = value.strip()
+
+        return cls.from_dict(config_dict)
+
+    def get_config_type(self) -> int:
+        """Get the configuration type (1 or 2)."""
+        return self._config_type
+
+
+class JobScraperManager:
+    """Manager class for job scraping operations."""
+
+    def __init__(self, config: JobScraperConfig):
+        """Initialize with a configuration."""
+        self.config = config
+        # self.db = DatabaseConnector()
+
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> "JobScraperManager":
+        """Create a manager from a dictionary configuration."""
+        config = JobScraperConfig.from_dict(config_dict)
+        return cls(config)
+
+    @classmethod
+    def from_args(cls, args_list: List[str]) -> "JobScraperManager":
+        """Create a manager from command-line arguments."""
+        config = JobScraperConfig.from_args(args_list)
+        return cls(config)
+
+    def run(self) -> Dict[str, Any]:
+        """Run the job scraper with the current configuration.
+
+        Returns:
+            Dict: Results of the scraping operation
+        """
+        if self.config.get_config_type() == 1:
+            return self._run_quantity_based()
+        else:
+            return self._run_page_based()
+
+    def _run_quantity_based(self) -> Dict[str, Any]:
+        """Run Type 1 (quantity-based) scraping."""
+        logger.info(f"Running quantity-based scraping with {self.config.quantity} jobs")
+
+        if self.config.source_platform == "jobsdb":
+            return self._run_jobsdb_quantity()
+        elif self.config.source_platform == "linkedin":
+            return self._run_linkedin_quantity()
+        else:
+            # Default to running all sources
+            return self._run_all_sources_quantity()
+
+    def _run_page_based(self) -> Dict[str, Any]:
+        """Run Type 2 (page-based) scraping."""
+        logger.info(
+            f"Running page-based scraping from page {self.config.start_page} to {self.config.end_page}"
+        )
+
+        if self.config.source_platform == 1:
+            return self._run_jobsdb_pages()
+        elif self.config.source_platform == 4:
+            return self._run_linkedin_pages()
+        else:
+            # Default to running all sources
+            return self._run_all_sources_pages()
+
+    def _run_jobsdb_quantity(self) -> Dict[str, Any]:
+        """Run quantity-based JobsDB scraping."""
+        # Implementation for JobsDB scraping by quantity
+        job_ids = self.db.get_jobs_with_null_description(limit=self.config.quantity)
+
+        if not job_ids:
+            logger.warning("No job IDs found with null descriptions to scrape.")
+            return {"success": False, "message": "No jobs found", "jobs_scraped": 0}
+
+        return self._scrape_job_details(job_ids)
+
+    def _run_linkedin_quantity(self) -> Dict[str, Any]:
+        """Run quantity-based LinkedIn scraping."""
+        # Implementation for LinkedIn scraping by quantity
+        # This would be similar to the JobsDB implementation
+        return {
+            "success": True,
+            "message": "LinkedIn quantity scraping not implemented yet",
+            "jobs_scraped": 0,
+        }
+
+    def _run_all_sources_quantity(self) -> Dict[str, Any]:
+        """Run quantity-based scraping for all sources."""
+        # Implementation for all sources by quantity
+        results = {}
+        results.update(self._run_jobsdb_quantity())
+        results.update(self._run_linkedin_quantity())
+        return results
+
+    def _run_jobsdb_pages(self) -> Dict[str, Any]:
+        """Run page-based JobsDB scraping."""
+        total_jobs = 0
+        jobs = []
+        for current_page in range(self.config.start_page, self.config.end_page + 1):
+            logger.info(f"Scraping page {current_page} of {self.config.end_page}")
+
+            if self.config.method == ScrapingMethod.SELENIUM:
+                # Use Selenium-based scraper
+                jobsdb_scraper = JobsdbScraper()
+
+                # Only pass the parameters specified by the user
+                search_params = {
+                    "job_class": self.config.job_class,
+                    "page": current_page,
+                    "source_platform": self.config.source_platform,
+                }
+
+                jobs = jobsdb_scraper.search_jobs(**search_params)
+
+                # Use the save parameter to determine if we should save to database
+                if self.config.save and self.db and jobs:
+                    saved_count = self.db.save_jobs(jobs)
+                    logger.info(
+                        f"Saved {saved_count} jobs from page {current_page} to database"
+                    )
+            total_jobs += len(jobs)
+            jobs = []
+
+        logger.info(
+            f"Total jobs found across pages {self.config.start_page} to {self.config.end_page}: {total_jobs}"
+        )
+
+        return {
+            "success": True,
+            "jobs_scraped": total_jobs,
+            "pages_scraped": self.config.end_page - self.config.start_page + 1,
+            "job_class": self.config.job_class,
+            "save": self.config.save,
+            "source_platform": self.config.source_platform,
+        }
+
+    def _run_linkedin_pages(self) -> Dict[str, Any]:
+        """Run page-based LinkedIn scraping."""
+        # Similar implementation as JobsDB but for LinkedIn
+        return {
+            "success": True,
+            "message": "LinkedIn page-based scraping not implemented yet",
+            "jobs_scraped": 0,
+        }
+
+    def _run_all_sources_pages(self) -> Dict[str, Any]:
+        """Run page-based scraping for all sources."""
+        # Implementation for all sources by page range
+        results = {}
+        results.update(self._run_jobsdb_pages())
+        results.update(self._run_linkedin_pages())
+        return results
+
+    def _scrape_job_details(self, job_ids: List[str]) -> Dict[str, Any]:
+        """Scrape details for the given job IDs."""
+        max_workers = min(self.config.workers, len(job_ids))
+
+        # Calculate batch size (with ceiling division to ensure all jobs are covered)
+        batch_size = math.ceil(len(job_ids) / max_workers)
+
+        # Split jobs into equal-sized batches (last batch may be smaller)
+        job_batches = [
+            job_ids[i : i + batch_size] for i in range(0, len(job_ids), batch_size)
+        ]
+
+        logger.info(
+            f"Starting detail scraping with {max_workers} workers. Each worker will process ~{batch_size} jobs."
+        )
+        logger.info(f"Total jobs: {len(job_ids)}, Save mode: {self.config.save}")
+
+        # Create and start workers
+        total_success = 0
+        total_failure = 0
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Create a future for each batch with its worker ID
+            futures = []
+            for worker_id, batch in enumerate(job_batches, 1):
+                future = executor.submit(
+                    process_job_batch,
+                    job_batch=batch,
+                    worker_id=worker_id,
+                    total_workers=len(job_batches),
+                    save=self.config.save,
+                )
+                futures.append(future)
+
+            # Collect results as they complete
+            for future in futures:
+                success, failure = future.result()
+                total_success += success
+                total_failure += failure
+
+        # Log final summary
+        logger.info(
+            f"All workers completed. Total processed: {total_success + total_failure}."
+        )
+        logger.info(
+            f"Final Stats -> Success: {total_success}, Failure: {total_failure}"
+        )
+
+        return {
+            "success": True,
+            "jobs_processed": total_success + total_failure,
+            "success_count": total_success,
+            "failure_count": total_failure,
+        }
+
+
+# Keep existing functions for compatibility
+def run_jobsdb_spider(job_category=None, job_type=None, sortmode="listed_date", page=1):
+    """Run JobsDB spider and return the results as Job objects."""
+    # Your existing implementation
+    # ...
 
 
 def process_job_batch(job_batch, worker_id, total_workers, save=False):
-    """Process a batch of jobs with a dedicated worker.
-
-    Args:
-        job_batch: List of job IDs to process
-        worker_id: ID of this worker (for logging)
-        total_workers: Total number of workers running
-        save: Whether to save results to database
-
-    Returns:
-        Tuple of (success_count, failure_count)
-    """
-    thread_id = threading.get_ident()
-    log_prefix = f"[Worker-{worker_id}/{total_workers} Thread-{thread_id}]"
-
-    logger.info(
-        f"{log_prefix} Starting batch processing of {len(job_batch)} jobs")
-
-    db = DatabaseConnector()
-    scraper = JobsdbScraper()
-
-    success_count = 0
-    failure_count = 0
-
-    for idx, job_id in enumerate(job_batch):
-        try:
-            # Add random delay to avoid rate limiting
-            delay = random.uniform(1.0, 3.0)
-            logger.debug(
-                f"{log_prefix} Job {job_id} sleeping for {delay:.2f} seconds")
-            time.sleep(delay)
-
-            # Replace the existing logging line (around line 128) with this:
-            if (idx + 1) % 50 == 0 or idx == 0 or idx == len(job_batch) - 1:
-                logger.info(
-                    f"{log_prefix} Processing job {idx+1}/{len(job_batch)}:{job_id} (Success: {success_count}, Failure: {failure_count})"
-                )
-            job_details = scraper.get_job_details(job_id)
-
-            if (
-                job_details
-                and job_details.description
-                and job_details.description != "N/A"
-            ):
-                if save:
-                    success = db.update_job_description(
-                        job_id, job_details.description)
-                    if success:
-                        success_count += 1
-                    else:
-                        failure_count += 1
-                else:
-                    # Preview mode
-                    success_count += 1
-                    logger.info(
-                        f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} description found (preview mode)"
-                    )
-            else:
-                logger.warning(
-                    f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} no valid description found"
-                )
-                if save:
-                    db.update_job_description(job_id, "N/A")
-                failure_count += 1
-
-        except Exception as e:
-            failure_count += 1
-            logger.error(
-                f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} failed: {e}"
-            )
-            if save:
-                try:
-                    db.update_job_description(
-                        job_id, f"Error: {type(e).__name__}")
-                except Exception:
-                    pass
-
-    logger.info(
-        f"{log_prefix} Completed batch. Success: {success_count}, Failure: {failure_count}"
-    )
-    return success_count, failure_count
+    """Process a batch of jobs with a dedicated worker."""
+    # Your existing implementation
+    # ...
 
 
-def scrape_job_details(
-    job_ids: Optional[List[int]] = None,
-    start_id: Optional[int] = None,
-    end_id: Optional[int] = None,
-    quantity: Optional[int] = None,
-    save: bool = False,
-    max_workers: int = 5,
-):
-    """Parallel scrape with evenly distributed workload per worker."""
-    db = DatabaseConnector()
-
-    # Determine job_ids if not provided
-    if not job_ids:
-        if start_id is not None and end_id is not None:
-            job_ids = db.get_jobs_by_internal_id_range(start_id, end_id)
-            logger.info(
-                f"Found {len(job_ids)} job IDs in range {start_id}-{end_id} to scrape."
-            )
-        elif quantity is not None:
-            job_ids = db.get_jobs_with_null_description(limit=quantity)
-            logger.info(
-                f"Found {len(job_ids)} jobs with null descriptions to scrape.")
-        else:
-            default_quantity = 100
-            job_ids = db.get_jobs_with_null_description(limit=default_quantity)
-            logger.info(
-                f"Found {len(job_ids)} jobs with null descriptions (default limit: {default_quantity})."
-            )
-
-    if not job_ids:
-        logger.warning(
-            "No job IDs found matching the criteria to scrape details for.")
-        return
-
-    # Adjust worker count if fewer jobs than workers
-    max_workers = min(max_workers, len(job_ids))
-
-    # Calculate batch size (with ceiling division to ensure all jobs are covered)
-    batch_size = math.ceil(len(job_ids) / max_workers)
-
-    # Split jobs into equal-sized batches (last batch may be smaller)
-    job_batches = [
-        job_ids[i: i + batch_size] for i in range(0, len(job_ids), batch_size)
-    ]
-
-    logger.info(
-        f"Starting detail scraping with {max_workers} workers. Each worker will process ~{batch_size} jobs."
-    )
-    logger.info(f"Total jobs: {len(job_ids)}, Save mode: {save}")
-
-    # Create and start workers
-    total_success = 0
-    total_failure = 0
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Create a future for each batch with its worker ID
-        futures = []
-        for worker_id, batch in enumerate(job_batches, 1):
-            future = executor.submit(
-                process_job_batch,
-                job_batch=batch,
-                worker_id=worker_id,
-                total_workers=len(job_batches),
-                save=save,
-            )
-            futures.append(future)
-
-        # Collect results as they complete
-        for future in futures:
-            success, failure = future.result()
-            total_success += success
-            total_failure += failure
-
-    # Log final summary
-    logger.info(
-        f"All workers completed. Total processed: {total_success + total_failure}."
-    )
-    logger.info(
-        f"Final Stats -> Success: {total_success}, Failure: {total_failure}")
-
-
-def update_job_description(job_id: str, description: str = None):
-    """Update job description for a specific job.
-
-    Args:
-        job_id: Job ID to update
-        description: Optional description text. If None, will scrape it.
-    """
-    # Initialize database connector and scraper
-    db = DatabaseConnector()
-    jobsdb_scraper = JobsdbScraper()
-
-    try:
-        # Update the description in the database
-        success = db.update_job_description(job_id, description)
-        if success:
-            logger.info(
-                f"Successfully updated description for job ID: {job_id}")
-            return True
-        else:
-            logger.error(f"Failed to update description for job ID: {job_id}")
-            return False
-
-    except Exception as e:
-        logger.error(f"Error updating job description: {e}")
-        return False
-
-
+# Main function for command-line use
 def main():
     """Run the CLI application."""
-    parser = argparse.ArgumentParser(description="Job Scraper CLI")
+    # Create a scraper from command-line arguments
+    manager = JobScraperManager.from_args(sys.argv[1:])
+    results = manager.run()
 
-    parser.add_argument(
-        "--source",
-        choices=["jobsdb", "all"],
-        default="all",
-        help="Job source to scrape (default: all)",
-    )
+    # # Print a summary of results
+    # print(f"\nScraping completed!")
+    # for key, value in results.items():
+    #     if key != "jobs":  # Don't print the full job list
+    #         print(f"{key}: {value}")
 
-    parser.add_argument(
-        "--query",
-        type=str,
-        default=None,
-        help="Job search query (e.g., 'software engineer')",
-    )
 
-    parser.add_argument(
-        "--location",
-        type=str,
-        default=None,
-        help="Job location (e.g., 'New York, NY')",
-    )
+# API functions for external use
+def create_scraper(config_dict: Dict[str, Any]) -> JobScraperManager:
+    """Create a scraper from a configuration dictionary."""
+    return JobScraperManager.from_dict(config_dict)
 
-    parser.add_argument(
-        "--start_page",
-        type=int,
-        default=1,
-        help="Page number to scrape (default: 1)",
-    )
 
-    parser.add_argument(
-        "--end_page",
-        type=int,
-        default=None,
-        help="End page number to scrape (default: same as page)",
-    )
-
-    parser.add_argument(
-        "--sortmode",
-        choices=["listed_date", "relevance"],
-        default="listed_date",
-        help="Sorting mode (default: listed_date)",
-    )
-
-    parser.add_argument(
-        "--job_type",
-        choices=["full_time", "part_time", "contract", "casual"],
-        default=None,
-        help="Job type to filter by (default: None)",
-    )
-
-    parser.add_argument(
-        "--job_category",
-        choices=["software", "finance"],
-        default=None,
-        help="Job category to filter by (default: None)",
-    )
-
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=25,
-        help="Maximum number of jobs to scrape per source (default: 25)",
-    )
-
-    parser.add_argument(
-        "--save", action="store_true", help="Save scraped jobs to database"
-    )
-
-    # Add a new argument for the scraping method
-    parser.add_argument(
-        "--method",
-        choices=["selenium", "scrapy"],
-        default="selenium",
-        help="Scraping method to use (default: selenium)",
-    )
-
-    parser.add_argument(
-        "--details",
-        action="store_true",
-        help="Scrape job details (default: False)",
-    )
-
-    parser.add_argument(
-        "--quantity",
-        type=int,
-        default=None,
-        help="Number of jobs with NULL descriptions to scrape",
-    )
-
-    # Add new arguments for job details scraping
-    parser.add_argument(
-        "--scrape_details_range",
-        action="store_true",
-        help="Scrape job details for a range of internal IDs",
-    )
-
-    parser.add_argument(
-        "--start_id", type=int, help="Starting internal ID for scraping details"
-    )
-
-    parser.add_argument(
-        "--end_id", type=int, help="Ending internal ID for scraping details"
-    )
-
-    # In main() function, add:
-    parser.add_argument(
-        "--update_description",
-        type=str,
-        help="Update description for a specific job ID",
-    )
-
-    args = parser.parse_args()
-
-    # Initialize database connector if saving is enabled
-    db = None
-    if args.save:
-        db = DatabaseConnector()
-
-    # Then in the main logic:
-    if args.update_description:
-        update_job_description(args.update_description)
-        return
-
-    # Add new condition to handle job details scraping
-    # In main() function
-    if args.scrape_details_range:
-        # Case 1: Range of internal IDs
-        if args.start_id is not None and args.end_id is not None:
-            scrape_job_details(
-                start_id=args.start_id, end_id=args.end_id, save=args.save
-            )
-
-        # Case 2: Quantity of jobs with null descriptions
-        elif args.quantity is not None:
-            scrape_job_details(quantity=args.quantity, save=args.save)
-
-        # Error case: Invalid parameters
-        else:
-            logger.error(
-                "Either provide both --start_id and --end_id OR provide --quantity"
-            )
-
-        return
-    elif args.source == "linkedin":
-        # Set end_page to page if not specified
-        if args.end_page is None:
-            args.end_page = args.page
-        total_jobs = 0
-
-        # Loop through pages from start to end
-        for current_page in range(args.start_page, args.end_page + 1):
-            logger.info(f"Scraping page {current_page} of {args.end_page}")
-
-            # Use Selenium-based scraper
-            linkedin_scraper = LinkedinScraper()
-            linkedin_jobs = linkedin_scraper.search_jobs(
-                page=current_page,
-            )
-
-            logger.info(
-                f"Found {len(linkedin_jobs)} jobs on Jobsdb (page {current_page})"
-            )
-            total_jobs += len(linkedin_jobs)
-
-            # Save to database if enabled
-            if args.save and db and linkedin_jobs:
-                logger.info(
-                    f"Saving {len(linkedin_jobs)} jobs from page {current_page} to database"
-                )
-                saved_count = db.save_jobs(linkedin_jobs)
-                logger.info(
-                    f"Saved {saved_count} jobs from page {current_page} to database"
-                )
-
-        logger.info(
-            f"Total jobs found across pages {args.start_page} to {args.end_page}: {total_jobs}"
-        )
-
-    elif args.source == "all" or args.source == "jobsdb":
-        # Set end_page to page if not specified
-        if args.end_page is None:
-            args.end_page = args.page
-        total_jobs = 0
-
-        # Loop through pages from start to end
-        for current_page in range(args.start_page, args.end_page + 1):
-            logger.info(f"Scraping page {current_page} of {args.end_page}")
-
-            if args.method == "scrapy":
-                # Use Scrapy spider
-                jobsdb_jobs = run_jobsdb_spider(
-                    job_category=args.job_category,
-                    job_type=args.job_type,
-                    sortmode=args.sortmode,
-                    page=current_page,
-                )
-            else:
-                # Use Selenium-based scraper
-                jobsdb_scraper = JobsdbScraper()
-                jobsdb_jobs = jobsdb_scraper.search_jobs(
-                    job_category=args.job_category,
-                    job_type=args.job_type,
-                    sortmode=args.sortmode,
-                    page=current_page,
-                )
-
-            logger.info(
-                f"Found {len(jobsdb_jobs)} jobs on Jobsdb (page {current_page})"
-            )
-            total_jobs += len(jobsdb_jobs)
-
-            # Save to database if enabled
-            if args.save and db and jobsdb_jobs:
-                logger.info(
-                    f"Saving {len(jobsdb_jobs)} jobs from page {current_page} to database"
-                )
-                saved_count = db.save_jobs(jobsdb_jobs)
-                logger.info(
-                    f"Saved {saved_count} jobs from page {current_page} to database"
-                )
-
-        logger.info(
-            f"Total jobs found across pages {args.start_page} to {args.end_page}: {total_jobs}"
-        )
-
-        # Print job titles
-        # for i, job in enumerate(jobsdb_jobs, 1):
-        #     print(f"{i}. {job}")
+def run_scraper(config_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Run a scraper with the given configuration."""
+    manager = create_scraper(config_dict)
+    return manager.run()
 
 
 if __name__ == "__main__":

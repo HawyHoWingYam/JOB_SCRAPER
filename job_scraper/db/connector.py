@@ -3,7 +3,7 @@
 import logging
 import os
 from typing import Dict, List, Optional
-
+import psycopg2 
 import sqlalchemy as sa
 from dotenv import load_dotenv
 from sqlalchemy.exc import SQLAlchemyError
@@ -54,18 +54,36 @@ class JobModel(Base):
 class DatabaseConnector:
     """Database connection and operations."""
 
+    # job_scraper/db/connector.py
+class DatabaseConnector:
     def __init__(self):
         """Initialize database connection."""
-        db_uri = os.getenv(
-            "DATABASE_URL", "postgresql://postgres:admin@localhost:5432/job_scraper"
-        )
+        try:
+            self.connection = psycopg2.connect(
+                host=os.environ.get("DB_HOST", "localhost"),
+                database=os.environ.get("DB_NAME", "job_scraper"),
+                user=os.environ.get("DB_USER", "postgres"),
+                password=os.environ.get("DB_PASSWORD", "admin"),
+                port=os.environ.get("DB_PORT", "5432")
+            )
+            
+            logger.info("Database connection established successfully")
+        except Exception as e:
+            logger.error(f"Error connecting to database: {e}")
+            # Set connection to None so methods can check for it
+            self.connection = None
+        
+        # """Initialize database connection."""
+        # db_uri = os.getenv(
+        #     "DATABASE_URL", "postgresql://postgres:admin@localhost:5432/job_scraper"
+        # )
 
-        self.engine = sa.create_engine(db_uri)
-        self.Session = sessionmaker(bind=self.engine)
+        # self.engine = sa.create_engine(db_uri)
+        # self.Session = sessionmaker(bind=self.engine)
 
-        # Create tables if they don't exist
-        Base.metadata.create_all(self.engine)
-        logger.info("Database connected and tables created if not exist")
+        # # Create tables if they don't exist
+        # Base.metadata.create_all(self.engine)
+        # logger.info("Database connected and tables created if not exist")
 
     def save_jobs(self, jobs: List[Job]) -> int:
         """Save jobs to database.
@@ -229,6 +247,50 @@ class DatabaseConnector:
 
         finally:
             session.close()
+
+    def get_all_job_classes(self):
+        """Get all job classes from the database.
+
+        Returns:
+            list: A list of job class objects with id and name attributes
+        """
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute("SELECT id, name FROM job_class")
+                job_classes = cursor.fetchall()
+
+                # Convert to objects with id and name attributes
+                class JobClass:
+                    def __init__(self, id, name):
+                        self.id = id
+                        self.name = name
+
+                return [JobClass(row[0], row[1]) for row in job_classes]
+        except Exception as e:
+            logger.error(f"Error fetching job classes: {e}")
+            return []
+
+    def get_all_source_platforms(self):
+        """Get all source platforms from the database.
+
+        Returns:
+            list: A list of platform objects with id and name attributes
+        """
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute("SELECT id, name FROM source_platform")
+                platforms = cursor.fetchall()
+
+                # Convert to objects with id and name attributes
+                class SourcePlatform:
+                    def __init__(self, id, name):
+                        self.id = id
+                        self.name = name
+
+                return [SourcePlatform(row[0], row[1]) for row in platforms]
+        except Exception as e:
+            logger.error(f"Error fetching source platforms: {e}")
+            return []
 
     def _convert_to_model(self, job: Job) -> JobModel:
         """Convert Pydantic Job model to SQLAlchemy JobModel.

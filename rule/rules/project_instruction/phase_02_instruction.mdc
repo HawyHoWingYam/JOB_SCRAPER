@@ -1,0 +1,234 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+## Phase 2: Core User Features – Job Search & Resume Management
+
+**Objective & Direction:** Implement the primary user-facing features of the MVP: job listings with search capability, and resume upload/view functionality for job seekers. At the end of this phase, a user should be able to browse available jobs and upload their resume to the system. The focus is on getting these core workflows functional end-to-end (front-end UI, back-end API, database persistence). Design the modules and database schema to support jobs and resumes, but keep features simple (e.g., basic search, single resume per user, no complex AI yet). Also, introduce user accounts and authentication if needed for these features (since resume upload likely requires a user login).
+
+**Detailed Tasks:**
+
+- **Jobs Listing Page:** Create a Next.js page that lists all job postings. This should fetch data from the Nest.js back-end (e.g., via an API call to `/api/jobs`). On the back-end, implement a `JobsModule` with a `JobsController` and `JobsService` to retrieve jobs from the database. Start with a simple data model for a Job (e.g., id, title, description, company, location, posted_date). Provide an endpoint like `GET /jobs` returning a list of jobs. In the front-end, create a React component to display the job titles with company names.
+    
+- **Search Functionality:** Implement a basic search on the job listing page. This could be a text input that filters jobs by title or description. For MVP simplicity, you can perform the filtering on the backend (e.g., `GET /jobs?query=developer` to search in title/description) or fetch all jobs and filter on the front-end. A simple approach is to use a case-insensitive `LIKE` SQL query or a full-text search if using PostgreSQL's text search. The Nest `JobsService` can handle this filter and return matching jobs. Update the front-end to call the API with the search term and update the list.
+    
+- **Job Details Page:** Create a Next.js dynamic page for job details (e.g., `/jobs/[id].tsx`). When a user selects a job from the list, navigate to this page and fetch the job details from the API (`GET /jobs/{id}`). The back-end `JobsController` should have a method to return a single job by ID. The page can show the full job description and other details. (For now, these fields can be just text stored in the DB.)
+    
+- **User Accounts & Auth:** Since resume upload is user-specific, set up a basic authentication system. Implement a `UsersModule` and possibly an `AuthModule` in Nest.js:
+    
+    - Create a `User` entity/table with fields: id, name, email, passwordHash, role (with role defaulting to 'user' for regular job seekers). Use a library like `bcrypt` to hash passwords.
+        
+    - Implement registration (`POST /auth/register`) and login (`POST /auth/login`) endpoints in the back-end. Nest can use Passport with a JWT strategy for simplicity. On successful login, issue a JWT to the front-end.
+        
+    - On the Next.js side, create pages for **Login** and **Register** (e.g., `pages/auth/login.tsx` and `pages/auth/register.tsx`) with forms. Manage auth state (store the JWT in a HttpOnly cookie or local storage for prototype ease). Ensure subsequent API calls include the token (e.g., in the Authorization header if using JWT).
+        
+    - If short on time, you could seed a default user in the database and focus only on login (or even skip auth entirely for the moment). However, implementing basic auth now will make admin and protected routes easier in Phase 3.
+        
+- **Resume Upload:** Implement the resume upload feature for users:
+    
+    - **Front-end:** Create a page (e.g., `/resume/upload.tsx`) with a form to upload a file (PDF or DOCX). Use an `<input type="file">` and handle the file via FormData to send to the API (POST request).
+        
+    - **Back-end:** Add a `ResumesModule` with `ResumesController` and `ResumesService`. An endpoint `POST /resumes` will receive the file (use Nest's `FileInterceptor` from `@nestjs/platform-express` to handle multipart file upload). Save the file and create a record in the database:
+        
+        - Store the file either on disk (e.g., save under `uploads/` directory with a generated name) and keep the file path in the DB, _or_ store the binary content in a bytea column (which is simpler to implement but not ideal for large files).
+            
+        - The `Resume` entity/table could have: id, user_id (foreign key to users), file_path (or file_blob), original_filename, upload_date.
+            
+        - Ensure the API only allows the authenticated user to upload/view their own resume. You might enforce this by tying the resume to the `req.user.id` from the JWT.
+            
+    - Implement an endpoint `GET /resumes/me` (or `/users/me/resume`) to fetch the current user's resume details (and possibly serve the file or its content if needed). For MVP, you can return metadata and not the file itself, unless you want to allow downloading the resume from the app.
+        
+    - On successful upload, you can either respond with the resume metadata or a success message. The front-end can then navigate the user to a "Resume view" page or simply display a confirmation.
+        
+- **Profile/Resume View:** Optionally, create a page (e.g., `/resume/view.tsx` or a section on the user's profile) to display the uploaded resume info. This could show the filename, upload date, and maybe provide a link to download it (which calls an API like `GET /resumes/:id/download` if implemented). This gives the user feedback that their resume is stored. If you plan to parse the resume later (Phase 4), this page can also show extracted info, but for now it can be minimal.
+    
+- **Database Schema Setup:** Create the necessary tables and relations:
+    
+    - `users` table (with a primary key and fields mentioned above; ensure a unique index on email).
+        
+    - `jobs` table (fields for job details as decided; e.g., id serial, title text, description text, company text, location text, etc.).
+        
+    - `resumes` table (fields for resume metadata; with a foreign key linking to `users.id`).
+        
+    - If using an ORM, define the corresponding models/entities (UserEntity, JobEntity, ResumeEntity) and run migrations to create these tables. If not using an ORM, use SQL commands or a migration tool to set up schema.
+        
+    - Optionally, preload the `jobs` table with some sample data (either via a SQL script or a seed service) so that the job listing page has content to display before an admin or crawler populates it.
+        
+- **Testing User Flows:** Manually test the end-to-end user workflow with the above features:
+    
+    1. Start the back-end and front-end.
+        
+    2. Register a new user (or insert one in the DB directly for testing), then log in via the UI.
+        
+    3. Navigate to the Jobs page – verify jobs load and the search works (try searching for a term that exists).
+        
+    4. Click on a job to view the details page.
+        
+    5. Go to Resume Upload – upload a file (use a small PDF or DOCX for testing).
+        
+    6. Verify the server saved the file (check the `uploads/` folder or the DB blob) and the UI shows a success or the resume info.
+        
+    7. Optionally, try to fetch the resume via API (perhaps implement a download link and test it).
+        
+- **Error Handling & Validation:** Implement basic checks:
+    
+    - Front-end: ensure required fields are filled (e.g., no empty email on register, only allow file types .pdf/.docx on upload via input accept attribute).
+        
+    - Back-end: validate inputs using Nest's ValidationPipe and class-validator (e.g., create DTOs for login/register). Check file type and size in the upload interceptor (you can configure Multer to accept certain mime types). Return appropriate HTTP status codes on errors (400 for bad input, 401 for unauthorized, etc.).
+        
+    - Provide user feedback for errors (simple `alert()` or messages on the form if something goes wrong, like "Invalid credentials" on login failure).
+        
+- **Commit Progress:** At the end of Phase 2, the platform should have working job display and resume upload features. Commit your code and update documentation (README) with how these features can be tested (for example, note the test user credentials or how to create an account).
+    
+
+**Recommended File Structure:** (after Phase 2 additions)
+
+```plaintext
+project-root/
+├── apps/
+│   ├── frontend/
+│   │   ├── pages/
+│   │   │   ├── index.tsx            # (Possibly a landing page; could redirect to /jobs)
+│   │   │   ├── jobs/
+│   │   │   │   ├── index.tsx        # Job listings with search
+│   │   │   │   └── [id].tsx         # Job detail page
+│   │   │   ├── resume/
+│   │   │   │   ├── upload.tsx       # Resume upload page (file input form)
+│   │   │   │   └── view.tsx         # Resume view page (to display uploaded resume info)
+│   │   │   ├── auth/
+│   │   │   │   ├── login.tsx        # Login form page
+│   │   │   │   └── register.tsx     # Registration form page
+│   │   ├── components/
+│   │   │   ├── JobList.tsx          # Component to display a list of jobs (uses JobCard)
+│   │   │   ├── JobCard.tsx          # Component for a single job item in the list
+│   │   │   ├── SearchBar.tsx        # Component for the search input and button
+│   │   │   └── ResumeUploadForm.tsx # Component for the resume upload form
+│   │   ├── utils/ or hooks/
+│   │   │   └── api.ts              # Utility for making API calls (sets base URL, attaches token)
+│   │   └── ... (styles, config, etc.)
+│   └── backend/
+│       ├── src/
+│       │   ├── modules/
+│       │   │   ├── jobs/
+│       │   │   │   ├── jobs.module.ts       # Nest module for Jobs
+│       │   │   │   ├── jobs.controller.ts   # Handles /jobs routes (list, get)
+│       │   │   │   ├── jobs.service.ts      # Business logic for jobs (fetch from DB)
+│       │   │   │   └── job.entity.ts        # Job entity (id, title, description, etc.)
+│       │   │   ├── users/
+│       │   │   │   ├── users.module.ts      # Nest module for Users
+│       │   │   │   ├── users.controller.ts  # Handles user registration (or none if done via AuthController)
+│       │   │   │   ├── users.service.ts     # CRUD logic for users (create user, find by email, etc.)
+│       │   │   │   └── user.entity.ts       # User entity (id, email, passwordHash, role)
+│       │   │   ├── auth/
+│       │   │   │   ├── auth.module.ts       # Nest module for Auth (JWT strategy config)
+│       │   │   │   ├── auth.controller.ts   # Handles /auth/login (and /auth/register if separated)
+│       │   │   │   └── auth.service.ts      # Auth logic (validate user credentials, generate JWT)
+│       │   │   ├── resumes/
+│       │   │   │   ├── resumes.module.ts    # Nest module for Resumes
+│       │   │   │   ├── resumes.controller.ts# Handles /resumes routes (upload, get resume)
+│       │   │   │   ├── resumes.service.ts   # Logic for saving files and retrieving resumes
+│       │   │   │   └── resume.entity.ts     # Resume entity (id, user_id, file_path, filename, etc.)
+│       │   ├── common/                      # (Optional: for common utilities like interceptors, guards)
+│       │   ├── main.ts
+│       │   └── app.module.ts               # Importing JobsModule, UsersModule, AuthModule, ResumesModule
+│       └── ...
+└── ...
+```
+
+**File/Module Responsibilities:**
+
+- **Jobs Module (Back-end):**
+    
+    - _jobs.controller.ts:_ Defines routes under `/jobs`. Methods: `GET /jobs` (optionally with a query param for search) returns a list of jobs; `GET /jobs/:id` returns details of one job. This controller uses `JobsService` for data retrieval.
+        
+    - _jobs.service.ts:_ Contains business logic for jobs. For example, a method `findAll(query?: string)` to retrieve jobs from the database (using an ORM repository or query builder) and apply a search filter if provided, and `findOne(id)` to get a specific job. This service abstracts away direct DB calls from the controller.
+        
+    - _job.entity.ts:_ Defines the Job database schema (if using an ORM). Fields might include id, title, description, company, location, etc., corresponding to columns in the `jobs` table.
+        
+- **Users & Auth Modules (Back-end):**
+    
+    - _user.entity.ts:_ Defines the User schema (id, name, email, passwordHash, role, created_at, etc.).
+        
+    - _users.service.ts:_ Provides user-related operations like `createUser` (for registration) and `findByEmail` (for login or validation). It interacts with the database to save or retrieve user records.
+        
+    - _users.controller.ts:_ May handle registration (`POST /users` or `/auth/register`) and possibly a route to get the current user's info (`GET /users/me`) if needed. In some setups, registration can also be handled in AuthController to keep auth logic together.
+        
+    - _auth.service.ts:_ Handles authentication logic: verifies a user's password on login, and issues a JWT if valid. It might use `UsersService` to get user data.
+        
+    - _auth.controller.ts:_ Handles login requests (and perhaps logout if doing stateful sessions, but likely JWT stateless). E.g., `POST /auth/login` calls `authService.validateUser` and if ok returns a JWT. This module also configures the JWT Passport strategy and sets up a guard (e.g., `JwtAuthGuard`) for protected routes.
+        
+- **Resumes Module (Back-end):**
+    
+    - _resume.entity.ts:_ Defines Resume schema (id, user_id, file_path or blob, original_filename, uploaded_at). This ties a resume file to a user.
+        
+    - _resumes.service.ts:_ Handles file storage and retrieval. For example, `uploadResume(userId, file)` to store the file (on disk or DB) and save a Resume record, and `getByUser(userId)` to retrieve a resume record by user. If storing files on disk, ensure to generate a unique filename (could use userId + timestamp or a UUID).
+        
+    - _resumes.controller.ts:_ Defines routes under `/resumes`. For instance, `POST /resumes` (with `@UseInterceptors(FileInterceptor('file'))`) to handle file upload from form data, which then calls `resumesService.uploadResume(req.user.id, file)` and returns success or the created resume info. Also `GET /resumes/me` to fetch the current user's resume data (using JWT auth to get user id).
+        
+    - **File upload handling:** Ensure `ResumesModule` imports `ServeStaticModule` or a configuration to serve the uploaded files if you want to allow downloading them by URL, or create a controller method to read the file and send as response (with appropriate content-type). Initially, you could skip file download feature if not needed for MVP demonstration.
+        
+- **Front-end Pages/Components:**
+    
+    - _jobs/index.tsx:_ Uses Next.js data fetching (either `getServerSideProps` or a client-side request in a React effect) to fetch job list from the API. Renders a list of jobs using `JobList` and includes a `SearchBar` for filtering. When search is submitted, it could call the API with the query or filter client-side if all jobs are loaded.
+        
+    - _jobs/[id].tsx:_ Fetches one job by ID (via `getServerSideProps` or client-side on mount) and displays the job details. Show fields like title, company, location, full description, etc. This page could also have an "Apply" button (which will be functional in a later phase when applications are implemented).
+        
+    - _resume/upload.tsx:_ Provides a form to upload a resume. It uses `ResumeUploadForm` component which handles the file input and submission. On submit, it calls the backend (e.g., via `fetch('/api/resumes', { method: 'POST', body: formData, headers: { Authorization: Bearer token } })`). After a successful upload (HTTP 201 Created), you might redirect the user to `/resume/view` or simply show a message.
+        
+    - _resume/view.tsx:_ Fetches the current user's resume info (`GET /resumes/me`) and displays it. This could show the filename and perhaps a link to download (if you implement an endpoint for it). If no resume is uploaded yet, it can prompt the user to upload one.
+        
+    - _auth/login.tsx & auth/register.tsx:_ Forms for authentication. The login form on submit calls `/auth/login` API with email/password, and on success, stores the JWT (e.g., in `localStorage` or a cookie) and redirects to the homepage or profile. The register form calls `/auth/register` to create a new user, then possibly logs them in or asks them to log in. For simplicity, after registration, you can auto-navigate to login page.
+        
+    - _Components:_
+        
+        - `JobCard.tsx` – displays a job's summary info (title, company, maybe location).
+            
+        - `JobList.tsx` – takes an array of job data and maps to `JobCard` components, possibly with some styling.
+            
+        - `SearchBar.tsx` – contains an input field and search button, and triggers a search (could lift the state up or use a callback prop to the jobs page to actually perform the search).
+            
+        - `ResumeUploadForm.tsx` – wraps the file input and submit button. It can manage the selected file in state and handle the form submission by calling a provided function prop or directly making the API call.
+            
+        - Possibly a `NavBar` component – since users need to navigate between pages, having a simple navigation bar with links (Home/Jobs, Upload Resume, Login/Logout) will be useful. Implement a basic one and include it in a top-level layout if using Next.js custom App or individual pages.
+            
+    - _API Utility:_ An `api.ts` or custom hook (like `useApi`) can centralize API calls. For example, it can automatically include the JWT from localStorage in headers. This avoids repeating authorization logic in each fetch call. Alternatively, use a library like axios and set a default authorization header after login.
+        
+- **Database Migrations/Config:** If using TypeORM, you will have migration files for creating the new tables (users, jobs, resumes). If using Prisma, you'll update the `schema.prisma` with models and run `prisma migrate`. Keep these schema definitions under version control. For prototyping, you might also manage the DB with an admin tool (like a SQL script or pgAdmin) and not have formal migrations; but consider adding them as the project grows.
+    
+- **State Management:** So far, state is mostly local to pages (jobs list, form inputs, etc.). Consider how to manage the logged-in user's state globally (so the NavBar can show "Logout" or the user's name). One simple way is to store the token and also store user info in a React Context. Another way is to fetch `GET /users/me` on page load (if token present) to get the user profile. For MVP, even a minimal approach like checking token existence to decide if user is logged in is okay. Keep in mind you'll refine this when adding admin/employer roles.
+    
+
+**Solo Development Tips:**
+
+- _One feature at a time:_ Implement and finish either the jobs listing or resume upload first, rather than both in parallel. For example, get job listing & search fully working with dummy data, then tackle resume upload. This gives a sense of progress and ensures each feature works before integrating them.
+    
+- _Reuse patterns and code:_ Notice that listing jobs and (later) listing users or applications will have similar patterns. Maybe create a generic Table or List component early that can list items with headers. Or reuse form handling logic between login and resume upload (both involve capturing input and calling an API). As a solo dev, leveraging similarities in features accelerates development.
+    
+- _Leverage Libraries:_ For the front-end, if you find a UI library that can save time (like using Material-UI or Chakra UI for pre-styled components), consider it. It can make forms and lists easier to style. On the back-end, using Nest’s CLI to generate modules, controllers, etc., can scaffold boilerplate quickly.
+    
+- _Test frequently:_ After implementing a portion (say, the jobs API), test it with a tool (Postman or curl) before integrating front-end. Similarly, use the browser console or a simple temporary UI to test front-end data fetching before polishing the UI. Frequent manual testing will catch issues early.
+    
+- _Data volume:_ Use small stub datasets initially. Hardcode a few jobs in the database or via your seed logic. This will keep things simple. You can worry about a large number of jobs or pagination in a later phase (perhaps when the crawler fills data).
+    
+- _Error handling:_ As a solo developer, it’s easy to assume things will be used correctly. But try some wrong inputs to ensure the app doesn't crash ungracefully (e.g., upload a very large file, or put a string in the login password). Improving robustness early saves debugging time later when you integrate more pieces.
+    
+- _Keep an eye on security:_ Even in an MVP, basic security should be in place. Use HTTPS in production (for local dev it's okay if not). Hash passwords (never store plain text). Don’t expose sensitive data in responses (e.g., when returning user info, you might omit the passwordHash field). These practices ensure your prototype is closer to real-world readiness and avoids bad habits.
+    
+
+**Module-Level Design Focus:** In Phase 2, you're establishing actual application modules – it's crucial to get their boundaries and interactions right:
+
+- **Jobs Module Design:** Ensure the jobs-related functionality is encapsulated. The Jobs module should handle all operations related to job postings. Define the data transfer objects (DTOs) for jobs (for input validation using class-validator) and the shape of data sent to the front-end. The front-end should rely on the API contract (e.g., a Job object with certain fields). If you change the Job entity (add or rename fields), track that you must update both the back-end and front-end consistently.
+    
+- **Resumes Module Design:** This module intersects with user accounts (each resume belongs to a user). Decide on policies such as: can a user have multiple resumes or just one active? For MVP, simplest is one resume per user (perhaps updating it replaces the old one). Enforce that in the design (e.g., `resumesService.uploadResume` checks if user already has a resume and overwrites or returns an error). This decision affects how you write queries (one-to-one vs one-to-many relationship).
+    
+- **Auth Integration:** The auth setup will be used in later phases for protecting routes (admin pages, etc.). Ensure that once a user logs in and has a token, you use Nest’s guards (`JwtAuthGuard`) on routes that require login (like upload resume). At module design level, you may apply the guard globally (to all routes, then use @Public for those that don’t need auth) or individually. Also, structure your auth such that adding roles is straightforward (e.g., the JWT payload includes user role, which you will use in Phase 3).
+    
+- **Front-end Organization:** With multiple pages and components now, consider adding a top-level layout for the front-end (e.g., a component that wraps pages to include the NavBar and maybe footer). Next.js allows a custom `_app.tsx` to inject layout. This avoids duplicating nav code on every page. Also, manage routing: maybe implement a redirect in `/` (index) to go to `/jobs` or to a welcome page with CTA to search jobs. Think about the user flow: after login, where do they go? Possibly back to whatever page they wanted or to a dashboard/profile. For now, you could just send them to the jobs list.
+    
+- **API Error design:** Decide how errors are communicated from back-end to front-end. For example, on login failure, do you return `400 Bad Request` with a JSON {error: "Invalid credentials"}? And on front-end, do you display that error message? Having a consistent error response format in your API will make handling them on the client easier (you can parse and show to user).
+    
+- **Maintainability:** Although working solo, write code as if others will read it later. That means using clear names, organizing logic into services, and avoiding monolithic functions. This module separation (Users, Jobs, Resumes, Auth) is already a good practice. It will make Phase 3 (admin, which reuses a lot of these modules) much easier to implement.
+    
+- By the end of **Phase 2**, you have a functional site for job seekers: they can search jobs and upload a resume. This covers the core user experience. Next, you'll introduce admin capabilities to manage this data and enforce security through roles.
+    
