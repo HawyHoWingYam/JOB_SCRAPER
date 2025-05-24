@@ -51,14 +51,15 @@ class BaseScraper(ABC):
         )
 
         self.driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()), options=options
+            # service=Service(ChromeDriverManager().install()), options=options
+            service=Service("chromedriver/chromedriver"),
+            options=options,
         )
 
     def __del__(self):
         """Clean up resources when the scraper is destroyed."""
         if self.driver:
             self.driver.quit()
-
 
     def get_soup(
         self, url: str, params: Optional[Dict] = None, headers: Optional[Dict] = None
@@ -78,7 +79,9 @@ class BaseScraper(ABC):
             if params:
                 query_string = "&".join(f"{k}={v}" for k, v in params.items())
                 full_url = (
-                    f"{url}?{query_string}" if "?" not in url else f"{url}&{query_string}"
+                    f"{url}?{query_string}"
+                    if "?" not in url
+                    else f"{url}&{query_string}"
                 )
             else:
                 full_url = url

@@ -371,8 +371,8 @@ class JobScraperManager:
     def run(self) -> Dict[str, Any]:
         """Run the job scraper with the current configuration.
 
-    Returns:
-            Dict: Results of the scraping operation
+        Returns:
+                Dict: Results of the scraping operation
         """
         if self.config.get_config_type() == 1:
             return self._run_quantity_based()
@@ -560,6 +560,7 @@ class JobScraperManager:
             "failure_count": total_failure,
         }
 
+
 def process_job_batch(job_batch, worker_id, total_workers, save=False):
     """Process a batch of jobs with a dedicated worker.
 
@@ -587,9 +588,7 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
         try:
             # Add random delay to avoid rate limiting
             delay = random.uniform(1.0, 3.0)
-            logger.debug(
-                    f"{log_prefix} Job {job_id} sleeping for {delay:.2f} seconds"
-                )
+            logger.debug(f"{log_prefix} Job {job_id} sleeping for {delay:.2f} seconds")
             time.sleep(delay)
 
             # Replace the existing logging line (around line 128) with this:
@@ -605,9 +604,7 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
                 and job_details.description != "N/A"
             ):
                 if save:
-                    success = db.update_job_description(
-                            job_id, job_details.description
-                        )
+                    success = db.update_job_description(job_id, job_details.description)
                     if success:
                         success_count += 1
                     else:
@@ -633,7 +630,7 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
             )
             if save:
                 try:
-                        db.update_job_description(job_id, f"Error: {type(e).__name__}")
+                    db.update_job_description(job_id, f"Error: {type(e).__name__}")
                 except Exception:
                     pass
 
