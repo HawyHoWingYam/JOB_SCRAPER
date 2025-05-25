@@ -5,12 +5,13 @@ import re
 import random
 import pytz
 import os
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from bs4 import BeautifulSoup
 import google.generativeai as genai
 from dotenv import load_dotenv
-
+from selenium.webdriver.common.by import By
 from ..base.scraper import BaseScraper
 from ..models.job import Company, Job
 
@@ -43,7 +44,7 @@ class LinkedInScraper(BaseScraper):
         self.db = db
 
         # Set up driver with visible browser (not headless)
-        self._setup_driver(headless=False)
+        self._setup_driver(headless=True)
 
     def save_soup_to_html(self, soup: BeautifulSoup, filename_prefix: str):
         """Save BeautifulSoup object to an HTML file in the raw_data folder.
@@ -178,6 +179,72 @@ class LinkedInScraper(BaseScraper):
             logger.warning("Could not verify login state. Continuing anyway...")
             return False
 
+    def close_modals(self):
+        """Find and close any modal popups that might interfere with scraping."""
+        try:
+            # Look for modal sections
+            modals = self.driver.find_elements(
+                By.CSS_SELECTOR, "section[aria-modal='true']"
+            )
+
+            if modals:
+                logger.info(f"Found {len(modals)} modal(s) to close")
+
+                # First try to find close buttons by SVG icon
+                close_buttons = self.driver.find_elements(
+                    By.CSS_SELECTOR, "svg.artdeco-icon"
+                )
+
+                # If no specific SVG close buttons, look for any button within the modal
+                if not close_buttons:
+                    for modal in modals:
+                        buttons = modal.find_elements(By.TAG_NAME, "button")
+                        close_buttons.extend(buttons)
+
+                # Try to click each button
+                for button in close_buttons:
+                    try:
+                        # logger.info("Clicking close button on modal")
+                        button.click()
+                        time.sleep(1)  # Brief pause to let modal close
+                    except Exception as e:
+                       #logger.warning(f"Failed to click a close button: {e}")
+                       continue
+
+                # Check if we still have modals
+                remaining = self.driver.find_elements(
+                    By.CSS_SELECTOR, "section[aria-modal='true']"
+                )
+                if remaining:
+                    logger.warning(
+                        f"Still have {len(remaining)} modal(s) after attempting to close"
+                    )
+
+        except Exception as e:
+            logger.warning(f"Error while closing modals: {e}")
+
+    def click_show_more_buttons(self):
+        """Find and click 'Show more' buttons to expand all content"""
+        try:
+            # Find all "Show more" buttons
+            show_more_buttons = self.driver.find_elements(
+                By.CSS_SELECTOR,
+                "button.show-more-less-html__button[aria-label='Show more'], "
+                "button.show-more-less-button[aria-expanded='false']",
+            )
+
+            if show_more_buttons:
+                #logger.info(f"Found {len(show_more_buttons)} 'Show more' buttons")
+                for button in show_more_buttons:
+                    try:
+                        #logger.info("Clicking 'Show more' button")
+                        button.click()
+                        time.sleep(1)  # Wait for content to expand
+                    except Exception as e:
+                        logger.warning(f"Failed to click 'Show more' button: {e}")
+        except Exception as e:
+            logger.warning(f"Error handling 'Show more' buttons: {e}")
+
     def get_job_details(self, job_id: str) -> Optional[Job]:
         job_url = f"{self.base_url}jobs/view/{job_id}/"
 
@@ -187,43 +254,68 @@ class LinkedInScraper(BaseScraper):
             headers = {"User-Agent": user_agent}
 
             # Get the page content
-            soup = self.get_soup(job_url, headers=headers)
+            self.driver.get(job_url)
+            time.sleep(3)
 
-            # Save the soup to HTML for debugging
-            # filename_prefix = f"linkedin_job_{job_id}"
-            # self.save_soup_to_html(soup, filename_prefix)
+            # Close any modals
+            self.close_modals()
 
-            description_element = None
-            selectors = [
-                ".jobs-description__content",
-                ".jobs-box__html-content",
-                ".description__text",
-                "[data-job-detail-type='description']",
-                # Add the specific selector from the image
-                "div.jobs-description__content.jobs-description-content.jobs-description__content--condensed",
+            # Click show more buttons
+            self.click_show_more_buttons()
+
+            # Get updated page content after expanding
+            soup = BeautifulSoup(self.driver.page_source, "html.parser")
+
+            # Extract job title - multiple possible selectors
+            job_title = "N/A"
+            title_selectors = [
+                "h1.top-card-layout__title",
+                "h1.topcard__title",
+                "h1.t-24.t-bold.inline",
             ]
+            for selector in title_selectors:
+                title_element = soup.select_one(selector)
+                if title_element:
+                    job_title = title_element.get_text(strip=True)
+                    break
 
-            for selector in selectors:
-                description_element = soup.select_one(selector)
-                if description_element:
-                    # logger.info(f"Found job description using selector: {selector}")
+            # Extract company name
+            company_name = "N/A"
+            company_selectors = [
+                "span.topcard__flavor a",
+                "a.topcard__org-name-link",
+                "a[data-tracking-control-name='public_jobs_topcard-org-name']",
+            ]
+            for selector in company_selectors:
+                company_element = soup.select_one(selector)
+                if company_element:
+                    company_name = company_element.get_text(strip=True)
                     break
 
             # Extract job description
-            description = (
-                description_element.get_text(separator="\n")
-                if description_element
-                else ""
-            )
+            description = "N/A"
+            description_selectors = [
+                "div.show-more-less-html__markup",
+                "div.jobs-description__content",
+                "div.jobs-box__html-content",
+            ]
+            for selector in description_selectors:
+                description_element = soup.select_one(selector)
+                if description_element:
+                    description = description_element.get_text(
+                        separator="\n", strip=True
+                    )
+                    break
 
-            # Log the first 100 characters of the description for verification
-            if description is None:
-                logger.warning("No job description found")
+            logger.info(f"Job ID: {str(job_id)}")
+            logger.info(f"Company Name: {company_name}")
+            logger.info(f"Job Title: {job_title}")
 
-            # Create job object with ID and description
             return Job(
                 id=str(job_id),
                 internal_id=job_id,
+                company_name=company_name,
+                name=job_title,
                 description=description,
                 source="LinkedIn",
             )

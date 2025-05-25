@@ -379,3 +379,57 @@ class DatabaseConnector:
 
         finally:
             session.close()
+
+    def update_job_title(self, job_id: str, title: str) -> bool:
+        session = self.Session()
+
+        try:
+            # Find the job by ID
+            job = session.query(JobModel).filter(JobModel.id == job_id).first()
+
+            if not job:
+                logger.error(f"Job with ID {job_id} not found")
+                return False
+
+            # Update the description
+            job.name = title
+
+            # Commit the changes
+            session.commit()
+            # logger.info(f"Updated description for job ID {job_id}")
+            return True
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"Error updating job title: {e}")
+            return False
+
+        finally:
+            session.close()
+
+    def update_job_company(self, job_id: str, company_name: str) -> bool:
+        session = self.Session()
+
+        try:
+            # Find the job by ID
+            job = session.query(JobModel).filter(JobModel.id == job_id).first()
+
+            if not job:
+                logger.error(f"Job with ID {job_id} not found")
+                return False
+
+            # Update the description
+            job.company_name = company_name
+
+            # Commit the changes
+            session.commit()
+            # logger.info(f"Updated description for job ID {job_id}")
+            return True
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"Error updating job company: {e}")
+            return False
+
+        finally:
+            session.close()

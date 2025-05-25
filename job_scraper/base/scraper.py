@@ -110,7 +110,7 @@ class BaseScraper(ABC):
             if "linkedin.com" in url:
                 try:
                     # logger.info("LinkedIn page detected, looking for expand buttons...")
-
+                    self.close_modals()
                     # Find and click all "展開" buttons
                     expand_buttons = self.driver.find_elements(
                         By.XPATH,

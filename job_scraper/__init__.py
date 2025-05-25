@@ -396,7 +396,7 @@ class JobScraperManager:
         """Run the job scraper with the current configuration.
 
         Returns:
-                        Dict: Results of the scraping operation
+                            Dict: Results of the scraping operation
         """
         if self.config.get_config_type() == 1:
             return self._run_quantity_based()
@@ -535,7 +535,6 @@ class JobScraperManager:
 
         if self.config.method == ScrapingMethod.SELENIUM:
             linkedin_scraper = LinkedInScraper(db=self.db)
-            linkedin_scraper.login()
 
         for current_page in range(self.config.start_page, self.config.end_page + 1):
             logger.info(f"Scraping page {current_page} of {self.config.end_page}")
@@ -642,7 +641,6 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
         scraper = JobsdbScraper()
     elif source.lower() == "linkedin":
         scraper = LinkedInScraper(db=db)
-        scraper.login()
     else:
         raise ValueError(f"Unsupported source: {source}")
 
@@ -669,7 +667,11 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
                 and job_details.description != "N/A"
             ):
                 if save:
+                    logger.info(f"Saving job {job_id} to database")
                     success = db.update_job_description(job_id, job_details.description)
+                    if source.lower() == "linkedin":
+                        db.update_job_title(job_id, job_details.name)
+                        db.update_job_company(job_id, job_details.company_name)
                     if success:
                         success_count += 1
                     else:
