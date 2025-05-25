@@ -101,7 +101,20 @@ class JobScraperConfig:
         """Validate and normalize the configuration."""
         # Validate common parameters
         self._validate_source_platform()
-        self._validate_job_class()
+
+        # Only validate job_class if not LinkedIn
+        if (
+            hasattr(self, "source_platform_name")
+            and self.source_platform_name.lower() != "linkedin"
+        ):
+            self._validate_job_class()
+        else:
+            # Clear job_class fields for LinkedIn
+            self.job_class = None
+            self.job_class_id = None
+            self.job_class_name = None
+
+        # Continue with other validations
         self._validate_method()
         self._validate_workers()
 
@@ -113,9 +126,20 @@ class JobScraperConfig:
 
     def validate(self):
         """Validate and normalize the configuration."""
-        # Validate common parameters
+        # First validate the source platform to get the platform name
         self._validate_source_platform()
-        self._validate_job_class()
+
+        # Only validate job_class if not LinkedIn
+        if self.source_platform_name.lower() != "linkedin":
+            self._validate_job_class()
+        else:
+            # For LinkedIn, just set job_class to None since it's not needed
+            logger.info("LinkedIn platform selected, skipping job_class validation")
+            self.job_class = None
+            self.job_class_id = None
+            self.job_class_name = None
+
+        # Continue with other validations
         self._validate_method()
         self._validate_workers()
 
@@ -372,7 +396,7 @@ class JobScraperManager:
         """Run the job scraper with the current configuration.
 
         Returns:
-                Dict: Results of the scraping operation
+                    Dict: Results of the scraping operation
         """
         if self.config.get_config_type() == 1:
             return self._run_quantity_based()
@@ -497,12 +521,44 @@ class JobScraperManager:
         }
 
     def _run_linkedin_pages(self) -> Dict[str, Any]:
-        """Run page-based LinkedIn scraping."""
-        # Similar implementation as JobsDB but for LinkedIn
+        """Run page-based linkedin scraping."""
+        total_jobs = 0
+        jobs = []
+        for current_page in range(self.config.start_page, self.config.end_page + 1):
+            logger.info(f"Scraping page {current_page} of {self.config.end_page}")
+
+            if self.config.method == ScrapingMethod.SELENIUM:
+                # Use Selenium-based scraper
+                linkedin_scraper = LinkedInScraper()
+
+                # Only pass the parameters specified by the user
+                search_params = {
+                    "job_class": self.config.job_class,
+                    "page": current_page,
+                }
+
+                jobs = linkedin_scraper.search_jobs(**search_params)
+
+                # Use the save parameter to determine if we should save to database
+                if self.config.save and self.db and jobs:
+                    saved_count = self.db.save_jobs(jobs)
+                    logger.info(
+                        f"Saved {saved_count} jobs from page {current_page} to database"
+                    )
+            total_jobs += len(jobs)
+            jobs = []
+
+        logger.info(
+            f"Total jobs found across pages {self.config.start_page} to {self.config.end_page}: {total_jobs}"
+        )
+
         return {
             "success": True,
-            "message": "LinkedIn page-based scraping not implemented yet",
-            "jobs_scraped": 0,
+            "jobs_scraped": total_jobs,
+            "pages_scraped": self.config.end_page - self.config.start_page + 1,
+            "job_class": self.config.job_class,
+            "save": self.config.save,
+            "source_platform": self.config.source_platform,
         }
 
     def _scrape_job_details(self, job_ids: List[str]) -> Dict[str, Any]:

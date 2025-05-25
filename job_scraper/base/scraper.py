@@ -38,20 +38,28 @@ class BaseScraper(ABC):
         self.driver = None
         self._setup_driver()
 
-    def _setup_driver(self):
-        """Set up the Selenium WebDriver."""
+    def _setup_driver(self, headless=True):
+        """Set up the Selenium WebDriver.
+
+        Args:
+            headless: Whether to run the browser in headless mode
+        """
         options = Options()
-        options.add_argument("--headless")  # Run in headless mode (no browser UI)
+
+        # Only add headless mode if requested
+        if headless:
+            options.add_argument("--headless")
+            options.add_argument("--disable-gpu")
+
+        # Common options regardless of headless mode
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920,1080")
         options.add_argument(
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
         )
 
         self.driver = webdriver.Chrome(
-            # service=Service(ChromeDriverManager().install()), options=options
             service=Service("chromedriver/chromedriver"),
             options=options,
         )
@@ -94,7 +102,7 @@ class BaseScraper(ABC):
                 )
                 logger.debug(f"Using User-Agent: {headers['User-Agent']}")
 
-            # logger.info(f"Fetching URL: {full_url}")
+            logger.info(f"Fetching URL: {full_url}")
             self.driver.get(full_url)
 
             # Wait for page to load

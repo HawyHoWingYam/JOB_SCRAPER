@@ -33,10 +33,20 @@ USER_AGENTS = [
 class LinkedInScraper(BaseScraper):
     """Scraper for LinkedIn job listings."""
 
-    def __init__(self):
-        """Initialize the LinkedIn scraper."""
-        super().__init__(name="LinkedIn", base_url="https://www.linkedin.com/")
-        # Base URL for job search will be: https://www.linkedin.com/jobs/search/
+    def __init__(self, username=None, password=None):
+        """Initialize the LinkedIn scraper with optional credentials."""
+        # Call parent init but don't set up driver yet
+        self.name = "LinkedIn"
+        self.base_url = "https://www.linkedin.com/"
+        self.driver = None
+
+        # Set credentials
+        self.username = username or os.environ.get("LINKEDIN_USERNAME")
+        self.password = password or os.environ.get("LINKEDIN_PASSWORD")
+        self.is_logged_in = False
+
+        # Set up driver with visible browser (not headless)
+        self._setup_driver(headless=False)
 
     def save_soup_to_html(self, soup: BeautifulSoup, filename_prefix: str):
         """Save BeautifulSoup object to an HTML file in the raw_data folder.
@@ -46,8 +56,9 @@ class LinkedInScraper(BaseScraper):
             filename_prefix: Prefix for the filename (e.g. 'search', 'job_123')
         """
         # Create raw_data directory if it doesn't exist
-        raw_data_dir = os.path.join(os.path.dirname(
-            os.path.dirname(os.path.abspath(__file__))), 'raw_data')
+        raw_data_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "raw_data"
+        )
         os.makedirs(raw_data_dir, exist_ok=True)
 
         # Generate timestamp for unique filename
@@ -61,90 +72,85 @@ class LinkedInScraper(BaseScraper):
 
         logger.info(f"Saved HTML content to {file_path}")
 
-    # def search_filters(
-    #     self, job_function: str = None, job_type: str = None, experience_level: str = None
-    # ) -> Dict[str, str]:
-    #     """Get search filters for LinkedIn.
-
-    #     Args:
-    #         job_function: Job function filter (e.g., "information-technology")
-    #         job_type: Job type filter (e.g., "full_time", "part_time")
-    #         experience_level: Experience level filter (e.g., "entry_level", "associate")
-
-    #     Returns:
-    #         Dictionary of filter parameters to be used in URL
-    #     """
-    #     # Available job functions (f_JT)
-    #     job_functions = {
-    #         "information_technology": "information-technology",
-    #         "engineering": "engineering",
-    #         "finance": "finance",
-    #         "marketing": "marketing",
-    #         "sales": "sales",
-    #     }
-
-    #     # Available job types (f_WT)
-    #     job_types = {
-    #         "full_time": "1",
-    #         "part_time": "2",
-    #         "contract": "3",
-    #         "temporary": "4",
-    #         "internship": "5",
-    #         "volunteer": "6",
-    #     }
-
-    #     # Available experience levels (f_E)
-    #     experience_levels = {
-    #         "internship": "1",
-    #         "entry_level": "2",
-    #         "associate": "3",
-    #         "mid_senior": "4",
-    #         "director": "5",
-    #         "executive": "6",
-    #     }
-
-    #     filters = {}
-
-    #     if job_function and job_function in job_functions:
-    #         filters["f_F"] = job_functions[job_function]
-
-    #     if job_type and job_type in job_types:
-    #         filters["f_WT"] = job_types[job_type]
-
-    #     if experience_level and experience_level in experience_levels:
-    #         filters["f_E"] = experience_levels[experience_level]
-
-    #     return filters
-
     def search_jobs(self, **kwargs) -> List[Job]:
+        """Search for jobs on LinkedIn using a manual login session."""
+        # Skip automatic login
+        if not self.is_logged_in:
+            logger.info("Using manual login approach...")
+
+            # Open LinkedIn and wait for manual login
+            self.driver.get("https://www.linkedin.com/login")
+
+            # Display instructions to the user
+            print("\n=== MANUAL LOGIN REQUIRED ===")
+            print("1. A browser window has opened")
+            print("2. Please log into your LinkedIn account manually")
+            print("3. After successful login, return to this console")
+            input("Press Enter once you've logged in to continue...")
+
+            # Check if login was successful
+            try:
+                if (
+                    "/feed" in self.driver.current_url
+                    or "global-nav" in self.driver.page_source
+                ):
+                    logger.info("Manual login successful")
+                    self.is_logged_in = True
+                else:
+                    logger.warning(
+                        "Could not confirm successful login. Continuing anyway..."
+                    )
+            except:
+                logger.warning("Could not verify login state. Continuing anyway...")
+
         page = kwargs.get("page", 1)
-        # Build search URL
-        search_url = f"{self.base_url}jobs/search/"
+        base_url = f"{self.base_url}jobs/search/"
+
         # Base parameters
         params = {
+            # "currentJobId": 4222208398,
             "geoId": 103291313,
+            # "origin": "JOB_SEARCH_PAGE_SEARCH_BUTTON",
+            # "refresh": "true",
             "sortBy": "DD",
             "start": (page - 1) * 25,
         }
 
         try:
             # Get the page content
-            soup = self.get_soup(search_url, params=params)
+            soup = self.get_soup(base_url, params=params)
 
             # Save the soup to HTML for debugging
             filename_prefix = f"linkedin_search_page_{page}"
             self.save_soup_to_html(soup, filename_prefix)
-            job_cards = soup.select("div[data-job-id]")
-            job_ids = [card.get("data-job-id") for card in job_cards]
+            job_cards = soup.select("li[data-occludable-job-id]")
+            job_ids = [card.get("data-occludable-job-id") for card in job_cards]
+
+            job_listings = []
+            for job_id in job_ids:
+                # Create a Job object instead of a dictionary
+                job = Job(
+                    id=str(job_id),
+                    name="N/A",  # or title if you extracted it
+                    description="",  # Empty for search results
+                    company_name="N/A",  # Create a Company object
+                    location="N/A",
+                    source="LinkedIn",
+                    date_scraped=datetime.now(pytz.timezone("Asia/Hong_Kong")).strftime(
+                        "%Y-%m-%d"
+                    ),
+                    salary_description="N/A",
+                    job_class="N/A",
+                )
+                job_listings.append(job)
 
             self.log_scraping_stats(
                 jobs_found=len(job_ids),
                 search_params={
                     "geoId": 103291313,
-                }
+                },
             )
-
-            return job_ids
+            return job_listings
 
         except Exception as e:
             logger.error(f"Error searching jobs on LinkedIn: {e}")
@@ -189,8 +195,11 @@ class LinkedInScraper(BaseScraper):
                     break
 
             # Extract job description
-            description = description_element.get_text(
-                separator='\n') if description_element else ""
+            description = (
+                description_element.get_text(separator="\n")
+                if description_element
+                else ""
+            )
 
             # Create job object with ID and description
             return Job(
@@ -208,12 +217,11 @@ class LinkedInScraper(BaseScraper):
         """Read job description prompt from file."""
         prompt_path = "job_scraper/prompt/job_description.txt"
         try:
-            with open(prompt_path, 'r', encoding='utf-8') as file:
+            with open(prompt_path, "r", encoding="utf-8") as file:
                 prompt = file.read()
             return prompt
         except FileNotFoundError:
-            logger.error(
-                f"Error: Could not find the prompt file at {prompt_path}")
+            logger.error(f"Error: Could not find the prompt file at {prompt_path}")
             return None
         except Exception as e:
             logger.error(f"Error reading prompt file: {str(e)}")
@@ -226,7 +234,7 @@ class LinkedInScraper(BaseScraper):
 
         try:
             # Initialize the model
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel("gemini-2.0-flash")
 
             # Create the prompt
             prompt = self.read_job_description_prompt()
@@ -241,8 +249,7 @@ class LinkedInScraper(BaseScraper):
 
             # If the response has markdown code blocks, extract just the HTML
             if "```html" in html_content:
-                html_content = html_content.split(
-                    "```html")[1].split("```")[0].strip()
+                html_content = html_content.split("```html")[1].split("```")[0].strip()
             elif "```" in html_content:
                 html_content = html_content.split("```")[1].strip()
 
@@ -275,21 +282,21 @@ class LinkedInScraper(BaseScraper):
             job_id = None
 
             # Try to get job ID from data attribute
-            job_id_attr = card.get(
-                "data-job-id") or card.get("data-entity-urn")
+            job_id_attr = card.get("data-job-id") or card.get("data-entity-urn")
 
             if job_id_attr:
                 # Extract numeric ID from the attribute value
-                job_id_match = re.search(r'(\d+)', job_id_attr)
+                job_id_match = re.search(r"(\d+)", job_id_attr)
                 job_id = job_id_match.group(1) if job_id_match else None
 
             # If not found in attribute, try finding it in the URL of the job link
             if not job_id:
                 job_link = card.select_one(
-                    "a.job-card-container__link") or card.select_one("a.job-search-card__link")
+                    "a.job-card-container__link"
+                ) or card.select_one("a.job-search-card__link")
                 if job_link:
                     href = job_link.get("href", "")
-                    job_id_match = re.search(r'/jobs/view/(\d+)/', href)
+                    job_id_match = re.search(r"/jobs/view/(\d+)/", href)
                     job_id = job_id_match.group(1) if job_id_match else None
 
             if not job_id:
@@ -309,7 +316,7 @@ class LinkedInScraper(BaseScraper):
                     "h3.job-card-list__title",
                     "h3.base-search-card__title",
                     ".job-card-container__link",
-                    ".job-search-card__title"
+                    ".job-search-card__title",
                 ]
 
                 for selector in title_selectors:
@@ -333,14 +340,13 @@ class LinkedInScraper(BaseScraper):
                     ".job-card-container__primary-description",
                     ".base-search-card__subtitle",
                     ".job-search-card__subtitle",
-                    "[data-job-hook='company-name']"
+                    "[data-job-hook='company-name']",
                 ]
 
                 for selector in company_selectors:
                     company_element = card.select_one(selector)
                     if company_element:
-                        company_name = self.clean_text(
-                            company_element.get_text())
+                        company_name = self.clean_text(company_element.get_text())
                         break
             except Exception as e:
                 logger.error(f"Error extracting company name: {e}")
@@ -351,7 +357,7 @@ class LinkedInScraper(BaseScraper):
                 location_selectors = [
                     ".job-card-container__metadata-item",
                     ".job-search-card__location",
-                    ".base-search-card__metadata"
+                    ".base-search-card__metadata",
                 ]
 
                 for selector in location_selectors:
@@ -368,7 +374,7 @@ class LinkedInScraper(BaseScraper):
                 salary_selectors = [
                     ".job-search-card__salary-info",
                     ".base-search-card__metadata-salary",
-                    "[data-job-hook='salary-info']"
+                    "[data-job-hook='salary-info']",
                 ]
 
                 for selector in salary_selectors:
@@ -387,63 +393,75 @@ class LinkedInScraper(BaseScraper):
                     ".job-search-card__listdate",
                     "time.job-search-card__listdate",
                     ".base-search-card__metadata time",
-                    "[data-job-hook='posting-date']"
+                    "[data-job-hook='posting-date']",
                 ]
 
                 for selector in date_selectors:
                     date_element = card.select_one(selector)
                     if date_element:
-                        posting_date_text = self.clean_text(
-                            date_element.get_text())
+                        posting_date_text = self.clean_text(date_element.get_text())
 
                         # Try to get the datetime attribute
                         datetime_attr = date_element.get("datetime")
                         if datetime_attr:
                             try:
                                 date_posted = datetime.fromisoformat(
-                                    datetime_attr).strftime("%Y-%m-%d")
+                                    datetime_attr
+                                ).strftime("%Y-%m-%d")
                                 break
                             except ValueError:
                                 pass
 
                 # If we couldn't get the datetime attribute, try to parse the text
                 if date_posted == "N/A" and posting_date_text != "N/A":
-                    current_time = datetime.now(
-                        pytz.timezone('UTC')).timestamp()
+                    current_time = datetime.now(pytz.timezone("UTC")).timestamp()
 
                     # Parse relative date strings
-                    if "day ago" in posting_date_text or "days ago" in posting_date_text:
-                        days = int(
-                            re.search(r'(\d+)', posting_date_text).group(1))
+                    if (
+                        "day ago" in posting_date_text
+                        or "days ago" in posting_date_text
+                    ):
+                        days = int(re.search(r"(\d+)", posting_date_text).group(1))
                         date_posted = datetime.fromtimestamp(
-                            current_time - days * 24 * 60 * 60).strftime("%Y-%m-%d")
-                    elif "hour ago" in posting_date_text or "hours ago" in posting_date_text:
-                        hours = int(
-                            re.search(r'(\d+)', posting_date_text).group(1))
+                            current_time - days * 24 * 60 * 60
+                        ).strftime("%Y-%m-%d")
+                    elif (
+                        "hour ago" in posting_date_text
+                        or "hours ago" in posting_date_text
+                    ):
+                        hours = int(re.search(r"(\d+)", posting_date_text).group(1))
                         date_posted = datetime.fromtimestamp(
-                            current_time - hours * 60 * 60).strftime("%Y-%m-%d")
-                    elif "week ago" in posting_date_text or "weeks ago" in posting_date_text:
-                        weeks = int(
-                            re.search(r'(\d+)', posting_date_text).group(1))
+                            current_time - hours * 60 * 60
+                        ).strftime("%Y-%m-%d")
+                    elif (
+                        "week ago" in posting_date_text
+                        or "weeks ago" in posting_date_text
+                    ):
+                        weeks = int(re.search(r"(\d+)", posting_date_text).group(1))
                         date_posted = datetime.fromtimestamp(
-                            current_time - weeks * 7 * 24 * 60 * 60).strftime("%Y-%m-%d")
-                    elif "month ago" in posting_date_text or "months ago" in posting_date_text:
-                        months = int(
-                            re.search(r'(\d+)', posting_date_text).group(1))
+                            current_time - weeks * 7 * 24 * 60 * 60
+                        ).strftime("%Y-%m-%d")
+                    elif (
+                        "month ago" in posting_date_text
+                        or "months ago" in posting_date_text
+                    ):
+                        months = int(re.search(r"(\d+)", posting_date_text).group(1))
                         date_posted = datetime.fromtimestamp(
-                            current_time - months * 30 * 24 * 60 * 60).strftime("%Y-%m-%d")
+                            current_time - months * 30 * 24 * 60 * 60
+                        ).strftime("%Y-%m-%d")
                     else:
                         # Try to parse absolute date
                         try:
                             date_posted = datetime.strptime(
-                                posting_date_text, "%b %d, %Y").strftime("%Y-%m-%d")
+                                posting_date_text, "%b %d, %Y"
+                            ).strftime("%Y-%m-%d")
                         except ValueError:
-                            date_posted = datetime.now(
-                                pytz.timezone('UTC')).strftime("%Y-%m-%d")
+                            date_posted = datetime.now(pytz.timezone("UTC")).strftime(
+                                "%Y-%m-%d"
+                            )
             except Exception as e:
                 logger.error(f"Error extracting posting date: {e}")
-                date_posted = datetime.now(
-                    pytz.timezone('UTC')).strftime("%Y-%m-%d")
+                date_posted = datetime.now(pytz.timezone("UTC")).strftime("%Y-%m-%d")
 
             # Create job object
             return Job(
@@ -454,8 +472,7 @@ class LinkedInScraper(BaseScraper):
                 location=location,
                 salary_description=salary,
                 source="LinkedIn",
-                date_scraped=datetime.now(
-                    pytz.timezone('UTC')).strftime("%Y-%m-%d"),
+                date_scraped=datetime.now(pytz.timezone("UTC")).strftime("%Y-%m-%d"),
                 date_posted=date_posted,
                 job_class=job_function,
                 work_type=job_type,

@@ -21,7 +21,7 @@ class Job(BaseModel):
 
     # ID will be None for new jobs (auto-increment in DB)
     internal_id: Optional[int] = None
-    id: int
+    id: str
     # Basic job info
     name: Optional[str] = None  # Job title
     description: Optional[str] = None

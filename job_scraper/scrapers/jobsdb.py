@@ -314,7 +314,7 @@ class JobsdbScraper(BaseScraper):
             # Create job object with new schema
             return Job(
                 internal_id=job_id,
-                id=job_id,
+                id=str(job_id),
                 name=title,
                 company_name=company_name,
                 location=location,
