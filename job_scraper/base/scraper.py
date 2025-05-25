@@ -102,11 +102,31 @@ class BaseScraper(ABC):
                 )
                 logger.debug(f"Using User-Agent: {headers['User-Agent']}")
 
-            logger.info(f"Fetching URL: {full_url}")
             self.driver.get(full_url)
 
             # Wait for page to load
             time.sleep(5)  # Basic wait - can be improved with explicit waits
+            # Check if this is LinkedIn and look for the expand button
+            if "linkedin.com" in url:
+                try:
+                    # logger.info("LinkedIn page detected, looking for expand buttons...")
+
+                    # Find and click all "展開" buttons
+                    expand_buttons = self.driver.find_elements(
+                        By.XPATH,
+                        "//span[@class='artdeco-button__text' and contains(text(), '展開')]",
+                    )
+
+                    if expand_buttons:
+                        for button in expand_buttons:
+                            try:
+                                button.click()
+                                time.sleep(3)  # Wait for content to expand
+                            except Exception as e:
+                                logger.warning(f"Failed to click expand button: {e}")
+
+                except Exception as e:
+                    logger.warning(f"Error handling LinkedIn expand buttons: {e}")
 
             # Get page source and create BeautifulSoup object
             page_source = self.driver.page_source

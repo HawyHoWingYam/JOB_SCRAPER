@@ -37,24 +37,26 @@ class JobsdbScraper(BaseScraper):
 
     def save_soup_to_html(self, soup: BeautifulSoup, filename_prefix: str):
         """Save BeautifulSoup object to an HTML file in the raw_data folder.
-        
+
         Args:
             soup: BeautifulSoup object to save
             filename_prefix: Prefix for the filename (e.g. 'search', 'job_123')
         """
         # Create raw_data directory if it doesn't exist
-        raw_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'raw_data')
+        raw_data_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "raw_data"
+        )
         os.makedirs(raw_data_dir, exist_ok=True)
-        
+
         # Generate timestamp for unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{filename_prefix}_{timestamp}.html"
         file_path = os.path.join(raw_data_dir, filename)
-        
+
         # Write the HTML content to the file
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(str(soup))
-        
+
         logger.info(f"Saved HTML content to {file_path}")
 
     def search_filters(
@@ -66,15 +68,13 @@ class JobsdbScraper(BaseScraper):
             "finance": "accounting-finance",
         }
         # Use ListedDate as the default sorting method
-        return (
-            job_categories[job_category],
-        )
+        return (job_categories[job_category],)
 
     def search_jobs(self, **kwargs) -> List[Job]:
         job_class = kwargs.get("job_class")
-        job_class_path = re.sub(r'[^a-z0-9]', '-', str(job_class).lower())
-        job_class_path = re.sub(r'-+', '-', job_class_path)
-        job_class_path = job_class_path.strip('-')
+        job_class_path = re.sub(r"[^a-z0-9]", "-", str(job_class).lower())
+        job_class_path = re.sub(r"-+", "-", job_class_path)
+        job_class_path = job_class_path.strip("-")
         page = kwargs.get("page", 1)
         search_url = f"{self.base_url}jobs-in-{job_class_path}"
         params = {"sortmode": "ListedDate", "page": page}
@@ -118,48 +118,45 @@ class JobsdbScraper(BaseScraper):
             Job object with detailed information or None if not found
         """
         job_url = f"{self.base_url}job/{job_id}"
-        
+
         try:
             # Select random user agent
             user_agent = random.choice(USER_AGENTS)
             headers = {"User-Agent": user_agent}
-            
+
             # Pass headers to get_soup
             soup = self.get_soup(job_url, headers=headers)
-            
+
             # Save the soup to HTML file
             # filename_prefix = f"job_details_{job_id}"
             # self.save_soup_to_html(soup, filename_prefix)
- 
+
             # Try multiple possible selectors
             description_element = None
             selectors = [
                 ".x3iy8f0._1xd6mbw0",
                 ".gg45di0._1apz9us0",  # Previous selector
                 "[data-automation='jobAdDetails']",  # More general selector
-                "div[data-automation='jobAdDetails'] > div"  # Child of jobAdDetails
+                "div[data-automation='jobAdDetails'] > div",  # Child of jobAdDetails
             ]
             for selector in selectors:
                 description_element = soup.select_one(selector)
                 if description_element:
                     break
-                        
+
             description = description_element.get_text() if description_element else ""
             # description_html = self.format_job_description_with_gemini(description)
             # Create job object with ID and description
-            return Job(
-                id=job_id, description=description  # Important: Include the job_id
-            )
+            return Job(id=str(job_id), description=description)
 
         except Exception as e:
             logger.error(f"Error getting job details for {job_id}: {e}")
             return None
 
-
     def read_job_description_prompt(self):
         prompt_path = "job_scraper/prompt/job_description.txt"
         try:
-            with open(prompt_path, 'r', encoding='utf-8') as file:
+            with open(prompt_path, "r", encoding="utf-8") as file:
                 prompt = file.read()
             return prompt
         except FileNotFoundError:
@@ -168,45 +165,46 @@ class JobsdbScraper(BaseScraper):
         except Exception as e:
             print(f"Error reading prompt file: {str(e)}")
             return None
-        
+
     def format_job_description_with_gemini(self, text):
         """Format job description as HTML using Gemini API"""
         if not text or not text.strip():
             return "<p>No description available</p>"
-        
+
         try:
             # Initialize the model
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            
+            model = genai.GenerativeModel("gemini-2.0-flash")
+
             # Create the prompt
             prompt = self.read_job_description_prompt()
-            
+
             # Generate the HTML response
             response = model.generate_content(prompt)
-            
+
             # Extract and sanitize the HTML
             html_content = response.text.strip()
-            
+
             # If the response has markdown code blocks, extract just the HTML
             if "```html" in html_content:
                 html_content = html_content.split("```html")[1].split("```")[0].strip()
             elif "```" in html_content:
                 html_content = html_content.split("```")[1].strip()
-                
+
             # Wrap in a container if not already wrapped
             if not html_content.startswith("<div"):
                 html_content = f'<div class="job-description">{html_content}</div>'
-                
+
             return html_content
-            
+
         except Exception as e:
             print(f"Error calling Gemini API: {str(e)}")
             # Fallback to simple formatting if API call fails
             return f"<div class='job-description'><p>{text}</p></div>"
-        
-        
+
     def _parse_job_card(
-        self, card: BeautifulSoup, job_class: str,
+        self,
+        card: BeautifulSoup,
+        job_class: str,
     ) -> Optional[Job]:
         """Parse job information from a job card.
 
@@ -292,17 +290,26 @@ class JobsdbScraper(BaseScraper):
                     posting_date_text = self.clean_text(date_element.get_text())
 
                     # current HK date and time in timestamp format
-                    current_time = datetime.now(pytz.timezone('Asia/Hong_Kong')).timestamp()
+                    current_time = datetime.now(
+                        pytz.timezone("Asia/Hong_Kong")
+                    ).timestamp()
                     # if date_posted contains "d ago", then calculate the timestamp
                     if "d ago" in posting_date_text:
-                        date_posted = current_time - int(posting_date_text.split("d ago")[0]) * 24 * 60 * 60
+                        date_posted = (
+                            current_time
+                            - int(posting_date_text.split("d ago")[0]) * 24 * 60 * 60
+                        )
                     elif "h ago" in posting_date_text:
-                        date_posted = current_time - int(posting_date_text.split("h ago")[0]) * 60 * 60
+                        date_posted = (
+                            current_time
+                            - int(posting_date_text.split("h ago")[0]) * 60 * 60
+                        )
                     elif "m ago" in posting_date_text:
-                        date_posted = current_time - int(posting_date_text.split("m ago")[0]) * 60
+                        date_posted = (
+                            current_time - int(posting_date_text.split("m ago")[0]) * 60
+                        )
                     else:
                         date_posted = current_time
-
 
             except Exception as e:
                 logger.error(f"Error extracting posting date: {e}")
@@ -320,9 +327,11 @@ class JobsdbScraper(BaseScraper):
                 location=location,
                 salary_description=salary,
                 source="JobsDB",
-                date_scraped=datetime.now(pytz.timezone('Asia/Hong_Kong')).strftime("%Y-%m-%d"),
+                date_scraped=datetime.now(pytz.timezone("Asia/Hong_Kong")).strftime(
+                    "%Y-%m-%d"
+                ),
                 date_posted=datetime.fromtimestamp(date_posted).strftime("%Y-%m-%d"),
-                job_class=job_class
+                job_class=job_class,
             )
 
         except Exception as e:

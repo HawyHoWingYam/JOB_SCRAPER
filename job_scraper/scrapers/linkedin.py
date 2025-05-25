@@ -33,17 +33,14 @@ USER_AGENTS = [
 class LinkedInScraper(BaseScraper):
     """Scraper for LinkedIn job listings."""
 
-    def __init__(self, username=None, password=None):
+    def __init__(self, db=None):
         """Initialize the LinkedIn scraper with optional credentials."""
         # Call parent init but don't set up driver yet
         self.name = "LinkedIn"
         self.base_url = "https://www.linkedin.com/"
         self.driver = None
-
-        # Set credentials
-        self.username = username or os.environ.get("LINKEDIN_USERNAME")
-        self.password = password or os.environ.get("LINKEDIN_PASSWORD")
         self.is_logged_in = False
+        self.db = db
 
         # Set up driver with visible browser (not headless)
         self._setup_driver(headless=False)
@@ -74,34 +71,10 @@ class LinkedInScraper(BaseScraper):
 
     def search_jobs(self, **kwargs) -> List[Job]:
         """Search for jobs on LinkedIn using a manual login session."""
-        # Skip automatic login
+        # Login check only - no login process here
         if not self.is_logged_in:
-            logger.info("Using manual login approach...")
-
-            # Open LinkedIn and wait for manual login
-            self.driver.get("https://www.linkedin.com/login")
-
-            # Display instructions to the user
-            print("\n=== MANUAL LOGIN REQUIRED ===")
-            print("1. A browser window has opened")
-            print("2. Please log into your LinkedIn account manually")
-            print("3. After successful login, return to this console")
-            input("Press Enter once you've logged in to continue...")
-
-            # Check if login was successful
-            try:
-                if (
-                    "/feed" in self.driver.current_url
-                    or "global-nav" in self.driver.page_source
-                ):
-                    logger.info("Manual login successful")
-                    self.is_logged_in = True
-                else:
-                    logger.warning(
-                        "Could not confirm successful login. Continuing anyway..."
-                    )
-            except:
-                logger.warning("Could not verify login state. Continuing anyway...")
+            logger.warning("Not logged in. Please call login() first")
+            return []
 
         page = kwargs.get("page", 1)
         base_url = f"{self.base_url}jobs/search/"
@@ -111,7 +84,7 @@ class LinkedInScraper(BaseScraper):
             # "currentJobId": 4222208398,
             "geoId": 103291313,
             # "origin": "JOB_SEARCH_PAGE_SEARCH_BUTTON",
-            # "refresh": "true",
+            "f_TPR": "r172800",
             "sortBy": "DD",
             "start": (page - 1) * 25,
         }
@@ -121,19 +94,35 @@ class LinkedInScraper(BaseScraper):
             soup = self.get_soup(base_url, params=params)
 
             # Save the soup to HTML for debugging
-            filename_prefix = f"linkedin_search_page_{page}"
-            self.save_soup_to_html(soup, filename_prefix)
+            # filename_prefix = f"linkedin_search_page_{page}"
+            # self.save_soup_to_html(soup, filename_prefix)
             job_cards = soup.select("li[data-occludable-job-id]")
             job_ids = [card.get("data-occludable-job-id") for card in job_cards]
 
+            # Get list of existing job IDs from database
+            existing_ids = []
+            if self.db:  # Make sure db connection exists
+                existing_ids = self.db.get_existing_job_ids()
+            else:
+                logger.warning(
+                    "No database connection available, skipping duplicate check"
+                )
+
             job_listings = []
             for job_id in job_ids:
-                # Create a Job object instead of a dictionary
+                # Skip if already exists in database
+                if str(job_id) in existing_ids:
+                    # logger.info(
+                    #     f"Skipping job ID {job_id} - already exists in database"
+                    # )
+                    continue
+
+                # Create a Job object for new jobs only
                 job = Job(
                     id=str(job_id),
-                    name="N/A",  # or title if you extracted it
-                    description="",  # Empty for search results
-                    company_name="N/A",  # Create a Company object
+                    name="N/A",
+                    description="",
+                    company_name="N/A",
                     location="N/A",
                     source="LinkedIn",
                     date_scraped=datetime.now(pytz.timezone("Asia/Hong_Kong")).strftime(
@@ -144,11 +133,8 @@ class LinkedInScraper(BaseScraper):
                 )
                 job_listings.append(job)
 
-            self.log_scraping_stats(
-                jobs_found=len(job_ids),
-                search_params={
-                    "geoId": 103291313,
-                },
+            logger.info(
+                f"Found {len(job_listings)} new jobs out of {len(job_ids)} total listings"
             )
             return job_listings
 
@@ -156,16 +142,43 @@ class LinkedInScraper(BaseScraper):
             logger.error(f"Error searching jobs on LinkedIn: {e}")
             return []
 
+    def login(self):
+        """Handle manual login process"""
+        if self.is_logged_in:
+            logger.info("Already logged in, skipping login")
+            return True
+
+        logger.info("Using manual login approach...")
+
+        # Open LinkedIn and wait for manual login
+        self.driver.get("https://www.linkedin.com/login")
+
+        # Display instructions to the user
+        print("\n=== MANUAL LOGIN REQUIRED ===")
+        print("1. A browser window has opened")
+        print("2. Please log into your LinkedIn account manually")
+        print("3. After successful login, return to this console")
+        input("Press Enter once you've logged in to continue...")
+
+        # Check if login was successful
+        try:
+            if (
+                "/feed" in self.driver.current_url
+                or "global-nav" in self.driver.page_source
+            ):
+                logger.info("Manual login successful")
+                self.is_logged_in = True
+                return True
+            else:
+                logger.warning(
+                    "Could not confirm successful login. Continuing anyway..."
+                )
+                return False
+        except:
+            logger.warning("Could not verify login state. Continuing anyway...")
+            return False
+
     def get_job_details(self, job_id: str) -> Optional[Job]:
-        """Get detailed information for a specific job.
-
-        Args:
-            job_id: LinkedIn job ID
-
-        Returns:
-            Job object with detailed information or None if not found
-        """
-        # LinkedIn job detail URL format
         job_url = f"{self.base_url}jobs/view/{job_id}/"
 
         try:
@@ -180,18 +193,20 @@ class LinkedInScraper(BaseScraper):
             # filename_prefix = f"linkedin_job_{job_id}"
             # self.save_soup_to_html(soup, filename_prefix)
 
-            # Try multiple possible selectors for job description
             description_element = None
             selectors = [
                 ".jobs-description__content",
                 ".jobs-box__html-content",
                 ".description__text",
                 "[data-job-detail-type='description']",
+                # Add the specific selector from the image
+                "div.jobs-description__content.jobs-description-content.jobs-description__content--condensed",
             ]
 
             for selector in selectors:
                 description_element = soup.select_one(selector)
                 if description_element:
+                    # logger.info(f"Found job description using selector: {selector}")
                     break
 
             # Extract job description
@@ -201,9 +216,13 @@ class LinkedInScraper(BaseScraper):
                 else ""
             )
 
+            # Log the first 100 characters of the description for verification
+            if description is None:
+                logger.warning("No job description found")
+
             # Create job object with ID and description
             return Job(
-                id=job_id,
+                id=str(job_id),
                 internal_id=job_id,
                 description=description,
                 source="LinkedIn",

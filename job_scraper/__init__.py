@@ -396,7 +396,7 @@ class JobScraperManager:
         """Run the job scraper with the current configuration.
 
         Returns:
-                    Dict: Results of the scraping operation
+                        Dict: Results of the scraping operation
         """
         if self.config.get_config_type() == 1:
             return self._run_quantity_based()
@@ -459,6 +459,7 @@ class JobScraperManager:
             limit=self.config.quantity,
             filter_type=self.config.filter.value,
             job_class=self.config.job_class,
+            source=self.config.source_platform_name,
         )
 
         if not job_ids:
@@ -470,14 +471,21 @@ class JobScraperManager:
         return self._scrape_job_details(job_ids)
 
     def _run_linkedin_quantity(self) -> Dict[str, Any]:
-        """Run quantity-based LinkedIn scraping."""
-        # Implementation for LinkedIn scraping by quantity
-        # This would be similar to the JobsDB implementation
-        return {
-            "success": True,
-            "message": "LinkedIn quantity scraping not implemented yet",
-            "jobs_scraped": 0,
-        }
+        """Run quantity-based JobsDB scraping."""
+        job_ids = self.db.get_jobs_with_filters(
+            limit=self.config.quantity,
+            filter_type=self.config.filter.value,
+            job_class=self.config.job_class,
+            source=self.config.source_platform_name,
+        )
+
+        if not job_ids:
+            logger.warning(
+                f"No job IDs found with filter '{self.config.filter.value}'."
+            )
+            return {"success": False, "message": "No jobs found", "jobs_scraped": 0}
+
+        return self._scrape_job_details(job_ids)
 
     def _run_jobsdb_pages(self) -> Dict[str, Any]:
         """Run page-based JobsDB scraping."""
@@ -524,27 +532,31 @@ class JobScraperManager:
         """Run page-based linkedin scraping."""
         total_jobs = 0
         jobs = []
+
+        if self.config.method == ScrapingMethod.SELENIUM:
+            linkedin_scraper = LinkedInScraper(db=self.db)
+            linkedin_scraper.login()
+
         for current_page in range(self.config.start_page, self.config.end_page + 1):
             logger.info(f"Scraping page {current_page} of {self.config.end_page}")
 
-            if self.config.method == ScrapingMethod.SELENIUM:
-                # Use Selenium-based scraper
-                linkedin_scraper = LinkedInScraper()
+            # Only pass the parameters specified by the user
+            search_params = {
+                "job_class": self.config.job_class,
+                "page": current_page,
+            }
 
-                # Only pass the parameters specified by the user
-                search_params = {
-                    "job_class": self.config.job_class,
-                    "page": current_page,
-                }
+            jobs = linkedin_scraper.search_jobs(
+                **search_params
+            )  # Reuse scraper instance
 
-                jobs = linkedin_scraper.search_jobs(**search_params)
+            # Use the save parameter to determine if we should save to database
+            if self.config.save and self.db and jobs:
+                saved_count = self.db.save_jobs(jobs)
+                logger.info(
+                    f"Saved {saved_count} jobs from page {current_page} to database"
+                )
 
-                # Use the save parameter to determine if we should save to database
-                if self.config.save and self.db and jobs:
-                    saved_count = self.db.save_jobs(jobs)
-                    logger.info(
-                        f"Saved {saved_count} jobs from page {current_page} to database"
-                    )
             total_jobs += len(jobs)
             jobs = []
 
@@ -592,6 +604,7 @@ class JobScraperManager:
                     worker_id=worker_id,
                     total_workers=len(job_batches),
                     save=self.config.save,
+                    source=self.config.source_platform_name,
                 )
                 futures.append(future)
 
@@ -617,29 +630,25 @@ class JobScraperManager:
         }
 
 
-def process_job_batch(job_batch, worker_id, total_workers, save=False):
-    """Process a batch of jobs with a dedicated worker.
+def process_job_batch(job_batch, worker_id, total_workers, save=False, source=None):
 
-    Args:
-        job_batch: List of job IDs to process
-        worker_id: ID of this worker (for logging)
-        total_workers: Total number of workers running
-        save: Whether to save results to database
-
-    Returns:
-        Tuple of (success_count, failure_count)
-    """
     thread_id = threading.get_ident()
     log_prefix = f"[Worker-{worker_id}/{total_workers} Thread-{thread_id}]"
 
     logger.info(f"{log_prefix} Starting batch processing of {len(job_batch)} jobs")
 
     db = DatabaseConnector()
-    scraper = JobsdbScraper()
+    if source.lower() == "jobsdb":
+        scraper = JobsdbScraper()
+    elif source.lower() == "linkedin":
+        scraper = LinkedInScraper(db=db)
+        scraper.login()
+    else:
+        raise ValueError(f"Unsupported source: {source}")
 
     success_count = 0
     failure_count = 0
-
+    failure_job_ids = []
     for idx, job_id in enumerate(job_batch):
         try:
             # Add random delay to avoid rate limiting
@@ -665,6 +674,7 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
                         success_count += 1
                     else:
                         failure_count += 1
+                        failure_job_ids.append(job_id)  # Add to failure list
                 else:
                     # Preview mode
                     success_count += 1
@@ -678,9 +688,11 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
                 if save:
                     db.update_job_description(job_id, "N/A")
                 failure_count += 1
+                failure_job_ids.append(job_id)  # Add to failure list
 
         except Exception as e:
             failure_count += 1
+            failure_job_ids.append(job_id)  # Add to failure list
             logger.error(
                 f"{log_prefix} ({idx+1}/{len(job_batch)}) Job {job_id} failed: {e}"
             )
@@ -691,7 +703,7 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False):
                     pass
 
     logger.info(
-        f"{log_prefix} Completed batch. Success: {success_count}, Failure: {failure_count}"
+        f"{log_prefix} Completed batch. Success: {success_count}, Failure: {failure_count}, Failed IDs: {failure_job_ids}"
     )
     return success_count, failure_count
 

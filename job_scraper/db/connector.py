@@ -30,7 +30,7 @@ class JobModel(Base):
 
     # Primary key with auto increment
     internal_id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
-    id = sa.Column(sa.Integer, nullable=False)
+    id = sa.Column(sa.String(255), nullable=False)
 
     # All other fields are nullable
     description = sa.Column(sa.Text, nullable=True)
@@ -82,6 +82,20 @@ class DatabaseConnector:
             self.Session = None
             raise
 
+    def get_existing_job_ids(self):
+        """Get a list of all existing job IDs in the database."""
+        from sqlalchemy.orm import Session
+
+        with Session(self.engine) as session:
+            try:
+                # Query just the ID column for efficiency
+                results = session.query(JobModel.id).all()
+                # Convert from list of tuples to list of strings
+                return [str(r[0]) for r in results]
+            except Exception as e:
+                logger.error(f"Error getting existing job IDs: {e}")
+                return []
+
     def save_jobs(self, jobs: List[Job]) -> int:
         """Save jobs to database."""
         if not self.Session:
@@ -94,6 +108,19 @@ class DatabaseConnector:
             for job in jobs:
                 # Convert to SQLAlchemy model
                 job_model = self._convert_to_model(job)
+                # Before saving job
+                logger.info(f"Saving job: {job_model}")
+                # Add detailed type logging
+                logger.info(
+                    f"Job data types: ID={type(job_model.id).__name__}:{job_model.id}, "
+                    f"Name={type(job_model.name).__name__}, "
+                    f"Company={type(job_model.company_name).__name__}, "
+                    f"Location={type(job_model.location).__name__}, "
+                    f"Source={type(job_model.source).__name__}, "
+                    f"Date={type(job_model.date_scraped).__name__}, "
+                    f"Salary={type(job_model.salary_description).__name__}, "
+                    f"Class={type(job_model.job_class).__name__}"
+                )
                 session.add(job_model)
                 saved_count += 1
 
@@ -159,33 +186,9 @@ class DatabaseConnector:
         finally:
             session.close()
 
-    def get_jobs_by_internal_id_range(self, start_id: int, end_id: int) -> List[str]:
-        """Get job IDs for a range of internal IDs.
-
-        Args:
-            start_id: Starting internal ID
-            end_id: Ending internal ID
-
-        Returns:
-            List of job IDs
-        """
-        session = self.Session()
-        try:
-            jobs = (
-                session.query(JobModel.id)
-                .filter(JobModel.id.between(start_id, end_id))
-                .all()
-            )
-            return [job[0] for job in jobs]  # Extract IDs from result tuples
-
-        except SQLAlchemyError as e:
-            logger.error(f"Error getting jobs from database: {e}")
-            return []
-
-        finally:
-            session.close()
-
-    def get_jobs_with_filters(self, limit=100, filter_type="new", job_class=None):
+    def get_jobs_with_filters(
+        self, limit=100, filter_type="new", job_class=None, source=None
+    ):
         """Get jobs with null descriptions.
 
         Args:
@@ -222,6 +225,9 @@ class DatabaseConnector:
                 query = query.filter(
                     func.lower(JobModel.job_class) == job_class.lower()
                 )
+
+            if source is not None:
+                query = query.filter(func.lower(JobModel.source) == source.lower())
 
             # Order by internal_id descending and apply limit
             jobs = query.order_by(JobModel.internal_id.desc()).limit(limit).all()
