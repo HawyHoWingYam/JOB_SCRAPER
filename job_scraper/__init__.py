@@ -102,18 +102,6 @@ class JobScraperConfig:
         # Validate common parameters
         self._validate_source_platform()
 
-        # Only validate job_class if not LinkedIn
-        if (
-            hasattr(self, "source_platform_name")
-            and self.source_platform_name.lower() != "linkedin"
-        ):
-            self._validate_job_class()
-        else:
-            # Clear job_class fields for LinkedIn
-            self.job_class = None
-            self.job_class_id = None
-            self.job_class_name = None
-
         # Continue with other validations
         self._validate_method()
         self._validate_workers()
@@ -128,16 +116,6 @@ class JobScraperConfig:
         """Validate and normalize the configuration."""
         # First validate the source platform to get the platform name
         self._validate_source_platform()
-
-        # Only validate job_class if not LinkedIn
-        if self.source_platform_name.lower() != "linkedin":
-            self._validate_job_class()
-        else:
-            # For LinkedIn, just set job_class to None since it's not needed
-            logger.info("LinkedIn platform selected, skipping job_class validation")
-            self.job_class = None
-            self.job_class_id = None
-            self.job_class_name = None
 
         # Continue with other validations
         self._validate_method()
@@ -205,34 +183,6 @@ class JobScraperConfig:
         except Exception as e:
             logger.error(f"Error validating source platform: {e}")
             raise ValueError(f"Failed to validate source platform: {e}")
-
-    def _validate_job_class(self):
-        try:
-            valid_job_classes = self._db.get_all_job_classes()
-            valid_job_class_ids = [int(job_class.id) for job_class in valid_job_classes]
-
-            # Create mapping from ID to job class name
-            job_class_id_to_name = {int(jc.id): jc.name for jc in valid_job_classes}
-
-            # Store both ID and name
-            self.job_class_id = None
-            self.job_class_name = None
-
-            # Check if job_class is a valid ID
-            job_class_id = int(self.job_class)
-            if job_class_id in valid_job_class_ids:
-                self.job_class_id = job_class_id
-                self.job_class = self.job_class_name = job_class_id_to_name[
-                    job_class_id
-                ]
-                logger.info(
-                    f"Using job class: {self.job_class_name} (ID: {self.job_class_id})"
-                )
-            else:
-                raise ValueError(f"Invalid job class ID: {job_class_id}")
-        except Exception as e:
-            logger.error(f"Error validating job class: {e}")
-            raise e
 
     def _validate_method(self):
         """Validate and normalize the scraping method."""
@@ -393,11 +343,6 @@ class JobScraperManager:
         return cls(config)
 
     def run(self) -> Dict[str, Any]:
-        """Run the job scraper with the current configuration.
-
-        Returns:
-                            Dict: Results of the scraping operation
-        """
         if self.config.get_config_type() == 1:
             return self._run_quantity_based()
         else:
@@ -496,11 +441,10 @@ class JobScraperManager:
 
             if self.config.method == ScrapingMethod.SELENIUM:
                 # Use Selenium-based scraper
-                jobsdb_scraper = JobsdbScraper()
+                jobsdb_scraper = JobsdbScraper(headless=True, db=self.db)
 
                 # Only pass the parameters specified by the user
                 search_params = {
-                    "job_class": self.config.job_class,
                     "page": current_page,
                 }
 
@@ -534,7 +478,8 @@ class JobScraperManager:
         jobs = []
 
         if self.config.method == ScrapingMethod.SELENIUM:
-            linkedin_scraper = LinkedInScraper(db=self.db)
+            linkedin_scraper = LinkedInScraper(db=self.db, headless=False)
+            linkedin_scraper.login()
 
         for current_page in range(self.config.start_page, self.config.end_page + 1):
             logger.info(f"Scraping page {current_page} of {self.config.end_page}")
@@ -638,7 +583,7 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
 
     db = DatabaseConnector()
     if source.lower() == "jobsdb":
-        scraper = JobsdbScraper()
+        scraper = JobsdbScraper(headless=True, db=db)
     elif source.lower() == "linkedin":
         scraper = LinkedInScraper(db=db)
     else:
@@ -672,6 +617,8 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
                     if source.lower() == "linkedin":
                         db.update_job_title(job_id, job_details.name)
                         db.update_job_company(job_id, job_details.company_name)
+                    elif source.lower() == "jobsdb":
+                        db.update_job_class(job_id, job_details.job_class)
                     if success:
                         success_count += 1
                     else:

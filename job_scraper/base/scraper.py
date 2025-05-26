@@ -1,7 +1,7 @@
 """Base scraper class with common functionality for all job scrapers."""
 
 import logging
-import time
+import time, random
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Union
 
@@ -26,7 +26,7 @@ class BaseScraper(ABC):
     browser automation, HTML parsing, and standardized data extraction.
     """
 
-    def __init__(self, name: str, base_url: str):
+    def __init__(self, name=None, base_url=None, headless=True):
         """Initialize the scraper.
 
         Args:
@@ -35,6 +35,7 @@ class BaseScraper(ABC):
         """
         self.name = name
         self.base_url = base_url
+        self.headless = headless
         self.driver = None
         self._setup_driver()
 
@@ -55,9 +56,16 @@ class BaseScraper(ABC):
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--window-size=1920,1080")
-        options.add_argument(
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
-        )
+        USER_AGENTS = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+        ]
+        user_agent = random.choice(USER_AGENTS)
+        options.add_argument(f"user-agent={user_agent}")
 
         self.driver = webdriver.Chrome(
             service=Service("chromedriver/chromedriver"),
@@ -101,7 +109,7 @@ class BaseScraper(ABC):
                     "Network.setUserAgentOverride", {"userAgent": headers["User-Agent"]}
                 )
                 logger.debug(f"Using User-Agent: {headers['User-Agent']}")
-
+            # logger.info(f"Scraping URL: {full_url}")
             self.driver.get(full_url)
 
             # Wait for page to load

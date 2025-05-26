@@ -109,18 +109,7 @@ class DatabaseConnector:
                 # Convert to SQLAlchemy model
                 job_model = self._convert_to_model(job)
                 # Before saving job
-                logger.info(f"Saving job: {job_model}")
-                # Add detailed type logging
-                logger.info(
-                    f"Job data types: ID={type(job_model.id).__name__}:{job_model.id}, "
-                    f"Name={type(job_model.name).__name__}, "
-                    f"Company={type(job_model.company_name).__name__}, "
-                    f"Location={type(job_model.location).__name__}, "
-                    f"Source={type(job_model.source).__name__}, "
-                    f"Date={type(job_model.date_scraped).__name__}, "
-                    f"Salary={type(job_model.salary_description).__name__}, "
-                    f"Class={type(job_model.job_class).__name__}"
-                )
+             
                 session.add(job_model)
                 saved_count += 1
 
@@ -344,6 +333,32 @@ class DatabaseConnector:
             "job_subclass": job_model.job_subclass,
         }
 
+
+    def update_job_class(self, job_id: str, job_class: str) -> bool:
+        session = self.Session()
+
+        try:
+            # Find the job by ID
+            job = session.query(JobModel).filter(JobModel.id == job_id).first()
+
+            if not job:
+                logger.error(f"Job with ID {job_id} not found")
+                return False
+
+            job.job_class = job_class
+
+            # Commit the changes
+            session.commit()
+            return True
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"Error updating job class: {e}")
+            return False
+
+        finally:
+            session.close()
+    
     def update_job_description(self, job_id: str, description: str) -> bool:
         """Update the description for a specific job.
 

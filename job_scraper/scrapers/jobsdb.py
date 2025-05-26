@@ -30,10 +30,17 @@ USER_AGENTS = [
 class JobsdbScraper(BaseScraper):
     """Scraper for Jobsdb job listings."""
 
-    def __init__(self):
-        """Initialize the Jobsdb scraper."""
-        super().__init__(name="Jobsdb", base_url="https://hk.jobsdb.com/")
-        # Example URL: "https://hk.jobsdb.com/jobs-in-information-communication-technology?sortmode=ListedDate&page=1"
+    def __init__(self, headless=True, db=None):
+        """Initialize the Jobsdb scraper.
+
+        Args:
+            headless (bool): Whether to run browser in headless mode. Defaults to True.
+            db: Database connector instance
+        """
+        super().__init__(
+            name="Jobsdb", base_url="https://hk.jobsdb.com/", headless=headless
+        )
+        self.db = db
 
     def save_soup_to_html(self, soup: BeautifulSoup, filename_prefix: str):
         """Save BeautifulSoup object to an HTML file in the raw_data folder.
@@ -71,15 +78,19 @@ class JobsdbScraper(BaseScraper):
         return (job_categories[job_category],)
 
     def search_jobs(self, **kwargs) -> List[Job]:
-        job_class = kwargs.get("job_class")
-        job_class_path = re.sub(r"[^a-z0-9]", "-", str(job_class).lower())
-        job_class_path = re.sub(r"-+", "-", job_class_path)
-        job_class_path = job_class_path.strip("-")
         page = kwargs.get("page", 1)
-        search_url = f"{self.base_url}jobs-in-{job_class_path}"
+        search_url = f"{self.base_url}jobs"
         params = {"sortmode": "ListedDate", "page": page}
 
         try:
+            existing_ids = []
+            if self.db:  # Make sure db connection exists
+                existing_ids = self.db.get_existing_job_ids()
+            else:
+                logger.warning(
+                    "No database connection available, skipping duplicate check"
+                )
+
             soup = self.get_soup(search_url, params=params)
             # filename_prefix = f"jobsdb_{job_class}_page{page}"
             # self.save_soup_to_html(soup, filename_prefix)
@@ -88,8 +99,10 @@ class JobsdbScraper(BaseScraper):
 
             for card in job_cards:
                 try:
-                    job = self._parse_job_card(card, job_class)
+                    job = self._parse_job_card(card)
                     if job:
+                        if str(job.id) in existing_ids:
+                            continue
                         job_listings.append(job)
                 except Exception as e:
                     logger.error(f"Error parsing job card: {e}")
@@ -97,7 +110,7 @@ class JobsdbScraper(BaseScraper):
             self.log_scraping_stats(
                 jobs_found=len(job_listings),
                 search_params={
-                    "job_class": job_class,
+                    # "job_class": job_class,
                     # "page": page,
                 },
             )
@@ -130,12 +143,21 @@ class JobsdbScraper(BaseScraper):
             # Save the soup to HTML file
             # filename_prefix = f"job_details_{job_id}"
             # self.save_soup_to_html(soup, filename_prefix)
+            job_class = "N/A"
+            job_class_element = soup.select_one(
+                'span[data-automation="job-detail-classifications"] a'
+            )
+            if job_class_element:
+                full_text = job_class_element.get_text(strip=True)
+                match = re.search(r"\((.*?)\)", full_text)
+                if match:
+                    job_class = match.group(1)
+                else:
+                    job_class = full_text
 
             # Try multiple possible selectors
             description_element = None
             selectors = [
-                ".x3iy8f0._1xd6mbw0",
-                ".gg45di0._1apz9us0",  # Previous selector
                 "[data-automation='jobAdDetails']",  # More general selector
                 "div[data-automation='jobAdDetails'] > div",  # Child of jobAdDetails
             ]
@@ -147,7 +169,7 @@ class JobsdbScraper(BaseScraper):
             description = description_element.get_text() if description_element else ""
             # description_html = self.format_job_description_with_gemini(description)
             # Create job object with ID and description
-            return Job(id=str(job_id), description=description)
+            return Job(id=str(job_id), description=description, job_class=job_class)
 
         except Exception as e:
             logger.error(f"Error getting job details for {job_id}: {e}")
@@ -201,11 +223,7 @@ class JobsdbScraper(BaseScraper):
             # Fallback to simple formatting if API call fails
             return f"<div class='job-description'><p>{text}</p></div>"
 
-    def _parse_job_card(
-        self,
-        card: BeautifulSoup,
-        job_class: str,
-    ) -> Optional[Job]:
+    def _parse_job_card(self, card: BeautifulSoup) -> Optional[Job]:
         """Parse job information from a job card.
 
         Args:
@@ -288,7 +306,7 @@ class JobsdbScraper(BaseScraper):
                 if date_element:
                     # Extract text directly from the span element
                     posting_date_text = self.clean_text(date_element.get_text())
-
+                    # logger.info(f"Posting date text: {posting_date_text}")
                     # current HK date and time in timestamp format
                     current_time = datetime.now(
                         pytz.timezone("Asia/Hong_Kong")
@@ -319,6 +337,7 @@ class JobsdbScraper(BaseScraper):
             # )
 
             # Create job object with new schema
+
             return Job(
                 internal_id=job_id,
                 id=str(job_id),
@@ -331,7 +350,7 @@ class JobsdbScraper(BaseScraper):
                     "%Y-%m-%d"
                 ),
                 date_posted=datetime.fromtimestamp(date_posted).strftime("%Y-%m-%d"),
-                job_class=job_class,
+                # job_class=job_class,
             )
 
         except Exception as e:

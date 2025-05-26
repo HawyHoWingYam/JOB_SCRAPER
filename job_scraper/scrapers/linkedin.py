@@ -34,7 +34,7 @@ USER_AGENTS = [
 class LinkedInScraper(BaseScraper):
     """Scraper for LinkedIn job listings."""
 
-    def __init__(self, db=None):
+    def __init__(self, db=None, headless=True):
         """Initialize the LinkedIn scraper with optional credentials."""
         # Call parent init but don't set up driver yet
         self.name = "LinkedIn"
@@ -44,7 +44,7 @@ class LinkedInScraper(BaseScraper):
         self.db = db
 
         # Set up driver with visible browser (not headless)
-        self._setup_driver(headless=True)
+        self._setup_driver(headless=headless)
 
     def save_soup_to_html(self, soup: BeautifulSoup, filename_prefix: str):
         """Save BeautifulSoup object to an HTML file in the raw_data folder.
