@@ -33,10 +33,23 @@ npm run dev:frontend
 npm run dev:backend
 ```
 
+1. npm run start:dev
+2. npm run dev 
+
 ### Accessing the Applications
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:3001/api
 - Health check: http://localhost:3001/api/health
+
+
+
+
+https://www.glassdoor.com.hk/Job/hong-kong-jobs-SRCH_IL.0,9_IN106.htm?sortBy=date_desc
+
+https://hk.indeed.com/jobs?l=Hong%20Kong%20Island&radius=100&sort=date
+https://hk.indeed.com/jobs?l=Kowloon&radius=100&sort=date
+https://hk.indeed.com/jobs?l=New%20Territories&radius=100&sort=date
+
 
 Get Header : 
 
