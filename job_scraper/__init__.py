@@ -20,9 +20,10 @@ from enum import Enum
 from .db.connector import DatabaseConnector
 from .scrapers.jobsdb import JobsdbScraper
 from .scrapers.linkedin import LinkedInScraper
+# Add import for Glassdoor scraper
+from .scrapers.glassdoor import GlassdoorScraper
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
-from .scrapers.jobsdb_spider import JobsDBSpider
 from .models.job import Company, Job
 
 # Configure logging
@@ -131,7 +132,8 @@ class JobScraperConfig:
         """Validate and normalize the source platform."""
         # Check if DB is available
         if not self._db:
-            logger.error("Database not available for source platform validation")
+            logger.error(
+                "Database not available for source platform validation")
             raise ValueError(
                 "Database connection required for source platform validation"
             )
@@ -141,8 +143,8 @@ class JobScraperConfig:
             if not valid_platforms:
                 logger.error("No source platforms found in database")
                 raise ValueError("No source platforms found in database")
-
-            valid_platform_ids = [int(platform.id) for platform in valid_platforms]
+            valid_platform_ids = [int(platform.id)
+                                  for platform in valid_platforms]
             platform_id_to_name = {int(p.id): p.name for p in valid_platforms}
 
             # Store both ID and name
@@ -152,6 +154,7 @@ class JobScraperConfig:
             try:
                 # Check if source_platform is a valid ID
                 platform_id = int(self.source_platform)
+                logger.info(f"Validating source platform ID 2: {platform_id}")
                 if platform_id in valid_platform_ids:
                     self.source_platform_id = platform_id
                     self.source_platform_name = platform_id_to_name[platform_id]
@@ -160,7 +163,8 @@ class JobScraperConfig:
                     )
                 else:
                     # Don't default to "all", raise an error instead
-                    raise ValueError(f"Invalid source platform ID: {platform_id}")
+                    raise ValueError(
+                        f"Invalid source platform ID: {platform_id}")
             except (ValueError, TypeError):
                 # Check if source_platform is a name
                 platform_name = str(self.source_platform).lower()
@@ -198,7 +202,8 @@ class JobScraperConfig:
     def _validate_workers(self):
         """Validate and normalize the number of workers."""
         if not isinstance(self.workers, int) or self.workers < 1:
-            logger.warning(f"Invalid workers value: {self.workers}. Using default: 1")
+            logger.warning(
+                f"Invalid workers value: {self.workers}. Using default: 1")
             self.workers = 1
 
     def _validate_type1_params(self):
@@ -266,7 +271,8 @@ class JobScraperConfig:
                 try:
                     config_dict[key] = int(config_dict[key])
                 except (ValueError, TypeError):
-                    config_dict.pop(key)  # Remove invalid values, defaults will be used
+                    # Remove invalid values, defaults will be used
+                    config_dict.pop(key)
 
         # Convert boolean values
         if "save" in config_dict:
@@ -313,7 +319,8 @@ class JobScraperManager:
                 logger.info("Database connection established")
             except Exception as e:
                 logger.error(f"Failed to connect to database: {e}")
-                raise ValueError(f"Database connection required but failed: {e}")
+                raise ValueError(
+                    f"Database connection required but failed: {e}")
 
         # Inject the same DB connection into the config
         self.config._db = self.db
@@ -350,7 +357,8 @@ class JobScraperManager:
 
     def _run_quantity_based(self) -> Dict[str, Any]:
         """Run Type 1 (quantity-based) scraping."""
-        logger.info(f"Running quantity-based scraping with {self.config.quantity} jobs")
+        logger.info(
+            f"Running quantity-based scraping with {self.config.quantity} jobs")
 
         # Convert source platform name to method name
         platform_name = str(self.config.source_platform_name).lower()
@@ -416,7 +424,24 @@ class JobScraperManager:
         return self._scrape_job_details(job_ids)
 
     def _run_linkedin_quantity(self) -> Dict[str, Any]:
-        """Run quantity-based JobsDB scraping."""
+        """Run quantity-based LinkedIn scraping."""
+        job_ids = self.db.get_jobs_with_filters(
+            limit=self.config.quantity,
+            filter_type=self.config.filter.value,
+            job_class=self.config.job_class,
+            source=self.config.source_platform_name,
+        )
+
+        if not job_ids:
+            logger.warning(
+                f"No job IDs found with filter '{self.config.filter.value}'."
+            )
+            return {"success": False, "message": "No jobs found", "jobs_scraped": 0}
+
+        return self._scrape_job_details(job_ids)
+
+    def _run_glassdoor_quantity(self) -> Dict[str, Any]:
+        """Run quantity-based Glassdoor scraping."""
         job_ids = self.db.get_jobs_with_filters(
             limit=self.config.quantity,
             filter_type=self.config.filter.value,
@@ -437,7 +462,8 @@ class JobScraperManager:
         total_jobs = 0
         jobs = []
         for current_page in range(self.config.start_page, self.config.end_page + 1):
-            logger.info(f"Scraping page {current_page} of {self.config.end_page}")
+            logger.info(
+                f"Scraping page {current_page} of {self.config.end_page}")
 
             if self.config.method == ScrapingMethod.SELENIUM:
                 # Use Selenium-based scraper
@@ -473,7 +499,7 @@ class JobScraperManager:
         }
 
     def _run_linkedin_pages(self) -> Dict[str, Any]:
-        """Run page-based linkedin scraping."""
+        """Run page-based LinkedIn scraping."""
         total_jobs = 0
         jobs = []
 
@@ -482,7 +508,8 @@ class JobScraperManager:
             linkedin_scraper.login()
 
         for current_page in range(self.config.start_page, self.config.end_page + 1):
-            logger.info(f"Scraping page {current_page} of {self.config.end_page}")
+            logger.info(
+                f"Scraping page {current_page} of {self.config.end_page}")
 
             # Only pass the parameters specified by the user
             search_params = {
@@ -517,6 +544,54 @@ class JobScraperManager:
             "source_platform": self.config.source_platform,
         }
 
+    def _run_glassdoor_pages(self) -> Dict[str, Any]:
+        """Run page-based Glassdoor scraping."""
+        total_jobs = 0
+        jobs = []
+
+        if self.config.method == ScrapingMethod.SELENIUM:
+            # Use Selenium-based scraper
+            glassdoor_scraper = GlassdoorScraper(db=self.db, headless=False)
+
+            # Manual login if needed
+            if self.config.get("require_login", False):
+                glassdoor_scraper.login()
+
+        for current_page in range(self.config.start_page, self.config.end_page + 1):
+            logger.info(
+                f"Scraping page {current_page} of {self.config.end_page}")
+
+            # Only pass the parameters specified by the user
+            search_params = {
+                "job_class": self.config.job_class,
+                "page": current_page,
+            }
+
+            jobs = glassdoor_scraper.search_jobs(**search_params)
+
+            # Use the save parameter to determine if we should save to database
+            if self.config.save and self.db and jobs:
+                saved_count = self.db.save_jobs(jobs)
+                logger.info(
+                    f"Saved {saved_count} jobs from page {current_page} to database"
+                )
+
+            total_jobs += len(jobs)
+            jobs = []
+
+        logger.info(
+            f"Total jobs found across pages {self.config.start_page} to {self.config.end_page}: {total_jobs}"
+        )
+
+        return {
+            "success": True,
+            "jobs_scraped": total_jobs,
+            "pages_scraped": self.config.end_page - self.config.start_page + 1,
+            "job_class": self.config.job_class,
+            "save": self.config.save,
+            "source_platform": self.config.source_platform,
+        }
+
     def _scrape_job_details(self, job_ids: List[str]) -> Dict[str, Any]:
         """Scrape details for the given job IDs."""
         max_workers = min(self.config.workers, len(job_ids))
@@ -526,13 +601,14 @@ class JobScraperManager:
 
         # Split jobs into equal-sized batches (last batch may be smaller)
         job_batches = [
-            job_ids[i : i + batch_size] for i in range(0, len(job_ids), batch_size)
+            job_ids[i: i + batch_size] for i in range(0, len(job_ids), batch_size)
         ]
 
         logger.info(
             f"Starting detail scraping with {max_workers} workers. Each worker will process ~{batch_size} jobs."
         )
-        logger.info(f"Total jobs: {len(job_ids)}, Save mode: {self.config.save}")
+        logger.info(
+            f"Total jobs: {len(job_ids)}, Save mode: {self.config.save}")
 
         # Create and start workers
         total_success = 0
@@ -579,13 +655,16 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
     thread_id = threading.get_ident()
     log_prefix = f"[Worker-{worker_id}/{total_workers} Thread-{thread_id}]"
 
-    logger.info(f"{log_prefix} Starting batch processing of {len(job_batch)} jobs")
+    logger.info(
+        f"{log_prefix} Starting batch processing of {len(job_batch)} jobs")
 
     db = DatabaseConnector()
     if source.lower() == "jobsdb":
         scraper = JobsdbScraper(headless=True, db=db)
     elif source.lower() == "linkedin":
         scraper = LinkedInScraper(db=db)
+    elif source.lower() == "glassdoor":  # Add support for Glassdoor
+        scraper = GlassdoorScraper(headless=True, db=db)
     else:
         raise ValueError(f"Unsupported source: {source}")
 
@@ -596,7 +675,8 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
         try:
             # Add random delay to avoid rate limiting
             delay = random.uniform(1.0, 3.0)
-            logger.debug(f"{log_prefix} Job {job_id} sleeping for {delay:.2f} seconds")
+            logger.debug(
+                f"{log_prefix} Job {job_id} sleeping for {delay:.2f} seconds")
             time.sleep(delay)
 
             # Replace the existing logging line (around line 128) with this:
@@ -613,8 +693,9 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
             ):
                 if save:
                     logger.info(f"Saving job {job_id} to database")
-                    success = db.update_job_description(job_id, job_details.description)
-                    if source.lower() == "linkedin":
+                    success = db.update_job_description(
+                        job_id, job_details.description)
+                    if source.lower() == "linkedin" or source.lower() == "glassdoor":  # Update for Glassdoor
                         db.update_job_title(job_id, job_details.name)
                         db.update_job_company(job_id, job_details.company_name)
                     elif source.lower() == "jobsdb":
@@ -647,7 +728,8 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
             )
             if save:
                 try:
-                    db.update_job_description(job_id, f"Error: {type(e).__name__}")
+                    db.update_job_description(
+                        job_id, f"Error: {type(e).__name__}")
                 except Exception:
                     pass
 

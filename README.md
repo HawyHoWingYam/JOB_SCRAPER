@@ -65,3 +65,6 @@ python -m job_scraper.__init__ source_platform=4, quantity=10, method=selenium, 
 
 - JobsDB
 python -m job_scraper.__init__ source_platform=1, quantity=10, method=selenium, save=True, filter=all, workers=5
+
+
+python -m job_scraper.__init__ source_platform=2, start_page=1, end_page=1, method=selenium, save=True
