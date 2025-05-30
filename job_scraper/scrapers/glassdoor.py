@@ -16,6 +16,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from ..base.scraper import BaseScraper
 from ..models.job import Company, Job
+from selenium import webdriver
 
 logger = logging.getLogger(__name__)
 load_dotenv()
@@ -36,17 +37,54 @@ USER_AGENTS = [
 class GlassdoorScraper(BaseScraper):
     """Scraper for Glassdoor job listings."""
 
-    def __init__(self, db=None, headless=True):
-        """Initialize the Glassdoor scraper."""
-        # Call parent init but don't set up driver yet
+    def __init__(self, headless=False, db=None, use_profile=True):
+        """Initialize the Glassdoor scraper with option to use existing profile.
+        
+        Args:
+            headless (bool): Whether to run browser in headless mode
+            db: Database connector instance
+            use_profile (bool): Whether to use a persistent Chrome profile
+        """
         self.name = "Glassdoor"
         self.base_url = "https://www.glassdoor.com/"
-        self.driver = None
-        self.is_logged_in = False
         self.db = db
+        self.is_logged_in = False
+        self.driver = None
+        self._setup_driver(headless, use_profile)
 
-        # Set up driver with visible browser if headless=False
-        self._setup_driver(headless=headless)
+    def _setup_driver(self, headless=False, use_profile=True):
+        """Set up the Selenium WebDriver with optional user profile."""
+        chrome_options = webdriver.ChromeOptions()
+        
+        if headless:
+            chrome_options.add_argument('--headless')
+        
+        if use_profile:
+            # Create a profile directory if it doesn't exist
+            profile_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "user_data", "glassdoor_profile"
+            )
+            os.makedirs(profile_dir, exist_ok=True)
+            
+            # Use this directory as the user profile
+            chrome_options.add_argument(f'--user-data-dir={profile_dir}')
+            
+            # Use a specific profile
+            chrome_options.add_argument('--profile-directory=Default')
+            
+            logger.info(f"Using Chrome profile at: {profile_dir}")
+        
+        # Other necessary options
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--window-size=1920,1080')
+        
+        try:
+            self.driver = webdriver.Chrome(options=chrome_options)
+        except Exception as e:
+            logger.error(f"Failed to initialize Chrome driver: {e}")
+            raise
 
     def save_soup_to_html(self, soup: BeautifulSoup, filename_prefix: str):
         """Save BeautifulSoup object to an HTML file in the raw_data folder.
@@ -157,37 +195,45 @@ class GlassdoorScraper(BaseScraper):
             return []
 
     def login(self):
-        """Handle manual login process for Glassdoor"""
+        """Handle login process for Glassdoor using profile."""
         if self.is_logged_in:
-            logger.info("Already logged in, skipping login")
+            logger.info("Already logged in via profile, skipping login")
             return True
-
-        logger.info("Using manual login approach...")
-
-        # Open Glassdoor login page
-        self.driver.get(f"{self.base_url}profile/login_input.htm")
-
-        # Display instructions to the user
-        print("\n=== MANUAL LOGIN REQUIRED ===")
-        print("1. A browser window has opened")
-        print("2. Please log into your Glassdoor account manually")
-        print("3. After successful login, return to this console")
-        input("Press Enter once you've logged in to continue...")
-
-        # Check if login was successful
+        
+        # Check if already logged in via profile
         try:
-            # Check for elements that indicate successful login
-            if "member_home" in self.driver.current_url or "isLoggedIn" in self.driver.page_source:
+            self.driver.get(self.base_url)
+            time.sleep(3)
+            
+            # Look for elements that indicate logged-in state
+            if "isLoggedIn" in self.driver.page_source or "member_home" in self.driver.current_url:
+                logger.info("Already logged in via saved profile")
+                self.is_logged_in = True
+                return True
+        except Exception as e:
+            logger.warning(f"Error checking login status: {e}")
+        
+        # If not logged in, prompt for manual login
+        logger.info("Manual login required...")
+        self.driver.get(f"{self.base_url}profile/login_input.htm")
+        
+        print("\n=== MANUAL LOGIN REQUIRED ===")
+        print("1. Please log into your Glassdoor account in the browser")
+        print("2. Your login will be saved for future sessions")
+        print("3. After logging in, return to this console")
+        input("Press Enter once you've logged in to continue...")
+        
+        # Verify login was successful
+        try:
+            if "isLoggedIn" in self.driver.page_source or "member_home" in self.driver.current_url:
                 logger.info("Manual login successful")
                 self.is_logged_in = True
                 return True
             else:
-                logger.warning(
-                    "Could not confirm successful login. Continuing anyway..."
-                )
+                logger.warning("Could not confirm successful login")
                 return False
         except:
-            logger.warning("Could not verify login state. Continuing anyway...")
+            logger.warning("Could not verify login state")
             return False
 
     def close_modals(self):

@@ -4,7 +4,8 @@ import logging
 import time, random
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Union
-
+import pickle
+import os
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -183,3 +184,51 @@ class BaseScraper(ABC):
         logger.info(
             f"[{self.name}] Found {jobs_found} jobs for params: {search_params}"
         )
+
+    def save_cookies(self, filename="cookies.pkl"):
+        """Save current browser cookies to file."""
+        cookies_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies"
+        )
+        os.makedirs(cookies_dir, exist_ok=True)
+        cookies_file = os.path.join(cookies_dir, filename)
+
+        if self.driver:
+            cookies = self.driver.get_cookies()
+            with open(cookies_file, "wb") as f:
+                pickle.dump(cookies, f)
+            logger.info(f"Saved cookies to {cookies_file}")
+            return True
+        return False
+
+    def load_cookies(self, filename="cookies.pkl", domain=None):
+        """Load cookies from file into current browser session."""
+        cookies_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies"
+        )
+        cookies_file = os.path.join(cookies_dir, filename)
+
+        if not os.path.exists(cookies_file):
+            logger.warning(f"No cookies file found at {cookies_file}")
+            return False
+
+        try:
+            with open(cookies_file, "rb") as f:
+                cookies = pickle.load(f)
+
+            # First load a page from the domain
+            if domain:
+                self.driver.get(domain)
+
+            # Then add the cookies
+            for cookie in cookies:
+                if "expiry" in cookie:
+                    # Convert expiry from float to int to avoid errors
+                    cookie["expiry"] = int(cookie["expiry"])
+                self.driver.add_cookie(cookie)
+
+            logger.info(f"Loaded cookies from {cookies_file}")
+            return True
+        except Exception as e:
+            logger.error(f"Error loading cookies: {e}")
+            return False
