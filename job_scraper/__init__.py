@@ -20,9 +20,6 @@ from enum import Enum
 from .db.connector import DatabaseConnector
 from .scrapers.jobsdb import JobsdbScraper
 from .scrapers.linkedin import LinkedInScraper
-
-# Add import for Glassdoor scraper
-from .scrapers.glassdoor import GlassdoorScraper
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 from .models.job import Company, Job
@@ -435,23 +432,6 @@ class JobScraperManager:
 
         return self._scrape_job_details(job_ids)
 
-    def _run_glassdoor_quantity(self) -> Dict[str, Any]:
-        """Run quantity-based Glassdoor scraping."""
-        job_ids = self.db.get_jobs_with_filters(
-            limit=self.config.quantity,
-            filter_type=self.config.filter.value,
-            job_class=self.config.job_class,
-            source=self.config.source_platform_name,
-        )
-
-        if not job_ids:
-            logger.warning(
-                f"No job IDs found with filter '{self.config.filter.value}'."
-            )
-            return {"success": False, "message": "No jobs found", "jobs_scraped": 0}
-
-        return self._scrape_job_details(job_ids)
-
     def _run_jobsdb_pages(self) -> Dict[str, Any]:
         """Run page-based JobsDB scraping."""
         total_jobs = 0
@@ -537,53 +517,6 @@ class JobScraperManager:
             "source_platform": self.config.source_platform,
         }
 
-    def _run_glassdoor_pages(self) -> Dict[str, Any]:
-        """Run page-based Glassdoor scraping."""
-        total_jobs = 0
-        jobs = []
-
-        if self.config.method == ScrapingMethod.SELENIUM:
-            # Use Selenium-based scraper
-            glassdoor_scraper = GlassdoorScraper(db=self.db, headless=False)
-
-            # Manual login if needed
-            # if self.config.get("require_login", False):
-        glassdoor_scraper.login()
-
-        for current_page in range(self.config.start_page, self.config.end_page + 1):
-            logger.info(f"Scraping page {current_page} of {self.config.end_page}")
-
-            # Only pass the parameters specified by the user
-            search_params = {
-                "job_class": self.config.job_class,
-                "page": current_page,
-            }
-
-            jobs = glassdoor_scraper.search_jobs(**search_params)
-
-            # Use the save parameter to determine if we should save to database
-            if self.config.save and self.db and jobs:
-                saved_count = self.db.save_jobs(jobs)
-                logger.info(
-                    f"Saved {saved_count} jobs from page {current_page} to database"
-                )
-
-            total_jobs += len(jobs)
-        jobs = []
-
-        logger.info(
-            f"Total jobs found across pages {self.config.start_page} to {self.config.end_page}: {total_jobs}"
-        )
-
-        return {
-            "success": True,
-            "jobs_scraped": total_jobs,
-            "pages_scraped": self.config.end_page - self.config.start_page + 1,
-            "job_class": self.config.job_class,
-            "save": self.config.save,
-            "source_platform": self.config.source_platform,
-        }
-
     def _scrape_job_details(self, job_ids: List[str]) -> Dict[str, Any]:
         """Scrape details for the given job IDs."""
         max_workers = min(self.config.workers, len(job_ids))
@@ -653,8 +586,6 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
         scraper = JobsdbScraper(headless=True, db=db)
     elif source.lower() == "linkedin":
         scraper = LinkedInScraper(db=db)
-    elif source.lower() == "glassdoor":  # Add support for Glassdoor
-        scraper = GlassdoorScraper(headless=True, db=db)
     else:
         raise ValueError(f"Unsupported source: {source}")
 
@@ -683,9 +614,7 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
                 if save:
                     logger.info(f"Saving job {job_id} to database")
                     success = db.update_job_description(job_id, job_details.description)
-                    if (
-                        source.lower() == "linkedin" or source.lower() == "glassdoor"
-                    ):  # Update for Glassdoor
+                    if source.lower() == "linkedin":
                         db.update_job_title(job_id, job_details.name)
                         db.update_job_company(job_id, job_details.company_name)
                     elif source.lower() == "jobsdb":
