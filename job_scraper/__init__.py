@@ -436,16 +436,47 @@ class JobScraperManager:
         """Run page-based JobsDB scraping."""
         total_jobs = 0
         jobs = []
+        job_classes = [
+            # s"accounting",
+            "administration-office-support",
+            # "advertising-arts-media",
+            "banking-financial-services",
+            # "call-centre-customer-service",
+            # "ceo-general-management",
+            # "community-services-development",
+            # "construction",
+            # "consulting-strategy",
+            # "design-architecture",
+            # "education-training",
+            # "engineering",
+            # "farming-animals-conservation",
+            # "government-defence",
+            # "healthcare-medical",
+            # "hospitality-tourism",
+            # "human-resources-recruitment",
+            "information-communication-technology",
+            # "insurance-superannuation",
+            # "mining-resources-energy",
+            # "real-estate-property",
+            # "retail-consumer-products",
+            # "sales",
+            # "science-technology",
+            # "sport-recreation",
+            # "trades-services",
+        ]
+    
         for current_page in range(self.config.start_page, self.config.end_page + 1):
             logger.info(f"Scraping page {current_page} of {self.config.end_page}")
 
-            if self.config.method == ScrapingMethod.SELENIUM:
-                # Use Selenium-based scraper
-                jobsdb_scraper = JobsdbScraper(headless=True, db=self.db)
+            for job_class in job_classes:
+                if self.config.method == ScrapingMethod.SELENIUM:
+                    # Use Selenium-based scraper
+                    jobsdb_scraper = JobsdbScraper(headless=True, db=self.db)
 
                 # Only pass the parameters specified by the user
                 search_params = {
                     "page": current_page,
+                    "job_class": job_class,
                 }
 
                 jobs = jobsdb_scraper.search_jobs(**search_params)
@@ -455,9 +486,9 @@ class JobScraperManager:
                     saved_count = self.db.save_jobs(jobs)
                     logger.info(
                         f"Saved {saved_count} jobs from page {current_page} to database"
-                    )
-            total_jobs += len(jobs)
-            jobs = []
+                        )
+                total_jobs += len(jobs)
+                jobs = []
 
         logger.info(
             f"Total jobs found across pages {self.config.start_page} to {self.config.end_page}: {total_jobs}"

@@ -79,9 +79,9 @@ class JobsdbScraper(BaseScraper):
 
     def search_jobs(self, **kwargs) -> List[Job]:
         page = kwargs.get("page", 1)
-        search_url = f"{self.base_url}jobs"
+        search_url = f"{self.base_url}jobs-in-{kwargs.get('job_class')}"
         params = {"sortmode": "ListedDate", "page": page}
-
+        
         try:
             existing_ids = []
             if self.db:  # Make sure db connection exists
@@ -90,7 +90,7 @@ class JobsdbScraper(BaseScraper):
                 logger.warning(
                     "No database connection available, skipping duplicate check"
                 )
-
+            logger.info(f"{search_url} - Searching for jobs in {kwargs.get('job_class')}")
             soup = self.get_soup(search_url, params=params)
             # filename_prefix = f"jobsdb_{job_class}_page{page}"
             # self.save_soup_to_html(soup, filename_prefix)
