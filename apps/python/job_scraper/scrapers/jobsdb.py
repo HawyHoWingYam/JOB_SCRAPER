@@ -403,3 +403,4 @@ class JobsdbScraper(BaseScraper):
         # Update selector based on actual JobsDB HTML
         location_element = soup.select_one(".job-location")
         return self.clean_text(location_element.get_text()) if location_element else ""
+
