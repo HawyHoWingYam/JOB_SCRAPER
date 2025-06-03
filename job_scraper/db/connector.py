@@ -376,7 +376,7 @@ class DatabaseConnector:
             job = session.query(JobModel).filter(JobModel.id == job_id).first()
 
             if not job:
-                logger.error(f"Job with ID {job_id} not found")
+                # logger.error(f"Job with ID {job_id} not found")
                 return False
 
             # Update the description
