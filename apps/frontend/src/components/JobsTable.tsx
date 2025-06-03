@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Job } from '@/types/job';
 import { API_URL } from '@/services/jobs';
+import * as XLSX from 'xlsx';
 
 interface JobsTableProps {
   initialJobs: Job[];
@@ -32,6 +33,9 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   const jobsPerPage = 20;
   const [totalJobs, setTotalJobs] = useState(initialJobs.length);
   const [totalPages, setTotalPages] = useState(Math.ceil(initialJobs.length / jobsPerPage));
+
+  // Go to specific page state
+  const [goToPage, setGoToPage] = useState<number | ''>('');
 
   // Load jobs when page changes
   useEffect(() => {
@@ -158,6 +162,89 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
     }
   };
 
+  const downloadExcel = async () => {
+    setIsLoading(true);
+    
+    try {
+      // Array to hold all job results
+      let allJobs: Job[] = [];
+      
+      // If we have search terms, use search endpoint
+      if (searchTerms.length > 0) {
+        // Fetch all pages one by one
+        for (let page = 1; page <= totalPages; page++) {
+          const response = await fetch(`${API_URL}/jobs/search`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              query: searchTerms,
+              page: page,
+              limit: jobsPerPage
+            }),
+          });
+          
+          if (!response.ok) {
+            throw new Error('Failed to fetch search results');
+          }
+          
+          const data = await response.json();
+          if (Array.isArray(data.items)) {
+            allJobs = [...allJobs, ...data.items];
+          }
+        }
+      } else {
+        // Fetch all regular jobs
+        for (let page = 1; page <= totalPages; page++) {
+          const response = await fetch(`${API_URL}/jobs?page=${page}&limit=${jobsPerPage}`);
+          
+          if (!response.ok) {
+            throw new Error('Failed to fetch jobs');
+          }
+          
+          const data = await response.json();
+          if (Array.isArray(data.items)) {
+            allJobs = [...allJobs, ...data.items];
+          }
+        }
+      }
+      
+      // Create a worksheet from all collected jobs
+      const worksheet = XLSX.utils.json_to_sheet(allJobs.map(job => ({
+        'ID': job.id,
+        'Job Title': job.name,
+        'Company': job.companyName,
+        'Location': job.location,
+        'Work Type': job.workType,
+        'Salary': job.salaryDescription,
+        'Date Posted': job.datePosted,
+        'Source': job.source,
+        'Category': job.jobClass || 'N/A',
+        'Description': job.description
+      })));
+
+      // Create a workbook and add the worksheet
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Jobs');
+
+      // Generate excel file and download
+      const searchTermText = searchTerms.length > 0 ? 
+        `_${searchTerms.join('_')}` : '';
+      const fileName = `job_search${searchTermText}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      
+      // Update the button text to show the total number of exported jobs
+      console.log(`Exporting ${allJobs.length} jobs to Excel`);
+      
+      XLSX.writeFile(workbook, fileName);
+    } catch (error) {
+      console.error('Error generating Excel file:', error);
+      alert('Failed to generate Excel file. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col space-y-4">
       {/* Search box */}
@@ -217,6 +304,20 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                 Clear All
               </button>
             )}
+            
+            {/* Add download button */}
+            <button
+              onClick={downloadExcel}
+              disabled={jobs.length === 0 || isLoading}
+              className={`ml-auto px-4 py-1 text-sm rounded-md text-white ${jobs.length === 0 || isLoading ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'}`}
+            >
+              <div className="flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                {isLoading ? 'Preparing Excel...' : `Download Excel (all ${totalJobs} jobs)`}
+              </div>
+            </button>
           </div>
         )}
       </div>
@@ -317,6 +418,30 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                         &raquo;
                       </button>
                     </nav>
+                    
+                    {/* Go to specific page */}
+                    <div className="mt-3 flex items-center">
+                      <span className="text-sm text-gray-700 mr-2">Go to page:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={totalPages}
+                        value={goToPage || ''}
+                        onChange={(e) => setGoToPage(parseInt(e.target.value) || '')}
+                        className="text-black w-16 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
+                      />
+                      <button
+                        onClick={() => {
+                          if (goToPage && goToPage >= 1 && goToPage <= totalPages) {
+                            setCurrentPage(goToPage);
+                          }
+                        }}
+                        disabled={!goToPage || goToPage < 1 || goToPage > totalPages}
+                        className="ml-2 inline-flex items-center px-3 py-1 border border-gray-300 text-sm font-medium rounded-md bg-white text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+                      >
+                        Go
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
