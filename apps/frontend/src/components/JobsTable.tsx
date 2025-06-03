@@ -384,7 +384,7 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Category</label>
                     <div className="mt-1 p-2 bg-gray-50 border border-gray-300 rounded-md text-black">
-                      {'N/A'}
+                      {selectedJob.jobClass || 'N/A'}
                     </div>
                   </div>
                 </div>

@@ -10,4 +10,5 @@ export interface Job {
     datePosted: string;
     dateScraped: string;
     source: string;
+    jobClass: string;
   }
