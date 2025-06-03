@@ -126,6 +126,9 @@ class LinkedInScraper(BaseScraper):
                     company_name="N/A",
                     location="N/A",
                     source="LinkedIn",
+                    date_posted=datetime.now(pytz.timezone("Asia/Hong_Kong")).strftime(
+                        "%Y-%m-%d"
+                    ),
                     date_scraped=datetime.now(pytz.timezone("Asia/Hong_Kong")).strftime(
                         "%Y-%m-%d"
                     ),
@@ -188,7 +191,7 @@ class LinkedInScraper(BaseScraper):
             )
 
             if modals:
-                logger.info(f"Found {len(modals)} modal(s) to close")
+                # logger.info(f"Found {len(modals)} modal(s) to close")
 
                 # First try to find close buttons by SVG icon
                 close_buttons = self.driver.find_elements(
@@ -208,17 +211,26 @@ class LinkedInScraper(BaseScraper):
                         button.click()
                         time.sleep(1)  # Brief pause to let modal close
                     except Exception as e:
-                       #logger.warning(f"Failed to click a close button: {e}")
-                       continue
+                        # logger.warning(f"Failed to click a close button: {e}")
+                        continue
 
                 # Check if we still have modals
                 remaining = self.driver.find_elements(
                     By.CSS_SELECTOR, "section[aria-modal='true']"
                 )
                 if remaining:
-                    logger.warning(
-                        f"Still have {len(remaining)} modal(s) after attempting to close"
-                    )
+                    # Keep trying to close remaining modals
+                    for modal in remaining:
+                        try:
+                            buttons = modal.find_elements(By.TAG_NAME, "button")
+                            for button in buttons:
+                                try:
+                                    button.click()
+                                    time.sleep(0.5)
+                                except:
+                                    continue
+                        except Exception as e:
+                            logger.warning(f"Failed to close remaining modal: {e}")
 
         except Exception as e:
             logger.warning(f"Error while closing modals: {e}")
@@ -226,6 +238,9 @@ class LinkedInScraper(BaseScraper):
     def click_show_more_buttons(self):
         """Find and click 'Show more' buttons to expand all content"""
         try:
+            # Close any modals first before trying to click show more buttons
+            self.close_modals()
+            
             # Find all "Show more" buttons
             show_more_buttons = self.driver.find_elements(
                 By.CSS_SELECTOR,
@@ -234,10 +249,13 @@ class LinkedInScraper(BaseScraper):
             )
 
             if show_more_buttons:
-                #logger.info(f"Found {len(show_more_buttons)} 'Show more' buttons")
+                # logger.info(f"Found {len(show_more_buttons)} 'Show more' buttons")
                 for button in show_more_buttons:
                     try:
-                        #logger.info("Clicking 'Show more' button")
+                        # Close any modals that might have appeared again
+                        self.close_modals()
+                        
+                        # logger.info("Clicking 'Show more' button")
                         button.click()
                         time.sleep(1)  # Wait for content to expand
                     except Exception as e:
@@ -306,11 +324,6 @@ class LinkedInScraper(BaseScraper):
                         separator="\n", strip=True
                     )
                     break
-
-            logger.info(f"Job ID: {str(job_id)}")
-            logger.info(f"Company Name: {company_name}")
-            logger.info(f"Job Title: {job_title}")
-
             return Job(
                 id=str(job_id),
                 internal_id=job_id,

@@ -616,7 +616,7 @@ def process_job_batch(job_batch, worker_id, total_workers, save=False, source=No
     if source.lower() == "jobsdb":
         scraper = JobsdbScraper(headless=True, db=db)
     elif source.lower() == "linkedin":
-        scraper = LinkedInScraper(db=db)
+        scraper = LinkedInScraper(db=db,headless=False)
     else:
         raise ValueError(f"Unsupported source: {source}")
 

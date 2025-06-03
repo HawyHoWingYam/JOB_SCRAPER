@@ -54,7 +54,7 @@ https://hk.indeed.com/jobs?l=New%20Territories&radius=100&sort=date
 Get Header : 
 
 - JobsDB
-python -m job_scraper.__init__ source_platform=1, start_page=130, end_page=200, method=selenium, save=True
+python -m job_scraper.__init__ source_platform=1, start_page=1, end_page=200, method=selenium, save=True
 
 - LinkedIn
 python -m job_scraper.__init__ source_platform=4, start_page=1, end_page=40, method=selenium, save=True
