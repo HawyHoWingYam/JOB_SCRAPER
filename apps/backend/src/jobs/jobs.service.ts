@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, IsNull, Like, ILike, In, FindOperator, Raw } from 'typeorm';
 import { Job } from './entities/job.entity';
 import { CreateJobDto, UpdateJobDto } from './dto/job.dto';
+import { PaginatedResponse } from './types/pagination.types';
 
 @Injectable()
 export class JobsService {
@@ -23,8 +24,34 @@ export class JobsService {
     });
   }
 
-  async searchJobs(query: string, mode: 'AND' | 'OR' = 'AND'): Promise<Job[]> {
-    console.log(`Searching jobs with query: ${query} (mode: ${mode})`);
+  async findAllPaginated(page = 1, limit = 20): Promise<PaginatedResponse<Job>> {
+    const [items, total] = await this.jobRepository.findAndCount({
+      where: [
+        { description: Not('N/A') }
+      ],
+      order: {
+        id: 'DESC',
+      },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async searchJobsPaginated(
+    query: string, 
+    mode: 'AND' | 'OR' = 'AND',
+    page = 1,
+    limit = 20
+  ): Promise<PaginatedResponse<Job>> {
+    console.log(`Searching jobs with query: ${query} (mode: ${mode}, page: ${page}, limit: ${limit})`);
 
     // Normalize query string by removing spaces around commas
     const normalizedQuery = query.replace(/\s*,\s*/g, '/');
@@ -34,21 +61,33 @@ export class JobsService {
     const andSearchTerms = normalizedQuery.split(',').map(term => term.trim()).filter(term => term);
 
     if (orSearchTerms.length === 0) {
-      return this.findAll();
+      return this.findAllPaginated(page, limit);
     }
 
     if (mode === 'OR') {
-      return this.searchJobsOr(orSearchTerms);
+      return this.searchJobsOrPaginated(orSearchTerms, page, limit);
     } else {
-      return this.searchJobsAnd(orSearchTerms);
+      return this.searchJobsAndPaginated(orSearchTerms, page, limit);
     }
   }
 
-  private async searchJobsAnd(searchTerms: string[]): Promise<Job[]> {
+  private async searchJobsAndPaginated(
+    searchTerms: string[],
+    page = 1,
+    limit = 20
+  ): Promise<PaginatedResponse<Job>> {
+    // Create where conditions for AND search - each term must match at least one field
+    // This is more complex and might need to be customized based on your database engine
+    
+    // For simplicity, we'll do a two-step process:
+    // 1. First, find all matching job IDs
+    // 2. Then do a paginated query with those IDs
+    
     // Start with all jobs
-    let filteredJobs = await this.findAll();
-
+    const allJobs = await this.findAll();
+    
     // For each term, filter the results further
+    let filteredJobs = allJobs;
     for (const term of searchTerms) {
       // Create a condition that matches this term in any field
       const termCondition = [
@@ -60,7 +99,6 @@ export class JobsService {
       // Filter current results against this term
       const termResults = await this.jobRepository.find({
         where: termCondition,
-        order: { id: 'DESC' }
       });
 
       // Get only IDs that match this term
@@ -69,12 +107,27 @@ export class JobsService {
       // Keep only jobs that exist in both filteredJobs and termResults
       filteredJobs = filteredJobs.filter(job => matchingIds.includes(job.id));
     }
-
-    console.log(`Found ${filteredJobs.length} jobs matching ALL terms`);
-    return filteredJobs;
+    
+    // Get total count
+    const total = filteredJobs.length;
+    
+    // Apply pagination
+    const paginatedItems = filteredJobs.slice((page - 1) * limit, page * limit);
+    
+    return {
+      items: paginatedItems,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
-  private async searchJobsOr(searchTerms: string[]): Promise<Job[]> {
+  private async searchJobsOrPaginated(
+    searchTerms: string[],
+    page = 1,
+    limit = 20
+  ): Promise<PaginatedResponse<Job>> {
     // Create where conditions for OR search - each term creates a set of conditions
     const whereConditions = searchTerms.map(term => [
       { name: ILike(`%${term}%`) },
@@ -82,47 +135,100 @@ export class JobsService {
       { companyName: ILike(`%${term}%`) }
     ]).flat();
 
-    const jobs = await this.jobRepository.find({
+    const [items, total] = await this.jobRepository.findAndCount({
       where: whereConditions,
       order: {
         id: 'DESC',
-      }
+      },
+      skip: (page - 1) * limit,
+      take: limit,
     });
 
-    console.log(`Found ${jobs.length} jobs matching ANY term`);
-    return jobs;
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async searchWithTermsPaginated(
+    terms: string[],
+    page = 1,
+    limit = 20
+  ): Promise<PaginatedResponse<Job>> {
+    if (terms.length === 0) {
+      return this.findAllPaginated(page, limit);
+    }
+
+    // Start with all jobs
+    const allJobs = await this.findAll();
+    let resultSet = allJobs;
+
+    // Process each term sequentially
+    for (const term of terms) {
+      if (term.includes('/')) {
+        // Handle OR logic: term1/term2/term3
+        const orTerms = term.split('/').map(t => t.trim()).filter(t => t);
+        console.log(`Processing OR terms: ${orTerms.join(' OR ')}`);
+        resultSet = await this.filterByOrTerms(resultSet, orTerms);
+      } else {
+        // Handle single term as filter
+        console.log(`Filtering by term: ${term}`);
+        resultSet = await this.filterByTerm(resultSet, term);
+      }
+    }
+
+    // Get total count
+    const total = resultSet.length;
+    
+    // Apply pagination
+    const paginatedItems = resultSet.slice((page - 1) * limit, page * limit);
+    
+    return {
+      items: paginatedItems,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async filterByTerm(jobs: Job[], term: string): Promise<Job[]> {
     if (jobs.length === 0) return jobs;
     
-    const jobIds = jobs.map(job => job.id);
+    // Too many job IDs can cause PostgreSQL parameter limit error
+    // Instead of using IN clause with all IDs, we'll search without the ID filter
+    // and then intersect the results with our job list in JavaScript
     
     const whereConditions = [
-      { name: ILike(`%${term}%`), id: In(jobIds) },
-      { description: ILike(`%${term}%`), id: In(jobIds) },
-      { companyName: ILike(`%${term}%`), id: In(jobIds) }
+      { name: ILike(`%${term}%`) },
+      { description: ILike(`%${term}%`) },
+      { companyName: ILike(`%${term}%`) }
     ];
     
+    // Get all jobs matching the search term
     const matchingJobs = await this.jobRepository.find({
       where: whereConditions
     });
     
-    return matchingJobs;
+    // Get the IDs of matching jobs
+    const matchingJobIds = new Set(matchingJobs.map(job => job.id));
+    
+    // Filter the input jobs to only include those that match
+    return jobs.filter(job => matchingJobIds.has(job.id));
   }
 
   async filterByOrTerms(jobs: Job[], terms: string[]): Promise<Job[]> {
     // If input jobs array is empty, return it immediately
     if (jobs.length === 0) return jobs;
     
-    // Get IDs to filter against
-    const jobIds = jobs.map(job => job.id);
-    
-    // Build OR conditions properly with TypeORM structure
+    // Same approach - search without ID filter, then intersect in memory
     const whereConditions = terms.map(term => [
-      { name: ILike(`%${term}%`), id: In(jobIds) },
-      { description: ILike(`%${term}%`), id: In(jobIds) },
-      { companyName: ILike(`%${term}%`), id: In(jobIds) }
+      { name: ILike(`%${term}%`) },
+      { description: ILike(`%${term}%`) },
+      { companyName: ILike(`%${term}%`) }
     ]).flat();
     
     // Find all jobs matching any of the terms (OR condition)
@@ -130,7 +236,11 @@ export class JobsService {
       where: whereConditions
     });
     
-    return matchingJobs;
+    // Create a set of matching job IDs
+    const matchingJobIds = new Set(matchingJobs.map(job => job.id));
+    
+    // Filter the input jobs to only include those that match
+    return jobs.filter(job => matchingJobIds.has(job.id));
   }
 
   async findOne(id: number): Promise<Job> {

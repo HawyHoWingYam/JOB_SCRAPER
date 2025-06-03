@@ -6,13 +6,20 @@ import Link from 'next/link';
 import { Job } from '@/types/job';
 import { API_URL } from '@/services/jobs';
 
-
 interface JobsTableProps {
   initialJobs: Job[];
 }
 
+interface PaginatedResponse {
+  items: Job[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
 export default function JobsTable({ initialJobs }: JobsTableProps) {
-  const [jobs, setJobs] = useState<Job[]>(initialJobs);
+  const [jobs, setJobs] = useState<Job[]>(initialJobs || []);
   const [selectedJob, setSelectedJob] = useState<Job | null>(
     initialJobs.length > 0 ? initialJobs[0] : null
   );
@@ -23,6 +30,45 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const jobsPerPage = 20;
+  const [totalJobs, setTotalJobs] = useState(initialJobs.length);
+  const [totalPages, setTotalPages] = useState(Math.ceil(initialJobs.length / jobsPerPage));
+
+  // Load jobs when page changes
+  useEffect(() => {
+    if (searchTerms.length > 0) {
+      // If we're searching, use the search with pagination
+      performSearch(searchTerms);
+    } else {
+      // Otherwise, fetch all jobs with pagination
+      fetchJobs();
+    }
+  }, [currentPage]);
+
+  const fetchJobs = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/jobs?page=${currentPage}&limit=${jobsPerPage}`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch jobs');
+      }
+      
+      const data = await response.json();
+      console.log('Response data:', data);
+      setJobs(Array.isArray(data.items) ? data.items : []);
+      setTotalJobs(data.total || 0);
+      setTotalPages(data.totalPages || 1);
+      
+      if (data.items && data.items.length > 0 && !selectedJob) {
+        setSelectedJob(data.items[0]);
+      }
+    } catch (error) {
+      console.error('Error fetching jobs:', error);
+      setJobs([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleSelectJob = (job: Job) => {
     setSelectedJob(job);
@@ -38,6 +84,9 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
     // Clear the input field
     setCurrentSearchTerm('');
 
+    // Reset to page 1 when adding a search term
+    setCurrentPage(1);
+
     // Perform the cascading search
     await performSearch(newSearchTerms);
   };
@@ -46,14 +95,12 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
     const newSearchTerms = searchTerms.filter(term => term !== termToRemove);
     setSearchTerms(newSearchTerms);
 
-    // If no search terms left, reset to initial jobs
+    // Reset to page 1 when removing a search term
+    setCurrentPage(1);
+
+    // If no search terms left, reset to initial jobs with pagination
     if (newSearchTerms.length === 0) {
-      setJobs(initialJobs);
-      if (initialJobs.length > 0) {
-        setSelectedJob(initialJobs[0]);
-      } else {
-        setSelectedJob(null);
-      }
+      fetchJobs();
     } else {
       // Otherwise perform search with remaining terms
       await performSearch(newSearchTerms);
@@ -63,14 +110,15 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   const performSearch = async (terms: string[]) => {
     setIsLoading(true);
     try {
-      // Send search terms as an array directly
       const response = await fetch(`${API_URL}/jobs/search`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          query: terms // Send as array instead of joining with commas
+          query: terms,
+          page: currentPage,
+          limit: jobsPerPage
         }),
       });
 
@@ -79,27 +127,23 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
       }
 
       const data = await response.json();
-      setJobs(data);
-      setCurrentPage(1);
+      console.log('API response:', data);
+      setJobs(data.items || []);
+      setTotalJobs(data.total || 0);
+      setTotalPages(data.totalPages || 1);
 
-      if (data.length > 0) {
-        setSelectedJob(data[0]);
+      if (data.items && data.items.length > 0) {
+        setSelectedJob(data.items[0]);
       } else {
         setSelectedJob(null);
       }
     } catch (error) {
       console.error('Error searching jobs:', error);
+      setJobs([]);
     } finally {
       setIsLoading(false);
     }
   };
-
-
-  // Calculate pagination values
-  const indexOfLastJob = currentPage * jobsPerPage;
-  const indexOfFirstJob = indexOfLastJob - jobsPerPage;
-  const currentJobs = jobs.slice(indexOfFirstJob, indexOfLastJob);
-  const totalPages = Math.ceil(jobs.length / jobsPerPage);
 
   // Page navigation handlers
   const goToNextPage = () => {
@@ -165,10 +209,8 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
               <button
                 onClick={() => {
                   setSearchTerms([]);
-                  setJobs(initialJobs);
-                  if (initialJobs.length > 0) {
-                    setSelectedJob(initialJobs[0]);
-                  }
+                  setCurrentPage(1);
+                  fetchJobs();
                 }}
                 className="text-xs text-blue-600 hover:text-blue-800 font-medium"
               >
@@ -186,7 +228,7 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
             <div className="bg-gray-50 px-4 py-3 border-b flex justify-between items-center">
               <h2 className="text-lg font-semibold">Jobs List</h2>
               <span className="text-sm text-gray-500">
-                {jobs.length} jobs found
+                {totalJobs} jobs found
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -197,14 +239,14 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {currentJobs.length === 0 ? (
+                  {Array.isArray(jobs) && jobs.length === 0 ? (
                     <tr>
                       <td colSpan={3} className="px-6 py-4 text-center text-gray-500">
                         No jobs found
                       </td>
                     </tr>
                   ) : (
-                    currentJobs.map((job) => (
+                    Array.isArray(jobs) && jobs.map((job) => (
                       <tr
                         key={job.id}
                         onClick={() => handleSelectJob(job)}
@@ -244,11 +286,11 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
                 <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
                   <div>
                     <p className="text-sm text-gray-700">
-                      Showing <span className="font-medium">{indexOfFirstJob + 1}</span> to{' '}
+                      Showing <span className="font-medium">{((currentPage - 1) * jobsPerPage) + 1}</span> to{' '}
                       <span className="font-medium">
-                        {Math.min(indexOfLastJob, jobs.length)}
+                        {Math.min(currentPage * jobsPerPage, totalJobs)}
                       </span>{' '}
-                      of <span className="font-medium">{jobs.length}</span> results
+                      of <span className="font-medium">{totalJobs}</span> results
                     </p>
                   </div>
                   <div>
@@ -282,7 +324,7 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
           </div>
         </div>
 
-        {/* Right side - Job Form */}
+        {/* Right side - Job Details */}
         <div className="w-full md:w-7/10">
           {selectedJob ? (
             <div className="bg-white rounded-lg shadow-md p-6">

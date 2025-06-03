@@ -27,10 +27,10 @@ npm run dev
 Or individually:
 ```bash
 # Frontend only
-npm run dev:frontend
+npm run dev
 
 # Backend only
-npm run dev:backend
+npm run start:dev
 ```
 
 1. npm run start:dev
