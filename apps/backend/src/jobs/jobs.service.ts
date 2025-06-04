@@ -26,11 +26,17 @@ export class JobsService {
     });
   }
 
-  async findAllPaginated(page = 1, limit = 20): Promise<PaginatedResponse<Job>> {
+  async findAllPaginated(page = 1, limit = 20, jobClass?: string): Promise<PaginatedResponse<Job>> {
+    // Build where condition
+    const whereConditions: any[] = [{ description: Not('N/A') }];
+    
+    // Add job class filter if provided
+    if (jobClass) {
+      whereConditions[0].jobClass = jobClass;
+    }
+
     const [items, total] = await this.jobRepository.findAndCount({
-      where: [
-        { description: Not('N/A') }
-      ],
+      where: whereConditions,
       order: {
         id: 'DESC',
       },
@@ -51,7 +57,8 @@ export class JobsService {
     query: string, 
     mode: 'AND' | 'OR' = 'AND',
     page = 1,
-    limit = 20
+    limit = 20,
+    jobClass?: string
   ): Promise<PaginatedResponse<Job>> {
     console.log(`Searching jobs with query: ${query} (mode: ${mode}, page: ${page}, limit: ${limit})`);
 
@@ -158,7 +165,8 @@ export class JobsService {
   async searchWithTermsPaginated(
     terms: string[],
     page = 1,
-    limit = 20
+    limit = 20,
+    jobClass?: string
   ): Promise<PaginatedResponse<Job>> {
     if (terms.length === 0) {
       return this.findAllPaginated(page, limit);
@@ -180,6 +188,12 @@ export class JobsService {
         console.log(`Filtering by term: ${term}`);
         resultSet = await this.filterByTerm(resultSet, term);
       }
+    }
+
+    // After filtering by search terms
+    // Apply job class filter if provided
+    if (jobClass && resultSet.length > 0) {
+      resultSet = resultSet.filter(job => job.jobClass === jobClass);
     }
 
     // Get total count

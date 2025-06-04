@@ -14,7 +14,8 @@ export class JobsController {
     @Query('query') query?: string,
     @Query('mode') mode?: 'AND' | 'OR',
     @Query('page') page?: string,
-    @Query('limit') limit?: string
+    @Query('limit') limit?: string,
+    @Query('jobClass') jobClass?: string
   ): Promise<PaginatedResponse<Job>> {
     // Auto-detect slash-separated queries and use OR mode unless explicitly specified
     const hasSlash = query?.includes('/');
@@ -29,9 +30,9 @@ export class JobsController {
 
     try {
       if (query) {
-        return this.jobsService.searchJobsPaginated(query, effectiveMode, pageNum, limitNum);
+        return this.jobsService.searchJobsPaginated(query, effectiveMode, pageNum, limitNum, jobClass);
       } else {
-        return this.jobsService.findAllPaginated(pageNum, limitNum);
+        return this.jobsService.findAllPaginated(pageNum, limitNum, jobClass);
       }
     } catch (error) {
       console.error('Error in findAll:', error);
@@ -41,7 +42,12 @@ export class JobsController {
 
   @Post('search')
   async searchJobs(
-    @Body() searchParams: { query: string[] | string, page?: number, limit?: number }
+    @Body() searchParams: { 
+      query: string[] | string, 
+      page?: number, 
+      limit?: number,
+      jobClass?: string
+    }
   ): Promise<PaginatedResponse<Job>> {
     console.log('Search params received:', searchParams);
 
@@ -61,10 +67,10 @@ export class JobsController {
 
     try {
       if (searchTerms.length === 0) {
-        return this.jobsService.findAllPaginated(page, limit);
+        return this.jobsService.findAllPaginated(page, limit, searchParams.jobClass);
       }
       
-      return this.jobsService.searchWithTermsPaginated(searchTerms, page, limit);
+      return this.jobsService.searchWithTermsPaginated(searchTerms, page, limit, searchParams.jobClass);
     } catch (error) {
       console.error('Error in searchJobs:', error);
       throw error;
