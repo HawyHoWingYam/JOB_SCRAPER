@@ -3,11 +3,11 @@ import React from 'react';
 import { fetchJobById } from '@/services/jobs';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { PageProps } from 'next/types';
 
-interface JobDetailPageProps {
-  params: {
-    id: string;
-  };
+interface JobDetailPageProps extends PageProps {
+  params: { id: string };
+  searchParams?: Record<string, string | string[] | undefined>;
 }
 
 export const dynamic = 'force-dynamic';
