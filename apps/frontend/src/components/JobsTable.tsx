@@ -19,14 +19,22 @@ interface PaginatedResponse {
   totalPages: number;
 }
 
+// Add a type for search terms to track include/exclude status
+interface SearchTerm {
+  text: string;
+  exclude: boolean;
+  exact: boolean;
+}
+
 export default function JobsTable({ initialJobs }: JobsTableProps) {
   const [jobs, setJobs] = useState<Job[]>(initialJobs || []);
   const [selectedJob, setSelectedJob] = useState<Job | null>(
     initialJobs.length > 0 ? initialJobs[0] : null
   );
-  const [searchTerms, setSearchTerms] = useState<string[]>([]);
+  const [searchTerms, setSearchTerms] = useState<SearchTerm[]>([]);
   const [currentSearchTerm, setCurrentSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isExcludeTerm, setIsExcludeTerm] = useState(false);
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -40,6 +48,10 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   // Job class filter state
   const [selectedJobClass, setSelectedJobClass] = useState('');
   const [jobClasses, setJobClasses] = useState<string[]>([]);
+
+  // Source filter state
+  const [selectedSource, setSelectedSource] = useState('');
+  const [sourcePlatforms, setSourcePlatforms] = useState<string[]>([]);
 
   // Load jobs when page changes
   useEffect(() => {
@@ -73,7 +85,7 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
     fetchJobClasses();
   }, []);
 
-  // Add this effect
+  // Update the filter effect to also listen for source changes
   useEffect(() => {
     if (currentPage === 1) {
       // If we're on page 1, just refresh with the new filter
@@ -86,7 +98,28 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
       // If we're not on page 1, go back to page 1 (which will trigger a refresh)
       setCurrentPage(1);
     }
-  }, [selectedJobClass]);
+  }, [selectedJobClass, selectedSource]);
+
+  // Add this alongside your other useEffect hooks
+  useEffect(() => {
+    // Fetch source platforms when component mounts
+    const fetchSourcePlatforms = async () => {
+      try {
+        const response = await fetch(`${API_URL}/jobs/sources`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch source platforms');
+        }
+        const data = await response.json();
+        setSourcePlatforms(data || []);
+        console.log('Source platforms loaded:', data);
+      } catch (error) {
+        console.error('Error fetching source platforms:', error);
+        setSourcePlatforms([]); // Set empty array if fetch fails
+      }
+    };
+    
+    fetchSourcePlatforms();
+  }, []);
 
   const fetchJobs = async () => {
     setIsLoading(true);
@@ -96,6 +129,11 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
       // Add job class filter if selected
       if (selectedJobClass) {
         url += `&jobClass=${encodeURIComponent(selectedJobClass)}`;
+      }
+      
+      // Add source filter if selected
+      if (selectedSource) {
+        url += `&source=${encodeURIComponent(selectedSource)}`;
       }
       
       const response = await fetch(url);
@@ -127,55 +165,82 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
 
   const handleAddSearchTerm = async () => {
     if (!currentSearchTerm.trim()) return;
+    
+    let termText = currentSearchTerm;
+    let isExact = false;
+    
+    // Check if this is an exact search (starts with =)
+    if (termText.startsWith('=')) {
+      isExact = true;
+      // Remove the = but keep the rest exactly as typed
+      termText = termText.substring(1);
+    } else {
+      // For non-exact searches, trim as usual
+      termText = termText.trim();
+    }
 
-    // Add the current term to the search terms array
-    const newSearchTerms = [...searchTerms, currentSearchTerm.trim()];
+    // Add the current term to the search terms array with flags
+    const newTerm: SearchTerm = {
+      text: termText,
+      exclude: isExcludeTerm,
+      exact: isExact
+    };
+    
+    const newSearchTerms = [...searchTerms, newTerm];
     setSearchTerms(newSearchTerms);
 
-    // Clear the input field
+    // Reset inputs
     setCurrentSearchTerm('');
+    setIsExcludeTerm(false);
 
     // Reset to page 1 when adding a search term
     setCurrentPage(1);
 
-    // Perform the cascading search
+    // Perform the search
     await performSearch(newSearchTerms);
   };
 
-  const handleRemoveSearchTerm = async (termToRemove: string) => {
-    const newSearchTerms = searchTerms.filter(term => term !== termToRemove);
+  const handleRemoveSearchTerm = async (termToRemove: SearchTerm) => {
+    const newSearchTerms = searchTerms.filter(term => 
+      term.text !== termToRemove.text || term.exclude !== termToRemove.exclude
+    );
     setSearchTerms(newSearchTerms);
-
-    // Reset to page 1 when removing a search term
     setCurrentPage(1);
 
-    // If no search terms left, reset to initial jobs with pagination
     if (newSearchTerms.length === 0) {
       fetchJobs();
     } else {
-      // Otherwise perform search with remaining terms
       await performSearch(newSearchTerms);
     }
   };
 
-  const performSearch = async (terms: string[]) => {
+  const performSearch = async (terms: SearchTerm[]) => {
     setIsLoading(true);
     try {
-      // Define with all possible properties upfront
       const searchParams: {
-        query: string[];
+        includeTerms: string[];
+        excludeTerms: string[];
+        exactTerms: string[];
+        exactExcludeTerms: string[];
         page: number;
         limit: number;
-        jobClass?: string;  // Add the optional property
+        jobClass?: string;
+        source?: string;
       } = {
-        query: terms,
+        includeTerms: terms.filter(t => !t.exclude && !t.exact).map(t => t.text),
+        excludeTerms: terms.filter(t => t.exclude && !t.exact).map(t => t.text),
+        exactTerms: terms.filter(t => !t.exclude && t.exact).map(t => t.text),
+        exactExcludeTerms: terms.filter(t => t.exclude && t.exact).map(t => t.text),
         page: currentPage,
         limit: jobsPerPage
       };
       
-      // Now it's safe to add the property
       if (selectedJobClass) {
         searchParams.jobClass = selectedJobClass;
+      }
+      
+      if (selectedSource) {
+        searchParams.source = selectedSource;
       }
       
       const response = await fetch(`${API_URL}/jobs/search`, {
@@ -239,7 +304,7 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              query: searchTerms,
+              query: searchTerms.map(t => t.text),
               page: page,
               limit: jobsPerPage
             }),
@@ -290,7 +355,7 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
 
       // Generate excel file and download
       const searchTermText = searchTerms.length > 0 ? 
-        `_${searchTerms.join('_')}` : '';
+        `_${searchTerms.map(t => t.text).join('_')}` : '';
       const fileName = `job_search${searchTermText}_${new Date().toISOString().split('T')[0]}.xlsx`;
       
       // Update the button text to show the total number of exported jobs
@@ -310,6 +375,20 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
       {/* Search box */}
       <div className="flex flex-col space-y-2">
         <div className="flex items-center space-x-2">
+          {/* Add this checkbox for exclude terms */}
+          <div className="flex items-center">
+            <input
+              type="checkbox"
+              id="excludeTerm"
+              checked={isExcludeTerm}
+              onChange={(e) => setIsExcludeTerm(e.target.checked)}
+              className="h-4 w-4 text-red-600 border-gray-300 rounded"
+            />
+            <label htmlFor="excludeTerm" className="ml-1 text-sm text-gray-700">
+              Exclude
+            </label>
+          </div>
+
           <input
             type="text"
             value={currentSearchTerm}
@@ -337,13 +416,30 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
             ))}
           </select>
           
+          {/* Add source platform filter dropdown */}
+          <select
+            value={selectedSource}
+            onChange={(e) => setSelectedSource(e.target.value)}
+            className="p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-black"
+          >
+            <option value="">All Sources</option>
+            {sourcePlatforms.map((source) => (
+              <option key={source} value={source}>
+                {source}
+              </option>
+            ))}
+          </select>
+          
           <button
             onClick={handleAddSearchTerm}
             disabled={isLoading || !currentSearchTerm.trim()}
-            className={`px-4 py-2 text-white rounded-md ${isLoading || !currentSearchTerm.trim() ? 'bg-blue-400' : 'bg-blue-600 hover:bg-blue-700'
-              }`}
+            className={`px-4 py-2 text-white rounded-md ${
+              isExcludeTerm 
+                ? (!currentSearchTerm.trim() ? 'bg-red-300' : 'bg-red-600 hover:bg-red-700')
+                : (isLoading || !currentSearchTerm.trim() ? 'bg-blue-400' : 'bg-blue-600 hover:bg-blue-700')
+            }`}
           >
-            {isLoading ? 'Searching...' : 'Add Search'}
+            {isLoading ? 'Searching...' : (isExcludeTerm ? 'Exclude Term' : 'Add Search')}
           </button>
         </div>
 
@@ -352,16 +448,33 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
           <div className="flex flex-wrap gap-2">
             {searchTerms.map((term, index) => (
               <span
-                key={`${term}-${index}`}
-                className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800"
+                key={`${term.text}-${term.exclude}-${term.exact}-${index}`}
+                className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                  term.exclude 
+                    ? 'bg-red-100 text-red-800' 
+                    : term.exact
+                      ? 'bg-purple-100 text-purple-800'
+                      : 'bg-blue-100 text-blue-800'
+                }`}
               >
-                {term}
+                {term.exclude ? '- ' : term.exact ? '= ' : '+ '}
+                <code className={term.exact ? 'font-mono' : ''}>
+                  {term.exact ? `"${term.text}"` : term.text}
+                </code>
                 <button
                   onClick={() => handleRemoveSearchTerm(term)}
-                  className="ml-1.5 inline-flex items-center justify-center h-4 w-4 rounded-full hover:bg-blue-200"
+                  className={`ml-1.5 inline-flex items-center justify-center h-4 w-4 rounded-full ${
+                    term.exclude 
+                      ? 'hover:bg-red-200'
+                      : term.exact
+                        ? 'hover:bg-purple-200'
+                        : 'hover:bg-blue-200'
+                  }`}
                 >
                   <span className="sr-only">Remove search term</span>
-                  <svg className="h-3 w-3 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className={`h-3 w-3 ${
+                    term.exclude ? 'text-red-600' : term.exact ? 'text-purple-600' : 'text-blue-600'
+                  }`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>

@@ -11,7 +11,7 @@ export default async function Page() {
   
   return (
     <div className="max-w-[100%] mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6">Job Management Dashboard</h1>
+      <h1 className="text-2xl font-bold mb-6 text-blue-500">Use "/" to perform OR search</h1>
       <JobsTable initialJobs={jobs} />
     </div>
   );

@@ -15,12 +15,13 @@ export class JobsController {
     @Query('mode') mode?: 'AND' | 'OR',
     @Query('page') page?: string,
     @Query('limit') limit?: string,
-    @Query('jobClass') jobClass?: string
+    @Query('jobClass') jobClass?: string,
+    @Query('source') source?: string
   ): Promise<PaginatedResponse<Job>> {
     // Auto-detect slash-separated queries and use OR mode unless explicitly specified
     const hasSlash = query?.includes('/');
     const effectiveMode = mode || (hasSlash ? 'OR' : 'AND');
-    
+
     // Parse pagination params
     const pageNum = page ? parseInt(page, 10) : 1;
     const limitNum = limit ? parseInt(limit, 10) : 20;
@@ -30,9 +31,9 @@ export class JobsController {
 
     try {
       if (query) {
-        return this.jobsService.searchJobsPaginated(query, effectiveMode, pageNum, limitNum, jobClass);
+        return this.jobsService.searchJobsPaginated(query, effectiveMode, pageNum, limitNum, jobClass, source);
       } else {
-        return this.jobsService.findAllPaginated(pageNum, limitNum, jobClass);
+        return this.jobsService.findAllPaginated(pageNum, limitNum, jobClass, source);
       }
     } catch (error) {
       console.error('Error in findAll:', error);
@@ -40,46 +41,64 @@ export class JobsController {
     }
   }
 
+  // ... existing code ...
   @Post('search')
   async searchJobs(
-    @Body() searchParams: { 
-      query: string[] | string, 
-      page?: number, 
+    @Body() searchParams: {
+      query?: string[] | string,
+      includeTerms?: string[],
+      excludeTerms?: string[],
+      exactTerms?: string[],
+      exactExcludeTerms?: string[],
+      page?: number,
       limit?: number,
-      jobClass?: string
+      jobClass?: string,
+      source?: string
     }
   ): Promise<PaginatedResponse<Job>> {
-    console.log('Search params received:', searchParams);
-
     // Handle pagination params
     const page = searchParams.page || 1;
     const limit = searchParams.limit || 20;
 
-    // Handle both string and array formats
-    let searchTerms: string[] = [];
-    if (typeof searchParams.query === 'string') {
-      searchTerms = [searchParams.query];
-    } else if (Array.isArray(searchParams.query)) {
-      searchTerms = searchParams.query;
-    }
-
-    console.log(`POST /api/jobs/search with terms:`, searchTerms, `page: ${page}, limit: ${limit}`);
+    console.log(`POST /api/jobs/search with include terms:`,
+      searchParams.includeTerms,
+      `exclude terms:`, searchParams.excludeTerms,
+      `exact terms:`, searchParams.exactTerms,
+      `exact exclude terms:`, searchParams.exactExcludeTerms,
+      `page: ${page}, limit: ${limit}`);
 
     try {
-      if (searchTerms.length === 0) {
-        return this.jobsService.findAllPaginated(page, limit, searchParams.jobClass);
+      if ((!searchParams.includeTerms || searchParams.includeTerms.length === 0) &&
+        (!searchParams.excludeTerms || searchParams.excludeTerms.length === 0) &&
+        (!searchParams.exactTerms || searchParams.exactTerms.length === 0) &&
+        (!searchParams.exactExcludeTerms || searchParams.exactExcludeTerms.length === 0)) {
+        return this.jobsService.findAllPaginated(page, limit, searchParams.jobClass, searchParams.source);
       }
-      
-      return this.jobsService.searchWithTermsPaginated(searchTerms, page, limit, searchParams.jobClass);
+
+      return this.jobsService.searchWithTermsPaginated(
+        searchParams.includeTerms || [],
+        searchParams.excludeTerms || [],
+        searchParams.exactTerms || [],
+        searchParams.exactExcludeTerms || [],
+        page,
+        limit,
+        searchParams.jobClass,
+        searchParams.source
+      );
     } catch (error) {
       console.error('Error in searchJobs:', error);
       throw error;
     }
   }
-
+  
   @Get('job-classes')
   async getJobClasses() {
     return this.jobsService.getJobClasses();
+  }
+
+  @Get('sources')
+  async getSourcePlatforms() {
+    return this.jobsService.getSourcePlatforms();
   }
 
   @Get(':id')

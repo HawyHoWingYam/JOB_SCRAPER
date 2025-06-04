@@ -26,13 +26,18 @@ export class JobsService {
     });
   }
 
-  async findAllPaginated(page = 1, limit = 20, jobClass?: string): Promise<PaginatedResponse<Job>> {
-    // Build where condition
+  async findAllPaginated(page = 1, limit = 20, jobClass?: string, source?: string): Promise<PaginatedResponse<Job>> {
+    // Build where conditions
     const whereConditions: any[] = [{ description: Not('N/A') }];
     
     // Add job class filter if provided
     if (jobClass) {
       whereConditions[0].jobClass = jobClass;
+    }
+    
+    // Add source filter if provided
+    if (source) {
+      whereConditions[0].source = source;
     }
 
     const [items, total] = await this.jobRepository.findAndCount({
@@ -58,7 +63,8 @@ export class JobsService {
     mode: 'AND' | 'OR' = 'AND',
     page = 1,
     limit = 20,
-    jobClass?: string
+    jobClass?: string,
+    source?: string
   ): Promise<PaginatedResponse<Job>> {
     console.log(`Searching jobs with query: ${query} (mode: ${mode}, page: ${page}, limit: ${limit})`);
 
@@ -70,20 +76,22 @@ export class JobsService {
     const andSearchTerms = normalizedQuery.split(',').map(term => term.trim()).filter(term => term);
 
     if (orSearchTerms.length === 0) {
-      return this.findAllPaginated(page, limit);
+      return this.findAllPaginated(page, limit, jobClass, source);
     }
 
     if (mode === 'OR') {
-      return this.searchJobsOrPaginated(orSearchTerms, page, limit);
+      return this.searchJobsOrPaginated(orSearchTerms, page, limit, jobClass, source);
     } else {
-      return this.searchJobsAndPaginated(orSearchTerms, page, limit);
+      return this.searchJobsAndPaginated(orSearchTerms, page, limit, jobClass, source);
     }
   }
 
   private async searchJobsAndPaginated(
     searchTerms: string[],
     page = 1,
-    limit = 20
+    limit = 20,
+    jobClass?: string,
+    source?: string
   ): Promise<PaginatedResponse<Job>> {
     // Create where conditions for AND search - each term must match at least one field
     // This is more complex and might need to be customized based on your database engine
@@ -135,7 +143,9 @@ export class JobsService {
   private async searchJobsOrPaginated(
     searchTerms: string[],
     page = 1,
-    limit = 20
+    limit = 20,
+    jobClass?: string,
+    source?: string
   ): Promise<PaginatedResponse<Job>> {
     // Create where conditions for OR search - each term creates a set of conditions
     const whereConditions = searchTerms.map(term => [
@@ -163,21 +173,29 @@ export class JobsService {
   }
 
   async searchWithTermsPaginated(
-    terms: string[],
+    includeTerms: string[],
+    excludeTerms: string[],
+    exactTerms: string[],
+    exactExcludeTerms: string[],
     page = 1,
     limit = 20,
-    jobClass?: string
+    jobClass?: string,
+    source?: string
   ): Promise<PaginatedResponse<Job>> {
-    if (terms.length === 0) {
-      return this.findAllPaginated(page, limit);
-    }
-
     // Start with all jobs
-    const allJobs = await this.findAll();
-    let resultSet = allJobs;
-
-    // Process each term sequentially
-    for (const term of terms) {
+    let resultSet = await this.findAll();
+    
+    // Apply filters for job class and source
+    if (jobClass) {
+      resultSet = resultSet.filter(job => job.jobClass === jobClass);
+    }
+    
+    if (source) {
+      resultSet = resultSet.filter(job => job.source === source);
+    }
+    
+    // Apply regular include terms (partial matches)
+    for (const term of includeTerms) {
       if (term.includes('/')) {
         // Handle OR logic: term1/term2/term3
         const orTerms = term.split('/').map(t => t.trim()).filter(t => t);
@@ -185,17 +203,41 @@ export class JobsService {
         resultSet = await this.filterByOrTerms(resultSet, orTerms);
       } else {
         // Handle single term as filter
-        console.log(`Filtering by term: ${term}`);
+        console.log(`Filtering by include term: ${term}`);
         resultSet = await this.filterByTerm(resultSet, term);
       }
     }
-
-    // After filtering by search terms
-    // Apply job class filter if provided
-    if (jobClass && resultSet.length > 0) {
-      resultSet = resultSet.filter(job => job.jobClass === jobClass);
+    
+    // Apply exact include terms
+    for (const term of exactTerms) {
+      console.log(`Filtering by exact include term: "${term}"`);
+      // For exact matches, we need to use exact comparison
+      resultSet = resultSet.filter(job => {
+        const jobText = `${job.name} ${job.companyName} ${job.description}`;
+        return jobText.includes(term); // Exact substring match
+      });
     }
-
+    
+    // Apply regular exclude terms
+    for (const term of excludeTerms) {
+      console.log(`Filtering by exclude term: ${term}`);
+      // Exclude any job that contains the term
+      const matchingJobs = await this.filterByTerm(resultSet, term);
+      const matchingIds = new Set(matchingJobs.map(job => job.id));
+      // Keep only jobs that don't match the exclude term
+      resultSet = resultSet.filter(job => !matchingIds.has(job.id));
+    }
+    
+    // Apply exact exclude terms
+    for (const term of exactExcludeTerms) {
+      console.log(`Filtering by exact exclude term: "${term}"`);
+      // Exclude jobs that contain the exact term
+      resultSet = resultSet.filter(job => {
+        const jobText = `${job.name} ${job.companyName} ${job.description}`;
+        return !jobText.includes(term); // Exclude exact matches
+      });
+    }
+    
     // Get total count
     const total = resultSet.length;
     
@@ -302,6 +344,28 @@ export class JobsService {
       // return result.map(r => r.jobClass).filter(Boolean);
     } catch (error) {
       console.error('Error fetching job classes:', error);
+      return [];
+    }
+  }
+
+  async getSourcePlatforms(): Promise<string[]> {
+    try {
+      // Query the source_platform table if it exists
+      const sources = await this.dataSource.query(`
+        SELECT name FROM source_platform ORDER BY name ASC
+      `);
+      return sources.map(s => s.name);
+      
+      // Alternative if you don't have a separate table but have sources in the jobs table
+      // const result = await this.jobRepository
+      //   .createQueryBuilder('job')
+      //   .select('DISTINCT job.source', 'source')
+      //   .where('job.source IS NOT NULL')
+      //   .orderBy('job.source', 'ASC')
+      //   .getRawMany();
+      // return result.map(r => r.source).filter(Boolean);
+    } catch (error) {
+      console.error('Error fetching source platforms:', error);
       return [];
     }
   }
