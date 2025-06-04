@@ -67,3 +67,4 @@ python -m job_scraper.__init__ source_platform=4, quantity=2000, method=selenium
 - JobsDB
 python -m job_scraper.__init__ source_platform=1, quantity=40000, method=selenium, save=True, filter=N/A, workers=5
 
+docker-compose up -d

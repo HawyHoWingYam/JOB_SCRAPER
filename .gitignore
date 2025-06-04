@@ -1,1 +1,3 @@
 /node_modules
+*.pyc
+/job_scraper/scrapers/__pycache__
