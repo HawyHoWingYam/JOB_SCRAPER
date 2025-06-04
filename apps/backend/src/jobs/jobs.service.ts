@@ -5,12 +5,14 @@ import { Repository, Not, IsNull, Like, ILike, In, FindOperator, Raw } from 'typ
 import { Job } from './entities/job.entity';
 import { CreateJobDto, UpdateJobDto } from './dto/job.dto';
 import { PaginatedResponse } from './types/pagination.types';
+import { DataSource } from 'typeorm';
 
 @Injectable()
 export class JobsService {
   constructor(
     @InjectRepository(Job)
     private jobRepository: Repository<Job>,
+    private dataSource: DataSource
   ) { }
 
   async findAll(): Promise<Job[]> {
@@ -265,5 +267,28 @@ export class JobsService {
   async remove(id: number): Promise<void> {
     const job = await this.findOne(id);
     await this.jobRepository.remove(job);
+  }
+
+  async getJobClasses(): Promise<string[]> {
+    // Assuming you have a JobClass entity/table
+    try {
+      // Option 1: If you have a dedicated job_class table with a name column
+      const jobClasses = await this.dataSource.query(`
+        SELECT name FROM job_class ORDER BY name ASC
+      `);
+      return jobClasses.map(jc => jc.name);
+      
+      // Option 2: If job_class is just a column in your jobs table
+      // const result = await this.jobRepository
+      //   .createQueryBuilder('job')
+      //   .select('DISTINCT job.job_class', 'jobClass')
+      //   .where('job.job_class IS NOT NULL')
+      //   .orderBy('job.job_class', 'ASC')
+      //   .getRawMany();
+      // return result.map(r => r.jobClass).filter(Boolean);
+    } catch (error) {
+      console.error('Error fetching job classes:', error);
+      return [];
+    }
   }
 }

@@ -37,6 +37,10 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   // Go to specific page state
   const [goToPage, setGoToPage] = useState<number | ''>('');
 
+  // Job class filter state
+  const [selectedJobClass, setSelectedJobClass] = useState('');
+  const [jobClasses, setJobClasses] = useState<string[]>([]);
+
   // Load jobs when page changes
   useEffect(() => {
     if (searchTerms.length > 0) {
@@ -48,10 +52,53 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
     }
   }, [currentPage]);
 
+  // Add this after your other useEffect hooks
+  useEffect(() => {
+    // Fetch job classes when component mounts
+    const fetchJobClasses = async () => {
+      try {
+        const response = await fetch(`${API_URL}/jobs/job-classes`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch job classes');
+        }
+        const data = await response.json();
+        setJobClasses(data || []);
+        console.log('Job classes loaded:', data);
+      } catch (error) {
+        console.error('Error fetching job classes:', error);
+        setJobClasses([]); // Set empty array if fetch fails
+      }
+    };
+    
+    fetchJobClasses();
+  }, []);
+
+  // Add this effect
+  useEffect(() => {
+    if (currentPage === 1) {
+      // If we're on page 1, just refresh with the new filter
+      if (searchTerms.length > 0) {
+        performSearch(searchTerms);
+      } else {
+        fetchJobs();
+      }
+    } else {
+      // If we're not on page 1, go back to page 1 (which will trigger a refresh)
+      setCurrentPage(1);
+    }
+  }, [selectedJobClass]);
+
   const fetchJobs = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(`${API_URL}/jobs?page=${currentPage}&limit=${jobsPerPage}`);
+      let url = `${API_URL}/jobs?page=${currentPage}&limit=${jobsPerPage}`;
+      
+      // Add job class filter if selected
+      if (selectedJobClass) {
+        url += `&jobClass=${encodeURIComponent(selectedJobClass)}`;
+      }
+      
+      const response = await fetch(url);
       
       if (!response.ok) {
         throw new Error('Failed to fetch jobs');
@@ -114,16 +161,29 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
   const performSearch = async (terms: string[]) => {
     setIsLoading(true);
     try {
+      // Define with all possible properties upfront
+      const searchParams: {
+        query: string[];
+        page: number;
+        limit: number;
+        jobClass?: string;  // Add the optional property
+      } = {
+        query: terms,
+        page: currentPage,
+        limit: jobsPerPage
+      };
+      
+      // Now it's safe to add the property
+      if (selectedJobClass) {
+        searchParams.jobClass = selectedJobClass;
+      }
+      
       const response = await fetch(`${API_URL}/jobs/search`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          query: terms,
-          page: currentPage,
-          limit: jobsPerPage
-        }),
+        body: JSON.stringify(searchParams),
       });
 
       if (!response.ok) {
@@ -262,6 +322,21 @@ export default function JobsTable({ initialJobs }: JobsTableProps) {
               }
             }}
           />
+          
+          {/* Add job class filter dropdown */}
+          <select
+            value={selectedJobClass}
+            onChange={(e) => setSelectedJobClass(e.target.value)}
+            className="p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-black"
+          >
+            <option value="">All Job Classes</option>
+            {jobClasses.map((jobClass) => (
+              <option key={jobClass} value={jobClass}>
+                {jobClass}
+              </option>
+            ))}
+          </select>
+          
           <button
             onClick={handleAddSearchTerm}
             disabled={isLoading || !currentSearchTerm.trim()}

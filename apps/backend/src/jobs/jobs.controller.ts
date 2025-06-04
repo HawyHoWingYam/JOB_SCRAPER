@@ -71,6 +71,11 @@ export class JobsController {
     }
   }
 
+  @Get('job-classes')
+  async getJobClasses() {
+    return this.jobsService.getJobClasses();
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string): Promise<Job> {
     return this.jobsService.findOne(+id);
