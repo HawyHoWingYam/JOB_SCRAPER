@@ -18,7 +18,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Job, JobSkill, Skill, SkillCategory, SkillReviewCandidate, SkillTechnology
+from app.models import (
+    Job,
+    JobSkill,
+    JobSkillMention,
+    Skill,
+    SkillCategory,
+    SkillReviewCandidate,
+    SkillTechnology,
+)
+from app.repositories.job_skill_mention_repository import JobSkillMentionRepository
 from app.services.skill_normalizer import SkillNormalizer
 
 
@@ -406,10 +415,42 @@ def _route_generic_links_to_job_tags(db: Session, *, source_skill: Skill, generi
     _delete_skill_if_unlinked(db, source_skill)
 
 
+def _ensure_review_candidate_mention(
+    db: Session,
+    *,
+    mention_repo: JobSkillMentionRepository,
+    candidate: SkillReviewCandidate,
+    source_skill: Skill,
+    job_id: Any,
+) -> None:
+    mention = (
+        db.query(JobSkillMention)
+        .filter(
+            JobSkillMention.job_id == job_id,
+            JobSkillMention.review_candidate_id == candidate.id,
+            JobSkillMention.resolution == "review_candidate",
+        )
+        .first()
+    )
+    if mention is None:
+        mention_repo.create_mention(
+            db,
+            job_id=job_id,
+            raw_name=source_skill.name,
+            normalized_name=candidate.normalized_name,
+            resolution="review_candidate",
+            review_candidate_id=candidate.id,
+        )
+        return
+
+    mention.raw_name = source_skill.name
+    mention.normalized_name = candidate.normalized_name
+
+
 def _register_review_candidate_links(db: Session, *, source_skill: Skill) -> None:
     normalizer = SkillNormalizer(db)
-    candidate = None
-    distinct_job_ids = set()
+    mention_repo = JobSkillMentionRepository()
+    affected_candidate_ids = set()
     links = (
         db.query(JobSkill)
         .filter(JobSkill.skill_id == source_skill.id)
@@ -422,12 +463,24 @@ def _register_review_candidate_links(db: Session, *, source_skill: Skill) -> Non
             normalized_name=source_skill.name,
             job_id=link.job_id,
         )
-        distinct_job_ids.add(link.job_id)
+        affected_candidate_ids.add(candidate.id)
+        _ensure_review_candidate_mention(
+            db,
+            mention_repo=mention_repo,
+            candidate=candidate,
+            source_skill=source_skill,
+            job_id=link.job_id,
+        )
         db.delete(link)
 
-    if candidate is not None:
-        candidate.occurrence_count = len(distinct_job_ids)
-
+    db.flush()
+    for candidate_id in affected_candidate_ids:
+        candidate = db.query(SkillReviewCandidate).filter_by(id=candidate_id).first()
+        if candidate is None:
+            continue
+        candidate.occurrence_count = mention_repo.count_jobs_for_review_candidate(
+            db, candidate_id
+        )
     db.flush()
     _delete_skill_if_unlinked(db, source_skill)
 

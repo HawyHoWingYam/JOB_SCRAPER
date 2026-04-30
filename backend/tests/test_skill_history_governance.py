@@ -14,7 +14,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.database import Base
-from app.models import Company, Job, JobSkill, Skill, SkillCategory, SkillTechnology
+from app.models import Company, Job, JobSkill, JobSkillMention, Skill, SkillCategory, SkillTechnology
 from app.models.skill_review_candidate import SkillReviewCandidate
 from scripts import govern_skill_history
 from scripts import verify_migration
@@ -39,6 +39,7 @@ def _build_sqlite_session():
             Skill.__table__,
             JobSkill.__table__,
             SkillReviewCandidate.__table__,
+            JobSkillMention.__table__,
         ],
     )
     Session = sessionmaker(bind=engine)
@@ -204,6 +205,51 @@ def _link_job_skill(db, job_id, skill_id, created_at=None):
     db.add(job_skill)
     db.flush()
     return job_skill
+
+
+def _create_review_candidate(
+    db,
+    raw_name,
+    normalized_name,
+    *,
+    occurrence_count=1,
+    first_seen_job_id=None,
+    last_seen_job_id=None,
+):
+    candidate = SkillReviewCandidate(
+        id=uuid.uuid4(),
+        raw_name=raw_name,
+        normalized_name=normalized_name,
+        occurrence_count=occurrence_count,
+        first_seen_job_id=first_seen_job_id,
+        last_seen_job_id=last_seen_job_id,
+    )
+    db.add(candidate)
+    db.flush()
+    return candidate
+
+
+def _create_review_candidate_mention(
+    db,
+    *,
+    job_id,
+    raw_name,
+    normalized_name,
+    review_candidate_id,
+):
+    mention = JobSkillMention(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        raw_name=raw_name,
+        normalized_name=normalized_name,
+        resolution="review_candidate",
+        review_candidate_id=review_candidate_id,
+        source="ai",
+        confidence=0.9,
+    )
+    db.add(mention)
+    db.flush()
+    return mention
 
 
 def test_audit_skill_history_classifies_polluted_skills(tmp_path):
@@ -417,6 +463,79 @@ def test_apply_skill_history_governance_routes_reviewed_skills_out_of_controlled
 
         assert candidate.raw_name == "Linux"
         assert candidate.occurrence_count == 2
+        assert db.query(JobSkill).filter(JobSkill.skill_id == polluted_skill.id).count() == 0
+        assert db.query(Skill).filter(Skill.id == polluted_skill.id).count() == 0
+    finally:
+        db.close()
+
+
+def test_apply_skill_history_governance_recomputes_review_occurrence_count_from_mentions(tmp_path):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        _, other_general = _create_skill_hierarchy(db, "Other", "General")
+        polluted_skill = _create_skill(db, other_general.id, "Linux")
+        existing_job = _create_job(db, company.id, "Legacy Systems Engineer")
+        migrated_job1 = _create_job(db, company.id, "Systems Engineer")
+        migrated_job2 = _create_job(db, company.id, "Infrastructure Engineer")
+        existing_candidate = _create_review_candidate(
+            db,
+            "Linux",
+            "linux",
+            occurrence_count=99,
+            first_seen_job_id=existing_job.id,
+            last_seen_job_id=existing_job.id,
+        )
+        _create_review_candidate_mention(
+            db,
+            job_id=existing_job.id,
+            raw_name="Linux",
+            normalized_name="linux",
+            review_candidate_id=existing_candidate.id,
+        )
+        _link_job_skill(db, migrated_job1.id, polluted_skill.id)
+        _link_job_skill(db, migrated_job2.id, polluted_skill.id)
+        db.commit()
+
+        curations_path = _write_curations(
+            tmp_path,
+            {
+                "linux": {
+                    "action": "review",
+                    "note": "Pending infra taxonomy curation",
+                }
+            },
+        )
+
+        govern_skill_history.apply_skill_history_governance(
+            db,
+            min_distinct_jobs=1,
+            curation_path=curations_path,
+            execute=True,
+        )
+        govern_skill_history.apply_skill_history_governance(
+            db,
+            min_distinct_jobs=1,
+            curation_path=curations_path,
+            execute=True,
+        )
+
+        db.refresh(existing_candidate)
+        mentions = (
+            db.query(JobSkillMention)
+            .filter_by(
+                review_candidate_id=existing_candidate.id,
+                resolution="review_candidate",
+            )
+            .all()
+        )
+
+        assert existing_candidate.occurrence_count == 3
+        assert {mention.job_id for mention in mentions} == {
+            existing_job.id,
+            migrated_job1.id,
+            migrated_job2.id,
+        }
         assert db.query(JobSkill).filter(JobSkill.skill_id == polluted_skill.id).count() == 0
         assert db.query(Skill).filter(Skill.id == polluted_skill.id).count() == 0
     finally:
