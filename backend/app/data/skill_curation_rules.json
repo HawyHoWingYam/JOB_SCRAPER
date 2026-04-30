@@ -1,0 +1,51 @@
+{
+  "canonical_aliases": {
+    "wifi": "Wi-Fi",
+    "wi fi": "Wi-Fi",
+    "wi-fi": "Wi-Fi",
+    "wi‑fi": "Wi-Fi",
+    "reactjs": "React",
+    "react js": "React",
+    "react.js": "React",
+    "vue3": "Vue 3",
+    "vue 3": "Vue 3",
+    "pci dss": "PCI DSS",
+    "pci-dss": "PCI DSS"
+  },
+  "generic_terms": [
+    "Project Management",
+    "Business Analysis",
+    "Documentation",
+    "Project Planning",
+    "Requirements Analysis",
+    "Risk Assessment",
+    "Risk Management",
+    "Stakeholder Management",
+    "Testing",
+    "Troubleshooting",
+    "User Acceptance Testing",
+    "Vendor Management"
+  ],
+  "technical_hint_keywords": [
+    "api",
+    "aws",
+    "azure",
+    "css",
+    "docker",
+    "fastapi",
+    "graphql",
+    "java",
+    "javascript",
+    "kubernetes",
+    "linux",
+    "mysql",
+    "node",
+    "postgres",
+    "python",
+    "react",
+    "redis",
+    "sql",
+    "typescript",
+    "vue"
+  ]
+}

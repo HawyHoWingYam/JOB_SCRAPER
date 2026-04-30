@@ -18,6 +18,7 @@ from app.config import settings
 from app.models.job import Job
 from app.models import JobSubcategory, Skill
 from app.database import SessionLocal
+from app.repositories.job_skill_mention_repository import JobSkillMentionRepository
 from app.repositories.job_skill_repository import JobSkillRepository
 from app.services.job_category_normalizer import JobCategoryNormalizer
 from app.services.skill_normalizer import SkillNormalizer
@@ -114,15 +115,77 @@ class AIEnrichmentService:
                 )
 
             # Update relational tables
+            mention_repo = JobSkillMentionRepository()
             job_skill_repo = JobSkillRepository()
             existing_skill_ids = {
                 job_skill.skill_id
                 for job_skill in job_skill_repo.get_job_skills(db, job.id)
             }
+            generic_tags: List[str] = []
 
-            for skill_name in extracted_skills:
-                skill_id, _, _ = skill_normalizer.normalize_skill(skill_name)
+            for extracted_skill in extracted_skills:
+                decision = skill_normalizer.resolve_extracted_skill(extracted_skill)
+                action = decision.get("action")
+                raw_name = ""
+                if isinstance(extracted_skill, dict):
+                    raw_name = str(
+                        extracted_skill.get("name")
+                        or extracted_skill.get("skill")
+                        or extracted_skill.get("raw_name")
+                        or extracted_skill.get("normalized_name")
+                        or ""
+                    ).strip()
+                elif isinstance(extracted_skill, str):
+                    raw_name = extracted_skill.strip()
+
+                if action == "generic_tag":
+                    generic_tag = str(decision.get("generic_tag") or "").strip()
+                    mention_repo.create_mention(
+                        db,
+                        job_id=job.id,
+                        raw_name=raw_name or generic_tag,
+                        normalized_name=generic_tag,
+                        resolution="generic_tag",
+                        generic_tag=generic_tag,
+                        confidence=insight.get("confidence"),
+                    )
+                    if generic_tag and generic_tag not in generic_tags:
+                        generic_tags.append(generic_tag)
+                    continue
+
+                if action == "review_candidate":
+                    candidate = skill_normalizer.register_review_candidate(
+                        raw_name=str(decision.get("raw_name") or ""),
+                        normalized_name=str(decision.get("normalized_name") or ""),
+                        job_id=job.id,
+                        suggested_category=decision.get("suggested_category"),
+                        suggested_technology=decision.get("suggested_technology"),
+                    )
+                    mention_repo.create_mention(
+                        db,
+                        job_id=job.id,
+                        raw_name=raw_name or str(decision.get("raw_name") or ""),
+                        normalized_name=str(decision.get("normalized_name") or ""),
+                        resolution="review_candidate",
+                        review_candidate_id=candidate.id,
+                        confidence=insight.get("confidence"),
+                    )
+                    continue
+
+                if action != "match_existing":
+                    continue
+
+                skill_id = decision["skill_id"]
                 skill = db.query(Skill).filter_by(id=skill_id).first()
+                mention_repo.create_mention(
+                    db,
+                    job_id=job.id,
+                    raw_name=raw_name or str(decision.get("skill_name") or ""),
+                    normalized_name=str(decision.get("skill_name") or ""),
+                    resolution="match_existing",
+                    skill_id=skill_id,
+                    confidence=insight.get("confidence"),
+                )
 
                 job_skill_repo.create_job_skill(
                     db,
@@ -139,6 +202,7 @@ class AIEnrichmentService:
                     )
                 existing_skill_ids.add(skill_id)
 
+            job.ai_generic_tags = generic_tags or None
             db.commit()
 
         except LLMUpstreamError as e:

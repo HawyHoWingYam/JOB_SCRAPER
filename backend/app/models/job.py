@@ -37,6 +37,7 @@ class Job(Base):
     ai_category = Column(String(255), nullable=True, index=True)
     ai_summary = Column(Text, nullable=True)
     ai_enriched_at = Column(DateTime, nullable=True)
+    ai_generic_tags = Column(JSON, nullable=True)
     experience_min_years = Column(Integer, nullable=True, index=True)
     experience_max_years = Column(Integer, nullable=True, index=True)
     experience_level = Column(String(50), nullable=True, index=True)
@@ -73,6 +74,22 @@ class Job(Base):
     def skills(self) -> List[str]:
         """Expose relational skills through the API without a legacy column."""
         return self.skills_list
+
+    @property
+    def generic_tags(self) -> List[str]:
+        value: Any = self.ai_generic_tags
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return [value]
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed if str(item).strip()]
+        return []
 
     @property
     def company_name(self) -> Optional[str]:

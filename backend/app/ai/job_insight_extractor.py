@@ -121,7 +121,17 @@ Respond with JSON only (no markdown, no extra keys):
     "cross_domain_reason": ""
   }},
   "summary": "",
-  "skills": ["", ""],
+  "skills": [
+    {
+      "name": "",
+      "kind": "technical|generic|reject",
+      "resolution": "match_existing|create_new|unresolved|drop",
+      "category": "",
+      "technology": "",
+      "existing_skill": "",
+      "evidence": ""
+    }
+  ],
   "experience": {{
     "experience_level": "not_specified",
     "experience_min_years": null,
@@ -205,7 +215,7 @@ class JobInsightExtractor:
         Return shape:
         - classification: dict (may be empty)
         - summary: str | None
-        - skills: list[str]
+        - skills: list[dict]
         - experience: {experience_level, experience_min_years, experience_max_years, summary, evidence}
         """
         prompt = self.build_prompt(
@@ -319,19 +329,30 @@ class JobInsightExtractor:
             return "- None"
         return "\n".join(f"- {str(value)}" for value in values if str(value).strip())
 
-    def _normalize_skills(self, skills_value: Any) -> List[str]:
+    def _normalize_skills(self, skills_value: Any) -> List[Dict[str, Any]]:
         if not isinstance(skills_value, list):
             return []
 
-        normalized: List[str] = []
+        normalized: List[Dict[str, Any]] = []
         seen = set()
 
         for raw in skills_value:
             skill = ""
+            item: Dict[str, Any] = {}
             if isinstance(raw, dict):
                 skill = str(raw.get("skill") or raw.get("name") or "").strip()
+                item = {
+                    "name": skill,
+                    "kind": str(raw.get("kind") or "").strip().lower() or None,
+                    "resolution": str(raw.get("resolution") or "").strip().lower() or None,
+                    "category": str(raw.get("category") or "").strip() or None,
+                    "technology": str(raw.get("technology") or "").strip() or None,
+                    "existing_skill": str(raw.get("existing_skill") or "").strip() or None,
+                    "evidence": str(raw.get("evidence") or "").strip() or None,
+                }
             elif isinstance(raw, str):
                 skill = raw.strip()
+                item = {"name": skill}
             else:
                 continue
 
@@ -341,7 +362,7 @@ class JobInsightExtractor:
             if key in seen:
                 continue
             seen.add(key)
-            normalized.append(skill)
+            normalized.append(item)
 
         return normalized[:30]
 
