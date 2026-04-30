@@ -16,7 +16,7 @@ from app.ai.job_insight_extractor import get_job_insight_extractor
 from app.ai.llm_client import LLMUpstreamError, LLMResponseFormatError
 from app.config import settings
 from app.models.job import Job
-from app.models import JobSubcategory, Skill
+from app.models import JobSubcategory, Skill, SkillReviewCandidate
 from app.database import SessionLocal
 from app.repositories.job_skill_mention_repository import JobSkillMentionRepository
 from app.repositories.job_skill_repository import JobSkillRepository
@@ -121,6 +121,13 @@ class AIEnrichmentService:
                 job_skill.skill_id
                 for job_skill in job_skill_repo.get_job_skills(db, job.id)
             }
+            previous_mentions = mention_repo.get_mentions_for_job(db, job.id)
+            affected_candidate_ids = {
+                mention.review_candidate_id
+                for mention in previous_mentions
+                if mention.review_candidate_id is not None
+            }
+            mention_repo.delete_mentions_for_job(db, job.id)
             generic_tags: List[str] = []
 
             for extracted_skill in extracted_skills:
@@ -165,11 +172,12 @@ class AIEnrichmentService:
                         db,
                         job_id=job.id,
                         raw_name=raw_name or str(decision.get("raw_name") or ""),
-                        normalized_name=str(decision.get("normalized_name") or ""),
+                        normalized_name=candidate.normalized_name,
                         resolution="review_candidate",
                         review_candidate_id=candidate.id,
                         confidence=insight.get("confidence"),
                     )
+                    affected_candidate_ids.add(candidate.id)
                     continue
 
                 if action != "match_existing":
@@ -202,7 +210,14 @@ class AIEnrichmentService:
                     )
                 existing_skill_ids.add(skill_id)
 
-            job.ai_generic_tags = generic_tags or None
+            job.ai_generic_tags = self._merge_generic_tags(job.ai_generic_tags, generic_tags) or None
+            for candidate_id in affected_candidate_ids:
+                candidate = db.query(SkillReviewCandidate).filter_by(id=candidate_id).first()
+                if candidate is None:
+                    continue
+                candidate.occurrence_count = mention_repo.count_jobs_for_review_candidate(
+                    db, candidate_id
+                )
             db.commit()
 
         except LLMUpstreamError as e:
@@ -307,6 +322,33 @@ class AIEnrichmentService:
         if not all(parts):
             return None
         return " / ".join(parts)
+
+    def _merge_generic_tags(self, existing_tags: Any, new_tags: List[str]) -> List[str]:
+        merged: List[str] = []
+        seen = set()
+        for value in self._coerce_generic_tags(existing_tags) + list(new_tags):
+            tag = str(value or "").strip()
+            if not tag or tag in seen:
+                continue
+            seen.add(tag)
+            merged.append(tag)
+        return merged
+
+    def _coerce_generic_tags(self, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                parsed = value
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            if isinstance(parsed, str) and parsed.strip():
+                return [parsed.strip()]
+        return []
 
 
 _service: Optional[AIEnrichmentService] = None

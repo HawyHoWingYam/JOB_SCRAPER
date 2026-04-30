@@ -298,7 +298,7 @@ async def test_ai_enrichment_service_routes_generic_tags_and_review_candidates()
         assert linked_skills[0].skill_id == react.id
         assert job.ai_generic_tags == ["Project Management"]
         assert len(review_candidates) == 1
-        assert review_candidates[0].normalized_name == "GraphQL"
+        assert review_candidates[0].normalized_name == "graphql"
     finally:
         db.close()
 
@@ -412,5 +412,186 @@ async def test_ai_enrichment_service_writes_skill_mentions_for_all_resolutions()
         assert [m.generic_tag for m in mentions if m.raw_name == "Project Management"] == [
             "Project Management"
         ]
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_ai_enrichment_service_reenrichment_replaces_mentions_and_merges_generic_tags():
+    from app.models.skill_review_candidate import SkillReviewCandidate
+
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        subcategory = _create_job_taxonomy(db)
+        _create_skill_taxonomy(db)
+        job = _create_job(db, company.id)
+        job.ai_generic_tags = ["Legacy Tag"]
+        db.commit()
+
+        def build_insight(skills):
+            return {
+                "classification": {
+                    "source_path_decision": {
+                        "domain": "Information & Communication Technology",
+                        "category": "Software Development",
+                        "subcategory": "Frontend Development",
+                        "resolution": "match_existing",
+                    },
+                    "final_taxonomy_decision": {
+                        "domain": "Information & Communication Technology",
+                        "category": "Software Development",
+                        "subcategory": "Frontend Development",
+                        "resolution": "match_existing",
+                    },
+                },
+                "summary": "Builds frontend applications.",
+                "skills": skills,
+                "confidence": 0.94,
+                "experience": {"experience_level": "mid_level"},
+            }
+
+        class FakeExtractor:
+            def __init__(self):
+                self._responses = [
+                    build_insight(
+                        [
+                            {
+                                "name": "React",
+                                "kind": "technical",
+                                "resolution": "match_existing",
+                                "existing_skill": "React",
+                            },
+                            {
+                                "name": "Project Management",
+                                "kind": "generic",
+                                "resolution": "drop",
+                            },
+                            {
+                                "name": "GraphQL",
+                                "kind": "technical",
+                                "resolution": "unresolved",
+                            },
+                        ]
+                    ),
+                    build_insight(
+                        [
+                            {
+                                "name": "React",
+                                "kind": "technical",
+                                "resolution": "match_existing",
+                                "existing_skill": "React",
+                            },
+                            {
+                                "name": "Project Management",
+                                "kind": "generic",
+                                "resolution": "drop",
+                            },
+                            {
+                                "name": "graphql",
+                                "kind": "technical",
+                                "resolution": "unresolved",
+                            },
+                        ]
+                    ),
+                    build_insight(
+                        [
+                            {
+                                "name": "React",
+                                "kind": "technical",
+                                "resolution": "match_existing",
+                                "existing_skill": "React",
+                            },
+                            {
+                                "name": "Stakeholder Management",
+                                "kind": "generic",
+                                "resolution": "drop",
+                            },
+                        ]
+                    ),
+                ]
+
+            async def extract(self, **_kwargs):
+                return self._responses.pop(0)
+
+        class FakeJobCategoryNormalizer:
+            def __init__(self, _db):
+                self._subcategory = subcategory
+
+            def get_taxonomy_candidate_slice(self, **_kwargs):
+                return {
+                    "source_classification_id": "6281",
+                    "source_classification_name": "Information & Communication Technology",
+                    "source_subclassification_name": "Developers/Programmers",
+                    "allowed_domains": ["Information & Communication Technology"],
+                    "allowed_categories": ["Software Development"],
+                    "allowed_subcategories": ["Frontend Development"],
+                    "default_path": [
+                        "Information & Communication Technology",
+                        "Software Development",
+                        "Frontend Development",
+                    ],
+                }
+
+            def resolve_taxonomy_decision(self, *_args, **_kwargs):
+                return self._subcategory.id
+
+            def get_category_hierarchy(self, _subcategory_id):
+                return {
+                    "domain": "Information & Communication Technology",
+                    "category": "Software Development",
+                    "subcategory": "Frontend Development",
+                }
+
+        service = AIEnrichmentService()
+        service.insight_extractor = FakeExtractor()
+
+        original_normalizer = ai_enrichment_module.JobCategoryNormalizer
+        ai_enrichment_module.JobCategoryNormalizer = FakeJobCategoryNormalizer
+        try:
+            await service.enrich_job(job, db)
+            await service.enrich_job(job, db)
+
+            second_mentions = (
+                db.query(JobSkillMention)
+                .filter_by(job_id=job.id)
+                .order_by(JobSkillMention.raw_name.asc())
+                .all()
+            )
+            second_candidates = db.query(SkillReviewCandidate).all()
+
+            assert [(m.raw_name, m.normalized_name, m.resolution) for m in second_mentions] == [
+                ("Project Management", "Project Management", "generic_tag"),
+                ("React", "React", "match_existing"),
+                ("graphql", "graphql", "review_candidate"),
+            ]
+            assert len(second_candidates) == 1
+            assert second_candidates[0].normalized_name == "graphql"
+            assert second_candidates[0].occurrence_count == 1
+
+            await service.enrich_job(job, db)
+        finally:
+            ai_enrichment_module.JobCategoryNormalizer = original_normalizer
+
+        db.refresh(job)
+        final_mentions = (
+            db.query(JobSkillMention)
+            .filter_by(job_id=job.id)
+            .order_by(JobSkillMention.raw_name.asc())
+            .all()
+        )
+        final_candidates = db.query(SkillReviewCandidate).all()
+
+        assert [(m.raw_name, m.resolution) for m in final_mentions] == [
+            ("React", "match_existing"),
+            ("Stakeholder Management", "generic_tag"),
+        ]
+        assert final_candidates[0].normalized_name == "graphql"
+        assert final_candidates[0].occurrence_count == 0
+        assert set(job.ai_generic_tags or []) == {
+            "Legacy Tag",
+            "Project Management",
+            "Stakeholder Management",
+        }
     finally:
         db.close()

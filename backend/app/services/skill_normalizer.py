@@ -207,15 +207,16 @@ class SkillNormalizer:
         suggested_category: Optional[str] = None,
         suggested_technology: Optional[str] = None,
     ) -> SkillReviewCandidate:
+        normalized_lookup = self._normalize_lookup_key(normalized_name or raw_name)
         candidate = (
             self.db.query(SkillReviewCandidate)
-            .filter_by(normalized_name=normalized_name)
+            .filter_by(normalized_name=normalized_lookup)
             .first()
         )
         if candidate is None:
             candidate = SkillReviewCandidate(
                 raw_name=raw_name,
-                normalized_name=normalized_name,
+                normalized_name=normalized_lookup,
                 suggested_category=suggested_category,
                 suggested_technology=suggested_technology,
                 first_seen_job_id=job_id,
@@ -226,7 +227,6 @@ class SkillNormalizer:
             return candidate
 
         candidate.raw_name = raw_name
-        candidate.occurrence_count = (candidate.occurrence_count or 0) + 1
         candidate.last_seen_job_id = job_id
         if suggested_category:
             candidate.suggested_category = suggested_category
