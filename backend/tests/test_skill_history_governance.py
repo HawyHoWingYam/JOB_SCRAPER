@@ -119,6 +119,95 @@ def _build_pre_migration_session():
     return Session()
 
 
+def _build_partial_governance_session():
+    engine = create_engine("sqlite:///:memory:")
+    statements = [
+        """
+        CREATE TABLE companies (
+            id CHAR(32) PRIMARY KEY,
+            company_id VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE jobs (
+            id CHAR(32) PRIMARY KEY,
+            job_id VARCHAR(255) NOT NULL,
+            company_id CHAR(32),
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            ai_category VARCHAR(255),
+            ai_enriched_at DATETIME,
+            ai_generic_tags TEXT,
+            subcategory_id CHAR(32),
+            is_deleted BOOLEAN DEFAULT 0
+        )
+        """,
+        """
+        CREATE TABLE skill_categories (
+            id CHAR(32) PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            is_filter_visible BOOLEAN DEFAULT 0,
+            distinct_job_count INTEGER DEFAULT 0,
+            usage_count INTEGER DEFAULT 0,
+            last_used_at DATETIME
+        )
+        """,
+        """
+        CREATE TABLE skill_technologies (
+            id CHAR(32) PRIMARY KEY,
+            category_id CHAR(32) NOT NULL,
+            name VARCHAR(100) NOT NULL,
+            is_filter_visible BOOLEAN DEFAULT 0,
+            distinct_job_count INTEGER DEFAULT 0,
+            usage_count INTEGER DEFAULT 0,
+            last_used_at DATETIME
+        )
+        """,
+        """
+        CREATE TABLE skills (
+            id CHAR(32) PRIMARY KEY,
+            technology_id CHAR(32) NOT NULL,
+            name VARCHAR(100) NOT NULL,
+            aliases TEXT,
+            is_filter_visible BOOLEAN DEFAULT 0,
+            distinct_job_count INTEGER DEFAULT 0,
+            usage_count INTEGER DEFAULT 0,
+            last_used_at DATETIME
+        )
+        """,
+        """
+        CREATE TABLE job_skills (
+            job_id CHAR(32) NOT NULL,
+            skill_id CHAR(32) NOT NULL,
+            source VARCHAR(50),
+            confidence FLOAT,
+            created_at DATETIME
+        )
+        """,
+        """
+        CREATE TABLE skill_review_candidates (
+            id CHAR(32) PRIMARY KEY,
+            raw_name VARCHAR(100) NOT NULL,
+            normalized_name VARCHAR(100) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+            suggested_category VARCHAR(100),
+            suggested_technology VARCHAR(100),
+            occurrence_count INTEGER NOT NULL DEFAULT 1,
+            first_seen_job_id CHAR(32),
+            last_seen_job_id CHAR(32),
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        )
+        """,
+    ]
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+    Session = sessionmaker(bind=engine)
+    return Session()
+
+
 def _write_curations(tmp_path, entries, minimum_distinct_jobs=1):
     path = tmp_path / "skill_backfill_curations.json"
     path.write_text(
@@ -326,7 +415,31 @@ def test_apply_skill_history_governance_requires_governance_schema(tmp_path):
             },
         )
 
-        with pytest.raises(ValueError, match="20260430_140000"):
+        with pytest.raises(ValueError, match="20260501_103000"):
+            govern_skill_history.apply_skill_history_governance(
+                db,
+                min_distinct_jobs=1,
+                curation_path=curations_path,
+                execute=True,
+            )
+    finally:
+        db.close()
+
+
+def test_apply_skill_history_governance_requires_job_skill_mentions_schema(tmp_path):
+    db = _build_partial_governance_session()
+    try:
+        curations_path = _write_curations(
+            tmp_path,
+            {
+                "linux": {
+                    "action": "review",
+                    "note": "Pending infra taxonomy curation",
+                }
+            },
+        )
+
+        with pytest.raises(ValueError, match="20260501_103000"):
             govern_skill_history.apply_skill_history_governance(
                 db,
                 min_distinct_jobs=1,

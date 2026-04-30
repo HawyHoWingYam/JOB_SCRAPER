@@ -226,11 +226,13 @@ def _require_governance_schema(db: Session) -> None:
         missing.append("jobs.ai_generic_tags")
     if not inspector.has_table("skill_review_candidates"):
         missing.append("skill_review_candidates")
+    if not inspector.has_table("job_skill_mentions"):
+        missing.append("job_skill_mentions")
 
     if missing:
         missing_text = ", ".join(missing)
         raise ValueError(
-            "Historical governance apply requires Alembic revision 20260430_140000 "
+            "Historical governance apply requires Alembic revision 20260501_103000 "
             f"before execution. Missing: {missing_text}"
         )
 
