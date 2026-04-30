@@ -194,12 +194,19 @@ class SkillNormalizer:
             }
 
         lookup_names = [canonical_name]
+        hinted_name = None
+        if payload.get("existing_skill"):
+            hinted_name = self._canonicalize_name(str(payload["existing_skill"]))
+            if hinted_name and hinted_name not in lookup_names:
+                lookup_names.append(hinted_name)
 
         existing_skill = self._find_cached_skill(canonical_name)
-        if existing_skill is None and payload.get("existing_skill"):
-            hinted_name = self._canonicalize_name(str(payload["existing_skill"]))
-            lookup_names.append(hinted_name)
-            existing_skill = self._find_cached_skill(hinted_name)
+        if hinted_name and (
+            existing_skill is None or self._is_polluted_other_general_auto_skill(existing_skill)
+        ):
+            hinted_skill = self._find_cached_skill(hinted_name)
+            if hinted_skill is not None:
+                existing_skill = hinted_skill
 
         if existing_skill is not None and self._is_polluted_other_general_auto_skill(existing_skill):
             for lookup_name in lookup_names:
