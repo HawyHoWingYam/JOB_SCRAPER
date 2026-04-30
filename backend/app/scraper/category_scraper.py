@@ -104,16 +104,18 @@ class CategoryListScraper:
             if max_pages:
                 total_pages = min(total_pages, max_pages)
 
-            # Process first page
+            # Start from last page and iterate backwards
+            page = total_pages
+            result = await self.fetch_page(classification_id, page, client)
             jobs = result.get("data", [])
             job_ids.extend([job["id"] for job in jobs])
 
             if on_progress:
                 on_progress(page, total_pages, len(job_ids))
 
-            # Continue with remaining pages
-            while page < total_pages:
-                page += 1
+            # Continue with remaining pages in reverse order
+            while page > 1:
+                page -= 1
 
                 # Rate limiting
                 delay = random.uniform(self.min_delay, self.max_delay)

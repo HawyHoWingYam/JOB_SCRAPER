@@ -222,7 +222,9 @@ class AIEnrichmentService:
         try:
             jobs = db.query(Job).filter(
                 Job.ai_enriched_at.is_(None),
-                Job.is_deleted.is_(False)
+                Job.is_deleted.is_(False),
+                Job.source_classification_id.isnot(None),
+                Job.source_classification_id != "",
             ).limit(limit).all()
 
             job_ids = [job.id for job in jobs]

@@ -359,6 +359,9 @@ class ZhipuClient(LLMClient):
 class AnthropicClient(LLMClient):
     """Anthropic Claude LLM client."""
 
+    _DEFAULT_TEXT_MAX_TOKENS = 1024
+    _DEFAULT_JSON_MAX_TOKENS = 4096
+
     def __init__(self, api_key: str, model: str = "claude-sonnet-4-5", base_url: str = None, default_headers: Dict[str, str] = None):
         self.api_key = api_key
         self.model = model
@@ -395,13 +398,14 @@ class AnthropicClient(LLMClient):
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate text using Claude."""
         _consume_web_search_flag(kwargs, provider_name="anthropic", supported=False)
+        max_tokens = kwargs.pop("max_tokens", self._DEFAULT_TEXT_MAX_TOKENS)
         try:
             client = self._get_client()
             message = await _call_with_retry(
                 "anthropic",
                 lambda: client.messages.create(
                     model=self.model,
-                    max_tokens=1024,
+                    max_tokens=max_tokens,
                     messages=[{"role": "user", "content": prompt}],
                 ),
             )
@@ -414,13 +418,35 @@ class AnthropicClient(LLMClient):
 
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
         """Generate JSON using Claude."""
-        json_prompt = f"{prompt}\n\nRespond with valid JSON only, no markdown."
-        text = await self.generate(json_prompt, **kwargs)
-        return self._extract_json(
-            text,
-            provider_name="anthropic",
-            raw_response=text,
+        json_prompt = (
+            f"{prompt}\n\n"
+            "Respond with valid JSON only, no markdown. "
+            "Return compact single-line JSON with no extra commentary."
         )
+        request_kwargs = dict(kwargs)
+        request_kwargs["max_tokens"] = max(
+            int(request_kwargs.get("max_tokens") or 0),
+            self._DEFAULT_JSON_MAX_TOKENS,
+        )
+
+        try:
+            text = await self.generate(json_prompt, **dict(request_kwargs))
+            return self._extract_json(
+                text,
+                provider_name="anthropic",
+                raw_response=text,
+            )
+        except LLMResponseFormatError as exc:
+            logger.warning(
+                "Retrying anthropic JSON generation after format error: %s",
+                exc,
+            )
+            retry_text = await self.generate(json_prompt, **dict(request_kwargs))
+            return self._extract_json(
+                retry_text,
+                provider_name="anthropic",
+                raw_response=retry_text,
+            )
 
 
 class OpenAIResponsesClient(LLMClient):

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Zap, AlertTriangle, CalendarClock } from 'lucide-react';
 import ScheduleForm from './ScheduleForm';
 import ScheduleList from './ScheduleList';
@@ -9,10 +9,63 @@ import './Scheduler.css';
 const API_URL = import.meta.env.VITE_API_URL || '';
 const API_BASE = `${API_URL}/api/v1`;
 const CATEGORY_API_BASE = `${API_URL}/api`;
+const DIRECT_OVERRIDE_RUN_KEY = 'scheduler.directOverrideRun';
+const DIRECT_OVERRIDE_RECOVERY_WINDOW_MS = 20_000;
+const EMPTY_PROGRESS = {};
 const SOURCE_OPTIONS = [
     { value: 'jobsdb', label: 'JobsDB' },
     { value: 'ctgoodjobs', label: 'CTgoodjobs' },
 ];
+
+function readDirectOverrideRunMarker() {
+    try {
+        const rawValue = window.sessionStorage.getItem(DIRECT_OVERRIDE_RUN_KEY);
+        if (!rawValue) {
+            return null;
+        }
+
+        const parsed = JSON.parse(rawValue);
+        if (!parsed || typeof parsed !== 'object') {
+            return null;
+        }
+
+        if (typeof parsed.sourceSite !== 'string' || typeof parsed.startedAt !== 'string') {
+            return null;
+        }
+
+        if (Number.isNaN(new Date(parsed.startedAt).getTime())) {
+            return null;
+        }
+
+        return {
+            sourceSite: parsed.sourceSite,
+            startedAt: parsed.startedAt,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function writeDirectOverrideRunMarker(marker) {
+    window.sessionStorage.setItem(DIRECT_OVERRIDE_RUN_KEY, JSON.stringify(marker));
+}
+
+function clearDirectOverrideRunMarker() {
+    window.sessionStorage.removeItem(DIRECT_OVERRIDE_RUN_KEY);
+}
+
+function isFreshDirectOverrideRunMarker(marker) {
+    if (!marker) {
+        return false;
+    }
+
+    const startedAtMs = new Date(marker.startedAt).getTime();
+    if (Number.isNaN(startedAtMs)) {
+        return false;
+    }
+
+    return Date.now() - startedAtMs <= DIRECT_OVERRIDE_RECOVERY_WINDOW_MS;
+}
 
 function formatApiErrorDetail(detail, fallback = '启动失败') {
     if (typeof detail === 'string' && detail.trim()) {
@@ -104,6 +157,11 @@ function ScheduleManager({ onNavigateToAI }) {
     });
     const [scrapeStatus, setScrapeStatus] = useState(null);
     const [showProgress, setShowProgress] = useState(false);
+    const [progressPanelState, setProgressPanelState] = useState({
+        initialProgress: EMPTY_PROGRESS,
+        recoveryStartedAt: null,
+    });
+    const directOverrideRecoveryRef = useRef(null);
 
     // Fetch schedules
     const fetchSchedules = useCallback(async () => {
@@ -131,7 +189,43 @@ function ScheduleManager({ onNavigateToAI }) {
         }
     }, []);
 
+    const getFreshDirectOverrideRecoveryMarker = useCallback(() => {
+        if (isFreshDirectOverrideRunMarker(directOverrideRecoveryRef.current)) {
+            return directOverrideRecoveryRef.current;
+        }
+
+        const storedMarker = readDirectOverrideRunMarker();
+        if (isFreshDirectOverrideRunMarker(storedMarker)) {
+            return storedMarker;
+        }
+
+        return null;
+    }, []);
+
     const bootstrapProgressPanel = useCallback(async () => {
+        const applyRecoveryFallback = () => {
+            const recoveryMarker = getFreshDirectOverrideRecoveryMarker();
+
+            if (recoveryMarker) {
+                directOverrideRecoveryRef.current = recoveryMarker;
+                setProgressPanelState({
+                    initialProgress: EMPTY_PROGRESS,
+                    recoveryStartedAt: recoveryMarker.startedAt,
+                });
+                setShowProgress(true);
+                return true;
+            }
+
+            directOverrideRecoveryRef.current = null;
+            clearDirectOverrideRunMarker();
+            setProgressPanelState({
+                initialProgress: EMPTY_PROGRESS,
+                recoveryStartedAt: null,
+            });
+            setShowProgress(false);
+            return false;
+        };
+
         try {
             const response = await fetch(`${API_BASE}/scrape/progress`);
             if (!response.ok) {
@@ -139,11 +233,35 @@ function ScheduleManager({ onNavigateToAI }) {
             }
 
             const data = await response.json();
-            const hasRecentProgress = Object.keys(data.all || {}).length > 0;
-            setShowProgress(Boolean(data.has_active || hasRecentProgress));
+            const initialProgress = data.all || {};
+            const hasRecentProgress = Object.keys(initialProgress).length > 0;
+
+            setProgressPanelState({
+                initialProgress,
+                recoveryStartedAt: null,
+            });
+
+            if (data.has_active || hasRecentProgress) {
+                setShowProgress(true);
+                return;
+            }
+
+            applyRecoveryFallback();
         } catch (err) {
             console.error('Failed to bootstrap scrape progress:', err);
+
+            applyRecoveryFallback();
         }
+    }, [getFreshDirectOverrideRecoveryMarker]);
+
+    const handleProgressClose = useCallback(() => {
+        directOverrideRecoveryRef.current = null;
+        clearDirectOverrideRunMarker();
+        setProgressPanelState({
+            initialProgress: EMPTY_PROGRESS,
+            recoveryStartedAt: null,
+        });
+        setShowProgress(false);
     }, []);
 
     // Initial load
@@ -267,6 +385,20 @@ function ScheduleManager({ onNavigateToAI }) {
                 const errData = await response.json();
                 throw new Error(formatApiErrorDetail(errData.detail));
             }
+            const runMarker = {
+                sourceSite: currentSourceSite,
+                startedAt: new Date(Date.now()).toISOString(),
+            };
+            directOverrideRecoveryRef.current = runMarker;
+            try {
+                writeDirectOverrideRunMarker(runMarker);
+            } catch {
+                // Keep recovery state in memory for this mount when storage is unavailable.
+            }
+            setProgressPanelState({
+                initialProgress: EMPTY_PROGRESS,
+                recoveryStartedAt: runMarker.startedAt,
+            });
             setShowProgress(true);
             setShowImmediateScrape(false);
             setScrapeStatus(null);
@@ -370,7 +502,10 @@ function ScheduleManager({ onNavigateToAI }) {
             {showProgress && (
                 <ScrapeProgressPanel
                     isVisible={showProgress}
-                    onClose={() => setShowProgress(false)}
+                    initialProgress={progressPanelState.initialProgress}
+                    recoveryStartedAt={progressPanelState.recoveryStartedAt}
+                    recoveryWindowMs={DIRECT_OVERRIDE_RECOVERY_WINDOW_MS}
+                    onClose={handleProgressClose}
                     onNavigateToAI={onNavigateToAI}
                 />
             )}

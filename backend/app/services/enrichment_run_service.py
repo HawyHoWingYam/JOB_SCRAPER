@@ -71,6 +71,8 @@ class EnrichmentRunService:
             .filter(
                 Job.ai_enriched_at.is_(None),
                 Job.is_deleted == False,
+                Job.source_classification_id.isnot(None),
+                Job.source_classification_id != "",
             )
             .order_by(Job.created_at.asc(), Job.id.asc())
         )

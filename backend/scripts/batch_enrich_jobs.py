@@ -42,7 +42,9 @@ async def batch_enrich(
         # Get all unenriched jobs
         query = db.query(Job).filter(
             Job.ai_enriched_at.is_(None),
-            Job.is_deleted == False
+            Job.is_deleted == False,
+            Job.source_classification_id.isnot(None),
+            Job.source_classification_id != "",
         )
         if limit is not None:
             query = query.limit(limit)

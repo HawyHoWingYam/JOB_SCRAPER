@@ -155,7 +155,7 @@ class CtgoodjobsScrapeService:
         job_url_by_id: dict[str, str] = {}
         seen: set[str] = set()
 
-        for page in range(1, max_pages + 1):
+        for page in range(max_pages, 0, -1):
             url = category_page_url(category.url, page=page)
             try:
                 page_html = await fetch_category_page_html(url)

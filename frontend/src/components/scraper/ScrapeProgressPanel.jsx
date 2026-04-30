@@ -2,44 +2,99 @@ import React, { useState, useEffect, useRef } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 const API_BASE = `${API_URL}/api/v1`;
+const EMPTY_PROGRESS = {};
 
-function ScrapeProgressPanel({ isVisible, onClose, onNavigateToAI }) {
-    const [progress, setProgress] = useState({});
+function ScrapeProgressPanel({
+    isVisible,
+    initialProgress = EMPTY_PROGRESS,
+    recoveryStartedAt,
+    recoveryWindowMs,
+    onClose,
+    onNavigateToAI
+}) {
+    const [progress, setProgress] = useState(initialProgress);
     const [isConnected, setIsConnected] = useState(false);
     const [error, setError] = useState(null);
     const eventSourceRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
+    const recoveryTimeoutRef = useRef(null);
+    const wasVisibleRef = useRef(false);
+    const onCloseRef = useRef(onClose);
+
+    onCloseRef.current = onClose;
+
+    const clearReconnectTimeout = () => {
+        if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = null;
+        }
+    };
+
+    const clearRecoveryTimeout = () => {
+        if (recoveryTimeoutRef.current) {
+            clearTimeout(recoveryTimeoutRef.current);
+            recoveryTimeoutRef.current = null;
+        }
+    };
+
+    const closeEventSource = () => {
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+        }
+    };
+
+    useEffect(() => {
+        const hasInitialProgress = Object.keys(initialProgress).length > 0;
+        const hasCurrentProgress = Object.keys(progress).length > 0;
+
+        if (!isVisible) {
+            wasVisibleRef.current = false;
+            setProgress(EMPTY_PROGRESS);
+            setError(null);
+            return;
+        }
+
+        if (!wasVisibleRef.current || (!hasCurrentProgress && hasInitialProgress)) {
+            setProgress(initialProgress);
+        }
+
+        wasVisibleRef.current = true;
+    }, [initialProgress, isVisible, progress]);
 
     useEffect(() => {
         if (!isVisible) {
-            if (reconnectTimeoutRef.current) {
-                clearTimeout(reconnectTimeoutRef.current);
-                reconnectTimeoutRef.current = null;
-            }
-            if (eventSourceRef.current) {
-                eventSourceRef.current.close();
-                eventSourceRef.current = null;
-                setIsConnected(false);
-            }
+            clearReconnectTimeout();
+            closeEventSource();
+            setIsConnected(false);
             return;
         }
 
         const connectSSE = () => {
             const eventSource = new EventSource(`${API_BASE}/scrape/progress/stream`);
             eventSourceRef.current = eventSource;
+            const isCurrentStream = () => eventSourceRef.current === eventSource;
 
             eventSource.onopen = () => {
+                if (!isCurrentStream()) {
+                    return;
+                }
                 setIsConnected(true);
                 setError(null);
             };
 
             eventSource.onmessage = (event) => {
+                if (!isCurrentStream()) {
+                    return;
+                }
                 try {
                     const data = JSON.parse(event.data);
                     if (data.closed) {
+                        clearRecoveryTimeout();
                         eventSource.close();
+                        eventSourceRef.current = null;
                         setIsConnected(false);
-                        if (onClose) onClose();
+                        onCloseRef.current?.('closed');
                         return;
                     }
                     setProgress(data.all || {});
@@ -49,9 +104,13 @@ function ScrapeProgressPanel({ isVisible, onClose, onNavigateToAI }) {
             };
 
             eventSource.onerror = () => {
+                if (!isCurrentStream()) {
+                    return;
+                }
                 setError('Connection lost. Reconnecting...');
                 setIsConnected(false);
                 eventSource.close();
+                eventSourceRef.current = null;
                 reconnectTimeoutRef.current = setTimeout(() => {
                     reconnectTimeoutRef.current = null;
                     connectSSE();
@@ -62,21 +121,58 @@ function ScrapeProgressPanel({ isVisible, onClose, onNavigateToAI }) {
         connectSSE();
 
         return () => {
-            if (reconnectTimeoutRef.current) {
-                clearTimeout(reconnectTimeoutRef.current);
-                reconnectTimeoutRef.current = null;
-            }
-            if (eventSourceRef.current) {
-                eventSourceRef.current.close();
-                eventSourceRef.current = null;
-            }
+            clearReconnectTimeout();
+            closeEventSource();
         };
-    }, [isVisible, onClose]);
-
-    if (!isVisible) return null;
+    }, [isVisible]);
 
     const progressEntries = Object.entries(progress);
     const hasProgress = progressEntries.length > 0;
+
+    useEffect(() => {
+        clearRecoveryTimeout();
+
+        if (!isVisible || !recoveryStartedAt || hasProgress) {
+            return;
+        }
+
+        const recoveryWindow = Number(recoveryWindowMs);
+        if (!Number.isFinite(recoveryWindow) || recoveryWindow <= 0) {
+            return;
+        }
+
+        const recoveryDeadline = new Date(recoveryStartedAt).getTime() + recoveryWindow;
+
+        if (Number.isNaN(recoveryDeadline)) {
+            return;
+        }
+
+        const closeForRecoveryTimeout = () => {
+            clearReconnectTimeout();
+            closeEventSource();
+            setIsConnected(false);
+            onCloseRef.current?.('recovery_timeout');
+        };
+
+        const remainingMs = recoveryDeadline - Date.now();
+
+        if (remainingMs <= 0) {
+            closeForRecoveryTimeout();
+            return;
+        }
+
+        recoveryTimeoutRef.current = setTimeout(() => {
+            recoveryTimeoutRef.current = null;
+            closeForRecoveryTimeout();
+        }, remainingMs);
+
+        return () => {
+            clearRecoveryTimeout();
+        };
+    }, [hasProgress, isVisible, recoveryStartedAt, recoveryWindowMs]);
+
+    if (!isVisible) return null;
+    const isRecovering = Boolean(recoveryStartedAt) && !hasProgress;
 
     return (
         <div className="scrape-progress-panel">
@@ -92,7 +188,9 @@ function ScrapeProgressPanel({ isVisible, onClose, onNavigateToAI }) {
 
             <div className="progress-panel-body">
                 {!hasProgress ? (
-                    <div className="no-progress">No active scraping tasks</div>
+                    <div className="no-progress">
+                        {isRecovering ? 'Reconnecting to active Direct Override...' : 'No active scraping tasks'}
+                    </div>
                 ) : (
                     progressEntries.map(([categoryId, data]) => (
                         <ProgressItem key={categoryId} data={data} onNavigateToAI={onNavigateToAI} />

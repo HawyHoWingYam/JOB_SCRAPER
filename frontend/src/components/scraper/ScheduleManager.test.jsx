@@ -1,5 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { scrapeProgressPanelSpy } = vi.hoisted(() => ({
+  scrapeProgressPanelSpy: vi.fn(),
+}));
 
 vi.mock('./ScheduleForm', () => ({
   default: ({ onSubmit, categories, sourceSite, onSourceScopedDirtyChange }) => (
@@ -28,16 +32,45 @@ vi.mock('./ScheduleHistory', () => ({
 }));
 
 vi.mock('./ScrapeProgressPanel', () => ({
-  default: () => <div>Scrape Progress Stub</div>,
+  default: (props) => {
+    scrapeProgressPanelSpy(props);
+
+    return (
+      <div>
+        <div>Scrape Progress Stub</div>
+        <div data-testid="progress-initial">{JSON.stringify(props.initialProgress ?? null)}</div>
+        <div data-testid="progress-recovery-started-at">{props.recoveryStartedAt ?? ''}</div>
+        <div data-testid="progress-recovery-window">{String(props.recoveryWindowMs ?? '')}</div>
+        <button type="button" onClick={() => props.onClose?.('manual_close')}>
+          Close Progress Stub
+        </button>
+      </div>
+    );
+  },
 }));
 
 import ScheduleManager from './ScheduleManager';
+
+const FIXED_NOW = new Date('2026-04-30T08:00:00.000Z').getTime();
+const DIRECT_OVERRIDE_MARKER_KEY = 'scheduler.directOverrideRun';
 
 function mockJsonResponse(payload) {
   return Promise.resolve({
     ok: true,
     json: async () => payload,
   });
+}
+
+function createDeferred() {
+  let resolve;
+  let reject;
+
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
 }
 
 const JOBSDB_CATEGORIES = [{ id: 1200, name: 'Engineering' }];
@@ -65,46 +98,64 @@ const MIXED_SCHEDULES = [
   },
 ];
 
+function createFetchMock({
+  schedules = MIXED_SCHEDULES,
+  jobsdbCategories = JOBSDB_CATEGORIES,
+  ctgoodjobsCategories = CTGOODJOBS_CATEGORIES,
+  scrapeProgress = { active: {}, all: {}, has_active: false },
+  scrapeProgressError = null,
+} = {}) {
+  return vi.fn((input, init) => {
+    const url = String(input);
+
+    if (url === '/api/v1/schedules') {
+      return mockJsonResponse({ schedules });
+    }
+
+    if (url === '/api/categories') {
+      return mockJsonResponse({ categories: jobsdbCategories });
+    }
+
+    if (url === '/api/categories?source_site=jobsdb') {
+      return mockJsonResponse({ categories: jobsdbCategories });
+    }
+
+    if (url === '/api/categories?source_site=ctgoodjobs') {
+      return mockJsonResponse({ categories: ctgoodjobsCategories });
+    }
+
+    if (url === '/api/v1/scrape/progress') {
+      if (scrapeProgressError) {
+        return Promise.reject(scrapeProgressError);
+      }
+
+      return mockJsonResponse(scrapeProgress);
+    }
+
+    if (url === '/api/v1/schedules/run-now' && init?.method === 'POST') {
+      return mockJsonResponse({ message: 'Scraping started' });
+    }
+
+    if (url === '/api/v1/schedules' && init?.method === 'POST') {
+      return mockJsonResponse({ id: 'created-schedule' });
+    }
+
+    return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+  });
+}
+
 describe('ScheduleManager', () => {
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn((input, init) => {
-      const url = String(input);
-
-      if (url === '/api/v1/schedules') {
-        return mockJsonResponse({ schedules: MIXED_SCHEDULES });
-      }
-
-      if (url === '/api/categories') {
-        return mockJsonResponse({ categories: JOBSDB_CATEGORIES });
-      }
-
-      if (url === '/api/categories?source_site=jobsdb') {
-        return mockJsonResponse({ categories: JOBSDB_CATEGORIES });
-      }
-
-      if (url === '/api/categories?source_site=ctgoodjobs') {
-        return mockJsonResponse({ categories: CTGOODJOBS_CATEGORIES });
-      }
-
-      if (url === '/api/v1/scrape/progress') {
-        return mockJsonResponse({ active: {}, all: {}, has_active: false });
-      }
-
-      if (url === '/api/v1/schedules/run-now' && init?.method === 'POST') {
-        return mockJsonResponse({ message: 'Scraping started' });
-      }
-
-      if (url === '/api/v1/schedules' && init?.method === 'POST') {
-        return mockJsonResponse({ id: 'created-schedule' });
-      }
-
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
-    }));
+    vi.stubGlobal('fetch', createFetchMock());
 
     vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW);
+    sessionStorage.clear();
+    scrapeProgressPanelSpy.mockClear();
   });
 
   afterEach(() => {
+    sessionStorage.clear();
     vi.restoreAllMocks();
   });
 
@@ -156,6 +207,28 @@ describe('ScheduleManager', () => {
     });
   });
 
+  it('stores a direct override session marker and opens progress with recovery props after launch', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /engineering/i }));
+    fireEvent.click(screen.getByRole('button', { name: /engage scanner/i }));
+
+    await screen.findByText('Scrape Progress Stub');
+
+    expect(JSON.parse(sessionStorage.getItem(DIRECT_OVERRIDE_MARKER_KEY))).toEqual({
+      sourceSite: 'jobsdb',
+      startedAt: new Date(FIXED_NOW).toISOString(),
+    });
+    expect(screen.queryByText('Direct Override Sequence')).not.toBeInTheDocument();
+    expect(screen.getByTestId('progress-initial')).toHaveTextContent('{}');
+    expect(screen.getByTestId('progress-recovery-started-at')).toHaveTextContent(
+      new Date(FIXED_NOW).toISOString(),
+    );
+    expect(screen.getByTestId('progress-recovery-window')).toHaveTextContent('20000');
+  });
+
   it('posts ctgoodjobs run-now payloads with string category ids and source_site', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
@@ -177,6 +250,174 @@ describe('ScheduleManager', () => {
         category_ids: ['ctgoodjobs:021'],
         max_pages: 3,
       });
+    });
+  });
+
+  it('restores the progress panel from active scrape progress on mount', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        scrapeProgress: {
+          active: { 1200: { status: 'running' } },
+          all: {
+            1200: { status: 'running', category_name: 'Engineering', phase: 2, total_jobs: 5 },
+          },
+          has_active: true,
+        },
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Scrape Progress Stub');
+
+    expect(screen.getByTestId('progress-initial')).toHaveTextContent(
+      JSON.stringify({
+        1200: { status: 'running', category_name: 'Engineering', phase: 2, total_jobs: 5 },
+      }),
+    );
+    expect(screen.getByTestId('progress-recovery-started-at')).toHaveTextContent('');
+  });
+
+  it('restores recovery mode on mount when progress is empty but the marker is fresh', async () => {
+    const startedAt = new Date(FIXED_NOW - 10_000).toISOString();
+    sessionStorage.setItem(
+      DIRECT_OVERRIDE_MARKER_KEY,
+      JSON.stringify({ sourceSite: 'jobsdb', startedAt }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Scrape Progress Stub');
+
+    expect(screen.getByTestId('progress-initial')).toHaveTextContent('{}');
+    expect(screen.getByTestId('progress-recovery-started-at')).toHaveTextContent(startedAt);
+    expect(sessionStorage.getItem(DIRECT_OVERRIDE_MARKER_KEY)).not.toBeNull();
+  });
+
+  it('does not restore recovery mode for a stale marker and clears storage', async () => {
+    sessionStorage.setItem(
+      DIRECT_OVERRIDE_MARKER_KEY,
+      JSON.stringify({
+        sourceSite: 'jobsdb',
+        startedAt: new Date(FIXED_NOW - 20_001).toISOString(),
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Scrape Progress Stub')).not.toBeInTheDocument();
+      expect(sessionStorage.getItem(DIRECT_OVERRIDE_MARKER_KEY)).toBeNull();
+    });
+  });
+
+  it('restores recovery mode when progress bootstrap fails but the marker is fresh', async () => {
+    const startedAt = new Date(FIXED_NOW - 5_000).toISOString();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    sessionStorage.setItem(
+      DIRECT_OVERRIDE_MARKER_KEY,
+      JSON.stringify({ sourceSite: 'jobsdb', startedAt }),
+    );
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        scrapeProgressError: new Error('network down'),
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Scrape Progress Stub');
+
+    expect(screen.getByTestId('progress-initial')).toHaveTextContent('{}');
+    expect(screen.getByTestId('progress-recovery-started-at')).toHaveTextContent(startedAt);
+  });
+
+  it('does not wipe a newer recovery state when an in-flight bootstrap finishes after run-now succeeds', async () => {
+    const progressDeferred = createDeferred();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input, init) => {
+        const url = String(input);
+
+        if (url === '/api/v1/scrape/progress') {
+          return progressDeferred.promise;
+        }
+
+        return createFetchMock()(input, init);
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /engineering/i }));
+    fireEvent.click(screen.getByRole('button', { name: /engage scanner/i }));
+
+    await screen.findByText('Scrape Progress Stub');
+
+    await act(async () => {
+      progressDeferred.resolve({
+        ok: true,
+        json: async () => ({ active: {}, all: {}, has_active: false }),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('Scrape Progress Stub')).toBeInTheDocument();
+    expect(screen.getByTestId('progress-recovery-started-at')).toHaveTextContent(
+      new Date(FIXED_NOW).toISOString(),
+    );
+    expect(JSON.parse(sessionStorage.getItem(DIRECT_OVERRIDE_MARKER_KEY))).toEqual({
+      sourceSite: 'jobsdb',
+      startedAt: new Date(FIXED_NOW).toISOString(),
+    });
+  });
+
+  it('still shows progress after run-now success when sessionStorage.setItem throws', async () => {
+    const originalSetItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItem(key, value) {
+      if (key === DIRECT_OVERRIDE_MARKER_KEY) {
+        throw new Error('storage unavailable');
+      }
+
+      return Reflect.apply(originalSetItem, this, [key, value]);
+    });
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /engineering/i }));
+    fireEvent.click(screen.getByRole('button', { name: /engage scanner/i }));
+
+    await screen.findByText('Scrape Progress Stub');
+
+    expect(screen.getByTestId('progress-recovery-started-at')).toHaveTextContent(
+      new Date(FIXED_NOW).toISOString(),
+    );
+    expect(screen.queryByText('storage unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText('Direct Override Sequence')).not.toBeInTheDocument();
+  });
+
+  it('clears the stored marker and hides the progress panel when the panel closes', async () => {
+    const startedAt = new Date(FIXED_NOW - 5_000).toISOString();
+    sessionStorage.setItem(
+      DIRECT_OVERRIDE_MARKER_KEY,
+      JSON.stringify({ sourceSite: 'jobsdb', startedAt }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Scrape Progress Stub');
+    fireEvent.click(screen.getByRole('button', { name: /close progress stub/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Scrape Progress Stub')).not.toBeInTheDocument();
+      expect(sessionStorage.getItem(DIRECT_OVERRIDE_MARKER_KEY)).toBeNull();
     });
   });
 
@@ -206,33 +447,12 @@ describe('ScheduleManager', () => {
   });
 
   it('renders source-specific empty copy when the current source has no schedules', async () => {
-    vi.stubGlobal('fetch', vi.fn((input, init) => {
-      const url = String(input);
-
-      if (url === '/api/v1/schedules') {
-        return mockJsonResponse({
-          schedules: [MIXED_SCHEDULES[0]],
-        });
-      }
-
-      if (url === '/api/categories?source_site=jobsdb') {
-        return mockJsonResponse({ categories: JOBSDB_CATEGORIES });
-      }
-
-      if (url === '/api/categories?source_site=ctgoodjobs') {
-        return mockJsonResponse({ categories: CTGOODJOBS_CATEGORIES });
-      }
-
-      if (url === '/api/v1/scrape/progress') {
-        return mockJsonResponse({ active: {}, all: {}, has_active: false });
-      }
-
-      if (url === '/api/v1/schedules/run-now' && init?.method === 'POST') {
-        return mockJsonResponse({ message: 'Scraping started' });
-      }
-
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
-    }));
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        schedules: [MIXED_SCHEDULES[0]],
+      }),
+    );
 
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
@@ -244,40 +464,23 @@ describe('ScheduleManager', () => {
   });
 
   it('shows a source badge on each rendered schedule card', async () => {
-    vi.stubGlobal('fetch', vi.fn((input, init) => {
-      const url = String(input);
-
-      if (url === '/api/v1/schedules') {
-        return mockJsonResponse({
-          schedules: [
-            {
-              id: 'jobsdb-neutral',
-              name: 'Nightly Import',
-              cron_expression: '0 2 * * *',
-              category_ids: [1200],
-              source_site: 'jobsdb',
-              is_active: true,
-              last_run_at: null,
-              next_run_at: null,
-            },
-          ],
-        });
-      }
-
-      if (url === '/api/categories?source_site=jobsdb') {
-        return mockJsonResponse({ categories: JOBSDB_CATEGORIES });
-      }
-
-      if (url === '/api/v1/scrape/progress') {
-        return mockJsonResponse({ active: {}, all: {}, has_active: false });
-      }
-
-      if (url === '/api/v1/schedules/run-now' && init?.method === 'POST') {
-        return mockJsonResponse({ message: 'Scraping started' });
-      }
-
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
-    }));
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        schedules: [
+          {
+            id: 'jobsdb-neutral',
+            name: 'Nightly Import',
+            cron_expression: '0 2 * * *',
+            category_ids: [1200],
+            source_site: 'jobsdb',
+            is_active: true,
+            last_run_at: null,
+            next_run_at: null,
+          },
+        ],
+      }),
+    );
 
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 

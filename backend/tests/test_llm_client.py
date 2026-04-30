@@ -21,6 +21,16 @@ class FakeMessages:
         )
 
 
+class RecordingMessages:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._responses.pop(0)
+
+
 class FakeAnthropicSdk:
     messages = FakeMessages()
 
@@ -33,3 +43,41 @@ async def test_anthropic_generate_skips_non_text_blocks_before_text():
     result = await client.generate("Say hello")
 
     assert result == "hello Hawy"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_generate_honors_max_tokens_override():
+    messages = RecordingMessages(
+        [
+            SimpleNamespace(
+                content=[SimpleNamespace(type="text", text='{"ok":true}')]
+            )
+        ]
+    )
+    client = AnthropicClient("test-key", "test-model")
+    client._get_client = lambda: SimpleNamespace(messages=messages)
+
+    await client.generate("Return JSON", max_tokens=2048)
+
+    assert messages.calls[0]["max_tokens"] == 2048
+
+
+@pytest.mark.asyncio
+async def test_anthropic_generate_json_retries_after_empty_response():
+    messages = RecordingMessages(
+        [
+            SimpleNamespace(content=[]),
+            SimpleNamespace(
+                content=[SimpleNamespace(type="text", text='{"ok":true}')]
+            ),
+        ]
+    )
+    client = AnthropicClient("test-key", "test-model")
+    client._get_client = lambda: SimpleNamespace(messages=messages)
+
+    result = await client.generate_json("Return JSON")
+
+    assert result == {"ok": True}
+    assert len(messages.calls) == 2
+    assert messages.calls[0]["max_tokens"] == 4096
+    assert messages.calls[1]["max_tokens"] == 4096
