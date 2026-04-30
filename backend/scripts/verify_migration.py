@@ -41,6 +41,13 @@ def collect_verification_snapshot(connection) -> dict[str, int]:
             """,
             "allow_missing": True,
         },
+        "jobs_without_subcategory": {
+            "query": """
+                SELECT COUNT(*) FROM jobs
+                WHERE subcategory_id IS NULL AND is_deleted = false
+            """,
+            "allow_missing": True,
+        },
         "jobs_unmapped_category": {
             "query": """
                 SELECT COUNT(*) FROM jobs
@@ -190,6 +197,7 @@ def render_report(snapshot: dict[str, int]) -> str:
         f"Checkpoint: {infer_checkpoint(snapshot)}",
         f"Jobs enriched: {jobs_enriched}/{jobs_total}",
         f"Subcategory coverage: {jobs_with_subcategory}/{jobs_total}",
+        f"Jobs without subcategory: {snapshot.get('jobs_without_subcategory', 0)}",
         f"Job domains: {snapshot.get('job_domains', 0)}",
         f"Job categories: {snapshot.get('job_categories', 0)}",
         f"Job subcategories: {snapshot.get('job_subcategories', 0)}",

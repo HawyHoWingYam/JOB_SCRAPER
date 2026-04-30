@@ -14,6 +14,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.database import Base
 from app.models import Company, Job, JobCategory, JobDomain, JobSubcategory
 from app.services.job_category_normalizer import JobCategoryNormalizer
+from scripts import govern_job_taxonomy
 
 if not hasattr(SQLiteTypeCompiler, "visit_UUID"):
     SQLiteTypeCompiler.visit_UUID = lambda self, type_, **kw: "CHAR(32)"
@@ -265,5 +266,103 @@ def test_get_category_hierarchy_can_render_compatibility_string():
             "category": "Software Development",
             "domain": "Information & Communication Technology",
         }
+    finally:
+        db.close()
+
+
+def test_backfill_unmapped_jobs_assigns_default_slice_path():
+    db = _build_sqlite_session()
+    try:
+        general, _ = _seed_taxonomy(db)
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Unmapped role",
+            description="Needs fallback",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Unknown Source Bucket",
+        )
+        db.add_all([company, job])
+        db.commit()
+
+        updated = govern_job_taxonomy.backfill_unmapped_jobs(db, execute=True)
+
+        db.refresh(job)
+        assert updated == 1
+        assert job.subcategory_id == general.id
+    finally:
+        db.close()
+
+
+def test_rebuild_job_taxonomy_metrics_recomputes_distinct_job_count(monkeypatch):
+    db = _build_sqlite_session()
+    try:
+        _, backend = _seed_taxonomy(db)
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        jobs = [
+            Job(
+                id=uuid.uuid4(),
+                job_id="job-1",
+                source_site="jobsdb",
+                company_id=company.id,
+                title="A",
+                description="A",
+                subcategory_id=backend.id,
+            ),
+            Job(
+                id=uuid.uuid4(),
+                job_id="job-2",
+                source_site="jobsdb",
+                company_id=company.id,
+                title="B",
+                description="B",
+                subcategory_id=backend.id,
+            ),
+        ]
+        db.add(company)
+        db.add_all(jobs)
+        backend.usage_count = 99
+        backend.distinct_job_count = 99
+        backend.is_filter_visible = False
+        backend.category.usage_count = 99
+        backend.category.distinct_job_count = 99
+        backend.category.is_filter_visible = False
+        backend.category.domain.usage_count = 99
+        backend.category.domain.distinct_job_count = 99
+        backend.category.domain.is_filter_visible = False
+        db.commit()
+
+        monkeypatch.setattr(govern_job_taxonomy.settings, "filter_job_l3_min_jobs", 2)
+        monkeypatch.setattr(govern_job_taxonomy.settings, "filter_job_l2_min_jobs", 2)
+        monkeypatch.setattr(govern_job_taxonomy.settings, "filter_job_l1_min_jobs", 2)
+
+        govern_job_taxonomy.rebuild_job_taxonomy_metrics(db)
+
+        db.refresh(backend)
+        db.refresh(backend.category)
+        db.refresh(backend.category.domain)
+
+        assert backend.usage_count == 2
+        assert backend.distinct_job_count == 2
+        assert backend.is_filter_visible is True
+        assert backend.category.usage_count == 2
+        assert backend.category.distinct_job_count == 2
+        assert backend.category.is_filter_visible is True
+        assert backend.category.domain.usage_count == 2
+        assert backend.category.domain.distinct_job_count == 2
+        assert backend.category.domain.is_filter_visible is True
+        assert backend.last_used_at is not None
     finally:
         db.close()
