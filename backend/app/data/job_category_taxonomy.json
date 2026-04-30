@@ -1,0 +1,217 @@
+{
+  "domains": [
+    {
+      "name": "Accounting",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Financial Accounting", "subcategories": ["Financial Accounting", "Accounts Payable", "Accounts Receivable"]},
+        {"name": "Audit & Tax", "subcategories": ["Audit", "Tax", "Compliance Reporting"]}
+      ]
+    },
+    {
+      "name": "Banking & Financial Services",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Banking", "subcategories": ["Retail Banking", "Corporate Banking", "Private Banking"]},
+        {"name": "Investment & Markets", "subcategories": ["Investment Banking", "Asset Management", "Trading & Markets"]},
+        {"name": "Risk & Compliance", "subcategories": ["Risk Management", "Regulatory Compliance", "KYC & AML"]}
+      ]
+    },
+    {
+      "name": "Call Centre & Customer Service",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Customer Service", "subcategories": ["Customer Service Representative", "Customer Success", "After-sales Support"]},
+        {"name": "Call Centre", "subcategories": ["Inbound Support", "Outbound Support", "Contact Centre Operations"]}
+      ]
+    },
+    {
+      "name": "Construction",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Project Delivery", "subcategories": ["Project Management", "Site Coordination", "Construction Planning"]},
+        {"name": "Technical Construction", "subcategories": ["Quantity Surveying", "Building Services", "Site Engineering"]}
+      ]
+    },
+    {
+      "name": "Engineering",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Mechanical & Manufacturing", "subcategories": ["Mechanical Engineering", "Manufacturing Engineering", "Industrial Engineering"]},
+        {"name": "Electrical & Electronics", "subcategories": ["Electrical Engineering", "Electronics Engineering", "Automation Engineering"]},
+        {"name": "Civil & Structural", "subcategories": ["Civil Engineering", "Structural Engineering", "Geotechnical Engineering"]}
+      ]
+    },
+    {
+      "name": "Healthcare & Medical",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Clinical Care", "subcategories": ["Clinical Care", "Nursing", "Medical Practitioner"]},
+        {"name": "Allied Health", "subcategories": ["Physiotherapy", "Pharmacy", "Diagnostic Services"]},
+        {"name": "Healthcare Operations", "subcategories": ["Medical Administration", "Clinic Operations", "Healthcare Support"]}
+      ]
+    },
+    {
+      "name": "Hospitality & Tourism",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Hotel Operations", "subcategories": ["Front Office", "Housekeeping", "Guest Relations"]},
+        {"name": "Food & Beverage", "subcategories": ["Restaurant Operations", "Kitchen Operations", "Bar Service"]},
+        {"name": "Travel Services", "subcategories": ["Travel Consulting", "Tour Operations", "Reservations"]}
+      ]
+    },
+    {
+      "name": "Insurance & Superannuation",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Claims & Underwriting", "subcategories": ["Claims", "Underwriting", "Policy Administration"]},
+        {"name": "Advisory & Broking", "subcategories": ["Insurance Advisory", "Brokerage", "Relationship Management"]}
+      ]
+    },
+    {
+      "name": "Legal",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Legal Practice", "subcategories": ["Corporate Law", "Litigation", "Commercial Law"]},
+        {"name": "Legal Operations", "subcategories": ["Paralegal", "Compliance", "Company Secretarial"]}
+      ]
+    },
+    {
+      "name": "Real Estate & Property",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Property Management", "subcategories": ["Property Management", "Facilities Management", "Building Operations"]},
+        {"name": "Sales & Leasing", "subcategories": ["Property Sales", "Leasing", "Real Estate Advisory"]}
+      ]
+    },
+    {
+      "name": "Science & Technology",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Research", "subcategories": ["Scientific Research", "R&D", "Research Operations"]},
+        {"name": "Laboratory & Quality", "subcategories": ["Laboratory Science", "Quality Assurance", "Testing Services"]}
+      ]
+    },
+    {
+      "name": "Trades & Services",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Field Services", "subcategories": ["Maintenance", "Installation", "Repair Services"]},
+        {"name": "Technical Trades", "subcategories": ["Electrical Trades", "Plumbing", "Automotive Services"]}
+      ]
+    },
+    {
+      "name": "Marketing & Communications",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Digital Marketing", "subcategories": ["Performance Marketing", "Social Media Marketing", "SEO & SEM"]},
+        {"name": "Brand & Communications", "subcategories": ["Brand Marketing", "Corporate Communications", "PR"]},
+        {"name": "Content & Events", "subcategories": ["Content Marketing", "Event Marketing", "Campaign Management"]}
+      ]
+    },
+    {
+      "name": "Retail & Consumer Products",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Retail Operations", "subcategories": ["Store Operations", "Floor Management", "Customer Experience"]},
+        {"name": "Merchandising & Buying", "subcategories": ["Merchandising", "Buying", "Category Management"]}
+      ]
+    },
+    {
+      "name": "Consulting & Strategy",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Strategy Consulting", "subcategories": ["Corporate Strategy", "Market Analysis", "Growth Strategy"]},
+        {"name": "Operations Consulting", "subcategories": ["Business Transformation", "Process Improvement", "PMO"]}
+      ]
+    },
+    {
+      "name": "Manufacturing, Transport & Logistics",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Logistics", "subcategories": ["Logistics Coordination", "Transportation", "Warehouse Operations"]},
+        {"name": "Supply Chain", "subcategories": ["Supply Chain Planning", "Procurement", "Inventory Control"]},
+        {"name": "Manufacturing Operations", "subcategories": ["Production Planning", "Plant Operations", "Quality Control"]}
+      ]
+    },
+    {
+      "name": "Education & Training",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Teaching", "subcategories": ["Primary Education", "Secondary Education", "Higher Education"]},
+        {"name": "Training & Support", "subcategories": ["Corporate Training", "Curriculum Development", "Student Support"]}
+      ]
+    },
+    {
+      "name": "Community Services & Development",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Community Programs", "subcategories": ["Program Delivery", "NGO Operations", "Volunteer Coordination"]},
+        {"name": "Case & Support Services", "subcategories": ["Case Management", "Counselling Support", "Outreach Services"]}
+      ]
+    },
+    {
+      "name": "Human Resources & Recruitment",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "HR Operations", "subcategories": ["HR Management", "HR Business Partner", "HR Administration"]},
+        {"name": "Recruitment & Talent", "subcategories": ["Recruitment", "Talent Acquisition", "Employer Branding"]},
+        {"name": "HR Systems & Analytics", "subcategories": ["HRIS", "People Analytics", "Payroll Systems"]}
+      ]
+    },
+    {
+      "name": "Administration & Office Support",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Administrative Support", "subcategories": ["Administrative Assistant", "Executive Assistant", "Team Support"]},
+        {"name": "Office Operations", "subcategories": ["Office Management", "Reception", "Data Entry & Coordination"]}
+      ]
+    },
+    {
+      "name": "Design & Architecture",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Graphic Design", "subcategories": ["Brand Design", "Visual Communication", "Motion Graphics"]},
+        {"name": "Product & UX Design", "subcategories": ["Product Design", "UX Design", "UI Design"]},
+        {"name": "Architecture & Interior", "subcategories": ["Architecture", "Interior Design", "Spatial Design"]}
+      ]
+    },
+    {
+      "name": "Information & Communication Technology",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Software Development", "subcategories": ["Backend Development", "Frontend Development", "Web Development", "Mobile Development", "Full Stack Development"]},
+        {"name": "Infrastructure & Support", "subcategories": ["Application Support", "Help Desk Support", "Systems Administration", "Network Engineering"]},
+        {"name": "Data & Analytics", "subcategories": ["Data Analysis", "Data Engineering", "Machine Learning", "Business Intelligence"]},
+        {"name": "Product & Quality", "subcategories": ["Product Management", "QA Testing", "UI/UX Design"]},
+        {"name": "Cybersecurity", "subcategories": ["Security Operations", "Application Security", "Governance Risk & Compliance"]}
+      ]
+    },
+    {
+      "name": "Advertising, Arts & Media",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Creative Production", "subcategories": ["Art Direction", "Copywriting", "Media Production"]},
+        {"name": "Content & Editorial", "subcategories": ["Editorial", "Content Production", "Publishing"]},
+        {"name": "Media Planning", "subcategories": ["Media Buying", "Media Planning", "Campaign Traffic"]}
+      ]
+    },
+    {
+      "name": "Sales",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Business Development", "subcategories": ["New Business", "Channel Sales", "Partnerships"]},
+        {"name": "Account Management", "subcategories": ["Key Account Management", "Client Success", "Inside Sales"]},
+        {"name": "Retail Sales", "subcategories": ["Store Sales", "Luxury Retail", "Consumer Sales"]}
+      ]
+    },
+    {
+      "name": "CEO & General Management",
+      "categories": [
+        {"name": "General", "subcategories": ["General"]},
+        {"name": "Executive Leadership", "subcategories": ["Chief Executive", "General Management", "Business Leadership"]},
+        {"name": "Operations Leadership", "subcategories": ["Business Unit Management", "Regional Management", "Operational Leadership"]}
+      ]
+    }
+  ]
+}

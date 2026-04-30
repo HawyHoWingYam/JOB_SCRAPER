@@ -1,70 +1,71 @@
-# Job Scraper Platform
+# JobsDB Hong Kong Scraper
 
-A recruitment platform built with Next.js (frontend), Nest.js (backend), PostgreSQL (database), and Python (web scraping and AI services).
+A production-grade job scraping application with AI enrichment.
 
-## Getting Started
+## Features
 
-### Prerequisites
-- Node.js (v18+)
-- npm
-- PostgreSQL
+- **Job Scraping**: REST API scraper for JobsDB Hong Kong
+- **Category-Based Scraping**: Scrape all 24 job categories
+- **Scheduled Scraping**: Cron-based automation
+- **AI Enrichment**: LLM-powered job classification and skill extraction
+- **Dashboard**: Charts and statistics with Recharts
 
-### Setup Database
-1. Create a PostgreSQL database named `job_scraper`
-2. Configure database connection in `apps/backend/.env`
+## Tech Stack
 
-### Install Dependencies
+| Layer | Technology |
+|-------|------------|
+| Frontend | React 19, Vite, Recharts |
+| Backend | Python 3.11, FastAPI |
+| Database | PostgreSQL 15 |
+| Queue | Redis 7 |
+| AI | Google Gemini, Zhipu |
+
+## Quick Start
+
 ```bash
-npm install
-```
-
-### Development
-Run both frontend and backend concurrently:
-```bash
-npm run dev
-```
-
-Or individually:
-```bash
-# Frontend only
-npm run dev
-
-# Backend only
-npm run start:dev
-```
-
-1. npm run start:dev
-2. npm run dev 
-
-### Accessing the Applications
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:3001/api
-- Health check: http://localhost:3001/api/health
-
-
-
-
-https://www.glassdoor.com.hk/Job/hong-kong-jobs-SRCH_IL.0,9_IN106.htm?sortBy=date_desc
-
-https://hk.indeed.com/jobs?l=Hong%20Kong%20Island&radius=100&sort=date
-https://hk.indeed.com/jobs?l=Kowloon&radius=100&sort=date
-https://hk.indeed.com/jobs?l=New%20Territories&radius=100&sort=date
-
-
-Get Header : 
-
-- JobsDB
-python -m job_scraper.__init__ source_platform=1, start_page=1, end_page=20, method=selenium, save=True
-
-- LinkedIn
-python -m job_scraper.__init__ source_platform=4, start_page=1, end_page=40, method=selenium, save=True
-
-
-Get Details :
-- LinkedIn
-python -m job_scraper.__init__ source_platform=4, quantity=2000, method=selenium,  save=True, filter=N/A, workers=5
-
-- JobsDB
-python -m job_scraper.__init__ source_platform=1, quantity=1000, method=selenium, save=True, filter=new, workers=5
-
+# Start all services
 docker-compose up -d
+
+# Access
+# Frontend: http://localhost:5173
+# Backend: http://localhost:8000
+# API Docs: http://localhost:8000/docs
+```
+
+## Backend Migrations
+
+```bash
+alembic -c backend/alembic.ini history
+```
+
+Alembic reads `DATABASE_URL` from the project `.env`. The local development default points at the PostgreSQL container on `localhost:5433`.
+
+This repository does not have a full Alembic baseline yet. The current first revision only tracks the enrichment-run tables added in Task 2.
+
+For a fresh local database, bootstrap the existing application schema first:
+
+```bash
+python backend/scripts/init_db.py
+alembic -c backend/alembic.ini stamp 20260415_103800
+```
+
+For an existing database that was created before Alembic, use the existing schema bootstrap/convergence path first so the current tables exist, then register the current revision:
+
+```bash
+alembic -c backend/alembic.ini stamp 20260415_103800
+```
+
+Use `cd backend && alembic upgrade head` only for databases that already have the pre-Alembic base schema but do not yet have the new `enrichment_runs` tables.
+
+## API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/v1/jobs/search` | Search jobs |
+| `POST /api/v1/ai/enrich` | AI enrichment |
+| `GET /api/v1/stats/skills` | Skill statistics |
+| `GET /api/v1/stats/categories` | Category distribution |
+
+## License
+
+MIT

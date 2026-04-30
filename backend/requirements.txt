@@ -1,0 +1,22 @@
+fastapi==0.135.2
+uvicorn[standard]==0.24.0
+requests==2.31.0
+beautifulsoup4==4.12.2
+pydantic==2.12.5
+pydantic-settings==2.1.0
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+redis==5.0.1
+alembic==1.13.0
+python-dotenv==1.0.0
+google-genai==1.66.0
+zhipuai==1.0.7
+google-api-python-client==2.107.0
+anthropic>=0.18.0
+
+# Scraper dependencies (Phase 2.2)
+httpx>=0.28.1
+playwright==1.58.0
+
+# Scheduler dependencies (Phase 2.7)
+apscheduler>=3.10.0

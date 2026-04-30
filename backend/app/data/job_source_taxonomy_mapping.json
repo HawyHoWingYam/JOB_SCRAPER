@@ -1,0 +1,300 @@
+{
+  "1200": {
+    "source_name": "Accounting",
+    "allowed_domains": ["Accounting"],
+    "default_path": ["Accounting", "General", "General"],
+    "subcategory_hints": {
+      "Financial Accounting & Reporting": {
+        "allowed_categories": ["Financial Accounting", "General"]
+      },
+      "Audit - External": {
+        "allowed_categories": ["Audit & Tax", "General"]
+      }
+    }
+  },
+  "1203": {
+    "source_name": "Banking & Financial Services",
+    "allowed_domains": ["Banking & Financial Services"],
+    "default_path": ["Banking & Financial Services", "General", "General"],
+    "subcategory_hints": {
+      "Banking - Retail/Branch": {
+        "allowed_categories": ["Banking", "General"]
+      },
+      "Funds Management": {
+        "allowed_categories": ["Investment & Markets", "General"]
+      }
+    }
+  },
+  "1204": {
+    "source_name": "Call Centre & Customer Service",
+    "allowed_domains": ["Call Centre & Customer Service"],
+    "default_path": ["Call Centre & Customer Service", "General", "General"],
+    "subcategory_hints": {
+      "Customer Service - Call Centre": {
+        "allowed_categories": ["Call Centre", "General"]
+      },
+      "Customer Service - Customer Facing": {
+        "allowed_categories": ["Customer Service", "General"]
+      }
+    }
+  },
+  "1206": {
+    "source_name": "Construction",
+    "allowed_domains": ["Construction"],
+    "default_path": ["Construction", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "1209": {
+    "source_name": "Engineering",
+    "allowed_domains": ["Engineering"],
+    "default_path": ["Engineering", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "1211": {
+    "source_name": "Healthcare & Medical",
+    "allowed_domains": ["Healthcare & Medical"],
+    "default_path": ["Healthcare & Medical", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "1212": {
+    "source_name": "Hospitality & Tourism",
+    "allowed_domains": ["Hospitality & Tourism"],
+    "default_path": ["Hospitality & Tourism", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "1214": {
+    "source_name": "Insurance & Superannuation",
+    "allowed_domains": ["Insurance & Superannuation"],
+    "default_path": ["Insurance & Superannuation", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "1216": {
+    "source_name": "Legal",
+    "allowed_domains": ["Legal"],
+    "default_path": ["Legal", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "1220": {
+    "source_name": "Real Estate & Property",
+    "allowed_domains": ["Real Estate & Property"],
+    "default_path": ["Real Estate & Property", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "1223": {
+    "source_name": "Science & Technology",
+    "allowed_domains": ["Science & Technology"],
+    "default_path": ["Science & Technology", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "1225": {
+    "source_name": "Trades & Services",
+    "allowed_domains": ["Trades & Services"],
+    "default_path": ["Trades & Services", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "6008": {
+    "source_name": "Marketing & Communications",
+    "allowed_domains": ["Marketing & Communications"],
+    "default_path": ["Marketing & Communications", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "6043": {
+    "source_name": "Retail & Consumer Products",
+    "allowed_domains": ["Retail & Consumer Products"],
+    "default_path": ["Retail & Consumer Products", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "6076": {
+    "source_name": "Consulting & Strategy",
+    "allowed_domains": ["Consulting & Strategy"],
+    "default_path": ["Consulting & Strategy", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "6092": {
+    "source_name": "Manufacturing, Transport & Logistics",
+    "allowed_domains": ["Manufacturing, Transport & Logistics"],
+    "default_path": ["Manufacturing, Transport & Logistics", "General", "General"],
+    "subcategory_hints": {
+      "Warehousing, Storage & Distribution": {
+        "allowed_categories": ["Logistics", "General"]
+      },
+      "Purchasing, Procurement & Inventory": {
+        "allowed_categories": ["Supply Chain", "General"]
+      }
+    }
+  },
+  "6123": {
+    "source_name": "Education & Training",
+    "allowed_domains": ["Education & Training"],
+    "default_path": ["Education & Training", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "6163": {
+    "source_name": "Community Services & Development",
+    "allowed_domains": ["Community Services & Development"],
+    "default_path": ["Community Services & Development", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "6317": {
+    "source_name": "Human Resources & Recruitment",
+    "allowed_domains": ["Human Resources & Recruitment"],
+    "default_path": ["Human Resources & Recruitment", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "6251": {
+    "source_name": "Administration & Office Support",
+    "allowed_domains": ["Administration & Office Support"],
+    "default_path": ["Administration & Office Support", "General", "General"],
+    "subcategory_hints": {
+      "Administrative Assistants": {
+        "allowed_categories": ["Administrative Support", "General"]
+      },
+      "Receptionists": {
+        "allowed_categories": ["Office Operations", "General"]
+      },
+      "PA, EA & Secretarial": {
+        "allowed_categories": ["Administrative Support", "General"]
+      }
+    }
+  },
+  "6263": {
+    "source_name": "Design & Architecture",
+    "allowed_domains": ["Design & Architecture"],
+    "default_path": ["Design & Architecture", "General", "General"],
+    "subcategory_hints": {
+      "Graphic Design": {
+        "allowed_categories": ["Graphic Design", "General"]
+      },
+      "Web & Interaction Design": {
+        "allowed_categories": ["Product & UX Design", "General"]
+      },
+      "Architecture": {
+        "allowed_categories": ["Architecture & Interior", "General"]
+      }
+    }
+  },
+  "6281": {
+    "source_name": "Information & Communication Technology",
+    "allowed_domains": ["Information & Communication Technology"],
+    "default_path": ["Information & Communication Technology", "General", "General"],
+    "subcategory_hints": {
+      "Developers/Programmers": {
+        "allowed_categories": ["Software Development", "General"]
+      },
+      "Help Desk & IT Support": {
+        "allowed_categories": ["Infrastructure & Support", "General"]
+      },
+      "Business/Systems Analysts": {
+        "allowed_categories": ["Data & Analytics", "General"]
+      },
+      "Networks & Systems Administration": {
+        "allowed_categories": ["Infrastructure & Support", "General"]
+      },
+      "Database Development & Administration": {
+        "allowed_categories": [
+          "Data & Analytics",
+          "Cybersecurity",
+          "Infrastructure & Support",
+          "General"
+        ]
+      },
+      "Management": {
+        "allowed_categories": [
+          "Product & Quality",
+          "Infrastructure & Support",
+          "General"
+        ]
+      }
+    }
+  },
+  "6304": {
+    "source_name": "Advertising, Arts & Media",
+    "allowed_domains": ["Advertising, Arts & Media"],
+    "default_path": ["Advertising, Arts & Media", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "6362": {
+    "source_name": "Sales",
+    "allowed_domains": ["Sales"],
+    "default_path": ["Sales", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "7019": {
+    "source_name": "CEO & General Management",
+    "allowed_domains": ["CEO & General Management"],
+    "default_path": ["CEO & General Management", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:001": {
+    "source_name": "Accounting",
+    "allowed_domains": ["Accounting"],
+    "default_path": ["Accounting", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:048": {
+    "source_name": "Administration & Office Support",
+    "allowed_domains": ["Administration & Office Support"],
+    "default_path": ["Administration & Office Support", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:007": {
+    "source_name": "Banking & Financial Services",
+    "allowed_domains": ["Banking & Financial Services"],
+    "default_path": ["Banking & Financial Services", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:015": {
+    "source_name": "Engineering",
+    "allowed_domains": ["Engineering"],
+    "default_path": ["Engineering", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:018": {
+    "source_name": "Hospitality & Tourism",
+    "allowed_domains": ["Hospitality & Tourism"],
+    "default_path": ["Hospitality & Tourism", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:021": {
+    "source_name": "Information & Communication Technology",
+    "allowed_domains": ["Information & Communication Technology"],
+    "default_path": ["Information & Communication Technology", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:022": {
+    "source_name": "Insurance & Superannuation",
+    "allowed_domains": ["Insurance & Superannuation"],
+    "default_path": ["Insurance & Superannuation", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:026": {
+    "source_name": "Marketing & Communications",
+    "allowed_domains": ["Marketing & Communications"],
+    "default_path": ["Marketing & Communications", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:027": {
+    "source_name": "Healthcare & Medical",
+    "allowed_domains": ["Healthcare & Medical"],
+    "default_path": ["Healthcare & Medical", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:032": {
+    "source_name": "Real Estate & Property",
+    "allowed_domains": ["Real Estate & Property"],
+    "default_path": ["Real Estate & Property", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:037": {
+    "source_name": "Retail & Consumer Products",
+    "allowed_domains": ["Retail & Consumer Products"],
+    "default_path": ["Retail & Consumer Products", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "ctgoodjobs:039": {
+    "source_name": "Community Services & Development",
+    "allowed_domains": ["Community Services & Development"],
+    "default_path": ["Community Services & Development", "General", "General"],
+    "subcategory_hints": {}
+  }
+}

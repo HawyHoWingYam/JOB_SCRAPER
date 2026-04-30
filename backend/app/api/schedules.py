@@ -1,0 +1,304 @@
+"""
+Schedule API Routes - CRUD endpoints for scheduled scraping tasks.
+"""
+
+import logging
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
+from typing import List
+from uuid import UUID
+
+logger = logging.getLogger(__name__)
+
+from app.database import get_db
+from app.repositories.schedule_repository import ScheduleRepository
+from app.services.source_category_registry import get_source_category_registry
+from app.services.scheduler_service import SchedulerService
+from app.schemas.schedule import (
+    ScheduleSchema,
+    ScheduleCreateSchema,
+    ScheduleUpdateSchema,
+    ScheduleListResponse,
+    ExecutionListResponse,
+    ScheduleToggleResponse,
+    ImmediateScrapeRequest,
+    normalize_source_site,
+    validate_category_ids_for_source_site,
+)
+
+router = APIRouter(prefix="/schedules", tags=["schedules"])
+repository = ScheduleRepository()
+SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs"}
+
+
+async def _add_schedule_to_scheduler(schedule) -> None:
+    """Offload scheduler registration from async route handlers."""
+    scheduler = SchedulerService.get_instance()
+    await run_in_threadpool(scheduler.add_schedule, schedule)
+
+
+async def _update_schedule_in_scheduler(schedule) -> None:
+    """Offload scheduler update from async route handlers."""
+    scheduler = SchedulerService.get_instance()
+    await run_in_threadpool(scheduler.update_schedule, schedule)
+
+
+async def _validate_ctgoodjobs_category_ids_exist(category_ids: list[str] | None) -> None:
+    """Validate CTgoodjobs category ids against the current registry."""
+    try:
+        registry = get_source_category_registry()
+        categories = await run_in_threadpool(registry.list_categories, source_site="ctgoodjobs")
+    except Exception as exc:
+        logger.error("CTgoodjobs registry unavailable during category validation: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="CTgoodjobs category registry unavailable",
+        ) from exc
+
+    supported_ids = {str(category["id"]) for category in categories}
+    unknown_ids = sorted(
+        {
+            str(category_id)
+            for category_id in (category_ids or [])
+            if str(category_id) not in supported_ids
+        }
+    )
+    if unknown_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown CTgoodjobs category_ids: {', '.join(unknown_ids)}",
+        )
+
+
+async def _validate_effective_category_ids(source_site: str | None, category_ids: list[int | str] | None) -> None:
+    """Validate source-aware category ids and registry-backed CTgoodjobs existence."""
+    try:
+        validate_category_ids_for_source_site(source_site, category_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if normalize_source_site(source_site) == "ctgoodjobs":
+        await _validate_ctgoodjobs_category_ids_exist(category_ids)
+
+
+@router.get("", response_model=ScheduleListResponse)
+async def list_schedules(
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    """Get all schedules."""
+    schedules = repository.get_all_schedules(db, skip, limit)
+    total = repository.count_schedules(db)
+    return ScheduleListResponse(schedules=schedules, total=total)
+
+
+@router.get("/{schedule_id}", response_model=ScheduleSchema)
+async def get_schedule(
+    schedule_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """Get a schedule by ID."""
+    schedule = repository.get_schedule_by_id(db, schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return schedule
+
+
+@router.post("", response_model=ScheduleSchema)
+async def create_schedule(
+    data: ScheduleCreateSchema,
+    db: Session = Depends(get_db)
+):
+    """Create a new schedule."""
+    await _validate_effective_category_ids(data.source_site, data.category_ids)
+    schedule = repository.create_schedule(db, data.model_dump())
+    
+    # Add to scheduler
+    await _add_schedule_to_scheduler(schedule)
+    
+    return schedule
+
+
+@router.put("/{schedule_id}", response_model=ScheduleSchema)
+async def update_schedule(
+    schedule_id: UUID,
+    data: ScheduleUpdateSchema,
+    db: Session = Depends(get_db)
+):
+    """Update a schedule."""
+    current_schedule = repository.get_schedule_by_id(db, schedule_id)
+    if not current_schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+    effective_source_site = update_data.get(
+        "source_site",
+        normalize_source_site(getattr(current_schedule, "source_site", "jobsdb")),
+    )
+    if effective_source_site is None:
+        effective_source_site = normalize_source_site(getattr(current_schedule, "source_site", "jobsdb"))
+    if "category_ids" in update_data:
+        effective_category_ids = update_data["category_ids"]
+    else:
+        effective_category_ids = getattr(current_schedule, "category_ids", None)
+
+    await _validate_effective_category_ids(effective_source_site, effective_category_ids)
+
+    schedule = repository.update_schedule(db, schedule_id, update_data)
+    
+    # Update in scheduler
+    await _update_schedule_in_scheduler(schedule)
+    
+    return schedule
+
+
+@router.delete("/{schedule_id}")
+async def delete_schedule(
+    schedule_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """Delete a schedule."""
+    # Remove from scheduler first
+    scheduler = SchedulerService.get_instance()
+    scheduler.remove_schedule(schedule_id)
+    
+    # Delete from database
+    deleted = repository.delete_schedule(db, schedule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    
+    return {"message": "Schedule deleted"}
+
+
+@router.post("/{schedule_id}/toggle", response_model=ScheduleToggleResponse)
+async def toggle_schedule(
+    schedule_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """Toggle schedule active status."""
+    current_schedule = repository.get_schedule_by_id(db, schedule_id)
+    if not current_schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    if (
+        normalize_source_site(getattr(current_schedule, "source_site", "jobsdb")) == "ctgoodjobs"
+        and not bool(getattr(current_schedule, "is_active", False))
+    ):
+        try:
+            await _validate_effective_category_ids(
+                getattr(current_schedule, "source_site", "jobsdb"),
+                getattr(current_schedule, "category_ids", None),
+            )
+        except HTTPException as exc:
+            if exc.status_code != 422:
+                raise
+
+            schedule = repository.update_schedule(db, schedule_id, {"is_active": False})
+            await _update_schedule_in_scheduler(schedule)
+            return ScheduleToggleResponse(
+                id=schedule.id,
+                is_active=schedule.is_active,
+                next_run_at=schedule.next_run_at,
+            )
+
+    schedule = repository.toggle_schedule(db, schedule_id)
+    
+    # Update in scheduler
+    await _update_schedule_in_scheduler(schedule)
+    
+    return ScheduleToggleResponse(
+        id=schedule.id,
+        is_active=schedule.is_active,
+        next_run_at=schedule.next_run_at
+    )
+
+
+@router.post("/{schedule_id}/run")
+async def run_schedule_now(
+    schedule_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """Run a schedule immediately."""
+    schedule = repository.get_schedule_by_id(db, schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    effective_source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
+    if effective_source_site not in SUPPORTED_SOURCE_SITES:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported source_site for execution",
+        )
+
+    await _validate_effective_category_ids(
+        effective_source_site,
+        getattr(schedule, "category_ids", None),
+    )
+    
+    scheduler = SchedulerService.get_instance()
+    await scheduler.run_now(schedule_id)
+    
+    return {"message": "Schedule execution started"}
+
+
+@router.get("/{schedule_id}/history", response_model=ExecutionListResponse)
+async def get_schedule_history(
+    schedule_id: UUID,
+    limit: int = 20,
+    db: Session = Depends(get_db)
+):
+    """Get execution history for a schedule."""
+    schedule = repository.get_schedule_by_id(db, schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    
+    executions = repository.get_executions(db, schedule_id, limit)
+    return ExecutionListResponse(executions=executions, total=len(executions))
+
+
+@router.post("/run-now")
+async def run_immediate_scrape(
+    request: ImmediateScrapeRequest,
+    db: Session = Depends(get_db)
+):
+    """Run scraping immediately without creating a schedule."""
+    if request.source_site not in SUPPORTED_SOURCE_SITES:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported source_site for execution",
+        )
+
+    await _validate_effective_category_ids(request.source_site, request.category_ids)
+
+    import asyncio
+
+    if request.source_site == "ctgoodjobs":
+        from app.services.ctgoodjobs_scrape_service import CtgoodjobsScrapeService
+        scrape_service = CtgoodjobsScrapeService()
+    else:
+        from app.services.category_scrape_service import CategoryScrapeService
+        scrape_service = CategoryScrapeService()
+
+    async def scrape_with_error_handling():
+        """Wrapper to catch and log errors from background scraping task."""
+        try:
+            result = await scrape_service.scrape_categories(
+                category_ids=request.category_ids,
+                max_pages=request.max_pages,
+                skip_existing=request.skip_existing
+            )
+            logger.info(f"Scrape completed: {result}")
+        except Exception as e:
+            logger.error(f"Scrape failed: {e}", exc_info=True)
+
+    # Start scraping in background with error handling
+    asyncio.create_task(scrape_with_error_handling())
+
+    return {
+        "message": "Scraping started",
+        "category_ids": request.category_ids,
+        "max_pages": request.max_pages,
+        "skip_existing": request.skip_existing
+    }

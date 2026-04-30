@@ -1,0 +1,100 @@
+{
+  "categories": [
+    {
+      "name": "Frontend",
+      "technologies": [
+        {
+          "name": "JavaScript",
+          "skills": [
+            {"name": "React", "aliases": ["react", "reactjs", "react.js"]},
+            {"name": "Vue.js", "aliases": ["vue", "vuejs", "vue.js"]},
+            {"name": "Angular", "aliases": ["angular", "angularjs"]},
+            {"name": "Next.js", "aliases": ["nextjs", "next"]},
+            {"name": "Svelte", "aliases": ["svelte", "sveltejs"]}
+          ]
+        },
+        {
+          "name": "CSS",
+          "skills": [
+            {"name": "Tailwind CSS", "aliases": ["tailwind", "tailwindcss"]},
+            {"name": "Sass", "aliases": ["sass", "scss"]},
+            {"name": "Bootstrap", "aliases": ["bootstrap"]},
+            {"name": "Material UI", "aliases": ["mui", "material-ui"]}
+          ]
+        },
+        {
+          "name": "TypeScript",
+          "skills": [
+            {"name": "TypeScript", "aliases": ["typescript", "ts"]}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Backend",
+      "technologies": [
+        {
+          "name": "Python",
+          "skills": [
+            {"name": "Django", "aliases": ["django"]},
+            {"name": "FastAPI", "aliases": ["fastapi", "fast-api"]},
+            {"name": "Flask", "aliases": ["flask"]}
+          ]
+        },
+        {
+          "name": "Node.js",
+          "skills": [
+            {"name": "Express.js", "aliases": ["express", "expressjs"]},
+            {"name": "NestJS", "aliases": ["nestjs", "nest"]}
+          ]
+        },
+        {
+          "name": "Java",
+          "skills": [
+            {"name": "Spring Boot", "aliases": ["spring", "springboot"]},
+            {"name": "Hibernate", "aliases": ["hibernate"]}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Database",
+      "technologies": [
+        {
+          "name": "SQL",
+          "skills": [
+            {"name": "PostgreSQL", "aliases": ["postgres", "postgresql"]},
+            {"name": "MySQL", "aliases": ["mysql"]},
+            {"name": "SQL Server", "aliases": ["mssql", "sqlserver"]}
+          ]
+        },
+        {
+          "name": "NoSQL",
+          "skills": [
+            {"name": "MongoDB", "aliases": ["mongodb", "mongo"]},
+            {"name": "Redis", "aliases": ["redis"]}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "DevOps",
+      "technologies": [
+        {
+          "name": "Containers",
+          "skills": [
+            {"name": "Docker", "aliases": ["docker"]},
+            {"name": "Kubernetes", "aliases": ["k8s", "kubernetes"]}
+          ]
+        },
+        {
+          "name": "CI/CD",
+          "skills": [
+            {"name": "Jenkins", "aliases": ["jenkins"]},
+            {"name": "GitHub Actions", "aliases": ["github-actions", "gh-actions"]}
+          ]
+        }
+      ]
+    }
+  ]
+}

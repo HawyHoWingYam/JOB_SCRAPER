@@ -1,0 +1,104 @@
+from sqlalchemy import Column, String, Text, DateTime, Boolean, JSON, Integer, ForeignKey, text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+from datetime import datetime
+from app.database import Base
+import uuid
+
+
+class ScrapeSchedule(Base):
+    """Model for storing scheduled scraping tasks."""
+
+    __tablename__ = "scrape_schedules"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Scheduling configuration
+    cron_expression = Column(String(100), nullable=False)
+    timezone = Column(String(50), default="Asia/Hong_Kong")
+    source_site = Column(
+        String(32),
+        nullable=False,
+        default="jobsdb",
+        server_default=text("'jobsdb'"),
+        index=True,
+    )
+
+    # Scraping parameters
+    category_ids = Column(JSON, nullable=True)  # List of category IDs [1200, 6281, ...]
+    keywords = Column(String(500), nullable=True)
+    location = Column(String(255), default="Hong Kong")
+    max_pages = Column(Integer, default=3)
+
+    # Status
+    is_active = Column(Boolean, default=True, index=True)
+    last_run_at = Column(DateTime, nullable=True)
+    next_run_at = Column(DateTime, nullable=True, index=True)
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    executions = relationship(
+        "ScheduleExecution",
+        back_populates="schedule",
+        cascade="all, delete-orphan",
+        order_by="desc(ScheduleExecution.started_at)"
+    )
+
+    def __repr__(self):
+        return f"<ScrapeSchedule(id={self.id}, name={self.name}, cron={self.cron_expression})>"
+
+
+class ScheduleExecution(Base):
+    """Model for tracking schedule execution history."""
+
+    __tablename__ = "schedule_executions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    schedule_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("scrape_schedules.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    # Execution details
+    status = Column(String(50), nullable=False, default="pending", index=True)
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
+
+    # Results
+    jobs_scraped = Column(Integer, default=0)
+    jobs_saved = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+
+    # Phase completion tracking
+    phase1_completed = Column(Boolean, default=False)
+    phase2_completed = Column(Boolean, default=False)
+    phase3_completed = Column(Boolean, default=False)
+    phase4_completed = Column(Boolean, default=False)
+    phase5_completed = Column(Boolean, default=False)
+
+    # Detailed stats
+    ids_collected = Column(Integer, default=0)
+    jobs_classified = Column(Integer, default=0)
+
+    # Timing
+    phase1_duration = Column(Integer, default=0)
+    phase2_duration = Column(Integer, default=0)
+    phase3_duration = Column(Integer, default=0)
+    phase4_duration = Column(Integer, default=0)
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    schedule = relationship("ScrapeSchedule", back_populates="executions")
+
+    def __repr__(self):
+        return f"<ScheduleExecution(id={self.id}, status={self.status})>"
