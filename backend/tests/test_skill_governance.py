@@ -150,12 +150,37 @@ def test_skill_normalizer_flags_generic_terms_without_creating_skills():
         normalizer = SkillNormalizer(db)
 
         result = normalizer.resolve_extracted_skill(
-            {"name": "Project Management", "kind": "generic", "resolution": "drop"}
+            {"name": "project management", "kind": "generic", "resolution": "drop"}
         )
 
         assert result["action"] == "generic_tag"
         assert result["generic_tag"] == "Project Management"
         assert db.query(Skill).count() == 0
+    finally:
+        db.close()
+
+
+def test_skill_normalizer_preserves_distinct_review_candidate_keys_for_technical_symbols():
+    from app.models.skill_review_candidate import SkillReviewCandidate
+
+    db = _build_sqlite_session()
+    try:
+        normalizer = SkillNormalizer(db)
+
+        c_sharp = normalizer.register_review_candidate(raw_name="C#", normalized_name="C#")
+        c_plus_plus = normalizer.register_review_candidate(raw_name="C++", normalized_name="C++")
+        dotnet = normalizer.register_review_candidate(raw_name=".NET", normalized_name=".NET")
+
+        candidates = (
+            db.query(SkillReviewCandidate)
+            .order_by(SkillReviewCandidate.normalized_name.asc())
+            .all()
+        )
+
+        assert c_sharp.normalized_name == "c#"
+        assert c_plus_plus.normalized_name == "c++"
+        assert dotnet.normalized_name == ".net"
+        assert [candidate.normalized_name for candidate in candidates] == [".net", "c#", "c++"]
     finally:
         db.close()
 
@@ -483,7 +508,7 @@ async def test_ai_enrichment_service_reenrichment_replaces_mentions_and_merges_g
                                 "existing_skill": "React",
                             },
                             {
-                                "name": "Project Management",
+                                "name": "project management",
                                 "kind": "generic",
                                 "resolution": "drop",
                             },
@@ -559,11 +584,17 @@ async def test_ai_enrichment_service_reenrichment_replaces_mentions_and_merges_g
                 .all()
             )
             second_candidates = db.query(SkillReviewCandidate).all()
+            second_generic_mentions = [
+                mention for mention in second_mentions if mention.resolution == "generic_tag"
+            ]
 
             assert [(m.raw_name, m.normalized_name, m.resolution) for m in second_mentions] == [
-                ("Project Management", "Project Management", "generic_tag"),
                 ("React", "React", "match_existing"),
                 ("graphql", "graphql", "review_candidate"),
+                ("project management", "Project Management", "generic_tag"),
+            ]
+            assert [(m.raw_name, m.generic_tag) for m in second_generic_mentions] == [
+                ("project management", "Project Management")
             ]
             assert len(second_candidates) == 1
             assert second_candidates[0].normalized_name == "graphql"

@@ -129,6 +129,7 @@ class AIEnrichmentService:
             }
             mention_repo.delete_mentions_for_job(db, job.id)
             generic_tags: List[str] = []
+            generic_tag_keys = set()
 
             for extracted_skill in extracted_skills:
                 decision = skill_normalizer.resolve_extracted_skill(extracted_skill)
@@ -147,6 +148,10 @@ class AIEnrichmentService:
 
                 if action == "generic_tag":
                     generic_tag = str(decision.get("generic_tag") or "").strip()
+                    generic_tag_key = str(
+                        decision.get("generic_tag_key")
+                        or skill_normalizer.normalize_generic_tag_key(generic_tag)
+                    ).strip()
                     mention_repo.create_mention(
                         db,
                         job_id=job.id,
@@ -156,7 +161,8 @@ class AIEnrichmentService:
                         generic_tag=generic_tag,
                         confidence=insight.get("confidence"),
                     )
-                    if generic_tag and generic_tag not in generic_tags:
+                    if generic_tag and generic_tag_key and generic_tag_key not in generic_tag_keys:
+                        generic_tag_keys.add(generic_tag_key)
                         generic_tags.append(generic_tag)
                     continue
 
@@ -210,7 +216,9 @@ class AIEnrichmentService:
                     )
                 existing_skill_ids.add(skill_id)
 
-            job.ai_generic_tags = self._merge_generic_tags(job.ai_generic_tags, generic_tags) or None
+            job.ai_generic_tags = (
+                self._merge_generic_tags(skill_normalizer, job.ai_generic_tags, generic_tags) or None
+            )
             for candidate_id in affected_candidate_ids:
                 candidate = db.query(SkillReviewCandidate).filter_by(id=candidate_id).first()
                 if candidate is None:
@@ -323,14 +331,23 @@ class AIEnrichmentService:
             return None
         return " / ".join(parts)
 
-    def _merge_generic_tags(self, existing_tags: Any, new_tags: List[str]) -> List[str]:
+    def _merge_generic_tags(
+        self,
+        skill_normalizer: SkillNormalizer,
+        existing_tags: Any,
+        new_tags: List[str],
+    ) -> List[str]:
         merged: List[str] = []
         seen = set()
         for value in self._coerce_generic_tags(existing_tags) + list(new_tags):
-            tag = str(value or "").strip()
-            if not tag or tag in seen:
+            raw_tag = str(value or "").strip()
+            if not raw_tag:
                 continue
-            seen.add(tag)
+            tag = skill_normalizer.canonicalize_generic_tag(raw_tag) or raw_tag
+            tag_key = skill_normalizer.normalize_generic_tag_key(tag)
+            if not tag_key or tag_key in seen:
+                continue
+            seen.add(tag_key)
             merged.append(tag)
         return merged
 

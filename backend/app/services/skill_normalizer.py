@@ -31,7 +31,14 @@ class SkillNormalizer:
             rules = json.load(f)
 
         generic_terms = rules.get("generic_terms", [])
-        rules["generic_terms_lookup"] = {self._normalize_lookup_key(term) for term in generic_terms}
+        generic_terms_canonical_lookup = {}
+        for term in generic_terms:
+            canonical_label = self._normalize_unicode(str(term))
+            lookup_key = self._normalize_lookup_key(canonical_label)
+            if lookup_key:
+                generic_terms_canonical_lookup[lookup_key] = canonical_label
+        rules["generic_terms_lookup"] = set(generic_terms_canonical_lookup)
+        rules["generic_terms_canonical_lookup"] = generic_terms_canonical_lookup
 
         alias_map = {}
         for raw_key, canonical_name in rules.get("canonical_aliases", {}).items():
@@ -68,6 +75,15 @@ class SkillNormalizer:
         text = re.sub(r"[^a-z0-9]+", " ", text)
         return re.sub(r"\s+", " ", text).strip()
 
+    def normalize_review_candidate_key(self, value: str) -> str:
+        text = self._normalize_unicode(value).lower().strip()
+        text = re.sub(r"[^a-z0-9+#./\-\s]+", " ", text)
+        text = re.sub(r"\s*([+#./-])\s*", r"\1", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def normalize_generic_tag_key(self, value: str) -> str:
+        return self._normalize_lookup_key(value)
+
     def _normalize_unicode(self, value: str) -> str:
         text = str(value or "").strip()
         for dash in ("\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"):
@@ -79,6 +95,11 @@ class SkillNormalizer:
         alias_lookup = self._rules.get("canonical_alias_lookup", {})
         alias_hit = alias_lookup.get(self._normalize_lookup_key(normalized))
         return alias_hit or normalized
+
+    def canonicalize_generic_tag(self, value: str) -> Optional[str]:
+        return self._rules.get("generic_terms_canonical_lookup", {}).get(
+            self.normalize_generic_tag_key(value)
+        )
 
     def _coerce_payload(self, extracted_skill: Any) -> Dict[str, Any]:
         if isinstance(extracted_skill, dict):
@@ -125,10 +146,13 @@ class SkillNormalizer:
 
         canonical_name = self._canonicalize_name(raw_name)
         kind = str(payload.get("kind") or "").strip().lower()
-        if kind == "generic" or self._is_generic_term(canonical_name):
+        generic_label = self.canonicalize_generic_tag(canonical_name)
+        if kind == "generic" or generic_label is not None:
+            generic_tag = generic_label or canonical_name
             return {
                 "action": "generic_tag",
-                "generic_tag": canonical_name,
+                "generic_tag": generic_tag,
+                "generic_tag_key": self.normalize_generic_tag_key(generic_tag),
             }
 
         existing_skill = self._find_cached_skill(canonical_name)
@@ -160,6 +184,7 @@ class SkillNormalizer:
         return {
             "action": "generic_tag",
             "generic_tag": canonical_name,
+            "generic_tag_key": self.normalize_generic_tag_key(canonical_name),
         }
 
     def _is_generic_term(self, name: str) -> bool:
@@ -207,7 +232,9 @@ class SkillNormalizer:
         suggested_category: Optional[str] = None,
         suggested_technology: Optional[str] = None,
     ) -> SkillReviewCandidate:
-        normalized_lookup = self._normalize_lookup_key(normalized_name or raw_name)
+        normalized_lookup = self.normalize_review_candidate_key(normalized_name or raw_name)
+        if not normalized_lookup:
+            normalized_lookup = self._normalize_lookup_key(normalized_name or raw_name)
         candidate = (
             self.db.query(SkillReviewCandidate)
             .filter_by(normalized_name=normalized_lookup)
