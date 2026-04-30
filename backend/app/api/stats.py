@@ -6,11 +6,14 @@ Provides aggregated data for dashboard charts.
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy import case, desc, func, literal
 from typing import List, Dict, Any
 
 from app.database import get_db
 from app.models.job import Job
+from app.models.job_category import JobCategory
+from app.models.job_domain import JobDomain
+from app.models.job_subcategory import JobSubcategory
 from app.models.skill import Skill
 from app.models.job_skill import JobSkill
 from app.models.skill_technology import SkillTechnology
@@ -64,13 +67,35 @@ async def get_skill_stats(
 @router.get("/categories")
 async def get_category_stats(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
     """Get job distribution by AI category."""
+    canonical_category = (
+        JobDomain.name
+        + literal(" / ")
+        + JobCategory.name
+        + literal(" / ")
+        + JobSubcategory.name
+    )
+    category_label = case(
+        (Job.subcategory_id.isnot(None), canonical_category),
+        else_=Job.ai_category,
+    ).label("category")
+
     results = db.query(
-        Job.ai_category,
+        category_label,
         func.count(Job.id).label("count")
+    ).outerjoin(
+        JobSubcategory,
+        Job.subcategory_id == JobSubcategory.id,
+    ).outerjoin(
+        JobCategory,
+        JobSubcategory.category_id == JobCategory.id,
+    ).outerjoin(
+        JobDomain,
+        JobCategory.domain_id == JobDomain.id,
     ).filter(
-        Job.ai_category.isnot(None),
-        Job.is_deleted == False
-    ).group_by(Job.ai_category).order_by(desc("count")).all()
+        Job.is_deleted.is_(False),
+        category_label.isnot(None),
+        category_label != "",
+    ).group_by(category_label).order_by(desc("count")).all()
 
     return [
         {"category": cat, "count": count}

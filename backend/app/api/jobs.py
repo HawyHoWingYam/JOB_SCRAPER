@@ -16,7 +16,7 @@ from app.api.job_search_query import apply_parsed_clauses
 from app.models import Job, Company
 from app.models.skill import Skill
 from app.models.job_skill import JobSkill
-from app.models import SkillTechnology, JobSubcategory, JobCategory
+from app.models import SkillTechnology, JobSubcategory, JobCategory, JobDomain
 from app.schemas import JobSchema, JobCreateSchema, JobDetailSchema
 from app.schemas.job_search import (
     JobSearchRequestSchema,
@@ -269,6 +269,38 @@ def _experience_windows_overlap_clause(query_window, job_window, job_level_colum
     return and_(*clauses)
 
 
+def _parse_legacy_category_path(category: str) -> Optional[tuple[str, str, str]]:
+    parts = [part.strip() for part in (category or "").split(" / ")]
+    if len(parts) != 3 or not all(parts):
+        return None
+    return parts[0], parts[1], parts[2]
+
+
+def _build_legacy_category_filter_clause(category: str):
+    canonical_path = _parse_legacy_category_path(category)
+    if canonical_path is None:
+        return Job.ai_category == category
+
+    domain_name, category_name, subcategory_name = canonical_path
+    return or_(
+        Job.subcategory.has(
+            and_(
+                JobSubcategory.name == subcategory_name,
+                JobSubcategory.category.has(
+                    and_(
+                        JobCategory.name == category_name,
+                        JobCategory.domain.has(JobDomain.name == domain_name),
+                    )
+                ),
+            )
+        ),
+        and_(
+            Job.subcategory_id.is_(None),
+            Job.ai_category == category,
+        ),
+    )
+
+
 def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     _validate_experience_query_window(
         filters.experience_years_from,
@@ -280,7 +312,7 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     if filters.employment_type:
         query = query.filter(Job.employment_type == filters.employment_type)
     if filters.category:
-        query = query.filter(Job.ai_category == filters.category)
+        query = query.filter(_build_legacy_category_filter_clause(filters.category))
     if filters.industry:
         query = query.filter(Company.industry == filters.industry)
     if filters.posted_date_from:
