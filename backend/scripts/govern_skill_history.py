@@ -64,10 +64,17 @@ def _resolved_threshold(curations: dict[str, Any], min_distinct_jobs: int | None
     return int(curations["minimum_distinct_jobs"])
 
 
-def _raw_polluted_skill_rows(db: Session, *, min_distinct_jobs: int) -> list[dict[str, Any]]:
-    result = db.execute(
-        text(
-            """
+def _polluted_skill_rows_query(*, min_distinct_jobs: int | None = None, exact_distinct_jobs: int | None = None) -> str:
+    having_clauses = []
+    if min_distinct_jobs is not None:
+        having_clauses.append("COUNT(DISTINCT js.job_id) >= :min_distinct_jobs")
+    if exact_distinct_jobs is not None:
+        having_clauses.append("COUNT(DISTINCT js.job_id) = :exact_distinct_jobs")
+    having_sql = ""
+    if having_clauses:
+        having_sql = "\n            HAVING " + " AND ".join(having_clauses)
+
+    return f"""
             SELECT
                 s.id AS skill_id,
                 s.name AS skill_name,
@@ -81,14 +88,55 @@ def _raw_polluted_skill_rows(db: Session, *, min_distinct_jobs: int) -> list[dic
             LEFT JOIN job_skills js ON js.skill_id = s.id
             WHERE lower(sc.name) = 'other'
               AND lower(st.name) = 'general'
-            GROUP BY s.id, s.name, sc.name, st.name
-            HAVING COUNT(DISTINCT js.job_id) >= :min_distinct_jobs
+            GROUP BY s.id, s.name, sc.name, st.name{having_sql}
             ORDER BY COUNT(DISTINCT js.job_id) DESC, COUNT(js.job_id) DESC, s.name ASC
             """
+
+
+def _query_polluted_skill_rows(
+    db: Session,
+    *,
+    min_distinct_jobs: int | None = None,
+    exact_distinct_jobs: int | None = None,
+) -> list[dict[str, Any]]:
+    params: dict[str, int] = {}
+    if min_distinct_jobs is not None:
+        params["min_distinct_jobs"] = min_distinct_jobs
+    if exact_distinct_jobs is not None:
+        params["exact_distinct_jobs"] = exact_distinct_jobs
+
+    result = db.execute(
+        text(
+            _polluted_skill_rows_query(
+                min_distinct_jobs=min_distinct_jobs,
+                exact_distinct_jobs=exact_distinct_jobs,
+            )
         ),
-        {"min_distinct_jobs": min_distinct_jobs},
+        params,
     )
     return [dict(row) for row in result.mappings()]
+
+
+def _raw_polluted_skill_rows(db: Session, *, min_distinct_jobs: int) -> list[dict[str, Any]]:
+    rows = _query_polluted_skill_rows(db, min_distinct_jobs=min_distinct_jobs)
+
+    if min_distinct_jobs > 1:
+        seen_skill_ids = {str(row["skill_id"]) for row in rows}
+        for row in _query_polluted_skill_rows(db, exact_distinct_jobs=1):
+            if str(row["skill_id"]) in seen_skill_ids:
+                continue
+            if not _looks_phrase_like(str(row["skill_name"] or "")):
+                continue
+            rows.append(row)
+
+    rows.sort(
+        key=lambda row: (
+            -int(row["distinct_jobs"] or 0),
+            -int(row["job_links"] or 0),
+            str(row["skill_name"] or ""),
+        )
+    )
+    return rows
 
 
 def _classify_skill_row(

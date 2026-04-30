@@ -437,11 +437,10 @@ def test_apply_skill_history_governance_marks_phrase_like_one_off_for_review(tmp
         _link_job_skill(db, job.id, phrase_skill.id)
         db.commit()
 
-        curations_path = _write_curations(tmp_path, {}, minimum_distinct_jobs=1)
+        curations_path = _write_curations(tmp_path, {}, minimum_distinct_jobs=100)
 
         report = govern_skill_history.apply_skill_history_governance(
             db,
-            min_distinct_jobs=1,
             curation_path=curations_path,
             execute=False,
         )
@@ -456,6 +455,7 @@ def test_apply_skill_history_governance_marks_phrase_like_one_off_for_review(tmp
             review_entries["Technology solutions implementation lifecycle"]["note"]
             == "Phrase-like one-off skill mention"
         )
+        assert report["minimum_distinct_jobs"] == 100
     finally:
         db.close()
 
@@ -516,10 +516,12 @@ def test_collect_verification_snapshot_tolerates_missing_governance_objects():
     try:
         with db.bind.connect() as connection:
             snapshot = verify_migration.collect_verification_snapshot(connection)
+            rendered = verify_migration.render_report(snapshot)
 
         assert snapshot["job_skill_mentions_total"] == 0
         assert snapshot["jobs_with_generic_tags"] == 0
         assert snapshot["skill_review_candidates_pending"] == 0
         assert snapshot["polluted_other_general_skills"] == 0
+        assert "Raw job skill mentions: 0" in rendered
     finally:
         db.close()
