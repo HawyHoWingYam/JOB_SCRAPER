@@ -224,6 +224,42 @@ def test_skill_normalizer_prioritizes_generic_policy_over_existing_polluted_skil
         db.close()
 
 
+def test_skill_normalizer_does_not_treat_other_general_auto_skill_as_canonical_match():
+    db = _build_sqlite_session()
+    try:
+        category = SkillCategory(
+            id=uuid.uuid4(),
+            name="Other",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        technology = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=category.id,
+            name="General",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        polluted = Skill(
+            id=uuid.uuid4(),
+            technology_id=technology.id,
+            name="Linux",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        db.add_all([category, technology, polluted])
+        db.commit()
+
+        decision = SkillNormalizer(db).resolve_extracted_skill(
+            {"name": "Linux", "kind": "technical", "resolution": "match_existing"}
+        )
+
+        assert decision["action"] == "review_candidate"
+        assert decision["normalized_name"] == "Linux"
+    finally:
+        db.close()
+
+
 @pytest.mark.asyncio
 async def test_ai_enrichment_service_routes_generic_tags_and_review_candidates():
     from app.models.skill_review_candidate import SkillReviewCandidate

@@ -129,6 +129,20 @@ class SkillNormalizer:
             return None
         return self.db.query(Skill).filter_by(id=skill_id).first()
 
+    def _is_polluted_other_general_auto_skill(self, skill: Skill) -> bool:
+        technology = skill.technology
+        category = technology.category if technology is not None else None
+        if technology is None or category is None:
+            return False
+
+        return (
+            skill.is_auto_created
+            and technology.is_auto_created
+            and category.is_auto_created
+            and self._normalize_lookup_key(category.name) == "other"
+            and self._normalize_lookup_key(technology.name) == "general"
+        )
+
     def resolve_extracted_skill(self, extracted_skill: Any) -> Dict[str, Any]:
         """
         Convert a raw extracted skill into one governed action.
@@ -163,7 +177,9 @@ class SkillNormalizer:
         if existing_skill is None:
             existing_skill = self._fuzzy_match(canonical_name)
 
-        if existing_skill is not None:
+        if existing_skill is not None and not self._is_polluted_other_general_auto_skill(
+            existing_skill
+        ):
             return {
                 "action": "match_existing",
                 "skill_id": existing_skill.id,
@@ -216,6 +232,11 @@ class SkillNormalizer:
         for cached_name, skill_id in self._normalized_skill_cache.items():
             ratio = SequenceMatcher(None, normalized_name, cached_name).ratio()
             if ratio > 0.93 and ratio > best_ratio:
+                matched_skill = self.db.query(Skill).filter_by(id=skill_id).first()
+                if matched_skill is None or self._is_polluted_other_general_auto_skill(
+                    matched_skill
+                ):
+                    continue
                 best_ratio = ratio
                 best_id = skill_id
 
