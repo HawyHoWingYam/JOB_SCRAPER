@@ -97,6 +97,10 @@ def collect_verification_snapshot(connection) -> dict[str, int]:
             """,
             "allow_missing": True,
         },
+        "job_skill_mentions_total": {
+            "query": "SELECT COUNT(*) FROM job_skill_mentions",
+            "allow_missing": True,
+        },
         "visible_nodes_without_distinct_job_count": {
             "query": """
                 SELECT COALESCE(SUM(node_count), 0)
@@ -207,6 +211,7 @@ def render_report(snapshot: dict[str, int]) -> str:
         f"Skill technologies: {snapshot.get('skill_technologies', 0)}",
         f"Job-skill associations: {job_skills}",
         f"Skill chain integrity: {job_skills_with_skill_chain}/{job_skills}",
+        f"Raw job skill mentions: {snapshot.get('job_skill_mentions_total', 0)}",
         (
             "Filter visibility / distinct_job_count mismatches: "
             f"{snapshot.get('visible_nodes_without_distinct_job_count', 0)}"
