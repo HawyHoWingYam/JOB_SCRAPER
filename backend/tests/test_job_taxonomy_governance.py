@@ -62,10 +62,10 @@ def _seed_taxonomy(db):
     return general, backend
 
 
-def test_unknown_ai_leaf_falls_back_to_registry_default_path():
+def test_unknown_final_create_new_leaf_falls_back_to_source_path():
     db = _build_sqlite_session()
     try:
-        general, backend = _seed_taxonomy(db)
+        _, backend = _seed_taxonomy(db)
         normalizer = JobCategoryNormalizer(db)
 
         resolved = normalizer.resolve_taxonomy_decision(
@@ -89,6 +89,32 @@ def test_unknown_ai_leaf_falls_back_to_registry_default_path():
         )
 
         assert resolved == backend.id
+        assert db.query(JobSubcategory).filter_by(name="Platform Reliability").count() == 0
+    finally:
+        db.close()
+
+
+def test_unknown_source_create_new_leaf_falls_back_to_registry_default_path():
+    db = _build_sqlite_session()
+    try:
+        general, _ = _seed_taxonomy(db)
+        normalizer = JobCategoryNormalizer(db)
+
+        resolved = normalizer.resolve_taxonomy_decision(
+            {
+                "source_path_decision": {
+                    "domain": "Information & Communication Technology",
+                    "category": "Software Development",
+                    "subcategory": "Platform Reliability",
+                    "resolution": "create_new",
+                },
+            },
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Developers/Programmers",
+        )
+
+        assert resolved == general.id
         assert db.query(JobSubcategory).filter_by(name="Platform Reliability").count() == 0
     finally:
         db.close()

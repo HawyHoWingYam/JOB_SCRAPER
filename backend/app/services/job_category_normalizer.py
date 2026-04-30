@@ -70,15 +70,21 @@ class JobCategoryNormalizer:
         final_decision = classification.get("final_taxonomy_decision")
 
         source_path = self._resolve_path_from_decision(source_decision, source_slice)
+        source_fallback_path = (*self.build_default_path(source_slice), False)
+        source_path = self._normalize_governed_path(
+            source_path,
+            fallback_path=source_fallback_path,
+            governance_override=bool(classification.get("governance_override")),
+        )
         final_path = self._resolve_open_path_from_decision(
             final_decision or self._decision_from_resolved_path(source_path),
             fallback_path=source_path,
         )
-        if (
-            not classification.get("governance_override")
-            and not self._path_exists(*final_path[:3])
-        ):
-            final_path = source_path
+        final_path = self._normalize_governed_path(
+            final_path,
+            fallback_path=source_path,
+            governance_override=bool(classification.get("governance_override")),
+        )
 
         domain_name, category_name, subcategory_name, allow_create = (
             self._select_resolved_path(
@@ -302,6 +308,17 @@ class JobCategoryNormalizer:
             return False
 
         return self._find_subcategory(category.id, subcategory_name) is not None
+
+    def _normalize_governed_path(
+        self,
+        path: tuple[str, str, str, bool],
+        fallback_path: tuple[str, str, str, bool],
+        governance_override: bool,
+    ) -> tuple[str, str, str, bool]:
+        """Clamp non-override paths to existing governed taxonomy nodes."""
+        if governance_override or self._path_exists(*path[:3]):
+            return path
+        return fallback_path
 
     def _find_domain(self, name: str) -> Optional[JobDomain]:
         return self.db.query(JobDomain).filter_by(name=name).first()
