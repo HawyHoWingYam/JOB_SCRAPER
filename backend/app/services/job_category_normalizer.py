@@ -74,7 +74,10 @@ class JobCategoryNormalizer:
             final_decision or self._decision_from_resolved_path(source_path),
             fallback_path=source_path,
         )
-        if final_path[3] and not classification.get("governance_override"):
+        if (
+            not classification.get("governance_override")
+            and not self._path_exists(*final_path[:3])
+        ):
             final_path = source_path
 
         domain_name, category_name, subcategory_name, allow_create = (
@@ -282,6 +285,23 @@ class JobCategoryNormalizer:
             subcategory = self._create_subcategory(category.id, subcategory_name)
 
         return subcategory.id
+
+    def _path_exists(
+        self,
+        domain_name: str,
+        category_name: str,
+        subcategory_name: str,
+    ) -> bool:
+        """Return whether the governed taxonomy already contains the full path."""
+        domain = self._find_domain(domain_name)
+        if domain is None:
+            return False
+
+        category = self._find_category(domain.id, category_name)
+        if category is None:
+            return False
+
+        return self._find_subcategory(category.id, subcategory_name) is not None
 
     def _find_domain(self, name: str) -> Optional[JobDomain]:
         return self.db.query(JobDomain).filter_by(name=name).first()
