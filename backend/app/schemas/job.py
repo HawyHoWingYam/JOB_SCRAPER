@@ -49,7 +49,6 @@ class JobDetailSchema(JobSchema):
     expiry_date: Optional[str] = None
     is_expired: Optional[bool] = None
     skills: list[str] = Field(default_factory=list)
-    generic_tags: list[str] = Field(default_factory=list)
 
     @field_serializer("ai_enriched_at")
     def serialize_ai_enriched_at(self, value: Optional[datetime]) -> Optional[str]:

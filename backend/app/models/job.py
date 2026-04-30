@@ -76,22 +76,6 @@ class Job(Base):
         return self.skills_list
 
     @property
-    def generic_tags(self) -> List[str]:
-        value: Any = self.ai_generic_tags
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return [str(item) for item in value if str(item).strip()]
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except json.JSONDecodeError:
-                return [value]
-            if isinstance(parsed, list):
-                return [str(item) for item in parsed if str(item).strip()]
-        return []
-
-    @property
     def company_name(self) -> Optional[str]:
         """Convenience field for job detail responses."""
         return self.company.name if self.company else None
