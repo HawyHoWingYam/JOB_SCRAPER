@@ -62,6 +62,22 @@ def _seed_taxonomy(db):
     return general, backend
 
 
+def test_normalize_category_legacy_wrapper_auto_creates_inferred_path_in_empty_db():
+    db = _build_sqlite_session()
+    try:
+        normalizer = JobCategoryNormalizer(db)
+
+        resolved = normalizer.normalize_category("Backend Engineer")
+
+        created = db.query(JobSubcategory).filter_by(id=resolved).one()
+
+        assert created.name == "Backend Development"
+        assert created.category.name == "Software Development"
+        assert created.category.domain.name == "Information & Communication Technology"
+    finally:
+        db.close()
+
+
 def test_unknown_final_create_new_leaf_falls_back_to_source_path():
     db = _build_sqlite_session()
     try:
@@ -90,6 +106,49 @@ def test_unknown_final_create_new_leaf_falls_back_to_source_path():
 
         assert resolved == backend.id
         assert db.query(JobSubcategory).filter_by(name="Platform Reliability").count() == 0
+    finally:
+        db.close()
+
+
+def test_missing_default_fallback_path_is_created_for_invalid_non_override_ai_paths():
+    db = _build_sqlite_session()
+    try:
+        domain = JobDomain(
+            id=uuid.uuid4(),
+            name="Information & Communication Technology",
+        )
+        db.add(domain)
+        db.commit()
+
+        normalizer = JobCategoryNormalizer(db)
+
+        resolved = normalizer.resolve_taxonomy_decision(
+            {
+                "source_path_decision": {
+                    "domain": "Information & Communication Technology",
+                    "category": "Software Development",
+                    "subcategory": "Platform Reliability",
+                    "resolution": "create_new",
+                },
+                "final_taxonomy_decision": {
+                    "domain": "Information & Communication Technology",
+                    "category": "Observability",
+                    "subcategory": "SRE Platform",
+                    "resolution": "create_new",
+                },
+            },
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Developers/Programmers",
+        )
+
+        created = db.query(JobSubcategory).filter_by(id=resolved).one()
+
+        assert created.name == "General"
+        assert created.category.name == "General"
+        assert created.category.domain.name == "Information & Communication Technology"
+        assert db.query(JobSubcategory).filter_by(name="Platform Reliability").count() == 0
+        assert db.query(JobCategory).filter_by(name="Observability").count() == 0
     finally:
         db.close()
 

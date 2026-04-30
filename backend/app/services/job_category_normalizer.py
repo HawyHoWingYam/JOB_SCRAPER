@@ -45,6 +45,7 @@ class JobCategoryNormalizer:
             domain_name,
             category_name,
             subcategory_name,
+            allow_create=True,
         )
 
     def resolve_taxonomy_decision(
@@ -95,12 +96,15 @@ class JobCategoryNormalizer:
                 cross_domain_min_confidence=cross_domain_min_confidence,
             )
         )
+        resolved_path = (domain_name, category_name, subcategory_name)
         return self._get_or_create_path(
             domain_name,
             category_name,
             subcategory_name,
             allow_create=(
-                allow_create if classification.get("governance_override") else False
+                allow_create
+                if classification.get("governance_override")
+                else resolved_path == source_fallback_path[:3]
             ),
         )
 
