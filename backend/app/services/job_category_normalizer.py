@@ -74,6 +74,8 @@ class JobCategoryNormalizer:
             final_decision or self._decision_from_resolved_path(source_path),
             fallback_path=source_path,
         )
+        if final_path[3] and not classification.get("governance_override"):
+            final_path = source_path
 
         domain_name, category_name, subcategory_name, allow_create = (
             self._select_resolved_path(
@@ -88,7 +90,9 @@ class JobCategoryNormalizer:
             domain_name,
             category_name,
             subcategory_name,
-            allow_create=allow_create,
+            allow_create=(
+                allow_create if classification.get("governance_override") else False
+            ),
         )
 
     def get_taxonomy_candidate_slice(
@@ -256,25 +260,25 @@ class JobCategoryNormalizer:
         domain_name: str,
         category_name: str,
         subcategory_name: str,
-        allow_create: bool = True,
+        allow_create: bool = False,
     ) -> uuid.UUID:
         """Resolve a taxonomy path to ids, creating hidden nodes when needed."""
         domain = self._find_domain(domain_name)
         if domain is None:
             if not allow_create:
-                allow_create = True
+                raise ValueError(f"Unknown governed domain: {domain_name}")
             domain = self._create_domain(domain_name)
 
         category = self._find_category(domain.id, category_name)
         if category is None:
             if not allow_create:
-                allow_create = True
+                raise ValueError(f"Unknown governed category: {category_name}")
             category = self._create_category(domain.id, category_name)
 
         subcategory = self._find_subcategory(category.id, subcategory_name)
         if subcategory is None:
             if not allow_create:
-                allow_create = True
+                raise ValueError(f"Unknown governed subcategory: {subcategory_name}")
             subcategory = self._create_subcategory(category.id, subcategory_name)
 
         return subcategory.id
