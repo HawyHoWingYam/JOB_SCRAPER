@@ -376,15 +376,16 @@ def _coerce_generic_tags(value: Any) -> list[str]:
     return []
 
 
-def _append_generic_tag(job: Job, generic_tag: str) -> None:
+def _append_generic_tag(job: Job, generic_tag: str, *, normalizer: SkillNormalizer) -> None:
     merged: list[str] = []
     seen = set()
 
     for value in _coerce_generic_tags(job.ai_generic_tags) + [generic_tag]:
-        tag = str(value or "").strip()
-        if not tag:
+        raw_tag = str(value or "").strip()
+        if not raw_tag:
             continue
-        normalized_tag = normalize_lookup_key(tag)
+        tag = normalizer.canonicalize_generic_tag(raw_tag) or raw_tag
+        normalized_tag = normalizer.normalize_generic_tag_key(tag)
         if not normalized_tag or normalized_tag in seen:
             continue
         seen.add(normalized_tag)
@@ -394,10 +395,11 @@ def _append_generic_tag(job: Job, generic_tag: str) -> None:
 
 
 def _route_generic_links_to_job_tags(db: Session, *, source_skill: Skill, generic_tag: str) -> None:
+    normalizer = SkillNormalizer(db)
     links = db.query(JobSkill).filter(JobSkill.skill_id == source_skill.id).all()
     for link in links:
         job = db.query(Job).filter(Job.id == link.job_id).one()
-        _append_generic_tag(job, generic_tag)
+        _append_generic_tag(job, generic_tag, normalizer=normalizer)
         db.delete(link)
 
     db.flush()
@@ -421,10 +423,13 @@ def _register_review_candidate_links(db: Session, *, source_skill: Skill) -> Non
             job_id=link.job_id,
         )
         distinct_job_ids.add(link.job_id)
+        db.delete(link)
 
     if candidate is not None:
         candidate.occurrence_count = len(distinct_job_ids)
-        db.flush()
+
+    db.flush()
+    _delete_skill_if_unlinked(db, source_skill)
 
 
 def rebuild_skill_taxonomy_metrics(db: Session) -> None:

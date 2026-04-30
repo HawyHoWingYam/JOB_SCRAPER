@@ -355,7 +355,7 @@ def test_apply_skill_history_governance_routes_generic_terms_to_job_tags(tmp_pat
         _, other_general = _create_skill_hierarchy(db, "Other", "General")
         polluted_skill = _create_skill(db, other_general.id, "Project Management")
         job = _create_job(db, company.id, "Delivery Lead")
-        job.ai_generic_tags = ["Existing Tag", "Project Management"]
+        job.ai_generic_tags = ["Existing Tag", "project management"]
         _link_job_skill(db, job.id, polluted_skill.id)
         db.commit()
 
@@ -384,7 +384,7 @@ def test_apply_skill_history_governance_routes_generic_terms_to_job_tags(tmp_pat
         db.close()
 
 
-def test_apply_skill_history_governance_upserts_review_candidates_without_removing_links(tmp_path):
+def test_apply_skill_history_governance_routes_reviewed_skills_out_of_controlled_layer(tmp_path):
     db = _build_sqlite_session()
     try:
         company = _create_company(db)
@@ -417,8 +417,8 @@ def test_apply_skill_history_governance_upserts_review_candidates_without_removi
 
         assert candidate.raw_name == "Linux"
         assert candidate.occurrence_count == 2
-        assert db.query(JobSkill).filter(JobSkill.skill_id == polluted_skill.id).count() == 2
-        assert db.query(Skill).filter(Skill.id == polluted_skill.id).count() == 1
+        assert db.query(JobSkill).filter(JobSkill.skill_id == polluted_skill.id).count() == 0
+        assert db.query(Skill).filter(Skill.id == polluted_skill.id).count() == 0
     finally:
         db.close()
 
@@ -456,6 +456,42 @@ def test_apply_skill_history_governance_marks_phrase_like_one_off_for_review(tmp
             == "Phrase-like one-off skill mention"
         )
         assert report["minimum_distinct_jobs"] == 100
+    finally:
+        db.close()
+
+
+def test_apply_skill_history_governance_routes_phrase_like_review_out_of_controlled_layer(tmp_path):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        _, other_general = _create_skill_hierarchy(db, "Other", "General")
+        phrase_skill = _create_skill(
+            db,
+            other_general.id,
+            "Technology solutions implementation lifecycle",
+        )
+        job = _create_job(db, company.id, "Delivery Lead")
+        _link_job_skill(db, job.id, phrase_skill.id)
+        db.commit()
+
+        curations_path = _write_curations(tmp_path, {}, minimum_distinct_jobs=100)
+
+        govern_skill_history.apply_skill_history_governance(
+            db,
+            curation_path=curations_path,
+            execute=True,
+        )
+
+        candidate = (
+            db.query(SkillReviewCandidate)
+            .filter_by(normalized_name="technology solutions implementation lifecycle")
+            .one()
+        )
+
+        assert candidate.raw_name == "Technology solutions implementation lifecycle"
+        assert candidate.occurrence_count == 1
+        assert db.query(JobSkill).filter(JobSkill.skill_id == phrase_skill.id).count() == 0
+        assert db.query(Skill).filter(Skill.id == phrase_skill.id).count() == 0
     finally:
         db.close()
 
