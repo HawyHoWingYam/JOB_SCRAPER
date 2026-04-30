@@ -129,6 +129,30 @@ class SkillNormalizer:
             return None
         return self.db.query(Skill).filter_by(id=skill_id).first()
 
+    def _find_non_polluted_duplicate_for_key(self, name: str) -> Optional[Skill]:
+        raw_key = name.lower().strip()
+        normalized_key = self._normalize_lookup_key(name)
+        if not raw_key and not normalized_key:
+            return None
+
+        for skill in self.db.query(Skill).all():
+            if self._is_polluted_other_general_auto_skill(skill):
+                continue
+
+            keys = {
+                skill.name.lower().strip(),
+                self._normalize_lookup_key(skill.name),
+            }
+            if skill.aliases:
+                for alias in skill.aliases:
+                    keys.add(alias.lower().strip())
+                    keys.add(self._normalize_lookup_key(alias))
+
+            if raw_key in keys or normalized_key in keys:
+                return skill
+
+        return None
+
     def _is_polluted_other_general_auto_skill(self, skill: Skill) -> bool:
         technology = skill.technology
         category = technology.category if technology is not None else None
@@ -169,10 +193,20 @@ class SkillNormalizer:
                 "generic_tag_key": self.normalize_generic_tag_key(generic_tag),
             }
 
+        lookup_names = [canonical_name]
+
         existing_skill = self._find_cached_skill(canonical_name)
         if existing_skill is None and payload.get("existing_skill"):
             hinted_name = self._canonicalize_name(str(payload["existing_skill"]))
+            lookup_names.append(hinted_name)
             existing_skill = self._find_cached_skill(hinted_name)
+
+        if existing_skill is not None and self._is_polluted_other_general_auto_skill(existing_skill):
+            for lookup_name in lookup_names:
+                canonical_skill = self._find_non_polluted_duplicate_for_key(lookup_name)
+                if canonical_skill is not None:
+                    existing_skill = canonical_skill
+                    break
 
         if existing_skill is None:
             existing_skill = self._fuzzy_match(canonical_name)

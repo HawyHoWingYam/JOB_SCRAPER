@@ -260,6 +260,72 @@ def test_skill_normalizer_does_not_treat_other_general_auto_skill_as_canonical_m
         db.close()
 
 
+def test_skill_normalizer_prefers_legitimate_duplicate_over_polluted_other_general_skill():
+    db = _build_sqlite_session()
+    try:
+        canonical_category = SkillCategory(
+            id=uuid.uuid4(),
+            name="Infrastructure",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        canonical_technology = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=canonical_category.id,
+            name="Operating Systems",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        canonical_skill = Skill(
+            id=uuid.uuid4(),
+            technology_id=canonical_technology.id,
+            name="Linux",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        polluted_category = SkillCategory(
+            id=uuid.uuid4(),
+            name="Other",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        polluted_technology = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=polluted_category.id,
+            name="General",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        polluted_skill = Skill(
+            id=uuid.uuid4(),
+            technology_id=polluted_technology.id,
+            name="Linux",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        db.add_all(
+            [
+                canonical_category,
+                canonical_technology,
+                canonical_skill,
+                polluted_category,
+                polluted_technology,
+                polluted_skill,
+            ]
+        )
+        db.commit()
+
+        decision = SkillNormalizer(db).resolve_extracted_skill(
+            {"name": "Linux", "kind": "technical", "resolution": "match_existing"}
+        )
+
+        assert decision["action"] == "match_existing"
+        assert decision["skill_id"] == canonical_skill.id
+        assert decision["skill_name"] == "Linux"
+    finally:
+        db.close()
+
+
 @pytest.mark.asyncio
 async def test_ai_enrichment_service_routes_generic_tags_and_review_candidates():
     from app.models.skill_review_candidate import SkillReviewCandidate
