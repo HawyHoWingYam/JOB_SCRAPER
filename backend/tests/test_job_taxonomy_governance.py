@@ -1,5 +1,6 @@
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -302,6 +303,51 @@ def test_backfill_unmapped_jobs_assigns_default_slice_path():
         db.close()
 
 
+def test_backfill_unmapped_jobs_skips_unknown_source_classification_and_continues_batch():
+    db = _build_sqlite_session()
+    try:
+        general, _ = _seed_taxonomy(db)
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        known_job = Job(
+            id=uuid.uuid4(),
+            job_id="job-known",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Known role",
+            description="Known source classification",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Unknown Source Bucket",
+        )
+        unknown_job = Job(
+            id=uuid.uuid4(),
+            job_id="job-unknown",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Unknown role",
+            description="Unknown source classification",
+            source_classification_id="not-in-registry",
+            source_classification_name="Mystery",
+            source_subclassification_name="Mystery",
+        )
+        db.add_all([company, known_job, unknown_job])
+        db.commit()
+
+        updated = govern_job_taxonomy.backfill_unmapped_jobs(db, execute=True)
+
+        db.refresh(known_job)
+        db.refresh(unknown_job)
+        assert updated == 1
+        assert known_job.subcategory_id == general.id
+        assert unknown_job.subcategory_id is None
+    finally:
+        db.close()
+
+
 def test_rebuild_job_taxonomy_metrics_recomputes_distinct_job_count(monkeypatch):
     db = _build_sqlite_session()
     try:
@@ -320,6 +366,8 @@ def test_rebuild_job_taxonomy_metrics_recomputes_distinct_job_count(monkeypatch)
                 title="A",
                 description="A",
                 subcategory_id=backend.id,
+                created_at=datetime(2026, 4, 30, 9, 0, 0),
+                ai_enriched_at=datetime(2026, 4, 30, 11, 0, 0),
             ),
             Job(
                 id=uuid.uuid4(),
@@ -329,6 +377,8 @@ def test_rebuild_job_taxonomy_metrics_recomputes_distinct_job_count(monkeypatch)
                 title="B",
                 description="B",
                 subcategory_id=backend.id,
+                created_at=datetime(2026, 4, 30, 10, 0, 0),
+                ai_enriched_at=datetime(2026, 4, 30, 12, 0, 0),
             ),
         ]
         db.add(company)
@@ -363,6 +413,69 @@ def test_rebuild_job_taxonomy_metrics_recomputes_distinct_job_count(monkeypatch)
         assert backend.category.domain.usage_count == 2
         assert backend.category.domain.distinct_job_count == 2
         assert backend.category.domain.is_filter_visible is True
-        assert backend.last_used_at is not None
+        assert backend.last_used_at == datetime(2026, 4, 30, 12, 0, 0)
+        assert backend.category.last_used_at == datetime(2026, 4, 30, 12, 0, 0)
+        assert backend.category.domain.last_used_at == datetime(2026, 4, 30, 12, 0, 0)
+    finally:
+        db.close()
+
+
+def test_backfill_unmapped_jobs_dry_run_rolls_back_job_assignments_and_metrics():
+    db = _build_sqlite_session()
+    try:
+        general, _ = _seed_taxonomy(db)
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Dry run role",
+            description="Should roll back",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Unknown Source Bucket",
+        )
+        original_last_used_at = datetime(2026, 4, 29, 8, 0, 0)
+        general.usage_count = 99
+        general.distinct_job_count = 88
+        general.is_filter_visible = True
+        general.last_used_at = original_last_used_at
+        general.category.usage_count = 77
+        general.category.distinct_job_count = 66
+        general.category.is_filter_visible = True
+        general.category.last_used_at = original_last_used_at
+        general.category.domain.usage_count = 55
+        general.category.domain.distinct_job_count = 44
+        general.category.domain.is_filter_visible = True
+        general.category.domain.last_used_at = original_last_used_at
+        db.add_all([company, job])
+        db.commit()
+
+        updated = govern_job_taxonomy.backfill_unmapped_jobs(db, execute=False)
+
+        db.refresh(job)
+        db.refresh(general)
+        db.refresh(general.category)
+        db.refresh(general.category.domain)
+
+        assert updated == 1
+        assert job.subcategory_id is None
+        assert general.usage_count == 99
+        assert general.distinct_job_count == 88
+        assert general.is_filter_visible is True
+        assert general.last_used_at == original_last_used_at
+        assert general.category.usage_count == 77
+        assert general.category.distinct_job_count == 66
+        assert general.category.is_filter_visible is True
+        assert general.category.last_used_at == original_last_used_at
+        assert general.category.domain.usage_count == 55
+        assert general.category.domain.distinct_job_count == 44
+        assert general.category.domain.is_filter_visible is True
+        assert general.category.domain.last_used_at == original_last_used_at
     finally:
         db.close()

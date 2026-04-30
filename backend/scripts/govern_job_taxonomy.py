@@ -9,7 +9,7 @@ import os
 import sys
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import false, func
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -18,6 +18,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import Job, JobCategory, JobDomain, JobSubcategory
 from app.services.job_category_normalizer import JobCategoryNormalizer
+from app.services.job_taxonomy_registry import get_job_taxonomy_registry
 
 
 def _unmapped_jobs_query(db: Session):
@@ -31,6 +32,22 @@ def _unmapped_jobs_query(db: Session):
         )
         .order_by(Job.created_at.asc(), Job.id.asc())
     )
+
+
+def _known_source_classification_ids() -> tuple[str, ...]:
+    registry = get_job_taxonomy_registry()
+    return tuple(sorted(registry.mapping.keys()))
+
+
+def _backfillable_jobs_query(db: Session):
+    known_ids = _known_source_classification_ids()
+    if not known_ids:
+        return _unmapped_jobs_query(db).filter(false())
+    return _unmapped_jobs_query(db).filter(Job.source_classification_id.in_(known_ids))
+
+
+def _usage_timestamp():
+    return func.coalesce(Job.ai_enriched_at, Job.created_at)
 
 
 def audit_job_taxonomy(db: Session) -> dict[str, int]:
@@ -58,7 +75,7 @@ def audit_job_taxonomy(db: Session) -> dict[str, int]:
         .scalar()
         or 0
     )
-    eligible_backfill_jobs = _unmapped_jobs_query(db).count()
+    eligible_backfill_jobs = _backfillable_jobs_query(db).count()
 
     return {
         "jobs_total": int(jobs_total),
@@ -70,7 +87,7 @@ def audit_job_taxonomy(db: Session) -> dict[str, int]:
 
 def backfill_unmapped_jobs(db: Session, *, execute: bool = False) -> int:
     normalizer = JobCategoryNormalizer(db)
-    jobs = _unmapped_jobs_query(db).all()
+    jobs = _backfillable_jobs_query(db).all()
     updated = 0
 
     try:
@@ -133,7 +150,7 @@ def rebuild_job_taxonomy_metrics(db: Session) -> None:
             Job.subcategory_id.label("subcategory_id"),
             func.count(Job.id).label("usage_count"),
             func.count(func.distinct(Job.id)).label("distinct_job_count"),
-            func.max(Job.created_at).label("last_used_at"),
+            func.max(_usage_timestamp()).label("last_used_at"),
         )
         .filter(
             Job.is_deleted.is_(False),
@@ -158,7 +175,7 @@ def rebuild_job_taxonomy_metrics(db: Session) -> None:
             JobCategory.id.label("category_id"),
             func.count(Job.id).label("usage_count"),
             func.count(func.distinct(Job.id)).label("distinct_job_count"),
-            func.max(Job.created_at).label("last_used_at"),
+            func.max(_usage_timestamp()).label("last_used_at"),
         )
         .join(JobSubcategory, JobSubcategory.category_id == JobCategory.id)
         .join(Job, Job.subcategory_id == JobSubcategory.id)
@@ -182,7 +199,7 @@ def rebuild_job_taxonomy_metrics(db: Session) -> None:
             JobDomain.id.label("domain_id"),
             func.count(Job.id).label("usage_count"),
             func.count(func.distinct(Job.id)).label("distinct_job_count"),
-            func.max(Job.created_at).label("last_used_at"),
+            func.max(_usage_timestamp()).label("last_used_at"),
         )
         .join(JobCategory, JobCategory.domain_id == JobDomain.id)
         .join(JobSubcategory, JobSubcategory.category_id == JobCategory.id)
