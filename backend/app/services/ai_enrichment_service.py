@@ -128,6 +128,7 @@ class AIEnrichmentService:
                 if mention.review_candidate_id is not None
             }
             mention_repo.delete_mentions_for_job(db, job.id)
+            current_matched_skill_ids = set()
             generic_tags: List[str] = []
             generic_tag_keys = set()
 
@@ -190,6 +191,7 @@ class AIEnrichmentService:
                     continue
 
                 skill_id = decision["skill_id"]
+                current_matched_skill_ids.add(skill_id)
                 skill = db.query(Skill).filter_by(id=skill_id).first()
                 mention_repo.create_mention(
                     db,
@@ -216,6 +218,12 @@ class AIEnrichmentService:
                     )
                 existing_skill_ids.add(skill_id)
 
+            job_skill_repo.delete_obsolete_job_skills(
+                db,
+                job.id,
+                keep_skill_ids=current_matched_skill_ids,
+                source="ai",
+            )
             job.ai_generic_tags = (
                 self._merge_generic_tags(skill_normalizer, job.ai_generic_tags, generic_tags) or None
             )

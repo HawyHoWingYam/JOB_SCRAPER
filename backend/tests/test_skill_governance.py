@@ -626,3 +626,157 @@ async def test_ai_enrichment_service_reenrichment_replaces_mentions_and_merges_g
         }
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_ai_enrichment_service_reenrichment_removes_stale_ai_job_skills():
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        subcategory = _create_job_taxonomy(db)
+        react = _create_skill_taxonomy(db)
+        vue = Skill(
+            id=uuid.uuid4(),
+            technology_id=react.technology_id,
+            name="Vue.js",
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        angular = Skill(
+            id=uuid.uuid4(),
+            technology_id=react.technology_id,
+            name="Angular",
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        db.add(vue)
+        db.add(angular)
+        db.flush()
+
+        job = _create_job(db, company.id)
+        db.add(
+            JobSkill(
+                job_id=job.id,
+                skill_id=angular.id,
+                source="manual",
+                confidence=None,
+            )
+        )
+        db.commit()
+
+        def build_insight(skills):
+            return {
+                "classification": {
+                    "source_path_decision": {
+                        "domain": "Information & Communication Technology",
+                        "category": "Software Development",
+                        "subcategory": "Frontend Development",
+                        "resolution": "match_existing",
+                    },
+                    "final_taxonomy_decision": {
+                        "domain": "Information & Communication Technology",
+                        "category": "Software Development",
+                        "subcategory": "Frontend Development",
+                        "resolution": "match_existing",
+                    },
+                },
+                "summary": "Builds frontend applications.",
+                "skills": skills,
+                "confidence": 0.94,
+                "experience": {"experience_level": "mid_level"},
+            }
+
+        class FakeExtractor:
+            def __init__(self):
+                self._responses = [
+                    build_insight(
+                        [
+                            {
+                                "name": "React",
+                                "kind": "technical",
+                                "resolution": "match_existing",
+                                "existing_skill": "React",
+                            },
+                            {
+                                "name": "Vue.js",
+                                "kind": "technical",
+                                "resolution": "match_existing",
+                                "existing_skill": "Vue.js",
+                            },
+                        ]
+                    ),
+                    build_insight(
+                        [
+                            {
+                                "name": "React",
+                                "kind": "technical",
+                                "resolution": "match_existing",
+                                "existing_skill": "React",
+                            },
+                        ]
+                    ),
+                ]
+
+            async def extract(self, **_kwargs):
+                return self._responses.pop(0)
+
+        class FakeJobCategoryNormalizer:
+            def __init__(self, _db):
+                self._subcategory = subcategory
+
+            def get_taxonomy_candidate_slice(self, **_kwargs):
+                return {
+                    "source_classification_id": "6281",
+                    "source_classification_name": "Information & Communication Technology",
+                    "source_subclassification_name": "Developers/Programmers",
+                    "allowed_domains": ["Information & Communication Technology"],
+                    "allowed_categories": ["Software Development"],
+                    "allowed_subcategories": ["Frontend Development"],
+                    "default_path": [
+                        "Information & Communication Technology",
+                        "Software Development",
+                        "Frontend Development",
+                    ],
+                }
+
+            def resolve_taxonomy_decision(self, *_args, **_kwargs):
+                return self._subcategory.id
+
+            def get_category_hierarchy(self, _subcategory_id):
+                return {
+                    "domain": "Information & Communication Technology",
+                    "category": "Software Development",
+                    "subcategory": "Frontend Development",
+                }
+
+        service = AIEnrichmentService()
+        service.insight_extractor = FakeExtractor()
+
+        original_normalizer = ai_enrichment_module.JobCategoryNormalizer
+        ai_enrichment_module.JobCategoryNormalizer = FakeJobCategoryNormalizer
+        try:
+            await service.enrich_job(job, db)
+            await service.enrich_job(job, db)
+        finally:
+            ai_enrichment_module.JobCategoryNormalizer = original_normalizer
+
+        job_skills = (
+            db.query(JobSkill)
+            .filter(JobSkill.job_id == job.id)
+            .order_by(JobSkill.source.asc(), JobSkill.skill_id.asc())
+            .all()
+        )
+        ai_skill_ids = sorted(
+            job_skill.skill_id for job_skill in job_skills if job_skill.source == "ai"
+        )
+        manual_skill_ids = sorted(
+            job_skill.skill_id for job_skill in job_skills if job_skill.source == "manual"
+        )
+
+        assert ai_skill_ids == [react.id]
+        assert manual_skill_ids == [angular.id]
+        assert vue.id not in [job_skill.skill_id for job_skill in job_skills]
+    finally:
+        db.close()
