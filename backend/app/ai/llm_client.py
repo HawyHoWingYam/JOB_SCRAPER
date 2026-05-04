@@ -225,6 +225,10 @@ class LLMClient(ABC):
         """Generate structured JSON from a prompt."""
         pass
 
+    def supports_web_search(self) -> bool:
+        """Return whether this client supports the web_search generation flag."""
+        return False
+
     def _extract_json(
         self,
         text: str,
@@ -571,6 +575,9 @@ class OpenAIResponsesClient(LLMClient):
 
         return None
 
+    def supports_web_search(self) -> bool:
+        return True
+
 
 class MockClient(LLMClient):
     """Mock LLM client for testing."""
@@ -717,16 +724,23 @@ def _log_provider_initialized(provider_name: str, client: LLMClient) -> None:
     logger.info("Initialized LLM provider '%s'", provider_name)
 
 
+def _load_effective_runtime_settings(scope: str):
+    try:
+        return get_effective_runtime_settings(scope)
+    except TypeError:
+        return get_effective_runtime_settings()
+
+
 # Factory function
-_client_instance: Optional[LLMClient] = None
-_provider_name: str = ""
-_configured_provider_name: str = ""
-_active_model: Optional[str] = None
-_is_degraded: bool = False
-_degradation_reason: Optional[str] = None
+_client_instances: Dict[str, LLMClient] = {}
+_provider_names: Dict[str, str] = {}
+_configured_provider_names: Dict[str, str] = {}
+_active_models: Dict[str, Optional[str]] = {}
+_degraded_states: Dict[str, bool] = {}
+_degradation_reasons: Dict[str, Optional[str]] = {}
 
 
-def get_llm_client() -> LLMClient:
+def get_llm_client(scope: str = "jobs") -> LLMClient:
     """
     Factory function to get the configured LLM client.
 
@@ -737,73 +751,74 @@ def get_llm_client() -> LLMClient:
     - "zhipu": Zhipu ChatGLM (requires ZHIPU_API_KEY)
     - "mock": Mock client for testing (default)
     """
-    global _client_instance, _provider_name, _configured_provider_name, _active_model, _is_degraded, _degradation_reason
+    if scope not in {"jobs", "companies"}:
+        raise ValueError(f"Unsupported LLM runtime scope '{scope}'")
 
-    if _client_instance is not None:
-        return _client_instance
+    if scope in _client_instances:
+        return _client_instances[scope]
 
     try:
-        runtime_settings = get_effective_runtime_settings()
+        runtime_settings = _load_effective_runtime_settings(scope)
     except Exception as exc:
         reason = f"Runtime settings resolution failed: {exc}"
-        logger.error("%s. Falling back to mock", reason)
-        _client_instance = MockClient()
-        _provider_name = "mock"
-        _configured_provider_name = "unknown"
-        _active_model = None
-        _is_degraded = True
-        _degradation_reason = reason
-        logger.info("Initialized LLM provider 'mock'")
-        return _client_instance
+        logger.error("%s for scope '%s'. Falling back to mock", reason, scope)
+        _client_instances[scope] = MockClient()
+        _provider_names[scope] = "mock"
+        _configured_provider_names[scope] = "unknown"
+        _active_models[scope] = None
+        _degraded_states[scope] = True
+        _degradation_reasons[scope] = reason
+        logger.info("Initialized LLM provider 'mock' for scope '%s'", scope)
+        return _client_instances[scope]
 
     provider = runtime_settings.llm_provider.lower()
-    _configured_provider_name = provider
+    _configured_provider_names[scope] = provider
     spec = PROVIDER_REGISTRY.get(provider)
 
     if spec is None:
         reason = f"Unsupported LLM provider: {provider}"
-        logger.error("%s, falling back to mock", reason)
-        _client_instance = MockClient()
-        _provider_name = "mock"
-        _active_model = None
-        _is_degraded = True
-        _degradation_reason = reason
-        logger.info("Initialized LLM provider 'mock'")
-        return _client_instance
+        logger.error("%s for scope '%s', falling back to mock", reason, scope)
+        _client_instances[scope] = MockClient()
+        _provider_names[scope] = "mock"
+        _active_models[scope] = None
+        _degraded_states[scope] = True
+        _degradation_reasons[scope] = reason
+        logger.info("Initialized LLM provider 'mock' for scope '%s'", scope)
+        return _client_instances[scope]
 
     missing_settings = _get_missing_settings(spec, runtime_settings)
     if missing_settings:
         reason = f"Provider '{spec.name}' missing required settings: {', '.join(missing_settings)}"
-        logger.error("%s. Falling back to mock", reason)
-        _client_instance = MockClient()
-        _provider_name = "mock"
-        _active_model = None
-        _is_degraded = True
-        _degradation_reason = reason
-        logger.info("Initialized LLM provider 'mock'")
-        return _client_instance
+        logger.error("%s for scope '%s'. Falling back to mock", reason, scope)
+        _client_instances[scope] = MockClient()
+        _provider_names[scope] = "mock"
+        _active_models[scope] = None
+        _degraded_states[scope] = True
+        _degradation_reasons[scope] = reason
+        logger.info("Initialized LLM provider 'mock' for scope '%s'", scope)
+        return _client_instances[scope]
 
     try:
-        _client_instance = spec.builder(runtime_settings)
-        _provider_name = spec.name
-        _active_model = getattr(_client_instance, "model", None)
-        _is_degraded = False
-        _degradation_reason = None
-        _log_provider_initialized(spec.name, _client_instance)
+        _client_instances[scope] = spec.builder(runtime_settings)
+        _provider_names[scope] = spec.name
+        _active_models[scope] = getattr(_client_instances[scope], "model", None)
+        _degraded_states[scope] = False
+        _degradation_reasons[scope] = None
+        _log_provider_initialized(spec.name, _client_instances[scope])
     except Exception as exc:
         reason = f"Failed to initialize provider '{spec.name}': {exc}"
-        logger.error("%s. Falling back to mock", reason)
-        _client_instance = MockClient()
-        _provider_name = "mock"
-        _active_model = None
-        _is_degraded = True
-        _degradation_reason = reason
-        logger.info("Initialized LLM provider 'mock'")
+        logger.error("%s for scope '%s'. Falling back to mock", reason, scope)
+        _client_instances[scope] = MockClient()
+        _provider_names[scope] = "mock"
+        _active_models[scope] = None
+        _degraded_states[scope] = True
+        _degradation_reasons[scope] = reason
+        logger.info("Initialized LLM provider 'mock' for scope '%s'", scope)
 
-    return _client_instance
+    return _client_instances[scope]
 
 
-def get_llm_status() -> Dict[str, Any]:
+def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
     """
     Get the current LLM provider status.
 
@@ -815,36 +830,47 @@ def get_llm_status() -> Dict[str, Any]:
         - is_degraded: bool - whether fallback to mock occurred
         - degradation_reason: Optional[str] - why degradation happened
     """
-    configured_provider = _configured_provider_name
+    configured_provider = _configured_provider_names.get(scope, "")
     if not configured_provider:
         try:
-            configured_provider = get_effective_runtime_settings().llm_provider.lower()
+            configured_provider = _load_effective_runtime_settings(scope).llm_provider.lower()
         except Exception:
             configured_provider = ""
 
+    client = _client_instances.get(scope)
     return {
-        "provider": _provider_name,
+        "provider": _provider_names.get(scope, ""),
         "configured_provider": configured_provider,
-        "active_provider": _provider_name,
-        "active_model": _active_model,
-        "is_degraded": _is_degraded,
-        "degradation_reason": _degradation_reason,
+        "active_provider": _provider_names.get(scope, ""),
+        "active_model": _active_models.get(scope),
+        "model": _active_models.get(scope),
+        "is_degraded": _degraded_states.get(scope, False),
+        "degradation_reason": _degradation_reasons.get(scope),
+        "supports_web_search": bool(client.supports_web_search()) if client else False,
     }
 
 
-def refresh_llm_status() -> Dict[str, Any]:
+def refresh_llm_status(scope: str = "jobs") -> Dict[str, Any]:
     """Force the runtime provider status to be recomputed from current settings."""
-    reset_client()
-    get_llm_client()
-    return get_llm_status()
+    reset_client(scope)
+    get_llm_client(scope)
+    return get_llm_status(scope)
 
 
-def reset_client():
-    """Reset the singleton client (useful for testing)."""
-    global _client_instance, _provider_name, _configured_provider_name, _active_model, _is_degraded, _degradation_reason
-    _client_instance = None
-    _provider_name = ""
-    _configured_provider_name = ""
-    _active_model = None
-    _is_degraded = False
-    _degradation_reason = None
+def reset_client(scope: Optional[str] = None):
+    """Reset cached runtime clients (useful for testing)."""
+    if scope is None:
+        _client_instances.clear()
+        _provider_names.clear()
+        _configured_provider_names.clear()
+        _active_models.clear()
+        _degraded_states.clear()
+        _degradation_reasons.clear()
+        return
+
+    _client_instances.pop(scope, None)
+    _provider_names.pop(scope, None)
+    _configured_provider_names.pop(scope, None)
+    _active_models.pop(scope, None)
+    _degraded_states.pop(scope, None)
+    _degradation_reasons.pop(scope, None)

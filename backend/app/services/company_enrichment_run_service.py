@@ -132,6 +132,7 @@ class CompanyEnrichmentRunService:
         timestamp = utc_now()
         completed_items = 0
         failed_items = 0
+        first_error_message = None
 
         for item in items:
             if item.status == "completed":
@@ -201,6 +202,8 @@ class CompanyEnrichmentRunService:
                 item.error_message = str(exc)
                 item.completed_at = utc_now()
                 failed_items += 1
+                if first_error_message is None:
+                    first_error_message = str(exc)
 
             run.pending_items = max(run.total_items - completed_items - failed_items, 0)
             run.completed_items = completed_items
@@ -211,9 +214,16 @@ class CompanyEnrichmentRunService:
         run.completed_at = utc_now()
         if failed_items == 0:
             run.status = "completed"
+            run.error_message = None
         elif completed_items == 0:
             run.status = "failed"
+            run.error_message = first_error_message
         else:
             run.status = "completed_with_failures"
+            run.error_message = (
+                f"{failed_items} item(s) failed. First error: {first_error_message}"
+                if first_error_message
+                else f"{failed_items} item(s) failed"
+            )
         self.db.flush()
         return run

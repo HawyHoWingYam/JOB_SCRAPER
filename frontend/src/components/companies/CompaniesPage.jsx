@@ -40,6 +40,14 @@ function getCompanyStatus(company, run) {
   return hasCompanyAIDescription(company) ? 'ready' : 'pending';
 }
 
+function formatRunCompletionMessage(run) {
+  const summary = `Finished generating descriptions for ${run.total_items} companies. ${run.completed_items} succeeded, ${run.failed_items} failed.`;
+  if (run.error_message) {
+    return `${summary} ${run.error_message}`;
+  }
+  return summary;
+}
+
 function getCompanyStatusLabel(status) {
   if (status === 'generating') return 'Generating';
   if (status === 'failed') return 'Failed';
@@ -167,9 +175,7 @@ function CompaniesPage() {
         setCurrentRun(payload);
 
         if (isTerminalRun(payload)) {
-          setActionMessage(
-            `Finished generating descriptions for ${payload.total_items} companies. ${payload.completed_items} succeeded, ${payload.failed_items} failed.`,
-          );
+          setActionMessage(formatRunCompletionMessage(payload));
           await loadCompanies({
             query: appliedQuery,
             status: statusFilter,
@@ -236,9 +242,7 @@ function CompaniesPage() {
           const refreshedRun = await fetchRunById(runPayload.id);
           setCurrentRun(refreshedRun);
           if (isTerminalRun(refreshedRun)) {
-            setActionMessage(
-              `Finished generating descriptions for ${refreshedRun.total_items} companies. ${refreshedRun.completed_items} succeeded, ${refreshedRun.failed_items} failed.`,
-            );
+            setActionMessage(formatRunCompletionMessage(refreshedRun));
             await loadCompanies({
               query: appliedQuery,
               status: statusFilter,

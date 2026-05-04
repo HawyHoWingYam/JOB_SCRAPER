@@ -278,4 +278,32 @@ describe('CompaniesPage', () => {
     expect(within(dialog).getByRole('heading', { name: 'Acme Health' })).toBeInTheDocument();
     expect(within(dialog).getByText(/No AI description yet\. Generate one for this company\./i)).toBeInTheDocument();
   });
+
+  it('shows the run failure reason when a terminal run completes with failures', async () => {
+    const user = userEvent.setup();
+    render(<CompaniesPage />);
+
+    await screen.findByText('Acme Health');
+
+    runResponsesById['run-1'] = [
+      {
+        id: 'run-1',
+        status: 'failed',
+        total_items: 2,
+        pending_items: 0,
+        completed_items: 0,
+        failed_items: 2,
+        current_company_name: null,
+        error_message: 'anthropic client does not support web_search requests',
+        started_at: '2026-04-19T10:00:00Z',
+        completed_at: '2026-04-19T10:01:00Z',
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+
+    await user.click(screen.getByRole('button', { name: /generate all pending descriptions/i }));
+
+    expect(await screen.findByText(/finished generating descriptions for 2 companies\. 0 succeeded, 2 failed\./i)).toBeInTheDocument();
+    expect(screen.getByText(/anthropic client does not support web_search requests/i)).toBeInTheDocument();
+  });
 });

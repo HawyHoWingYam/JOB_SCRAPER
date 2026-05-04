@@ -61,7 +61,7 @@ def _build_test_client(monkeypatch):
     monkeypatch.setattr(
         llm_client_module,
         "get_effective_runtime_settings",
-        lambda: AIRuntimeSettingsService(Session()).get_effective_settings(),
+        lambda scope="jobs": AIRuntimeSettingsService(Session()).get_effective_settings(scope),
     )
     transport = httpx.ASGITransport(app=app)
     client = httpx.AsyncClient(transport=transport, base_url="http://testserver")
@@ -267,5 +267,52 @@ async def test_put_ai_settings_returns_degraded_runtime_status_when_reload_falls
         assert payload["runtime_status"]["active_provider"] == "mock"
         assert payload["runtime_status"]["is_degraded"] is True
         assert "Failed to initialize provider 'gemini'" in payload["runtime_status"]["degradation_reason"]
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_put_ai_settings_persists_separate_company_profile_and_returns_company_runtime_status(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "mock")
+    monkeypatch.setattr(settings, "ai_enrichment_run_concurrency", 10)
+    llm_client_module.reset_client()
+    client, Session = _build_test_client(monkeypatch)
+    try:
+        response = await client.put(
+            "/api/v1/settings/ai",
+            json={
+                "llm_provider": "custom",
+                "custom_api_key": "deepseek-secret",
+                "custom_model": "deepseek-v4-flash",
+                "custom_base_url": "https://api.deepseek.com",
+                "custom_api_format": "anthropic",
+                "company_llm_provider": "anthropic",
+                "company_anthropic_api_key": "anthropic-secret",
+                "company_anthropic_model": "claude-sonnet-4-5",
+                "company_anthropic_base_url": "https://api.anthropic.com",
+                "ai_enrichment_run_concurrency": 5,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["persisted_config"]["llm_provider"] == "custom"
+        assert payload["persisted_config"]["company_llm_provider"] == "anthropic"
+        assert payload["persisted_config"]["company_anthropic"]["model"] == "claude-sonnet-4-5"
+        assert payload["persisted_config"]["company_anthropic"]["api_key_preview"] == "anth...cret"
+        assert payload["runtime_status"]["configured_provider"] == "custom"
+        assert payload["company_runtime_status"]["configured_provider"] == "anthropic"
+        assert payload["company_runtime_status"]["active_provider"] == "anthropic"
+
+        AppRuntimeSettings = _import_runtime_settings_model()
+        db = Session()
+        try:
+            row = db.query(AppRuntimeSettings).one()
+            assert row.llm_provider == "custom"
+            assert row.company_llm_provider == "anthropic"
+            assert row.company_anthropic_api_key == "anthropic-secret"
+            assert row.company_anthropic_model == "claude-sonnet-4-5"
+        finally:
+            db.close()
     finally:
         await client.aclose()

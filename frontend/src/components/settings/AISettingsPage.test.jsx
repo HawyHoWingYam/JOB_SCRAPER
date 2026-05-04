@@ -28,6 +28,7 @@ function clonePayload(payload) {
 const aiSettingsPayload = {
   persisted_config: {
     llm_provider: 'gemini',
+    company_llm_provider: 'anthropic',
     ai_enrichment_run_concurrency: 8,
     anthropic: {
       model: null,
@@ -35,10 +36,21 @@ const aiSettingsPayload = {
       has_api_key: false,
       api_key_preview: null,
     },
+    company_anthropic: {
+      has_api_key: true,
+      api_key_preview: 'comp...9999',
+      model: 'claude-sonnet-4-5',
+      base_url: 'https://api.anthropic.com',
+    },
     gemini: {
       model: 'gemini-2.5-flash',
       has_api_key: true,
       api_key_preview: 'gem-...3456',
+    },
+    company_gemini: {
+      has_api_key: false,
+      api_key_preview: null,
+      model: null,
     },
     custom: {
       model: null,
@@ -47,22 +59,43 @@ const aiSettingsPayload = {
       has_api_key: false,
       api_key_preview: null,
     },
+    company_custom: {
+      has_api_key: false,
+      api_key_preview: null,
+      model: null,
+      base_url: null,
+      api_format: null,
+    },
     zhipu: {
+      has_api_key: false,
+      api_key_preview: null,
+    },
+    company_zhipu: {
       has_api_key: false,
       api_key_preview: null,
     },
   },
   effective_config: {
     llm_provider: 'gemini',
+    company_llm_provider: 'anthropic',
     ai_enrichment_run_concurrency: 8,
     anthropic: {
       model: 'claude-sonnet-4-5',
       base_url: 'https://api.anthropic.com',
       has_api_key: false,
     },
+    company_anthropic: {
+      has_api_key: true,
+      model: 'claude-sonnet-4-5',
+      base_url: 'https://api.anthropic.com',
+    },
     gemini: {
       model: 'gemini-2.5-flash',
       has_api_key: true,
+    },
+    company_gemini: {
+      has_api_key: false,
+      model: 'gemini-2.5-flash',
     },
     custom: {
       model: 'gpt-4.1-mini',
@@ -70,7 +103,16 @@ const aiSettingsPayload = {
       api_format: 'openai',
       has_api_key: false,
     },
+    company_custom: {
+      has_api_key: false,
+      model: 'gpt-4.1-mini',
+      base_url: 'https://api.example.com/v1',
+      api_format: 'openai',
+    },
     zhipu: {
+      has_api_key: false,
+    },
+    company_zhipu: {
       has_api_key: false,
     },
   },
@@ -79,6 +121,14 @@ const aiSettingsPayload = {
     active_provider: 'gemini',
     provider: 'gemini',
     model: 'gemini-2.5-flash',
+    is_degraded: false,
+    degradation_reason: null,
+  },
+  company_runtime_status: {
+    configured_provider: 'anthropic',
+    active_provider: 'anthropic',
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-5',
     is_degraded: false,
     degradation_reason: null,
   },
@@ -160,17 +210,19 @@ describe('AISettingsPage', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: /ai runtime/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 2, name: /ai enrichment throughput/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/provider/i)).toHaveDisplayValue(/gemini/i);
+    expect(screen.getByLabelText(/ai enrichment provider/i)).toHaveDisplayValue(/gemini/i);
+    expect(screen.getByLabelText(/companies provider/i)).toHaveDisplayValue(/anthropic/i);
     expect(screen.getByLabelText(/concurrency/i)).toHaveValue(8);
     expect(screen.getByText(/gem-\.{3}3456/i)).toBeInTheDocument();
     expect(screen.queryByText(/gem-secret-123456/i)).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/api key/i)).toHaveValue('');
-    expect(screen.getByText(/leave blank to keep the existing key/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/ai enrichment api key/i)).toHaveValue('');
 
-    const providerGroup = screen.getByRole('group', { name: /gemini settings/i });
-    expect(within(providerGroup).getByLabelText(/model/i)).toHaveValue('gemini-2.5-flash');
+    const providerGroup = screen.getByRole('group', { name: /ai enrichment gemini settings/i });
+    expect(within(providerGroup).getByLabelText(/ai enrichment model/i)).toHaveValue('gemini-2.5-flash');
     expect(within(providerGroup).getByText(/api key saved/i)).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: /anthropic settings/i })).not.toBeInTheDocument();
+    expect(within(providerGroup).getByText(/saved only for the ai enrichment profile/i)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: /companies anthropic settings/i })).toBeInTheDocument();
+    expect(screen.getByText(/comp\.\.\.9999/i)).toBeInTheDocument();
     expect(screen.getAllByText(/configured provider/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/active provider/i).length).toBeGreaterThan(0);
   });
@@ -193,9 +245,13 @@ describe('AISettingsPage', () => {
 
       expect(body).toEqual({
         llm_provider: 'gemini',
+        company_llm_provider: 'anthropic',
         ai_enrichment_run_concurrency: 12,
         gemini_api_key: '',
         gemini_model: 'gemini-2.5-pro',
+        company_anthropic_api_key: '',
+        company_anthropic_model: 'claude-sonnet-4-5',
+        company_anthropic_base_url: 'https://api.anthropic.com',
       });
 
       currentSettingsPayload = {
@@ -226,6 +282,7 @@ describe('AISettingsPage', () => {
           is_degraded: false,
           degradation_reason: null,
         },
+        company_runtime_status: currentSettingsPayload.company_runtime_status,
       };
 
       return mockJsonResponse(currentSettingsPayload);
@@ -237,13 +294,13 @@ describe('AISettingsPage', () => {
 
     await user.clear(screen.getByLabelText(/concurrency/i));
     await user.type(screen.getByLabelText(/concurrency/i), '12');
-    await user.clear(screen.getByLabelText(/^model$/i));
-    await user.type(screen.getByLabelText(/^model$/i), 'gemini-2.5-pro');
+    await user.clear(screen.getByLabelText(/ai enrichment model/i));
+    await user.type(screen.getByLabelText(/ai enrichment model/i), 'gemini-2.5-pro');
     await user.click(screen.getByRole('button', { name: /save settings/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/ai runtime settings saved/i);
     expect(screen.getByLabelText(/concurrency/i)).toHaveValue(12);
-    expect(screen.getByLabelText(/^model$/i)).toHaveValue('gemini-2.5-pro');
+    expect(screen.getByLabelText(/ai enrichment model/i)).toHaveValue('gemini-2.5-pro');
     expect(screen.getByText(/runtime ready/i)).toBeInTheDocument();
   });
 
@@ -254,12 +311,15 @@ describe('AISettingsPage', () => {
 
       expect(body).toEqual({
         llm_provider: 'anthropic',
+        company_llm_provider: 'anthropic',
         ai_enrichment_run_concurrency: 9,
         anthropic_api_key: 'anthropic-secret-987654',
         anthropic_model: 'claude-sonnet-4-5',
         anthropic_base_url: 'https://api.anthropic.com/v1',
+        company_anthropic_api_key: '',
+        company_anthropic_model: 'claude-sonnet-4-5',
+        company_anthropic_base_url: 'https://api.anthropic.com',
       });
-      expect(body.gemini_model).toBeUndefined();
 
       currentSettingsPayload = {
         persisted_config: {
@@ -291,6 +351,7 @@ describe('AISettingsPage', () => {
           is_degraded: false,
           degradation_reason: null,
         },
+        company_runtime_status: currentSettingsPayload.company_runtime_status,
       };
 
       return mockJsonResponse(currentSettingsPayload);
@@ -300,25 +361,25 @@ describe('AISettingsPage', () => {
 
     await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
 
-    await user.selectOptions(screen.getByLabelText(/provider/i), 'anthropic');
-    expect(screen.getByRole('group', { name: /anthropic settings/i })).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: /gemini settings/i })).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText(/ai enrichment provider/i), 'anthropic');
+    expect(screen.getByRole('group', { name: /ai enrichment anthropic settings/i })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /ai enrichment gemini settings/i })).not.toBeInTheDocument();
 
     await user.clear(screen.getByLabelText(/concurrency/i));
     await user.type(screen.getByLabelText(/concurrency/i), '9');
-    await user.clear(screen.getByLabelText(/^model$/i));
-    await user.type(screen.getByLabelText(/^model$/i), 'claude-sonnet-4-5');
-    await user.clear(screen.getByLabelText(/base url/i));
-    await user.type(screen.getByLabelText(/base url/i), 'https://api.anthropic.com/v1');
-    await user.type(screen.getByLabelText(/api key/i), 'anthropic-secret-987654');
+    await user.clear(screen.getByLabelText(/ai enrichment model/i));
+    await user.type(screen.getByLabelText(/ai enrichment model/i), 'claude-sonnet-4-5');
+    await user.clear(screen.getByLabelText(/ai enrichment base url/i));
+    await user.type(screen.getByLabelText(/ai enrichment base url/i), 'https://api.anthropic.com/v1');
+    await user.type(screen.getByLabelText(/ai enrichment api key/i), 'anthropic-secret-987654');
     await user.click(screen.getByRole('button', { name: /save settings/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/ai runtime settings saved/i);
-    expect(screen.getByRole('group', { name: /anthropic settings/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/provider/i)).toHaveDisplayValue(/anthropic/i);
-    expect(screen.getByLabelText(/^model$/i)).toHaveValue('claude-sonnet-4-5');
-    expect(screen.getByLabelText(/base url/i)).toHaveValue('https://api.anthropic.com/v1');
-    expect(screen.getByText(/configured provider:.*anthropic.*active provider:.*anthropic/i)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: /ai enrichment anthropic settings/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/ai enrichment provider/i)).toHaveDisplayValue(/anthropic/i);
+    expect(screen.getByLabelText(/ai enrichment model/i)).toHaveValue('claude-sonnet-4-5');
+    expect(screen.getByLabelText(/ai enrichment base url/i)).toHaveValue('https://api.anthropic.com/v1');
+    expect(screen.getByText(/runtime ready/i)).toBeInTheDocument();
   });
 
   it('preserves the existing stored secret when the secret input is left blank', async () => {
@@ -359,13 +420,14 @@ describe('AISettingsPage', () => {
 
     await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
 
-    expect(screen.getByLabelText(/api key/i)).toHaveValue('');
-    await user.clear(screen.getByLabelText(/^model$/i));
-    await user.type(screen.getByLabelText(/^model$/i), 'gemini-2.5-flash-lite');
+    expect(screen.getByLabelText(/ai enrichment api key/i)).toHaveValue('');
+    await user.clear(screen.getByLabelText(/ai enrichment model/i));
+    await user.type(screen.getByLabelText(/ai enrichment model/i), 'gemini-2.5-flash-lite');
     await user.click(screen.getByRole('button', { name: /save settings/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/ai runtime settings saved/i);
-    expect(screen.getByText(/api key saved/i)).toBeInTheDocument();
+    const providerGroup = screen.getByRole('group', { name: /ai enrichment gemini settings/i });
+    expect(within(providerGroup).getByText(/^api key saved$/i)).toBeInTheDocument();
     expect(screen.getByText(/gem-\.{3}3456/i)).toBeInTheDocument();
   });
 
@@ -429,6 +491,111 @@ describe('AISettingsPage', () => {
     expect(alert).toHaveTextContent(/runtime is degraded/i);
     expect(alert).toHaveTextContent(/failed to initialize provider 'gemini'/i);
     expect(screen.getByText(/degraded runtime/i)).toBeInTheDocument();
-    expect(screen.getByText(/configured provider:.*gemini.*active provider:.*mock/i)).toBeInTheDocument();
+  });
+
+  it('lets jobs and companies use separate providers and submits both profiles in one save', async () => {
+    const user = userEvent.setup();
+    putSettingsResponse.mockImplementationOnce(async (_url, init) => {
+      const body = JSON.parse(init.body);
+
+      expect(body).toEqual({
+        llm_provider: 'custom',
+        company_llm_provider: 'anthropic',
+        ai_enrichment_run_concurrency: 8,
+        custom_api_key: 'deepseek-secret',
+        custom_model: 'deepseek-v4-flash',
+        custom_base_url: 'https://api.deepseek.com',
+        custom_api_format: 'anthropic',
+        company_anthropic_api_key: 'anthropic-secret-123456',
+        company_anthropic_model: 'claude-sonnet-4-5',
+        company_anthropic_base_url: 'https://api.anthropic.com/v1',
+      });
+
+      currentSettingsPayload = {
+        ...currentSettingsPayload,
+        persisted_config: {
+          ...currentSettingsPayload.persisted_config,
+          llm_provider: 'custom',
+          company_llm_provider: 'anthropic',
+          custom: {
+            model: 'deepseek-v4-flash',
+            base_url: 'https://api.deepseek.com',
+            api_format: 'anthropic',
+            has_api_key: true,
+            api_key_preview: 'deep...cret',
+          },
+          company_anthropic: {
+            has_api_key: true,
+            api_key_preview: 'anth...3456',
+            model: 'claude-sonnet-4-5',
+            base_url: 'https://api.anthropic.com/v1',
+          },
+          anthropic: {
+            ...currentSettingsPayload.persisted_config.anthropic,
+            has_api_key: false,
+            api_key_preview: null,
+          },
+        },
+        effective_config: {
+          ...currentSettingsPayload.effective_config,
+          llm_provider: 'custom',
+          company_llm_provider: 'anthropic',
+          custom: {
+            model: 'deepseek-v4-flash',
+            base_url: 'https://api.deepseek.com',
+            api_format: 'anthropic',
+            has_api_key: true,
+          },
+          company_anthropic: {
+            model: 'claude-sonnet-4-5',
+            base_url: 'https://api.anthropic.com/v1',
+          },
+        },
+        runtime_status: {
+          configured_provider: 'custom',
+          active_provider: 'custom',
+          provider: 'custom',
+          model: 'deepseek-v4-flash',
+          is_degraded: false,
+          degradation_reason: null,
+        },
+        company_runtime_status: {
+          configured_provider: 'anthropic',
+          active_provider: 'anthropic',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-5',
+          is_degraded: false,
+          degradation_reason: null,
+        },
+      };
+
+      return mockJsonResponse(currentSettingsPayload);
+    });
+
+    render(<AISettingsPage />);
+
+    await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
+
+    await user.selectOptions(screen.getByLabelText(/ai enrichment provider/i), 'custom');
+    await user.clear(screen.getByLabelText(/ai enrichment model/i));
+    await user.type(screen.getByLabelText(/ai enrichment model/i), 'deepseek-v4-flash');
+    await user.clear(screen.getByLabelText(/ai enrichment base url/i));
+    await user.type(screen.getByLabelText(/ai enrichment base url/i), 'https://api.deepseek.com');
+    await user.clear(screen.getByLabelText(/ai enrichment api format/i));
+    await user.type(screen.getByLabelText(/ai enrichment api format/i), 'anthropic');
+    await user.type(screen.getByLabelText(/ai enrichment api key/i), 'deepseek-secret');
+
+    await user.selectOptions(screen.getByLabelText(/companies provider/i), 'anthropic');
+    await user.clear(screen.getByLabelText(/companies model/i));
+    await user.type(screen.getByLabelText(/companies model/i), 'claude-sonnet-4-5');
+    await user.clear(screen.getByLabelText(/companies base url/i));
+    await user.type(screen.getByLabelText(/companies base url/i), 'https://api.anthropic.com/v1');
+    await user.type(screen.getByLabelText(/companies api key/i), 'anthropic-secret-123456');
+
+    await user.click(screen.getByRole('button', { name: /save settings/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/ai runtime settings saved/i);
+    expect(screen.getByLabelText(/ai enrichment provider/i)).toHaveDisplayValue(/custom/i);
+    expect(screen.getByLabelText(/companies provider/i)).toHaveDisplayValue(/anthropic/i);
   });
 });

@@ -20,25 +20,36 @@ class AISettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     llm_provider: Optional[str] = None
+    company_llm_provider: Optional[str] = None
     ai_enrichment_run_concurrency: Optional[int] = None
     anthropic_api_key: Optional[str] = None
     anthropic_model: Optional[str] = None
     anthropic_base_url: Optional[str] = None
+    company_anthropic_api_key: Optional[str] = None
+    company_anthropic_model: Optional[str] = None
+    company_anthropic_base_url: Optional[str] = None
     gemini_api_key: Optional[str] = None
     gemini_model: Optional[str] = None
+    company_gemini_api_key: Optional[str] = None
+    company_gemini_model: Optional[str] = None
     custom_api_key: Optional[str] = None
     custom_model: Optional[str] = None
     custom_base_url: Optional[str] = None
     custom_api_format: Optional[str] = None
+    company_custom_api_key: Optional[str] = None
+    company_custom_model: Optional[str] = None
+    company_custom_base_url: Optional[str] = None
+    company_custom_api_format: Optional[str] = None
     zhipu_api_key: Optional[str] = None
+    company_zhipu_api_key: Optional[str] = None
 
 
 def _build_ai_settings_response(service: AIRuntimeSettingsService) -> dict:
-    effective = service.get_effective_settings()
     return {
         "persisted_config": service.serialize_persisted_config(),
-        "effective_config": service.serialize_effective_config(effective),
+        "effective_config": service.serialize_effective_config(),
         "runtime_status": get_llm_status(),
+        "company_runtime_status": get_llm_status("companies"),
     }
 
 
@@ -48,6 +59,7 @@ async def get_ai_settings(db: Session = Depends(get_db)):
     service.get_or_create()
     db.commit()
     refresh_llm_status()
+    refresh_llm_status("companies")
     return _build_ai_settings_response(service)
 
 
@@ -75,4 +87,5 @@ async def update_ai_settings(
         ) from exc
 
     refresh_llm_status()
+    refresh_llm_status("companies")
     return _build_ai_settings_response(service)

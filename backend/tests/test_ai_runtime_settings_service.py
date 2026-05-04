@@ -102,6 +102,7 @@ def test_effective_settings_merge_persisted_values_with_config_fallbacks(monkeyp
         )
 
         effective = service.get_effective_settings()
+        company_effective = service.get_effective_settings("companies")
 
         assert effective.llm_provider == "anthropic"
         assert effective.ai_enrichment_run_concurrency == 7
@@ -111,6 +112,58 @@ def test_effective_settings_merge_persisted_values_with_config_fallbacks(monkeyp
         assert effective.gemini_model == "gemini-fallback"
         assert effective.custom_model == "custom-fallback"
         assert effective.custom_base_url == "https://env-custom.example.com"
+        assert company_effective.llm_provider == "anthropic"
+        assert company_effective.anthropic_model == "claude-db"
+    finally:
+        db.close()
+
+
+def test_company_effective_settings_can_override_job_profile_with_shared_provider_secrets(monkeypatch):
+    _, AIRuntimeSettingsService, _, _ = _import_runtime_settings_modules()
+    db = _build_sqlite_session()
+    try:
+        monkeypatch.setattr(settings, "llm_provider", "mock")
+        monkeypatch.setattr(settings, "ai_enrichment_run_concurrency", 10)
+        monkeypatch.setattr(settings, "anthropic_api_key", None)
+        monkeypatch.setattr(settings, "anthropic_model", "claude-fallback")
+        monkeypatch.setattr(settings, "anthropic_base_url", None)
+        monkeypatch.setattr(settings, "gemini_api_key", None)
+        monkeypatch.setattr(settings, "gemini_model", "gemini-fallback")
+        monkeypatch.setattr(settings, "custom_api_key", None)
+        monkeypatch.setattr(settings, "custom_model", "deepseek-default")
+        monkeypatch.setattr(settings, "custom_base_url", "https://api.deepseek.com")
+        monkeypatch.setattr(settings, "custom_api_format", "anthropic")
+        monkeypatch.setattr(settings, "zhipu_api_key", None)
+
+        service = AIRuntimeSettingsService(db)
+        service.update_settings(
+            {
+                "llm_provider": "custom",
+                "custom_api_key": "deepseek-secret",
+                "custom_model": "deepseek-v4-flash",
+                "custom_base_url": "https://api.deepseek.com",
+                "custom_api_format": "anthropic",
+                "company_llm_provider": "anthropic",
+                "company_anthropic_api_key": "anthropic-secret",
+                "company_anthropic_model": "claude-sonnet-4-5",
+                "company_anthropic_base_url": "https://api.anthropic.com",
+            }
+        )
+
+        job_effective = service.get_effective_settings("jobs")
+        company_effective = service.get_effective_settings("companies")
+        serialized = service.serialize_persisted_config()
+
+        assert job_effective.llm_provider == "custom"
+        assert job_effective.custom_model == "deepseek-v4-flash"
+        assert company_effective.llm_provider == "anthropic"
+        assert company_effective.anthropic_model == "claude-sonnet-4-5"
+        assert company_effective.anthropic_api_key == "anthropic-secret"
+        assert serialized["company_llm_provider"] == "anthropic"
+        assert serialized["company_anthropic"]["model"] == "claude-sonnet-4-5"
+        assert serialized["company_anthropic"]["api_key_preview"] == "anth...cret"
+        assert serialized["custom"]["api_key_preview"] == "deep...cret"
+        assert serialized["anthropic"]["api_key_preview"] is None
     finally:
         db.close()
 
@@ -175,10 +228,14 @@ def test_update_settings_validates_provider_requirements_and_concurrency_bounds(
             service.update_settings(
                 {
                     "llm_provider": "anthropic",
+                    "company_llm_provider": "custom",
                     "ai_enrichment_run_concurrency": 0,
                     "anthropic_api_key": "",
                     "anthropic_model": "",
                     "anthropic_base_url": "not-a-url",
+                    "company_custom_api_format": "",
+                    "company_custom_base_url": "not-a-url",
+                    "company_custom_model": "",
                 }
             )
 
@@ -186,6 +243,8 @@ def test_update_settings_validates_provider_requirements_and_concurrency_bounds(
         assert any(error["loc"] == ["ai_enrichment_run_concurrency"] for error in errors)
         assert any(error["loc"] == ["anthropic_api_key"] for error in errors)
         assert any(error["loc"] == ["anthropic_base_url"] for error in errors)
+        assert any(error["loc"] == ["custom_api_key"] for error in errors)
+        assert any(error["loc"] == ["company_custom_base_url"] for error in errors)
     finally:
         db.close()
 

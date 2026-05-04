@@ -104,3 +104,57 @@ def test_get_llm_client_degrades_to_mock_when_runtime_settings_resolution_fails(
         assert "settings table missing" in status["degradation_reason"]
     finally:
         llm_client_module.reset_client()
+
+
+def test_get_llm_client_caches_per_scope_and_tracks_independent_status(monkeypatch):
+    llm_client_module.reset_client()
+    try:
+        job_effective = llm_client_module.EffectiveAIRuntimeSettings(
+            llm_provider="gemini",
+            ai_enrichment_run_concurrency=10,
+            anthropic_api_key=None,
+            anthropic_model="claude-sonnet-4-5",
+            anthropic_base_url=None,
+            gemini_api_key="gemini-secret",
+            gemini_model="gemini-jobs",
+            custom_api_key=None,
+            custom_model="custom-model",
+            custom_base_url=None,
+            custom_api_format="anthropic",
+            zhipu_api_key=None,
+        )
+        company_effective = llm_client_module.EffectiveAIRuntimeSettings(
+            llm_provider="anthropic",
+            ai_enrichment_run_concurrency=10,
+            anthropic_api_key="anthropic-secret",
+            anthropic_model="claude-sonnet-4-5",
+            anthropic_base_url="https://api.anthropic.com",
+            gemini_api_key=None,
+            gemini_model="gemini-company",
+            custom_api_key=None,
+            custom_model="custom-model",
+            custom_base_url=None,
+            custom_api_format="anthropic",
+            zhipu_api_key=None,
+        )
+        monkeypatch.setattr(
+            llm_client_module,
+            "get_effective_runtime_settings",
+            lambda scope="jobs": company_effective if scope == "companies" else job_effective,
+        )
+
+        job_client = llm_client_module.get_llm_client()
+        company_client = llm_client_module.get_llm_client("companies")
+        job_status = llm_client_module.get_llm_status()
+        company_status = llm_client_module.get_llm_status("companies")
+
+        assert type(job_client).__name__ == "GeminiClient"
+        assert type(company_client).__name__ == "AnthropicClient"
+        assert job_status["configured_provider"] == "gemini"
+        assert job_status["active_provider"] == "gemini"
+        assert job_status["active_model"] == "gemini-jobs"
+        assert company_status["configured_provider"] == "anthropic"
+        assert company_status["active_provider"] == "anthropic"
+        assert company_status["active_model"] == "claude-sonnet-4-5"
+    finally:
+        llm_client_module.reset_client()

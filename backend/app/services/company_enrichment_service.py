@@ -12,7 +12,7 @@ class CompanyEnrichmentService:
     """Generate concise AI descriptions for companies."""
 
     def __init__(self):
-        self.llm = get_llm_client()
+        self.llm = get_llm_client("companies")
 
     async def enrich_company_description(self, company, db: Session, force: bool = False) -> dict:
         """Generate and persist a concise AI description for a company."""
@@ -72,12 +72,13 @@ class CompanyEnrichmentService:
             .all()
         )
 
+        allow_web_search = bool(getattr(self.llm, "supports_web_search", lambda: False)())
         return await self.llm.generate(
-            self._build_company_prompt(company, jobs),
-            web_search=True,
+            self._build_company_prompt(company, jobs, allow_web_search=allow_web_search),
+            web_search=allow_web_search,
         )
 
-    def _build_company_prompt(self, company, jobs: list[Job]) -> str:
+    def _build_company_prompt(self, company, jobs: list[Job], *, allow_web_search: bool) -> str:
         """Build a concise prompt from company metadata and recent jobs."""
         job_lines = []
         for job in jobs:
@@ -90,9 +91,14 @@ class CompanyEnrichmentService:
             )
 
         jobs_context = "\n".join(job_lines) if job_lines else "- No recent jobs available"
+        search_guidance = (
+            "Search the web first for current public information about the company.\n"
+            if allow_web_search
+            else "Use only the provided company metadata and recent hiring signals.\n"
+        )
         return (
             "Write a short factual company description in 2-4 sentences.\n"
-            "Search the web first for current public information about the company.\n"
+            f"{search_guidance}"
             "Use the provided company metadata and recent hiring signals as supporting context.\n"
             "If search results are sparse, stay conservative and only state what is supported.\n"
             "Do not invent facts.\n\n"

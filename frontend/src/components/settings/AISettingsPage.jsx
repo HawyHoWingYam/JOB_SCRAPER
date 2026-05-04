@@ -13,6 +13,10 @@ import './AISettingsPage.css';
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 const PROVIDER_OPTIONS = ['anthropic', 'gemini', 'custom', 'zhipu', 'mock'];
+const PROFILE_LABELS = {
+  jobs: 'AI Enrichment',
+  companies: 'Companies',
+};
 
 const PROVIDER_LABELS = {
   anthropic: 'Anthropic',
@@ -49,21 +53,45 @@ function toProviderLabel(provider) {
   return PROVIDER_LABELS[provider] || String(provider || 'Unknown');
 }
 
-function getSelectedProvider(payload) {
-  return payload?.persisted_config?.llm_provider || payload?.effective_config?.llm_provider || 'mock';
+function getProfileProviderKey(profileKey) {
+  return profileKey === 'companies' ? 'company_llm_provider' : 'llm_provider';
 }
 
-function getProviderConfig(payload, provider) {
-  return payload?.persisted_config?.[provider] || payload?.effective_config?.[provider] || {};
+function getScopedProviderConfigKey(profileKey, provider) {
+  return profileKey === 'companies' ? `company_${provider}` : provider;
 }
 
-function getProviderInitialValue(payload, provider, key) {
-  const persistedValue = payload?.persisted_config?.[provider]?.[key];
+function getSelectedProvider(payload, profileKey) {
+  const providerKey = getProfileProviderKey(profileKey);
+  return (
+    payload?.persisted_config?.[providerKey] ||
+    payload?.effective_config?.[providerKey] ||
+    (profileKey === 'companies'
+      ? getSelectedProvider(payload, 'jobs')
+      : 'mock')
+  );
+}
+
+function getProviderConfig(payload, profileKey, provider) {
+  const configKey = getScopedProviderConfigKey(profileKey, provider);
+  return payload?.persisted_config?.[configKey] || payload?.effective_config?.[configKey] || {};
+}
+
+function getProfileSecretKey(profileKey, provider) {
+  if (profileKey === 'companies') {
+    return `company_${provider}_api_key`;
+  }
+
+  return SECRET_REQUEST_KEYS[provider];
+}
+
+function getProviderInitialValue(payload, profileKey, provider, key) {
+  const persistedValue = payload?.persisted_config?.[getScopedProviderConfigKey(profileKey, provider)]?.[key];
   if (persistedValue !== null && persistedValue !== undefined) {
     return String(persistedValue);
   }
 
-  const effectiveValue = payload?.effective_config?.[provider]?.[key];
+  const effectiveValue = payload?.effective_config?.[getScopedProviderConfigKey(profileKey, provider)]?.[key];
   if (effectiveValue !== null && effectiveValue !== undefined) {
     return String(effectiveValue);
   }
@@ -71,23 +99,30 @@ function getProviderInitialValue(payload, provider, key) {
   return '';
 }
 
+function createProfileState(payload, profileKey) {
+  return {
+    llm_provider: getSelectedProvider(payload, profileKey),
+    providers: PROVIDER_OPTIONS.reduce((accumulator, provider) => {
+      accumulator[provider] = {
+        model: getProviderInitialValue(payload, profileKey, provider, 'model'),
+        base_url: getProviderInitialValue(payload, profileKey, provider, 'base_url'),
+        api_format: getProviderInitialValue(payload, profileKey, provider, 'api_format'),
+        api_key: '',
+      };
+      return accumulator;
+    }, {}),
+  };
+}
+
 function createFormState(payload) {
   return {
-    llm_provider: getSelectedProvider(payload),
+    jobs: createProfileState(payload, 'jobs'),
+    companies: createProfileState(payload, 'companies'),
     ai_enrichment_run_concurrency: String(
       payload?.persisted_config?.ai_enrichment_run_concurrency ??
         payload?.effective_config?.ai_enrichment_run_concurrency ??
         '',
     ),
-    providers: PROVIDER_OPTIONS.reduce((accumulator, provider) => {
-      accumulator[provider] = {
-        model: getProviderInitialValue(payload, provider, 'model'),
-        base_url: getProviderInitialValue(payload, provider, 'base_url'),
-        api_format: getProviderInitialValue(payload, provider, 'api_format'),
-        api_key: '',
-      };
-      return accumulator;
-    }, {}),
   };
 }
 
@@ -103,20 +138,33 @@ function formatValidationErrors(detail) {
   });
 }
 
+function appendSecret(body, requestKey, value) {
+  const nextValue = value ?? '';
+  if (!(requestKey in body) || nextValue) {
+    body[requestKey] = nextValue;
+  }
+}
+
 function buildRequestBody(formState) {
-  const provider = formState.llm_provider;
   const body = {
-    llm_provider: provider,
+    llm_provider: formState.jobs.llm_provider,
+    company_llm_provider: formState.companies.llm_provider,
     ai_enrichment_run_concurrency: Number(formState.ai_enrichment_run_concurrency),
   };
-  const providerValues = formState.providers[provider] || {};
 
-  for (const field of PROVIDER_FIELDS[provider] || []) {
-    body[field.requestKey] = providerValues[field.key] ?? '';
-  }
+  for (const [profileKey, prefix] of [['jobs', ''], ['companies', 'company_']]) {
+    const profile = formState[profileKey];
+    const provider = profile.llm_provider;
+    const providerValues = profile.providers[provider] || {};
 
-  if (SECRET_REQUEST_KEYS[provider]) {
-    body[SECRET_REQUEST_KEYS[provider]] = providerValues.api_key ?? '';
+    for (const field of PROVIDER_FIELDS[provider] || []) {
+      body[`${prefix}${field.requestKey}`] = providerValues[field.key] ?? '';
+    }
+
+    const secretRequestKey = getProfileSecretKey(profileKey, provider);
+    if (secretRequestKey) {
+      appendSecret(body, secretRequestKey, providerValues.api_key);
+    }
   }
 
   return body;
@@ -159,6 +207,117 @@ function FeedbackBanner({ feedback }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ProfileSection({
+  profileKey,
+  profileLabel,
+  formState,
+  settingsPayload,
+  runtimeStatus,
+  saving,
+  updateProfileProvider,
+  updateProfileField,
+}) {
+  const selectedProvider = formState?.llm_provider || getSelectedProvider(settingsPayload, profileKey);
+  const providerFields = PROVIDER_FIELDS[selectedProvider] || [];
+  const providerValues = formState?.providers?.[selectedProvider] || {};
+  const providerConfig = getProviderConfig(settingsPayload, profileKey, selectedProvider);
+  const hasSavedApiKey = Boolean(providerConfig?.has_api_key);
+  const isDegraded = Boolean(runtimeStatus?.is_degraded);
+
+  return (
+    <section className="ai-settings-panel glass-panel">
+      <div className="ai-settings-section-heading">
+        <div>
+          <h2>{profileLabel} Profile</h2>
+          <p>{profileLabel} can use a different provider and model than the other AI workflow.</p>
+        </div>
+      </div>
+
+      <div className="ai-settings-form-grid">
+        <label className="ai-settings-field">
+          <span>{profileLabel} Provider</span>
+          <select
+            aria-label={`${profileLabel} provider`}
+            value={selectedProvider}
+            onChange={(event) => updateProfileProvider(profileKey, event.target.value)}
+            disabled={saving}
+          >
+            {PROVIDER_OPTIONS.map((provider) => (
+              <option key={provider} value={provider}>
+                {toProviderLabel(provider)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="ai-settings-runtime-meta">
+        <div>
+          <span>Configured provider</span>
+          <strong>{toProviderLabel(runtimeStatus?.configured_provider || selectedProvider)}</strong>
+        </div>
+        <div>
+          <span>Active provider</span>
+          <strong>{toProviderLabel(runtimeStatus?.active_provider || runtimeStatus?.provider || selectedProvider)}</strong>
+        </div>
+        <div>
+          <span>Model</span>
+          <strong>{runtimeStatus?.model || providerConfig?.model || 'Unavailable'}</strong>
+        </div>
+        <div>
+          <span>Degraded state</span>
+          <strong>{isDegraded ? 'Degraded' : 'Healthy'}</strong>
+        </div>
+      </div>
+
+      <fieldset className="ai-settings-provider-group" aria-label={`${profileLabel} ${toProviderLabel(selectedProvider)} settings`}>
+        <legend>{profileLabel} {toProviderLabel(selectedProvider)} settings</legend>
+
+        <div className="ai-settings-form-grid">
+          {providerFields.map((field) => (
+            <label className="ai-settings-field" key={field.key}>
+              <span>{field.label}</span>
+              <input
+                aria-label={`${profileLabel} ${field.label}`}
+                type="text"
+                value={providerValues[field.key] || ''}
+                onChange={(event) => updateProfileField(profileKey, selectedProvider, field.key, event.target.value)}
+                disabled={saving}
+              />
+            </label>
+          ))}
+
+          {SECRET_REQUEST_KEYS[selectedProvider] ? (
+            <label className="ai-settings-field ai-settings-secret-field">
+              <span>API key</span>
+              <input
+                aria-label={`${profileLabel} API key`}
+                type="password"
+                value={providerValues.api_key || ''}
+                onChange={(event) => updateProfileField(profileKey, selectedProvider, 'api_key', event.target.value)}
+                placeholder={hasSavedApiKey ? 'Leave blank to keep existing key' : 'Enter API key'}
+                disabled={saving}
+              />
+              <div className="ai-settings-secret-meta">
+                <div className="ai-settings-secret-value">
+                  <KeyRound size={16} />
+                  <strong>{hasSavedApiKey ? 'API key saved' : 'No API key saved'}</strong>
+                  {providerConfig?.api_key_preview ? <code>{providerConfig.api_key_preview}</code> : null}
+                </div>
+                <p className="ai-settings-field-hint">
+                  {profileKey === 'companies'
+                    ? 'Saved only for the Companies profile.'
+                    : 'Saved only for the AI Enrichment profile.'}
+                </p>
+              </div>
+            </label>
+          ) : null}
+        </div>
+      </fieldset>
+    </section>
   );
 }
 
@@ -206,14 +365,27 @@ export default function AISettingsPage() {
     };
   }, []);
 
-  function updateField(provider, key, value) {
+  function updateProfileProvider(profileKey, provider) {
     setFormState((currentState) => ({
       ...currentState,
-      providers: {
-        ...currentState.providers,
-        [provider]: {
-          ...currentState.providers[provider],
-          [key]: value,
+      [profileKey]: {
+        ...currentState[profileKey],
+        llm_provider: provider,
+      },
+    }));
+  }
+
+  function updateProfileField(profileKey, provider, key, value) {
+    setFormState((currentState) => ({
+      ...currentState,
+      [profileKey]: {
+        ...currentState[profileKey],
+        providers: {
+          ...currentState[profileKey].providers,
+          [provider]: {
+            ...currentState[profileKey].providers[provider],
+            [key]: value,
+          },
         },
       },
     }));
@@ -257,20 +429,30 @@ export default function AISettingsPage() {
 
       setSettingsPayload(payload);
       setFormState(createFormState(payload));
+
+      const degradedLines = [];
+      if (payload?.runtime_status?.is_degraded) {
+        degradedLines.push(
+          `AI Enrichment runtime is degraded. ${payload.runtime_status.degradation_reason || 'The selected provider did not initialize cleanly.'}`,
+        );
+      }
+      if (payload?.company_runtime_status?.is_degraded) {
+        degradedLines.push(
+          `Companies runtime is degraded. ${payload.company_runtime_status.degradation_reason || 'The selected provider did not initialize cleanly.'}`,
+        );
+      }
+
       setFeedback(
-        payload?.runtime_status?.is_degraded
+        degradedLines.length
           ? {
               tone: 'warning',
               title: 'AI runtime settings saved',
-              lines: [
-                'Runtime is degraded.',
-                payload.runtime_status.degradation_reason || 'The selected provider did not initialize cleanly.',
-              ],
+              lines: degradedLines,
             }
           : {
               tone: 'success',
               title: 'AI runtime settings saved',
-              lines: ['Runtime settings are active.'],
+              lines: ['Runtime settings are active for both profiles.'],
             },
       );
     } catch (err) {
@@ -310,15 +492,11 @@ export default function AISettingsPage() {
     );
   }
 
-  const selectedProvider = formState?.llm_provider || getSelectedProvider(settingsPayload);
   const persistedConfig = settingsPayload?.persisted_config || {};
   const effectiveConfig = settingsPayload?.effective_config || {};
-  const runtimeStatus = settingsPayload?.runtime_status || {};
-  const providerConfig = getProviderConfig(settingsPayload, selectedProvider);
-  const providerFields = PROVIDER_FIELDS[selectedProvider] || [];
-  const providerValues = formState?.providers?.[selectedProvider] || {};
-  const isDegraded = Boolean(runtimeStatus.is_degraded);
-  const hasSavedApiKey = Boolean(providerConfig?.has_api_key);
+  const jobRuntimeStatus = settingsPayload?.runtime_status || {};
+  const companyRuntimeStatus = settingsPayload?.company_runtime_status || {};
+  const isAnyDegraded = Boolean(jobRuntimeStatus.is_degraded || companyRuntimeStatus.is_degraded);
 
   return (
     <section className="ai-settings-page">
@@ -327,13 +505,13 @@ export default function AISettingsPage() {
           <p className="ai-settings-eyebrow">Settings</p>
           <h1>AI Runtime</h1>
           <p className="ai-settings-subtitle">
-            Manage persisted provider settings, keep existing secrets when left blank, and verify the active runtime posture after each save.
+            Manage separate provider profiles for AI enrichment and company descriptions while reusing saved provider credentials.
           </p>
         </div>
         <div className="ai-settings-hero-badges">
           <span className="ai-settings-chip">{saving ? 'Saving…' : 'Editable'}</span>
-          <span className={`ai-settings-chip ${isDegraded ? 'warning' : 'success'}`}>
-            {isDegraded ? 'Degraded runtime' : 'Runtime ready'}
+          <span className={`ai-settings-chip ${isAnyDegraded ? 'warning' : 'success'}`}>
+            {isAnyDegraded ? 'Degraded runtime' : 'Runtime ready'}
           </span>
         </div>
       </header>
@@ -343,16 +521,17 @@ export default function AISettingsPage() {
       <section className="ai-settings-summary-grid">
         <SummaryCard
           icon={BrainCircuit}
-          label="Configured provider"
-          value={toProviderLabel(runtimeStatus.configured_provider || selectedProvider)}
-          hint="Persisted selection"
+          label="AI Enrichment"
+          value={toProviderLabel(jobRuntimeStatus.configured_provider || formState?.jobs?.llm_provider)}
+          hint={jobRuntimeStatus.model || 'No model reported'}
+          tone={jobRuntimeStatus.is_degraded ? 'warning' : 'default'}
         />
         <SummaryCard
           icon={Layers3}
-          label="Active provider"
-          value={toProviderLabel(runtimeStatus.active_provider || runtimeStatus.provider || selectedProvider)}
-          hint={runtimeStatus.model || 'No model reported'}
-          tone={isDegraded ? 'warning' : 'default'}
+          label="Companies"
+          value={toProviderLabel(companyRuntimeStatus.configured_provider || formState?.companies?.llm_provider)}
+          hint={companyRuntimeStatus.model || 'No model reported'}
+          tone={companyRuntimeStatus.is_degraded ? 'warning' : 'default'}
         />
         <SummaryCard
           icon={Gauge}
@@ -365,11 +544,15 @@ export default function AISettingsPage() {
           hint="AI enrichment workers"
         />
         <SummaryCard
-          icon={isDegraded ? AlertTriangle : ShieldCheck}
+          icon={isAnyDegraded ? AlertTriangle : ShieldCheck}
           label="Runtime state"
-          value={isDegraded ? 'Degraded' : 'Healthy'}
-          hint={runtimeStatus.degradation_reason || 'Provider initialized successfully'}
-          tone={isDegraded ? 'warning' : 'success'}
+          value={isAnyDegraded ? 'Degraded' : 'Healthy'}
+          hint={
+            jobRuntimeStatus.degradation_reason ||
+            companyRuntimeStatus.degradation_reason ||
+            'Both profiles initialized successfully'
+          }
+          tone={isAnyDegraded ? 'warning' : 'success'}
         />
       </section>
 
@@ -377,99 +560,43 @@ export default function AISettingsPage() {
         <section className="ai-settings-panel glass-panel">
           <div className="ai-settings-section-heading">
             <div>
-              <h2>AI Runtime</h2>
-              <p>Provider selection, provider-specific settings, and secret preservation.</p>
+              <h2>Model Profiles</h2>
+              <p>Save separate providers and models for AI enrichment and company descriptions.</p>
             </div>
             <button className="ai-settings-save-button" type="submit" disabled={saving}>
               <Save size={16} />
               <span>{saving ? 'Saving…' : 'Save settings'}</span>
             </button>
           </div>
-
-          <div className="ai-settings-form-grid">
-            <label className="ai-settings-field">
-              <span>Provider</span>
-              <select
-                aria-label="Provider"
-                value={selectedProvider}
-                onChange={(event) => updateTopLevelField('llm_provider', event.target.value)}
-                disabled={saving}
-              >
-                {PROVIDER_OPTIONS.map((provider) => (
-                  <option key={provider} value={provider}>
-                    {toProviderLabel(provider)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="ai-settings-runtime-meta">
-            <div>
-              <span>Configured provider</span>
-              <strong>{toProviderLabel(runtimeStatus.configured_provider || selectedProvider)}</strong>
-            </div>
-            <div>
-              <span>Active provider</span>
-              <strong>{toProviderLabel(runtimeStatus.active_provider || runtimeStatus.provider || selectedProvider)}</strong>
-            </div>
-            <div>
-              <span>Model</span>
-              <strong>{runtimeStatus.model || providerConfig?.model || 'Unavailable'}</strong>
-            </div>
-            <div>
-              <span>Degraded state</span>
-              <strong>{isDegraded ? 'Degraded' : 'Healthy'}</strong>
-            </div>
-          </div>
-
-          <fieldset className="ai-settings-provider-group" aria-label={`${toProviderLabel(selectedProvider)} settings`}>
-            <legend>{toProviderLabel(selectedProvider)} provider</legend>
-
-            <div className="ai-settings-form-grid">
-              {providerFields.map((field) => (
-                <label className="ai-settings-field" key={field.key}>
-                  <span>{field.label}</span>
-                  <input
-                    aria-label={field.label}
-                    type="text"
-                    value={providerValues[field.key] || ''}
-                    onChange={(event) => updateField(selectedProvider, field.key, event.target.value)}
-                    disabled={saving}
-                  />
-                </label>
-              ))}
-
-              {SECRET_REQUEST_KEYS[selectedProvider] ? (
-                <label className="ai-settings-field ai-settings-secret-field">
-                  <span>API key</span>
-                  <input
-                    aria-label="API key"
-                    type="password"
-                    value={providerValues.api_key || ''}
-                    onChange={(event) => updateField(selectedProvider, 'api_key', event.target.value)}
-                    placeholder={hasSavedApiKey ? 'Leave blank to keep existing key' : 'Enter API key'}
-                    disabled={saving}
-                  />
-                  <div className="ai-settings-secret-meta">
-                    <div className="ai-settings-secret-value">
-                      <KeyRound size={16} />
-                      <strong>{hasSavedApiKey ? 'API key saved' : 'No API key saved'}</strong>
-                      {providerConfig?.api_key_preview ? <code>{providerConfig.api_key_preview}</code> : null}
-                    </div>
-                    <p className="ai-settings-field-hint">Leave blank to keep the existing key.</p>
-                  </div>
-                </label>
-              ) : null}
-            </div>
-          </fieldset>
         </section>
+
+        <ProfileSection
+          profileKey="jobs"
+          profileLabel={PROFILE_LABELS.jobs}
+          formState={formState.jobs}
+          settingsPayload={settingsPayload}
+          runtimeStatus={jobRuntimeStatus}
+          saving={saving}
+          updateProfileProvider={updateProfileProvider}
+          updateProfileField={updateProfileField}
+        />
+
+        <ProfileSection
+          profileKey="companies"
+          profileLabel={PROFILE_LABELS.companies}
+          formState={formState.companies}
+          settingsPayload={settingsPayload}
+          runtimeStatus={companyRuntimeStatus}
+          saving={saving}
+          updateProfileProvider={updateProfileProvider}
+          updateProfileField={updateProfileField}
+        />
 
         <section className="ai-settings-panel glass-panel">
           <div className="ai-settings-section-heading">
             <div>
               <h2>AI Enrichment Throughput</h2>
-              <p>Concurrency is editable and the runtime summary below reflects the latest saved response.</p>
+              <p>Concurrency is still global for job enrichment workers.</p>
             </div>
           </div>
 
@@ -487,7 +614,7 @@ export default function AISettingsPage() {
             </label>
           </div>
 
-          <div className={`ai-settings-throughput-note ${isDegraded ? 'warning' : ''}`}>
+          <div className={`ai-settings-throughput-note ${isAnyDegraded ? 'warning' : ''}`}>
             <span>Effective value</span>
             <strong>
               {String(
@@ -497,13 +624,12 @@ export default function AISettingsPage() {
               )}
             </strong>
             <p>
-              Configured provider: {toProviderLabel(runtimeStatus.configured_provider || selectedProvider)}. Active provider:{' '}
-              {toProviderLabel(runtimeStatus.active_provider || runtimeStatus.provider || selectedProvider)}. Model:{' '}
-              {runtimeStatus.model || 'Unavailable'}.
+              AI Enrichment active provider: {toProviderLabel(jobRuntimeStatus.active_provider || jobRuntimeStatus.provider || formState.jobs.llm_provider)}.
+              Companies active provider: {toProviderLabel(companyRuntimeStatus.active_provider || companyRuntimeStatus.provider || formState.companies.llm_provider)}.
             </p>
-            {isDegraded ? (
+            {isAnyDegraded ? (
               <p className="ai-settings-warning-copy">
-                Runtime is degraded. {runtimeStatus.degradation_reason || 'Check the provider configuration and try again.'}
+                One or more profiles are degraded. Check the saved provider configuration and try again.
               </p>
             ) : null}
           </div>

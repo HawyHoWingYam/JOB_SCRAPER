@@ -15,15 +15,22 @@ from app.config import (
 from app.database import SessionLocal
 from app.models.app_runtime_settings import AppRuntimeSettings
 
+RUNTIME_SCOPES = ("jobs", "companies")
 SECRET_FIELD_NAMES = {
     "anthropic_api_key",
     "gemini_api_key",
     "custom_api_key",
     "zhipu_api_key",
+    "company_anthropic_api_key",
+    "company_gemini_api_key",
+    "company_custom_api_key",
+    "company_zhipu_api_key",
 }
 URL_FIELD_NAMES = {
     "anthropic_base_url",
     "custom_base_url",
+    "company_anthropic_base_url",
+    "company_custom_base_url",
 }
 PROVIDER_REQUIRED_FIELDS = {
     "anthropic": ("anthropic_api_key", "anthropic_model"),
@@ -35,6 +42,7 @@ PROVIDER_REQUIRED_FIELDS = {
 }
 PERSISTED_FIELD_NAMES = (
     "llm_provider",
+    "company_llm_provider",
     "ai_enrichment_run_concurrency",
     "anthropic_api_key",
     "anthropic_model",
@@ -46,6 +54,16 @@ PERSISTED_FIELD_NAMES = (
     "custom_base_url",
     "custom_api_format",
     "zhipu_api_key",
+    "company_anthropic_api_key",
+    "company_anthropic_model",
+    "company_anthropic_base_url",
+    "company_gemini_api_key",
+    "company_gemini_model",
+    "company_custom_api_key",
+    "company_custom_model",
+    "company_custom_base_url",
+    "company_custom_api_format",
+    "company_zhipu_api_key",
 )
 
 
@@ -74,7 +92,7 @@ class RuntimeSettingsValidationError(ValueError):
 
 
 class AIRuntimeSettingsService:
-    """Persist and resolve AI runtime settings with config fallbacks."""
+    """Persist and resolve AI runtime settings with profile-specific overrides."""
 
     def __init__(self, db: Session):
         self.db = db
@@ -100,9 +118,10 @@ class AIRuntimeSettingsService:
         self.db.refresh(row)
         return row
 
-    def get_effective_settings(self) -> EffectiveAIRuntimeSettings:
+    def get_effective_settings(self, scope: str = "jobs") -> EffectiveAIRuntimeSettings:
+        self._ensure_valid_scope(scope)
         row = self.get_or_create()
-        return self._build_effective_settings(self._row_values(row))
+        return self._build_effective_settings(self._row_values(row), scope)
 
     def serialize_persisted_config(
         self,
@@ -112,6 +131,7 @@ class AIRuntimeSettingsService:
         values = self._row_values(row)
         return {
             "llm_provider": values["llm_provider"],
+            "company_llm_provider": values["company_llm_provider"],
             "ai_enrichment_run_concurrency": values["ai_enrichment_run_concurrency"],
             "anthropic": {
                 "model": values["anthropic_model"],
@@ -135,33 +155,76 @@ class AIRuntimeSettingsService:
                 "has_api_key": bool(values["zhipu_api_key"]),
                 "api_key_preview": self._mask_secret(values["zhipu_api_key"]),
             },
+            "company_anthropic": {
+                "has_api_key": bool(values["company_anthropic_api_key"]),
+                "api_key_preview": self._mask_secret(values["company_anthropic_api_key"]),
+                "model": values["company_anthropic_model"],
+                "base_url": values["company_anthropic_base_url"],
+            },
+            "company_gemini": {
+                "has_api_key": bool(values["company_gemini_api_key"]),
+                "api_key_preview": self._mask_secret(values["company_gemini_api_key"]),
+                "model": values["company_gemini_model"],
+            },
+            "company_custom": {
+                "has_api_key": bool(values["company_custom_api_key"]),
+                "api_key_preview": self._mask_secret(values["company_custom_api_key"]),
+                "model": values["company_custom_model"],
+                "base_url": values["company_custom_base_url"],
+                "api_format": values["company_custom_api_format"],
+            },
+            "company_zhipu": {
+                "has_api_key": bool(values["company_zhipu_api_key"]),
+                "api_key_preview": self._mask_secret(values["company_zhipu_api_key"]),
+            },
         }
 
-    def serialize_effective_config(
-        self,
-        effective: Optional[EffectiveAIRuntimeSettings] = None,
-    ) -> dict[str, Any]:
-        effective = effective or self.get_effective_settings()
+    def serialize_effective_config(self) -> dict[str, Any]:
+        job_effective = self.get_effective_settings("jobs")
+        company_effective = self.get_effective_settings("companies")
         return {
-            "llm_provider": effective.llm_provider,
-            "ai_enrichment_run_concurrency": effective.ai_enrichment_run_concurrency,
+            "llm_provider": job_effective.llm_provider,
+            "company_llm_provider": company_effective.llm_provider,
+            "ai_enrichment_run_concurrency": job_effective.ai_enrichment_run_concurrency,
             "anthropic": {
-                "model": effective.anthropic_model,
-                "base_url": effective.anthropic_base_url,
-                "has_api_key": bool(effective.anthropic_api_key),
+                "model": job_effective.anthropic_model,
+                "base_url": job_effective.anthropic_base_url,
+                "has_api_key": bool(job_effective.anthropic_api_key),
             },
             "gemini": {
-                "model": effective.gemini_model,
-                "has_api_key": bool(effective.gemini_api_key),
+                "model": job_effective.gemini_model,
+                "has_api_key": bool(job_effective.gemini_api_key),
             },
             "custom": {
-                "model": effective.custom_model,
-                "base_url": effective.custom_base_url,
-                "api_format": effective.custom_api_format,
-                "has_api_key": bool(effective.custom_api_key),
+                "model": job_effective.custom_model,
+                "base_url": job_effective.custom_base_url,
+                "api_format": job_effective.custom_api_format,
+                "has_api_key": bool(job_effective.custom_api_key),
             },
             "zhipu": {
-                "has_api_key": bool(effective.zhipu_api_key),
+                "has_api_key": bool(job_effective.zhipu_api_key),
+            },
+            "company_anthropic": {
+                "has_api_key": bool(company_effective.anthropic_api_key),
+                "api_key_preview": self._mask_secret(company_effective.anthropic_api_key),
+                "model": company_effective.anthropic_model,
+                "base_url": company_effective.anthropic_base_url,
+            },
+            "company_gemini": {
+                "has_api_key": bool(company_effective.gemini_api_key),
+                "api_key_preview": self._mask_secret(company_effective.gemini_api_key),
+                "model": company_effective.gemini_model,
+            },
+            "company_custom": {
+                "has_api_key": bool(company_effective.custom_api_key),
+                "api_key_preview": self._mask_secret(company_effective.custom_api_key),
+                "model": company_effective.custom_model,
+                "base_url": company_effective.custom_base_url,
+                "api_format": company_effective.custom_api_format,
+            },
+            "company_zhipu": {
+                "has_api_key": bool(company_effective.zhipu_api_key),
+                "api_key_preview": self._mask_secret(company_effective.zhipu_api_key),
             },
         }
 
@@ -193,16 +256,6 @@ class AIRuntimeSettingsService:
 
     def _validate_candidate(self, candidate: dict[str, Any]) -> None:
         errors: list[dict[str, Any]] = []
-        provider = (candidate.get("llm_provider") or settings.llm_provider or "").strip().lower()
-
-        if provider not in SUPPORTED_LLM_PROVIDERS:
-            errors.append(
-                {
-                    "loc": ["llm_provider"],
-                    "msg": f"Unsupported provider '{provider}'",
-                    "type": "value_error.provider",
-                }
-            )
 
         concurrency_value = candidate.get("ai_enrichment_run_concurrency")
         effective_concurrency = concurrency_value
@@ -239,46 +292,149 @@ class AIRuntimeSettingsService:
                     }
                 )
 
-        if provider in PROVIDER_REQUIRED_FIELDS:
-            effective = self._build_effective_settings(candidate)
-            effective_map = asdict(effective)
-            for field_name in PROVIDER_REQUIRED_FIELDS[provider]:
-                value = effective_map.get(field_name)
-                if value is None or (isinstance(value, str) and not value.strip()):
-                    errors.append(
-                        {
-                            "loc": [field_name],
-                            "msg": f"{field_name} is required for provider '{provider}'",
-                            "type": "value_error.required",
-                        }
-                    )
+        errors.extend(self._validate_profile(candidate, "jobs"))
+        errors.extend(self._validate_profile(candidate, "companies"))
 
         if errors:
             raise RuntimeSettingsValidationError(errors)
 
+    def _validate_profile(self, candidate: dict[str, Any], scope: str) -> list[dict[str, Any]]:
+        effective = self._build_effective_settings(candidate, scope)
+        provider = (effective.llm_provider or "").strip().lower()
+        provider_field = "llm_provider" if scope == "jobs" else "company_llm_provider"
+
+        errors: list[dict[str, Any]] = []
+        if provider not in SUPPORTED_LLM_PROVIDERS:
+            errors.append(
+                {
+                    "loc": [provider_field],
+                    "msg": f"Unsupported provider '{provider}'",
+                    "type": "value_error.provider",
+                }
+            )
+            return errors
+
+        effective_map = asdict(effective)
+        for field_name in PROVIDER_REQUIRED_FIELDS.get(provider, tuple()):
+            value = effective_map.get(field_name)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                errors.append(
+                    {
+                        "loc": [self._validation_loc_for_field(scope, field_name)],
+                        "msg": f"{self._validation_loc_for_field(scope, field_name)} is required for provider '{provider}'",
+                        "type": "value_error.required",
+                    }
+                )
+
+        return errors
+
     def _build_effective_settings(
         self,
         persisted_values: dict[str, Any],
+        scope: str = "jobs",
     ) -> EffectiveAIRuntimeSettings:
+        self._ensure_valid_scope(scope)
+        job_provider = persisted_values.get("llm_provider") or settings.llm_provider
+
+        provider = self._resolve_profile_value(
+            persisted_values,
+            scope,
+            "llm_provider",
+            job_provider if scope == "companies" else settings.llm_provider,
+        )
+
         return EffectiveAIRuntimeSettings(
-            llm_provider=(persisted_values.get("llm_provider") or settings.llm_provider).lower(),
+            llm_provider=(provider or settings.llm_provider).lower(),
             ai_enrichment_run_concurrency=int(
                 persisted_values.get("ai_enrichment_run_concurrency")
                 or settings.ai_enrichment_run_concurrency
             ),
-            anthropic_api_key=persisted_values.get("anthropic_api_key") or settings.anthropic_api_key,
-            anthropic_model=persisted_values.get("anthropic_model") or settings.anthropic_model,
-            anthropic_base_url=persisted_values.get("anthropic_base_url") or settings.anthropic_base_url,
-            gemini_api_key=persisted_values.get("gemini_api_key") or settings.gemini_api_key,
-            gemini_model=persisted_values.get("gemini_model") or settings.gemini_model,
-            custom_api_key=persisted_values.get("custom_api_key") or settings.custom_api_key,
-            custom_model=persisted_values.get("custom_model") or settings.custom_model,
-            custom_base_url=persisted_values.get("custom_base_url") or settings.custom_base_url,
-            custom_api_format=(
-                persisted_values.get("custom_api_format") or settings.custom_api_format
+            anthropic_api_key=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "anthropic_api_key",
+                settings.anthropic_api_key,
             ),
-            zhipu_api_key=persisted_values.get("zhipu_api_key") or settings.zhipu_api_key,
+            anthropic_model=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "anthropic_model",
+                settings.anthropic_model,
+            ),
+            anthropic_base_url=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "anthropic_base_url",
+                settings.anthropic_base_url,
+            ),
+            gemini_api_key=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "gemini_api_key",
+                settings.gemini_api_key,
+            ),
+            gemini_model=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "gemini_model",
+                settings.gemini_model,
+            ),
+            custom_api_key=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "custom_api_key",
+                settings.custom_api_key,
+            ),
+            custom_model=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "custom_model",
+                settings.custom_model,
+            ),
+            custom_base_url=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "custom_base_url",
+                settings.custom_base_url,
+            ),
+            custom_api_format=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "custom_api_format",
+                settings.custom_api_format,
+            ),
+            zhipu_api_key=self._resolve_profile_value(
+                persisted_values,
+                scope,
+                "zhipu_api_key",
+                settings.zhipu_api_key,
+            ),
         )
+
+    def _resolve_profile_value(
+        self,
+        persisted_values: dict[str, Any],
+        scope: str,
+        field_name: str,
+        shared_default: Any,
+    ) -> Any:
+        if scope == "jobs":
+            return persisted_values.get(field_name) or shared_default
+
+        company_field_name = f"company_{field_name}"
+        return (
+            persisted_values.get(company_field_name)
+            or persisted_values.get(field_name)
+            or shared_default
+        )
+
+    @staticmethod
+    def _validation_loc_for_field(scope: str, field_name: str) -> str:
+        if field_name in SECRET_FIELD_NAMES:
+            return field_name
+        if scope == "companies":
+            return f"company_{field_name}"
+        return field_name
 
     @staticmethod
     def _row_values(row: AppRuntimeSettings) -> dict[str, Any]:
@@ -317,10 +473,15 @@ class AIRuntimeSettingsService:
         parsed = urlparse(value)
         return bool(parsed.scheme and parsed.netloc)
 
+    @staticmethod
+    def _ensure_valid_scope(scope: str) -> None:
+        if scope not in RUNTIME_SCOPES:
+            raise ValueError(f"Unsupported runtime scope '{scope}'")
 
-def get_effective_runtime_settings() -> EffectiveAIRuntimeSettings:
+
+def get_effective_runtime_settings(scope: str = "jobs") -> EffectiveAIRuntimeSettings:
     db = SessionLocal()
     try:
-        return AIRuntimeSettingsService(db).get_effective_settings()
+        return AIRuntimeSettingsService(db).get_effective_settings(scope)
     finally:
         db.close()
