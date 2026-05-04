@@ -100,6 +100,8 @@ describe('AIEnrichmentPage', () => {
               completed_items: 4,
               failed_items: 1,
               current_job_title: 'Security Engineer',
+              in_progress_items: 2,
+              latest_started_job_title: 'Security Engineer',
             },
             {
               id: 'run-terminal-3',
@@ -505,7 +507,9 @@ describe('AIEnrichmentPage', () => {
     expect(screen.getByText(/run-complete-7/i)).toBeInTheDocument();
     expect(screen.getAllByText(/processed/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/succeeded/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/current focus/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Jobs in progress$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^2 jobs in progress$/i)).toBeInTheDocument();
+    expect(screen.getByText(/latest title:/i)).toBeInTheDocument();
     expect(screen.getByText(/security engineer/i)).toBeInTheDocument();
   });
 

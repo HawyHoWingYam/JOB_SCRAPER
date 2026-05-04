@@ -1,0 +1,384 @@
+{
+  "minimum_distinct_jobs": 100,
+  "entries": {
+    "python": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "Python",
+        "skill": "Python"
+      }
+    },
+    "java": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "Java",
+        "skill": "Java"
+      }
+    },
+    "javascript": {
+      "action": "merge",
+      "target": {
+        "category": "Frontend",
+        "technology": "JavaScript",
+        "skill": "JavaScript",
+        "aliases": ["js"]
+      }
+    },
+    "node js": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "Node.js",
+        "skill": "Node.js",
+        "aliases": ["nodejs"]
+      }
+    },
+    "ci cd": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "CI/CD",
+        "skill": "CI/CD",
+        "aliases": ["cicd"]
+      }
+    },
+    "project management": {
+      "action": "generic",
+      "generic_tag": "Project Management"
+    },
+    "vendor management": {
+      "action": "generic",
+      "generic_tag": "Vendor Management"
+    },
+    "troubleshooting": {
+      "action": "generic",
+      "generic_tag": "Troubleshooting"
+    },
+    "user acceptance testing": {
+      "action": "generic",
+      "generic_tag": "User Acceptance Testing"
+    },
+    "business analysis": {
+      "action": "generic",
+      "generic_tag": "Business Analysis"
+    },
+    "risk management": {
+      "action": "generic",
+      "generic_tag": "Risk Management"
+    },
+    "agile": {
+      "action": "generic",
+      "generic_tag": "Agile"
+    },
+    "testing": {
+      "action": "generic",
+      "generic_tag": "Testing"
+    },
+    "stakeholder management": {
+      "action": "generic",
+      "generic_tag": "Stakeholder Management"
+    },
+    "requirements gathering": {
+      "action": "generic",
+      "generic_tag": "Requirements Gathering"
+    },
+    "uat": {
+      "action": "generic",
+      "generic_tag": "User Acceptance Testing"
+    },
+    "incident management": {
+      "action": "generic",
+      "generic_tag": "Incident Management"
+    },
+    "documentation": {
+      "action": "generic",
+      "generic_tag": "Documentation"
+    },
+    "requirements analysis": {
+      "action": "generic",
+      "generic_tag": "Requirements Analysis"
+    },
+    "root cause analysis": {
+      "action": "generic",
+      "generic_tag": "Root Cause Analysis"
+    },
+    "change management": {
+      "action": "generic",
+      "generic_tag": "Change Management"
+    },
+    "data governance": {
+      "action": "generic",
+      "generic_tag": "Data Governance"
+    },
+    "functional specifications": {
+      "action": "generic",
+      "generic_tag": "Functional Specifications"
+    },
+    "quality assurance": {
+      "action": "generic",
+      "generic_tag": "Quality Assurance"
+    },
+    "aws": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Cloud Platforms",
+        "skill": "AWS"
+      }
+    },
+    "azure": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Cloud Platforms",
+        "skill": "Azure"
+      }
+    },
+    "microsoft azure": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Cloud Platforms",
+        "skill": "Azure"
+      }
+    },
+    "c#": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": ".NET",
+        "skill": "C#"
+      }
+    },
+    ".net": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": ".NET",
+        "skill": ".NET"
+      }
+    },
+    "php": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "PHP",
+        "skill": "PHP"
+      }
+    },
+    "git": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Version Control",
+        "skill": "Git"
+      }
+    },
+    "terraform": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Infrastructure as Code",
+        "skill": "Terraform"
+      }
+    },
+    "machine learning": {
+      "action": "merge",
+      "target": {
+        "category": "Data",
+        "technology": "Machine Learning",
+        "skill": "Machine Learning"
+      }
+    },
+    "power bi": {
+      "action": "merge",
+      "target": {
+        "category": "Data",
+        "technology": "Business Intelligence",
+        "skill": "Power BI"
+      }
+    },
+    "tableau": {
+      "action": "merge",
+      "target": {
+        "category": "Data",
+        "technology": "Business Intelligence",
+        "skill": "Tableau"
+      }
+    },
+    "active directory": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Identity & Access",
+        "skill": "Active Directory"
+      }
+    },
+    "vmware": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Virtualization",
+        "skill": "VMware"
+      }
+    },
+    "vpn": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Networking",
+        "skill": "VPN"
+      }
+    },
+    "network engineering": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Networking",
+        "skill": "Network Engineering"
+      }
+    },
+    "oracle": {
+      "action": "merge",
+      "target": {
+        "category": "Database",
+        "technology": "SQL",
+        "skill": "Oracle"
+      }
+    },
+    "linux": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Operating Systems",
+        "skill": "Linux"
+      }
+    },
+    "api": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "API Development",
+        "skill": "API Development"
+      }
+    },
+    "firewalls": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Security",
+        "skill": "Firewalls"
+      }
+    },
+    "it systems administration": {
+      "action": "review",
+      "note": "Operational phrase requires manual taxonomy curation."
+    },
+    "windows": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Operating Systems",
+        "skill": "Windows"
+      }
+    },
+    "data analysis": {
+      "action": "review",
+      "note": "Broad analytics term requires manual taxonomy curation."
+    },
+    "cybersecurity": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Security",
+        "skill": "Cybersecurity"
+      }
+    },
+    "system integration": {
+      "action": "review",
+      "note": "Broad integration phrase requires manual taxonomy curation."
+    },
+    "windows server": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Operating Systems",
+        "skill": "Windows Server"
+      }
+    },
+    "unix": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Operating Systems",
+        "skill": "UNIX"
+      }
+    },
+    "html": {
+      "action": "merge",
+      "target": {
+        "category": "Frontend",
+        "technology": "Markup",
+        "skill": "HTML"
+      }
+    },
+    "html5": {
+      "action": "merge",
+      "target": {
+        "category": "Frontend",
+        "technology": "Markup",
+        "skill": "HTML"
+      }
+    },
+    "devops": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "DevOps Practices",
+        "skill": "DevOps"
+      }
+    },
+    "networking": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Networking",
+        "skill": "Networking"
+      }
+    },
+    "business intelligence": {
+      "action": "merge",
+      "target": {
+        "category": "Data",
+        "technology": "Business Intelligence",
+        "skill": "Business Intelligence"
+      }
+    },
+    "restful apis": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "API Development",
+        "skill": "RESTful APIs"
+      }
+    },
+    "api integration": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "API Development",
+        "skill": "API Integration"
+      }
+    },
+    "microsoft 365": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Cloud Platforms",
+        "skill": "Microsoft 365"
+      }
+    }
+  }
+}

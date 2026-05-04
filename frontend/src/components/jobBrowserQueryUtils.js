@@ -1,7 +1,7 @@
 const EMPTY_QUERY = {
   search_query: '',
   employment_type: '',
-  category: '',
+  subcategory_ids: [],
   industry: '',
   posted_date_from: '',
   posted_date_to: '',
@@ -37,6 +37,21 @@ function normalizeNumericString(value) {
   return rawValue;
 }
 
+function normalizeIdArray(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeValue(item))
+      .filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    const normalized = normalizeValue(value);
+    return normalized ? [normalized] : [];
+  }
+
+  return [];
+}
+
 function startOfToday(referenceDate = new Date()) {
   return new Date(referenceDate.getFullYear(), referenceDate.getMonth(), referenceDate.getDate());
 }
@@ -62,7 +77,7 @@ export function normalizeQueryForSubmit(query) {
     ...query,
     search_query: normalizeDraftKeyword(query?.search_query || ''),
     employment_type: normalizeValue(query?.employment_type),
-    category: normalizeValue(query?.category),
+    subcategory_ids: normalizeIdArray(query?.subcategory_ids),
     industry: normalizeValue(query?.industry),
     posted_date_from: normalizeValue(query?.posted_date_from),
     posted_date_to: normalizeValue(query?.posted_date_to),
@@ -75,7 +90,12 @@ export function queriesAreEqual(left, right) {
   const normalizedLeft = normalizeQueryForSubmit(left || {});
   const normalizedRight = normalizeQueryForSubmit(right || {});
 
-  return Object.keys(EMPTY_QUERY).every((key) => normalizedLeft[key] === normalizedRight[key]);
+  return Object.keys(EMPTY_QUERY).every((key) => {
+    if (Array.isArray(normalizedLeft[key]) || Array.isArray(normalizedRight[key])) {
+      return JSON.stringify(normalizedLeft[key] || []) === JSON.stringify(normalizedRight[key] || []);
+    }
+    return normalizedLeft[key] === normalizedRight[key];
+  });
 }
 
 export function countPendingQueryChanges(appliedQuery, draftQuery) {
@@ -89,7 +109,7 @@ export function countPendingQueryChanges(appliedQuery, draftQuery) {
   if (applied.employment_type !== draft.employment_type) {
     count += 1;
   }
-  if (applied.category !== draft.category) {
+  if (JSON.stringify(applied.subcategory_ids) !== JSON.stringify(draft.subcategory_ids)) {
     count += 1;
   }
   if (applied.industry !== draft.industry) {

@@ -4,6 +4,7 @@ import Dashboard from './components/Dashboard';
 import JobBrowser from './components/JobBrowser';
 import AIEnrichmentPage from './components/ai/AIEnrichmentPage';
 import CompaniesPage from './components/companies/CompaniesPage';
+import AISettingsPage from './components/settings/AISettingsPage';
 import ScheduleManager from './components/scraper/ScheduleManager';
 import './App.css';
 
@@ -21,6 +22,7 @@ function App() {
           {activeView === 'jobs' && <JobBrowser />}
           {activeView === 'companies' && <CompaniesPage />}
           {activeView === 'ai' && <AIEnrichmentPage />}
+          {activeView === 'settings' && <AISettingsPage />}
           {activeView === 'scheduler' && <ScheduleManager onNavigateToAI={navigateToAI} />}
         </div>
       </main>

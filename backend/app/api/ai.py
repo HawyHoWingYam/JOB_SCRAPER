@@ -25,10 +25,18 @@ class EnrichRequest(BaseModel):
     limit: int = 100
 
 
+class QueryRunRequest(BaseModel):
+    review_candidate_names: Optional[List[str]] = None
+    polluted_skill_names: Optional[List[str]] = None
+    source_subclassification_names: Optional[List[str]] = None
+    scope: Literal["all", "enriched_only"] = "all"
+
+
 class CreateRunRequest(BaseModel):
-    mode: Literal["pending", "batch"] = "pending"
+    mode: Literal["pending", "batch", "query"] = "pending"
     limit: Optional[int] = None
     job_ids: Optional[List[UUID]] = None
+    query: Optional[QueryRunRequest] = None
 
 
 def _job_id_param(db: Session, job_id: UUID):
@@ -66,6 +74,13 @@ def _derive_last_failed_job_title(db: Session, run_id: str) -> Optional[str]:
 
 
 def _serialize_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
+    in_progress_items = max(
+        int(run.total_items or 0)
+        - int(run.pending_items or 0)
+        - int(run.completed_items or 0)
+        - int(run.failed_items or 0),
+        0,
+    ) if str(run.status or "").lower() in {"pending", "running"} else 0
     return {
         "id": run.id,
         "source_type": run.source_type,
@@ -79,6 +94,8 @@ def _serialize_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "current_job_title": getattr(run, "current_job_title", None),
+        "latest_started_job_title": getattr(run, "current_job_title", None),
+        "in_progress_items": in_progress_items,
         "last_failed_job_title": _derive_last_failed_job_title(db, run.id) if db is not None else None,
         "error_message": run.error_message,
     }
@@ -179,6 +196,18 @@ async def create_enrichment_run(
         if not request.job_ids:
             raise HTTPException(status_code=400, detail="job_ids are required for batch mode")
         run = service.create_manual_batch_run([str(job_id) for job_id in request.job_ids])
+    elif request.mode == "query":
+        if request.query is None:
+            raise HTTPException(status_code=400, detail="query is required for query mode")
+        try:
+            run = service.create_manual_query_run(
+                review_candidate_names=request.query.review_candidate_names,
+                polluted_skill_names=request.query.polluted_skill_names,
+                source_subclassification_names=request.query.source_subclassification_names,
+                scope=request.query.scope,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     else:
         raise HTTPException(status_code=400, detail="Unsupported run mode")
 

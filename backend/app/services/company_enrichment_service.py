@@ -84,8 +84,9 @@ class CompanyEnrichmentService:
             description = (job.description or "").strip()
             if len(description) > 280:
                 description = f"{description[:280]}..."
+            taxonomy_path = job.job_taxonomy_path or job.source_classification_name or "Unknown"
             job_lines.append(
-                f"- {job.title} | category: {job.ai_category or 'Unknown'} | {description or 'No description'}"
+                f"- {job.title} | taxonomy: {taxonomy_path} | {description or 'No description'}"
             )
 
         jobs_context = "\n".join(job_lines) if job_lines else "- No recent jobs available"

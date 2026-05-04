@@ -21,7 +21,7 @@ describe('jobBrowserQueryUtils', () => {
         {
           search_query: '',
           employment_type: '',
-          category: '',
+          subcategory_ids: [],
           industry: '',
           experience_years_from: '',
           experience_years_to: '',
@@ -31,7 +31,7 @@ describe('jobBrowserQueryUtils', () => {
         {
           search_query: '',
           employment_type: '',
-          category: '',
+          subcategory_ids: [],
           industry: '',
           experience_years_from: '',
           experience_years_to: '',
@@ -48,7 +48,7 @@ describe('jobBrowserQueryUtils', () => {
         {
           search_query: '',
           employment_type: '',
-          category: '',
+          subcategory_ids: [],
           industry: '',
           experience_years_from: '2',
           experience_years_to: '5',
@@ -58,7 +58,7 @@ describe('jobBrowserQueryUtils', () => {
         {
           search_query: '',
           employment_type: '',
-          category: '',
+          subcategory_ids: [],
           industry: '',
           experience_years_from: '3',
           experience_years_to: '5',
@@ -75,7 +75,7 @@ describe('jobBrowserQueryUtils', () => {
         {
           search_query: '',
           employment_type: '',
-          category: '',
+          subcategory_ids: [],
           industry: '',
           experience_years_from: '',
           experience_years_to: '',
@@ -85,7 +85,7 @@ describe('jobBrowserQueryUtils', () => {
         {
           search_query: '',
           employment_type: '',
-          category: '',
+          subcategory_ids: [],
           industry: '',
           experience_years_from: '',
           experience_years_to: '',
@@ -102,7 +102,7 @@ describe('jobBrowserQueryUtils', () => {
         {
           search_query: '',
           employment_type: '',
-          category: '',
+          subcategory_ids: [],
           industry: '',
           experience_years_from: '',
           experience_years_to: '',
@@ -112,7 +112,7 @@ describe('jobBrowserQueryUtils', () => {
         {
           search_query: '',
           employment_type: '',
-          category: '',
+          subcategory_ids: [],
           industry: '',
           experience_years_from: '2',
           experience_years_to: '5',

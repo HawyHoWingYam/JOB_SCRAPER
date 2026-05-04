@@ -179,16 +179,36 @@
     "default_path": ["Information & Communication Technology", "General", "General"],
     "subcategory_hints": {
       "Developers/Programmers": {
-        "allowed_categories": ["Software Development", "General"]
+        "allowed_categories": ["Software Development", "General"],
+        "default_path": [
+          "Information & Communication Technology",
+          "Software Development",
+          "Backend Development"
+        ]
       },
       "Help Desk & IT Support": {
-        "allowed_categories": ["Infrastructure & Support", "General"]
+        "allowed_categories": ["Infrastructure & Support", "General"],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Help Desk Support"
+        ]
       },
       "Business/Systems Analysts": {
-        "allowed_categories": ["Data & Analytics", "General"]
+        "allowed_categories": ["Data & Analytics", "General"],
+        "default_path": [
+          "Information & Communication Technology",
+          "Data & Analytics",
+          "Data Analysis"
+        ]
       },
       "Networks & Systems Administration": {
-        "allowed_categories": ["Infrastructure & Support", "General"]
+        "allowed_categories": ["Infrastructure & Support", "General"],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Systems Administration"
+        ]
       },
       "Database Development & Administration": {
         "allowed_categories": [
@@ -196,6 +216,34 @@
           "Cybersecurity",
           "Infrastructure & Support",
           "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Data & Analytics",
+          "Data Engineering"
+        ]
+      },
+      "Programme & Project Management": {
+        "allowed_categories": [
+          "Product & Quality",
+          "Infrastructure & Support",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Product & Quality",
+          "Project Management"
+        ]
+      },
+      "Product Management & Development": {
+        "allowed_categories": [
+          "Product & Quality",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Product & Quality",
+          "Product Management"
         ]
       },
       "Management": {
@@ -203,6 +251,161 @@
           "Product & Quality",
           "Infrastructure & Support",
           "General"
+        ]
+        ,
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Technology Management"
+        ]
+      },
+      "Sales - Pre & Post": {
+        "allowed_categories": [
+          "Infrastructure & Support",
+          "Cybersecurity",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Solutions Consulting"
+        ]
+      },
+      "Engineering - Software": {
+        "allowed_categories": [
+          "Software Development",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Software Development",
+          "Backend Development"
+        ]
+      },
+      "Consultants": {
+        "allowed_categories": [
+          "Infrastructure & Support",
+          "Data & Analytics",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Solutions Consulting"
+        ]
+      },
+      "Architects": {
+        "allowed_categories": [
+          "Infrastructure & Support",
+          "Software Development",
+          "Data & Analytics",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Solutions Architecture"
+        ]
+      },
+      "Team Leaders": {
+        "allowed_categories": [
+          "Infrastructure & Support",
+          "Software Development",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Technology Management"
+        ]
+      },
+      "Testing & Quality Assurance": {
+        "allowed_categories": [
+          "Product & Quality",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Product & Quality",
+          "QA Testing"
+        ]
+      },
+      "Telecommunications": {
+        "allowed_categories": [
+          "Infrastructure & Support",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Network Engineering"
+        ]
+      },
+      "Security": {
+        "allowed_categories": [
+          "Cybersecurity",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Cybersecurity",
+          "Security Operations"
+        ]
+      },
+      "Web Development & Production": {
+        "allowed_categories": [
+          "Software Development",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Software Development",
+          "Web Development"
+        ]
+      },
+      "Technical Writing": {
+        "allowed_categories": [
+          "Product & Quality",
+          "Infrastructure & Support",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Product & Quality",
+          "Technical Documentation"
+        ]
+      },
+      "Engineering - Hardware": {
+        "allowed_categories": [
+          "Infrastructure & Support",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Systems Administration"
+        ]
+      },
+      "Computer Operators": {
+        "allowed_categories": [
+          "Infrastructure & Support",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Application Support"
+        ]
+      },
+      "Engineering - Network": {
+        "allowed_categories": [
+          "Infrastructure & Support",
+          "General"
+        ],
+        "default_path": [
+          "Information & Communication Technology",
+          "Infrastructure & Support",
+          "Network Engineering"
         ]
       }
     }

@@ -4,8 +4,15 @@
       "name": "Frontend",
       "technologies": [
         {
+          "name": "Markup",
+          "skills": [
+            {"name": "HTML", "aliases": ["html", "html5"]}
+          ]
+        },
+        {
           "name": "JavaScript",
           "skills": [
+            {"name": "JavaScript", "aliases": ["js"]},
             {"name": "React", "aliases": ["react", "reactjs", "react.js"]},
             {"name": "Vue.js", "aliases": ["vue", "vuejs", "vue.js"]},
             {"name": "Angular", "aliases": ["angular", "angularjs"]},
@@ -34,8 +41,24 @@
       "name": "Backend",
       "technologies": [
         {
+          "name": "API Development",
+          "skills": [
+            {"name": "API Development", "aliases": ["api"]},
+            {"name": "RESTful APIs", "aliases": ["restful api", "restful apis"]},
+            {"name": "API Integration", "aliases": ["api integration"]}
+          ]
+        },
+        {
+          "name": ".NET",
+          "skills": [
+            {"name": ".NET", "aliases": ["dotnet", ".net core", ".net framework"]},
+            {"name": "C#", "aliases": ["c sharp", "c-sharp"]}
+          ]
+        },
+        {
           "name": "Python",
           "skills": [
+            {"name": "Python", "aliases": []},
             {"name": "Django", "aliases": ["django"]},
             {"name": "FastAPI", "aliases": ["fastapi", "fast-api"]},
             {"name": "Flask", "aliases": ["flask"]}
@@ -44,6 +67,7 @@
         {
           "name": "Node.js",
           "skills": [
+            {"name": "Node.js", "aliases": ["nodejs"]},
             {"name": "Express.js", "aliases": ["express", "expressjs"]},
             {"name": "NestJS", "aliases": ["nestjs", "nest"]}
           ]
@@ -51,8 +75,15 @@
         {
           "name": "Java",
           "skills": [
+            {"name": "Java", "aliases": []},
             {"name": "Spring Boot", "aliases": ["spring", "springboot"]},
             {"name": "Hibernate", "aliases": ["hibernate"]}
+          ]
+        },
+        {
+          "name": "PHP",
+          "skills": [
+            {"name": "PHP", "aliases": ["php"]}
           ]
         }
       ]
@@ -78,8 +109,33 @@
       ]
     },
     {
+      "name": "Data",
+      "technologies": [
+        {
+          "name": "Business Intelligence",
+          "skills": [
+            {"name": "Business Intelligence", "aliases": ["business intelligence", "bi"]},
+            {"name": "Power BI", "aliases": ["powerbi", "power bi"]},
+            {"name": "Tableau", "aliases": ["tableau"]}
+          ]
+        },
+        {
+          "name": "Machine Learning",
+          "skills": [
+            {"name": "Machine Learning", "aliases": ["ml", "machine learning"]}
+          ]
+        }
+      ]
+    },
+    {
       "name": "DevOps",
       "technologies": [
+        {
+          "name": "DevOps Practices",
+          "skills": [
+            {"name": "DevOps", "aliases": ["devops"]}
+          ]
+        },
         {
           "name": "Containers",
           "skills": [
@@ -90,8 +146,65 @@
         {
           "name": "CI/CD",
           "skills": [
+            {"name": "CI/CD", "aliases": ["cicd"]},
             {"name": "Jenkins", "aliases": ["jenkins"]},
             {"name": "GitHub Actions", "aliases": ["github-actions", "gh-actions"]}
+          ]
+        },
+        {
+          "name": "Cloud Platforms",
+          "skills": [
+            {"name": "AWS", "aliases": ["amazon web services"]},
+            {"name": "Azure", "aliases": ["microsoft azure"]},
+            {"name": "Microsoft 365", "aliases": ["office 365", "m365"]}
+          ]
+        },
+        {
+          "name": "Operating Systems",
+          "skills": [
+            {"name": "Linux", "aliases": ["linux"]},
+            {"name": "Windows", "aliases": ["windows", "microsoft windows"]},
+            {"name": "Windows Server", "aliases": ["windows server"]},
+            {"name": "UNIX", "aliases": ["unix"]}
+          ]
+        },
+        {
+          "name": "Security",
+          "skills": [
+            {"name": "Cybersecurity", "aliases": ["cybersecurity", "cyber security"]},
+            {"name": "Firewalls", "aliases": ["firewalls"]}
+          ]
+        },
+        {
+          "name": "Version Control",
+          "skills": [
+            {"name": "Git", "aliases": ["git"]}
+          ]
+        },
+        {
+          "name": "Infrastructure as Code",
+          "skills": [
+            {"name": "Terraform", "aliases": ["terraform"]}
+          ]
+        },
+        {
+          "name": "Identity & Access",
+          "skills": [
+            {"name": "Active Directory", "aliases": ["active directory"]}
+          ]
+        },
+        {
+          "name": "Virtualization",
+          "skills": [
+            {"name": "VMware", "aliases": ["vmware"]}
+          ]
+        },
+        {
+          "name": "Networking",
+          "skills": [
+            {"name": "Networking", "aliases": ["networking"]},
+            {"name": "Network Engineering", "aliases": ["network engineering"]},
+            {"name": "VPN", "aliases": ["vpn"]}
           ]
         }
       ]

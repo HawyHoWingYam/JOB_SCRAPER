@@ -40,9 +40,13 @@ const Sidebar = ({ activeView, setActiveView }) => {
             </nav>
 
             <div className="sidebar-footer">
-                <button className="nav-item">
+                <button
+                    className={`nav-item ${activeView === 'settings' ? 'active' : ''}`}
+                    onClick={() => setActiveView('settings')}
+                >
                     <Settings size={20} className="nav-icon" />
                     <span>Settings</span>
+                    {activeView === 'settings' && <div className="active-indicator" />}
                 </button>
                 <div className="system-status">
                     <div className="status-dot online"></div>

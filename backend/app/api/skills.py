@@ -1,9 +1,8 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.repositories.skill_repository import SkillRepository
-from app.models import SkillCategory
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
@@ -28,5 +27,5 @@ async def search_skills(q: str, limit: int = 10, db: Session = Depends(get_db)):
 @router.get("/categories")
 async def get_skill_categories(db: Session = Depends(get_db)):
     """Get all skill categories"""
-    categories = db.query(SkillCategory.name).distinct().order_by(SkillCategory.name.asc()).all()
-    return {"categories": [c[0] for c in categories]}
+    repo = SkillRepository()
+    return {"categories": repo.get_visible_categories(db)}

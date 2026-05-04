@@ -20,4 +20,14 @@ describe('Sidebar', () => {
     await userEvent.click(screen.getByRole('button', { name: /scheduler/i }));
     expect(setActiveView).toHaveBeenCalledWith('scheduler');
   });
+
+  it('routes the footer settings button into the settings view', async () => {
+    const setActiveView = vi.fn();
+
+    render(<Sidebar activeView="dashboard" setActiveView={setActiveView} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /^settings$/i }));
+
+    expect(setActiveView).toHaveBeenCalledWith('settings');
+  });
 });

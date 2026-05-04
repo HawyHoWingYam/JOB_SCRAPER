@@ -16,8 +16,9 @@ from app.ai.job_insight_extractor import get_job_insight_extractor
 from app.ai.llm_client import LLMUpstreamError, LLMResponseFormatError
 from app.config import settings
 from app.models.job import Job
-from app.models import JobSubcategory, Skill
+from app.models import JobSubcategory, Skill, SkillReviewCandidate
 from app.database import SessionLocal
+from app.repositories.job_skill_mention_repository import JobSkillMentionRepository
 from app.repositories.job_skill_repository import JobSkillRepository
 from app.services.job_category_normalizer import JobCategoryNormalizer
 from app.services.skill_normalizer import SkillNormalizer
@@ -54,7 +55,11 @@ class AIEnrichmentService:
             category_candidates["cross_domain_min_confidence"] = (
                 self.settings.job_classification_cross_domain_min_confidence
             )
-            skill_candidates = skill_normalizer.get_taxonomy_candidate_slice(job.title)
+            skill_candidates = skill_normalizer.get_taxonomy_candidate_slice(
+                job.title,
+                description=job.description or "",
+                source_subclassification_name=job.source_subclassification_name,
+            )
             insight = await self.insight_extractor.extract(
                 title=job.title,
                 description=job.description or "",
@@ -84,17 +89,6 @@ class AIEnrichmentService:
             job.subcategory_id = subcategory_id
             job.ai_enriched_at = utc_now()
 
-            accepted_hierarchy = {}
-            if hasattr(job_category_normalizer, "get_category_hierarchy"):
-                accepted_hierarchy = (
-                    job_category_normalizer.get_category_hierarchy(subcategory_id) or {}
-                )
-
-            job.ai_category = (
-                self._build_compatibility_category(accepted_hierarchy)
-                or classification.get("compatibility_category")
-                or classification.get("category")
-            )
             job.ai_summary = insight.get("summary")
 
             experience = insight.get("experience") or {}
@@ -114,15 +108,86 @@ class AIEnrichmentService:
                 )
 
             # Update relational tables
+            mention_repo = JobSkillMentionRepository()
             job_skill_repo = JobSkillRepository()
             existing_skill_ids = {
                 job_skill.skill_id
                 for job_skill in job_skill_repo.get_job_skills(db, job.id)
             }
+            previous_mentions = mention_repo.get_mentions_for_job(db, job.id)
+            affected_candidate_ids = {
+                mention.review_candidate_id
+                for mention in previous_mentions
+                if mention.review_candidate_id is not None
+            }
+            mention_repo.delete_mentions_for_job(db, job.id)
+            current_matched_skill_ids = set()
 
-            for skill_name in extracted_skills:
-                skill_id, _, _ = skill_normalizer.normalize_skill(skill_name)
+            for extracted_skill in extracted_skills:
+                decision = skill_normalizer.resolve_extracted_skill(extracted_skill)
+                action = decision.get("action")
+                raw_name = ""
+                if isinstance(extracted_skill, dict):
+                    raw_name = str(
+                        extracted_skill.get("name")
+                        or extracted_skill.get("skill")
+                        or extracted_skill.get("raw_name")
+                        or extracted_skill.get("normalized_name")
+                        or ""
+                    ).strip()
+                elif isinstance(extracted_skill, str):
+                    raw_name = extracted_skill.strip()
+
+                if action == "generic_tag":
+                    generic_tag = str(decision.get("generic_tag") or "").strip()
+                    mention_repo.create_mention(
+                        db,
+                        job_id=job.id,
+                        raw_name=raw_name or generic_tag,
+                        normalized_name=generic_tag,
+                        resolution="generic_tag",
+                        generic_tag=generic_tag,
+                        confidence=insight.get("confidence"),
+                    )
+                    continue
+
+                if action == "review_candidate":
+                    candidate = skill_normalizer.register_review_candidate(
+                        raw_name=str(decision.get("raw_name") or ""),
+                        normalized_name=str(decision.get("normalized_name") or ""),
+                        job_id=job.id,
+                        suggested_category=decision.get("suggested_category"),
+                        suggested_technology=decision.get("suggested_technology"),
+                        description=job.description or "",
+                        source_subclassification_name=job.source_subclassification_name,
+                    )
+                    mention_repo.create_mention(
+                        db,
+                        job_id=job.id,
+                        raw_name=raw_name or str(decision.get("raw_name") or ""),
+                        normalized_name=candidate.normalized_name,
+                        resolution="review_candidate",
+                        review_candidate_id=candidate.id,
+                        confidence=insight.get("confidence"),
+                    )
+                    affected_candidate_ids.add(candidate.id)
+                    continue
+
+                if action != "match_existing":
+                    continue
+
+                skill_id = decision["skill_id"]
+                current_matched_skill_ids.add(skill_id)
                 skill = db.query(Skill).filter_by(id=skill_id).first()
+                mention_repo.create_mention(
+                    db,
+                    job_id=job.id,
+                    raw_name=raw_name or str(decision.get("skill_name") or ""),
+                    normalized_name=str(decision.get("skill_name") or ""),
+                    resolution="match_existing",
+                    skill_id=skill_id,
+                    confidence=insight.get("confidence"),
+                )
 
                 job_skill_repo.create_job_skill(
                     db,
@@ -139,6 +204,19 @@ class AIEnrichmentService:
                     )
                 existing_skill_ids.add(skill_id)
 
+            job_skill_repo.delete_obsolete_job_skills(
+                db,
+                job.id,
+                keep_skill_ids=current_matched_skill_ids,
+                source="ai",
+            )
+            for candidate_id in affected_candidate_ids:
+                candidate = db.query(SkillReviewCandidate).filter_by(id=candidate_id).first()
+                if candidate is None:
+                    continue
+                candidate.occurrence_count = mention_repo.count_jobs_for_review_candidate(
+                    db, candidate_id
+                )
             db.commit()
 
         except LLMUpstreamError as e:
@@ -211,6 +289,21 @@ class AIEnrichmentService:
 
         return results
 
+    async def enrich_job_id(self, job_id: UUID) -> Dict[str, Any]:
+        """Enrich a single job by ID using an isolated DB session."""
+        db = SessionLocal()
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job is None:
+                return {
+                    "job_id": str(job_id),
+                    "status": "error",
+                    "error": "job not found",
+                }
+            return await self.enrich_job(job, db)
+        finally:
+            db.close()
+
     async def enrich_unenriched(
         self,
         limit: int = 100,
@@ -232,18 +325,6 @@ class AIEnrichmentService:
             db.close()
 
         return await self.enrich_batch(job_ids, on_progress)
-
-    def _build_compatibility_category(self, hierarchy: Dict[str, Any]) -> Optional[str]:
-        """Render an accepted taxonomy hierarchy into the legacy ai_category string."""
-        parts = [
-            hierarchy.get("domain"),
-            hierarchy.get("category"),
-            hierarchy.get("subcategory"),
-        ]
-        if not all(parts):
-            return None
-        return " / ".join(parts)
-
 
 _service: Optional[AIEnrichmentService] = None
 

@@ -11,7 +11,7 @@ const ALL_JOBS = [
     company_industry: 'Healthcare',
     location: 'Hong Kong',
     employment_type: 'Full-time',
-    ai_category: 'Engineering / Backend / Platform',
+    job_taxonomy: { path: 'Information & Communication Technology / Software Development / Backend Development' },
     posted_date: '2026-04-15T00:00:00Z',
   },
   {
@@ -21,7 +21,7 @@ const ALL_JOBS = [
     company_industry: 'Technology',
     location: 'Hong Kong',
     employment_type: 'Full-time',
-    ai_category: 'Engineering / Backend / Platform',
+    job_taxonomy: { path: 'Information & Communication Technology / Software Development / Backend Development' },
     posted_date: '2026-04-14T00:00:00Z',
   },
   {
@@ -31,7 +31,7 @@ const ALL_JOBS = [
     company_industry: 'Healthcare',
     location: 'Hong Kong',
     employment_type: 'Contract',
-    ai_category: 'Engineering / Backend / Platform',
+    job_taxonomy: { path: 'Information & Communication Technology / Data & Analytics / Data Analysis' },
     posted_date: '2026-04-13T00:00:00Z',
   },
 ];
@@ -167,9 +167,18 @@ describe('JobBrowser', () => {
             regions: [],
             location_hierarchy: [],
             employment_types: ['Full-time', 'Contract'],
-            categories: ['Engineering / Backend / Platform'],
             industries: ['Technology', 'Healthcare'],
           }),
+        });
+      }
+
+      if (url.pathname === '/api/v1/filters/job-subcategories') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ([
+            { id: 'subcat-backend', name: 'Backend Development' },
+            { id: 'subcat-data', name: 'Data Analysis' },
+          ]),
         });
       }
 
@@ -251,7 +260,7 @@ describe('JobBrowser', () => {
           text_expression: 'erp',
           structured_filters: {
             employment_type: '',
-            category: '',
+            subcategory_ids: [],
             industry: 'Healthcare',
             posted_date_from: '',
             posted_date_to: '',
@@ -294,7 +303,7 @@ describe('JobBrowser', () => {
           text_expression: 'erp',
           structured_filters: {
             employment_type: '',
-            category: '',
+            subcategory_ids: [],
             industry: '',
             posted_date_from: '',
             posted_date_to: '',
@@ -307,7 +316,7 @@ describe('JobBrowser', () => {
           text_expression: '',
           structured_filters: {
             employment_type: '',
-            category: '',
+            subcategory_ids: [],
             industry: 'Healthcare',
             posted_date_from: '',
             posted_date_to: '',
@@ -424,7 +433,7 @@ describe('JobBrowser', () => {
             text_expression: 'erp',
             structured_filters: {
               employment_type: '',
-              category: '',
+              subcategory_ids: [],
               industry: '',
               posted_date_from: '',
               posted_date_to: '',

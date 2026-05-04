@@ -25,8 +25,10 @@ Instructions:
 2. Include: programming languages, frameworks, tools, platforms
 3. Normalize names (e.g., "JS" → "JavaScript", "K8s" → "Kubernetes")
 4. Exclude soft skills (communication, teamwork, etc.)
-5. Prefer `match_existing` when an existing taxonomy node is a reasonable fit
-6. Use `create_new` only when the existing taxonomy slice clearly does not fit
+5. Prefer `match_existing` only for concrete tools, platforms, frameworks, and technologies
+6. If a term appears in the review-only list, leave it unresolved instead of forcing an existing match
+7. If a term appears in the suppressed list, do not emit it as a skill unless it is clearly a concrete product/tool
+8. Use `create_new` only when the existing taxonomy slice clearly does not fit
 
 Respond with JSON only:
 {{"skills": ["skill1", "skill2", ...], "taxonomy_decisions": [{{"skill": "skill1", "action": "match_existing|create_new", "category": "L1", "technology": "L2", "existing_skill": "L3 or null"}}], "confidence": 0.0-1.0}}
@@ -101,7 +103,9 @@ class SkillExtractor:
             f"Inferred technology hint: {taxonomy_candidates.get('technology_hint', 'Unknown')}\n"
             f"Existing categories:\n{self._format_candidates(categories)}\n"
             f"Existing technologies:\n{self._format_candidates(technologies)}\n"
-            f"Existing skills:\n{self._format_candidates(skills)}"
+            f"Existing skills:\n{self._format_candidates(skills)}\n"
+            f"Review-only terms:\n{self._format_candidates(taxonomy_candidates.get('review_only_terms', []))}\n"
+            f"Suppressed broad terms:\n{self._format_candidates(taxonomy_candidates.get('suppressed_review_terms', []))}"
         )
 
     def _format_candidates(self, values: List[str]) -> str:

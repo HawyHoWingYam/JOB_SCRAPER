@@ -41,10 +41,10 @@ def collect_verification_snapshot(connection) -> dict[str, int]:
             """,
             "allow_missing": True,
         },
-        "jobs_unmapped_category": {
+        "jobs_without_subcategory": {
             "query": """
                 SELECT COUNT(*) FROM jobs
-                WHERE subcategory_id IS NULL AND ai_category IS NOT NULL AND is_deleted = false
+                WHERE subcategory_id IS NULL AND is_deleted = false
             """,
             "allow_missing": True,
         },
@@ -87,6 +87,29 @@ def collect_verification_snapshot(connection) -> dict[str, int]:
                 JOIN skills s ON js.skill_id = s.id
                 JOIN skill_technologies st ON s.technology_id = st.id
                 JOIN skill_categories sc ON st.category_id = sc.id
+            """,
+            "allow_missing": True,
+        },
+        "job_skill_mentions_total": {
+            "query": "SELECT COUNT(*) FROM job_skill_mentions",
+            "allow_missing": True,
+        },
+        "skill_review_candidates_pending": {
+            "query": """
+                SELECT COUNT(*)
+                FROM skill_review_candidates
+                WHERE status = 'pending'
+            """,
+            "allow_missing": True,
+        },
+        "polluted_other_general_skills": {
+            "query": """
+                SELECT COUNT(*)
+                FROM skills s
+                JOIN skill_technologies st ON s.technology_id = st.id
+                JOIN skill_categories sc ON st.category_id = sc.id
+                WHERE lower(sc.name) = 'other'
+                  AND lower(st.name) = 'general'
             """,
             "allow_missing": True,
         },
@@ -190,6 +213,7 @@ def render_report(snapshot: dict[str, int]) -> str:
         f"Checkpoint: {infer_checkpoint(snapshot)}",
         f"Jobs enriched: {jobs_enriched}/{jobs_total}",
         f"Subcategory coverage: {jobs_with_subcategory}/{jobs_total}",
+        f"Jobs without subcategory: {snapshot.get('jobs_without_subcategory', 0)}",
         f"Job domains: {snapshot.get('job_domains', 0)}",
         f"Job categories: {snapshot.get('job_categories', 0)}",
         f"Job subcategories: {snapshot.get('job_subcategories', 0)}",
@@ -199,15 +223,20 @@ def render_report(snapshot: dict[str, int]) -> str:
         f"Skill technologies: {snapshot.get('skill_technologies', 0)}",
         f"Job-skill associations: {job_skills}",
         f"Skill chain integrity: {job_skills_with_skill_chain}/{job_skills}",
+        f"Raw job skill mentions: {snapshot.get('job_skill_mentions_total', 0)}",
+        (
+            "Pending skill review candidates: "
+            f"{snapshot.get('skill_review_candidates_pending', 0)}"
+        ),
+        (
+            "Polluted Other/General skills: "
+            f"{snapshot.get('polluted_other_general_skills', 0)}"
+        ),
         (
             "Filter visibility / distinct_job_count mismatches: "
             f"{snapshot.get('visible_nodes_without_distinct_job_count', 0)}"
         ),
     ]
-
-    jobs_unmapped_category = snapshot.get("jobs_unmapped_category")
-    if jobs_unmapped_category is not None:
-        lines.append(f"Jobs still relying on ai_category only: {jobs_unmapped_category}")
 
     unenriched_jobs = snapshot.get("unenriched_jobs")
     if unenriched_jobs is not None:

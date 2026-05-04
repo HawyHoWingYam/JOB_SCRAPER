@@ -23,7 +23,9 @@ function createJobPayload(overrides = {}) {
     employment_type: 'Full-time',
     skills: ['Python', 'FastAPI'],
     ai_summary: 'Builds internal platform services and backend APIs.',
-    ai_category: 'Engineering / Backend / Platform',
+    job_taxonomy: {
+      path: 'Information & Communication Technology / Software Development / Backend Development',
+    },
     ai_enriched_at: '2026-04-15T12:34:56Z',
     source_classification_name: 'Information & Communication Technology',
     source_subclassification_name: 'Platform Engineering',
@@ -78,7 +80,7 @@ describe('JobDetailModal', () => {
         ai_enriched_at: null,
         skills: [],
         ai_summary: null,
-        ai_category: null,
+        job_taxonomy: null,
         experience_level: null,
         experience_summary: null,
       }),
@@ -95,7 +97,7 @@ describe('JobDetailModal', () => {
       createJobPayload({
         skills: [],
         ai_summary: null,
-        ai_category: null,
+        job_taxonomy: null,
         experience_level: 'not_specified',
         experience_summary: null,
       }),
@@ -104,7 +106,7 @@ describe('JobDetailModal', () => {
     expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
     expect(screen.getByText('No technical skills extracted from this posting')).toBeInTheDocument();
     expect(screen.getByText('No AI summary extracted from this posting')).toBeInTheDocument();
-    expect(screen.getByText('No AI category assigned')).toBeInTheDocument();
+    expect(screen.getByText('No governed job taxonomy assigned')).toBeInTheDocument();
     expect(screen.getByText('No explicit experience requirement found in the posting')).toBeInTheDocument();
   });
 

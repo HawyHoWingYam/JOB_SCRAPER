@@ -23,7 +23,14 @@ import './JobBrowser.css';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 function hasQueryValue(value) {
+    if (Array.isArray(value)) {
+        return value.length > 0;
+    }
     return value !== '' && value != null;
+}
+
+function getJobTaxonomyPath(job) {
+    return job?.job_taxonomy?.path || '';
 }
 
 function formatFilterDate(value) {
@@ -148,8 +155,8 @@ function JobBrowser() {
     const [layerSummaries, setLayerSummaries] = useState([]);
     const [filterOptions, setFilterOptions] = useState({
         employment_types: [],
-        categories: [],
-        industries: []
+        industries: [],
+        job_subcategories: [],
     });
     const [pagination, setPagination] = useState({
         page: 1,
@@ -228,10 +235,20 @@ function JobBrowser() {
     useEffect(() => {
         const fetchFilterOptions = async () => {
             try {
-                const response = await fetch(`${API_URL}/api/v1/jobs/filters`);
-                if (response.ok) {
-                    const data = await response.json();
-                    setFilterOptions(data);
+                const [baseResponse, subcategoriesResponse] = await Promise.all([
+                    fetch(`${API_URL}/api/v1/jobs/filters`),
+                    fetch(`${API_URL}/api/v1/filters/job-subcategories`),
+                ]);
+
+                if (baseResponse.ok && subcategoriesResponse.ok) {
+                    const [data, jobSubcategories] = await Promise.all([
+                        baseResponse.json(),
+                        subcategoriesResponse.json(),
+                    ]);
+                    setFilterOptions({
+                        ...data,
+                        job_subcategories: jobSubcategories,
+                    });
                 }
             } catch (err) {
                 console.error('Failed to fetch filter options:', err);
@@ -558,10 +575,10 @@ function JobBrowser() {
 
                                     <div className="job-tags-area">
                                         {job.employment_type && <span className="tag type-tag">{job.employment_type}</span>}
-                                        {job.ai_category && (
+                                        {getJobTaxonomyPath(job) && (
                                             <span className="tag ai-tag">
                                                 <BrainCircuit size={12} />
-                                                {job.ai_category}
+                                                {getJobTaxonomyPath(job)}
                                             </span>
                                         )}
                                     </div>

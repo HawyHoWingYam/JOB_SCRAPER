@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.ai.llm_client import get_llm_client, get_llm_status
+from app.ai.llm_client import refresh_llm_status
 
 router = APIRouter(tags=["health"])
 
@@ -8,9 +8,7 @@ router = APIRouter(tags=["health"])
 @router.get("/health")
 async def health_check():
     """Health check endpoint for container orchestration."""
-    # Trigger LLM client initialization to check configuration
-    get_llm_client()
-    llm_status = get_llm_status()
+    llm_status = refresh_llm_status()
 
     if llm_status["is_degraded"]:
         return {

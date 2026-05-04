@@ -45,6 +45,7 @@ class JobCategoryNormalizer:
             domain_name,
             category_name,
             subcategory_name,
+            allow_create=True,
         )
 
     def resolve_taxonomy_decision(
@@ -70,9 +71,20 @@ class JobCategoryNormalizer:
         final_decision = classification.get("final_taxonomy_decision")
 
         source_path = self._resolve_path_from_decision(source_decision, source_slice)
+        source_fallback_path = (*self.build_default_path(source_slice), False)
+        source_path = self._normalize_governed_path(
+            source_path,
+            fallback_path=source_fallback_path,
+            governance_override=bool(classification.get("governance_override")),
+        )
         final_path = self._resolve_open_path_from_decision(
             final_decision or self._decision_from_resolved_path(source_path),
             fallback_path=source_path,
+        )
+        final_path = self._normalize_governed_path(
+            final_path,
+            fallback_path=source_path,
+            governance_override=bool(classification.get("governance_override")),
         )
 
         domain_name, category_name, subcategory_name, allow_create = (
@@ -84,12 +96,43 @@ class JobCategoryNormalizer:
                 cross_domain_min_confidence=cross_domain_min_confidence,
             )
         )
+        domain_name, category_name, subcategory_name, allow_create = self._prefer_specific_default_over_generic(
+            (domain_name, category_name, subcategory_name, allow_create),
+            source_slice,
+            governance_override=bool(classification.get("governance_override")),
+        )
+        resolved_path = (domain_name, category_name, subcategory_name)
         return self._get_or_create_path(
             domain_name,
             category_name,
             subcategory_name,
-            allow_create=allow_create,
+            allow_create=(
+                allow_create
+                if classification.get("governance_override")
+                else resolved_path == source_fallback_path[:3]
+            ),
         )
+
+    def _prefer_specific_default_over_generic(
+        self,
+        resolved_path: tuple[str, str, str, bool],
+        source_slice: SourceBoundTaxonomySlice,
+        *,
+        governance_override: bool,
+    ) -> tuple[str, str, str, bool]:
+        """Prefer a more specific source default when the resolved leaf is generic."""
+        if governance_override:
+            return resolved_path
+
+        default_domain, default_category, default_subcategory = source_slice.default_path
+        if default_subcategory == "General":
+            return resolved_path
+
+        _, category_name, subcategory_name, _ = resolved_path
+        if category_name != "General" and subcategory_name != "General":
+            return resolved_path
+
+        return (default_domain, default_category, default_subcategory, False)
 
     def get_taxonomy_candidate_slice(
         self,
@@ -256,28 +299,56 @@ class JobCategoryNormalizer:
         domain_name: str,
         category_name: str,
         subcategory_name: str,
-        allow_create: bool = True,
+        allow_create: bool = False,
     ) -> uuid.UUID:
         """Resolve a taxonomy path to ids, creating hidden nodes when needed."""
         domain = self._find_domain(domain_name)
         if domain is None:
             if not allow_create:
-                allow_create = True
+                raise ValueError(f"Unknown governed domain: {domain_name}")
             domain = self._create_domain(domain_name)
 
         category = self._find_category(domain.id, category_name)
         if category is None:
             if not allow_create:
-                allow_create = True
+                raise ValueError(f"Unknown governed category: {category_name}")
             category = self._create_category(domain.id, category_name)
 
         subcategory = self._find_subcategory(category.id, subcategory_name)
         if subcategory is None:
             if not allow_create:
-                allow_create = True
+                raise ValueError(f"Unknown governed subcategory: {subcategory_name}")
             subcategory = self._create_subcategory(category.id, subcategory_name)
 
         return subcategory.id
+
+    def _path_exists(
+        self,
+        domain_name: str,
+        category_name: str,
+        subcategory_name: str,
+    ) -> bool:
+        """Return whether the governed taxonomy already contains the full path."""
+        domain = self._find_domain(domain_name)
+        if domain is None:
+            return False
+
+        category = self._find_category(domain.id, category_name)
+        if category is None:
+            return False
+
+        return self._find_subcategory(category.id, subcategory_name) is not None
+
+    def _normalize_governed_path(
+        self,
+        path: tuple[str, str, str, bool],
+        fallback_path: tuple[str, str, str, bool],
+        governance_override: bool,
+    ) -> tuple[str, str, str, bool]:
+        """Clamp non-override paths to existing governed taxonomy nodes."""
+        if governance_override or self._path_exists(*path[:3]):
+            return path
+        return fallback_path
 
     def _find_domain(self, name: str) -> Optional[JobDomain]:
         return self.db.query(JobDomain).filter_by(name=name).first()

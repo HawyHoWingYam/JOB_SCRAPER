@@ -13,7 +13,6 @@ class JobSearchFiltersSchema(BaseModel):
     region: Optional[str] = None
     district: Optional[str] = None
     employment_type: Optional[str] = None
-    category: Optional[str] = None
     industry: Optional[str] = None
     posted_date_from: Optional[date] = None
     posted_date_to: Optional[date] = None

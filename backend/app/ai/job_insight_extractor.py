@@ -47,10 +47,21 @@ __EXISTING_TECHNOLOGIES__
 Existing skills:
 __EXISTING_SKILLS__
 
+Review-only technical terms from this context:
+__REVIEW_ONLY_TERMS__
+
+Suppressed broad technical terms from this context:
+__SUPPRESSED_REVIEW_TERMS__
+
 Rules:
 - Extract only technical / hard skills (languages, frameworks, tools, platforms).
 - Exclude soft skills.
 - Normalize common abbreviations (e.g., JS -> JavaScript, K8s -> Kubernetes).
+- Prefer `match_existing` only for concrete tools, platforms, frameworks, and technologies.
+- If a term appears in the review-only list, mark it as `kind=technical` and `resolution=unresolved`.
+- If a term appears in the suppressed list, do not emit it as a skill unless the posting clearly names a concrete product/tool instead.
+- Do not force broad infrastructure, architecture, platform, or discipline terms into an existing skill.
+- Use `kind=generic` with `resolution=drop` only for non-technical process/collaboration terms.
 
 **3) Summary Instructions**
 Write a concise 2-3 sentence summary. Focus on responsibilities, impact, and the core requirements.
@@ -121,7 +132,17 @@ Respond with JSON only (no markdown, no extra keys):
     "cross_domain_reason": ""
   }},
   "summary": "",
-  "skills": ["", ""],
+  "skills": [
+    {
+      "name": "",
+      "kind": "technical|generic|reject",
+      "resolution": "match_existing|create_new|unresolved|drop",
+      "category": "",
+      "technology": "",
+      "existing_skill": "",
+      "evidence": ""
+    }
+  ],
   "experience": {{
     "experience_level": "not_specified",
     "experience_min_years": null,
@@ -181,6 +202,12 @@ class JobInsightExtractor:
             "__EXISTING_SKILLS__": self._format_candidates(
                 skill_taxonomy_candidates.get("existing_skills", [])
             ),
+            "__REVIEW_ONLY_TERMS__": self._format_candidates(
+                skill_taxonomy_candidates.get("review_only_terms", [])
+            ),
+            "__SUPPRESSED_REVIEW_TERMS__": self._format_candidates(
+                skill_taxonomy_candidates.get("suppressed_review_terms", [])
+            ),
             "__TITLE__": title,
             "__DESCRIPTION__": (description or "No description")[:2000],
         }
@@ -205,7 +232,7 @@ class JobInsightExtractor:
         Return shape:
         - classification: dict (may be empty)
         - summary: str | None
-        - skills: list[str]
+        - skills: list[dict]
         - experience: {experience_level, experience_min_years, experience_max_years, summary, evidence}
         """
         prompt = self.build_prompt(
@@ -319,19 +346,30 @@ class JobInsightExtractor:
             return "- None"
         return "\n".join(f"- {str(value)}" for value in values if str(value).strip())
 
-    def _normalize_skills(self, skills_value: Any) -> List[str]:
+    def _normalize_skills(self, skills_value: Any) -> List[Dict[str, Any]]:
         if not isinstance(skills_value, list):
             return []
 
-        normalized: List[str] = []
+        normalized: List[Dict[str, Any]] = []
         seen = set()
 
         for raw in skills_value:
             skill = ""
+            item: Dict[str, Any] = {}
             if isinstance(raw, dict):
                 skill = str(raw.get("skill") or raw.get("name") or "").strip()
+                item = {
+                    "name": skill,
+                    "kind": str(raw.get("kind") or "").strip().lower() or None,
+                    "resolution": str(raw.get("resolution") or "").strip().lower() or None,
+                    "category": str(raw.get("category") or "").strip() or None,
+                    "technology": str(raw.get("technology") or "").strip() or None,
+                    "existing_skill": str(raw.get("existing_skill") or "").strip() or None,
+                    "evidence": str(raw.get("evidence") or "").strip() or None,
+                }
             elif isinstance(raw, str):
                 skill = raw.strip()
+                item = {"name": skill}
             else:
                 continue
 
@@ -341,7 +379,7 @@ class JobInsightExtractor:
             if key in seen:
                 continue
             seen.add(key)
-            normalized.append(skill)
+            normalized.append(item)
 
         return normalized[:30]
 
