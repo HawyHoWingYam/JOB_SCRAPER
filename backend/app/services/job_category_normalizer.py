@@ -96,6 +96,11 @@ class JobCategoryNormalizer:
                 cross_domain_min_confidence=cross_domain_min_confidence,
             )
         )
+        domain_name, category_name, subcategory_name, allow_create = self._prefer_specific_default_over_generic(
+            (domain_name, category_name, subcategory_name, allow_create),
+            source_slice,
+            governance_override=bool(classification.get("governance_override")),
+        )
         resolved_path = (domain_name, category_name, subcategory_name)
         return self._get_or_create_path(
             domain_name,
@@ -107,6 +112,27 @@ class JobCategoryNormalizer:
                 else resolved_path == source_fallback_path[:3]
             ),
         )
+
+    def _prefer_specific_default_over_generic(
+        self,
+        resolved_path: tuple[str, str, str, bool],
+        source_slice: SourceBoundTaxonomySlice,
+        *,
+        governance_override: bool,
+    ) -> tuple[str, str, str, bool]:
+        """Prefer a more specific source default when the resolved leaf is generic."""
+        if governance_override:
+            return resolved_path
+
+        default_domain, default_category, default_subcategory = source_slice.default_path
+        if default_subcategory == "General":
+            return resolved_path
+
+        _, category_name, subcategory_name, _ = resolved_path
+        if category_name != "General" and subcategory_name != "General":
+            return resolved_path
+
+        return (default_domain, default_category, default_subcategory, False)
 
     def get_taxonomy_candidate_slice(
         self,

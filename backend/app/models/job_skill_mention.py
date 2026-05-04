@@ -38,6 +38,6 @@ class JobSkillMention(Base):
     confidence = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    job = relationship("Job")
+    job = relationship("Job", back_populates="job_skill_mentions")
     skill = relationship("Skill")
     review_candidate = relationship("SkillReviewCandidate")

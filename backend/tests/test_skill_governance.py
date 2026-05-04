@@ -160,6 +160,20 @@ def test_skill_normalizer_flags_generic_terms_without_creating_skills():
         db.close()
 
 
+def test_skill_normalizer_canonicalizes_uat_into_generic_user_acceptance_testing():
+    db = _build_sqlite_session()
+    try:
+        normalizer = SkillNormalizer(db)
+
+        result = normalizer.resolve_extracted_skill("UAT")
+
+        assert result["action"] == "generic_tag"
+        assert result["generic_tag"] == "User Acceptance Testing"
+        assert db.query(Skill).count() == 0
+    finally:
+        db.close()
+
+
 def test_skill_normalizer_preserves_distinct_review_candidate_keys_for_technical_symbols():
     from app.models.skill_review_candidate import SkillReviewCandidate
 
@@ -181,6 +195,35 @@ def test_skill_normalizer_preserves_distinct_review_candidate_keys_for_technical
         assert c_plus_plus.normalized_name == "c++"
         assert dotnet.normalized_name == ".net"
         assert [candidate.normalized_name for candidate in candidates] == [".net", "c#", "c++"]
+    finally:
+        db.close()
+
+
+def test_skill_normalizer_preserves_non_ascii_review_candidate_keys():
+    from app.models.skill_review_candidate import SkillReviewCandidate
+
+    db = _build_sqlite_session()
+    try:
+        normalizer = SkillNormalizer(db)
+
+        chinese = normalizer.register_review_candidate(
+            raw_name="人工智能",
+            normalized_name="人工智能",
+        )
+        chinese_alt = normalizer.register_review_candidate(
+            raw_name="数据治理",
+            normalized_name="数据治理",
+        )
+
+        candidates = (
+            db.query(SkillReviewCandidate)
+            .order_by(SkillReviewCandidate.raw_name.asc())
+            .all()
+        )
+
+        assert chinese.normalized_name == "人工智能"
+        assert chinese_alt.normalized_name == "数据治理"
+        assert [candidate.normalized_name for candidate in candidates] == ["人工智能", "数据治理"]
     finally:
         db.close()
 
@@ -256,6 +299,42 @@ def test_skill_normalizer_does_not_treat_other_general_auto_skill_as_canonical_m
 
         assert decision["action"] == "review_candidate"
         assert decision["normalized_name"] == "Linux"
+    finally:
+        db.close()
+
+
+def test_skill_normalizer_matches_canonical_alias_on_non_polluted_canonical_skill():
+    db = _build_sqlite_session()
+    try:
+        category = SkillCategory(
+            id=uuid.uuid4(),
+            name="DevOps",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        technology = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=category.id,
+            name="Cloud Platforms",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        azure = Skill(
+            id=uuid.uuid4(),
+            technology_id=technology.id,
+            name="Azure",
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        db.add_all([category, technology, azure])
+        db.commit()
+
+        decision = SkillNormalizer(db).resolve_extracted_skill("Microsoft Azure")
+
+        assert decision["action"] == "match_existing"
+        assert decision["skill_id"] == azure.id
+        assert decision["skill_name"] == "Azure"
     finally:
         db.close()
 
@@ -397,6 +476,138 @@ def test_skill_normalizer_uses_existing_skill_hint_after_polluted_exact_hit():
         db.close()
 
 
+def test_skill_normalizer_rejects_suppressed_review_terms_even_with_canonical_skill():
+    db = _build_sqlite_session()
+    try:
+        category = SkillCategory(
+            id=uuid.uuid4(),
+            name="Data",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        technology = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=category.id,
+            name="Business Intelligence",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        skill = Skill(
+            id=uuid.uuid4(),
+            technology_id=technology.id,
+            name="Data Analysis",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        db.add_all([category, technology, skill])
+        db.commit()
+
+        decision = SkillNormalizer(db).resolve_extracted_skill(
+            {
+                "name": "Data analysis",
+                "kind": "technical",
+                "resolution": "match_existing",
+                "existing_skill": "Data Analysis",
+            }
+        )
+
+        assert decision == {
+            "action": "reject",
+            "reason": "suppressed_review_term",
+            "raw_name": "Data analysis",
+            "normalized_name": "Data analysis",
+        }
+    finally:
+        db.close()
+
+
+def test_skill_normalizer_rejects_suppressed_review_terms():
+    db = _build_sqlite_session()
+    try:
+        decision = SkillNormalizer(db).resolve_extracted_skill(
+            {
+                "name": "IT systems administration",
+                "kind": "technical",
+                "resolution": "unresolved",
+            }
+        )
+
+        assert decision == {
+            "action": "reject",
+            "reason": "suppressed_review_term",
+            "raw_name": "IT systems administration",
+            "normalized_name": "IT systems administration",
+        }
+    finally:
+        db.close()
+
+
+def test_skill_normalizer_candidate_slice_uses_description_and_source_context():
+    db = _build_sqlite_session()
+    try:
+        devops = SkillCategory(
+            id=uuid.uuid4(),
+            name="DevOps",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        operating_systems = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=devops.id,
+            name="Operating Systems",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        windows_server = Skill(
+            id=uuid.uuid4(),
+            technology_id=operating_systems.id,
+            name="Windows Server",
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        linux = Skill(
+            id=uuid.uuid4(),
+            technology_id=operating_systems.id,
+            name="Linux",
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        db.add_all([devops, operating_systems, windows_server, linux])
+        db.commit()
+
+        candidate_slice = SkillNormalizer(db).get_taxonomy_candidate_slice(
+            "Platform Specialist",
+            description="Administer Windows Server and Linux production infrastructure.",
+            source_subclassification_name="Networks & Systems Administration",
+        )
+
+        assert candidate_slice["category_hint"] == "DevOps"
+        assert candidate_slice["technology_hint"] == "Operating Systems"
+        assert "Windows Server" in candidate_slice["existing_skills"]
+    finally:
+        db.close()
+
+
+def test_skill_normalizer_candidate_slice_separates_review_and_suppressed_terms():
+    db = _build_sqlite_session()
+    try:
+        candidate_slice = SkillNormalizer(db).get_taxonomy_candidate_slice(
+            "Systems Engineer",
+            description=(
+                "Provide IT systems administration support, manage DNS services, "
+                "and maintain network operations."
+            ),
+            source_subclassification_name="Networks & Systems Administration",
+        )
+
+        assert "DNS" in candidate_slice["review_only_terms"]
+        assert "it systems administration" in candidate_slice["suppressed_review_terms"]
+    finally:
+        db.close()
+
+
 @pytest.mark.asyncio
 async def test_ai_enrichment_service_routes_generic_tags_and_review_candidates():
     from app.models.skill_review_candidate import SkillReviewCandidate
@@ -494,9 +705,315 @@ async def test_ai_enrichment_service_routes_generic_tags_and_review_candidates()
         assert result["status"] == "success"
         assert len(linked_skills) == 1
         assert linked_skills[0].skill_id == react.id
-        assert job.ai_generic_tags == ["Project Management"]
+        generic_mentions = (
+            db.query(JobSkillMention)
+            .filter_by(job_id=job.id, resolution="generic_tag")
+            .all()
+        )
+        assert not hasattr(job, "ai_generic_tags")
+        assert [(mention.raw_name, mention.generic_tag) for mention in generic_mentions] == [
+            ("Project Management", "Project Management")
+        ]
         assert len(review_candidates) == 1
         assert review_candidates[0].normalized_name == "graphql"
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_ai_enrichment_service_drops_suppressed_review_terms_without_creating_mentions():
+    from app.models.skill_review_candidate import SkillReviewCandidate
+
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        subcategory = _create_job_taxonomy(db)
+        react = _create_skill_taxonomy(db)
+        job = _create_job(db, company.id)
+        captured = {}
+
+        class FakeExtractor:
+            async def extract(self, **_kwargs):
+                return {
+                    "classification": {
+                        "source_path_decision": {
+                            "domain": "Information & Communication Technology",
+                            "category": "Software Development",
+                            "subcategory": "Frontend Development",
+                            "resolution": "match_existing",
+                        },
+                        "final_taxonomy_decision": {
+                            "domain": "Information & Communication Technology",
+                            "category": "Software Development",
+                            "subcategory": "Frontend Development",
+                            "resolution": "match_existing",
+                        },
+                    },
+                    "summary": "Supports infra and apps.",
+                    "skills": [
+                        {
+                            "name": "React",
+                            "kind": "technical",
+                            "resolution": "match_existing",
+                            "existing_skill": "React",
+                        },
+                        {
+                            "name": "IT systems administration",
+                            "kind": "technical",
+                            "resolution": "unresolved",
+                        },
+                        {
+                            "name": "DNS",
+                            "kind": "technical",
+                            "resolution": "unresolved",
+                        },
+                    ],
+                    "confidence": 0.9,
+                    "experience": {"experience_level": "mid_level"},
+                }
+
+        class FakeSkillNormalizer:
+            def __init__(self, _db):
+                self._skill_id = react.id
+
+            def get_taxonomy_candidate_slice(self, *_args, **_kwargs):
+                return {
+                    "category_hint": "DevOps",
+                    "technology_hint": "Networking",
+                    "existing_categories": ["DevOps"],
+                    "existing_technologies": ["Networking"],
+                    "existing_skills": ["React"],
+                    "review_only_terms": ["DNS"],
+                    "suppressed_review_terms": ["it systems administration"],
+                }
+
+            def resolve_extracted_skill(self, payload):
+                name = payload["name"]
+                if name == "React":
+                    return {
+                        "action": "match_existing",
+                        "skill_id": self._skill_id,
+                        "skill_name": "React",
+                    }
+                if name == "IT systems administration":
+                    return {
+                        "action": "reject",
+                        "reason": "suppressed_review_term",
+                        "raw_name": name,
+                        "normalized_name": name,
+                    }
+                return {
+                    "action": "review_candidate",
+                    "raw_name": name,
+                    "normalized_name": name,
+                    "suggested_category": None,
+                    "suggested_technology": None,
+                }
+
+            def register_review_candidate(
+                self,
+                *,
+                raw_name,
+                normalized_name,
+                job_id=None,
+                suggested_category=None,
+                suggested_technology=None,
+                description="",
+                source_subclassification_name=None,
+            ):
+                captured["raw_name"] = raw_name
+                captured["normalized_name"] = normalized_name
+                captured["description"] = description
+                captured["source_subclassification_name"] = source_subclassification_name
+                candidate = SkillReviewCandidate(
+                    id=uuid.uuid4(),
+                    raw_name=raw_name,
+                    normalized_name=normalized_name.lower(),
+                    suggested_category=suggested_category,
+                    suggested_technology=suggested_technology,
+                    first_seen_job_id=job_id,
+                    last_seen_job_id=job_id,
+                )
+                db.add(candidate)
+                db.flush()
+                return candidate
+
+        class FakeJobCategoryNormalizer:
+            def __init__(self, _db):
+                self._subcategory = subcategory
+
+            def get_taxonomy_candidate_slice(self, **_kwargs):
+                return {
+                    "source_classification_id": "6281",
+                    "source_classification_name": "Information & Communication Technology",
+                    "source_subclassification_name": "Developers/Programmers",
+                    "allowed_domains": ["Information & Communication Technology"],
+                    "allowed_categories": ["Software Development"],
+                    "allowed_subcategories": ["Frontend Development"],
+                    "default_path": [
+                        "Information & Communication Technology",
+                        "Software Development",
+                        "Frontend Development",
+                    ],
+                }
+
+            def resolve_taxonomy_decision(self, *_args, **_kwargs):
+                return self._subcategory.id
+
+        service = AIEnrichmentService()
+        service.insight_extractor = FakeExtractor()
+
+        original_skill_normalizer = ai_enrichment_module.SkillNormalizer
+        original_job_normalizer = ai_enrichment_module.JobCategoryNormalizer
+        ai_enrichment_module.SkillNormalizer = FakeSkillNormalizer
+        ai_enrichment_module.JobCategoryNormalizer = FakeJobCategoryNormalizer
+        try:
+            result = await service.enrich_job(job, db)
+        finally:
+            ai_enrichment_module.SkillNormalizer = original_skill_normalizer
+            ai_enrichment_module.JobCategoryNormalizer = original_job_normalizer
+
+        mentions = (
+            db.query(JobSkillMention)
+            .filter_by(job_id=job.id)
+            .order_by(JobSkillMention.raw_name.asc())
+            .all()
+        )
+
+        assert result["status"] == "success"
+        assert [(mention.raw_name, mention.resolution) for mention in mentions] == [
+            ("DNS", "review_candidate"),
+            ("React", "match_existing"),
+        ]
+        assert captured == {
+            "raw_name": "DNS",
+            "normalized_name": "DNS",
+            "description": "Build React products and coordinate with stakeholders.",
+            "source_subclassification_name": "Developers/Programmers",
+        }
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_ai_enrichment_service_passes_description_and_source_context_to_skill_candidates():
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        subcategory = _create_job_taxonomy(db)
+        react = _create_skill_taxonomy(db)
+        job = _create_job(db, company.id)
+        job.title = "Platform Specialist"
+        job.description = "Administer Windows Server and Linux production infrastructure."
+        job.source_subclassification_name = "Networks & Systems Administration"
+        db.commit()
+
+        captured = {}
+
+        class FakeExtractor:
+            async def extract(self, **_kwargs):
+                return {
+                    "classification": {
+                        "source_path_decision": {
+                            "domain": "Information & Communication Technology",
+                            "category": "Software Development",
+                            "subcategory": "Frontend Development",
+                            "resolution": "match_existing",
+                        },
+                        "final_taxonomy_decision": {
+                            "domain": "Information & Communication Technology",
+                            "category": "Software Development",
+                            "subcategory": "Frontend Development",
+                            "resolution": "match_existing",
+                        },
+                    },
+                    "summary": "Builds frontend applications.",
+                    "skills": [
+                        {
+                            "name": "React",
+                            "kind": "technical",
+                            "resolution": "match_existing",
+                            "existing_skill": "React",
+                        }
+                    ],
+                    "confidence": 0.94,
+                    "experience": {"experience_level": "mid_level"},
+                }
+
+        class FakeSkillNormalizer:
+            def __init__(self, _db):
+                self._skill_id = react.id
+
+            def get_taxonomy_candidate_slice(
+                self,
+                title,
+                *,
+                description="",
+                source_subclassification_name=None,
+                limit=10,
+            ):
+                captured["title"] = title
+                captured["description"] = description
+                captured["source_subclassification_name"] = source_subclassification_name
+                captured["limit"] = limit
+                return {
+                    "category_hint": "Frontend",
+                    "technology_hint": "JavaScript",
+                    "existing_categories": ["Frontend"],
+                    "existing_technologies": ["JavaScript"],
+                    "existing_skills": ["React"],
+                    "review_only_terms": [],
+                }
+
+            def resolve_extracted_skill(self, _payload):
+                return {
+                    "action": "match_existing",
+                    "skill_id": self._skill_id,
+                    "skill_name": "React",
+                }
+
+        class FakeJobCategoryNormalizer:
+            def __init__(self, _db):
+                self._subcategory = subcategory
+
+            def get_taxonomy_candidate_slice(self, **_kwargs):
+                return {
+                    "source_classification_id": "6281",
+                    "source_classification_name": "Information & Communication Technology",
+                    "source_subclassification_name": "Networks & Systems Administration",
+                    "allowed_domains": ["Information & Communication Technology"],
+                    "allowed_categories": ["Software Development"],
+                    "allowed_subcategories": ["Frontend Development"],
+                    "default_path": [
+                        "Information & Communication Technology",
+                        "Software Development",
+                        "Frontend Development",
+                    ],
+                }
+
+            def resolve_taxonomy_decision(self, *_args, **_kwargs):
+                return self._subcategory.id
+
+        service = AIEnrichmentService()
+        service.insight_extractor = FakeExtractor()
+
+        original_skill_normalizer = ai_enrichment_module.SkillNormalizer
+        original_job_normalizer = ai_enrichment_module.JobCategoryNormalizer
+        ai_enrichment_module.SkillNormalizer = FakeSkillNormalizer
+        ai_enrichment_module.JobCategoryNormalizer = FakeJobCategoryNormalizer
+        try:
+            result = await service.enrich_job(job, db)
+        finally:
+            ai_enrichment_module.SkillNormalizer = original_skill_normalizer
+            ai_enrichment_module.JobCategoryNormalizer = original_job_normalizer
+
+        assert result["status"] == "success"
+        assert captured == {
+            "title": "Platform Specialist",
+            "description": "Administer Windows Server and Linux production infrastructure.",
+            "source_subclassification_name": "Networks & Systems Administration",
+            "limit": 10,
+        }
     finally:
         db.close()
 
@@ -615,7 +1132,114 @@ async def test_ai_enrichment_service_writes_skill_mentions_for_all_resolutions()
 
 
 @pytest.mark.asyncio
-async def test_ai_enrichment_service_reenrichment_replaces_mentions_and_merges_generic_tags():
+async def test_ai_enrichment_service_drops_suppressed_review_terms_even_with_canonical_skill():
+    from app.models.skill_review_candidate import SkillReviewCandidate
+
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        subcategory = _create_job_taxonomy(db)
+        category = SkillCategory(
+            id=uuid.uuid4(),
+            name="Data",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        technology = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=category.id,
+            name="Business Intelligence",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        data_analysis = Skill(
+            id=uuid.uuid4(),
+            technology_id=technology.id,
+            name="Data Analysis",
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        db.add_all([category, technology, data_analysis])
+        db.flush()
+        job = _create_job(db, company.id)
+
+        class FakeExtractor:
+            async def extract(self, **_kwargs):
+                return {
+                    "classification": {
+                        "source_path_decision": {
+                            "domain": "Information & Communication Technology",
+                            "category": "Software Development",
+                            "subcategory": "Frontend Development",
+                            "resolution": "match_existing",
+                        },
+                        "final_taxonomy_decision": {
+                            "domain": "Information & Communication Technology",
+                            "category": "Software Development",
+                            "subcategory": "Frontend Development",
+                            "resolution": "match_existing",
+                        },
+                    },
+                    "summary": "Analyzes delivery metrics.",
+                    "skills": [
+                        {
+                            "name": "Data analysis",
+                            "kind": "technical",
+                            "resolution": "match_existing",
+                            "existing_skill": "Data Analysis",
+                        }
+                    ],
+                    "confidence": 0.91,
+                    "experience": {"experience_level": "mid_level"},
+                }
+
+        class FakeJobCategoryNormalizer:
+            def __init__(self, _db):
+                self._subcategory = subcategory
+
+            def get_taxonomy_candidate_slice(self, **_kwargs):
+                return {
+                    "source_classification_id": "6281",
+                    "source_classification_name": "Information & Communication Technology",
+                    "source_subclassification_name": "Business/Systems Analysts",
+                    "allowed_domains": ["Information & Communication Technology"],
+                    "allowed_categories": ["Software Development"],
+                    "allowed_subcategories": ["Frontend Development"],
+                    "default_path": [
+                        "Information & Communication Technology",
+                        "Software Development",
+                        "Frontend Development",
+                    ],
+                }
+
+            def resolve_taxonomy_decision(self, *_args, **_kwargs):
+                return self._subcategory.id
+
+        service = AIEnrichmentService()
+        service.insight_extractor = FakeExtractor()
+
+        original_normalizer = ai_enrichment_module.JobCategoryNormalizer
+        ai_enrichment_module.JobCategoryNormalizer = FakeJobCategoryNormalizer
+        try:
+            result = await service.enrich_job(job, db)
+        finally:
+            ai_enrichment_module.JobCategoryNormalizer = original_normalizer
+
+        mentions = db.query(JobSkillMention).filter_by(job_id=job.id).all()
+        review_candidates = db.query(SkillReviewCandidate).all()
+        linked_skills = db.query(JobSkill).filter_by(job_id=job.id).all()
+
+        assert result["status"] == "success"
+        assert len(linked_skills) == 0
+        assert mentions == []
+        assert review_candidates == []
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_ai_enrichment_service_reenrichment_replaces_mentions_without_job_generic_tags():
     from app.models.skill_review_candidate import SkillReviewCandidate
 
     db = _build_sqlite_session()
@@ -624,7 +1248,6 @@ async def test_ai_enrichment_service_reenrichment_replaces_mentions_and_merges_g
         subcategory = _create_job_taxonomy(db)
         _create_skill_taxonomy(db)
         job = _create_job(db, company.id)
-        job.ai_generic_tags = ["Legacy Tag"]
         db.commit()
 
         def build_insight(skills):
@@ -792,11 +1415,10 @@ async def test_ai_enrichment_service_reenrichment_replaces_mentions_and_merges_g
         ]
         assert final_candidates[0].normalized_name == "graphql"
         assert final_candidates[0].occurrence_count == 0
-        assert set(job.ai_generic_tags or []) == {
-            "Legacy Tag",
-            "Project Management",
-            "Stakeholder Management",
-        }
+        assert not hasattr(job, "ai_generic_tags")
+        assert [(m.raw_name, m.generic_tag) for m in final_mentions if m.resolution == "generic_tag"] == [
+            ("Stakeholder Management", "Stakeholder Management")
+        ]
     finally:
         db.close()
 

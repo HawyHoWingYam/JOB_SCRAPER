@@ -16,12 +16,23 @@ class JobCreateSchema(BaseModel):
     source_classification_name: Optional[str] = None
     source_subclassification_id: Optional[str] = None
     source_subclassification_name: Optional[str] = None
-    ai_category: Optional[str] = None
     ai_summary: Optional[str] = None
     salary_range: Optional[str] = None
     location: Optional[str] = None
     employment_type: Optional[str] = None
     posted_date: Optional[datetime] = None
+
+
+class JobTaxonomySchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    domain_id: UUID
+    domain_name: str
+    category_id: UUID
+    category_name: str
+    subcategory_id: UUID
+    subcategory_name: str
+    path: str
 
 
 class JobSchema(JobCreateSchema):
@@ -32,6 +43,7 @@ class JobSchema(JobCreateSchema):
     id: UUID
     created_at: datetime
     updated_at: datetime
+    job_taxonomy: Optional[JobTaxonomySchema] = None
 
 
 class JobDetailSchema(JobSchema):

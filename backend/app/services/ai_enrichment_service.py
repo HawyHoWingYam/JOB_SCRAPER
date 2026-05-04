@@ -55,7 +55,11 @@ class AIEnrichmentService:
             category_candidates["cross_domain_min_confidence"] = (
                 self.settings.job_classification_cross_domain_min_confidence
             )
-            skill_candidates = skill_normalizer.get_taxonomy_candidate_slice(job.title)
+            skill_candidates = skill_normalizer.get_taxonomy_candidate_slice(
+                job.title,
+                description=job.description or "",
+                source_subclassification_name=job.source_subclassification_name,
+            )
             insight = await self.insight_extractor.extract(
                 title=job.title,
                 description=job.description or "",
@@ -85,17 +89,6 @@ class AIEnrichmentService:
             job.subcategory_id = subcategory_id
             job.ai_enriched_at = utc_now()
 
-            accepted_hierarchy = {}
-            if hasattr(job_category_normalizer, "get_category_hierarchy"):
-                accepted_hierarchy = (
-                    job_category_normalizer.get_category_hierarchy(subcategory_id) or {}
-                )
-
-            job.ai_category = (
-                self._build_compatibility_category(accepted_hierarchy)
-                or classification.get("compatibility_category")
-                or classification.get("category")
-            )
             job.ai_summary = insight.get("summary")
 
             experience = insight.get("experience") or {}
@@ -129,8 +122,6 @@ class AIEnrichmentService:
             }
             mention_repo.delete_mentions_for_job(db, job.id)
             current_matched_skill_ids = set()
-            generic_tags: List[str] = []
-            generic_tag_keys = set()
 
             for extracted_skill in extracted_skills:
                 decision = skill_normalizer.resolve_extracted_skill(extracted_skill)
@@ -149,10 +140,6 @@ class AIEnrichmentService:
 
                 if action == "generic_tag":
                     generic_tag = str(decision.get("generic_tag") or "").strip()
-                    generic_tag_key = str(
-                        decision.get("generic_tag_key")
-                        or skill_normalizer.normalize_generic_tag_key(generic_tag)
-                    ).strip()
                     mention_repo.create_mention(
                         db,
                         job_id=job.id,
@@ -162,9 +149,6 @@ class AIEnrichmentService:
                         generic_tag=generic_tag,
                         confidence=insight.get("confidence"),
                     )
-                    if generic_tag and generic_tag_key and generic_tag_key not in generic_tag_keys:
-                        generic_tag_keys.add(generic_tag_key)
-                        generic_tags.append(generic_tag)
                     continue
 
                 if action == "review_candidate":
@@ -174,6 +158,8 @@ class AIEnrichmentService:
                         job_id=job.id,
                         suggested_category=decision.get("suggested_category"),
                         suggested_technology=decision.get("suggested_technology"),
+                        description=job.description or "",
+                        source_subclassification_name=job.source_subclassification_name,
                     )
                     mention_repo.create_mention(
                         db,
@@ -223,9 +209,6 @@ class AIEnrichmentService:
                 job.id,
                 keep_skill_ids=current_matched_skill_ids,
                 source="ai",
-            )
-            job.ai_generic_tags = (
-                self._merge_generic_tags(skill_normalizer, job.ai_generic_tags, generic_tags) or None
             )
             for candidate_id in affected_candidate_ids:
                 candidate = db.query(SkillReviewCandidate).filter_by(id=candidate_id).first()
@@ -306,6 +289,21 @@ class AIEnrichmentService:
 
         return results
 
+    async def enrich_job_id(self, job_id: UUID) -> Dict[str, Any]:
+        """Enrich a single job by ID using an isolated DB session."""
+        db = SessionLocal()
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job is None:
+                return {
+                    "job_id": str(job_id),
+                    "status": "error",
+                    "error": "job not found",
+                }
+            return await self.enrich_job(job, db)
+        finally:
+            db.close()
+
     async def enrich_unenriched(
         self,
         limit: int = 100,
@@ -327,54 +325,6 @@ class AIEnrichmentService:
             db.close()
 
         return await self.enrich_batch(job_ids, on_progress)
-
-    def _build_compatibility_category(self, hierarchy: Dict[str, Any]) -> Optional[str]:
-        """Render an accepted taxonomy hierarchy into the legacy ai_category string."""
-        parts = [
-            hierarchy.get("domain"),
-            hierarchy.get("category"),
-            hierarchy.get("subcategory"),
-        ]
-        if not all(parts):
-            return None
-        return " / ".join(parts)
-
-    def _merge_generic_tags(
-        self,
-        skill_normalizer: SkillNormalizer,
-        existing_tags: Any,
-        new_tags: List[str],
-    ) -> List[str]:
-        merged: List[str] = []
-        seen = set()
-        for value in self._coerce_generic_tags(existing_tags) + list(new_tags):
-            raw_tag = str(value or "").strip()
-            if not raw_tag:
-                continue
-            tag = skill_normalizer.canonicalize_generic_tag(raw_tag) or raw_tag
-            tag_key = skill_normalizer.normalize_generic_tag_key(tag)
-            if not tag_key or tag_key in seen:
-                continue
-            seen.add(tag_key)
-            merged.append(tag)
-        return merged
-
-    def _coerce_generic_tags(self, value: Any) -> List[str]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
-        if isinstance(value, str):
-            try:
-                parsed = json.loads(value)
-            except json.JSONDecodeError:
-                parsed = value
-            if isinstance(parsed, list):
-                return [str(item).strip() for item in parsed if str(item).strip()]
-            if isinstance(parsed, str) and parsed.strip():
-                return [parsed.strip()]
-        return []
-
 
 _service: Optional[AIEnrichmentService] = None
 

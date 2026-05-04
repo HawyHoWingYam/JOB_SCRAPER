@@ -17,7 +17,7 @@ describe('jobBrowserScopeUtils', () => {
       text_expression: '',
       structured_filters: {
         employment_type: '',
-        category: '',
+        subcategory_ids: [],
         industry: '',
         posted_date_from: '',
         posted_date_to: '',
@@ -43,7 +43,7 @@ describe('jobBrowserScopeUtils', () => {
       text_expression: '=ERP   "ERP system"',
       structured_filters: {
         employment_type: '',
-        category: '',
+        subcategory_ids: [],
         industry: 'Healthcare',
         posted_date_from: '',
         posted_date_to: '',
@@ -72,7 +72,7 @@ describe('jobBrowserScopeUtils', () => {
           text_expression: 'erp',
           structured_filters: {
             employment_type: '',
-            category: '',
+            subcategory_ids: [],
             industry: 'Healthcare',
             posted_date_from: '',
             posted_date_to: '',

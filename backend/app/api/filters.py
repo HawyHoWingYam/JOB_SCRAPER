@@ -6,6 +6,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import SkillCategory, SkillTechnology, Skill
 from app.models import JobDomain, JobCategory, JobSubcategory
+from app.utils.skill_taxonomy_policy import (
+    apply_governed_skill_category_filters,
+    apply_governed_skill_filters,
+)
 
 router = APIRouter(prefix="/filters", tags=["filters"])
 
@@ -18,7 +22,9 @@ def _visible_only(query, model):
 @router.get("/skill-categories")
 def get_skill_categories(db: Session = Depends(get_db)):
     """Get all skill categories (Level 1)."""
-    categories = _visible_only(db.query(SkillCategory), SkillCategory).order_by(SkillCategory.name).all()
+    categories = db.query(SkillCategory)
+    categories = apply_governed_skill_category_filters(categories)
+    categories = categories.order_by(SkillCategory.name).all()
     return [{"id": str(c.id), "name": c.name} for c in categories]
 
 
@@ -28,7 +34,20 @@ def get_skill_technologies(
     db: Session = Depends(get_db)
 ):
     """Get skill technologies, optionally filtered by category (Level 2)."""
-    query = _visible_only(db.query(SkillTechnology), SkillTechnology)
+    query = (
+        db.query(SkillTechnology)
+        .join(Skill, Skill.technology_id == SkillTechnology.id)
+        .join(
+        SkillCategory,
+        SkillTechnology.category_id == SkillCategory.id,
+    )
+    )
+    query = apply_governed_skill_filters(
+        query,
+        technology_model=SkillTechnology,
+        category_model=SkillCategory,
+        require_visible=True,
+    ).with_entities(SkillTechnology).distinct()
     if category_id:
         query = query.filter(SkillTechnology.category_id == category_id)
     technologies = query.order_by(SkillTechnology.name).all()
@@ -41,7 +60,12 @@ def get_skills(
     db: Session = Depends(get_db)
 ):
     """Get skills, optionally filtered by technology (Level 3)."""
-    query = _visible_only(db.query(Skill), Skill)
+    query = (
+        db.query(Skill)
+        .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
+        .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+    )
+    query = apply_governed_skill_filters(query)
     if technology_id:
         query = query.filter(Skill.technology_id == technology_id)
     skills = query.order_by(Skill.popularity.desc(), Skill.name).all()

@@ -225,7 +225,6 @@ def map_scraped_job_to_db(
             ),
             "source_subclassification_id": scraped_job.get("subclassification_id"),
             "source_subclassification_name": scraped_job.get("subclassification"),
-            "ai_category": None,
             "posted_date": parse_listing_date(scraped_job.get("listing_date")),
             "raw_data": scraped_job,
         }
@@ -311,7 +310,6 @@ def map_ctgoodjobs_scraped_job_to_db(scraped_job: Dict[str, Any], company_id: st
         "source_classification_name": scraped_job.get("source_classification_name"),
         "source_subclassification_id": scraped_job.get("source_subclassification_id"),
         "source_subclassification_name": scraped_job.get("source_subclassification_name"),
-        "ai_category": None,
         "posted_date": _parse_optional_iso_datetime(scraped_job.get("posted_date")),
         "raw_data": scraped_job,
     }

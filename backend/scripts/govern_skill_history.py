@@ -29,10 +29,38 @@ from app.models import (
 )
 from app.repositories.job_skill_mention_repository import JobSkillMentionRepository
 from app.services.skill_normalizer import SkillNormalizer
+from app.utils.skill_taxonomy_policy import polluted_other_general_clause
 
 
 def _data_path(filename: str) -> Path:
     return Path(__file__).resolve().parents[1] / "app" / "data" / filename
+
+
+def _coerce_aliases(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(alias).strip() for alias in value if str(alias).strip()]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = value
+        if isinstance(parsed, list):
+            return [str(alias).strip() for alias in parsed if str(alias).strip()]
+        if isinstance(parsed, str) and parsed.strip():
+            return [parsed.strip()]
+    return []
+
+
+def _serialize_aliases_for_db(db: Session, aliases: list[str] | None):
+    normalized = _coerce_aliases(aliases)
+    if not normalized:
+        return None
+    dialect_name = getattr(getattr(db.bind, "dialect", None), "name", "")
+    if dialect_name == "sqlite":
+        return json.dumps(normalized)
+    return normalized
 
 
 def normalize_lookup_key(value: str) -> str:
@@ -151,6 +179,7 @@ def _raw_polluted_skill_rows(db: Session, *, min_distinct_jobs: int) -> list[dic
 def _classify_skill_row(
     row: dict[str, Any],
     curations: dict[str, Any],
+    normalizer: SkillNormalizer,
 ) -> dict[str, Any]:
     source_name = row["skill_name"]
     normalized_name = normalize_lookup_key(source_name)
@@ -158,6 +187,37 @@ def _classify_skill_row(
 
     if not curation and int(row["distinct_jobs"] or 0) <= 1 and _looks_phrase_like(source_name):
         curation = {"action": "review", "note": "Phrase-like one-off skill mention"}
+
+    if not curation:
+        decision = normalizer.resolve_extracted_skill(
+            {
+                "name": source_name,
+                "kind": "technical",
+                "resolution": "unresolved",
+            }
+        )
+        action = str(decision.get("action") or "review").strip()
+        if action == "match_existing":
+            hierarchy = normalizer.get_skill_hierarchy(decision["skill_id"])
+            curation = {
+                "action": "merge",
+                "target": {
+                    "category": hierarchy["category"],
+                    "technology": hierarchy["technology"],
+                    "skill": hierarchy["skill"],
+                },
+            }
+        elif action == "generic_tag":
+            curation = {
+                "action": "generic",
+                "generic_tag": str(decision.get("generic_tag") or source_name).strip(),
+            }
+        elif action == "reject":
+            curation = {
+                "action": "generic",
+                "generic_tag": source_name,
+                "note": str(decision.get("reason") or "suppressed technical term"),
+            }
 
     action = str(curation.get("action") or "review").strip()
 
@@ -189,13 +249,17 @@ def audit_skill_history(
     *,
     min_distinct_jobs: int | None = None,
     curation_path: str | Path | None = None,
+    only_curated: bool = False,
 ) -> dict[str, Any]:
     curations = load_backfill_curations(curation_path)
     threshold = _resolved_threshold(curations, min_distinct_jobs)
-    entries = [
-        _classify_skill_row(row, curations)
-        for row in _raw_polluted_skill_rows(db, min_distinct_jobs=threshold)
-    ]
+    normalizer = SkillNormalizer(db)
+    entries = []
+    for row in _raw_polluted_skill_rows(db, min_distinct_jobs=threshold):
+        entry = _classify_skill_row(row, curations, normalizer)
+        if only_curated and entry["source_skill"]["normalized_name"] not in curations["entries"]:
+            continue
+        entries.append(entry)
 
     summary = {
         "merge": {"skill_count": 0, "affected_distinct_jobs": 0, "affected_job_links": 0},
@@ -212,6 +276,7 @@ def audit_skill_history(
     return {
         "minimum_distinct_jobs": threshold,
         "curation_path": curations["path"],
+        "only_curated": only_curated,
         "entries": entries,
         "summary": summary,
     }
@@ -219,11 +284,8 @@ def audit_skill_history(
 
 def _require_governance_schema(db: Session) -> None:
     inspector = inspect(db.bind)
-    job_columns = {column["name"] for column in inspector.get_columns("jobs")}
     missing = []
 
-    if "ai_generic_tags" not in job_columns:
-        missing.append("jobs.ai_generic_tags")
     if not inspector.has_table("skill_review_candidates"):
         missing.append("skill_review_candidates")
     if not inspector.has_table("job_skill_mentions"):
@@ -291,7 +353,7 @@ def _ensure_skill_technology(db: Session, *, category_name: str, technology_name
 
 
 def _merge_aliases(existing: list[str] | None, incoming: list[str] | None) -> list[str] | None:
-    aliases = list(existing or [])
+    aliases = list(_coerce_aliases(existing))
     for value in incoming or []:
         alias = str(value).strip()
         if alias and alias not in aliases:
@@ -310,7 +372,7 @@ def _ensure_target_skill(db: Session, target: dict[str, Any]) -> Skill:
         skill = Skill(
             technology_id=technology.id,
             name=str(target["skill"]),
-            aliases=_merge_aliases(None, target.get("aliases")),
+            aliases=_serialize_aliases_for_db(db, _merge_aliases(None, target.get("aliases"))),
             created_by="seed",
             is_auto_created=False,
             is_filter_visible=False,
@@ -323,7 +385,7 @@ def _ensure_target_skill(db: Session, target: dict[str, Any]) -> Skill:
 
     aliases = _merge_aliases(skill.aliases, target.get("aliases"))
     if aliases != skill.aliases:
-        skill.aliases = aliases
+        skill.aliases = _serialize_aliases_for_db(db, aliases)
         db.flush()
     return skill
 
@@ -370,47 +432,35 @@ def _merge_job_skill_links(db: Session, *, source_skill: Skill, target_skill: Sk
     _delete_skill_if_unlinked(db, source_skill)
 
 
-def _coerce_generic_tags(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            parsed = value
-        if isinstance(parsed, list):
-            return [str(item).strip() for item in parsed if str(item).strip()]
-        if isinstance(parsed, str) and parsed.strip():
-            return [parsed.strip()]
-    return []
-
-
-def _append_generic_tag(job: Job, generic_tag: str, *, normalizer: SkillNormalizer) -> None:
-    merged: list[str] = []
-    seen = set()
-
-    for value in _coerce_generic_tags(job.ai_generic_tags) + [generic_tag]:
-        raw_tag = str(value or "").strip()
-        if not raw_tag:
-            continue
-        tag = normalizer.canonicalize_generic_tag(raw_tag) or raw_tag
-        normalized_tag = normalizer.normalize_generic_tag_key(tag)
-        if not normalized_tag or normalized_tag in seen:
-            continue
-        seen.add(normalized_tag)
-        merged.append(tag)
-
-    job.ai_generic_tags = merged or None
-
-
-def _route_generic_links_to_job_tags(db: Session, *, source_skill: Skill, generic_tag: str) -> None:
+def _route_generic_links_to_job_mentions(db: Session, *, source_skill: Skill, generic_tag: str) -> None:
     normalizer = SkillNormalizer(db)
+    mention_repo = JobSkillMentionRepository()
     links = db.query(JobSkill).filter(JobSkill.skill_id == source_skill.id).all()
     for link in links:
-        job = db.query(Job).filter(Job.id == link.job_id).one()
-        _append_generic_tag(job, generic_tag, normalizer=normalizer)
+        canonical_tag = normalizer.canonicalize_generic_tag(generic_tag) or generic_tag
+        mention = (
+            db.query(JobSkillMention)
+            .filter(
+                JobSkillMention.job_id == link.job_id,
+                JobSkillMention.resolution == "generic_tag",
+                JobSkillMention.generic_tag == canonical_tag,
+            )
+            .first()
+        )
+        if mention is None:
+            mention_repo.create_mention(
+                db,
+                job_id=link.job_id,
+                raw_name=source_skill.name,
+                normalized_name=canonical_tag,
+                resolution="generic_tag",
+                generic_tag=canonical_tag,
+                source=link.source,
+                confidence=link.confidence,
+            )
+        else:
+            mention.raw_name = source_skill.name
+            mention.normalized_name = canonical_tag
         db.delete(link)
 
     db.flush()
@@ -460,10 +510,15 @@ def _register_review_candidate_links(db: Session, *, source_skill: Skill) -> Non
         .all()
     )
     for link in links:
+        job = db.query(Job).filter(Job.id == link.job_id).first()
         candidate = normalizer.register_review_candidate(
             raw_name=source_skill.name,
             normalized_name=source_skill.name,
             job_id=link.job_id,
+            description=job.description if job is not None and job.description else "",
+            source_subclassification_name=(
+                job.source_subclassification_name if job is not None else None
+            ),
         )
         affected_candidate_ids.add(candidate.id)
         _ensure_review_candidate_mention(
@@ -519,12 +574,20 @@ def rebuild_skill_taxonomy_metrics(db: Session) -> None:
 
     skill_counts = (
         db.query(
-            JobSkill.skill_id.label("skill_id"),
+            JobSkillMention.skill_id.label("skill_id"),
             func.count().label("usage_count"),
-            func.count(func.distinct(JobSkill.job_id)).label("distinct_job_count"),
-            func.max(JobSkill.created_at).label("last_used_at"),
+            func.count(func.distinct(JobSkillMention.job_id)).label("distinct_job_count"),
+            func.max(JobSkillMention.created_at).label("last_used_at"),
         )
-        .group_by(JobSkill.skill_id)
+        .join(Skill, Skill.id == JobSkillMention.skill_id)
+        .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
+        .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+        .filter(
+            JobSkillMention.resolution == "match_existing",
+            JobSkillMention.skill_id.isnot(None),
+            ~polluted_other_general_clause(SkillCategory, SkillTechnology),
+        )
+        .group_by(JobSkillMention.skill_id)
         .all()
     )
     for row in skill_counts:
@@ -539,12 +602,18 @@ def rebuild_skill_taxonomy_metrics(db: Session) -> None:
     technology_counts = (
         db.query(
             SkillTechnology.id.label("technology_id"),
-            func.count(JobSkill.job_id).label("usage_count"),
-            func.count(func.distinct(JobSkill.job_id)).label("distinct_job_count"),
-            func.max(JobSkill.created_at).label("last_used_at"),
+            func.count(JobSkillMention.job_id).label("usage_count"),
+            func.count(func.distinct(JobSkillMention.job_id)).label("distinct_job_count"),
+            func.max(JobSkillMention.created_at).label("last_used_at"),
         )
         .join(Skill, Skill.technology_id == SkillTechnology.id)
-        .join(JobSkill, JobSkill.skill_id == Skill.id)
+        .join(JobSkillMention, JobSkillMention.skill_id == Skill.id)
+        .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+        .filter(
+            JobSkillMention.resolution == "match_existing",
+            JobSkillMention.skill_id.isnot(None),
+            ~polluted_other_general_clause(SkillCategory, SkillTechnology),
+        )
         .group_by(SkillTechnology.id)
         .all()
     )
@@ -562,13 +631,18 @@ def rebuild_skill_taxonomy_metrics(db: Session) -> None:
     category_counts = (
         db.query(
             SkillCategory.id.label("category_id"),
-            func.count(JobSkill.job_id).label("usage_count"),
-            func.count(func.distinct(JobSkill.job_id)).label("distinct_job_count"),
-            func.max(JobSkill.created_at).label("last_used_at"),
+            func.count(JobSkillMention.job_id).label("usage_count"),
+            func.count(func.distinct(JobSkillMention.job_id)).label("distinct_job_count"),
+            func.max(JobSkillMention.created_at).label("last_used_at"),
         )
         .join(SkillTechnology, SkillTechnology.category_id == SkillCategory.id)
         .join(Skill, Skill.technology_id == SkillTechnology.id)
-        .join(JobSkill, JobSkill.skill_id == Skill.id)
+        .join(JobSkillMention, JobSkillMention.skill_id == Skill.id)
+        .filter(
+            JobSkillMention.resolution == "match_existing",
+            JobSkillMention.skill_id.isnot(None),
+            ~polluted_other_general_clause(SkillCategory, SkillTechnology),
+        )
         .group_by(SkillCategory.id)
         .all()
     )
@@ -591,6 +665,7 @@ def apply_skill_history_governance(
     *,
     min_distinct_jobs: int | None = None,
     curation_path: str | Path | None = None,
+    only_curated: bool = False,
     execute: bool = False,
 ) -> dict[str, Any]:
     _require_governance_schema(db)
@@ -598,6 +673,7 @@ def apply_skill_history_governance(
         db,
         min_distinct_jobs=min_distinct_jobs,
         curation_path=curation_path,
+        only_curated=only_curated,
     )
 
     processed = {"merge": 0, "generic": 0, "review": 0}
@@ -611,7 +687,7 @@ def apply_skill_history_governance(
                 target_skill = _ensure_target_skill(db, entry["target"])
                 _merge_job_skill_links(db, source_skill=source_skill, target_skill=target_skill)
             elif action == "generic":
-                _route_generic_links_to_job_tags(
+                _route_generic_links_to_job_mentions(
                     db,
                     source_skill=source_skill,
                     generic_tag=str(entry["generic_tag"]),
@@ -644,6 +720,19 @@ def _write_report_if_requested(report: dict[str, Any], output_path: str | None) 
     destination.write_text(json.dumps(report, indent=2, default=str))
 
 
+def _summarize_report(report: dict[str, Any]) -> dict[str, Any]:
+    summary = {
+        "minimum_distinct_jobs": report.get("minimum_distinct_jobs"),
+        "curation_path": report.get("curation_path"),
+        "only_curated": report.get("only_curated"),
+        "summary": report.get("summary"),
+        "dry_run": report.get("dry_run"),
+        "processed": report.get("processed"),
+        "entry_count": len(report.get("entries") or []),
+    }
+    return {key: value for key, value in summary.items() if value is not None}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -652,11 +741,31 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("--min-distinct-jobs", type=int, default=None)
     audit_parser.add_argument("--curation-path", type=str, default=None)
     audit_parser.add_argument("--output", type=str, default=None)
+    audit_parser.add_argument(
+        "--only-curated",
+        action="store_true",
+        help="Limit the audit to explicitly curated polluted skills",
+    )
+    audit_parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Print only summary fields instead of the full entry list",
+    )
 
     apply_parser = subparsers.add_parser("apply", help="Apply curated historical cleanup")
     apply_parser.add_argument("--min-distinct-jobs", type=int, default=None)
     apply_parser.add_argument("--curation-path", type=str, default=None)
     apply_parser.add_argument("--output", type=str, default=None)
+    apply_parser.add_argument(
+        "--only-curated",
+        action="store_true",
+        help="Apply only explicitly curated polluted skills",
+    )
+    apply_parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Print only summary fields instead of the full entry list",
+    )
     mode = apply_parser.add_mutually_exclusive_group()
     mode.add_argument("--execute", action="store_true", help="Persist historical cleanup")
     mode.add_argument("--dry-run", action="store_true", help="Simulate without committing")
@@ -673,16 +782,19 @@ def main() -> int:
                 db,
                 min_distinct_jobs=args.min_distinct_jobs,
                 curation_path=args.curation_path,
+                only_curated=bool(args.only_curated),
             )
         else:
             report = apply_skill_history_governance(
                 db,
                 min_distinct_jobs=args.min_distinct_jobs,
                 curation_path=args.curation_path,
+                only_curated=bool(args.only_curated),
                 execute=bool(args.execute),
             )
         _write_report_if_requested(report, getattr(args, "output", None))
-        print(json.dumps(report, indent=2, default=str))
+        payload = _summarize_report(report) if bool(args.summary_only) else report
+        print(json.dumps(payload, indent=2, default=str))
         return 0
     finally:
         db.close()

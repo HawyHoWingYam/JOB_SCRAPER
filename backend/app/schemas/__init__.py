@@ -1,5 +1,5 @@
 from app.schemas.company import CompanySchema, CompanyCreateSchema
-from app.schemas.job import JobSchema, JobCreateSchema, JobDetailSchema
+from app.schemas.job import JobSchema, JobCreateSchema, JobDetailSchema, JobTaxonomySchema
 from app.schemas.job_search import (
     SearchClauseSchema,
     JobSearchFiltersSchema,
@@ -26,6 +26,7 @@ __all__ = [
     "JobSchema",
     "JobCreateSchema",
     "JobDetailSchema",
+    "JobTaxonomySchema",
     "SearchClauseSchema",
     "JobSearchFiltersSchema",
     "JobSearchLayerSchema",

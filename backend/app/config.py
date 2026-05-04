@@ -2,6 +2,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from typing import Optional
 
+SUPPORTED_LLM_PROVIDERS = ("anthropic", "claude", "custom", "gemini", "zhipu", "mock")
+AI_ENRICHMENT_RUN_CONCURRENCY_MIN = 1
+AI_ENRICHMENT_RUN_CONCURRENCY_MAX = 50
+
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
@@ -61,6 +65,7 @@ class Settings(BaseSettings):
     filter_job_l1_min_jobs: int = 20
     job_classification_conservative_mode: bool = False
     job_classification_cross_domain_min_confidence: float = 0.9
+    ai_enrichment_run_concurrency: int = 10
 
     # Application
     debug: bool = False

@@ -17,7 +17,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Callable
 
-from app.config import settings
+from app.services.ai_runtime_settings_service import (
+    EffectiveAIRuntimeSettings,
+    get_effective_runtime_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -619,42 +622,42 @@ class ProviderSpec:
 
     name: str
     required_settings: tuple[tuple[str, str], ...]
-    builder: Callable[[], LLMClient]
+    builder: Callable[[EffectiveAIRuntimeSettings], LLMClient]
 
 
-def _build_anthropic_client() -> LLMClient:
+def _build_anthropic_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
     return AnthropicClient(
-        settings.anthropic_api_key,
-        settings.anthropic_model,
-        settings.anthropic_base_url,
+        runtime_settings.anthropic_api_key,
+        runtime_settings.anthropic_model,
+        runtime_settings.anthropic_base_url,
     )
 
 
-def _build_custom_client() -> LLMClient:
-    if settings.custom_api_format == "openai_responses":
+def _build_custom_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
+    if runtime_settings.custom_api_format == "openai_responses":
         return OpenAIResponsesClient(
-            settings.custom_api_key,
-            settings.custom_model,
-            settings.custom_base_url,
+            runtime_settings.custom_api_key,
+            runtime_settings.custom_model,
+            runtime_settings.custom_base_url,
         )
 
     return AnthropicClient(
-        settings.custom_api_key,
-        settings.custom_model,
-        settings.custom_base_url,
+        runtime_settings.custom_api_key,
+        runtime_settings.custom_model,
+        runtime_settings.custom_base_url,
         DEFAULT_ANTHROPIC_HEADERS,
     )
 
 
-def _build_gemini_client() -> LLMClient:
-    return GeminiClient(settings.gemini_api_key, settings.gemini_model)
+def _build_gemini_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
+    return GeminiClient(runtime_settings.gemini_api_key, runtime_settings.gemini_model)
 
 
-def _build_zhipu_client() -> LLMClient:
-    return ZhipuClient(settings.zhipu_api_key)
+def _build_zhipu_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
+    return ZhipuClient(runtime_settings.zhipu_api_key)
 
 
-def _build_mock_client() -> LLMClient:
+def _build_mock_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
     return MockClient()
 
 
@@ -688,11 +691,15 @@ PROVIDER_REGISTRY = {
 }
 
 
-def _get_missing_settings(spec: ProviderSpec) -> list[str]:
+def _get_missing_settings(
+    spec: ProviderSpec,
+    runtime_settings: EffectiveAIRuntimeSettings,
+) -> list[str]:
     missing = []
+    values = runtime_settings.__dict__
 
     for attr_name, env_name in spec.required_settings:
-        if not getattr(settings, attr_name):
+        if not values.get(attr_name):
             missing.append(env_name)
 
     return missing
@@ -713,6 +720,8 @@ def _log_provider_initialized(provider_name: str, client: LLMClient) -> None:
 # Factory function
 _client_instance: Optional[LLMClient] = None
 _provider_name: str = ""
+_configured_provider_name: str = ""
+_active_model: Optional[str] = None
 _is_degraded: bool = False
 _degradation_reason: Optional[str] = None
 
@@ -728,12 +737,27 @@ def get_llm_client() -> LLMClient:
     - "zhipu": Zhipu ChatGLM (requires ZHIPU_API_KEY)
     - "mock": Mock client for testing (default)
     """
-    global _client_instance, _provider_name, _is_degraded, _degradation_reason
+    global _client_instance, _provider_name, _configured_provider_name, _active_model, _is_degraded, _degradation_reason
 
     if _client_instance is not None:
         return _client_instance
 
-    provider = settings.llm_provider.lower()
+    try:
+        runtime_settings = get_effective_runtime_settings()
+    except Exception as exc:
+        reason = f"Runtime settings resolution failed: {exc}"
+        logger.error("%s. Falling back to mock", reason)
+        _client_instance = MockClient()
+        _provider_name = "mock"
+        _configured_provider_name = "unknown"
+        _active_model = None
+        _is_degraded = True
+        _degradation_reason = reason
+        logger.info("Initialized LLM provider 'mock'")
+        return _client_instance
+
+    provider = runtime_settings.llm_provider.lower()
+    _configured_provider_name = provider
     spec = PROVIDER_REGISTRY.get(provider)
 
     if spec is None:
@@ -741,25 +765,28 @@ def get_llm_client() -> LLMClient:
         logger.error("%s, falling back to mock", reason)
         _client_instance = MockClient()
         _provider_name = "mock"
+        _active_model = None
         _is_degraded = True
         _degradation_reason = reason
         logger.info("Initialized LLM provider 'mock'")
         return _client_instance
 
-    missing_settings = _get_missing_settings(spec)
+    missing_settings = _get_missing_settings(spec, runtime_settings)
     if missing_settings:
         reason = f"Provider '{spec.name}' missing required settings: {', '.join(missing_settings)}"
         logger.error("%s. Falling back to mock", reason)
         _client_instance = MockClient()
         _provider_name = "mock"
+        _active_model = None
         _is_degraded = True
         _degradation_reason = reason
         logger.info("Initialized LLM provider 'mock'")
         return _client_instance
 
     try:
-        _client_instance = spec.builder()
+        _client_instance = spec.builder(runtime_settings)
         _provider_name = spec.name
+        _active_model = getattr(_client_instance, "model", None)
         _is_degraded = False
         _degradation_reason = None
         _log_provider_initialized(spec.name, _client_instance)
@@ -768,6 +795,7 @@ def get_llm_client() -> LLMClient:
         logger.error("%s. Falling back to mock", reason)
         _client_instance = MockClient()
         _provider_name = "mock"
+        _active_model = None
         _is_degraded = True
         _degradation_reason = reason
         logger.info("Initialized LLM provider 'mock'")
@@ -781,21 +809,42 @@ def get_llm_status() -> Dict[str, Any]:
 
     Returns:
         Dict with keys:
-        - provider: str - actual provider being used
+        - configured_provider: str - provider selected by config/runtime settings
+        - active_provider: str - actual provider being used
+        - active_model: Optional[str] - active model if available
         - is_degraded: bool - whether fallback to mock occurred
         - degradation_reason: Optional[str] - why degradation happened
     """
+    configured_provider = _configured_provider_name
+    if not configured_provider:
+        try:
+            configured_provider = get_effective_runtime_settings().llm_provider.lower()
+        except Exception:
+            configured_provider = ""
+
     return {
         "provider": _provider_name,
+        "configured_provider": configured_provider,
+        "active_provider": _provider_name,
+        "active_model": _active_model,
         "is_degraded": _is_degraded,
         "degradation_reason": _degradation_reason,
     }
 
 
+def refresh_llm_status() -> Dict[str, Any]:
+    """Force the runtime provider status to be recomputed from current settings."""
+    reset_client()
+    get_llm_client()
+    return get_llm_status()
+
+
 def reset_client():
     """Reset the singleton client (useful for testing)."""
-    global _client_instance, _provider_name, _is_degraded, _degradation_reason
+    global _client_instance, _provider_name, _configured_provider_name, _active_model, _is_degraded, _degradation_reason
     _client_instance = None
     _provider_name = ""
+    _configured_provider_name = ""
+    _active_model = None
     _is_degraded = False
     _degradation_reason = None

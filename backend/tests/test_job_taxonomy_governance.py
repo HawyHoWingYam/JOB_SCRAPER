@@ -16,6 +16,7 @@ from app.database import Base
 from app.models import Company, Job, JobCategory, JobDomain, JobSubcategory
 from app.services.job_category_normalizer import JobCategoryNormalizer
 from scripts import govern_job_taxonomy
+from scripts import migrate_job_categories
 
 if not hasattr(SQLiteTypeCompiler, "visit_UUID"):
     SQLiteTypeCompiler.visit_UUID = lambda self, type_, **kw: "CHAR(32)"
@@ -103,7 +104,7 @@ def test_unknown_final_create_new_leaf_falls_back_to_source_path():
             },
             source_classification_id="6281",
             source_classification_name="Information & Communication Technology",
-            source_subclassification_name="Developers/Programmers",
+            source_subclassification_name="Unknown Source Bucket",
         )
 
         assert resolved == backend.id
@@ -141,7 +142,7 @@ def test_missing_default_fallback_path_is_created_for_invalid_non_override_ai_pa
             },
             source_classification_id="6281",
             source_classification_name="Information & Communication Technology",
-            source_subclassification_name="Developers/Programmers",
+            source_subclassification_name="Unknown Source Bucket",
         )
 
         created = db.query(JobSubcategory).filter_by(id=resolved).one()
@@ -172,7 +173,7 @@ def test_unknown_source_create_new_leaf_falls_back_to_registry_default_path():
             },
             source_classification_id="6281",
             source_classification_name="Information & Communication Technology",
-            source_subclassification_name="Developers/Programmers",
+            source_subclassification_name="Unknown Source Bucket",
         )
 
         assert resolved == general.id
@@ -299,6 +300,73 @@ def test_backfill_unmapped_jobs_assigns_default_slice_path():
         db.refresh(job)
         assert updated == 1
         assert job.subcategory_id == general.id
+    finally:
+        db.close()
+
+
+def test_backfill_unmapped_jobs_uses_subclassification_specific_default_path():
+    db = _build_sqlite_session()
+    try:
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Business Systems Analyst",
+            description="Needs subclassification-specific path",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Business/Systems Analysts",
+        )
+        db.add_all([company, job])
+        db.commit()
+
+        updated = govern_job_taxonomy.backfill_unmapped_jobs(db, execute=True)
+
+        db.refresh(job)
+        hierarchy = JobCategoryNormalizer(db).get_category_hierarchy(job.subcategory_id)
+        assert updated == 1
+        assert hierarchy == {
+            "subcategory": "Data Analysis",
+            "category": "Data & Analytics",
+            "domain": "Information & Communication Technology",
+        }
+    finally:
+        db.close()
+
+
+def test_resolve_taxonomy_decision_prefers_specific_default_over_generic_leaf():
+    db = _build_sqlite_session()
+    try:
+        _, backend = _seed_taxonomy(db)
+        normalizer = JobCategoryNormalizer(db)
+
+        resolved = normalizer.resolve_taxonomy_decision(
+            {
+                "source_path_decision": {
+                    "domain": "Information & Communication Technology",
+                    "category": "Software Development",
+                    "subcategory": "General",
+                    "resolution": "match_existing",
+                },
+                "final_taxonomy_decision": {
+                    "domain": "Information & Communication Technology",
+                    "category": "Software Development",
+                    "subcategory": "General",
+                    "resolution": "match_existing",
+                },
+            },
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Developers/Programmers",
+        )
+
+        assert resolved == backend.id
     finally:
         db.close()
 
@@ -477,5 +545,307 @@ def test_backfill_unmapped_jobs_dry_run_rolls_back_job_assignments_and_metrics()
         assert general.category.domain.distinct_job_count == 44
         assert general.category.domain.is_filter_visible is True
         assert general.category.domain.last_used_at == original_last_used_at
+    finally:
+        db.close()
+
+
+def test_refine_base_default_jobs_reassigns_general_general_when_specific_default_exists():
+    db = _build_sqlite_session()
+    try:
+        general, _ = _seed_taxonomy(db)
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Senior Business Analyst",
+            description="Currently on the base default path",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Business/Systems Analysts",
+            subcategory_id=general.id,
+        )
+        db.add_all([company, job])
+        db.commit()
+
+        updated = govern_job_taxonomy.refine_base_default_jobs(db, execute=True)
+
+        db.refresh(job)
+        hierarchy = JobCategoryNormalizer(db).get_category_hierarchy(job.subcategory_id)
+        assert updated == 1
+        assert hierarchy == {
+            "subcategory": "Data Analysis",
+            "category": "Data & Analytics",
+            "domain": "Information & Communication Technology",
+        }
+    finally:
+        db.close()
+
+
+def test_refine_base_default_jobs_uses_title_heuristics_for_other_bucket():
+    db = _build_sqlite_session()
+    try:
+        general, _ = _seed_taxonomy(db)
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Senior UX Designer",
+            description="Own the product design system and interaction flows.",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Other",
+            subcategory_id=general.id,
+        )
+        db.add_all([company, job])
+        db.commit()
+
+        updated = govern_job_taxonomy.refine_base_default_jobs(db, execute=True)
+
+        db.refresh(job)
+        hierarchy = JobCategoryNormalizer(db).get_category_hierarchy(job.subcategory_id)
+        assert updated == 1
+        assert hierarchy == {
+            "subcategory": "UI/UX Design",
+            "category": "Product & Quality",
+            "domain": "Information & Communication Technology",
+        }
+    finally:
+        db.close()
+
+
+def test_refine_base_default_jobs_keeps_ambiguous_other_bucket_when_no_safe_heuristic():
+    db = _build_sqlite_session()
+    try:
+        general, _ = _seed_taxonomy(db)
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Technology Trainee",
+            description="Support the team across multiple tasks.",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Other",
+            subcategory_id=general.id,
+        )
+        db.add_all([company, job])
+        db.commit()
+
+        updated = govern_job_taxonomy.refine_base_default_jobs(db, execute=True)
+
+        db.refresh(job)
+        assert updated == 0
+        assert job.subcategory_id == general.id
+    finally:
+        db.close()
+
+
+def test_apply_job_taxonomy_governance_reassigns_off_taxonomy_ict_paths():
+    db = _build_sqlite_session()
+    try:
+        _, backend = _seed_taxonomy(db)
+        governed_web = JobSubcategory(
+            id=uuid.uuid4(),
+            category_id=backend.category_id,
+            name="Web Development",
+        )
+        drift_category = JobCategory(
+            id=uuid.uuid4(),
+            domain_id=backend.category.domain_id,
+            name="Web Development",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        drift_subcategory = JobSubcategory(
+            id=uuid.uuid4(),
+            category_id=drift_category.id,
+            name="Web Development",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        drifted_job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Web Developer",
+            description="Build public websites and web applications.",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Web Development & Production",
+            subcategory_id=drift_subcategory.id,
+        )
+        db.add_all([governed_web, drift_category, drift_subcategory, company, drifted_job])
+        db.commit()
+
+        report = govern_job_taxonomy.apply_job_taxonomy_governance(db, execute=True)
+
+        db.refresh(drifted_job)
+        hierarchy = JobCategoryNormalizer(db).get_category_hierarchy(drifted_job.subcategory_id)
+
+        assert report["jobs_reconciled_off_taxonomy"] == 1
+        assert hierarchy == {
+            "subcategory": "Web Development",
+            "category": "Software Development",
+            "domain": "Information & Communication Technology",
+        }
+    finally:
+        db.close()
+
+
+def test_prune_unused_taxonomy_nodes_removes_empty_subcategories_categories_and_domains():
+    db = _build_sqlite_session()
+    try:
+        general, backend = _seed_taxonomy(db)
+
+        empty_domain = JobDomain(
+            id=uuid.uuid4(),
+            name="Unused Domain",
+        )
+        empty_category = JobCategory(
+            id=uuid.uuid4(),
+            domain_id=empty_domain.id,
+            name="Unused Category",
+        )
+        empty_subcategory = JobSubcategory(
+            id=uuid.uuid4(),
+            category_id=empty_category.id,
+            name="Unused Subcategory",
+        )
+        db.add_all([empty_domain, empty_category, empty_subcategory])
+
+        partially_empty_category = JobCategory(
+            id=uuid.uuid4(),
+            domain_id=backend.category.domain_id,
+            name="Partially Empty Category",
+        )
+        partially_empty_subcategory = JobSubcategory(
+            id=uuid.uuid4(),
+            category_id=partially_empty_category.id,
+            name="Partially Empty Subcategory",
+        )
+        db.add_all([partially_empty_category, partially_empty_subcategory])
+
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        used_job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Used role",
+            description="Used role",
+            subcategory_id=backend.id,
+        )
+        db.add_all([company, used_job])
+        db.commit()
+
+        govern_job_taxonomy.rebuild_job_taxonomy_metrics(db)
+        deleted = govern_job_taxonomy.prune_unused_taxonomy_nodes(db, execute=True)
+
+        assert deleted == {
+            "subcategories_deleted": 3,
+            "categories_deleted": 3,
+            "domains_deleted": 1,
+        }
+        assert db.query(JobSubcategory).filter_by(id=empty_subcategory.id).count() == 0
+        assert db.query(JobCategory).filter_by(id=empty_category.id).count() == 0
+        assert db.query(JobDomain).filter_by(id=empty_domain.id).count() == 0
+        assert db.query(JobCategory).filter_by(id=partially_empty_category.id).count() == 0
+        assert db.query(JobSubcategory).filter_by(id=general.id).count() == 0
+        assert db.query(JobCategory).filter_by(id=general.category_id).count() == 0
+        assert db.query(JobSubcategory).filter_by(id=backend.id).count() == 1
+    finally:
+        db.close()
+
+
+def test_migrate_job_categories_uses_governed_source_classification_flow():
+    db = _build_sqlite_session()
+    try:
+        general, _ = _seed_taxonomy(db)
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Governed migration role",
+            description="Should use source taxonomy, not legacy ai_category",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Unknown Source Bucket",
+        )
+        db.add_all([company, job])
+        db.commit()
+
+        report = migrate_job_categories.migrate_job_categories(db=db, execute=True)
+
+        db.refresh(job)
+        assert report["jobs_backfilled"] == 1
+        assert report["dry_run"] is False
+        assert job.subcategory_id == general.id
+    finally:
+        db.close()
+
+
+def test_migrate_job_categories_dry_run_rolls_back_changes():
+    db = _build_sqlite_session()
+    try:
+        _seed_taxonomy(db)
+        company = Company(
+            id=uuid.uuid4(),
+            company_id="company-1",
+            name="Company 1",
+        )
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="job-1",
+            source_site="jobsdb",
+            company_id=company.id,
+            title="Dry-run migration role",
+            description="Should not persist",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            source_subclassification_name="Unknown Source Bucket",
+        )
+        db.add_all([company, job])
+        db.commit()
+
+        report = migrate_job_categories.migrate_job_categories(db=db, execute=False)
+
+        db.refresh(job)
+        assert report["jobs_backfilled"] == 1
+        assert report["dry_run"] is True
+        assert job.subcategory_id is None
     finally:
         db.close()

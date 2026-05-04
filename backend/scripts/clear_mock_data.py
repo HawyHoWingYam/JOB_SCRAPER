@@ -19,7 +19,7 @@ def clear_mock_data():
 
         # Reset AI enrichment flags
         result = conn.execute(text(
-            "UPDATE jobs SET ai_enriched_at = NULL, ai_category = NULL "
+            "UPDATE jobs SET ai_enriched_at = NULL "
             "WHERE ai_enriched_at IS NOT NULL"
         ))
         print(f"✓ Reset {result.rowcount} jobs")

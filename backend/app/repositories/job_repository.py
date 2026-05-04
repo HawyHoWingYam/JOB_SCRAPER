@@ -122,7 +122,6 @@ class JobRepository:
                 salary_currency=job_data.get("salary_currency"),
                 location=job_data.get("location"),
                 employment_type=job_data.get("employment_type"),
-                ai_category=job_data.get("ai_category"),
                 ai_summary=job_data.get("ai_summary"),
                 posted_date=job_data.get("posted_date"),
                 raw_data=job_data.get("raw_data"),

@@ -21,9 +21,9 @@ def build_backup_plan(output_dir: str) -> dict[str, object]:
     base_dir = Path(output_dir)
     exports = {
         "jobs": {
-            "columns": ["id", "job_id", "title", "ai_category", "ai_summary", "ai_enriched_at"],
+            "columns": ["id", "job_id", "title", "subcategory_id", "ai_summary", "ai_enriched_at"],
             "query": """
-                SELECT id, job_id, title, ai_category, ai_summary, ai_enriched_at
+                SELECT id, job_id, title, subcategory_id, ai_summary, ai_enriched_at
                 FROM jobs
             """,
             "path": str(base_dir / "jobs.csv"),

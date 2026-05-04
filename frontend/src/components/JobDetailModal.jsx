@@ -269,10 +269,10 @@ function JobDetailModal({ jobId, apiUrl, onClose }) {
               </div>
 
               <div className="modal-subsection">
-                <h4>AI Category</h4>
-                <p className={!job.ai_category ? 'modal-empty' : undefined}>
-                  {job.ai_category || (job.ai_enriched_at
-                    ? 'No AI category assigned'
+                <h4>Job Taxonomy</h4>
+                <p className={!job.job_taxonomy?.path ? 'modal-empty' : undefined}>
+                  {job.job_taxonomy?.path || (job.ai_enriched_at
+                    ? 'No governed job taxonomy assigned'
                     : getAwaitingAiCopy())}
                 </p>
               </div>

@@ -15,6 +15,7 @@ from app.models.company_enrichment_run import (
     CompanyEnrichmentRun,
     CompanyEnrichmentRunItem,
 )
+from app.models.app_runtime_settings import AppRuntimeSettings
 
 __all__ = [
     "Company", "Job", "ScrapeSchedule", "ScheduleExecution",
@@ -23,4 +24,5 @@ __all__ = [
     "SkillReviewCandidate",
     "EnrichmentRun", "EnrichmentRunItem",
     "CompanyEnrichmentRun", "CompanyEnrichmentRunItem",
+    "AppRuntimeSettings",
 ]

@@ -5,6 +5,16 @@ function hasFilterValue(value) {
     return value !== '' && value != null;
 }
 
+function selectedSubcategoryLabel(filters, filterOptions) {
+    const selectedId = filters.subcategory_ids?.[0];
+    if (!selectedId) {
+        return '';
+    }
+
+    const match = filterOptions.job_subcategories?.find((subcategory) => subcategory.id === selectedId);
+    return match?.name || selectedId;
+}
+
 function FilterPanel({
     filters,
     onFilterChange,
@@ -25,7 +35,7 @@ function FilterPanel({
 
     const activeFilters = [
         filters.employment_type && `Job type: ${filters.employment_type}`,
-        filters.category && `AI category: ${filters.category}`,
+        filters.subcategory_ids?.length > 0 && `Job taxonomy: ${selectedSubcategoryLabel(filters, filterOptions)}`,
         filters.industry && `Industry: ${filters.industry}`,
         filters.posted_date_from && `Date from: ${filters.posted_date_from}`,
         filters.posted_date_to && `Date to: ${filters.posted_date_to}`,
@@ -101,16 +111,16 @@ function FilterPanel({
                     </label>
 
                     <label className="filter-field">
-                        <span className="filter-label">AI Category</span>
+                        <span className="filter-label">Job Taxonomy</span>
                         <select
                             className="premium-select highlight-select"
-                            value={filters.category || ''}
-                            onChange={(e) => handleChange('category', e.target.value)}
+                            value={filters.subcategory_ids?.[0] || ''}
+                            onChange={(e) => handleChange('subcategory_ids', e.target.value ? [e.target.value] : [])}
                             disabled={isLoading}
                         >
-                            <option value="">All AI Categories</option>
-                            {filterOptions.categories.map((cat) => (
-                                <option key={cat} value={cat}>{cat}</option>
+                            <option value="">All Taxonomy Paths</option>
+                            {filterOptions.job_subcategories?.map((subcategory) => (
+                                <option key={subcategory.id} value={subcategory.id}>{subcategory.name}</option>
                             ))}
                         </select>
                     </label>

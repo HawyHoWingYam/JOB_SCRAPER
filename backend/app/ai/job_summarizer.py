@@ -16,7 +16,7 @@ Focus on:
 Do not invent facts.
 
 Job title: {title}
-AI category: {ai_category}
+Job taxonomy: {job_taxonomy_path}
 Job description:
 {description}
 """
@@ -33,11 +33,11 @@ class JobSummarizer:
         *,
         title: str,
         description: str,
-        ai_category: Optional[str] = None,
+        job_taxonomy_path: Optional[str] = None,
     ) -> str:
         prompt = SUMMARY_PROMPT.format(
             title=title,
-            ai_category=ai_category or "Unknown",
+            job_taxonomy_path=job_taxonomy_path or "Unknown",
             description=description[:2000] if description else "No description provided.",
         )
         return await self.llm.generate(prompt)

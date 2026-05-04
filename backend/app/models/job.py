@@ -4,6 +4,7 @@ from datetime import datetime, UTC
 import json
 from typing import Any, List, Optional
 from app.database import Base
+from app.utils.skill_taxonomy_policy import is_governed_visible_skill_instance
 import uuid
 
 
@@ -34,10 +35,8 @@ class Job(Base):
     source_classification_name = Column(String(255), nullable=True, index=True)
     source_subclassification_id = Column(String(50), nullable=True, index=True)
     source_subclassification_name = Column(String(255), nullable=True, index=True)
-    ai_category = Column(String(255), nullable=True, index=True)
     ai_summary = Column(Text, nullable=True)
     ai_enriched_at = Column(DateTime, nullable=True)
-    ai_generic_tags = Column(JSON, nullable=True)
     experience_min_years = Column(Integer, nullable=True, index=True)
     experience_max_years = Column(Integer, nullable=True, index=True)
     experience_level = Column(String(50), nullable=True, index=True)
@@ -64,11 +63,37 @@ class Job(Base):
     company = relationship("Company", back_populates="jobs")
     subcategory = relationship("JobSubcategory", back_populates="jobs")
     job_skills = relationship("JobSkill", back_populates="job", cascade="all, delete-orphan")
+    job_skill_mentions = relationship(
+        "JobSkillMention",
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )
 
     @property
     def skills_list(self) -> List[str]:
-        """Get skills from relational table"""
-        return [js.skill.name for js in self.job_skills]
+        """Return governed canonical skills derived from match-existing mentions."""
+        names: list[str] = []
+        seen: set[str] = set()
+
+        mentions = sorted(
+            self.job_skill_mentions,
+            key=lambda mention: (
+                mention.created_at or datetime.min,
+                mention.raw_name or "",
+                str(mention.id),
+            ),
+        )
+        for mention in mentions:
+            if mention.resolution != "match_existing" or mention.skill is None:
+                continue
+            if not is_governed_visible_skill_instance(mention.skill):
+                continue
+            if mention.skill.name in seen:
+                continue
+            seen.add(mention.skill.name)
+            names.append(mention.skill.name)
+
+        return names
 
     @property
     def skills(self) -> List[str]:
@@ -87,6 +112,32 @@ class Job(Base):
     @property
     def company_ai_description(self) -> Optional[str]:
         return self.company.ai_description if self.company else None
+
+    @property
+    def job_taxonomy(self) -> Optional[dict[str, Any]]:
+        subcategory = self.subcategory
+        if subcategory is None or subcategory.category is None or subcategory.category.domain is None:
+            return None
+
+        category = subcategory.category
+        domain = category.domain
+        return {
+            "domain_id": domain.id,
+            "domain_name": domain.name,
+            "category_id": category.id,
+            "category_name": category.name,
+            "subcategory_id": subcategory.id,
+            "subcategory_name": subcategory.name,
+            "path": f"{domain.name} / {category.name} / {subcategory.name}",
+        }
+
+    @property
+    def job_taxonomy_path(self) -> Optional[str]:
+        taxonomy = self.job_taxonomy
+        if taxonomy is None:
+            return None
+        path = taxonomy.get("path")
+        return str(path) if path else None
 
     def _raw_data_mapping(self) -> Optional[dict[str, Any]]:
         value: Any = self.raw_data

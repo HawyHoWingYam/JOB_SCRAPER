@@ -66,6 +66,7 @@ class JobTaxonomyRegistry:
         allowed_categories = list(categories_by_name.keys())
 
         hint_categories = None
+        hint_default_path = None
         if source_subclassification_name:
             hint = mapping_entry.get("subcategory_hints", {}).get(source_subclassification_name)
             if hint:
@@ -74,6 +75,15 @@ class JobTaxonomyRegistry:
                     for category in hint.get("allowed_categories", [])
                     if category in categories_by_name
                 ]
+                raw_default_path = hint.get("default_path")
+                if (
+                    isinstance(raw_default_path, list)
+                    and len(raw_default_path) == 3
+                    and raw_default_path[0] in allowed_domains
+                    and raw_default_path[1] in categories_by_name
+                    and raw_default_path[2] in categories_by_name.get(raw_default_path[1], [])
+                ):
+                    hint_default_path = tuple(str(part) for part in raw_default_path)
 
         if hint_categories:
             allowed_categories = hint_categories
@@ -91,8 +101,20 @@ class JobTaxonomyRegistry:
             allowed_domains=allowed_domains,
             allowed_categories=allowed_categories,
             allowed_subcategories=allowed_subcategories,
-            default_path=tuple(mapping_entry["default_path"]),
+            default_path=hint_default_path or tuple(mapping_entry["default_path"]),
         )
+
+    def get_base_default_path(
+        self,
+        source_classification_id: str | None,
+    ) -> tuple[str, str, str]:
+        if not source_classification_id or source_classification_id not in self.mapping:
+            raise ValueError(
+                f"Unknown source classification: {source_classification_id or 'missing'}"
+            )
+
+        mapping_entry = self.mapping[source_classification_id]
+        return tuple(mapping_entry["default_path"])
 
 
 _registry: JobTaxonomyRegistry | None = None

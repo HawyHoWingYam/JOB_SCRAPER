@@ -21,8 +21,7 @@ def build_statements() -> list[str]:
         "DELETE FROM job_skills",
         """
         UPDATE jobs
-        SET ai_category = NULL,
-            ai_summary = NULL,
+        SET ai_summary = NULL,
             ai_enriched_at = NULL,
             subcategory_id = NULL
         """,

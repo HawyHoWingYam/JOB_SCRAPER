@@ -47,10 +47,21 @@ __EXISTING_TECHNOLOGIES__
 Existing skills:
 __EXISTING_SKILLS__
 
+Review-only technical terms from this context:
+__REVIEW_ONLY_TERMS__
+
+Suppressed broad technical terms from this context:
+__SUPPRESSED_REVIEW_TERMS__
+
 Rules:
 - Extract only technical / hard skills (languages, frameworks, tools, platforms).
 - Exclude soft skills.
 - Normalize common abbreviations (e.g., JS -> JavaScript, K8s -> Kubernetes).
+- Prefer `match_existing` only for concrete tools, platforms, frameworks, and technologies.
+- If a term appears in the review-only list, mark it as `kind=technical` and `resolution=unresolved`.
+- If a term appears in the suppressed list, do not emit it as a skill unless the posting clearly names a concrete product/tool instead.
+- Do not force broad infrastructure, architecture, platform, or discipline terms into an existing skill.
+- Use `kind=generic` with `resolution=drop` only for non-technical process/collaboration terms.
 
 **3) Summary Instructions**
 Write a concise 2-3 sentence summary. Focus on responsibilities, impact, and the core requirements.
@@ -190,6 +201,12 @@ class JobInsightExtractor:
             ),
             "__EXISTING_SKILLS__": self._format_candidates(
                 skill_taxonomy_candidates.get("existing_skills", [])
+            ),
+            "__REVIEW_ONLY_TERMS__": self._format_candidates(
+                skill_taxonomy_candidates.get("review_only_terms", [])
+            ),
+            "__SUPPRESSED_REVIEW_TERMS__": self._format_candidates(
+                skill_taxonomy_candidates.get("suppressed_review_terms", [])
             ),
             "__TITLE__": title,
             "__DESCRIPTION__": (description or "No description")[:2000],

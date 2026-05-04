@@ -604,10 +604,14 @@ export default function AIEnrichmentPage() {
                   const remainingItems = Number.isFinite(Number(run.pending_items))
                     ? Number(run.pending_items)
                     : Math.max(0, totalItems - processedItems);
-                  const progressValue = totalItems ? Math.round((processedItems / totalItems) * 100) : 0;
                   const normalizedStatus = normalizeRunStatus(run.status);
                   const statusTone = getRunStatusTone(normalizedStatus);
                   const active = isActiveRun(run);
+                  const inProgressItems = Number.isFinite(Number(run.in_progress_items))
+                    ? Number(run.in_progress_items)
+                    : (active ? Math.max(0, totalItems - remainingItems - processedItems) : 0);
+                  const latestStartedJobTitle = run.latest_started_job_title || run.current_job_title || 'Waiting for persisted title';
+                  const progressValue = totalItems ? Math.round((processedItems / totalItems) * 100) : 0;
 
                   const startedMs = parseDateMs(run.started_at);
                   const completedMs = parseDateMs(run.completed_at);
@@ -653,10 +657,11 @@ export default function AIEnrichmentPage() {
 
                       {active && (
                         <div className="ai-run-focus">
-                          <span className="ai-run-focus-label">Current focus</span>
+                          <span className="ai-run-focus-label">Jobs in progress</span>
                           <strong className="ai-run-focus-value">
-                            {run.current_job_title || 'Waiting for persisted title'}
+                            {inProgressItems > 0 ? `${inProgressItems} jobs in progress` : 'Waiting for workers to claim jobs'}
                           </strong>
+                          <span className="ai-run-focus-detail">Latest title: {latestStartedJobTitle}</span>
                         </div>
                       )}
 

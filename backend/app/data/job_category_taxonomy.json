@@ -181,9 +181,9 @@
       "categories": [
         {"name": "General", "subcategories": ["General"]},
         {"name": "Software Development", "subcategories": ["Backend Development", "Frontend Development", "Web Development", "Mobile Development", "Full Stack Development"]},
-        {"name": "Infrastructure & Support", "subcategories": ["Application Support", "Help Desk Support", "Systems Administration", "Network Engineering"]},
+        {"name": "Infrastructure & Support", "subcategories": ["Application Support", "Help Desk Support", "Systems Administration", "Network Engineering", "Solutions Architecture", "Solutions Consulting", "Technology Management"]},
         {"name": "Data & Analytics", "subcategories": ["Data Analysis", "Data Engineering", "Machine Learning", "Business Intelligence"]},
-        {"name": "Product & Quality", "subcategories": ["Product Management", "QA Testing", "UI/UX Design"]},
+        {"name": "Product & Quality", "subcategories": ["Product Management", "Project Management", "QA Testing", "UI/UX Design", "Technical Documentation"]},
         {"name": "Cybersecurity", "subcategories": ["Security Operations", "Application Security", "Governance Risk & Compliance"]}
       ]
     },

@@ -17,6 +17,7 @@ from app.database import Base
 from app.models import Company, Job, JobSkill, JobSkillMention, Skill, SkillCategory, SkillTechnology
 from app.models.skill_review_candidate import SkillReviewCandidate
 from scripts import govern_skill_history
+from scripts import govern_skill_review_candidates
 from scripts import verify_migration
 
 
@@ -233,14 +234,22 @@ def _create_company(db):
     return company
 
 
-def _create_job(db, company_id, title):
+def _create_job(
+    db,
+    company_id,
+    title,
+    *,
+    description=None,
+    source_subclassification_name=None,
+):
     job = Job(
         id=uuid.uuid4(),
         job_id=f"job-{uuid.uuid4()}",
         source_site="jobsdb",
         company_id=company_id,
         title=title,
-        description=f"{title} description",
+        description=description or f"{title} description",
+        source_subclassification_name=source_subclassification_name,
         created_at=datetime(2026, 4, 30, 10, 0, 0),
         updated_at=datetime(2026, 4, 30, 10, 0, 0),
     )
@@ -294,6 +303,29 @@ def _link_job_skill(db, job_id, skill_id, created_at=None):
     db.add(job_skill)
     db.flush()
     return job_skill
+
+
+def _create_match_existing_mention(
+    db,
+    *,
+    job_id,
+    raw_name,
+    normalized_name,
+    skill_id,
+):
+    mention = JobSkillMention(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        raw_name=raw_name,
+        normalized_name=normalized_name,
+        resolution="match_existing",
+        skill_id=skill_id,
+        source="ai",
+        confidence=0.9,
+    )
+    db.add(mention)
+    db.flush()
+    return mention
 
 
 def _create_review_candidate(
@@ -507,14 +539,155 @@ def test_apply_skill_history_governance_merges_into_created_canonical_skill(tmp_
         db.close()
 
 
-def test_apply_skill_history_governance_routes_generic_terms_to_job_tags(tmp_path):
+def test_apply_skill_history_governance_merges_into_created_canonical_skill_with_canonicalized_name(
+    tmp_path,
+):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        _, other_general = _create_skill_hierarchy(db, "Other", "General")
+
+        polluted_skill = _create_skill(db, other_general.id, "Microsoft Azure")
+        job1 = _create_job(db, company.id, "Cloud Engineer")
+        job2 = _create_job(db, company.id, "Platform Engineer")
+        _link_job_skill(db, job1.id, polluted_skill.id)
+        _link_job_skill(db, job2.id, polluted_skill.id)
+        db.commit()
+
+        curations_path = _write_curations(
+            tmp_path,
+            {
+                    "microsoft azure": {
+                        "action": "merge",
+                        "target": {
+                            "category": "DevOps",
+                            "technology": "Cloud Platforms",
+                            "skill": "Azure",
+                        },
+                    }
+                },
+            )
+
+        govern_skill_history.apply_skill_history_governance(
+            db,
+            min_distinct_jobs=1,
+            curation_path=curations_path,
+            execute=True,
+        )
+
+        canonical_skill = (
+            db.query(Skill)
+            .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
+            .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+            .filter(
+                Skill.name == "Azure",
+                SkillTechnology.name == "Cloud Platforms",
+                SkillCategory.name == "DevOps",
+            )
+            .one()
+        )
+        links = db.query(JobSkill).filter(JobSkill.skill_id == canonical_skill.id).all()
+
+        assert canonical_skill.aliases is None
+        assert len(links) == 2
+        assert db.query(JobSkill).filter(JobSkill.skill_id == polluted_skill.id).count() == 0
+        assert db.query(Skill).filter(Skill.id == polluted_skill.id).count() == 0
+    finally:
+        db.close()
+
+
+def test_apply_skill_review_candidate_governance_merges_into_created_canonical_skill(
+    tmp_path,
+):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        job1 = _create_job(db, company.id, "Cloud Engineer")
+        job2 = _create_job(db, company.id, "Platform Engineer")
+        candidate = _create_review_candidate(
+            db,
+            "AWS",
+            "aws",
+            occurrence_count=2,
+            first_seen_job_id=job1.id,
+            last_seen_job_id=job2.id,
+        )
+        _create_review_candidate_mention(
+            db,
+            job_id=job1.id,
+            raw_name="AWS",
+            normalized_name="aws",
+            review_candidate_id=candidate.id,
+        )
+        _create_review_candidate_mention(
+            db,
+            job_id=job2.id,
+            raw_name="AWS",
+            normalized_name="aws",
+            review_candidate_id=candidate.id,
+        )
+        db.commit()
+
+        curations_path = _write_curations(
+            tmp_path,
+            {
+                "aws": {
+                    "action": "merge",
+                    "target": {
+                        "category": "DevOps",
+                        "technology": "Cloud Platforms",
+                        "skill": "AWS",
+                    },
+                }
+            },
+            minimum_distinct_jobs=1,
+        )
+
+        govern_skill_review_candidates.apply_review_candidate_governance(
+            db,
+            min_occurrence_count=1,
+            curation_path=curations_path,
+            execute=True,
+        )
+
+        canonical_skill = (
+            db.query(Skill)
+            .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
+            .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+            .filter(
+                Skill.name == "AWS",
+                SkillTechnology.name == "Cloud Platforms",
+                SkillCategory.name == "DevOps",
+            )
+            .one()
+        )
+        mentions = (
+            db.query(JobSkillMention)
+            .filter(JobSkillMention.job_id.in_([job1.id, job2.id]))
+            .order_by(JobSkillMention.job_id.asc())
+            .all()
+        )
+        links = db.query(JobSkill).filter(JobSkill.skill_id == canonical_skill.id).all()
+
+        db.refresh(candidate)
+        assert candidate.status == "resolved"
+        assert candidate.occurrence_count == 0
+        assert len(links) == 2
+        assert [(mention.resolution, mention.skill_id, mention.review_candidate_id) for mention in mentions] == [
+            ("match_existing", canonical_skill.id, None),
+            ("match_existing", canonical_skill.id, None),
+        ]
+    finally:
+        db.close()
+
+
+def test_apply_skill_history_governance_routes_generic_terms_to_job_mentions(tmp_path):
     db = _build_sqlite_session()
     try:
         company = _create_company(db)
         _, other_general = _create_skill_hierarchy(db, "Other", "General")
         polluted_skill = _create_skill(db, other_general.id, "Project Management")
         job = _create_job(db, company.id, "Delivery Lead")
-        job.ai_generic_tags = ["Existing Tag", "project management"]
         _link_job_skill(db, job.id, polluted_skill.id)
         db.commit()
 
@@ -535,8 +708,15 @@ def test_apply_skill_history_governance_routes_generic_terms_to_job_tags(tmp_pat
             execute=True,
         )
 
-        db.refresh(job)
-        assert job.ai_generic_tags == ["Existing Tag", "Project Management"]
+        mentions = (
+            db.query(JobSkillMention)
+            .filter_by(job_id=job.id, resolution="generic_tag")
+            .order_by(JobSkillMention.raw_name.asc())
+            .all()
+        )
+        assert [(mention.raw_name, mention.generic_tag) for mention in mentions] == [
+            ("Project Management", "Project Management")
+        ]
         assert db.query(JobSkill).filter(JobSkill.skill_id == polluted_skill.id).count() == 0
         assert db.query(Skill).filter(Skill.id == polluted_skill.id).count() == 0
     finally:
@@ -692,6 +872,86 @@ def test_apply_skill_history_governance_marks_phrase_like_one_off_for_review(tmp
         db.close()
 
 
+def test_audit_skill_history_uses_normalizer_to_auto_genericize_suppressed_terms(tmp_path):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        _, other_general = _create_skill_hierarchy(db, "Other", "General")
+        suppressed_skill = _create_skill(db, other_general.id, "Data Analysis")
+        job = _create_job(db, company.id, "Analyst")
+        _link_job_skill(db, job.id, suppressed_skill.id)
+        db.commit()
+
+        curations_path = _write_curations(tmp_path, {}, minimum_distinct_jobs=1)
+
+        report = govern_skill_history.audit_skill_history(
+            db,
+            min_distinct_jobs=1,
+            curation_path=curations_path,
+        )
+
+        data_analysis_entry = next(
+            entry for entry in report["entries"] if entry["source_skill"]["name"] == "Data Analysis"
+        )
+        assert data_analysis_entry["action"] == "generic"
+        assert data_analysis_entry["generic_tag"] == "Data Analysis"
+    finally:
+        db.close()
+
+
+def test_audit_skill_history_uses_normalizer_to_auto_merge_matchable_terms(tmp_path):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        other_category = SkillCategory(
+            id=uuid.uuid4(),
+            name="Other",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        other_general = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=other_category.id,
+            name="General",
+            created_by="ai",
+            is_auto_created=True,
+        )
+        db.add_all([other_category, other_general])
+        db.flush()
+        backend_category, python_technology = _create_skill_hierarchy(db, "Backend", "Python")
+        _create_skill(
+            db,
+            python_technology.id,
+            "Python",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        polluted_skill = _create_skill(db, other_general.id, "Python")
+        job = _create_job(db, company.id, "Backend Engineer")
+        _link_job_skill(db, job.id, polluted_skill.id)
+        db.commit()
+
+        curations_path = _write_curations(tmp_path, {}, minimum_distinct_jobs=1)
+
+        report = govern_skill_history.audit_skill_history(
+            db,
+            min_distinct_jobs=1,
+            curation_path=curations_path,
+        )
+
+        python_entry = next(
+            entry for entry in report["entries"] if entry["source_skill"]["name"] == "Python"
+        )
+        assert python_entry["action"] == "merge"
+        assert python_entry["target"] == {
+            "category": backend_category.name,
+            "technology": python_technology.name,
+            "skill": "Python",
+        }
+    finally:
+        db.close()
+
+
 def test_apply_skill_history_governance_routes_phrase_like_review_out_of_controlled_layer(tmp_path):
     db = _build_sqlite_session()
     try:
@@ -743,6 +1003,20 @@ def test_rebuild_skill_taxonomy_metrics_recalculates_counts_and_visibility(monke
         jobs = [_create_job(db, company.id, f"Job {index}") for index in range(1, 3)]
         _link_job_skill(db, jobs[0].id, skill.id, created_at=datetime(2026, 4, 30, 11, 0, 0))
         _link_job_skill(db, jobs[1].id, skill.id, created_at=datetime(2026, 4, 30, 12, 0, 0))
+        _create_match_existing_mention(
+            db,
+            job_id=jobs[0].id,
+            raw_name="Python",
+            normalized_name="Python",
+            skill_id=skill.id,
+        )
+        _create_match_existing_mention(
+            db,
+            job_id=jobs[1].id,
+            raw_name="Python",
+            normalized_name="Python",
+            skill_id=skill.id,
+        )
 
         category.usage_count = 99
         category.distinct_job_count = 99
@@ -779,6 +1053,249 @@ def test_rebuild_skill_taxonomy_metrics_recalculates_counts_and_visibility(monke
         db.close()
 
 
+def test_rebuild_skill_taxonomy_metrics_only_counts_governed_match_existing_mentions(monkeypatch):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        backend_category, python_technology = _create_skill_hierarchy(db, "Backend", "Python")
+        canonical_skill = _create_skill(
+            db,
+            python_technology.id,
+            "Python",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        other_category, other_general = _create_skill_hierarchy(db, "Other", "General")
+        polluted_skill = _create_skill(db, other_general.id, "Linux")
+
+        canonical_job = _create_job(db, company.id, "Python Engineer")
+        polluted_job = _create_job(db, company.id, "Linux Engineer")
+
+        _link_job_skill(db, canonical_job.id, canonical_skill.id, created_at=datetime(2026, 4, 30, 11, 0, 0))
+        _link_job_skill(db, polluted_job.id, polluted_skill.id, created_at=datetime(2026, 4, 30, 12, 0, 0))
+        _create_match_existing_mention(
+            db,
+            job_id=canonical_job.id,
+            raw_name="Python",
+            normalized_name="Python",
+            skill_id=canonical_skill.id,
+        )
+        db.commit()
+
+        monkeypatch.setattr(govern_skill_history.settings, "filter_skill_l3_min_jobs", 1)
+        monkeypatch.setattr(govern_skill_history.settings, "filter_skill_l2_min_jobs", 1)
+        monkeypatch.setattr(govern_skill_history.settings, "filter_skill_l1_min_jobs", 1)
+
+        govern_skill_history.rebuild_skill_taxonomy_metrics(db)
+
+        db.refresh(canonical_skill)
+        db.refresh(polluted_skill)
+        db.refresh(python_technology)
+        db.refresh(backend_category)
+        db.refresh(other_general)
+        db.refresh(other_category)
+
+        assert canonical_skill.distinct_job_count == 1
+        assert canonical_skill.is_filter_visible is True
+        assert python_technology.distinct_job_count == 1
+        assert backend_category.distinct_job_count == 1
+        assert polluted_skill.distinct_job_count == 0
+        assert polluted_skill.is_filter_visible is False
+        assert other_general.distinct_job_count == 0
+        assert other_general.is_filter_visible is False
+        assert other_category.distinct_job_count == 0
+        assert other_category.is_filter_visible is False
+    finally:
+        db.close()
+
+
+def test_apply_review_candidate_governance_backfills_suggested_hierarchy_for_pending_reviews(
+    tmp_path,
+):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        job = _create_job(db, company.id, "Database Engineer")
+        database_category, sql_technology = _create_skill_hierarchy(db, "Database", "SQL")
+        _create_skill(
+            db,
+            sql_technology.id,
+            "PostgreSQL",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        candidate = _create_review_candidate(
+            db,
+            "PostgreSQL",
+            "postgresql",
+            occurrence_count=1,
+            first_seen_job_id=job.id,
+            last_seen_job_id=job.id,
+        )
+        _create_review_candidate_mention(
+            db,
+            job_id=job.id,
+            raw_name="PostgreSQL",
+            normalized_name="postgresql",
+            review_candidate_id=candidate.id,
+        )
+        db.commit()
+
+        curations_path = _write_curations(tmp_path, {}, minimum_distinct_jobs=1)
+
+        report = govern_skill_review_candidates.apply_review_candidate_governance(
+            db,
+            min_occurrence_count=1,
+            curation_path=curations_path,
+            execute=True,
+        )
+
+        db.refresh(candidate)
+
+        assert report["processed"]["review"] == 1
+        assert candidate.status == "pending"
+        assert candidate.suggested_category == "Database"
+        assert candidate.suggested_technology == "SQL"
+    finally:
+        db.close()
+
+
+def test_apply_review_candidate_governance_backfills_suggestions_from_job_context(tmp_path):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        job = _create_job(
+            db,
+            company.id,
+            "Systems Engineer",
+            description="Maintain DNS services and network routing for enterprise systems.",
+            source_subclassification_name="Networks & Systems Administration",
+        )
+        candidate = _create_review_candidate(
+            db,
+            "DNS",
+            "dns",
+            occurrence_count=1,
+            first_seen_job_id=job.id,
+            last_seen_job_id=job.id,
+        )
+        _create_review_candidate_mention(
+            db,
+            job_id=job.id,
+            raw_name="DNS",
+            normalized_name="dns",
+            review_candidate_id=candidate.id,
+        )
+        db.commit()
+
+        curations_path = _write_curations(tmp_path, {}, minimum_distinct_jobs=1)
+
+        govern_skill_review_candidates.apply_review_candidate_governance(
+            db,
+            min_occurrence_count=1,
+            curation_path=curations_path,
+            execute=True,
+        )
+
+        db.refresh(candidate)
+
+        assert candidate.status == "pending"
+        assert candidate.suggested_category == "DevOps"
+        assert candidate.suggested_technology == "Networking"
+    finally:
+        db.close()
+
+
+def test_audit_skill_history_only_curated_skips_default_review_entries(tmp_path):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        _, other_general = _create_skill_hierarchy(db, "Other", "General")
+
+        curated_skill = _create_skill(db, other_general.id, "Project Management")
+        uncurated_skill = _create_skill(db, other_general.id, "Unmapped Legacy Phrase")
+        job1 = _create_job(db, company.id, "Delivery Lead")
+        job2 = _create_job(db, company.id, "Support Lead")
+        _link_job_skill(db, job1.id, curated_skill.id)
+        _link_job_skill(db, job2.id, uncurated_skill.id)
+        db.commit()
+
+        curations_path = _write_curations(
+            tmp_path,
+            {
+                "project management": {
+                    "action": "generic",
+                    "generic_tag": "Project Management",
+                }
+            },
+            minimum_distinct_jobs=1,
+        )
+
+        report = govern_skill_history.audit_skill_history(
+            db,
+            min_distinct_jobs=1,
+            curation_path=curations_path,
+            only_curated=True,
+        )
+
+        assert [
+            (entry["source_skill"]["name"], entry["action"])
+            for entry in report["entries"]
+        ] == [("Project Management", "generic")]
+    finally:
+        db.close()
+
+
+def test_apply_skill_history_governance_only_curated_skips_uncurated_review_entries(tmp_path):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        _, other_general = _create_skill_hierarchy(db, "Other", "General")
+
+        curated_skill = _create_skill(db, other_general.id, "Project Management")
+        uncurated_skill = _create_skill(db, other_general.id, "Unmapped Legacy Phrase")
+        job1 = _create_job(db, company.id, "Delivery Lead")
+        job2 = _create_job(db, company.id, "Support Lead")
+        _link_job_skill(db, job1.id, curated_skill.id)
+        _link_job_skill(db, job2.id, uncurated_skill.id)
+        db.commit()
+
+        curations_path = _write_curations(
+            tmp_path,
+            {
+                "project management": {
+                    "action": "generic",
+                    "generic_tag": "Project Management",
+                }
+            },
+            minimum_distinct_jobs=1,
+        )
+
+        report = govern_skill_history.apply_skill_history_governance(
+            db,
+            min_distinct_jobs=1,
+            curation_path=curations_path,
+            only_curated=True,
+            execute=True,
+        )
+
+        generic_mentions = (
+            db.query(JobSkillMention)
+            .filter_by(job_id=job1.id, resolution="generic_tag")
+            .all()
+        )
+        pending_candidates = db.query(SkillReviewCandidate).filter_by(status="pending").all()
+
+        assert report["processed"] == {"merge": 0, "generic": 1, "review": 0}
+        assert [(mention.raw_name, mention.generic_tag) for mention in generic_mentions] == [
+            ("Project Management", "Project Management")
+        ]
+        assert pending_candidates == []
+        assert db.query(JobSkill).filter(JobSkill.skill_id == uncurated_skill.id).count() == 1
+    finally:
+        db.close()
+
+
 def test_collect_verification_snapshot_tolerates_missing_governance_objects():
     db = _build_pre_migration_session()
     try:
@@ -787,7 +1304,6 @@ def test_collect_verification_snapshot_tolerates_missing_governance_objects():
             rendered = verify_migration.render_report(snapshot)
 
         assert snapshot["job_skill_mentions_total"] == 0
-        assert snapshot["jobs_with_generic_tags"] == 0
         assert snapshot["skill_review_candidates_pending"] == 0
         assert snapshot["polluted_other_general_skills"] == 0
         assert "Raw job skill mentions: 0" in rendered
