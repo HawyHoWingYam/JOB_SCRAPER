@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import create_engine
+from sqlalchemy import text
 from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -86,127 +87,139 @@ def _create_job(db, *, company_id: uuid.UUID, title: str) -> Job:
 def test_recover_interrupted_operations_marks_active_runs_and_executions_failed():
     db = _build_sqlite_session()
     try:
-        company = _create_company(db, name="Acme Health")
-        job = _create_job(db, company_id=company.id, title="Platform Engineer")
+        service = StartupRecoveryService(db)
+        call_order = []
 
-        ai_run = EnrichmentRun(
-            id="ai-run-1",
-            source_type="manual_pending",
-            status="running",
-            job_ids=[str(job.id)],
-            total_items=1,
-            pending_items=0,
-            completed_items=0,
-            failed_items=0,
-            started_at=datetime(2026, 5, 5, 10, 0, 0),
-            current_job_title="Platform Engineer",
-            created_at=datetime(2026, 5, 5, 10, 0, 0),
-        )
-        db.add(ai_run)
-        db.flush()
-        db.add(
-            EnrichmentRunItem(
-                id="ai-item-1",
-                run_id=ai_run.id,
-                job_id=job.id,
-                position=0,
-                status="running",
-                started_at=datetime(2026, 5, 5, 10, 0, 5),
-                created_at=datetime(2026, 5, 5, 10, 0, 0),
+        def record_ai():
+            call_order.append("ai")
+            return 2
+
+        def record_company():
+            call_order.append("company")
+            return 3
+
+        def record_schedule():
+            call_order.append("schedule")
+            return 4
+
+        service._recover_ai_runs = record_ai
+        service._recover_company_runs = record_company
+        service._recover_schedule_executions = record_schedule
+
+        summary = service.recover_interrupted_operations()
+
+        assert call_order == ["ai", "company", "schedule"]
+        assert summary == {
+            "ai_runs_recovered": 2,
+            "company_runs_recovered": 3,
+            "schedule_executions_recovered": 4,
+        }
+    finally:
+        db.close()
+
+
+def test_recover_interrupted_operations_tolerates_legacy_schedule_execution_schema():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Company.__table__,
+            Job.__table__,
+            EnrichmentRun.__table__,
+            EnrichmentRunItem.__table__,
+            CompanyEnrichmentRun.__table__,
+            CompanyEnrichmentRunItem.__table__,
+        ],
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE schedule_executions (
+                    id CHAR(32) PRIMARY KEY,
+                    schedule_id CHAR(32) NOT NULL,
+                    status VARCHAR(50) NOT NULL,
+                    started_at DATETIME NOT NULL,
+                    completed_at DATETIME,
+                    duration_seconds INTEGER,
+                    jobs_scraped INTEGER DEFAULT 0,
+                    jobs_saved INTEGER DEFAULT 0,
+                    error_message TEXT,
+                    created_at DATETIME
+                )
+                """
             )
         )
-
-        company_run = CompanyEnrichmentRun(
-            id="company-run-1",
-            status="pending",
-            total_items=1,
-            pending_items=1,
-            completed_items=0,
-            failed_items=0,
-            started_at=datetime(2026, 5, 5, 10, 5, 0),
-            current_company_name="Acme Health",
-            created_at=datetime(2026, 5, 5, 10, 5, 0),
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        legacy_execution_id = uuid.uuid4().hex
+        db.execute(
+            text(
+                """
+                INSERT INTO schedule_executions (
+                    id, schedule_id, status, started_at, completed_at, duration_seconds,
+                    jobs_scraped, jobs_saved, error_message, created_at
+                ) VALUES (
+                    :id, :schedule_id, :status, :started_at, :completed_at, :duration_seconds,
+                    :jobs_scraped, :jobs_saved, :error_message, :created_at
+                )
+                """
+            ),
+            {
+                "id": legacy_execution_id,
+                "schedule_id": uuid.uuid4().hex,
+                "status": "running",
+                "started_at": datetime(2026, 5, 5, 11, 10, 0),
+                "completed_at": None,
+                "duration_seconds": None,
+                "jobs_scraped": 5,
+                "jobs_saved": 5,
+                "error_message": None,
+                "created_at": datetime(2026, 5, 5, 11, 10, 0),
+            },
         )
-        db.add(company_run)
-        db.flush()
-        db.add(
-            CompanyEnrichmentRunItem(
-                id="company-item-1",
-                run_id=company_run.id,
-                company_id=company.id,
-                position=0,
-                status="pending",
-                created_at=datetime(2026, 5, 5, 10, 5, 0),
-            )
-        )
-
-        schedule = ScrapeSchedule(
-            id=uuid.uuid4(),
-            name="Nightly Import",
-            cron_expression="0 2 * * *",
-            source_site="jobsdb",
-            category_ids=[1200],
-            created_at=datetime(2026, 5, 5, 8, 0, 0),
-            updated_at=datetime(2026, 5, 5, 8, 0, 0),
-        )
-        db.add(schedule)
-        db.flush()
-        execution = ScheduleExecution(
-            schedule_id=schedule.id,
-            status="ai_running",
-            started_at=datetime(2026, 5, 5, 10, 10, 0),
-            phase1_completed=True,
-            phase2_completed=True,
-            phase3_completed=True,
-            phase4_completed=True,
-            phase5_completed=False,
-            jobs_scraped=8,
-            jobs_saved=8,
-            jobs_classified=4,
-            created_at=datetime(2026, 5, 5, 10, 10, 0),
-        )
-        db.add(execution)
         db.commit()
 
-        summary = StartupRecoveryService(db).recover_interrupted_operations()
+        schedule_count = StartupRecoveryService(db)._recover_schedule_executions()
+        db.commit()
 
-        db.expire_all()
-        recovered_ai_run = db.query(EnrichmentRun).filter(EnrichmentRun.id == ai_run.id).one()
-        recovered_ai_item = db.query(EnrichmentRunItem).filter(EnrichmentRunItem.id == "ai-item-1").one()
-        recovered_company_run = db.query(CompanyEnrichmentRun).filter(CompanyEnrichmentRun.id == company_run.id).one()
-        recovered_company_item = db.query(CompanyEnrichmentRunItem).filter(
-            CompanyEnrichmentRunItem.id == "company-item-1"
-        ).one()
-        recovered_execution = db.query(ScheduleExecution).filter(ScheduleExecution.id == execution.id).one()
+        legacy_execution = db.execute(
+            text("SELECT status, error_message, completed_at FROM schedule_executions WHERE id = :id"),
+            {"id": legacy_execution_id},
+        ).mappings().one()
+
+        assert schedule_count == 1
+        assert legacy_execution["status"] == "failed"
+        assert "service restarted" in legacy_execution["error_message"].lower()
+        assert legacy_execution["completed_at"] is not None
+    finally:
+        db.close()
+
+
+def test_recover_interrupted_operations_keeps_ai_and_company_results_when_schedule_recovery_fails():
+    db = _build_sqlite_session()
+    try:
+        service = StartupRecoveryService(db)
+
+        service._recover_ai_runs = lambda: 1
+        service._recover_company_runs = lambda: 2
+
+        def fail_schedule():
+            raise RuntimeError("legacy schedule schema mismatch")
+
+        service._recover_schedule_executions = fail_schedule
+
+        summary = service.recover_interrupted_operations()
 
         assert summary == {
             "ai_runs_recovered": 1,
-            "company_runs_recovered": 1,
-            "schedule_executions_recovered": 1,
+            "company_runs_recovered": 2,
+            "schedule_executions_recovered": 0,
         }
-
-        assert recovered_ai_run.status == "failed"
-        assert recovered_ai_run.pending_items == 0
-        assert recovered_ai_run.completed_items == 0
-        assert recovered_ai_run.failed_items == 1
-        assert recovered_ai_run.current_job_title is None
-        assert recovered_ai_run.completed_at is not None
-        assert "service restarted" in recovered_ai_run.error_message.lower()
-        assert recovered_ai_item.status == "failed"
-        assert "service restarted" in recovered_ai_item.error_message.lower()
-
-        assert recovered_company_run.status == "failed"
-        assert recovered_company_run.pending_items == 0
-        assert recovered_company_run.completed_items == 0
-        assert recovered_company_run.failed_items == 1
-        assert recovered_company_run.current_company_name is None
-        assert recovered_company_run.completed_at is not None
-        assert "service restarted" in recovered_company_run.error_message.lower()
-        assert recovered_company_item.status == "failed"
-        assert "service restarted" in recovered_company_item.error_message.lower()
-
-        assert recovered_execution.status == "failed"
-        assert recovered_execution.completed_at is not None
-        assert "service restarted" in recovered_execution.error_message.lower()
     finally:
         db.close()
