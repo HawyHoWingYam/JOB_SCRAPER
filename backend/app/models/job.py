@@ -7,6 +7,9 @@ from app.database import Base
 from app.utils.skill_taxonomy_policy import is_governed_visible_skill_instance
 import uuid
 
+JOBSDB_BASE_URL = "https://hk.jobsdb.com/job"
+CTGOODJOBS_BASE_URL = "https://jobs.ctgoodjobs.hk/job"
+
 
 class Job(Base):
     """Job model for storing JobsDB job listings."""
@@ -196,6 +199,10 @@ class Job(Base):
                 return False
         return None
 
+    def _strip_source_prefix(self, job_id: str, source_site: str) -> str:
+        prefix = f"{source_site}:"
+        return job_id[len(prefix):] if job_id.startswith(prefix) else job_id
+
     @property
     def experience_evidence(self) -> Optional[list[str]]:
         value: Any = self._experience_evidence
@@ -258,6 +265,24 @@ class Job(Base):
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=UTC)
         return expires_at <= datetime.now(UTC)
+
+    @property
+    def original_job_url(self) -> Optional[str]:
+        job_id = self.job_id or ""
+        if not job_id:
+            return None
+
+        raw_data = self._raw_data_mapping() or {}
+        for key in ("canonical_job_url", "job_url", "url"):
+            value = raw_data.get(key)
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                return value
+
+        source_site = (self.source_site or "jobsdb").strip().lower()
+        if source_site == "ctgoodjobs":
+            raw_job_id = self._strip_source_prefix(job_id, source_site)
+            return f"{CTGOODJOBS_BASE_URL}/{raw_job_id}"
+        return f"{JOBSDB_BASE_URL}/{job_id}"
 
     def __repr__(self):
         return f"<Job(id={self.id}, title={self.title})>"

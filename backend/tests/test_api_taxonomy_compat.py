@@ -419,6 +419,54 @@ def test_job_detail_returns_provisional_skills_from_review_candidates_only():
         db.close()
 
 
+def test_job_detail_returns_ctgoodjobs_original_job_url():
+    db = _build_sqlite_session()
+    try:
+        company = _seed_company(db)
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="ctgoodjobs:10090657",
+            source_site="ctgoodjobs",
+            company_id=company.id,
+            title="Platform Engineer",
+            raw_data={},
+            is_deleted=False,
+        )
+        db.add(job)
+        db.commit()
+
+        result = asyncio.run(jobs_api.get_job(job.id, db=db))
+        payload = JobDetailSchema.model_validate(result).model_dump(mode="json")
+
+        assert payload["original_job_url"] == "https://jobs.ctgoodjobs.hk/job/10090657"
+    finally:
+        db.close()
+
+
+def test_job_detail_prefers_absolute_original_job_url_from_raw_data():
+    db = _build_sqlite_session()
+    try:
+        company = _seed_company(db)
+        job = Job(
+            id=uuid.uuid4(),
+            job_id="ctgoodjobs:10090657",
+            source_site="ctgoodjobs",
+            company_id=company.id,
+            title="Platform Engineer",
+            raw_data={"url": "https://jobs.ctgoodjobs.hk/job/10090657?track=feed"},
+            is_deleted=False,
+        )
+        db.add(job)
+        db.commit()
+
+        result = asyncio.run(jobs_api.get_job(job.id, db=db))
+        payload = JobDetailSchema.model_validate(result).model_dump(mode="json")
+
+        assert payload["original_job_url"] == "https://jobs.ctgoodjobs.hk/job/10090657?track=feed"
+    finally:
+        db.close()
+
+
 def test_skill_stats_only_count_governed_match_existing_mentions():
     db = _build_sqlite_session()
     try:

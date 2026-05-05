@@ -565,6 +565,10 @@ def _strip_source_prefix(job_id: str, source_site: str) -> str:
 
 
 def _build_original_job_url(job) -> str:
+    original_job_url = getattr(job, "original_job_url", None)
+    if isinstance(original_job_url, str):
+        return original_job_url
+
     job_id = job.job_id or ""
     if not job_id:
         return ""

@@ -141,6 +141,7 @@ describe('JobDetailModal', () => {
     renderModalWithPayload(
       createJobPayload({
         job_id: '7f3a-platform-engineer',
+        original_job_url: 'https://hk.jobsdb.com/job/7f3a-platform-engineer',
       }),
     );
 
@@ -158,6 +159,22 @@ describe('JobDetailModal', () => {
     expect(screen.getByRole('link', { name: /original job post/i })).toHaveAttribute(
       'href',
       'https://hk.jobsdb.com/job/7f3a-platform-engineer',
+    );
+  });
+
+  it('uses the API-provided ctgoodjobs original job url', async () => {
+    renderModalWithPayload(
+      createJobPayload({
+        job_id: 'ctgoodjobs:10090657',
+        source_site: 'ctgoodjobs',
+        original_job_url: 'https://jobs.ctgoodjobs.hk/job/10090657',
+      }),
+    );
+
+    expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /original job post/i })).toHaveAttribute(
+      'href',
+      'https://jobs.ctgoodjobs.hk/job/10090657',
     );
   });
 });

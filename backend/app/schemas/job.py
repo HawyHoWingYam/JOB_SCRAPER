@@ -49,6 +49,7 @@ class JobSchema(JobCreateSchema):
 class JobDetailSchema(JobSchema):
     """Expanded schema for the job detail view."""
 
+    original_job_url: Optional[str] = None
     company_name: Optional[str] = None
     company_industry: Optional[str] = None
     company_ai_description: Optional[str] = None

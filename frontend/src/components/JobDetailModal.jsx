@@ -2,12 +2,6 @@ import React, { useEffect, useState } from 'react';
 import DOMPurify from 'dompurify';
 import SkillTags from './SkillTags';
 
-const JOBSDB_BASE_URL = 'https://hk.jobsdb.com/job';
-
-function buildOriginalJobUrl(jobId) {
-  return jobId ? `${JOBSDB_BASE_URL}/${jobId}` : null;
-}
-
 function formatRelativePostedState(postedDate) {
   if (!postedDate) {
     return 'Posted date unavailable';
@@ -182,7 +176,7 @@ function JobDetailModal({ jobId, apiUrl, onClose }) {
     }
   };
 
-  const originalJobUrl = job ? buildOriginalJobUrl(job.job_id) : null;
+  const originalJobUrl = job?.original_job_url || null;
   const aiStateMessage = job ? getAiStateMessage(job) : null;
   const expiryLabel = job ? getExpiryLabel(job) : null;
   const hasProvisionalSkills = Boolean(job?.provisional_skills?.length);
