@@ -195,19 +195,19 @@ export default function AIEnrichmentPage() {
   const mountedRef = useRef(true);
   const sortedRuns = sortRunsNewestFirst(runs);
   const overviewPendingJobs = Number(overview?.pending_jobs || 0);
-  const overviewFailedItems = Number(overview?.failed_items || 0);
+  const overviewFailedJobs = Number(overview?.failed_jobs ?? overview?.failed_items ?? 0);
   const visibleActiveRunsCount = sortedRuns.filter((run) => isActiveRun(run)).length;
   const overviewActiveRunsCount = Number(overview?.active_runs || 0);
   const isBootstrapPolling = hasConsoleData && (!hasLoadedOverview || !hasLoadedRuns);
   const shouldPollRuns = isBootstrapPolling || overviewActiveRunsCount > 0 || (!hasLoadedOverview && visibleActiveRunsCount > 0);
   const pendingJobsDisplay = hasLoadedOverview ? overviewPendingJobs : DEGRADED_PLACEHOLDER;
-  const failedItemsDisplay = hasLoadedOverview ? overviewFailedItems : DEGRADED_PLACEHOLDER;
+  const failedJobsDisplay = hasLoadedOverview ? overviewFailedJobs : DEGRADED_PLACEHOLDER;
   const activeRunsDisplay = hasLoadedOverview ? overviewActiveRunsCount : DEGRADED_PLACEHOLDER;
   const lastCompletedDisplay = hasLoadedOverview
     ? overview?.last_completed_run?.id || 'No completed run yet'
     : DEGRADED_PLACEHOLDER;
   const backlogWindowDisplay = hasLoadedOverview ? `${overviewPendingJobs.toLocaleString()} jobs` : DEGRADED_PLACEHOLDER;
-  const failureCountDisplay = hasLoadedOverview ? `${overviewFailedItems.toLocaleString()} items` : DEGRADED_PLACEHOLDER;
+  const failureCountDisplay = hasLoadedOverview ? `${overviewFailedJobs.toLocaleString()} jobs` : DEGRADED_PLACEHOLDER;
   const activeRunsRibbonDisplay = hasLoadedOverview ? `${overviewActiveRunsCount.toLocaleString()} runs` : DEGRADED_PLACEHOLDER;
   const { hasActive: monitorHasActive, slots: monitorSlots } = resolveMonitorSlots(sortedRuns);
   const retryTargetRun = monitorSlots.find((run) => isRetryableTerminalRun(run)) || null;
@@ -482,8 +482,8 @@ export default function AIEnrichmentPage() {
               tone="blue"
             />
             <SummaryCard
-              label="Failed Items"
-              value={failedItemsDisplay}
+              label="Failed Jobs"
+              value={failedJobsDisplay}
               icon={AlertTriangle}
               tone="green"
             />

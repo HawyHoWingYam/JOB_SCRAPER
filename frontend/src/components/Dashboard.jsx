@@ -28,7 +28,7 @@ export default function Dashboard({ onNavigateToAI }) {
         }
 
         const statsPayload = await statsResponse.json();
-        let aiOverviewPayload = { failed_items: null };
+        let aiOverviewPayload = { failed_jobs: null, failed_items: null };
 
         if (aiOverviewResult.status === 'fulfilled') {
           const aiOverviewResponse = aiOverviewResult.value;
@@ -71,7 +71,9 @@ export default function Dashboard({ onNavigateToAI }) {
     );
   }
 
-  const failedItemsValue = aiOverview?.failed_items == null ? null : Number(aiOverview.failed_items || 0);
+  const failedJobsValue = aiOverview?.failed_jobs == null
+    ? (aiOverview?.failed_items == null ? null : Number(aiOverview.failed_items || 0))
+    : Number(aiOverview.failed_jobs || 0);
   const totalJobs = Number(stats?.total_jobs || 0);
   const enrichedJobs = Number(stats?.enriched_jobs || 0);
   const pendingEnrichment = Number(stats?.pending_enrichment || 0);
@@ -117,17 +119,17 @@ export default function Dashboard({ onNavigateToAI }) {
                 <div className="dashboard-signal-item">
                   <span>Failure watch</span>
                   <strong>
-                    {failedItemsValue == null
+                    {failedJobsValue == null
                       ? 'N/A'
-                      : failedItemsValue === 0
+                      : failedJobsValue === 0
                         ? 'Clear'
-                        : failedItemsValue.toLocaleString()}
+                        : failedJobsValue.toLocaleString()}
                   </strong>
                   <small>
-                    {failedItemsValue == null
+                    {failedJobsValue == null
                       ? 'AI failure telemetry is temporarily unavailable'
-                      : failedItemsValue === 0
-                        ? 'No failed items currently open'
+                      : failedJobsValue === 0
+                        ? 'No failed jobs currently open'
                         : 'Queue attention required'}
                   </small>
                 </div>
@@ -193,10 +195,10 @@ export default function Dashboard({ onNavigateToAI }) {
               </div>
               <div className="stat-info">
                 <div className="stat-value">
-                  {failedItemsValue == null ? 'N/A' : failedItemsValue.toLocaleString()}
+                  {failedJobsValue == null ? 'N/A' : failedJobsValue.toLocaleString()}
                 </div>
                 <div className="stat-label">
-                  {failedItemsValue == null ? 'Failed Items Unavailable' : 'Failed Items'}
+                  {failedJobsValue == null ? 'Failed Jobs Unavailable' : 'Failed Jobs'}
                 </div>
               </div>
             </div>

@@ -88,6 +88,48 @@ def _create_job(
     return job
 
 
+def _create_run_with_items(
+    db,
+    *,
+    jobs,
+    item_statuses,
+    created_at,
+    source_type="manual_pending",
+    run_status="completed_with_failures",
+):
+    run = EnrichmentRun(
+        source_type=source_type,
+        status=run_status,
+        job_ids=[str(job.id) for job in jobs],
+        total_items=len(jobs),
+        pending_items=sum(1 for status in item_statuses if status == "pending"),
+        completed_items=sum(1 for status in item_statuses if status == "completed"),
+        failed_items=sum(1 for status in item_statuses if status == "failed"),
+        created_at=created_at,
+        started_at=created_at,
+        completed_at=created_at,
+    )
+    db.add(run)
+    db.flush()
+
+    for position, (job, status) in enumerate(zip(jobs, item_statuses)):
+        db.add(
+            EnrichmentRunItem(
+                run_id=run.id,
+                job_id=job.id,
+                position=position,
+                status=status,
+                created_at=created_at,
+                started_at=created_at,
+                completed_at=created_at,
+                error_message=f"{status} {job.id}" if status == "failed" else None,
+            )
+        )
+
+    db.commit()
+    return run
+
+
 def test_create_manual_pending_run_skips_jobs_missing_source_classification():
     db = _build_sqlite_session()
     try:
@@ -265,6 +307,100 @@ def test_create_manual_query_run_selects_union_and_applies_scope_and_subclassifi
         assert run.source_type == "manual_query"
         assert run.total_items == 2
         assert run.job_ids == [str(selected_review_job.id), str(selected_polluted_job.id)]
+    finally:
+        db.close()
+
+
+def test_get_overview_counts_only_latest_unrecovered_failed_jobs():
+    db = _build_sqlite_session()
+    try:
+        counted_job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 1, 9, 0, 0),
+            title="Counted Failed Job",
+        )
+        duplicate_failed_job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 1, 9, 5, 0),
+            title="Duplicate Failed Job",
+        )
+        retrying_job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 1, 9, 10, 0),
+            title="Retrying Job",
+        )
+        recovered_job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 1, 9, 15, 0),
+            title="Recovered Job",
+            ai_enriched_at=datetime(2026, 5, 1, 11, 0, 0),
+        )
+        deleted_job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 1, 9, 20, 0),
+            title="Deleted Failed Job",
+            is_deleted=True,
+        )
+
+        _create_run_with_items(
+            db,
+            jobs=[counted_job],
+            item_statuses=["failed"],
+            created_at=datetime(2026, 5, 1, 10, 0, 0),
+            run_status="failed",
+        )
+        _create_run_with_items(
+            db,
+            jobs=[duplicate_failed_job],
+            item_statuses=["failed"],
+            created_at=datetime(2026, 5, 1, 10, 5, 0),
+            run_status="failed",
+        )
+        _create_run_with_items(
+            db,
+            jobs=[duplicate_failed_job],
+            item_statuses=["failed"],
+            created_at=datetime(2026, 5, 1, 10, 10, 0),
+            run_status="failed",
+        )
+        _create_run_with_items(
+            db,
+            jobs=[retrying_job],
+            item_statuses=["failed"],
+            created_at=datetime(2026, 5, 1, 10, 15, 0),
+            run_status="failed",
+        )
+        _create_run_with_items(
+            db,
+            jobs=[retrying_job],
+            item_statuses=["pending"],
+            created_at=datetime(2026, 5, 1, 10, 20, 0),
+            run_status="pending",
+        )
+        _create_run_with_items(
+            db,
+            jobs=[recovered_job],
+            item_statuses=["failed"],
+            created_at=datetime(2026, 5, 1, 10, 25, 0),
+            run_status="failed",
+        )
+        _create_run_with_items(
+            db,
+            jobs=[deleted_job],
+            item_statuses=["failed"],
+            created_at=datetime(2026, 5, 1, 10, 30, 0),
+            run_status="failed",
+        )
+
+        overview = EnrichmentRunService(db).get_overview()
+
+        assert overview["failed_jobs"] == 2
+        assert overview["failed_items"] == 6
     finally:
         db.close()
 
