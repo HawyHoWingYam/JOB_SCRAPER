@@ -17,7 +17,9 @@ from app.api.ai import router as ai_router
 from app.api.stats import router as stats_router
 from app.api.skills import router as skills_router
 from app.logging_config import configure_logging, redact_url
+from app.database import SessionLocal
 from app.services.scheduler_service import SchedulerService
+from app.services.startup_recovery_service import StartupRecoveryService
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
@@ -29,6 +31,16 @@ async def lifespan(app: FastAPI):
     logger.info("Starting JobsDB Scraper API")
     logger.info("Debug mode: %s", settings.debug)
     logger.info("Database: %s", redact_url(settings.database_url))
+
+    startup_db = SessionLocal()
+    try:
+        recovery_summary = StartupRecoveryService(startup_db).recover_interrupted_operations()
+        logger.info("Startup recovery summary: %s", recovery_summary)
+    except Exception:
+        startup_db.rollback()
+        logger.exception("Startup recovery sweep failed")
+    finally:
+        startup_db.close()
 
     scheduler = SchedulerService.get_instance()
     await scheduler.initialize()

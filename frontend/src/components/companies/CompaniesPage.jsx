@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import CompanyDetailModal from './CompanyDetailModal';
 import CompanySummaryCard from './CompanySummaryCard';
@@ -77,12 +77,21 @@ function CompaniesPage() {
   const [totalPages, setTotalPages] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [refreshError, setRefreshError] = useState(null);
   const [actionMessage, setActionMessage] = useState(null);
   const [currentRun, setCurrentRun] = useState(null);
   const [isCreatingRun, setIsCreatingRun] = useState(false);
   const [selectedCompanyId, setSelectedCompanyId] = useState(null);
+  const mountedRef = useRef(true);
 
   const selectedCompany = companies.find((company) => company.id === selectedCompanyId) || null;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const fetchRunById = async (runId) => {
     const response = await fetch(`${API_URL}/api/v1/companies/enrichment-runs/${runId}`);
@@ -119,14 +128,23 @@ function CompaniesPage() {
       }
 
       const payload = await response.json();
+      if (!mountedRef.current) {
+        return;
+      }
       setCompanies(payload.items || []);
       setTotalPages(Number(payload.total_pages || 0));
+      setError(null);
     } catch (err) {
+      if (!mountedRef.current) {
+        return;
+      }
       setCompanies([]);
       setTotalPages(0);
       setError(err.message);
     } finally {
-      setIsLoading(false);
+      if (mountedRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -138,9 +156,15 @@ function CompaniesPage() {
       }
 
       const payload = await response.json();
+      if (!mountedRef.current) {
+        return;
+      }
       setCurrentRun(payload);
+      setError(null);
     } catch (err) {
-      setError(err.message);
+      if (mountedRef.current) {
+        setError(err.message);
+      }
     }
   };
 
@@ -167,6 +191,8 @@ function CompaniesPage() {
     let timeoutId;
 
     const poll = async () => {
+      let shouldContinuePolling = true;
+
       try {
         const payload = await fetchRunById(currentRun.id);
         if (cancelled) {
@@ -174,8 +200,10 @@ function CompaniesPage() {
         }
 
         setCurrentRun(payload);
+        setRefreshError(null);
 
         if (isTerminalRun(payload)) {
+          shouldContinuePolling = false;
           setActionMessage(formatRunCompletionMessage(payload));
           await loadCompanies({
             query: appliedQuery,
@@ -185,11 +213,13 @@ function CompaniesPage() {
           });
           return;
         }
-
-        timeoutId = window.setTimeout(poll, RUN_POLL_INTERVAL_MS);
       } catch (err) {
         if (!cancelled) {
-          setError(err.message);
+          setRefreshError(`Refresh failed: ${err.message}`);
+        }
+      } finally {
+        if (!cancelled && shouldContinuePolling) {
+          timeoutId = window.setTimeout(poll, RUN_POLL_INTERVAL_MS);
         }
       }
     };
@@ -218,6 +248,7 @@ function CompaniesPage() {
   const handleCreateRun = async () => {
     setIsCreatingRun(true);
     setError(null);
+    setRefreshError(null);
     setActionMessage(null);
 
     try {
@@ -241,6 +272,9 @@ function CompaniesPage() {
       if (isActiveRun(runPayload)) {
         try {
           const refreshedRun = await fetchRunById(runPayload.id);
+          if (!mountedRef.current) {
+            return;
+          }
           setCurrentRun(refreshedRun);
           if (isTerminalRun(refreshedRun)) {
             setActionMessage(formatRunCompletionMessage(refreshedRun));
@@ -390,6 +424,7 @@ function CompaniesPage() {
       </section>
 
       {error && <div className="companies-error glass-panel">{error}</div>}
+      {refreshError && <div className="companies-error glass-panel">{refreshError}</div>}
       {actionMessage && <div className="companies-status glass-panel">{actionMessage}</div>}
 
       {isLoading ? (

@@ -156,6 +156,7 @@ function ScheduleManager({ onNavigateToAI }) {
         max_pages: 3
     });
     const [scrapeStatus, setScrapeStatus] = useState(null);
+    const [progressRecoveryNotice, setProgressRecoveryNotice] = useState(null);
     const [showProgress, setShowProgress] = useState(false);
     const [progressPanelState, setProgressPanelState] = useState({
         initialProgress: EMPTY_PROGRESS,
@@ -254,7 +255,7 @@ function ScheduleManager({ onNavigateToAI }) {
         }
     }, [getFreshDirectOverrideRecoveryMarker]);
 
-    const handleProgressClose = useCallback(() => {
+    const handleProgressClose = useCallback((reason) => {
         directOverrideRecoveryRef.current = null;
         clearDirectOverrideRunMarker();
         setProgressPanelState({
@@ -262,6 +263,12 @@ function ScheduleManager({ onNavigateToAI }) {
             recoveryStartedAt: null,
         });
         setShowProgress(false);
+        if (reason === 'recovery_timeout') {
+            setProgressRecoveryNotice({
+                title: 'Direct Override recovery timed out after reconnecting.',
+                detail: 'The run was likely interrupted by a restart or connection loss. Re-run the scrape if you still need it.',
+            });
+        }
     }, []);
 
     // Initial load
@@ -374,6 +381,7 @@ function ScheduleManager({ onNavigateToAI }) {
         }
         setIsLoading(true);
         setError(null);
+        setProgressRecoveryNotice(null);
         setScrapeStatus('Initiating scraping sequence...');
         try {
             const response = await fetch(`${API_BASE}/schedules/run-now`, {
@@ -496,6 +504,22 @@ function ScheduleManager({ onNavigateToAI }) {
                 <div className="status-banner glass-panel">
                     <Zap size={20} className="spinner" />
                     <span>{scrapeStatus}</span>
+                </div>
+            )}
+
+            {progressRecoveryNotice && (
+                <div className="error-banner glass-panel">
+                    <AlertTriangle size={20} />
+                    <span>
+                        <strong>{progressRecoveryNotice.title}</strong>{' '}
+                        {progressRecoveryNotice.detail}
+                    </span>
+                    <button
+                        onClick={() => setProgressRecoveryNotice(null)}
+                        className="close-error"
+                    >
+                        ×
+                    </button>
                 </div>
             )}
 

@@ -188,7 +188,7 @@ describe('AIEnrichmentPage', () => {
 
     await user.click(aiNavButton);
 
-    expect(screen.getByRole('heading', { name: /ai enrichment/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /ai enrichment/i })).toBeInTheDocument();
     expect(await screen.findByText('396')).toBeInTheDocument();
     expect(screen.getByText(/pending jobs/i)).toBeInTheDocument();
     expect(screen.getByText(/active runs/i, { selector: '.stat-label' })).toBeInTheDocument();
@@ -1194,6 +1194,51 @@ describe('AIEnrichmentPage', () => {
     expect(cards[1]).toHaveTextContent(/last failed/i);
     expect(screen.getByText(/staff data engineer/i)).toBeInTheDocument();
     expect(screen.getByText(/retry available via queue controls/i)).toBeInTheDocument();
+  });
+
+  it('shows backend failure detail on terminal failure cards', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 400,
+          enriched_jobs: 4,
+          pending_jobs: 396,
+          active_runs: 0,
+          failed_items: 1,
+          last_completed_run: null,
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        return mockJsonResponse({
+          runs: [
+            {
+              id: 'run-failed-restart',
+              source_type: 'manual_pending',
+              status: 'failed',
+              created_at: '2026-04-15T12:00:00Z',
+              started_at: '2026-04-15T12:00:00Z',
+              completed_at: '2026-04-15T12:01:00Z',
+              total_items: 1,
+              pending_items: 0,
+              completed_items: 0,
+              failed_items: 1,
+              last_failed_job_title: 'Platform Engineer',
+              error_message: 'Service restarted before AI enrichment run could finish.',
+            },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<AIEnrichmentPage />);
+
+    expect(await screen.findAllByText(/run-failed-restart/i)).toHaveLength(2);
+    expect(screen.getByText(/service restarted before ai enrichment run could finish\./i)).toBeInTheDocument();
   });
 
   it('keeps the console usable on initial load when overview fails but runs succeed', async () => {

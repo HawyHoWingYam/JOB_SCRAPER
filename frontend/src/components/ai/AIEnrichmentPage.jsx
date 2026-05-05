@@ -694,6 +694,9 @@ export default function AIEnrichmentPage() {
                             {run.last_failed_job_title && (
                               <span>Last failed {run.last_failed_job_title}</span>
                             )}
+                            {run.error_message && (
+                              <span>{run.error_message}</span>
+                            )}
                             <span>Retry available via queue controls.</span>
                           </div>
                         </div>

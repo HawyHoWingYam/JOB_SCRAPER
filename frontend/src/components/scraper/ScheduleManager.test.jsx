@@ -421,6 +421,32 @@ describe('ScheduleManager', () => {
     });
   });
 
+  it('shows an interrupted-run banner when recovery mode times out', async () => {
+    const startedAt = new Date(FIXED_NOW - 5_000).toISOString();
+    sessionStorage.setItem(
+      DIRECT_OVERRIDE_MARKER_KEY,
+      JSON.stringify({ sourceSite: 'jobsdb', startedAt }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Scrape Progress Stub');
+
+    const latestProps = scrapeProgressPanelSpy.mock.calls.at(-1)?.[0];
+    expect(latestProps).toBeTruthy();
+
+    await act(async () => {
+      latestProps.onClose?.('recovery_timeout');
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Scrape Progress Stub')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText(/direct override recovery timed out after reconnecting/i)).toBeInTheDocument();
+    expect(screen.getByText(/the run was likely interrupted by a restart or connection loss/i)).toBeInTheDocument();
+  });
+
   it('includes source_site when creating schedules', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -305,5 +305,100 @@ describe('CompaniesPage', () => {
 
     expect(await screen.findByText(/finished generating descriptions for 2 companies\. 0 succeeded, 2 failed\./i)).toBeInTheDocument();
     expect(screen.getByText(/anthropic client does not support web_search requests/i)).toBeInTheDocument();
+  });
+
+  it('keeps polling after a refresh failure and recovers on a later poll', async () => {
+    let runPollCalls = 0;
+    const realSetTimeout = window.setTimeout.bind(window);
+    let pollTimeoutCalls = 0;
+    vi.spyOn(window, 'setTimeout').mockImplementation((callback, delay, ...args) => {
+      if (delay === 2000) {
+        pollTimeoutCalls += 1;
+        return realSetTimeout(callback, pollTimeoutCalls === 1 ? 0 : 25, ...args);
+      }
+
+      return realSetTimeout(callback, delay, ...args);
+    });
+
+    companyPages['status=pending&q=&page=1&page_size=25'] = companyPages['status=pending&q=&page=1&page_size=25#after-run'];
+
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = new URL(String(input), 'http://localhost');
+
+      if (url.pathname === '/api/v1/companies' && (!init.method || init.method === 'GET')) {
+        const key = [
+          `status=${url.searchParams.get('status') || ''}`,
+          `q=${url.searchParams.get('q') || ''}`,
+          `page=${url.searchParams.get('page') || ''}`,
+          `page_size=${url.searchParams.get('page_size') || ''}`,
+        ].join('&');
+        companyRequests.push(key);
+        return mockJsonResponse(companyPages[key]);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
+        return mockJsonResponse(null);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs' && init.method === 'POST') {
+        createdRunCalls += 1;
+        return mockJsonResponse(createdRunResponse);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/run-1' && (!init.method || init.method === 'GET')) {
+        runPollCalls += 1;
+
+        if (runPollCalls === 1) {
+          return mockJsonResponse({
+            id: 'run-1',
+            status: 'running',
+            total_items: 2,
+            pending_items: 1,
+            completed_items: 1,
+            failed_items: 0,
+            current_company_name: 'Acme Health',
+            error_message: null,
+            started_at: '2026-04-19T10:00:00Z',
+            completed_at: null,
+            created_at: '2026-04-19T10:00:00Z',
+          });
+        }
+
+        if (runPollCalls === 2) {
+          return Promise.reject(new Error('network down'));
+        }
+
+        return mockJsonResponse({
+          id: 'run-1',
+          status: 'completed',
+          total_items: 2,
+          pending_items: 0,
+          completed_items: 2,
+          failed_items: 0,
+          current_company_name: null,
+          error_message: null,
+          started_at: '2026-04-19T10:00:00Z',
+          completed_at: '2026-04-19T10:02:00Z',
+          created_at: '2026-04-19T10:00:00Z',
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
+    });
+
+    render(<CompaniesPage />);
+
+    await screen.findByText('Acme Health');
+    fireEvent.click(screen.getByRole('button', { name: /generate all pending descriptions/i }));
+
+    expect(await screen.findByText(/current company: acme health/i)).toBeInTheDocument();
+    expect(await screen.findByText(/refresh failed: network down/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /generation in progress/i })).toBeDisabled();
+
+    await waitFor(() => {
+      expect(screen.queryByText(/refresh failed: network down/i)).not.toBeInTheDocument();
+    });
+    expect(await screen.findByText(/finished generating descriptions for 2 companies\. 2 succeeded, 0 failed\./i)).toBeInTheDocument();
+    expect(screen.getByText('Acme Health')).toBeInTheDocument();
   });
 });
