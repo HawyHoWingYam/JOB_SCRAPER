@@ -502,9 +502,12 @@ class AIRuntimeSettingsService:
         for effective_field_name, persisted_field_name in profile_field_map.items():
             if effective_field_name == "llm_provider":
                 continue
+            if effective_field_name not in payload:
+                continue
             if persisted_field_name in SECRET_FIELD_NAMES:
                 normalized_secret = self._normalize_secret_update(payload.get(effective_field_name))
-                candidate[persisted_field_name] = normalized_secret
+                if normalized_secret is not None:
+                    candidate[persisted_field_name] = normalized_secret
                 continue
             candidate[persisted_field_name] = self._normalize_optional_string(payload.get(effective_field_name))
 

@@ -153,7 +153,7 @@ async def test_ai_settings_profile(
     try:
         result = await probe_profile_configuration(
             request.scope,
-            request.profile.model_dump(),
+            request.profile.model_dump(exclude_unset=True),
             service,
         )
         service.record_profile_test_result(
@@ -176,7 +176,7 @@ async def test_ai_settings_profile(
         try:
             draft_values = service.draft_profile_values_from_payload(
                 request.scope,
-                request.profile.model_dump(),
+                request.profile.model_dump(exclude_unset=True),
             )
             fingerprint = service.build_config_fingerprint(request.scope, draft_values)
         except Exception:

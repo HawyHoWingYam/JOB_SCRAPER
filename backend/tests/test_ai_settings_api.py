@@ -418,6 +418,61 @@ async def test_post_ai_settings_test_validates_draft_profile_and_records_passed_
 
 
 @pytest.mark.asyncio
+async def test_post_ai_settings_test_preserves_unsent_provider_fields_so_subsequent_save_stays_ready(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "mock")
+    monkeypatch.setattr(settings, "ai_enrichment_run_concurrency", 10)
+    llm_client_module.reset_client()
+    client, Session = _build_test_client(monkeypatch)
+    monkeypatch.setattr(
+        llm_client_module,
+        "_load_profile_metadata",
+        lambda scope="jobs": AIRuntimeSettingsService(Session()).get_profile_runtime_metadata(scope),
+    )
+    try:
+        seed_response = await client.put(
+            "/api/v1/settings/ai",
+            json={
+                "llm_provider": "gemini",
+                "ai_enrichment_run_concurrency": 6,
+                "gemini_api_key": "gem-secret-123456",
+                "gemini_model": "gemini-live",
+                "anthropic_api_key": "anthropic-secret-123456",
+                "anthropic_model": "claude-sonnet-4-5",
+            },
+        )
+        assert seed_response.status_code == 200
+
+        test_response = await client.post(
+            "/api/v1/settings/ai/test",
+            json={
+                "scope": "jobs",
+                "profile": {
+                    "llm_provider": "mock",
+                },
+            },
+        )
+
+        assert test_response.status_code == 200
+        assert test_response.json()["ok"] is True
+
+        save_response = await client.put(
+            "/api/v1/settings/ai",
+            json={
+                "llm_provider": "mock",
+                "ai_enrichment_run_concurrency": 6,
+            },
+        )
+
+        assert save_response.status_code == 200
+        payload = save_response.json()
+        assert payload["runtime_status"]["requires_test"] is False
+        assert payload["runtime_status"]["is_ready"] is True
+        assert payload["runtime_status"]["last_test_status"] == "passed"
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_create_enrichment_run_rejects_untested_jobs_profile(monkeypatch):
     monkeypatch.setattr(settings, "llm_provider", "mock")
     monkeypatch.setattr(settings, "ai_enrichment_run_concurrency", 10)
