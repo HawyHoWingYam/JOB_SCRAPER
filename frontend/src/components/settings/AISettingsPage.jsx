@@ -2,15 +2,17 @@ import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   BrainCircuit,
+  Eye,
+  EyeOff,
   Gauge,
   KeyRound,
   Layers3,
   Save,
   ShieldCheck,
+  FlaskConical,
 } from 'lucide-react';
+import { API_BASE_URL } from '../../api/base';
 import './AISettingsPage.css';
-
-const API_URL = import.meta.env.VITE_API_URL || '';
 
 const PROVIDER_OPTIONS = ['anthropic', 'gemini', 'custom', 'zhipu', 'mock'];
 const PROFILE_LABELS = {
@@ -26,6 +28,19 @@ const PROVIDER_LABELS = {
   zhipu: 'Zhipu',
   mock: 'Mock',
 };
+
+const PROVIDER_DESCRIPTIONS = {
+  anthropic: 'Claude-compatible runtime',
+  gemini: 'Fast general-purpose model',
+  custom: 'Custom OpenAI or Anthropic endpoint',
+  zhipu: 'Credential-only setup',
+  mock: 'Built-in fallback for testing',
+};
+
+const CUSTOM_API_FORMAT_OPTIONS = [
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'openai_responses', label: 'OpenAI Responses' },
+];
 
 const PROVIDER_FIELDS = {
   anthropic: [
@@ -53,6 +68,17 @@ function toProviderLabel(provider) {
   return PROVIDER_LABELS[provider] || String(provider || 'Unknown');
 }
 
+function getProviderSetupLabel(provider) {
+  if (provider === 'mock') {
+    return 'No credentials required';
+  }
+
+  const editableFieldCount =
+    (PROVIDER_FIELDS[provider] || []).length + (SECRET_REQUEST_KEYS[provider] ? 1 : 0);
+
+  return editableFieldCount === 1 ? '1 setting' : `${editableFieldCount} settings`;
+}
+
 function getProfileProviderKey(profileKey) {
   return profileKey === 'companies' ? 'company_llm_provider' : 'llm_provider';
 }
@@ -66,9 +92,7 @@ function getSelectedProvider(payload, profileKey) {
   return (
     payload?.persisted_config?.[providerKey] ||
     payload?.effective_config?.[providerKey] ||
-    (profileKey === 'companies'
-      ? getSelectedProvider(payload, 'jobs')
-      : 'mock')
+    'mock'
   );
 }
 
@@ -99,6 +123,18 @@ function getProviderInitialValue(payload, profileKey, provider, key) {
   return '';
 }
 
+function normalizeApiFormatValue(value) {
+  if (value === 'openai') {
+    return 'openai_responses';
+  }
+
+  if (CUSTOM_API_FORMAT_OPTIONS.some((option) => option.value === value)) {
+    return value;
+  }
+
+  return 'anthropic';
+}
+
 function createProfileState(payload, profileKey) {
   return {
     llm_provider: getSelectedProvider(payload, profileKey),
@@ -106,7 +142,10 @@ function createProfileState(payload, profileKey) {
       accumulator[provider] = {
         model: getProviderInitialValue(payload, profileKey, provider, 'model'),
         base_url: getProviderInitialValue(payload, profileKey, provider, 'base_url'),
-        api_format: getProviderInitialValue(payload, profileKey, provider, 'api_format'),
+        api_format:
+          provider === 'custom'
+            ? normalizeApiFormatValue(getProviderInitialValue(payload, profileKey, provider, 'api_format'))
+            : getProviderInitialValue(payload, profileKey, provider, 'api_format'),
         api_key: '',
       };
       return accumulator;
@@ -123,6 +162,13 @@ function createFormState(payload) {
         payload?.effective_config?.ai_enrichment_run_concurrency ??
         '',
     ),
+  };
+}
+
+function createSecretVisibilityState() {
+  return {
+    jobs: false,
+    companies: false,
   };
 }
 
@@ -170,6 +216,37 @@ function buildRequestBody(formState) {
   return body;
 }
 
+function buildProfileTestPayload(profileKey, formState) {
+  const profile = formState[profileKey];
+  const provider = profile.llm_provider;
+  const values = profile.providers[provider] || {};
+
+  return {
+    scope: profileKey,
+    profile: {
+      llm_provider: provider,
+      ...(provider === 'anthropic' ? {
+        anthropic_api_key: values.api_key || '',
+        anthropic_model: values.model || '',
+        anthropic_base_url: values.base_url || '',
+      } : {}),
+      ...(provider === 'gemini' ? {
+        gemini_api_key: values.api_key || '',
+        gemini_model: values.model || '',
+      } : {}),
+      ...(provider === 'custom' ? {
+        custom_api_key: values.api_key || '',
+        custom_model: values.model || '',
+        custom_base_url: values.base_url || '',
+        custom_api_format: values.api_format || 'anthropic',
+      } : {}),
+      ...(provider === 'zhipu' ? {
+        zhipu_api_key: values.api_key || '',
+      } : {}),
+    },
+  };
+}
+
 function SummaryCard({ icon: Icon, label, value, hint, tone = 'default' }) {
   return (
     <article className={`ai-settings-summary-card glass-panel tone-${tone}`}>
@@ -183,6 +260,16 @@ function SummaryCard({ icon: Icon, label, value, hint, tone = 'default' }) {
       </div>
     </article>
   );
+}
+
+function getRuntimeStateLabel(runtimeStatus) {
+  if (runtimeStatus?.is_ready) {
+    return 'Ready';
+  }
+  if (runtimeStatus?.requires_test) {
+    return 'Needs test';
+  }
+  return 'Blocked';
 }
 
 function FeedbackBanner({ feedback }) {
@@ -215,92 +302,124 @@ function ProfileSection({
   profileLabel,
   formState,
   settingsPayload,
-  runtimeStatus,
   saving,
+  testing,
+  isSecretVisible,
+  toggleSecretVisibility,
   updateProfileProvider,
   updateProfileField,
+  onTestProfile,
 }) {
   const selectedProvider = formState?.llm_provider || getSelectedProvider(settingsPayload, profileKey);
   const providerFields = PROVIDER_FIELDS[selectedProvider] || [];
   const providerValues = formState?.providers?.[selectedProvider] || {};
   const providerConfig = getProviderConfig(settingsPayload, profileKey, selectedProvider);
   const hasSavedApiKey = Boolean(providerConfig?.has_api_key);
-  const isDegraded = Boolean(runtimeStatus?.is_degraded);
+  const providerDescription = PROVIDER_DESCRIPTIONS[selectedProvider];
+  const showProviderSetupHint = providerFields.length === 0 && !SECRET_REQUEST_KEYS[selectedProvider];
 
   return (
     <section className="ai-settings-panel glass-panel">
       <div className="ai-settings-section-heading">
         <div>
           <h2>{profileLabel} Profile</h2>
-          <p>{profileLabel} can use a different provider and model than the other AI workflow.</p>
+          <p>{profileLabel} keeps its own provider, credentials, and model settings.</p>
         </div>
+        <button
+          type="button"
+          className="ai-settings-save-button"
+          onClick={() => onTestProfile(profileKey)}
+          disabled={saving || testing}
+        >
+          <FlaskConical size={16} />
+          <span>{testing ? 'Testing…' : `Test ${profileLabel} configuration`}</span>
+        </button>
       </div>
 
-      <div className="ai-settings-form-grid">
-        <label className="ai-settings-field">
-          <span>{profileLabel} Provider</span>
-          <select
-            aria-label={`${profileLabel} provider`}
-            value={selectedProvider}
-            onChange={(event) => updateProfileProvider(profileKey, event.target.value)}
-            disabled={saving}
-          >
-            {PROVIDER_OPTIONS.map((provider) => (
-              <option key={provider} value={provider}>
-                {toProviderLabel(provider)}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <div className="ai-settings-runtime-meta">
-        <div>
-          <span>Configured provider</span>
-          <strong>{toProviderLabel(runtimeStatus?.configured_provider || selectedProvider)}</strong>
-        </div>
-        <div>
-          <span>Active provider</span>
-          <strong>{toProviderLabel(runtimeStatus?.active_provider || runtimeStatus?.provider || selectedProvider)}</strong>
-        </div>
-        <div>
-          <span>Model</span>
-          <strong>{runtimeStatus?.model || providerConfig?.model || 'Unavailable'}</strong>
-        </div>
-        <div>
-          <span>Degraded state</span>
-          <strong>{isDegraded ? 'Degraded' : 'Healthy'}</strong>
-        </div>
+      <div className="ai-settings-provider-picker" role="group" aria-label={`${profileLabel} provider`}>
+        {PROVIDER_OPTIONS.map((provider) => {
+          const isSelected = provider === selectedProvider;
+          return (
+            <button
+              key={provider}
+              type="button"
+              className={`ai-settings-provider-card ${isSelected ? 'selected' : ''}`}
+              aria-pressed={isSelected}
+              onClick={() => updateProfileProvider(profileKey, provider)}
+              disabled={saving}
+            >
+              <strong>{toProviderLabel(provider)}</strong>
+              <span>{getProviderSetupLabel(provider)}</span>
+              <small>{PROVIDER_DESCRIPTIONS[provider]}</small>
+            </button>
+          );
+        })}
       </div>
 
       <fieldset className="ai-settings-provider-group" aria-label={`${profileLabel} ${toProviderLabel(selectedProvider)} settings`}>
         <legend>{profileLabel} {toProviderLabel(selectedProvider)} settings</legend>
 
+        <p className="ai-settings-field-hint">{providerDescription}</p>
+
         <div className="ai-settings-form-grid">
           {providerFields.map((field) => (
             <label className="ai-settings-field" key={field.key}>
               <span>{field.label}</span>
-              <input
-                aria-label={`${profileLabel} ${field.label}`}
-                type="text"
-                value={providerValues[field.key] || ''}
-                onChange={(event) => updateProfileField(profileKey, selectedProvider, field.key, event.target.value)}
-                disabled={saving}
-              />
+              {selectedProvider === 'custom' && field.key === 'api_format' ? (
+                <select
+                  aria-label={`${profileLabel} ${field.label}`}
+                  value={normalizeApiFormatValue(providerValues[field.key] || '')}
+                  onChange={(event) => updateProfileField(profileKey, selectedProvider, field.key, event.target.value)}
+                  disabled={saving}
+                >
+                  {CUSTOM_API_FORMAT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  aria-label={`${profileLabel} ${field.label}`}
+                  type="text"
+                  value={providerValues[field.key] || ''}
+                  onChange={(event) => updateProfileField(profileKey, selectedProvider, field.key, event.target.value)}
+                  disabled={saving}
+                />
+              )}
             </label>
           ))}
 
           {SECRET_REQUEST_KEYS[selectedProvider] ? (
             <label className="ai-settings-field ai-settings-secret-field">
-              <span>API key</span>
-              <input
-                aria-label={`${profileLabel} API key`}
-                type="password"
-                value={providerValues.api_key || ''}
-                onChange={(event) => updateProfileField(profileKey, selectedProvider, 'api_key', event.target.value)}
-                placeholder={hasSavedApiKey ? 'Leave blank to keep existing key' : 'Enter API key'}
-                disabled={saving}
-              />
+              <div className="ai-settings-field-label-row">
+                <span>API key</span>
+                {hasSavedApiKey ? (
+                  <span className="ai-settings-saved-badge">
+                    <KeyRound size={12} />
+                    <span>API key saved</span>
+                  </span>
+                ) : null}
+              </div>
+              <div className="ai-settings-password-row">
+                <input
+                  aria-label={`${profileLabel} API key`}
+                  type={isSecretVisible ? 'text' : 'password'}
+                  value={providerValues.api_key || ''}
+                  onChange={(event) => updateProfileField(profileKey, selectedProvider, 'api_key', event.target.value)}
+                  placeholder={hasSavedApiKey ? 'Leave blank to keep existing key' : 'Enter API key'}
+                  disabled={saving}
+                />
+                <button
+                  type="button"
+                  className="ai-settings-password-toggle"
+                  aria-label={`${isSecretVisible ? 'Hide' : 'Show'} ${profileLabel} API key`}
+                  onClick={() => toggleSecretVisibility(profileKey)}
+                  disabled={saving}
+                >
+                  {isSecretVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
               <div className="ai-settings-secret-meta">
                 <div className="ai-settings-secret-value">
                   <KeyRound size={16} />
@@ -315,6 +434,14 @@ function ProfileSection({
               </div>
             </label>
           ) : null}
+
+          {showProviderSetupHint ? (
+            <div className="ai-settings-provider-empty-state">
+              <p className="ai-settings-field-hint">
+                Mock mode uses built-in responses for UI verification and does not require extra setup.
+              </p>
+            </div>
+          ) : null}
         </div>
       </fieldset>
     </section>
@@ -326,8 +453,10 @@ export default function AISettingsPage() {
   const [formState, setFormState] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testingProfile, setTestingProfile] = useState(null);
   const [error, setError] = useState(null);
   const [feedback, setFeedback] = useState(null);
+  const [secretVisibility, setSecretVisibility] = useState(createSecretVisibilityState);
 
   useEffect(() => {
     let cancelled = false;
@@ -337,7 +466,7 @@ export default function AISettingsPage() {
       setError(null);
 
       try {
-        const response = await fetch(`${API_URL}/api/v1/settings/ai`);
+        const response = await fetch(`${API_BASE_URL}/api/v1/settings/ai`);
         if (!response.ok) {
           throw new Error(`Failed to load AI settings (${response.status})`);
         }
@@ -346,6 +475,7 @@ export default function AISettingsPage() {
         if (!cancelled) {
           setSettingsPayload(payload);
           setFormState(createFormState(payload));
+          setSecretVisibility(createSecretVisibilityState());
         }
       } catch (err) {
         if (!cancelled) {
@@ -398,13 +528,20 @@ export default function AISettingsPage() {
     }));
   }
 
+  function toggleSecretVisibility(profileKey) {
+    setSecretVisibility((currentState) => ({
+      ...currentState,
+      [profileKey]: !currentState[profileKey],
+    }));
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
     setSaving(true);
     setFeedback(null);
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/settings/ai`, {
+      const response = await fetch(`${API_BASE_URL}/api/v1/settings/ai`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -429,16 +566,17 @@ export default function AISettingsPage() {
 
       setSettingsPayload(payload);
       setFormState(createFormState(payload));
+      setSecretVisibility(createSecretVisibilityState());
 
       const degradedLines = [];
-      if (payload?.runtime_status?.is_degraded) {
+      if (payload?.runtime_status?.requires_test) {
         degradedLines.push(
-          `AI Enrichment runtime is degraded. ${payload.runtime_status.degradation_reason || 'The selected provider did not initialize cleanly.'}`,
+          `AI Enrichment needs a successful configuration test before it can run. ${payload.runtime_status.degradation_reason || ''}`.trim(),
         );
       }
-      if (payload?.company_runtime_status?.is_degraded) {
+      if (payload?.company_runtime_status?.requires_test) {
         degradedLines.push(
-          `Companies runtime is degraded. ${payload.company_runtime_status.degradation_reason || 'The selected provider did not initialize cleanly.'}`,
+          `Companies needs a successful configuration test before it can run. ${payload.company_runtime_status.degradation_reason || ''}`.trim(),
         );
       }
 
@@ -452,7 +590,7 @@ export default function AISettingsPage() {
           : {
               tone: 'success',
               title: 'AI runtime settings saved',
-              lines: ['Runtime settings are active for both profiles.'],
+              lines: ['Runtime settings are saved.'],
             },
       );
     } catch (err) {
@@ -463,6 +601,50 @@ export default function AISettingsPage() {
       });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleTestProfile(profileKey) {
+    setTestingProfile(profileKey);
+    setFeedback(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/settings/ai/test`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(buildProfileTestPayload(profileKey, formState)),
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        const message = payload?.detail?.error_message || 'Configuration test failed';
+        setFeedback({
+          tone: 'error',
+          title: 'Configuration test failed',
+          lines: [message],
+        });
+        return;
+      }
+
+      setFeedback({
+        tone: 'success',
+        title: 'Configuration test passed',
+        lines: [
+          `${PROFILE_LABELS[profileKey]} provider responded successfully.`,
+          payload.latency_ms ? `${payload.latency_ms} ms` : 'Latency unavailable',
+        ],
+      });
+    } catch (err) {
+      setFeedback({
+        tone: 'error',
+        title: 'Configuration test failed',
+        lines: [err.message],
+      });
+    } finally {
+      setTestingProfile(null);
     }
   }
 
@@ -511,7 +693,7 @@ export default function AISettingsPage() {
         <div className="ai-settings-hero-badges">
           <span className="ai-settings-chip">{saving ? 'Saving…' : 'Editable'}</span>
           <span className={`ai-settings-chip ${isAnyDegraded ? 'warning' : 'success'}`}>
-            {isAnyDegraded ? 'Degraded runtime' : 'Runtime ready'}
+            {isAnyDegraded ? 'Needs test' : 'Runtime ready'}
           </span>
         </div>
       </header>
@@ -524,14 +706,14 @@ export default function AISettingsPage() {
           label="AI Enrichment"
           value={toProviderLabel(jobRuntimeStatus.configured_provider || formState?.jobs?.llm_provider)}
           hint={jobRuntimeStatus.model || 'No model reported'}
-          tone={jobRuntimeStatus.is_degraded ? 'warning' : 'default'}
+          tone={jobRuntimeStatus.requires_test ? 'warning' : 'default'}
         />
         <SummaryCard
           icon={Layers3}
           label="Companies"
           value={toProviderLabel(companyRuntimeStatus.configured_provider || formState?.companies?.llm_provider)}
           hint={companyRuntimeStatus.model || 'No model reported'}
-          tone={companyRuntimeStatus.is_degraded ? 'warning' : 'default'}
+          tone={companyRuntimeStatus.requires_test ? 'warning' : 'default'}
         />
         <SummaryCard
           icon={Gauge}
@@ -546,22 +728,24 @@ export default function AISettingsPage() {
         <SummaryCard
           icon={isAnyDegraded ? AlertTriangle : ShieldCheck}
           label="Runtime state"
-          value={isAnyDegraded ? 'Degraded' : 'Healthy'}
+          value={isAnyDegraded ? 'Needs test' : 'Ready'}
           hint={
             jobRuntimeStatus.degradation_reason ||
             companyRuntimeStatus.degradation_reason ||
-            'Both profiles initialized successfully'
+            'Both profiles are ready to run'
           }
           tone={isAnyDegraded ? 'warning' : 'success'}
         />
       </section>
 
       <form className="ai-settings-shell" onSubmit={handleSubmit} noValidate>
-        <section className="ai-settings-panel glass-panel">
+        <section className="ai-settings-panel ai-settings-actions glass-panel">
           <div className="ai-settings-section-heading">
             <div>
-              <h2>Model Profiles</h2>
-              <p>Save separate providers and models for AI enrichment and company descriptions.</p>
+              <h2>Edit profiles</h2>
+              <p>
+                Pick a provider card, update only the relevant fields, then save once to apply both profiles.
+              </p>
             </div>
             <button className="ai-settings-save-button" type="submit" disabled={saving}>
               <Save size={16} />
@@ -575,10 +759,13 @@ export default function AISettingsPage() {
           profileLabel={PROFILE_LABELS.jobs}
           formState={formState.jobs}
           settingsPayload={settingsPayload}
-          runtimeStatus={jobRuntimeStatus}
           saving={saving}
+          testing={testingProfile === 'jobs'}
+          isSecretVisible={secretVisibility.jobs}
+          toggleSecretVisibility={toggleSecretVisibility}
           updateProfileProvider={updateProfileProvider}
           updateProfileField={updateProfileField}
+          onTestProfile={handleTestProfile}
         />
 
         <ProfileSection
@@ -586,10 +773,13 @@ export default function AISettingsPage() {
           profileLabel={PROFILE_LABELS.companies}
           formState={formState.companies}
           settingsPayload={settingsPayload}
-          runtimeStatus={companyRuntimeStatus}
           saving={saving}
+          testing={testingProfile === 'companies'}
+          isSecretVisible={secretVisibility.companies}
+          toggleSecretVisibility={toggleSecretVisibility}
           updateProfileProvider={updateProfileProvider}
           updateProfileField={updateProfileField}
+          onTestProfile={handleTestProfile}
         />
 
         <section className="ai-settings-panel glass-panel">
@@ -624,12 +814,12 @@ export default function AISettingsPage() {
               )}
             </strong>
             <p>
-              AI Enrichment active provider: {toProviderLabel(jobRuntimeStatus.active_provider || jobRuntimeStatus.provider || formState.jobs.llm_provider)}.
-              Companies active provider: {toProviderLabel(companyRuntimeStatus.active_provider || companyRuntimeStatus.provider || formState.companies.llm_provider)}.
+              AI Enrichment state: {getRuntimeStateLabel(jobRuntimeStatus)}.
+              Companies state: {getRuntimeStateLabel(companyRuntimeStatus)}.
             </p>
             {isAnyDegraded ? (
               <p className="ai-settings-warning-copy">
-                One or more profiles are degraded. Check the saved provider configuration and try again.
+                One or more profiles still need a successful configuration test before runtime can start.
               </p>
             ) : null}
           </div>

@@ -16,6 +16,7 @@ from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
 from app.services.ai_enrichment_service import get_ai_enrichment_service
 from app.services.enrichment_run_service import EnrichmentRunService
+from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
@@ -141,6 +142,11 @@ async def start_enrichment(
     db: Session = Depends(get_db),
 ):
     """Start batch AI enrichment for unenriched jobs."""
+    try:
+        ensure_profile_runtime_ready("jobs")
+    except ProfileRuntimeNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     run = EnrichmentRunService(db).create_manual_pending_run(limit=request.limit)
     if run is None:
         return {"task_id": None, "run_id": None, "status": "no_jobs"}
@@ -188,6 +194,11 @@ async def create_enrichment_run(
     db: Session = Depends(get_db),
 ):
     """Create a persisted enrichment run."""
+    try:
+        ensure_profile_runtime_ready("jobs")
+    except ProfileRuntimeNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     service = EnrichmentRunService(db)
 
     if request.mode == "pending":
@@ -287,6 +298,11 @@ async def retry_failed_enrichment_run(
 @router.post("/enrich-job/{job_id}")
 async def enrich_single_job(job_id: UUID, db: Session = Depends(get_db)):
     """Enrich a single job immediately."""
+    try:
+        ensure_profile_runtime_ready("jobs")
+    except ProfileRuntimeNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")

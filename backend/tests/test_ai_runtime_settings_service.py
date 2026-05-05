@@ -74,96 +74,90 @@ def test_get_or_create_settings_returns_singleton_row_and_allows_sparse_values()
         db.close()
 
 
-def test_effective_settings_merge_persisted_values_with_config_fallbacks(monkeypatch):
+def test_effective_settings_do_not_fall_back_to_env_or_shared_profile_values(monkeypatch):
     _, AIRuntimeSettingsService, _, _ = _import_runtime_settings_modules()
     db = _build_sqlite_session()
     try:
         monkeypatch.setattr(settings, "llm_provider", "gemini")
         monkeypatch.setattr(settings, "ai_enrichment_run_concurrency", 10)
         monkeypatch.setattr(settings, "anthropic_model", "claude-fallback")
-        monkeypatch.setattr(settings, "anthropic_api_key", None)
-        monkeypatch.setattr(settings, "anthropic_base_url", None)
+        monkeypatch.setattr(settings, "anthropic_api_key", "env-anthropic-key")
+        monkeypatch.setattr(settings, "anthropic_base_url", "https://env-anthropic.example.com")
         monkeypatch.setattr(settings, "gemini_api_key", "env-gemini-key")
         monkeypatch.setattr(settings, "gemini_model", "gemini-fallback")
-        monkeypatch.setattr(settings, "custom_api_key", None)
+        monkeypatch.setattr(settings, "custom_api_key", "env-custom-key")
         monkeypatch.setattr(settings, "custom_model", "custom-fallback")
+        monkeypatch.setattr(settings, "custom_base_url", "https://env-custom.example.com")
+        monkeypatch.setattr(settings, "custom_api_format", "anthropic")
+        monkeypatch.setattr(settings, "zhipu_api_key", "env-zhipu-key")
+
+        service = AIRuntimeSettingsService(db)
+        row = service.get_or_create()
+        row.llm_provider = "custom"
+        row.custom_api_key = "db-custom-key"
+        row.custom_model = "db-custom-model"
+        row.custom_base_url = "https://db-custom.example.com"
+        row.custom_api_format = "openai_responses"
+        row.company_llm_provider = None
+        db.commit()
+
+        effective = service.get_effective_settings()
+        company_effective = service.get_effective_settings("companies")
+
+        assert effective.llm_provider == "custom"
+        assert effective.custom_api_key == "db-custom-key"
+        assert effective.custom_model == "db-custom-model"
+        assert effective.custom_base_url == "https://db-custom.example.com"
+        assert effective.custom_api_format == "openai_responses"
+        assert effective.gemini_api_key is None
+        assert effective.gemini_model is None
+        assert company_effective.llm_provider is None
+        assert company_effective.custom_api_key is None
+    finally:
+        db.close()
+
+
+def test_company_profile_does_not_inherit_jobs_profile_values(monkeypatch):
+    _, AIRuntimeSettingsService, _, _ = _import_runtime_settings_modules()
+    db = _build_sqlite_session()
+    try:
+        monkeypatch.setattr(settings, "llm_provider", "anthropic")
+        monkeypatch.setattr(settings, "ai_enrichment_run_concurrency", 10)
+        monkeypatch.setattr(settings, "anthropic_api_key", "env-jobs-key")
+        monkeypatch.setattr(settings, "anthropic_model", "env-jobs-model")
+        monkeypatch.setattr(settings, "anthropic_base_url", "https://env-jobs.example.com")
+        monkeypatch.setattr(settings, "gemini_api_key", None)
+        monkeypatch.setattr(settings, "gemini_model", "env-gemini-model")
+        monkeypatch.setattr(settings, "custom_api_key", None)
+        monkeypatch.setattr(settings, "custom_model", "env-custom-model")
         monkeypatch.setattr(settings, "custom_base_url", "https://env-custom.example.com")
         monkeypatch.setattr(settings, "custom_api_format", "anthropic")
         monkeypatch.setattr(settings, "zhipu_api_key", None)
 
         service = AIRuntimeSettingsService(db)
-        service.update_settings(
-            {
-                "llm_provider": "anthropic",
-                "ai_enrichment_run_concurrency": 7,
-                "anthropic_api_key": "db-anthropic-key-1234",
-                "anthropic_model": "claude-db",
-            }
-        )
-
-        effective = service.get_effective_settings()
-        company_effective = service.get_effective_settings("companies")
-
-        assert effective.llm_provider == "anthropic"
-        assert effective.ai_enrichment_run_concurrency == 7
-        assert effective.anthropic_api_key == "db-anthropic-key-1234"
-        assert effective.anthropic_model == "claude-db"
-        assert effective.gemini_api_key == "env-gemini-key"
-        assert effective.gemini_model == "gemini-fallback"
-        assert effective.custom_model == "custom-fallback"
-        assert effective.custom_base_url == "https://env-custom.example.com"
-        assert company_effective.llm_provider == "anthropic"
-        assert company_effective.anthropic_model == "claude-db"
-    finally:
-        db.close()
-
-
-def test_company_effective_settings_can_override_job_profile_with_shared_provider_secrets(monkeypatch):
-    _, AIRuntimeSettingsService, _, _ = _import_runtime_settings_modules()
-    db = _build_sqlite_session()
-    try:
-        monkeypatch.setattr(settings, "llm_provider", "mock")
-        monkeypatch.setattr(settings, "ai_enrichment_run_concurrency", 10)
-        monkeypatch.setattr(settings, "anthropic_api_key", None)
-        monkeypatch.setattr(settings, "anthropic_model", "claude-fallback")
-        monkeypatch.setattr(settings, "anthropic_base_url", None)
-        monkeypatch.setattr(settings, "gemini_api_key", None)
-        monkeypatch.setattr(settings, "gemini_model", "gemini-fallback")
-        monkeypatch.setattr(settings, "custom_api_key", None)
-        monkeypatch.setattr(settings, "custom_model", "deepseek-default")
-        monkeypatch.setattr(settings, "custom_base_url", "https://api.deepseek.com")
-        monkeypatch.setattr(settings, "custom_api_format", "anthropic")
-        monkeypatch.setattr(settings, "zhipu_api_key", None)
-
-        service = AIRuntimeSettingsService(db)
-        service.update_settings(
-            {
-                "llm_provider": "custom",
-                "custom_api_key": "deepseek-secret",
-                "custom_model": "deepseek-v4-flash",
-                "custom_base_url": "https://api.deepseek.com",
-                "custom_api_format": "anthropic",
-                "company_llm_provider": "anthropic",
-                "company_anthropic_api_key": "anthropic-secret",
-                "company_anthropic_model": "claude-sonnet-4-5",
-                "company_anthropic_base_url": "https://api.anthropic.com",
-            }
-        )
+        row = service.get_or_create()
+        row.llm_provider = "anthropic"
+        row.anthropic_api_key = "jobs-anthropic-key"
+        row.anthropic_model = "jobs-model"
+        row.anthropic_base_url = "https://jobs.example.com"
+        row.company_llm_provider = None
+        row.company_anthropic_api_key = None
+        row.company_anthropic_model = None
+        row.company_anthropic_base_url = None
+        db.commit()
 
         job_effective = service.get_effective_settings("jobs")
         company_effective = service.get_effective_settings("companies")
         serialized = service.serialize_persisted_config()
 
-        assert job_effective.llm_provider == "custom"
-        assert job_effective.custom_model == "deepseek-v4-flash"
-        assert company_effective.llm_provider == "anthropic"
-        assert company_effective.anthropic_model == "claude-sonnet-4-5"
-        assert company_effective.anthropic_api_key == "anthropic-secret"
-        assert serialized["company_llm_provider"] == "anthropic"
-        assert serialized["company_anthropic"]["model"] == "claude-sonnet-4-5"
-        assert serialized["company_anthropic"]["api_key_preview"] == "anth...cret"
-        assert serialized["custom"]["api_key_preview"] == "deep...cret"
-        assert serialized["anthropic"]["api_key_preview"] is None
+        assert job_effective.llm_provider == "anthropic"
+        assert job_effective.anthropic_api_key == "jobs-anthropic-key"
+        assert job_effective.anthropic_model == "jobs-model"
+        assert company_effective.llm_provider is None
+        assert company_effective.anthropic_api_key is None
+        assert company_effective.anthropic_model is None
+        assert serialized["llm_provider"] == "anthropic"
+        assert serialized["company_llm_provider"] is None
     finally:
         db.close()
 
@@ -290,6 +284,23 @@ def test_reset_client_reloads_from_updated_effective_runtime_settings(monkeypatc
 
     llm_client_module.reset_client()
     try:
+        monkeypatch.setattr(
+            llm_client_module,
+            "_load_profile_metadata",
+            lambda scope="jobs": type(
+                "Meta",
+                (),
+                {
+                    "is_ready": True,
+                    "requires_test": False,
+                    "last_test_status": "passed",
+                    "last_tested_at": None,
+                    "last_test_error": None,
+                    "last_test_fingerprint": f"{scope}:fingerprint",
+                    "last_successful_test_fingerprint": f"{scope}:fingerprint",
+                },
+            )(),
+        )
         monkeypatch.setattr(
             llm_client_module,
             "get_effective_runtime_settings",

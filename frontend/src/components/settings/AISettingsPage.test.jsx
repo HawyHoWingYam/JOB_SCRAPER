@@ -25,6 +25,40 @@ function clonePayload(payload) {
   return JSON.parse(JSON.stringify(payload));
 }
 
+function getProviderPicker(profileLabel) {
+  return screen.getByRole('group', { name: new RegExp(`${profileLabel} provider`, 'i') });
+}
+
+function getProviderCard(profileLabel, providerLabel) {
+  return within(getProviderPicker(profileLabel)).getByRole('button', {
+    name: new RegExp(`^${providerLabel}\\b`, 'i'),
+  });
+}
+
+function getProviderSettingsGroup(profileLabel, providerLabel) {
+  return screen.getByRole('group', {
+    name: new RegExp(`${profileLabel} ${providerLabel} settings`, 'i'),
+  });
+}
+
+function getSecretInput(profileLabel, providerLabel) {
+  return within(getProviderSettingsGroup(profileLabel, providerLabel))
+    .getAllByLabelText(new RegExp(`${profileLabel} api key`, 'i'))
+    .find((element) => element.tagName === 'INPUT');
+}
+
+function getSecretToggle(profileLabel, providerLabel) {
+  return within(getProviderSettingsGroup(profileLabel, providerLabel)).getByRole('button', {
+    name: /show|hide/i,
+  });
+}
+
+function getApiFormatField(profileLabel, providerLabel = 'Custom') {
+  return within(getProviderSettingsGroup(profileLabel, providerLabel)).getByLabelText(
+    new RegExp(`${profileLabel} api format`, 'i'),
+  );
+}
+
 const aiSettingsPayload = {
   persisted_config: {
     llm_provider: 'gemini',
@@ -118,19 +152,25 @@ const aiSettingsPayload = {
   },
   runtime_status: {
     configured_provider: 'gemini',
-    active_provider: 'gemini',
+    active_provider: null,
     provider: 'gemini',
     model: 'gemini-2.5-flash',
-    is_degraded: false,
-    degradation_reason: null,
+    is_degraded: true,
+    degradation_reason: 'AI Enrichment profile must be tested before running',
+    requires_test: true,
+    is_ready: false,
+    last_test_status: 'untested',
   },
   company_runtime_status: {
     configured_provider: 'anthropic',
-    active_provider: 'anthropic',
+    active_provider: null,
     provider: 'anthropic',
     model: 'claude-sonnet-4-5',
-    is_degraded: false,
-    degradation_reason: null,
+    is_degraded: true,
+    degradation_reason: 'Companies profile must be tested before running',
+    requires_test: true,
+    is_ready: false,
+    last_test_status: 'untested',
   },
 };
 
@@ -186,6 +226,18 @@ describe('AISettingsPage', () => {
       }
 
       if (url.includes('/api/v1/settings/ai')) {
+        if (url.includes('/api/v1/settings/ai/test')) {
+          return mockJsonResponse({
+            ok: true,
+            scope: 'jobs',
+            configured_provider: 'gemini',
+            active_provider: 'gemini',
+            model: 'gemini-2.5-flash',
+            latency_ms: 111,
+            config_fingerprint: 'jobs:test-fingerprint',
+          });
+        }
+
         if (method === 'PUT') {
           return putSettingsResponse(url, init);
         }
@@ -210,21 +262,21 @@ describe('AISettingsPage', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: /ai runtime/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 2, name: /ai enrichment throughput/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/ai enrichment provider/i)).toHaveDisplayValue(/gemini/i);
-    expect(screen.getByLabelText(/companies provider/i)).toHaveDisplayValue(/anthropic/i);
+    expect(getProviderCard('AI Enrichment', 'Gemini')).toHaveAttribute('aria-pressed', 'true');
+    expect(getProviderCard('Companies', 'Anthropic')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByLabelText(/concurrency/i)).toHaveValue(8);
     expect(screen.getByText(/gem-\.{3}3456/i)).toBeInTheDocument();
     expect(screen.queryByText(/gem-secret-123456/i)).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/ai enrichment api key/i)).toHaveValue('');
+    expect(getSecretInput('AI Enrichment', 'Gemini')).toHaveValue('');
 
-    const providerGroup = screen.getByRole('group', { name: /ai enrichment gemini settings/i });
+    const providerGroup = getProviderSettingsGroup('AI Enrichment', 'Gemini');
     expect(within(providerGroup).getByLabelText(/ai enrichment model/i)).toHaveValue('gemini-2.5-flash');
-    expect(within(providerGroup).getByText(/api key saved/i)).toBeInTheDocument();
+    expect(within(providerGroup).getAllByText(/^api key saved$/i).length).toBeGreaterThan(0);
     expect(within(providerGroup).getByText(/saved only for the ai enrichment profile/i)).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: /companies anthropic settings/i })).toBeInTheDocument();
+    expect(getProviderSettingsGroup('Companies', 'Anthropic')).toBeInTheDocument();
     expect(screen.getByText(/comp\.\.\.9999/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/configured provider/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/active provider/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/configured provider/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/degraded state/i)).not.toBeInTheDocument();
   });
 
   it('adds the settings view to app navigation and opens the settings shell from the sidebar footer', async () => {
@@ -235,7 +287,7 @@ describe('AISettingsPage', () => {
     await user.click(screen.getByRole('button', { name: /^settings$/i }));
 
     expect(await screen.findByRole('heading', { level: 1, name: /ai runtime/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 2, name: /ai enrichment throughput/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 2, name: /ai enrichment throughput/i })).toBeInTheDocument();
   });
 
   it('saves edited settings and refreshes the runtime summary from the PUT response', async () => {
@@ -301,7 +353,7 @@ describe('AISettingsPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/ai runtime settings saved/i);
     expect(screen.getByLabelText(/concurrency/i)).toHaveValue(12);
     expect(screen.getByLabelText(/ai enrichment model/i)).toHaveValue('gemini-2.5-pro');
-    expect(screen.getByText(/runtime ready/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/^Needs test$/i).length).toBeGreaterThan(0);
   });
 
   it('switches providers and submits only the selected provider fields', async () => {
@@ -361,8 +413,8 @@ describe('AISettingsPage', () => {
 
     await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
 
-    await user.selectOptions(screen.getByLabelText(/ai enrichment provider/i), 'anthropic');
-    expect(screen.getByRole('group', { name: /ai enrichment anthropic settings/i })).toBeInTheDocument();
+    await user.click(getProviderCard('AI Enrichment', 'Anthropic'));
+    expect(getProviderSettingsGroup('AI Enrichment', 'Anthropic')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: /ai enrichment gemini settings/i })).not.toBeInTheDocument();
 
     await user.clear(screen.getByLabelText(/concurrency/i));
@@ -371,15 +423,83 @@ describe('AISettingsPage', () => {
     await user.type(screen.getByLabelText(/ai enrichment model/i), 'claude-sonnet-4-5');
     await user.clear(screen.getByLabelText(/ai enrichment base url/i));
     await user.type(screen.getByLabelText(/ai enrichment base url/i), 'https://api.anthropic.com/v1');
-    await user.type(screen.getByLabelText(/ai enrichment api key/i), 'anthropic-secret-987654');
+    await user.type(getSecretInput('AI Enrichment', 'Anthropic'), 'anthropic-secret-987654');
     await user.click(screen.getByRole('button', { name: /save settings/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/ai runtime settings saved/i);
-    expect(screen.getByRole('group', { name: /ai enrichment anthropic settings/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/ai enrichment provider/i)).toHaveDisplayValue(/anthropic/i);
+    expect(getProviderSettingsGroup('AI Enrichment', 'Anthropic')).toBeInTheDocument();
+    expect(getProviderCard('AI Enrichment', 'Anthropic')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByLabelText(/ai enrichment model/i)).toHaveValue('claude-sonnet-4-5');
     expect(screen.getByLabelText(/ai enrichment base url/i)).toHaveValue('https://api.anthropic.com/v1');
-    expect(screen.getByText(/runtime ready/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/^Needs test$/i).length).toBeGreaterThan(0);
+  });
+
+  it('tests the current draft profile before save and shows probe feedback', async () => {
+    const user = userEvent.setup();
+    const fetchSpy = globalThis.fetch;
+
+    render(<AISettingsPage />);
+
+    await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
+
+    await user.click(getProviderCard('AI Enrichment', 'Custom'));
+    await user.clear(screen.getByLabelText(/ai enrichment model/i));
+    await user.type(screen.getByLabelText(/ai enrichment model/i), 'gpt-5.2');
+    await user.clear(screen.getByLabelText(/ai enrichment base url/i));
+    await user.type(screen.getByLabelText(/ai enrichment base url/i), 'https://api.example.com/v1');
+    await user.selectOptions(getApiFormatField('AI Enrichment'), 'openai_responses');
+    await user.type(getSecretInput('AI Enrichment', 'Custom'), 'test-secret');
+
+    await user.click(screen.getByRole('button', { name: /test ai enrichment configuration/i }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/settings/ai/test',
+        expect.objectContaining({
+          method: 'POST',
+        }),
+      );
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/configuration test passed/i);
+    expect(screen.getByText(/111 ms/i)).toBeInTheDocument();
+  });
+
+  it('toggles api key visibility without exposing saved secrets by default', async () => {
+    const user = userEvent.setup();
+
+    render(<AISettingsPage />);
+
+    await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
+
+    const apiKeyInput = getSecretInput('AI Enrichment', 'Gemini');
+    expect(apiKeyInput).toHaveAttribute('type', 'password');
+
+    await user.type(apiKeyInput, 'temporary-secret');
+    await user.click(getSecretToggle('AI Enrichment', 'Gemini'));
+    expect(apiKeyInput).toHaveAttribute('type', 'text');
+    expect(apiKeyInput).toHaveValue('temporary-secret');
+    expect(screen.queryByText(/temporary-secret/i)).not.toBeInTheDocument();
+
+    await user.click(getSecretToggle('AI Enrichment', 'Gemini'));
+    expect(apiKeyInput).toHaveAttribute('type', 'password');
+  });
+
+  it('limits custom api format to supported options and normalizes legacy values', async () => {
+    const user = userEvent.setup();
+
+    render(<AISettingsPage />);
+
+    await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
+
+    await user.click(getProviderCard('AI Enrichment', 'Custom'));
+
+    const apiFormatField = getApiFormatField('AI Enrichment');
+    expect(apiFormatField.tagName).toBe('SELECT');
+    expect(apiFormatField).toHaveValue('openai_responses');
+    expect(within(apiFormatField).getByRole('option', { name: /anthropic/i })).toBeInTheDocument();
+    expect(within(apiFormatField).getByRole('option', { name: /openai responses/i })).toBeInTheDocument();
+    expect(within(apiFormatField).queryByRole('option', { name: /^openai$/i })).not.toBeInTheDocument();
   });
 
   it('preserves the existing stored secret when the secret input is left blank', async () => {
@@ -420,14 +540,14 @@ describe('AISettingsPage', () => {
 
     await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
 
-    expect(screen.getByLabelText(/ai enrichment api key/i)).toHaveValue('');
+    expect(getSecretInput('AI Enrichment', 'Gemini')).toHaveValue('');
     await user.clear(screen.getByLabelText(/ai enrichment model/i));
     await user.type(screen.getByLabelText(/ai enrichment model/i), 'gemini-2.5-flash-lite');
     await user.click(screen.getByRole('button', { name: /save settings/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/ai runtime settings saved/i);
-    const providerGroup = screen.getByRole('group', { name: /ai enrichment gemini settings/i });
-    expect(within(providerGroup).getByText(/^api key saved$/i)).toBeInTheDocument();
+    const providerGroup = getProviderSettingsGroup('AI Enrichment', 'Gemini');
+    expect(within(providerGroup).getAllByText(/^api key saved$/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/gem-\.{3}3456/i)).toBeInTheDocument();
   });
 
@@ -471,11 +591,14 @@ describe('AISettingsPage', () => {
         ...currentSettingsPayload,
         runtime_status: {
           configured_provider: 'gemini',
-          active_provider: 'mock',
-          provider: 'mock',
-          model: 'mock',
+          active_provider: null,
+          provider: 'gemini',
+          model: 'gemini-2.5-flash',
           is_degraded: true,
           degradation_reason: "Failed to initialize provider 'gemini'",
+          requires_test: true,
+          is_ready: false,
+          last_test_status: 'failed',
         },
       };
 
@@ -488,9 +611,9 @@ describe('AISettingsPage', () => {
     await user.click(screen.getByRole('button', { name: /save settings/i }));
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(/runtime is degraded/i);
+    expect(alert).toHaveTextContent(/needs a successful configuration test before it can run/i);
     expect(alert).toHaveTextContent(/failed to initialize provider 'gemini'/i);
-    expect(screen.getByText(/degraded runtime/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/^Needs test$/i).length).toBeGreaterThan(0);
   });
 
   it('lets jobs and companies use separate providers and submits both profiles in one save', async () => {
@@ -576,26 +699,25 @@ describe('AISettingsPage', () => {
 
     await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
 
-    await user.selectOptions(screen.getByLabelText(/ai enrichment provider/i), 'custom');
+    await user.click(getProviderCard('AI Enrichment', 'Custom'));
     await user.clear(screen.getByLabelText(/ai enrichment model/i));
     await user.type(screen.getByLabelText(/ai enrichment model/i), 'deepseek-v4-flash');
     await user.clear(screen.getByLabelText(/ai enrichment base url/i));
     await user.type(screen.getByLabelText(/ai enrichment base url/i), 'https://api.deepseek.com');
-    await user.clear(screen.getByLabelText(/ai enrichment api format/i));
-    await user.type(screen.getByLabelText(/ai enrichment api format/i), 'anthropic');
-    await user.type(screen.getByLabelText(/ai enrichment api key/i), 'deepseek-secret');
+    await user.selectOptions(getApiFormatField('AI Enrichment'), 'anthropic');
+    await user.type(getSecretInput('AI Enrichment', 'Custom'), 'deepseek-secret');
 
-    await user.selectOptions(screen.getByLabelText(/companies provider/i), 'anthropic');
+    await user.click(getProviderCard('Companies', 'Anthropic'));
     await user.clear(screen.getByLabelText(/companies model/i));
     await user.type(screen.getByLabelText(/companies model/i), 'claude-sonnet-4-5');
     await user.clear(screen.getByLabelText(/companies base url/i));
     await user.type(screen.getByLabelText(/companies base url/i), 'https://api.anthropic.com/v1');
-    await user.type(screen.getByLabelText(/companies api key/i), 'anthropic-secret-123456');
+    await user.type(getSecretInput('Companies', 'Anthropic'), 'anthropic-secret-123456');
 
     await user.click(screen.getByRole('button', { name: /save settings/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/ai runtime settings saved/i);
-    expect(screen.getByLabelText(/ai enrichment provider/i)).toHaveDisplayValue(/custom/i);
-    expect(screen.getByLabelText(/companies provider/i)).toHaveDisplayValue(/anthropic/i);
+    expect(getProviderCard('AI Enrichment', 'Custom')).toHaveAttribute('aria-pressed', 'true');
+    expect(getProviderCard('Companies', 'Anthropic')).toHaveAttribute('aria-pressed', 'true');
   });
 });

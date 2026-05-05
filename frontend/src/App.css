@@ -24,6 +24,15 @@
   min-height: 100%;
 }
 
+.app-view-loading {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  font-size: var(--text-lg);
+}
+
 .app-header {
   text-align: center;
   margin-bottom: var(--space-8);

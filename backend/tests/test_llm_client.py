@@ -84,7 +84,7 @@ async def test_anthropic_generate_json_retries_after_empty_response():
     assert messages.calls[1]["max_tokens"] == 4096
 
 
-def test_get_llm_client_degrades_to_mock_when_runtime_settings_resolution_fails(monkeypatch):
+def test_get_llm_client_raises_when_runtime_settings_resolution_fails(monkeypatch):
     llm_client_module.reset_client()
     try:
         monkeypatch.setattr(
@@ -93,15 +93,16 @@ def test_get_llm_client_degrades_to_mock_when_runtime_settings_resolution_fails(
             lambda: (_ for _ in ()).throw(RuntimeError("settings table missing")),
         )
 
-        client = llm_client_module.get_llm_client()
-        status = llm_client_module.get_llm_status()
+        with pytest.raises(llm_client_module.LLMProfileNotReadyError) as exc_info:
+            llm_client_module.get_llm_client()
 
-        assert isinstance(client, llm_client_module.MockClient)
+        status = llm_client_module.get_llm_status()
         assert status["configured_provider"] == "unknown"
-        assert status["active_provider"] == "mock"
+        assert status["active_provider"] in {"", None}
         assert status["is_degraded"] is True
         assert "runtime settings resolution failed" in status["degradation_reason"].lower()
         assert "settings table missing" in status["degradation_reason"]
+        assert exc_info.value.code == "runtime_settings_resolution_failed"
     finally:
         llm_client_module.reset_client()
 
@@ -136,6 +137,23 @@ def test_get_llm_client_caches_per_scope_and_tracks_independent_status(monkeypat
             custom_base_url=None,
             custom_api_format="anthropic",
             zhipu_api_key=None,
+        )
+        monkeypatch.setattr(
+            llm_client_module,
+            "_load_profile_metadata",
+            lambda scope="jobs": type(
+                "Meta",
+                (),
+                {
+                    "is_ready": True,
+                    "requires_test": False,
+                    "last_test_status": "passed",
+                    "last_tested_at": None,
+                    "last_test_error": None,
+                    "last_test_fingerprint": f"{scope}:fingerprint",
+                    "last_successful_test_fingerprint": f"{scope}:fingerprint",
+                },
+            )(),
         )
         monkeypatch.setattr(
             llm_client_module,

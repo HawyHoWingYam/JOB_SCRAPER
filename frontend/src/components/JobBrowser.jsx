@@ -4,6 +4,7 @@ import SearchBar from './SearchBar';
 import FilterPanel from './FilterPanel';
 import Pagination from './Pagination';
 import JobDetailModal from './JobDetailModal';
+import { API_BASE_URL } from '../api/base';
 import {
     createEmptyJobBrowserLayer,
     createEmptyJobBrowserScope,
@@ -20,7 +21,7 @@ import {
 } from './jobBrowserQueryUtils';
 import './JobBrowser.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = API_BASE_URL;
 
 function hasQueryValue(value) {
     if (Array.isArray(value)) {

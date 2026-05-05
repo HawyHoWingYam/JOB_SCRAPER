@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import CompanyDetailModal from './CompanyDetailModal';
 import CompanySummaryCard from './CompanySummaryCard';
+import { API_BASE_URL } from '../../api/base';
 import './CompaniesPage.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = API_BASE_URL;
 const PAGE_SIZE = 25;
 const RUN_POLL_INTERVAL_MS = 2000;
 

@@ -8,6 +8,7 @@ from app.models import Company
 from app.schemas import CompanySchema, CompanyCreateSchema
 from app.services.company_enrichment_service import CompanyEnrichmentService
 from app.services.company_enrichment_run_service import CompanyEnrichmentRunService
+from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -99,6 +100,11 @@ async def create_company_enrichment_run(
     db: Session = Depends(get_db),
 ):
     """Create or resume a persisted company enrichment run."""
+    try:
+        ensure_profile_runtime_ready("companies")
+    except ProfileRuntimeNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     service = CompanyEnrichmentRunService(db)
     active_run = service.get_active_run()
     if active_run is not None:
@@ -231,6 +237,11 @@ async def enrich_company_description(
     db: Session = Depends(get_db),
 ):
     """Generate a concise AI description for a company."""
+    try:
+        ensure_profile_runtime_ready("companies")
+    except ProfileRuntimeNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     company = db.query(Company).filter(
         Company.id == company_id,
         Company.is_deleted == False,
@@ -247,6 +258,11 @@ async def batch_enrich_company_descriptions(
     db: Session = Depends(get_db),
 ):
     """Generate concise AI descriptions for multiple companies in a single request."""
+    try:
+        ensure_profile_runtime_ready("companies")
+    except ProfileRuntimeNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     requested_ids = payload.company_ids
     companies = (
         db.query(Company)

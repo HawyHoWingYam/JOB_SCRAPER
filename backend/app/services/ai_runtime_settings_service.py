@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -14,8 +16,10 @@ from app.config import (
 )
 from app.database import SessionLocal
 from app.models.app_runtime_settings import AppRuntimeSettings
+from app.utils.time import utc_now
 
 RUNTIME_SCOPES = ("jobs", "companies")
+PROFILE_TEST_STATUSES = ("untested", "passed", "failed")
 SECRET_FIELD_NAMES = {
     "anthropic_api_key",
     "gemini_api_key",
@@ -64,22 +68,121 @@ PERSISTED_FIELD_NAMES = (
     "company_custom_base_url",
     "company_custom_api_format",
     "company_zhipu_api_key",
+    "jobs_last_test_status",
+    "jobs_last_tested_at",
+    "jobs_last_test_error",
+    "jobs_last_test_provider",
+    "jobs_last_test_model",
+    "jobs_last_test_latency_ms",
+    "jobs_last_test_fingerprint",
+    "jobs_last_successful_test_fingerprint",
+    "companies_last_test_status",
+    "companies_last_tested_at",
+    "companies_last_test_error",
+    "companies_last_test_provider",
+    "companies_last_test_model",
+    "companies_last_test_latency_ms",
+    "companies_last_test_fingerprint",
+    "companies_last_successful_test_fingerprint",
 )
+PROFILE_FIELD_NAME_MAP = {
+    "jobs": {
+        "llm_provider": "llm_provider",
+        "anthropic_api_key": "anthropic_api_key",
+        "anthropic_model": "anthropic_model",
+        "anthropic_base_url": "anthropic_base_url",
+        "gemini_api_key": "gemini_api_key",
+        "gemini_model": "gemini_model",
+        "custom_api_key": "custom_api_key",
+        "custom_model": "custom_model",
+        "custom_base_url": "custom_base_url",
+        "custom_api_format": "custom_api_format",
+        "zhipu_api_key": "zhipu_api_key",
+    },
+    "companies": {
+        "llm_provider": "company_llm_provider",
+        "anthropic_api_key": "company_anthropic_api_key",
+        "anthropic_model": "company_anthropic_model",
+        "anthropic_base_url": "company_anthropic_base_url",
+        "gemini_api_key": "company_gemini_api_key",
+        "gemini_model": "company_gemini_model",
+        "custom_api_key": "company_custom_api_key",
+        "custom_model": "company_custom_model",
+        "custom_base_url": "company_custom_base_url",
+        "custom_api_format": "company_custom_api_format",
+        "zhipu_api_key": "company_zhipu_api_key",
+    },
+}
+PROFILE_TEST_FIELD_MAP = {
+    "jobs": {
+        "status": "jobs_last_test_status",
+        "tested_at": "jobs_last_tested_at",
+        "error": "jobs_last_test_error",
+        "provider": "jobs_last_test_provider",
+        "model": "jobs_last_test_model",
+        "latency_ms": "jobs_last_test_latency_ms",
+        "fingerprint": "jobs_last_test_fingerprint",
+        "success_fingerprint": "jobs_last_successful_test_fingerprint",
+    },
+    "companies": {
+        "status": "companies_last_test_status",
+        "tested_at": "companies_last_tested_at",
+        "error": "companies_last_test_error",
+        "provider": "companies_last_test_provider",
+        "model": "companies_last_test_model",
+        "latency_ms": "companies_last_test_latency_ms",
+        "fingerprint": "companies_last_test_fingerprint",
+        "success_fingerprint": "companies_last_successful_test_fingerprint",
+    },
+}
 
 
 @dataclass(frozen=True)
 class EffectiveAIRuntimeSettings:
-    llm_provider: str
+    llm_provider: Optional[str]
     ai_enrichment_run_concurrency: int
     anthropic_api_key: Optional[str]
-    anthropic_model: str
+    anthropic_model: Optional[str]
     anthropic_base_url: Optional[str]
     gemini_api_key: Optional[str]
-    gemini_model: str
+    gemini_model: Optional[str]
     custom_api_key: Optional[str]
-    custom_model: str
+    custom_model: Optional[str]
     custom_base_url: Optional[str]
-    custom_api_format: str
+    custom_api_format: Optional[str]
+    zhipu_api_key: Optional[str]
+
+
+@dataclass(frozen=True)
+class ProfileRuntimeMetadata:
+    scope: str
+    configured_provider: Optional[str]
+    config_fingerprint: Optional[str]
+    last_test_status: str
+    last_tested_at: Optional[str]
+    last_test_error: Optional[str]
+    last_test_provider: Optional[str]
+    last_test_model: Optional[str]
+    last_test_latency_ms: Optional[int]
+    last_test_fingerprint: Optional[str]
+    last_successful_test_fingerprint: Optional[str]
+    requires_test: bool
+    is_ready: bool
+
+
+@dataclass(frozen=True)
+class DraftProbeRequest:
+    scope: str
+    llm_provider: Optional[str]
+    anthropic_api_key: Optional[str]
+    anthropic_model: Optional[str]
+    anthropic_base_url: Optional[str]
+    gemini_api_key: Optional[str]
+    gemini_model: Optional[str]
+    custom_api_key: Optional[str]
+    custom_model: Optional[str]
+    custom_base_url: Optional[str]
+    custom_api_format: Optional[str]
     zhipu_api_key: Optional[str]
 
 
@@ -91,8 +194,17 @@ class RuntimeSettingsValidationError(ValueError):
         self.errors = errors
 
 
+class ProfileRuntimeNotReadyError(RuntimeError):
+    """Raised when a runtime profile is saved but not runnable."""
+
+    def __init__(self, scope: str, message: str, *, code: str):
+        super().__init__(message)
+        self.scope = scope
+        self.code = code
+
+
 class AIRuntimeSettingsService:
-    """Persist and resolve AI runtime settings with profile-specific overrides."""
+    """Persist and resolve AI runtime settings with fully isolated profiles."""
 
     def __init__(self, db: Session):
         self.db = db
@@ -113,6 +225,13 @@ class AIRuntimeSettingsService:
         for field_name, value in candidate.items():
             setattr(row, field_name, value)
 
+        for scope in RUNTIME_SCOPES:
+            current_fingerprint = self.build_config_fingerprint(scope, candidate)
+            test_fields = PROFILE_TEST_FIELD_MAP[scope]
+            last_successful = candidate.get(test_fields["success_fingerprint"])
+            if current_fingerprint != last_successful:
+                setattr(row, test_fields["status"], "untested")
+
         self.db.add(row)
         self.db.flush()
         self.db.refresh(row)
@@ -122,6 +241,114 @@ class AIRuntimeSettingsService:
         self._ensure_valid_scope(scope)
         row = self.get_or_create()
         return self._build_effective_settings(self._row_values(row), scope)
+
+    def get_profile_runtime_metadata(
+        self,
+        scope: str,
+        row: Optional[AppRuntimeSettings] = None,
+    ) -> ProfileRuntimeMetadata:
+        self._ensure_valid_scope(scope)
+        row = row or self.get_or_create()
+        values = self._row_values(row)
+        effective = self._build_effective_settings(values, scope)
+        test_fields = PROFILE_TEST_FIELD_MAP[scope]
+        configured_provider = (effective.llm_provider or None)
+        config_fingerprint = self.build_config_fingerprint(scope, values)
+        last_status = values.get(test_fields["status"]) or "untested"
+        last_successful = values.get(test_fields["success_fingerprint"])
+        requires_test = bool(configured_provider) and config_fingerprint != last_successful
+        is_ready = bool(configured_provider) and not requires_test and last_status == "passed"
+        tested_at = values.get(test_fields["tested_at"])
+
+        return ProfileRuntimeMetadata(
+            scope=scope,
+            configured_provider=configured_provider,
+            config_fingerprint=config_fingerprint,
+            last_test_status=last_status if last_status in PROFILE_TEST_STATUSES else "untested",
+            last_tested_at=tested_at.isoformat() if tested_at else None,
+            last_test_error=values.get(test_fields["error"]),
+            last_test_provider=values.get(test_fields["provider"]),
+            last_test_model=values.get(test_fields["model"]),
+            last_test_latency_ms=values.get(test_fields["latency_ms"]),
+            last_test_fingerprint=values.get(test_fields["fingerprint"]),
+            last_successful_test_fingerprint=last_successful,
+            requires_test=requires_test,
+            is_ready=is_ready,
+        )
+
+    def ensure_profile_runtime_ready(self, scope: str) -> EffectiveAIRuntimeSettings:
+        effective = self.get_effective_settings(scope)
+        metadata = self.get_profile_runtime_metadata(scope)
+        if not metadata.configured_provider:
+            raise ProfileRuntimeNotReadyError(scope, f"{scope} profile is not configured", code="profile_not_configured")
+        if metadata.requires_test:
+            raise ProfileRuntimeNotReadyError(
+                scope,
+                f"{scope} profile must be tested before running",
+                code="profile_requires_test",
+            )
+        if not metadata.is_ready:
+            raise ProfileRuntimeNotReadyError(
+                scope,
+                f"{scope} profile is blocked by the last failed test",
+                code="profile_test_failed",
+            )
+        self._validate_effective_settings(scope, effective)
+        return effective
+
+    def build_draft_client(self, scope: str, draft_values: dict[str, Any]):
+        from app.ai.llm_client import PROVIDER_REGISTRY, LLMProfileNotReadyError
+
+        effective = self._build_effective_settings(draft_values, scope)
+        self._validate_effective_settings(scope, effective)
+        provider = (effective.llm_provider or "").strip().lower()
+        spec = PROVIDER_REGISTRY.get(provider)
+        if spec is None:
+            raise LLMProfileNotReadyError(scope, f"Unsupported LLM provider: {provider}", code="unsupported_provider")
+        missing = [
+            field_name
+            for field_name in PROVIDER_REQUIRED_FIELDS.get(provider, tuple())
+            if not asdict(effective).get(field_name)
+        ]
+        if missing:
+            raise LLMProfileNotReadyError(
+                scope,
+                f"Provider '{provider}' missing required settings: {', '.join(missing)}",
+                code="missing_required_settings",
+            )
+
+        return spec.builder(effective)
+
+    def record_profile_test_result(
+        self,
+        scope: str,
+        *,
+        ok: bool,
+        configured_provider: Optional[str],
+        model: Optional[str],
+        latency_ms: Optional[int],
+        config_fingerprint: Optional[str],
+        error_message: Optional[str],
+    ) -> AppRuntimeSettings:
+        self._ensure_valid_scope(scope)
+        row = self.get_or_create()
+        test_fields = PROFILE_TEST_FIELD_MAP[scope]
+        timestamp = utc_now()
+
+        setattr(row, test_fields["status"], "passed" if ok else "failed")
+        setattr(row, test_fields["tested_at"], timestamp)
+        setattr(row, test_fields["error"], None if ok else error_message)
+        setattr(row, test_fields["provider"], configured_provider)
+        setattr(row, test_fields["model"], model)
+        setattr(row, test_fields["latency_ms"], latency_ms)
+        setattr(row, test_fields["fingerprint"], config_fingerprint)
+        if ok:
+            setattr(row, test_fields["success_fingerprint"], config_fingerprint)
+
+        self.db.add(row)
+        self.db.flush()
+        self.db.refresh(row)
+        return row
 
     def serialize_persisted_config(
         self,
@@ -185,7 +412,7 @@ class AIRuntimeSettingsService:
         return {
             "llm_provider": job_effective.llm_provider,
             "company_llm_provider": company_effective.llm_provider,
-            "ai_enrichment_run_concurrency": job_effective.ai_enrichment_run_concurrency,
+            "ai_enrichment_run_concurrency": self.get_effective_concurrency(),
             "anthropic": {
                 "model": job_effective.anthropic_model,
                 "base_url": job_effective.anthropic_base_url,
@@ -228,6 +455,61 @@ class AIRuntimeSettingsService:
             },
         }
 
+    def get_effective_concurrency(self) -> int:
+        row = self.get_or_create()
+        candidate = getattr(row, "ai_enrichment_run_concurrency", None)
+        if candidate is None:
+            candidate = getattr(settings, "ai_enrichment_run_concurrency", None)
+        try:
+            value = int(candidate)
+        except (TypeError, ValueError):
+            value = AI_ENRICHMENT_RUN_CONCURRENCY_MIN
+        return max(AI_ENRICHMENT_RUN_CONCURRENCY_MIN, min(value, AI_ENRICHMENT_RUN_CONCURRENCY_MAX))
+
+    def build_config_fingerprint(self, scope: str, values: dict[str, Any]) -> Optional[str]:
+        self._ensure_valid_scope(scope)
+        effective = self._build_effective_settings(values, scope)
+        provider = (effective.llm_provider or "").strip().lower()
+        if not provider:
+            return None
+
+        payload = {
+            "scope": scope,
+            "llm_provider": provider,
+            "anthropic_api_key": self._normalize_secret_value(effective.anthropic_api_key),
+            "anthropic_model": self._normalize_optional_string(effective.anthropic_model),
+            "anthropic_base_url": self._normalize_optional_string(effective.anthropic_base_url),
+            "gemini_api_key": self._normalize_secret_value(effective.gemini_api_key),
+            "gemini_model": self._normalize_optional_string(effective.gemini_model),
+            "custom_api_key": self._normalize_secret_value(effective.custom_api_key),
+            "custom_model": self._normalize_optional_string(effective.custom_model),
+            "custom_base_url": self._normalize_optional_string(effective.custom_base_url),
+            "custom_api_format": self._normalize_optional_string(effective.custom_api_format),
+            "zhipu_api_key": self._normalize_secret_value(effective.zhipu_api_key),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return f"{scope}:{hashlib.sha256(encoded).hexdigest()}"
+
+    def draft_profile_values_from_payload(self, scope: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self._ensure_valid_scope(scope)
+        row = self.get_or_create()
+        candidate = self._row_values(row)
+        profile_field_map = PROFILE_FIELD_NAME_MAP[scope]
+
+        provider = self._normalize_optional_string(payload.get("llm_provider"))
+        candidate[profile_field_map["llm_provider"]] = provider
+
+        for effective_field_name, persisted_field_name in profile_field_map.items():
+            if effective_field_name == "llm_provider":
+                continue
+            if persisted_field_name in SECRET_FIELD_NAMES:
+                normalized_secret = self._normalize_secret_update(payload.get(effective_field_name))
+                candidate[persisted_field_name] = normalized_secret
+                continue
+            candidate[persisted_field_name] = self._normalize_optional_string(payload.get(effective_field_name))
+
+        return candidate
+
     def _build_candidate_values(
         self,
         row: AppRuntimeSettings,
@@ -250,7 +532,7 @@ class AIRuntimeSettingsService:
                 candidate[field_name] = value
                 continue
 
-            candidate[field_name] = self._normalize_optional_string(value)
+            candidate[field_name] = value if field_name.endswith("_tested_at") else self._normalize_optional_string(value)
 
         return candidate
 
@@ -304,6 +586,8 @@ class AIRuntimeSettingsService:
         provider_field = "llm_provider" if scope == "jobs" else "company_llm_provider"
 
         errors: list[dict[str, Any]] = []
+        if not provider:
+            return errors
         if provider not in SUPPORTED_LLM_PROVIDERS:
             errors.append(
                 {
@@ -334,99 +618,46 @@ class AIRuntimeSettingsService:
         scope: str = "jobs",
     ) -> EffectiveAIRuntimeSettings:
         self._ensure_valid_scope(scope)
-        job_provider = persisted_values.get("llm_provider") or settings.llm_provider
-
-        provider = self._resolve_profile_value(
-            persisted_values,
-            scope,
-            "llm_provider",
-            job_provider if scope == "companies" else settings.llm_provider,
-        )
+        field_map = PROFILE_FIELD_NAME_MAP[scope]
+        provider = self._normalize_optional_string(persisted_values.get(field_map["llm_provider"]))
 
         return EffectiveAIRuntimeSettings(
-            llm_provider=(provider or settings.llm_provider).lower(),
-            ai_enrichment_run_concurrency=int(
-                persisted_values.get("ai_enrichment_run_concurrency")
-                or settings.ai_enrichment_run_concurrency
-            ),
-            anthropic_api_key=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "anthropic_api_key",
-                settings.anthropic_api_key,
-            ),
-            anthropic_model=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "anthropic_model",
-                settings.anthropic_model,
-            ),
-            anthropic_base_url=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "anthropic_base_url",
-                settings.anthropic_base_url,
-            ),
-            gemini_api_key=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "gemini_api_key",
-                settings.gemini_api_key,
-            ),
-            gemini_model=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "gemini_model",
-                settings.gemini_model,
-            ),
-            custom_api_key=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "custom_api_key",
-                settings.custom_api_key,
-            ),
-            custom_model=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "custom_model",
-                settings.custom_model,
-            ),
-            custom_base_url=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "custom_base_url",
-                settings.custom_base_url,
-            ),
-            custom_api_format=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "custom_api_format",
-                settings.custom_api_format,
-            ),
-            zhipu_api_key=self._resolve_profile_value(
-                persisted_values,
-                scope,
-                "zhipu_api_key",
-                settings.zhipu_api_key,
-            ),
+            llm_provider=(provider.lower() if provider else None),
+            ai_enrichment_run_concurrency=self.get_effective_concurrency(),
+            anthropic_api_key=self._normalize_optional_string(persisted_values.get(field_map["anthropic_api_key"])),
+            anthropic_model=self._normalize_optional_string(persisted_values.get(field_map["anthropic_model"])),
+            anthropic_base_url=self._normalize_optional_string(persisted_values.get(field_map["anthropic_base_url"])),
+            gemini_api_key=self._normalize_optional_string(persisted_values.get(field_map["gemini_api_key"])),
+            gemini_model=self._normalize_optional_string(persisted_values.get(field_map["gemini_model"])),
+            custom_api_key=self._normalize_optional_string(persisted_values.get(field_map["custom_api_key"])),
+            custom_model=self._normalize_optional_string(persisted_values.get(field_map["custom_model"])),
+            custom_base_url=self._normalize_optional_string(persisted_values.get(field_map["custom_base_url"])),
+            custom_api_format=self._normalize_optional_string(persisted_values.get(field_map["custom_api_format"])),
+            zhipu_api_key=self._normalize_optional_string(persisted_values.get(field_map["zhipu_api_key"])),
         )
 
-    def _resolve_profile_value(
-        self,
-        persisted_values: dict[str, Any],
-        scope: str,
-        field_name: str,
-        shared_default: Any,
-    ) -> Any:
-        if scope == "jobs":
-            return persisted_values.get(field_name) or shared_default
-
-        company_field_name = f"company_{field_name}"
-        return (
-            persisted_values.get(company_field_name)
-            or persisted_values.get(field_name)
-            or shared_default
-        )
+    def _validate_effective_settings(self, scope: str, effective: EffectiveAIRuntimeSettings) -> None:
+        provider = (effective.llm_provider or "").strip().lower()
+        if not provider:
+            raise ProfileRuntimeNotReadyError(scope, f"{scope} profile is not configured", code="profile_not_configured")
+        if provider not in SUPPORTED_LLM_PROVIDERS:
+            raise ProfileRuntimeNotReadyError(
+                scope,
+                f"{scope} profile has unsupported provider '{provider}'",
+                code="profile_invalid_provider",
+            )
+        effective_map = asdict(effective)
+        missing = [
+            field_name
+            for field_name in PROVIDER_REQUIRED_FIELDS.get(provider, tuple())
+            if not effective_map.get(field_name)
+        ]
+        if missing:
+            raise ProfileRuntimeNotReadyError(
+                scope,
+                f"{scope} profile is missing required settings: {', '.join(missing)}",
+                code="profile_missing_settings",
+            )
 
     @staticmethod
     def _validation_loc_for_field(scope: str, field_name: str) -> str:
@@ -447,9 +678,13 @@ class AIRuntimeSettingsService:
         if not isinstance(value, str):
             return str(value)
         stripped = value.strip()
-        if not stripped:
+        return stripped or None
+
+    @staticmethod
+    def _normalize_secret_value(value: Any) -> Optional[str]:
+        if value is None:
             return None
-        return stripped
+        return str(value).strip() or None
 
     @staticmethod
     def _normalize_optional_string(value: Any) -> Optional[str]:
@@ -483,5 +718,13 @@ def get_effective_runtime_settings(scope: str = "jobs") -> EffectiveAIRuntimeSet
     db = SessionLocal()
     try:
         return AIRuntimeSettingsService(db).get_effective_settings(scope)
+    finally:
+        db.close()
+
+
+def ensure_profile_runtime_ready(scope: str) -> EffectiveAIRuntimeSettings:
+    db = SessionLocal()
+    try:
+        return AIRuntimeSettingsService(db).ensure_profile_runtime_ready(scope)
     finally:
         db.close()

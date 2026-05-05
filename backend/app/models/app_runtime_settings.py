@@ -43,6 +43,24 @@ class AppRuntimeSettings(Base):
 
     company_zhipu_api_key = Column(Text, nullable=True)
 
+    jobs_last_test_status = Column(String(32), nullable=True)
+    jobs_last_tested_at = Column(DateTime, nullable=True)
+    jobs_last_test_error = Column(Text, nullable=True)
+    jobs_last_test_provider = Column(String(32), nullable=True)
+    jobs_last_test_model = Column(String(255), nullable=True)
+    jobs_last_test_latency_ms = Column(Integer, nullable=True)
+    jobs_last_test_fingerprint = Column(String(128), nullable=True)
+    jobs_last_successful_test_fingerprint = Column(String(128), nullable=True)
+
+    companies_last_test_status = Column(String(32), nullable=True)
+    companies_last_tested_at = Column(DateTime, nullable=True)
+    companies_last_test_error = Column(Text, nullable=True)
+    companies_last_test_provider = Column(String(32), nullable=True)
+    companies_last_test_model = Column(String(255), nullable=True)
+    companies_last_test_latency_ms = Column(Integer, nullable=True)
+    companies_last_test_fingerprint = Column(String(128), nullable=True)
+    companies_last_successful_test_fingerprint = Column(String(128), nullable=True)
+
     updated_at = Column(
         DateTime,
         default=datetime.utcnow,

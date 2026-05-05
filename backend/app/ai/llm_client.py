@@ -19,8 +19,11 @@ from typing import Optional, Dict, Any, Callable
 
 from app.services.ai_runtime_settings_service import (
     EffectiveAIRuntimeSettings,
+    AIRuntimeSettingsService,
+    ProfileRuntimeNotReadyError,
     get_effective_runtime_settings,
 )
+from app.database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +73,15 @@ class LLMUpstreamError(RuntimeError):
 
 class LLMCapabilityError(RuntimeError):
     """Raised when a caller requests an unsupported LLM capability."""
+
+
+class LLMProfileNotReadyError(RuntimeError):
+    """Raised when a runtime profile is not ready to serve requests."""
+
+    def __init__(self, scope: str, message: str, *, code: str):
+        super().__init__(message)
+        self.scope = scope
+        self.code = code
 
 
 def _preview_text(value: Optional[str], limit: int = 1000) -> str:
@@ -731,6 +743,32 @@ def _load_effective_runtime_settings(scope: str):
         return get_effective_runtime_settings()
 
 
+def _load_profile_metadata(scope: str):
+    db = SessionLocal()
+    try:
+        return AIRuntimeSettingsService(db).get_profile_runtime_metadata(scope)
+    except Exception as exc:
+        logger.debug("Profile metadata load failed for scope '%s': %s", scope, exc)
+        return type(
+            "ProfileMetadataFallback",
+            (),
+            {
+                "is_ready": False,
+                "requires_test": True,
+                "last_test_status": "untested",
+                "last_tested_at": None,
+                "last_test_error": str(exc),
+                "last_test_provider": None,
+                "last_test_model": None,
+                "last_test_latency_ms": None,
+                "last_test_fingerprint": None,
+                "last_successful_test_fingerprint": None,
+            },
+        )()
+    finally:
+        db.close()
+
+
 # Factory function
 _client_instances: Dict[str, LLMClient] = {}
 _provider_names: Dict[str, str] = {}
@@ -738,6 +776,13 @@ _configured_provider_names: Dict[str, str] = {}
 _active_models: Dict[str, Optional[str]] = {}
 _degraded_states: Dict[str, bool] = {}
 _degradation_reasons: Dict[str, Optional[str]] = {}
+_ready_states: Dict[str, bool] = {}
+_requires_test_states: Dict[str, bool] = {}
+_last_test_statuses: Dict[str, Optional[str]] = {}
+_last_tested_at: Dict[str, Optional[str]] = {}
+_last_test_errors: Dict[str, Optional[str]] = {}
+_last_test_fingerprints: Dict[str, Optional[str]] = {}
+_last_successful_test_fingerprints: Dict[str, Optional[str]] = {}
 
 
 def get_llm_client(scope: str = "jobs") -> LLMClient:
@@ -761,42 +806,69 @@ def get_llm_client(scope: str = "jobs") -> LLMClient:
         runtime_settings = _load_effective_runtime_settings(scope)
     except Exception as exc:
         reason = f"Runtime settings resolution failed: {exc}"
-        logger.error("%s for scope '%s'. Falling back to mock", reason, scope)
-        _client_instances[scope] = MockClient()
-        _provider_names[scope] = "mock"
         _configured_provider_names[scope] = "unknown"
+        _provider_names[scope] = ""
         _active_models[scope] = None
         _degraded_states[scope] = True
         _degradation_reasons[scope] = reason
-        logger.info("Initialized LLM provider 'mock' for scope '%s'", scope)
-        return _client_instances[scope]
+        raise LLMProfileNotReadyError(scope, reason, code="runtime_settings_resolution_failed") from exc
 
-    provider = runtime_settings.llm_provider.lower()
+    provider = (runtime_settings.llm_provider or "").lower()
     _configured_provider_names[scope] = provider
+    if not provider:
+        reason = "Profile is not configured"
+        _provider_names[scope] = ""
+        _active_models[scope] = None
+        _degraded_states[scope] = True
+        _degradation_reasons[scope] = reason
+        raise LLMProfileNotReadyError(scope, reason, code="profile_not_configured")
+
+    metadata = _load_profile_metadata(scope)
+    _ready_states[scope] = metadata.is_ready
+    _requires_test_states[scope] = metadata.requires_test
+    _last_test_statuses[scope] = metadata.last_test_status
+    _last_tested_at[scope] = metadata.last_tested_at
+    _last_test_errors[scope] = metadata.last_test_error
+    _last_test_fingerprints[scope] = metadata.last_test_fingerprint
+    _last_successful_test_fingerprints[scope] = metadata.last_successful_test_fingerprint
+
+    if metadata.requires_test or not metadata.is_ready:
+        reason = (
+            metadata.last_test_error
+            or (
+                "Profile is not configured"
+                if not provider
+                else "Profile requires a successful test before it can run"
+            )
+        )
+        _provider_names[scope] = ""
+        _active_models[scope] = None
+        _degraded_states[scope] = True
+        _degradation_reasons[scope] = reason
+        raise LLMProfileNotReadyError(
+            scope,
+            reason,
+            code="profile_requires_test" if provider else "profile_not_configured",
+        )
+
     spec = PROVIDER_REGISTRY.get(provider)
 
     if spec is None:
         reason = f"Unsupported LLM provider: {provider}"
-        logger.error("%s for scope '%s', falling back to mock", reason, scope)
-        _client_instances[scope] = MockClient()
-        _provider_names[scope] = "mock"
+        _provider_names[scope] = ""
         _active_models[scope] = None
         _degraded_states[scope] = True
         _degradation_reasons[scope] = reason
-        logger.info("Initialized LLM provider 'mock' for scope '%s'", scope)
-        return _client_instances[scope]
+        raise LLMProfileNotReadyError(scope, reason, code="unsupported_provider")
 
     missing_settings = _get_missing_settings(spec, runtime_settings)
     if missing_settings:
         reason = f"Provider '{spec.name}' missing required settings: {', '.join(missing_settings)}"
-        logger.error("%s for scope '%s'. Falling back to mock", reason, scope)
-        _client_instances[scope] = MockClient()
-        _provider_names[scope] = "mock"
+        _provider_names[scope] = provider
         _active_models[scope] = None
         _degraded_states[scope] = True
         _degradation_reasons[scope] = reason
-        logger.info("Initialized LLM provider 'mock' for scope '%s'", scope)
-        return _client_instances[scope]
+        raise LLMProfileNotReadyError(scope, reason, code="missing_required_settings")
 
     try:
         _client_instances[scope] = spec.builder(runtime_settings)
@@ -807,13 +879,11 @@ def get_llm_client(scope: str = "jobs") -> LLMClient:
         _log_provider_initialized(spec.name, _client_instances[scope])
     except Exception as exc:
         reason = f"Failed to initialize provider '{spec.name}': {exc}"
-        logger.error("%s for scope '%s'. Falling back to mock", reason, scope)
-        _client_instances[scope] = MockClient()
-        _provider_names[scope] = "mock"
+        _provider_names[scope] = provider
         _active_models[scope] = None
         _degraded_states[scope] = True
         _degradation_reasons[scope] = reason
-        logger.info("Initialized LLM provider 'mock' for scope '%s'", scope)
+        raise LLMProfileNotReadyError(scope, reason, code="provider_init_failed") from exc
 
     return _client_instances[scope]
 
@@ -833,27 +903,56 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
     configured_provider = _configured_provider_names.get(scope, "")
     if not configured_provider:
         try:
-            configured_provider = _load_effective_runtime_settings(scope).llm_provider.lower()
+            configured_provider = (_load_effective_runtime_settings(scope).llm_provider or "").lower()
         except Exception:
             configured_provider = ""
 
+    metadata = None
+    try:
+        metadata = _load_profile_metadata(scope)
+    except Exception:
+        metadata = None
+
+    if metadata is not None:
+        _ready_states[scope] = metadata.is_ready
+        _requires_test_states[scope] = metadata.requires_test
+        _last_test_statuses[scope] = metadata.last_test_status
+        _last_tested_at[scope] = metadata.last_tested_at
+        _last_test_errors[scope] = metadata.last_test_error
+        _last_test_fingerprints[scope] = metadata.last_test_fingerprint
+        _last_successful_test_fingerprints[scope] = metadata.last_successful_test_fingerprint
+
     client = _client_instances.get(scope)
     return {
-        "provider": _provider_names.get(scope, ""),
-        "configured_provider": configured_provider,
-        "active_provider": _provider_names.get(scope, ""),
+        "provider": _provider_names.get(scope, "") or configured_provider or None,
+        "configured_provider": configured_provider or None,
+        "active_provider": (
+            (_provider_names.get(scope, "") or configured_provider)
+            if (_ready_states.get(scope) and not _degraded_states.get(scope, False))
+            else None
+        ),
         "active_model": _active_models.get(scope),
         "model": _active_models.get(scope),
-        "is_degraded": _degraded_states.get(scope, False),
+        "is_degraded": _degraded_states.get(scope, False) or bool(_requires_test_states.get(scope)),
         "degradation_reason": _degradation_reasons.get(scope),
         "supports_web_search": bool(client.supports_web_search()) if client else False,
+        "requires_test": _requires_test_states.get(scope, False),
+        "is_ready": _ready_states.get(scope, False),
+        "last_test_status": _last_test_statuses.get(scope),
+        "last_tested_at": _last_tested_at.get(scope),
+        "last_test_error": _last_test_errors.get(scope),
+        "last_test_fingerprint": _last_test_fingerprints.get(scope),
+        "last_successful_test_fingerprint": _last_successful_test_fingerprints.get(scope),
     }
 
 
 def refresh_llm_status(scope: str = "jobs") -> Dict[str, Any]:
     """Force the runtime provider status to be recomputed from current settings."""
     reset_client(scope)
-    get_llm_client(scope)
+    try:
+        get_llm_client(scope)
+    except LLMProfileNotReadyError:
+        pass
     return get_llm_status(scope)
 
 
@@ -866,6 +965,13 @@ def reset_client(scope: Optional[str] = None):
         _active_models.clear()
         _degraded_states.clear()
         _degradation_reasons.clear()
+        _ready_states.clear()
+        _requires_test_states.clear()
+        _last_test_statuses.clear()
+        _last_tested_at.clear()
+        _last_test_errors.clear()
+        _last_test_fingerprints.clear()
+        _last_successful_test_fingerprints.clear()
         return
 
     _client_instances.pop(scope, None)
@@ -874,3 +980,10 @@ def reset_client(scope: Optional[str] = None):
     _active_models.pop(scope, None)
     _degraded_states.pop(scope, None)
     _degradation_reasons.pop(scope, None)
+    _ready_states.pop(scope, None)
+    _requires_test_states.pop(scope, None)
+    _last_test_statuses.pop(scope, None)
+    _last_tested_at.pop(scope, None)
+    _last_test_errors.pop(scope, None)
+    _last_test_fingerprints.pop(scope, None)
+    _last_successful_test_fingerprints.pop(scope, None)
