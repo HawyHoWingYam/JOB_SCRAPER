@@ -11,6 +11,7 @@ Unified extractor that requests a single JSON payload from the LLM containing:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from app.ai.llm_client import LLMUpstreamError, get_llm_client
@@ -53,8 +54,16 @@ __REVIEW_ONLY_TERMS__
 Suppressed broad technical terms from this context:
 __SUPPRESSED_REVIEW_TERMS__
 
+Role extraction mode:
+__ROLE_MODE__
+
+Additional role-specific guidance:
+__ROLE_MODE_GUIDANCE__
+
 Rules:
 - Extract only technical / hard skills (languages, frameworks, tools, platforms).
+- Aim for 3-20 technical skills when the posting clearly supports that many.
+- Never invent skills just to reach a minimum count; if fewer than 3 concrete skills are evidenced, return fewer.
 - Exclude soft skills.
 - Normalize common abbreviations (e.g., JS -> JavaScript, K8s -> Kubernetes).
 - Prefer `match_existing` only for concrete tools, platforms, frameworks, and technologies.
@@ -158,6 +167,15 @@ Respond with JSON only (no markdown, no extra keys):
 class JobInsightExtractor:
     """Unified extractor that returns classification, skills, summary, and experience."""
 
+    _DESCRIPTION_CONTEXT_LIMIT = 3200
+    _DESCRIPTION_PREFIX_CHARS = 1200
+    _DESCRIPTION_TAIL_CHARS = 600
+    _SECTION_LINE_BUDGET = 8
+    _SECTION_HEADING_PATTERN = re.compile(
+        r"\b(requirement|requirements|qualification|qualifications|skill|skills|tool|tools|technology|technologies|preferred|experience)\b",
+        re.IGNORECASE,
+    )
+
     _ALLOWED_EXPERIENCE_LEVELS = {
         "not_specified",
         "internship",
@@ -172,7 +190,7 @@ class JobInsightExtractor:
     }
 
     def __init__(self):
-        self.llm = get_llm_client()
+        self.llm = None
 
     def build_prompt(
         self,
@@ -208,8 +226,13 @@ class JobInsightExtractor:
             "__SUPPRESSED_REVIEW_TERMS__": self._format_candidates(
                 skill_taxonomy_candidates.get("suppressed_review_terms", [])
             ),
+            "__ROLE_MODE__": str(skill_taxonomy_candidates.get("role_mode") or "technical_heavy"),
+            "__ROLE_MODE_GUIDANCE__": str(
+                skill_taxonomy_candidates.get("role_mode_guidance")
+                or "No additional role-specific guidance."
+            ),
             "__TITLE__": title,
-            "__DESCRIPTION__": (description or "No description")[:2000],
+            "__DESCRIPTION__": self._build_description_context(description),
         }
 
         prompt = INSIGHT_PROMPT
@@ -217,6 +240,52 @@ class JobInsightExtractor:
             prompt = prompt.replace(key, str(value))
 
         return prompt
+
+    def _build_description_context(self, description: str) -> str:
+        text = str(description or "").strip()
+        if not text:
+            return "No description"
+        if len(text) <= self._DESCRIPTION_CONTEXT_LIMIT:
+            return text
+
+        segments: list[str] = []
+        seen: set[str] = set()
+
+        def add_segment(value: str) -> None:
+            cleaned = value.strip()
+            if not cleaned or cleaned in seen:
+                return
+            seen.add(cleaned)
+            segments.append(cleaned)
+
+        add_segment(text[: self._DESCRIPTION_PREFIX_CHARS])
+
+        lines = [line.rstrip() for line in text.splitlines()]
+        for index, line in enumerate(lines):
+            if not self._SECTION_HEADING_PATTERN.search(line):
+                continue
+
+            chunk = [line.strip()]
+            for candidate in lines[index + 1 : index + 1 + self._SECTION_LINE_BUDGET]:
+                stripped = candidate.strip()
+                if not stripped:
+                    break
+                if (
+                    chunk
+                    and stripped == stripped.upper()
+                    and len(stripped.split()) <= 6
+                    and self._SECTION_HEADING_PATTERN.search(stripped)
+                ):
+                    break
+                chunk.append(stripped)
+            add_segment("\n".join(chunk))
+
+        add_segment(text[-self._DESCRIPTION_TAIL_CHARS :])
+
+        context = "\n\n".join(segments)
+        if len(context) <= self._DESCRIPTION_CONTEXT_LIMIT:
+            return context
+        return context[: self._DESCRIPTION_CONTEXT_LIMIT].rstrip()
 
     async def extract(
         self,
@@ -244,7 +313,7 @@ class JobInsightExtractor:
 
         result: Dict[str, Any]
         try:
-            result = await self.llm.generate_json(prompt)
+            result = await self._get_llm().generate_json(prompt)
         except LLMUpstreamError:
             raise
         except Exception as exc:
@@ -271,6 +340,11 @@ class JobInsightExtractor:
             "experience": experience,
             "confidence": self._coerce_confidence(result.get("confidence")),
         }
+
+    def _get_llm(self):
+        if self.llm is None:
+            self.llm = get_llm_client()
+        return self.llm
 
     def _format_taxonomy_context(self, taxonomy_candidates: Dict[str, Any]) -> str:
         if not taxonomy_candidates:
@@ -381,7 +455,7 @@ class JobInsightExtractor:
             seen.add(key)
             normalized.append(item)
 
-        return normalized[:30]
+        return normalized[:20]
 
     def _normalize_experience(self, value: Any) -> Dict[str, Any]:
         if not isinstance(value, dict):

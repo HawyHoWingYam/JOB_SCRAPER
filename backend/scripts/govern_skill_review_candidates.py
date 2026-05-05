@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from app.database import SessionLocal
 from app.models import Job, JobSkillMention, SkillReviewCandidate
 from app.repositories.job_skill_repository import JobSkillRepository
+from app.services.skill_recommendation_service import SkillRecommendationService
 from app.services.skill_normalizer import SkillNormalizer
 from scripts.govern_skill_history import (
     _ensure_target_skill,
@@ -48,6 +49,8 @@ def audit_review_candidates(
         )
         .all()
     )
+    recommendation_service = SkillRecommendationService(db)
+    cluster_ids = recommendation_service.cluster_candidates(candidates)
 
     entries = []
     summary = {"merge": 0, "generic": 0, "review": 0}
@@ -63,6 +66,8 @@ def audit_review_candidates(
                 "normalized_name": candidate.normalized_name,
                 "occurrence_count": int(candidate.occurrence_count or 0),
             },
+            "cluster_id": cluster_ids.get(candidate.normalized_name, normalize_lookup_key(candidate.normalized_name or candidate.raw_name)),
+            "recommendations": recommendation_service.recommend_for_candidate(candidate),
         }
         if action == "merge":
             entry["target"] = dict(curation.get("target") or {})

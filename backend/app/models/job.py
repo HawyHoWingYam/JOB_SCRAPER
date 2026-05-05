@@ -101,6 +101,37 @@ class Job(Base):
         return self.skills_list
 
     @property
+    def provisional_skills_list(self) -> List[str]:
+        """Return deduped unresolved technical terms for secondary display."""
+        names: list[str] = []
+        seen: set[str] = set()
+
+        mentions = sorted(
+            self.job_skill_mentions,
+            key=lambda mention: (
+                mention.created_at or datetime.min,
+                mention.raw_name or "",
+                str(mention.id),
+            ),
+        )
+        for mention in mentions:
+            if mention.resolution != "review_candidate":
+                continue
+
+            display_name = str(mention.raw_name or mention.normalized_name or "").strip()
+            key = str(mention.normalized_name or display_name).strip().lower()
+            if not display_name or not key or key in seen:
+                continue
+            seen.add(key)
+            names.append(display_name)
+
+        return names
+
+    @property
+    def provisional_skills(self) -> List[str]:
+        return self.provisional_skills_list
+
+    @property
     def company_name(self) -> Optional[str]:
         """Convenience field for job detail responses."""
         return self.company.name if self.company else None

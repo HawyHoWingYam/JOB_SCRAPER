@@ -339,6 +339,102 @@ def test_skill_normalizer_matches_canonical_alias_on_non_polluted_canonical_skil
         db.close()
 
 
+@pytest.mark.parametrize(
+    ("skill_name", "raw_input"),
+    [
+        ("Google Workspace", "Google Suite"),
+        ("ManageBac", "Manage Bac"),
+        ("SSIS", "SQL Server Integration Services"),
+        ("Zoom", "Zoom Meetings"),
+    ],
+)
+def test_skill_normalizer_matches_high_value_promoted_skill_aliases(skill_name, raw_input):
+    db = _build_sqlite_session()
+    try:
+        category = SkillCategory(
+            id=uuid.uuid4(),
+            name="Platforms",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        technology = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=category.id,
+            name="Collaboration",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        skill = Skill(
+            id=uuid.uuid4(),
+            technology_id=technology.id,
+            name=skill_name,
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        db.add_all([category, technology, skill])
+        db.commit()
+
+        decision = SkillNormalizer(db).resolve_extracted_skill(raw_input)
+
+        assert decision["action"] == "match_existing"
+        assert decision["skill_id"] == skill.id
+        assert decision["skill_name"] == skill_name
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    ("skill_name", "technology_name", "raw_input"),
+    [
+        ("Jira", "Collaboration Tools", "Jira"),
+        ("Product Management", "Product Management", "Product Management"),
+        ("Help Desk Support", "Service & Support", "Help Desk Support"),
+    ],
+)
+def test_skill_normalizer_role_mode_product_ba_support_allows_canonical_match_for_domain_skills(
+    skill_name,
+    technology_name,
+    raw_input,
+):
+    db = _build_sqlite_session()
+    try:
+        category = SkillCategory(
+            id=uuid.uuid4(),
+            name="Product & Delivery" if technology_name != "Service & Support" else "Support & Operations",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        technology = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=category.id,
+            name=technology_name,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        skill = Skill(
+            id=uuid.uuid4(),
+            technology_id=technology.id,
+            name=skill_name,
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        db.add_all([category, technology, skill])
+        db.commit()
+
+        decision = SkillNormalizer(db).resolve_extracted_skill(
+            {"name": raw_input, "kind": "technical", "resolution": "unresolved"},
+            role_mode="product_ba_support",
+        )
+
+        assert decision["action"] == "match_existing"
+        assert decision["skill_id"] == skill.id
+        assert decision["skill_name"] == skill_name
+    finally:
+        db.close()
+
+
 def test_skill_normalizer_prefers_legitimate_duplicate_over_polluted_other_general_skill():
     db = _build_sqlite_session()
     try:
@@ -787,7 +883,7 @@ async def test_ai_enrichment_service_drops_suppressed_review_terms_without_creat
                     "suppressed_review_terms": ["it systems administration"],
                 }
 
-            def resolve_extracted_skill(self, payload):
+            def resolve_extracted_skill(self, payload, **_kwargs):
                 name = payload["name"]
                 if name == "React":
                     return {
@@ -951,11 +1047,13 @@ async def test_ai_enrichment_service_passes_description_and_source_context_to_sk
                 description="",
                 source_subclassification_name=None,
                 limit=10,
+                role_mode=None,
             ):
                 captured["title"] = title
                 captured["description"] = description
                 captured["source_subclassification_name"] = source_subclassification_name
                 captured["limit"] = limit
+                captured["role_mode"] = role_mode
                 return {
                     "category_hint": "Frontend",
                     "technology_hint": "JavaScript",
@@ -965,7 +1063,7 @@ async def test_ai_enrichment_service_passes_description_and_source_context_to_sk
                     "review_only_terms": [],
                 }
 
-            def resolve_extracted_skill(self, _payload):
+            def resolve_extracted_skill(self, _payload, **_kwargs):
                 return {
                     "action": "match_existing",
                     "skill_id": self._skill_id,
@@ -1013,6 +1111,7 @@ async def test_ai_enrichment_service_passes_description_and_source_context_to_sk
             "description": "Administer Windows Server and Linux production infrastructure.",
             "source_subclassification_name": "Networks & Systems Administration",
             "limit": 10,
+            "role_mode": "technical_heavy",
         }
     finally:
         db.close()

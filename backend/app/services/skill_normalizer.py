@@ -21,6 +21,30 @@ def _data_path(filename: str) -> Path:
 
 
 class SkillNormalizer:
+    _ROLE_MODE_CANONICAL_OVERRIDES = {
+        "product_ba_support": {
+            "jira",
+            "confluence",
+            "product management",
+            "business analysis",
+            "requirements gathering",
+            "requirements analysis",
+            "functional specifications",
+            "agile",
+            "scrum",
+            "stakeholder management",
+            "user acceptance testing",
+            "kpi tracking",
+            "user journey mapping",
+            "roadmapping",
+            "market analysis",
+            "help desk support",
+            "application support",
+            "incident management",
+            "troubleshooting",
+        }
+    }
+
     def __init__(self, db: Session):
         self.db = db
         self._rules = self._load_rules()
@@ -152,6 +176,18 @@ class SkillNormalizer:
             "suppressed_review_terms_lookup", set()
         )
 
+    def _role_mode_allows_canonical_override(
+        self,
+        name: str,
+        role_mode: Optional[str],
+    ) -> bool:
+        if not role_mode:
+            return False
+        return self._normalize_lookup_key(name) in self._ROLE_MODE_CANONICAL_OVERRIDES.get(
+            role_mode,
+            set(),
+        )
+
     def _coerce_payload(self, extracted_skill: Any) -> Dict[str, Any]:
         if isinstance(extracted_skill, dict):
             name = (
@@ -217,7 +253,12 @@ class SkillNormalizer:
             and self._normalize_lookup_key(technology.name) == "general"
         )
 
-    def resolve_extracted_skill(self, extracted_skill: Any) -> Dict[str, Any]:
+    def resolve_extracted_skill(
+        self,
+        extracted_skill: Any,
+        *,
+        role_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Convert a raw extracted skill into one governed action.
 
@@ -233,9 +274,13 @@ class SkillNormalizer:
             return {"action": "reject", "reason": "empty_name"}
 
         canonical_name = self._canonicalize_name(raw_name)
+        allow_canonical_override = self._role_mode_allows_canonical_override(
+            canonical_name,
+            role_mode,
+        )
         kind = str(payload.get("kind") or "").strip().lower()
         generic_label = self.canonicalize_generic_tag(canonical_name)
-        if kind == "generic" or generic_label is not None:
+        if (kind == "generic" or generic_label is not None) and not allow_canonical_override:
             generic_tag = generic_label or canonical_name
             return {
                 "action": "generic_tag",
@@ -243,7 +288,7 @@ class SkillNormalizer:
                 "generic_tag_key": self.normalize_generic_tag_key(generic_tag),
             }
 
-        if self._is_suppressed_review_term(canonical_name):
+        if self._is_suppressed_review_term(canonical_name) and not allow_canonical_override:
             return {
                 "action": "reject",
                 "reason": "suppressed_review_term",
@@ -251,12 +296,13 @@ class SkillNormalizer:
                 "normalized_name": canonical_name,
             }
 
-        if self._is_review_only_term(canonical_name):
+        if self._is_review_only_term(canonical_name) and not allow_canonical_override:
             suggested_category = payload.get("category")
             suggested_technology = payload.get("technology")
             if not suggested_category or not suggested_technology:
                 inferred_category, inferred_technology = self.infer_taxonomy_hints(
-                    canonical_name
+                    canonical_name,
+                    role_mode=role_mode,
                 )
                 suggested_category = suggested_category or inferred_category
                 suggested_technology = suggested_technology or inferred_technology
@@ -531,6 +577,7 @@ class SkillNormalizer:
         *,
         description: str = "",
         source_subclassification_name: Optional[str] = None,
+        role_mode: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """Infer the best available category/technology hint for a raw skill name."""
         canonical_name = self._canonicalize_name(name)
@@ -556,6 +603,15 @@ class SkillNormalizer:
                 contextual_skill.technology.name,
             )
 
+        role_mode_hint = self._infer_role_mode_hierarchy(
+            role_mode=role_mode,
+            title=name,
+            description=description,
+            source_subclassification_name=source_subclassification_name,
+        )
+        if role_mode_hint is not None:
+            return role_mode_hint
+
         hint_source = " ".join(
             value for value in [canonical_name, description, source_subclassification_name or ""] if value
         )
@@ -565,6 +621,28 @@ class SkillNormalizer:
 
         return (category_hint, technology_hint)
 
+    def _infer_role_mode_hierarchy(
+        self,
+        *,
+        role_mode: Optional[str],
+        title: str,
+        description: str = "",
+        source_subclassification_name: Optional[str] = None,
+    ) -> Optional[Tuple[str, str]]:
+        if role_mode != "product_ba_support":
+            return None
+
+        haystack = " ".join(
+            [str(title or ""), str(description or ""), str(source_subclassification_name or "")]
+        ).lower()
+        if any(keyword in haystack for keyword in ("support", "service desk", "help desk", "incident")):
+            return ("Support & Operations", "Service & Support")
+        if any(keyword in haystack for keyword in ("analyst", "analysis", "requirements")):
+            return ("Product & Delivery", "Business Analysis")
+        if any(keyword in haystack for keyword in ("jira", "confluence")):
+            return ("Product & Delivery", "Collaboration Tools")
+        return ("Product & Delivery", "Product Management")
+
     def get_taxonomy_candidate_slice(
         self,
         title: str,
@@ -572,13 +650,24 @@ class SkillNormalizer:
         description: str = "",
         source_subclassification_name: Optional[str] = None,
         limit: int = 10,
+        role_mode: Optional[str] = None,
     ) -> dict:
         """Return a focused taxonomy slice to guide AI skill extraction decisions."""
-        category_hint, technology_hint = self.infer_taxonomy_hints(
-            title,
+        role_mode_hint = self._infer_role_mode_hierarchy(
+            role_mode=role_mode,
+            title=title,
             description=description,
             source_subclassification_name=source_subclassification_name,
         )
+        if role_mode_hint is not None:
+            category_hint, technology_hint = role_mode_hint
+        else:
+            category_hint, technology_hint = self.infer_taxonomy_hints(
+                title,
+                description=description,
+                source_subclassification_name=source_subclassification_name,
+                role_mode=role_mode,
+            )
         has_specific_hint = not (
             category_hint is None
             or technology_hint is None
@@ -638,6 +727,12 @@ class SkillNormalizer:
                 description,
                 source_subclassification_name,
                 limit=limit,
+            ),
+            "role_mode": role_mode or "technical_heavy",
+            "role_mode_guidance": (
+                "For product / BA / support roles, include concrete tools, delivery practices, and structured analysis skills when explicitly named or strongly evidenced."
+                if role_mode == "product_ba_support"
+                else "Focus on hard technical skills only."
             ),
         }
 

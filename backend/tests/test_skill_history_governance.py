@@ -1206,6 +1206,73 @@ def test_apply_review_candidate_governance_backfills_suggestions_from_job_contex
         db.close()
 
 
+def test_audit_review_candidates_includes_recommendations_and_cluster_ids(tmp_path):
+    db = _build_sqlite_session()
+    try:
+        company = _create_company(db)
+        _, collaboration = _create_skill_hierarchy(db, "Platforms", "Collaboration")
+        _create_skill(
+            db,
+            collaboration.id,
+            "Google Workspace",
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        job1 = _create_job(db, company.id, "School IT Support")
+        job2 = _create_job(db, company.id, "Workspace Administrator")
+        candidate1 = _create_review_candidate(
+            db,
+            "Google Suite",
+            "google suite",
+            occurrence_count=2,
+            first_seen_job_id=job1.id,
+            last_seen_job_id=job2.id,
+        )
+        candidate2 = _create_review_candidate(
+            db,
+            "Google Workspace Admin",
+            "google workspace admin",
+            occurrence_count=1,
+            first_seen_job_id=job2.id,
+            last_seen_job_id=job2.id,
+        )
+        _create_review_candidate_mention(
+            db,
+            job_id=job1.id,
+            raw_name="Google Suite",
+            normalized_name="google suite",
+            review_candidate_id=candidate1.id,
+        )
+        _create_review_candidate_mention(
+            db,
+            job_id=job2.id,
+            raw_name="Google Workspace Admin",
+            normalized_name="google workspace admin",
+            review_candidate_id=candidate2.id,
+        )
+        db.commit()
+
+        curations_path = _write_curations(tmp_path, {}, minimum_distinct_jobs=1)
+
+        report = govern_skill_review_candidates.audit_review_candidates(
+            db,
+            min_occurrence_count=1,
+            curation_path=curations_path,
+        )
+
+        entries = {
+            entry["review_candidate"]["normalized_name"]: entry
+            for entry in report["entries"]
+        }
+
+        assert entries["google suite"]["recommendations"][0]["skill"] == "Google Workspace"
+        assert entries["google workspace admin"]["recommendations"][0]["skill"] == "Google Workspace"
+        assert entries["google suite"]["cluster_id"] == entries["google workspace admin"]["cluster_id"]
+    finally:
+        db.close()
+
+
 def test_audit_skill_history_only_curated_skips_default_review_entries(tmp_path):
     db = _build_sqlite_session()
     try:

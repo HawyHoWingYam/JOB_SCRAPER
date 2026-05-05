@@ -185,6 +185,7 @@ function JobDetailModal({ jobId, apiUrl, onClose }) {
   const originalJobUrl = job ? buildOriginalJobUrl(job.job_id) : null;
   const aiStateMessage = job ? getAiStateMessage(job) : null;
   const expiryLabel = job ? getExpiryLabel(job) : null;
+  const hasProvisionalSkills = Boolean(job?.provisional_skills?.length);
 
   return (
     <div className="modal-overlay" onClick={handleOverlayClick}>
@@ -253,11 +254,20 @@ function JobDetailModal({ jobId, apiUrl, onClose }) {
                 ) : (
                   <p className="modal-empty">
                     {job.ai_enriched_at
-                      ? 'No technical skills extracted from this posting'
+                      ? (hasProvisionalSkills
+                        ? 'No governed skills matched yet'
+                        : 'No technical skills extracted from this posting')
                       : getAwaitingAiCopy()}
                   </p>
                 )}
               </div>
+
+              {hasProvisionalSkills && (
+                <div className="modal-subsection">
+                  <h4>Provisional Skills</h4>
+                  <SkillTags skills={job.provisional_skills} />
+                </div>
+              )}
 
               <div className="modal-subsection">
                 <h4>AI Summary</h4>

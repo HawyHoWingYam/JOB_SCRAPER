@@ -21,6 +21,7 @@ from app.database import SessionLocal
 from app.repositories.job_skill_mention_repository import JobSkillMentionRepository
 from app.repositories.job_skill_repository import JobSkillRepository
 from app.services.job_category_normalizer import JobCategoryNormalizer
+from app.services.job_role_mode import resolve_job_role_mode
 from app.services.skill_normalizer import SkillNormalizer
 from app.services.taxonomy_visibility_service import get_taxonomy_visibility_service
 from app.utils.time import utc_now
@@ -44,6 +45,11 @@ class AIEnrichmentService:
         try:
             skill_normalizer = SkillNormalizer(db)
             job_category_normalizer = JobCategoryNormalizer(db)
+            role_mode = resolve_job_role_mode(
+                title=job.title,
+                source_subclassification_name=job.source_subclassification_name or "",
+                source_classification_name=job.source_classification_name or "",
+            )
             category_candidates = job_category_normalizer.get_taxonomy_candidate_slice(
                 source_classification_id=job.source_classification_id,
                 source_classification_name=job.source_classification_name,
@@ -59,6 +65,7 @@ class AIEnrichmentService:
                 job.title,
                 description=job.description or "",
                 source_subclassification_name=job.source_subclassification_name,
+                role_mode=role_mode,
             )
             insight = await self.insight_extractor.extract(
                 title=job.title,
@@ -124,7 +131,10 @@ class AIEnrichmentService:
             current_matched_skill_ids = set()
 
             for extracted_skill in extracted_skills:
-                decision = skill_normalizer.resolve_extracted_skill(extracted_skill)
+                decision = skill_normalizer.resolve_extracted_skill(
+                    extracted_skill,
+                    role_mode=role_mode,
+                )
                 action = decision.get("action")
                 raw_name = ""
                 if isinstance(extracted_skill, dict):

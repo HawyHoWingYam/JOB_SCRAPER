@@ -232,6 +232,21 @@ def _create_match_existing_mention(db, *, job_id, raw_name, skill_id):
     return mention
 
 
+def _create_review_candidate_mention(db, *, job_id, raw_name):
+    mention = JobSkillMention(
+        id=uuid.uuid4(),
+        job_id=job_id,
+        raw_name=raw_name,
+        normalized_name=raw_name.lower(),
+        resolution="review_candidate",
+        source="ai",
+        confidence=0.8,
+    )
+    db.add(mention)
+    db.flush()
+    return mention
+
+
 def test_search_response_returns_canonical_job_taxonomy_and_hides_ai_category():
     db = _build_sqlite_session()
     try:
@@ -362,6 +377,44 @@ def test_job_detail_returns_only_governed_match_existing_skills():
         payload = JobDetailSchema.model_validate(result).model_dump(mode="json")
 
         assert payload["skills"] == ["Python"]
+    finally:
+        db.close()
+
+
+def test_job_detail_returns_provisional_skills_from_review_candidates_only():
+    db = _build_sqlite_session()
+    try:
+        company = _seed_company(db)
+        _, _, backend = _seed_taxonomy(db)
+        job = _seed_job(
+            db,
+            company_id=company.id,
+            job_id="job-provisional-skills",
+            title="School IT Support",
+            subcategory_id=backend.id,
+        )
+
+        _create_review_candidate_mention(db, job_id=job.id, raw_name="Google Suite")
+        _create_review_candidate_mention(db, job_id=job.id, raw_name="Zoom")
+        db.add(
+            JobSkillMention(
+                id=uuid.uuid4(),
+                job_id=job.id,
+                raw_name="Project Management",
+                normalized_name="project management",
+                resolution="generic_tag",
+                generic_tag="Project Management",
+                source="ai",
+                confidence=0.8,
+            )
+        )
+        db.commit()
+
+        result = asyncio.run(jobs_api.get_job(job.id, db=db))
+        payload = JobDetailSchema.model_validate(result).model_dump(mode="json")
+
+        assert payload["skills"] == []
+        assert payload["provisional_skills"] == ["Google Suite", "Zoom"]
     finally:
         db.close()
 

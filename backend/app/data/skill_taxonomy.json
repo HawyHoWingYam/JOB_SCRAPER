@@ -116,13 +116,97 @@
           "skills": [
             {"name": "Business Intelligence", "aliases": ["business intelligence", "bi"]},
             {"name": "Power BI", "aliases": ["powerbi", "power bi"]},
-            {"name": "Tableau", "aliases": ["tableau"]}
+            {"name": "Tableau", "aliases": ["tableau"]},
+            {"name": "SSIS", "aliases": ["ssis", "sql server integration services"]},
+            {"name": "SSRS", "aliases": ["ssrs", "sql server reporting services"]},
+            {"name": "SSAS", "aliases": ["ssas", "sql server analysis services"]},
+            {"name": "DAX", "aliases": ["dax"]},
+            {"name": "Excel Power Query", "aliases": ["excel power query", "power query"]}
           ]
         },
         {
           "name": "Machine Learning",
           "skills": [
-            {"name": "Machine Learning", "aliases": ["ml", "machine learning"]}
+            {"name": "Machine Learning", "aliases": ["ml", "machine learning"]},
+            {"name": "Jupyter Notebook", "aliases": ["jupyter notebook", "jupyter notebooks"]}
+          ]
+        },
+        {
+          "name": "Graph Databases",
+          "skills": [
+            {"name": "Neo4j", "aliases": ["neo4j", "neo 4j"]}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Platforms",
+      "technologies": [
+        {
+          "name": "Collaboration",
+          "skills": [
+            {"name": "Google Workspace", "aliases": ["google workspace", "google suite"]},
+            {"name": "Zoom", "aliases": ["zoom", "zoom meetings"]}
+          ]
+        },
+        {
+          "name": "Education Platforms",
+          "skills": [
+            {"name": "ManageBac", "aliases": ["managebac", "manage bac"]}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Product & Delivery",
+      "technologies": [
+        {
+          "name": "Product Management",
+          "skills": [
+            {"name": "Product Management", "aliases": ["product management"]},
+            {"name": "Roadmapping", "aliases": ["roadmapping", "roadmap"]},
+            {"name": "User Journey Mapping", "aliases": ["user journey mapping"]},
+            {"name": "Market Analysis", "aliases": ["market analysis"]},
+            {"name": "KPI Tracking", "aliases": ["kpi tracking", "kpi", "kpis"]}
+          ]
+        },
+        {
+          "name": "Business Analysis",
+          "skills": [
+            {"name": "Business Analysis", "aliases": ["business analysis"]},
+            {"name": "Requirements Gathering", "aliases": ["requirements gathering"]},
+            {"name": "Requirements Analysis", "aliases": ["requirements analysis"]},
+            {"name": "Functional Specifications", "aliases": ["functional specifications", "functional spec", "functional specs"]}
+          ]
+        },
+        {
+          "name": "Ways of Working",
+          "skills": [
+            {"name": "Agile", "aliases": ["agile"]},
+            {"name": "Scrum", "aliases": ["scrum"]},
+            {"name": "Stakeholder Management", "aliases": ["stakeholder management"]},
+            {"name": "User Acceptance Testing", "aliases": ["uat", "user acceptance testing"]}
+          ]
+        },
+        {
+          "name": "Collaboration Tools",
+          "skills": [
+            {"name": "Jira", "aliases": ["jira"]},
+            {"name": "Confluence", "aliases": ["confluence"]}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Support & Operations",
+      "technologies": [
+        {
+          "name": "Service & Support",
+          "skills": [
+            {"name": "Help Desk Support", "aliases": ["help desk support", "service desk", "helpdesk"]},
+            {"name": "Application Support", "aliases": ["application support", "app support"]},
+            {"name": "Incident Management", "aliases": ["incident management"]},
+            {"name": "Troubleshooting", "aliases": ["troubleshooting"]}
           ]
         }
       ]

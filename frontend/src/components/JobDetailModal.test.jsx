@@ -22,6 +22,7 @@ function createJobPayload(overrides = {}) {
     salary_range: 'HK$40k - HK$60k',
     employment_type: 'Full-time',
     skills: ['Python', 'FastAPI'],
+    provisional_skills: [],
     ai_summary: 'Builds internal platform services and backend APIs.',
     job_taxonomy: {
       path: 'Information & Communication Technology / Software Development / Backend Development',
@@ -96,6 +97,7 @@ describe('JobDetailModal', () => {
     renderModalWithPayload(
       createJobPayload({
         skills: [],
+        provisional_skills: [],
         ai_summary: null,
         job_taxonomy: null,
         experience_level: 'not_specified',
@@ -108,6 +110,21 @@ describe('JobDetailModal', () => {
     expect(screen.getByText('No AI summary extracted from this posting')).toBeInTheDocument();
     expect(screen.getByText('No governed job taxonomy assigned')).toBeInTheDocument();
     expect(screen.getByText('No explicit experience requirement found in the posting')).toBeInTheDocument();
+  });
+
+  it('renders provisional skills separately when governed skills are unavailable', async () => {
+    renderModalWithPayload(
+      createJobPayload({
+        skills: [],
+        provisional_skills: ['Google Suite', 'Zoom'],
+      }),
+    );
+
+    expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /provisional skills/i })).toBeInTheDocument();
+    expect(screen.getByText('Google Suite')).toBeInTheDocument();
+    expect(screen.getByText('Zoom')).toBeInTheDocument();
+    expect(screen.getByText('No governed skills matched yet')).toBeInTheDocument();
   });
 
   it('prefers a normalized numeric experience label over free-text summary text', async () => {
