@@ -34,7 +34,8 @@ describe('Dashboard', () => {
 
       if (url.includes('/api/v1/ai/overview')) {
         return mockJsonResponse({
-          failed_items: 7,
+          failed_jobs: 7,
+          failed_items: 11820,
         });
       }
 
@@ -62,7 +63,8 @@ describe('Dashboard', () => {
 
     expect(await screen.findByText('396')).toBeInTheDocument();
     expect(screen.getByText(/pending enrichment/i)).toBeInTheDocument();
-    expect(screen.getByText(/failed items/i)).toBeInTheDocument();
+    expect(screen.getByText(/failed jobs/i)).toBeInTheDocument();
+    expect(screen.queryByText('11,820')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /run pending/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /retry failed/i })).not.toBeInTheDocument();
 
@@ -107,6 +109,6 @@ describe('Dashboard', () => {
 
     expect(await screen.findByText('396')).toBeInTheDocument();
     expect(screen.getByText(/pending enrichment/i)).toBeInTheDocument();
-    expect(screen.getByText(/failed items unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/failed jobs unavailable/i)).toBeInTheDocument();
   });
 });

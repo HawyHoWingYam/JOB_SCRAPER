@@ -65,7 +65,8 @@ describe('AIEnrichmentPage', () => {
           enriched_jobs: 4,
           pending_jobs: 396,
           active_runs: 2,
-          failed_items: 7,
+          failed_jobs: 7,
+          failed_items: 11820,
           last_completed_run: { id: 'run-complete-7' },
         });
       }
@@ -192,7 +193,8 @@ describe('AIEnrichmentPage', () => {
     expect(await screen.findByText('396')).toBeInTheDocument();
     expect(screen.getByText(/pending jobs/i)).toBeInTheDocument();
     expect(screen.getByText(/active runs/i, { selector: '.stat-label' })).toBeInTheDocument();
-    expect(screen.getAllByText(/failed items/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/failed jobs/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText('11,820')).not.toBeInTheDocument();
   });
 
   it('loads queue data inside StrictMode without getting stuck in the loading state', async () => {
@@ -1287,7 +1289,7 @@ describe('AIEnrichmentPage', () => {
     expect(pendingJobsCard).not.toBeNull();
     expect(within(pendingJobsCard).getByText(/^unavailable$/i)).toBeInTheDocument();
 
-    const failedItemsLabel = screen.getByText(/failed items/i, { selector: '.stat-label' });
+    const failedItemsLabel = screen.getByText(/failed jobs/i, { selector: '.stat-label' });
     const failedItemsCard = failedItemsLabel.closest('article');
     expect(failedItemsCard).not.toBeNull();
     expect(within(failedItemsCard).getByText(/^unavailable$/i)).toBeInTheDocument();

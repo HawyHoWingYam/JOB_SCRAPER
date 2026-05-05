@@ -436,6 +436,7 @@ class EnrichmentRunService:
             .filter(EnrichmentRunItem.status == "failed")
             .count()
         )
+        failed_jobs = self._count_current_failed_jobs()
         last_completed_run = (
             self.db.query(EnrichmentRun)
             .filter(
@@ -454,9 +455,40 @@ class EnrichmentRunService:
             "pending_jobs": total_jobs - enriched_jobs,
             "running_runs": running_runs,
             "active_runs": active_runs,
+            "failed_jobs": failed_jobs,
             "failed_items": failed_items,
             "last_completed_run": last_completed_run,
         }
+
+    def _count_current_failed_jobs(self) -> int:
+        latest_item_per_job = (
+            self.db.query(
+                EnrichmentRunItem.job_id.label("job_id"),
+                EnrichmentRunItem.status.label("status"),
+                func.row_number().over(
+                    partition_by=EnrichmentRunItem.job_id,
+                    order_by=(
+                        EnrichmentRunItem.created_at.desc(),
+                        EnrichmentRunItem.id.desc(),
+                    ),
+                ).label("row_number"),
+            )
+            .subquery()
+        )
+
+        return int(
+            self.db.query(func.count())
+            .select_from(latest_item_per_job)
+            .join(Job, Job.id == latest_item_per_job.c.job_id)
+            .filter(
+                latest_item_per_job.c.row_number == 1,
+                latest_item_per_job.c.status == "failed",
+                Job.ai_enriched_at.is_(None),
+                Job.is_deleted == False,
+            )
+            .scalar()
+            or 0
+        )
 
     def _compute_in_progress_items(self, run: EnrichmentRun) -> int:
         if run.status not in ACTIVE_RUN_STATUSES:

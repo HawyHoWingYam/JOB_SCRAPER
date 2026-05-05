@@ -178,6 +178,7 @@ async def get_ai_overview(db: Session = Depends(get_db)):
         "pending_jobs": overview["pending_jobs"],
         "running_runs": overview["running_runs"],
         "active_runs": overview["active_runs"],
+        "failed_jobs": overview["failed_jobs"],
         "failed_items": overview["failed_items"],
         "last_completed_run": (
             _serialize_run(overview["last_completed_run"], db)
