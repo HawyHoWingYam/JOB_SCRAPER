@@ -349,6 +349,136 @@ def test_category_stats_only_group_jobs_with_canonical_taxonomy():
         db.close()
 
 
+def test_dashboard_category_stats_separates_fallback_from_specific_categories():
+    db = _build_sqlite_session()
+    try:
+        company = _seed_company(db)
+        domain, category, backend = _seed_taxonomy(db)
+
+        _seed_job(
+            db,
+            company_id=company.id,
+            job_id="job-backend",
+            title="Backend Engineer",
+            subcategory_id=backend.id,
+        )
+
+        other_category = JobCategory(
+            id=uuid.uuid4(),
+            domain_id=domain.id,
+            name="Infrastructure & Support",
+        )
+        other_subcategory = JobSubcategory(
+            id=uuid.uuid4(),
+            category_id=other_category.id,
+            name="Systems Administration",
+        )
+        general_category = JobCategory(
+            id=uuid.uuid4(),
+            domain_id=domain.id,
+            name="General",
+        )
+        general_subcategory = JobSubcategory(
+            id=uuid.uuid4(),
+            category_id=general_category.id,
+            name="General",
+        )
+        db.add_all([other_category, other_subcategory, general_category, general_subcategory])
+        db.commit()
+
+        _seed_job(
+            db,
+            company_id=company.id,
+            job_id="job-systems",
+            title="Systems Engineer",
+            subcategory_id=other_subcategory.id,
+        )
+        _seed_job(
+            db,
+            company_id=company.id,
+            job_id="job-general",
+            title="Ambiguous Listing",
+            subcategory_id=general_subcategory.id,
+        )
+        db.add(
+            Job(
+                id=uuid.uuid4(),
+                job_id="job-ctgoodjobs-general",
+                company_id=company.id,
+                title="CTGoodJobs General",
+                source_site="ctgoodjobs",
+                source_subclassification_name=None,
+                subcategory_id=general_subcategory.id,
+                is_deleted=False,
+            )
+        )
+        db.add(
+            Job(
+                id=uuid.uuid4(),
+                job_id="job-jobsdb-other",
+                company_id=company.id,
+                title="JobsDB Other",
+                source_site="jobsdb",
+                source_subclassification_name="Other",
+                subcategory_id=general_subcategory.id,
+                is_deleted=False,
+            )
+        )
+        db.commit()
+
+        payload = asyncio.run(stats_api.get_dashboard_category_stats(db=db))
+
+        assert payload["categorized_total"] == 5
+        assert payload["specific_total"] == 2
+        assert payload["fallback_total"] == 3
+        assert payload["top_specific_categories"] == [
+            {
+                "path": CANONICAL_PATH,
+                "label": "Backend Development",
+                "count": 1,
+                "share_of_specific": 50,
+            },
+            {
+                "path": "Information & Communication Technology / Infrastructure & Support / Systems Administration",
+                "label": "Systems Administration",
+                "count": 1,
+                "share_of_specific": 50,
+            },
+        ]
+        assert payload["fallback_buckets"] == [
+            {
+                "path": "Information & Communication Technology / General / General",
+                "label": "General / General",
+                "count": 3,
+                "share_of_categorized": 60,
+                "source_breakdown": [
+                    {
+                        "source_site": "ctgoodjobs",
+                        "source_subclassification_name": None,
+                        "count": 1,
+                    },
+                    {
+                        "source_site": "jobsdb",
+                        "source_subclassification_name": "Other",
+                        "count": 1,
+                    },
+                    {
+                        "source_site": "jobsdb",
+                        "source_subclassification_name": None,
+                        "count": 1,
+                    },
+                ],
+            }
+        ]
+        assert payload["other_specific_categories"] == {
+            "count": 0,
+            "bucket_count": 0,
+            "share_of_specific": 0,
+        }
+    finally:
+        db.close()
+
+
 def test_job_detail_returns_only_governed_match_existing_skills():
     db = _build_sqlite_session()
     try:
@@ -500,11 +630,23 @@ def test_skill_stats_only_count_governed_match_existing_mentions():
 
         assert results == {
             "skills": [
-                {"name": "Python", "category": "Backend", "count": 1},
+                {
+                    "name": "Python",
+                    "category": "Backend",
+                    "count": 1,
+                    "dashboard_bucket": "Backend",
+                },
             ]
         }
     finally:
         db.close()
+
+
+def test_skill_dashboard_bucket_maps_devops_skills_into_stable_dashboard_groups():
+    assert stats_api.get_skill_dashboard_bucket("Azure", "DevOps") == "Platform & Cloud"
+    assert stats_api.get_skill_dashboard_bucket("Linux", "DevOps") == "Systems & Network"
+    assert stats_api.get_skill_dashboard_bucket("Firewalls", "DevOps") == "Security & Identity"
+    assert stats_api.get_skill_dashboard_bucket("Troubleshooting", "Support & Operations") == "Support"
 
 
 def test_skill_search_and_filters_hide_other_general_and_invisible_skills():

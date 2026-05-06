@@ -1,31 +1,79 @@
-import { useState, useEffect } from 'react';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Cell
-} from 'recharts';
+import { useEffect, useState } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
-const CustomTooltip = ({ active, payload }) => {
-  if (active && payload && payload.length) {
-    return (
-      <div style={{
-        backgroundColor: 'rgba(24, 24, 27, 0.9)',
-        border: '1px solid rgba(255, 255, 255, 0.1)',
-        padding: '10px',
-        borderRadius: '8px',
-        boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
-        color: '#f8fafc'
-      }}>
-        <p style={{ margin: 0, fontWeight: 600 }}>{`${payload[0].payload.skill}`}</p>
-        <p style={{ margin: '4px 0 0', color: '#00f2fe' }}>
-          {`Count: ${payload[0].value}`}
-        </p>
-      </div>
-    );
+const SKILL_BUCKET_ORDER = [
+  'Backend',
+  'Database',
+  'Frontend',
+  'Data',
+  'Platform & Cloud',
+  'Systems & Network',
+  'Security & Identity',
+  'Support',
+  'Infrastructure',
+];
+
+const VISIBLE_SKILLS_PER_BUCKET = 4;
+
+function mapSkillBucket(skill) {
+  const dashboardBucket = String(skill?.dashboard_bucket || '').trim();
+  if (dashboardBucket) {
+    return dashboardBucket;
   }
+
+  const category = String(skill?.category || '');
+  const name = String(skill?.name || '').toLowerCase();
+
+  if (category === 'Backend') {
+    return 'Backend';
+  }
+  if (category === 'Database') {
+    return 'Database';
+  }
+  if (category === 'Frontend') {
+    return 'Frontend';
+  }
+  if (category === 'Data') {
+    return 'Data';
+  }
+  if (category === 'Support & Operations') {
+    return 'Support';
+  }
+  if (category === 'DevOps') {
+    if (/(azure|aws|kubernetes|docker|ci\/cd|microsoft 365)/i.test(name)) {
+      return 'Platform & Cloud';
+    }
+    if (/(linux|windows server|windows|network|vpn|active directory)/i.test(name)) {
+      return 'Systems & Network';
+    }
+    if (/(firewall|cybersecurity|security|identity)/i.test(name)) {
+      return 'Security & Identity';
+    }
+    return 'Infrastructure';
+  }
+
   return null;
-};
+}
+
+function groupSkills(skills) {
+  const grouped = new Map(SKILL_BUCKET_ORDER.map((bucket) => [bucket, []]));
+
+  for (const skill of skills || []) {
+    const bucket = mapSkillBucket(skill);
+    if (!bucket) {
+      continue;
+    }
+    grouped.get(bucket).push(skill);
+  }
+
+  return SKILL_BUCKET_ORDER
+    .map((bucket) => ({
+      bucket,
+      skills: (grouped.get(bucket) || []).sort((left, right) => Number(right.count || 0) - Number(left.count || 0)),
+    }))
+    .filter((entry) => entry.skills.length > 0);
+}
 
 export default function SkillChart() {
   const [data, setData] = useState([]);
@@ -33,63 +81,99 @@ export default function SkillChart() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/v1/stats/skills?limit=15`)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    fetch(`${API_URL}/api/v1/stats/skills?limit=30`)
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
         return res.json();
       })
-      .then(data => {
-        // Transform new API format {skills: [{name, category, count}]} to chart format
-        const chartData = data.skills?.map(s => ({ skill: s.name, count: s.count })) || [];
-        setData(chartData);
+      .then((payload) => {
+        setData(payload.skills || []);
       })
-      .catch(err => setError(err.message))
+      .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return (
-    <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-primary)' }}>
-      Loading skills telemetry...
-    </div>
-  );
+  if (loading) {
+    return (
+      <div
+        style={{
+          height: '300px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--color-primary)',
+        }}
+      >
+        Loading skills telemetry...
+      </div>
+    );
+  }
 
   if (error) {
     return (
       <div className="chart-container">
-        <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-text-primary)', fontWeight: 600 }}>Top Skills</h3>
+        <h3
+          style={{
+            marginBottom: '1.5rem',
+            color: 'var(--color-text-primary)',
+            fontWeight: 600,
+          }}
+        >
+          Top Requested Skills
+        </h3>
         <div className="error-message">Failed to load skills: {error}</div>
       </div>
     );
   }
 
+  const groups = groupSkills(data);
+
   return (
-    <div className="chart-container" style={{ width: '100%', height: '100%' }}>
-      <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-text-primary)', fontWeight: 600, fontSize: '1.125rem' }}>
-        Top Requested Skills
-      </h3>
-      <ResponsiveContainer width="100%" height={320}>
-        <BarChart data={data} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
-          <XAxis
-            type="number"
-            stroke="var(--color-text-muted)"
-            tick={{ fill: 'var(--color-text-secondary)', fontSize: 12 }}
-          />
-          <YAxis
-            dataKey="skill"
-            type="category"
-            width={100}
-            stroke="var(--color-text-muted)"
-            tick={{ fill: 'var(--color-text-primary)', fontSize: 12 }}
-          />
-          <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.02)' }} />
-          <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-            {data.map((entry, index) => (
-              <Cell key={`cell-${index}`} fill={'#00f2fe'} />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+    <div className="chart-container dashboard-skill-chart">
+      <div className="dashboard-chart-heading">
+        <div>
+          <h3>Top Requested Skills</h3>
+          <p>Skills are grouped into narrower operating buckets so you can scan more demand without losing context.</p>
+        </div>
+        <div className="dashboard-chart-badge">
+          {Number(data.length || 0)} ranked skills
+        </div>
+      </div>
+
+      {groups.length === 0 ? (
+        <p className="chart-empty-state">No governed skills yet.</p>
+      ) : (
+        <div className="skill-chart-grid">
+          {groups.map(({ bucket, skills }) => {
+            const visibleSkills = skills.slice(0, VISIBLE_SKILLS_PER_BUCKET);
+            const hiddenCount = Math.max(skills.length - VISIBLE_SKILLS_PER_BUCKET, 0);
+
+            return (
+              <section key={bucket} className="skill-chart-card">
+                <div className="skill-chart-card-header">
+                  <h4>{bucket}</h4>
+                  <span>{skills.length}</span>
+                </div>
+
+                <div className="skill-chart-list">
+                  {visibleSkills.map((skill) => (
+                    <div key={`${bucket}-${skill.name}`} className="skill-chart-row">
+                      <span>{skill.name}</span>
+                      <strong>{Number(skill.count || 0).toLocaleString()}</strong>
+                    </div>
+                  ))}
+                </div>
+
+                {hiddenCount > 0 && (
+                  <div className="skill-chart-overflow">+{hiddenCount} more</div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ Provides aggregated data for dashboard charts.
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, literal
+from collections import defaultdict
 from typing import List, Dict, Any
 
 from app.database import get_db
@@ -19,8 +20,42 @@ from app.models.job_skill_mention import JobSkillMention
 from app.models.skill_technology import SkillTechnology
 from app.models.skill_category import SkillCategory
 from app.utils.skill_taxonomy_policy import apply_governed_skill_filters
+from app.schemas.stats import (
+    DashboardCategoryStatsSchema,
+    DashboardCategoryItemSchema,
+    DashboardFallbackBucketSchema,
+    DashboardOtherSpecificCategoriesSchema,
+    DashboardCategorySourceBreakdownSchema,
+)
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
+
+
+def get_skill_dashboard_bucket(skill_name: str, category_name: str) -> str | None:
+    """Map canonical skill categories into stable dashboard presentation buckets."""
+    category = str(category_name or "")
+    name = str(skill_name or "").lower()
+
+    if category == "Backend":
+        return "Backend"
+    if category == "Database":
+        return "Database"
+    if category == "Frontend":
+        return "Frontend"
+    if category == "Data":
+        return "Data"
+    if category == "Support & Operations":
+        return "Support"
+    if category == "DevOps":
+        if any(token in name for token in ("azure", "aws", "kubernetes", "docker", "ci/cd", "microsoft 365")):
+            return "Platform & Cloud"
+        if any(token in name for token in ("linux", "windows server", "windows", "network", "vpn", "active directory")):
+            return "Systems & Network"
+        if any(token in name for token in ("firewall", "cybersecurity", "security", "identity")):
+            return "Security & Identity"
+        return "Infrastructure"
+
+    return None
 
 
 @router.get("/overview")
@@ -73,7 +108,12 @@ async def get_skill_stats(
 
     return {
         "skills": [
-            {"name": r.name, "category": r.category, "count": r.count}
+            {
+                "name": r.name,
+                "category": r.category,
+                "count": r.count,
+                "dashboard_bucket": get_skill_dashboard_bucket(r.name, r.category),
+            }
             for r in results
         ]
     }
@@ -113,3 +153,145 @@ async def get_category_stats(db: Session = Depends(get_db)) -> List[Dict[str, An
         {"category": cat, "count": count}
         for cat, count in results
     ]
+
+
+@router.get("/categories/dashboard", response_model=DashboardCategoryStatsSchema)
+async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Get dashboard-oriented category stats with explicit fallback diagnostics."""
+    category_label = (
+        JobDomain.name
+        + literal(" / ")
+        + JobCategory.name
+        + literal(" / ")
+        + JobSubcategory.name
+    ).label("category")
+
+    results = db.query(
+        category_label,
+        JobDomain.name.label("domain_name"),
+        JobCategory.name.label("category_name"),
+        JobSubcategory.name.label("subcategory_name"),
+        Job.source_site.label("source_site"),
+        Job.source_subclassification_name.label("source_subclassification_name"),
+        func.count(Job.id).label("count"),
+    ).outerjoin(
+        JobSubcategory,
+        Job.subcategory_id == JobSubcategory.id,
+    ).outerjoin(
+        JobCategory,
+        JobSubcategory.category_id == JobCategory.id,
+    ).outerjoin(
+        JobDomain,
+        JobCategory.domain_id == JobDomain.id,
+    ).filter(
+        Job.is_deleted.is_(False),
+        Job.subcategory_id.isnot(None),
+        category_label.isnot(None),
+        category_label != "",
+    ).group_by(
+        category_label,
+        JobDomain.name,
+        JobCategory.name,
+        JobSubcategory.name,
+        Job.source_site,
+        Job.source_subclassification_name,
+    ).all()
+
+    grouped_specific: dict[str, dict[str, Any]] = defaultdict(lambda: {
+        "count": 0,
+        "path": "",
+        "label": "",
+    })
+    fallback_counts: dict[str, dict[str, Any]] = defaultdict(lambda: {
+        "count": 0,
+        "path": "",
+        "label": "",
+        "source_breakdown": defaultdict(int),
+    })
+
+    for row in results:
+        path = row.category or ""
+        count = int(row.count or 0)
+        domain_name = row.domain_name or ""
+        category_name = row.category_name or ""
+        subcategory_name = row.subcategory_name or ""
+        is_fallback = category_name == "General" or subcategory_name == "General"
+
+        if is_fallback:
+            fallback_entry = fallback_counts[path]
+            fallback_entry["count"] += count
+            fallback_entry["path"] = path
+            fallback_entry["label"] = f"{category_name} / {subcategory_name}"
+            source_key = (row.source_site, row.source_subclassification_name)
+            fallback_entry["source_breakdown"][source_key] += count
+            continue
+
+        specific_entry = grouped_specific[path]
+        specific_entry["count"] += count
+        specific_entry["path"] = path
+        specific_entry["label"] = subcategory_name
+
+    specific_items = sorted(
+        grouped_specific.values(),
+        key=lambda item: (-item["count"], item["label"], item["path"]),
+    )
+    fallback_items = sorted(
+        fallback_counts.values(),
+        key=lambda item: (-item["count"], item["label"], item["path"]),
+    )
+
+    specific_total = sum(item["count"] for item in specific_items)
+    fallback_total = sum(item["count"] for item in fallback_items)
+    categorized_total = specific_total + fallback_total
+    visible_specific_items = specific_items[:6]
+    other_specific_count = sum(item["count"] for item in specific_items[6:])
+    other_specific_bucket_count = max(len(specific_items) - 6, 0)
+
+    top_specific_categories = [
+        DashboardCategoryItemSchema(
+            path=item["path"],
+            label=item["label"],
+            count=item["count"],
+            share_of_specific=round((item["count"] / specific_total) * 100) if specific_total else 0,
+        ).model_dump(mode="json")
+        for item in visible_specific_items
+    ]
+
+    fallback_buckets = [
+        DashboardFallbackBucketSchema(
+            path=item["path"],
+            label=item["label"],
+            count=item["count"],
+            share_of_categorized=round((item["count"] / categorized_total) * 100) if categorized_total else 0,
+            source_breakdown=[
+                DashboardCategorySourceBreakdownSchema(
+                    source_site=source_site,
+                    source_subclassification_name=source_subclassification_name,
+                    count=count,
+                ).model_dump(mode="json")
+                for (source_site, source_subclassification_name), count in sorted(
+                    item["source_breakdown"].items(),
+                    key=lambda entry: (
+                        -entry[1],
+                        str(entry[0][0] or ""),
+                        entry[0][1] is None,
+                        str(entry[0][1] or ""),
+                    ),
+                )
+            ],
+        ).model_dump(mode="json")
+        for item in fallback_items
+    ]
+
+    return {
+        "categorized_total": categorized_total,
+        "specific_total": specific_total,
+        "fallback_total": fallback_total,
+        "top_specific_categories": top_specific_categories,
+        "other_specific_categories": DashboardOtherSpecificCategoriesSchema(
+            count=other_specific_count,
+            bucket_count=other_specific_bucket_count,
+            share_of_specific=round((other_specific_count / specific_total) * 100) if specific_total else 0,
+        ).model_dump(mode="json"),
+        "fallback_buckets": fallback_buckets,
+    }

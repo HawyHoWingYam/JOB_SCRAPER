@@ -19,6 +19,13 @@ from app.schemas.schedule import (
     ExecutionListResponse,
     ScheduleToggleResponse,
 )
+from app.schemas.stats import (
+    DashboardCategoryStatsSchema,
+    DashboardCategoryItemSchema,
+    DashboardCategorySourceBreakdownSchema,
+    DashboardFallbackBucketSchema,
+    DashboardOtherSpecificCategoriesSchema,
+)
 
 __all__ = [
     "CompanySchema",
@@ -42,4 +49,9 @@ __all__ = [
     "ScheduleListResponse",
     "ExecutionListResponse",
     "ScheduleToggleResponse",
+    "DashboardCategoryStatsSchema",
+    "DashboardCategoryItemSchema",
+    "DashboardCategorySourceBreakdownSchema",
+    "DashboardFallbackBucketSchema",
+    "DashboardOtherSpecificCategoriesSchema",
 ]

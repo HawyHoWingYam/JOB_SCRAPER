@@ -1,188 +1,232 @@
-import { useState, useEffect } from 'react';
-import {
-  PieChart, Pie, Cell, Tooltip, ResponsiveContainer
-} from 'recharts';
+import { useEffect, useState } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
-const MAX_VISIBLE_CATEGORIES = 6;
 
-// Premium Neon Palette
-const COLORS = [
-  '#00f2fe', // Neon Cyan
-  '#8b5cf6', // Electric Purple
-  '#10b981', // Emerald Green
-  '#f59e0b', // Neon Amber
-  '#ef4444', // Neon Red
-  '#3b82f6', // Bright Blue
-  '#14b8a6', // Teal
-  '#d946ef', // Fuchsia
-  '#84cc16', // Lime
-  '#06b6d4', // Cyan
-  '#8b5cf6', // Indigo
-  '#f97316'  // Orange
+const CATEGORY_COLORS = [
+  '#00f2fe',
+  '#10b981',
+  '#f59e0b',
+  '#8b5cf6',
+  '#3b82f6',
+  '#ef4444',
+  '#14b8a6',
 ];
 
-function condenseCategoryLabel(category) {
-  const parts = String(category || '')
-    .split('/')
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  if (parts.length <= 2) {
-    return parts.join(' / ') || 'Uncategorized';
+function formatShare(value, total) {
+  if (!total) {
+    return '0%';
   }
-
-  return parts.slice(-2).join(' / ');
+  return `${Math.round((value / total) * 100)}%`;
 }
 
-function normalizeCategoryData(data) {
-  const sorted = [...(data || [])].sort((left, right) => right.count - left.count);
-  const visible = sorted.slice(0, MAX_VISIBLE_CATEGORIES).map((item) => ({
-    ...item,
-    shortLabel: condenseCategoryLabel(item.category),
-  }));
-  const overflowCount = sorted
-    .slice(MAX_VISIBLE_CATEGORIES)
-    .reduce((total, item) => total + Number(item.count || 0), 0);
-
-  if (overflowCount > 0) {
-    visible.push({
-      category: 'Other categories',
-      shortLabel: 'Other categories',
-      count: overflowCount,
-    });
+function formatFallbackInsight(bucket) {
+  if (!bucket?.source_breakdown?.length) {
+    return 'Fallback bucket includes jobs that could not be classified into a more specific governed path.';
   }
 
-  return visible;
+  const primary = bucket.source_breakdown[0];
+  const primaryShare = formatShare(primary.count, bucket.count);
+
+  if (primary.source_site === 'ctgoodjobs' && primary.source_subclassification_name == null) {
+    return `${primaryShare} of this fallback bucket comes from CTGoodJobs rows without a source subcategory.`;
+  }
+
+  if (primary.source_subclassification_name) {
+    return `${primaryShare} of this fallback bucket comes from ${primary.source_site || 'unknown source'} / ${primary.source_subclassification_name}.`;
+  }
+
+  return `${primaryShare} of this fallback bucket comes from ${primary.source_site || 'unknown source'} rows without a source subcategory.`;
 }
 
-const CustomTooltip = ({ active, payload }) => {
-  if (active && payload && payload.length) {
-    return (
-      <div style={{
-        backgroundColor: 'rgba(24, 24, 27, 0.9)',
-        border: '1px solid rgba(255, 255, 255, 0.1)',
-        padding: '10px',
-        borderRadius: '8px',
-        boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
-        color: '#f8fafc'
-      }}>
-        <p style={{ margin: 0, fontWeight: 600 }}>{`${payload[0].payload.category}`}</p>
-        <p style={{ margin: '4px 0 0', color: payload[0].color }}>
-          {`${payload[0].value} Jobs`}
-        </p>
-      </div>
-    );
+function formatSourceBreakdownItem(item, total) {
+  const share = formatShare(item.count, total);
+  if (item.source_subclassification_name) {
+    return `${item.source_site || 'Unknown'} / ${item.source_subclassification_name}: ${item.count.toLocaleString()} (${share})`;
   }
-  return null;
-};
+  return `${item.source_site || 'Unknown'} / no source subcategory: ${item.count.toLocaleString()} (${share})`;
+}
 
 export default function CategoryChart({ totalJobs = 0 }) {
-  const [data, setData] = useState([]);
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/v1/stats/categories`)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    fetch(`${API_URL}/api/v1/stats/categories/dashboard`)
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
         return res.json();
       })
       .then(setData)
-      .catch(err => setError(err.message))
+      .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
-  const chartData = normalizeCategoryData(data);
-  const categorizedTotal = chartData.reduce((total, item) => total + Number(item.count || 0), 0);
-
-  if (loading) return (
-    <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-primary)' }}>
-      Loading categorization...
-    </div>
-  );
+  if (loading) {
+    return (
+      <div
+        style={{
+          height: '300px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--color-primary)',
+        }}
+      >
+        Loading categorization...
+      </div>
+    );
+  }
 
   if (error) {
     return (
-      <div className="chart-container">
-        <h3 style={{ marginBottom: '1.5rem', color: 'var(--color-text-primary)', fontWeight: 600 }}>Jobs by Category</h3>
+      <div className="chart-container dashboard-category-chart">
+        <div className="dashboard-chart-heading">
+          <div>
+            <h3>Jobs by AI Category</h3>
+            <p>Specific categories are separated from fallback taxonomy buckets.</p>
+          </div>
+        </div>
         <div className="error-message">Failed to load categories: {error}</div>
       </div>
     );
   }
 
+  const categorizedTotal = Number(data?.categorized_total || 0);
+  const specificTotal = Number(data?.specific_total || 0);
+  const fallbackTotal = Number(data?.fallback_total || 0);
+  const topSpecificCategories = data?.top_specific_categories || [];
+  const otherSpecificCategories = data?.other_specific_categories || {
+    count: 0,
+    bucket_count: 0,
+    share_of_specific: 0,
+  };
+  const fallbackBuckets = data?.fallback_buckets || [];
+  const primaryFallbackBucket = fallbackBuckets[0] || null;
+
   return (
-    <div className="chart-container dashboard-category-chart" style={{ width: '100%', height: '100%' }}>
+    <div className="chart-container dashboard-category-chart">
       <div className="dashboard-chart-heading">
         <div>
           <h3>Jobs by AI Category</h3>
-          <p>The long tail is grouped so the taxonomy stays readable at a glance.</p>
+          <p>Specific categories are ranked separately so fallback taxonomy buckets do not distort the comparison view.</p>
         </div>
         <div className="dashboard-chart-badge">
           {categorizedTotal.toLocaleString()} categorized
         </div>
       </div>
 
-      {chartData.length === 0 ? (
+      {topSpecificCategories.length === 0 && fallbackBuckets.length === 0 ? (
         <p className="chart-empty-state">No categorized jobs yet.</p>
       ) : (
-        <div className="category-chart-layout">
-          <div className="category-chart-visual">
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie
-                  data={chartData}
-                  dataKey="count"
-                  nameKey="shortLabel"
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={82}
-                  innerRadius={56}
-                  paddingAngle={2}
-                  stroke="none"
-                >
-                  {chartData.map((_, i) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-              </PieChart>
-            </ResponsiveContainer>
-
-            <div className="category-chart-center">
-              <strong>{categorizedTotal.toLocaleString()}</strong>
-              <span>{totalJobs ? `${Math.round((categorizedTotal / totalJobs) * 100)}% of all jobs` : 'categorized jobs'}</span>
+        <div className="category-chart-stack">
+          <div className="category-chart-summary-grid">
+            <div className="category-chart-summary-card">
+              <span>Specific categories</span>
+              <strong>{specificTotal.toLocaleString()}</strong>
+              <small>{formatShare(specificTotal, categorizedTotal)} of categorized jobs</small>
+            </div>
+            <div className="category-chart-summary-card category-chart-summary-card-alert">
+              <span>Fallback buckets</span>
+              <strong>{fallbackTotal.toLocaleString()}</strong>
+              <small>{formatShare(fallbackTotal, categorizedTotal)} of categorized jobs</small>
             </div>
           </div>
 
-          <div className="category-chart-list">
-            {chartData.map((item, index) => {
-              const percentage = categorizedTotal > 0
-                ? Math.round((Number(item.count || 0) / categorizedTotal) * 100)
-                : 0;
-              const color = COLORS[index % COLORS.length];
+          <div className="category-chart-main-panel">
+            <div className="category-chart-section-header">
+              <h4>Specific category mix</h4>
+              <p>Primary comparison view for governed non-fallback categories.</p>
+            </div>
 
-              return (
-                <div key={`${item.category}-${index}`} className="category-chart-row">
-                  <span
-                    className="category-chart-swatch"
-                    style={{ backgroundColor: color }}
-                    aria-hidden="true"
-                  />
+            <div className="category-chart-list">
+              {topSpecificCategories.map((item, index) => {
+                const color = CATEGORY_COLORS[index % CATEGORY_COLORS.length];
+                const share = Number(item.share_of_specific || 0);
 
-                  <div className="category-chart-copy">
-                    <strong title={item.category}>{item.shortLabel}</strong>
-                    <div className="category-chart-bar">
-                      <span style={{ width: `${percentage}%`, backgroundColor: color }} />
+                return (
+                  <div key={item.path} className="category-chart-row">
+                    <span
+                      className="category-chart-swatch"
+                      style={{ backgroundColor: color }}
+                      aria-hidden="true"
+                    />
+
+                    <div className="category-chart-copy">
+                      <strong title={item.path}>{item.label}</strong>
+                      <div className="category-chart-bar">
+                        <span style={{ width: `${share}%`, backgroundColor: color }} />
+                      </div>
+                      <small>{share}% of specific categories</small>
                     </div>
-                    <small>{percentage}% of categorized jobs</small>
-                  </div>
 
-                  <span className="category-chart-value">{Number(item.count || 0).toLocaleString()}</span>
+                    <span className="category-chart-value">{Number(item.count || 0).toLocaleString()}</span>
+                  </div>
+                );
+              })}
+
+              {Number(otherSpecificCategories.count || 0) > 0 && (
+                <div className="category-chart-row category-chart-row-muted">
+                  <span className="category-chart-swatch category-chart-swatch-muted" aria-hidden="true" />
+                  <div className="category-chart-copy">
+                    <strong>Other specific categories</strong>
+                    <div className="category-chart-bar">
+                      <span
+                        style={{
+                          width: `${Number(otherSpecificCategories.share_of_specific || 0)}%`,
+                          backgroundColor: 'rgba(148, 163, 184, 0.9)',
+                        }}
+                      />
+                    </div>
+                    <small>
+                      {Number(otherSpecificCategories.share_of_specific || 0)}% across{' '}
+                      {Number(otherSpecificCategories.bucket_count || 0)} categories
+                    </small>
+                  </div>
+                  <span className="category-chart-value">
+                    {Number(otherSpecificCategories.count || 0).toLocaleString()}
+                  </span>
                 </div>
-              );
-            })}
+              )}
+            </div>
           </div>
+
+          {primaryFallbackBucket && (
+            <div className="category-fallback-panel">
+              <div className="category-chart-section-header">
+                <h4>Fallback diagnostic</h4>
+                <p>Fallback buckets are real taxonomy outputs, but they are tracked separately from the specific category ranking.</p>
+              </div>
+
+              <div className="category-fallback-highlight">
+                <div>
+                  <span className="category-fallback-label">{primaryFallbackBucket.label}</span>
+                  <strong>{Number(primaryFallbackBucket.count || 0).toLocaleString()}</strong>
+                  <small>{Number(primaryFallbackBucket.share_of_categorized || 0)}% of categorized jobs</small>
+                </div>
+                <p>{formatFallbackInsight(primaryFallbackBucket)}</p>
+              </div>
+
+              <div className="category-fallback-breakdown">
+                {primaryFallbackBucket.source_breakdown.map((item) => (
+                  <div
+                    key={`${item.source_site || 'unknown'}-${item.source_subclassification_name || 'none'}`}
+                    className="category-fallback-breakdown-row"
+                  >
+                    <span>{formatSourceBreakdownItem(item, primaryFallbackBucket.count)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {totalJobs > 0 && (
+            <p className="category-chart-footnote">
+              {categorizedTotal.toLocaleString()} of {Number(totalJobs || 0).toLocaleString()} total jobs currently have a governed category path.
+            </p>
+          )}
         </div>
       )}
     </div>
