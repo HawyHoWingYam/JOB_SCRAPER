@@ -3,6 +3,7 @@ import uuid
 from pathlib import Path
 
 from sqlalchemy import create_engine
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -108,3 +109,16 @@ def test_event_outbox_repository_lists_pending_rows():
         assert [item.id for item in pending_rows] == [row.id]
     finally:
         db.close()
+
+
+def test_crawl_job_events_enforce_per_job_sequence_uniqueness_in_schema():
+    unique_constraints = [
+        constraint
+        for constraint in CrawlJobEvent.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    ]
+
+    assert any(
+        constraint.name == "uq_crawl_job_events_job_sequence"
+        for constraint in unique_constraints
+    )

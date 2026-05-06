@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
@@ -49,6 +49,15 @@ class CrawlJobRepository:
         emitted_by: str | None = None,
         auto_commit: bool = True,
     ) -> CrawlJobEvent:
+        crawl_job = (
+            db.query(CrawlJob)
+            .filter(CrawlJob.id == crawl_job_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if crawl_job is None:
+            raise ValueError(f"Crawl job not found: {crawl_job_id}")
+
         next_sequence_no = (
             db.query(func.coalesce(func.max(CrawlJobEvent.sequence_no), 0))
             .filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
@@ -69,3 +78,22 @@ class CrawlJobRepository:
         else:
             db.flush()
         return event
+
+    def get_crawl_job_by_id(self, db: Session, crawl_job_id) -> CrawlJob | None:
+        return db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
+
+    def list_events(self, db: Session, crawl_job_id) -> list[CrawlJobEvent]:
+        return (
+            db.query(CrawlJobEvent)
+            .filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
+            .order_by(CrawlJobEvent.sequence_no.asc())
+            .all()
+        )
+
+    def list_recent_crawl_jobs(self, db: Session, *, limit: int = 100) -> list[CrawlJob]:
+        return (
+            db.query(CrawlJob)
+            .order_by(desc(CrawlJob.queued_at), desc(CrawlJob.created_at))
+            .limit(limit)
+            .all()
+        )

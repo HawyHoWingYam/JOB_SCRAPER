@@ -5,16 +5,19 @@ import logging
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
+from app.models.crawl_job import CrawlJob
 from app.models.company_enrichment_run import CompanyEnrichmentRun, CompanyEnrichmentRunItem
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.utils.time import utc_now
 
 AI_RESTART_MESSAGE = "Service restarted before AI enrichment run could finish."
 COMPANY_RESTART_MESSAGE = "Service restarted before company enrichment run could finish."
+CRAWL_JOB_RESTART_MESSAGE = "Service restarted before crawl job could finish."
 SCHEDULE_RESTART_MESSAGE = "Service restarted before scheduled scrape execution could finish."
 ACTIVE_SCHEDULE_EXECUTION_STATUSES = ("pending", "running", "ai_running")
 ACTIVE_AI_RUN_STATUSES = ("pending", "running")
 ACTIVE_COMPANY_RUN_STATUSES = ("pending", "running")
+ACTIVE_CRAWL_JOB_STATUSES = ("dispatching", "running")
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,14 @@ class StartupRecoveryService:
         company_run_count = self._recover_company_runs()
         self.db.commit()
 
+        crawl_job_recovery_count = 0
+        try:
+            crawl_job_recovery_count = self._recover_crawl_jobs()
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            logger.exception("Startup crawl job recovery failed")
+
         schedule_recovery_count = 0
         try:
             schedule_recovery_count = self._recover_schedule_executions()
@@ -41,6 +52,7 @@ class StartupRecoveryService:
         return {
             "ai_runs_recovered": ai_run_count,
             "company_runs_recovered": company_run_count,
+            "crawl_jobs_recovered": crawl_job_recovery_count,
             "schedule_executions_recovered": schedule_recovery_count,
         }
 
@@ -125,6 +137,27 @@ class StartupRecoveryService:
             run.error_message = COMPANY_RESTART_MESSAGE
 
         return len(active_runs)
+
+    def _recover_crawl_jobs(self) -> int:
+        inspector = inspect(self.db.get_bind())
+        if "crawl_jobs" not in inspector.get_table_names():
+            return 0
+
+        active_jobs = (
+            self.db.query(CrawlJob)
+            .filter(CrawlJob.status.in_(ACTIVE_CRAWL_JOB_STATUSES))
+            .all()
+        )
+        if not active_jobs:
+            return 0
+
+        timestamp = utc_now()
+        for crawl_job in active_jobs:
+            crawl_job.status = "failed"
+            crawl_job.completed_at = crawl_job.completed_at or timestamp
+            crawl_job.error_message = CRAWL_JOB_RESTART_MESSAGE
+
+        return len(active_jobs)
 
     def _recover_schedule_executions(self) -> int:
         inspector = inspect(self.db.get_bind())

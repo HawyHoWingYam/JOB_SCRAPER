@@ -3,7 +3,7 @@ Schedule API Routes - CRUD endpoints for scheduled scraping tasks.
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from typing import List
@@ -13,8 +13,10 @@ logger = logging.getLogger(__name__)
 
 from app.database import get_db
 from app.repositories.schedule_repository import ScheduleRepository
+from app.schemas.crawl_job import CrawlJobSchema
 from app.services.source_category_registry import get_source_category_registry
 from app.services.scheduler_service import SchedulerService
+from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.schemas.schedule import (
     ScheduleSchema,
     ScheduleCreateSchema,
@@ -29,6 +31,7 @@ from app.schemas.schedule import (
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 repository = ScheduleRepository()
+crawl_job_dispatch_service = CrawlJobDispatchService()
 SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs"}
 
 
@@ -215,7 +218,11 @@ async def toggle_schedule(
     )
 
 
-@router.post("/{schedule_id}/run")
+@router.post(
+    "/{schedule_id}/run",
+    response_model=CrawlJobSchema,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def run_schedule_now(
     schedule_id: UUID,
     db: Session = Depends(get_db)
@@ -238,9 +245,11 @@ async def run_schedule_now(
     )
     
     scheduler = SchedulerService.get_instance()
-    await scheduler.run_now(schedule_id)
-    
-    return {"message": "Schedule execution started"}
+    crawl_job = await scheduler.run_now(schedule_id)
+    if crawl_job is None:
+        raise HTTPException(status_code=500, detail="Failed to queue crawl job")
+
+    return crawl_job
 
 
 @router.get("/{schedule_id}/history", response_model=ExecutionListResponse)
@@ -258,7 +267,11 @@ async def get_schedule_history(
     return ExecutionListResponse(executions=executions, total=len(executions))
 
 
-@router.post("/run-now")
+@router.post(
+    "/run-now",
+    response_model=CrawlJobSchema,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def run_immediate_scrape(
     request: ImmediateScrapeRequest,
     db: Session = Depends(get_db)
@@ -272,33 +285,12 @@ async def run_immediate_scrape(
 
     await _validate_effective_category_ids(request.source_site, request.category_ids)
 
-    import asyncio
-
-    if request.source_site == "ctgoodjobs":
-        from app.services.ctgoodjobs_scrape_service import CtgoodjobsScrapeService
-        scrape_service = CtgoodjobsScrapeService()
-    else:
-        from app.services.category_scrape_service import CategoryScrapeService
-        scrape_service = CategoryScrapeService()
-
-    async def scrape_with_error_handling():
-        """Wrapper to catch and log errors from background scraping task."""
-        try:
-            result = await scrape_service.scrape_categories(
-                category_ids=request.category_ids,
-                max_pages=request.max_pages,
-                skip_existing=request.skip_existing
-            )
-            logger.info(f"Scrape completed: {result}")
-        except Exception as e:
-            logger.error(f"Scrape failed: {e}", exc_info=True)
-
-    # Start scraping in background with error handling
-    asyncio.create_task(scrape_with_error_handling())
-
-    return {
-        "message": "Scraping started",
-        "category_ids": request.category_ids,
-        "max_pages": request.max_pages,
-        "skip_existing": request.skip_existing
-    }
+    dispatch_result = crawl_job_dispatch_service.dispatch_manual_crawl_job(
+        db,
+        source_site=request.source_site,
+        category_ids=list(request.category_ids),
+        max_pages=request.max_pages,
+        skip_existing=request.skip_existing,
+        requested_by="api",
+    )
+    return dispatch_result.crawl_job

@@ -161,17 +161,26 @@ class ScheduleRepository:
         )
 
     def create_execution(
-        self, db: Session, schedule_id: UUID, status: str = "running"
+        self,
+        db: Session,
+        schedule_id: UUID,
+        status: str = "pending",
+        crawl_job_id: UUID | None = None,
+        auto_commit: bool = True,
     ) -> ScheduleExecution:
         """Create a new execution record."""
         execution = ScheduleExecution(
             schedule_id=schedule_id,
+            crawl_job_id=crawl_job_id,
             status=status,
-            started_at=utc_now()
+            started_at=utc_now(),
         )
         db.add(execution)
-        db.commit()
-        db.refresh(execution)
+        if auto_commit:
+            db.commit()
+            db.refresh(execution)
+        else:
+            db.flush()
         return execution
 
     def update_execution(

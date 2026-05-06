@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -13,12 +14,13 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.database import Base
 from app.models import Company, Job, JobCategory, JobDomain, JobEmbedding, JobSubcategory
+from app.models.job_embedding import EMBEDDING_DIMENSIONS
 from app.repositories.job_embedding_repository import JobEmbeddingRepository
 
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://admin:dev_password@localhost:5433/jobsdb",
+    "postgresql://admin:dev_password@localhost:5434/jobsdb",
 )
 
 
@@ -72,6 +74,14 @@ def _create_company_and_job(db):
     return job
 
 
+def _unit_vector():
+    return [1.0] + ([0.0] * (EMBEDDING_DIMENSIONS - 1))
+
+
+def _tilted_vector():
+    return [0.9, 0.1] + ([0.0] * (EMBEDDING_DIMENSIONS - 2))
+
+
 def test_job_embedding_repository_persists_vectors_and_supports_cosine_query():
     db, engine = _build_postgres_session()
     try:
@@ -82,36 +92,58 @@ def test_job_embedding_repository_persists_vectors_and_supports_cosine_query():
             db,
             job_id=job.id,
             embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-            embedding_dimensions=3,
+            embedding_dimensions=EMBEDDING_DIMENSIONS,
             embedding_version=1,
             document_text="platform engineer distributed systems",
             document_hash="hash-a",
-            embedding=[1.0, 0.0, 0.0],
+            embedding=_unit_vector(),
         )
         repository.upsert_embedding(
             db,
             job_id=job.id,
             embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-            embedding_dimensions=3,
+            embedding_dimensions=EMBEDDING_DIMENSIONS,
             embedding_version=2,
             document_text="platform engineer distributed systems updated",
             document_hash="hash-b",
-            embedding=[0.9, 0.1, 0.0],
+            embedding=_tilted_vector(),
         )
 
         stored = db.query(JobEmbedding).filter(JobEmbedding.job_id == job.id).one()
         assert stored.document_hash == "hash-b"
-        assert stored.embedding_dimensions == 3
+        assert stored.embedding_dimensions == EMBEDDING_DIMENSIONS
 
         ranked_ids = [
             row[0]
             for row in db.query(JobEmbedding.job_id)
-            .order_by(JobEmbedding.embedding.cosine_distance([1.0, 0.0, 0.0]))
+            .order_by(JobEmbedding.embedding.cosine_distance(_unit_vector()))
             .limit(1)
             .all()
         ]
 
         assert ranked_ids == [job.id]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_job_embedding_repository_rejects_non_384_dimension_vectors():
+    db, engine = _build_postgres_session()
+    try:
+        repository = JobEmbeddingRepository()
+        job = _create_company_and_job(db)
+
+        with pytest.raises(ValueError, match="384"):
+            repository.upsert_embedding(
+                db,
+                job_id=job.id,
+                embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+                embedding_dimensions=128,
+                embedding_version=1,
+                document_text="platform engineer distributed systems",
+                document_hash="hash-a",
+                embedding=[1.0] * 128,
+            )
     finally:
         db.close()
         engine.dispose()

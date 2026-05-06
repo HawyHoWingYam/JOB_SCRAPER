@@ -38,6 +38,7 @@ function readDirectOverrideRunMarker() {
         }
 
         return {
+            crawlJobId: typeof parsed.crawlJobId === 'string' ? parsed.crawlJobId : null,
             sourceSite: parsed.sourceSite,
             startedAt: parsed.startedAt,
         };
@@ -344,8 +345,10 @@ function ScheduleManager({ onNavigateToAI }) {
     const handleRun = async (id) => {
         setIsLoading(true);
         try {
-            const response = await fetch(`${API_BASE}/schedules/${id}/run`, {
-                method: 'POST'
+            const response = await fetch(`${API_BASE}/crawl-jobs`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ schedule_id: id })
             });
             if (!response.ok) throw new Error('执行失败');
             await fetchSchedules();
@@ -382,9 +385,9 @@ function ScheduleManager({ onNavigateToAI }) {
         setIsLoading(true);
         setError(null);
         setProgressRecoveryNotice(null);
-        setScrapeStatus('Initiating scraping sequence...');
+        setScrapeStatus('Queueing crawl job...');
         try {
-            const response = await fetch(`${API_BASE}/schedules/run-now`, {
+            const response = await fetch(`${API_BASE}/crawl-jobs`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(request.payload)
@@ -393,7 +396,9 @@ function ScheduleManager({ onNavigateToAI }) {
                 const errData = await response.json();
                 throw new Error(formatApiErrorDetail(errData.detail));
             }
+            const payload = await response.json();
             const runMarker = {
+                crawlJobId: payload.id || response.headers.get('X-Crawl-Job-Id') || null,
                 sourceSite: currentSourceSite,
                 startedAt: new Date(Date.now()).toISOString(),
             };

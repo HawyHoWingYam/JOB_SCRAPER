@@ -15,6 +15,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.database import Base
 from app.models.company import Company
+from app.models.crawl_job import CrawlJob
 from app.models.company_enrichment_run import CompanyEnrichmentRun, CompanyEnrichmentRunItem
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
@@ -43,6 +44,7 @@ def _build_sqlite_session():
             EnrichmentRunItem.__table__,
             CompanyEnrichmentRun.__table__,
             CompanyEnrichmentRunItem.__table__,
+            CrawlJob.__table__,
             ScrapeSchedule.__table__,
             ScheduleExecution.__table__,
         ],
@@ -102,16 +104,22 @@ def test_recover_interrupted_operations_marks_active_runs_and_executions_failed(
             call_order.append("schedule")
             return 4
 
+        def record_crawl_jobs():
+            call_order.append("crawl")
+            return 1
+
         service._recover_ai_runs = record_ai
         service._recover_company_runs = record_company
+        service._recover_crawl_jobs = record_crawl_jobs
         service._recover_schedule_executions = record_schedule
 
         summary = service.recover_interrupted_operations()
 
-        assert call_order == ["ai", "company", "schedule"]
+        assert call_order == ["ai", "company", "crawl", "schedule"]
         assert summary == {
             "ai_runs_recovered": 2,
             "company_runs_recovered": 3,
+            "crawl_jobs_recovered": 1,
             "schedule_executions_recovered": 4,
         }
     finally:
@@ -208,6 +216,7 @@ def test_recover_interrupted_operations_keeps_ai_and_company_results_when_schedu
 
         service._recover_ai_runs = lambda: 1
         service._recover_company_runs = lambda: 2
+        service._recover_crawl_jobs = lambda: 3
 
         def fail_schedule():
             raise RuntimeError("legacy schedule schema mismatch")
@@ -219,7 +228,33 @@ def test_recover_interrupted_operations_keeps_ai_and_company_results_when_schedu
         assert summary == {
             "ai_runs_recovered": 1,
             "company_runs_recovered": 2,
+            "crawl_jobs_recovered": 3,
             "schedule_executions_recovered": 0,
         }
+    finally:
+        db.close()
+
+
+def test_recover_crawl_jobs_marks_running_jobs_failed():
+    db = _build_sqlite_session()
+    try:
+        crawl_job = CrawlJob(
+            source_site="jobsdb",
+            trigger_type="manual",
+            status="running",
+            request_payload={"category_ids": [1200], "max_pages": 3},
+            requested_by="pytest",
+        )
+        db.add(crawl_job)
+        db.commit()
+
+        recovered = StartupRecoveryService(db)._recover_crawl_jobs()
+        db.commit()
+        db.refresh(crawl_job)
+
+        assert recovered == 1
+        assert crawl_job.status == "failed"
+        assert crawl_job.completed_at is not None
+        assert "restarted" in (crawl_job.error_message or "").lower()
     finally:
         db.close()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -49,6 +49,9 @@ class CrawlJobEvent(Base):
     """Ordered event history for a crawl job."""
 
     __tablename__ = "crawl_job_events"
+    __table_args__ = (
+        UniqueConstraint("crawl_job_id", "sequence_no", name="uq_crawl_job_events_job_sequence"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     crawl_job_id = Column(
