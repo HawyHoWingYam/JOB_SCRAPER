@@ -10,8 +10,18 @@ logger = logging.getLogger(__name__)
 class RedisClient:
     """Redis client for pub/sub and caching operations."""
 
-    def __init__(self):
-        self.redis = redis.from_url(settings.redis_url, decode_responses=True)
+    def __init__(
+        self,
+        *,
+        redis_client: redis.Redis | None = None,
+        redis_url: str | None = None,
+        decode_responses: bool = True,
+    ):
+        self._owns_redis = redis_client is None
+        self.redis = redis_client or redis.from_url(
+            redis_url or settings.redis_url,
+            decode_responses=decode_responses,
+        )
         self.pubsub = self.redis.pubsub()
 
     async def publish(self, channel: str, message: dict) -> None:
@@ -68,4 +78,6 @@ class RedisClient:
 
     def close(self) -> None:
         """Close Redis connection."""
-        self.redis.close()
+        self.pubsub.close()
+        if self._owns_redis:
+            self.redis.close()

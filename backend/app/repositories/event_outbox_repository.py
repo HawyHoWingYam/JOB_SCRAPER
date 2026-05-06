@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -58,3 +58,42 @@ class EventOutboxRepository:
             .limit(limit)
             .all()
         )
+
+    def mark_published(
+        self,
+        db: Session,
+        *,
+        row: EventOutbox,
+        published_at: datetime | None = None,
+        auto_commit: bool = True,
+    ) -> EventOutbox:
+        row.status = "published"
+        row.published_at = published_at or utc_now()
+        row.last_error = None
+        if auto_commit:
+            db.commit()
+            db.refresh(row)
+        else:
+            db.flush()
+        return row
+
+    def mark_retryable_failure(
+        self,
+        db: Session,
+        *,
+        row: EventOutbox,
+        error_message: str,
+        now: datetime | None = None,
+        auto_commit: bool = True,
+    ) -> EventOutbox:
+        row.status = "pending"
+        row.attempt_count += 1
+        row.last_error = error_message
+        delay_seconds = min(5 * (2 ** (row.attempt_count - 1)), 300)
+        row.available_at = (now or utc_now()) + timedelta(seconds=delay_seconds)
+        if auto_commit:
+            db.commit()
+            db.refresh(row)
+        else:
+            db.flush()
+        return row
