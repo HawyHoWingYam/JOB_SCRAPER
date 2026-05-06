@@ -7,18 +7,16 @@ Phase 2 of the two-phase scraping approach.
 Extracts job data from window.SEEK_REDUX_DATA embedded in HTML.
 """
 
-import re
 import json
 import asyncio
 import random
 import logging
 from typing import Dict, Any, Optional, List
-from html import unescape
 
 import httpx
 
 from app.config import settings
-from app.utils.time import utc_now
+from app.sources.jobsdb.parsers import parse_detail_page as parse_jobsdb_detail_page
 
 logger = logging.getLogger(__name__)
 
@@ -61,127 +59,6 @@ class JobDetailScraper:
             "Connection": "keep-alive",
         }
 
-    def _extract_redux_data(self, html: str) -> Optional[Dict[str, Any]]:
-        """Extract SEEK_REDUX_DATA from HTML page."""
-        # Find the start of the Redux data
-        marker = 'window.SEEK_REDUX_DATA'
-        start_idx = html.find(marker)
-        if start_idx == -1:
-            logger.warning("Redux data marker not found in HTML")
-            return None
-
-        # Find the opening brace
-        brace_start = html.find('{', start_idx)
-        if brace_start == -1:
-            logger.warning("Opening brace not found after Redux marker")
-            return None
-
-        # Count braces to find the matching closing brace
-        depth = 0
-        in_string = False
-        escape_next = False
-        end_idx = brace_start
-
-        for i, char in enumerate(html[brace_start:], brace_start):
-            if escape_next:
-                escape_next = False
-                continue
-
-            if char == '\\' and in_string:
-                escape_next = True
-                continue
-
-            if char == '"' and not escape_next:
-                in_string = not in_string
-                continue
-
-            if not in_string:
-                if char == '{':
-                    depth += 1
-                elif char == '}':
-                    depth -= 1
-                    if depth == 0:
-                        end_idx = i + 1
-                        break
-
-        if depth != 0:
-            logger.warning(f"Unbalanced braces in Redux data (depth={depth})")
-            return None
-
-        json_str = html[brace_start:end_idx]
-
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse Redux JSON: {e}")
-            return None
-
-    def _parse_job_details(self, redux_data: Dict, job_id: str) -> Optional[Dict[str, Any]]:
-        """Parse job details from Redux data structure."""
-        try:
-            # JobsDB structure: jobdetails.result.job
-            job_details_container = redux_data.get("jobdetails", {})
-            result = job_details_container.get("result", {})
-
-            # The actual job data is under 'result.job'
-            job = result.get("job", {})
-
-            if not job or not isinstance(job, dict):
-                logger.warning(f"Job not found in jobdetails.result for {job_id}")
-                return None
-
-            # Extract tracking info for classification
-            tracking = job.get("tracking", {})
-            classification_info = tracking.get("classificationInfo", {})
-
-            # Extract content (HTML description) - it's a direct string now
-            content_html = job.get("content", "")
-
-            # Extract listing date
-            listed_at = job.get("listedAt", {})
-            listing_date = listed_at.get("dateTimeUtc") if isinstance(listed_at, dict) else None
-
-            # Extract expiry date
-            expires_at = job.get("expiresAt", {})
-            expiry_date = expires_at.get("dateTimeUtc") if isinstance(expires_at, dict) else None
-
-            # Extract work types - simple label access
-            work_types = job.get("workTypes", {})
-            work_type = work_types.get("label", "") if isinstance(work_types, dict) else ""
-
-            # Extract location - simple label access
-            location = job.get("location", {})
-            location_label = location.get("label", "") if isinstance(location, dict) else ""
-
-            # Extract advertiser info
-            advertiser = job.get("advertiser", {})
-            advertiser_id = advertiser.get("id", "") if isinstance(advertiser, dict) else ""
-            advertiser_name = advertiser.get("name", "") if isinstance(advertiser, dict) else ""
-
-            return {
-                "jobsdb_id": job_id,
-                "title": job.get("title", ""),
-                "abstract": job.get("abstract", ""),
-                "description_html": unescape(content_html) if content_html else "",
-                "classification_id": classification_info.get("classificationId"),
-                "classification": classification_info.get("classification"),
-                "subclassification_id": classification_info.get("subClassificationId"),
-                "subclassification": classification_info.get("subClassification"),
-                "location": location_label,
-                "work_type": work_type,
-                "salary": job.get("salary"),
-                "listing_date": listing_date,
-                "expiry_date": expiry_date,
-                "is_expired": job.get("isExpired", False),
-                "advertiser_id": advertiser_id,
-                "advertiser_name": advertiser_name,
-                "status": job.get("status", ""),
-                "scraped_at": utc_now().isoformat(),
-            }
-
-        except (KeyError, TypeError) as e:
-            return None
-
     async def fetch_job_detail(
         self,
         job_id: str,
@@ -201,12 +78,7 @@ class JobDetailScraper:
             response.raise_for_status()
 
             html = response.text
-            redux_data = self._extract_redux_data(html)
-
-            if not redux_data:
-                return None
-
-            return self._parse_job_details(redux_data, job_id)
+            return parse_jobsdb_detail_page(html, job_id=job_id)
 
         except httpx.HTTPError:
             return None

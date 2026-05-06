@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
 
+_UNSET = object()
+
 
 class CrawlJobRepository:
     """Repository for durable crawl jobs and their ordered event history."""
@@ -81,6 +83,56 @@ class CrawlJobRepository:
 
     def get_crawl_job_by_id(self, db: Session, crawl_job_id) -> CrawlJob | None:
         return db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
+
+    def record_runtime_event(
+        self,
+        db: Session,
+        *,
+        crawl_job_id,
+        status: str,
+        event_type: str,
+        payload: dict[str, Any],
+        emitted_by: str = "crawl-worker",
+        started_at=_UNSET,
+        completed_at=_UNSET,
+        error_message=_UNSET,
+        metrics: dict[str, Any] | None = None,
+        auto_commit: bool = True,
+    ) -> CrawlJob:
+        crawl_job = (
+            db.query(CrawlJob)
+            .filter(CrawlJob.id == crawl_job_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if crawl_job is None:
+            raise ValueError(f"Crawl job not found: {crawl_job_id}")
+
+        crawl_job.status = status
+        if started_at is not _UNSET:
+            crawl_job.started_at = started_at
+        if completed_at is not _UNSET:
+            crawl_job.completed_at = completed_at
+        if error_message is not _UNSET:
+            crawl_job.error_message = error_message
+        if metrics is not None:
+            crawl_job.metrics = metrics
+
+        self.append_event(
+            db,
+            crawl_job_id=crawl_job_id,
+            event_type=event_type,
+            payload=payload,
+            emitted_by=emitted_by,
+            auto_commit=False,
+        )
+
+        if auto_commit:
+            db.commit()
+            db.refresh(crawl_job)
+        else:
+            db.flush()
+        return crawl_job
 
     def list_events(self, db: Session, crawl_job_id) -> list[CrawlJobEvent]:
         return (
