@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.models.crawl_job import CrawlJob, CrawlJobEvent
+
+
+class CrawlJobRepository:
+    """Repository for durable crawl jobs and their ordered event history."""
+
+    def create_crawl_job(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+        trigger_type: str,
+        request_payload: dict[str, Any],
+        requested_by: str | None = None,
+        schedule_id=None,
+        status: str = "queued",
+        auto_commit: bool = True,
+    ) -> CrawlJob:
+        crawl_job = CrawlJob(
+            source_site=source_site,
+            trigger_type=trigger_type,
+            schedule_id=schedule_id,
+            status=status,
+            request_payload=request_payload,
+            requested_by=requested_by,
+        )
+        db.add(crawl_job)
+        if auto_commit:
+            db.commit()
+            db.refresh(crawl_job)
+        else:
+            db.flush()
+        return crawl_job
+
+    def append_event(
+        self,
+        db: Session,
+        *,
+        crawl_job_id,
+        event_type: str,
+        payload: dict[str, Any],
+        emitted_by: str | None = None,
+        auto_commit: bool = True,
+    ) -> CrawlJobEvent:
+        next_sequence_no = (
+            db.query(func.coalesce(func.max(CrawlJobEvent.sequence_no), 0))
+            .filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
+            .scalar()
+            + 1
+        )
+        event = CrawlJobEvent(
+            crawl_job_id=crawl_job_id,
+            sequence_no=int(next_sequence_no),
+            event_type=event_type,
+            payload=payload,
+            emitted_by=emitted_by,
+        )
+        db.add(event)
+        if auto_commit:
+            db.commit()
+            db.refresh(event)
+        else:
+            db.flush()
+        return event

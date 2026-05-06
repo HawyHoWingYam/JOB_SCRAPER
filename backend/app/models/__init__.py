@@ -1,5 +1,8 @@
 from app.models.company import Company
+from app.models.crawl_job import CrawlJob, CrawlJobEvent
+from app.models.event_outbox import EventOutbox
 from app.models.job import Job
+from app.models.job_embedding import JobEmbedding
 from app.models.schedule import ScrapeSchedule, ScheduleExecution
 from app.models.skill_category import SkillCategory
 from app.models.skill_technology import SkillTechnology
@@ -18,7 +21,8 @@ from app.models.company_enrichment_run import (
 from app.models.app_runtime_settings import AppRuntimeSettings
 
 __all__ = [
-    "Company", "Job", "ScrapeSchedule", "ScheduleExecution",
+    "Company", "CrawlJob", "CrawlJobEvent", "EventOutbox", "Job", "JobEmbedding",
+    "ScrapeSchedule", "ScheduleExecution",
     "SkillCategory", "SkillTechnology", "Skill",
     "JobDomain", "JobCategory", "JobSubcategory", "JobSkill", "JobSkillMention",
     "SkillReviewCandidate",
