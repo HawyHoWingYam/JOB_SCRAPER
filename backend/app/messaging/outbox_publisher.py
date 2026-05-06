@@ -39,7 +39,7 @@ class OutboxPublisher:
                 aggregate_type=row.aggregate_type,
                 aggregate_id=row.aggregate_id,
                 payload=row.payload,
-                source_service="outbox-publisher",
+                source_service=row.source_service,
                 event_id=f"event-outbox:{row.id}",
                 occurred_at=row.created_at,
             )

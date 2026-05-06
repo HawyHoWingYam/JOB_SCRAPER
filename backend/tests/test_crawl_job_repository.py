@@ -122,3 +122,45 @@ def test_crawl_job_events_enforce_per_job_sequence_uniqueness_in_schema():
         constraint.name == "uq_crawl_job_events_job_sequence"
         for constraint in unique_constraints
     )
+
+
+def test_record_runtime_event_merges_metrics_without_dropping_existing_keys():
+    db = _build_sqlite_session()
+    try:
+        repository = CrawlJobRepository()
+        crawl_job = repository.create_crawl_job(
+            db,
+            source_site="jobsdb",
+            trigger_type="manual",
+            request_payload={"category_ids": [6281], "max_pages": 1},
+            requested_by="pytest",
+        )
+        crawl_job.metrics = {
+            "ingest_items_seen": 2,
+            "ingest_jobs_created": 1,
+        }
+        db.commit()
+
+        repository.record_runtime_event(
+            db,
+            crawl_job_id=crawl_job.id,
+            status="completed",
+            event_type="crawl.completed",
+            payload={"status": "completed"},
+            metrics={
+                "pages_processed": 1,
+                "items_emitted": 1,
+                "job_ids_collected": 1,
+            },
+        )
+
+        db.refresh(crawl_job)
+        assert crawl_job.metrics == {
+            "ingest_items_seen": 2,
+            "ingest_jobs_created": 1,
+            "pages_processed": 1,
+            "items_emitted": 1,
+            "job_ids_collected": 1,
+        }
+    finally:
+        db.close()

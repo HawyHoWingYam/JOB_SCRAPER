@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -99,3 +100,29 @@ def test_publish_pending_batch_retries_and_retains_pending_state_on_failure(sqli
     assert row.attempt_count == 1
     assert row.last_error == "redis unavailable"
     assert row.available_at > original_available_at
+
+
+def test_publish_pending_batch_preserves_source_service_from_outbox_row(sqlite_session, redis_db):
+    repository = EventOutboxRepository()
+    bus = RedisStreamBus(redis_client=redis_db)
+    publisher = OutboxPublisher(event_outbox_repository=repository, stream_bus=bus)
+
+    row = repository.enqueue(
+        sqlite_session,
+        topic=STREAM_CRAWL_COMMANDS,
+        aggregate_type="job",
+        aggregate_id=str(uuid.uuid4()),
+        event_type="job.ingested",
+        payload={"job_id": "abc"},
+        source_service="ingest-worker",
+    )
+
+    result = publisher.publish_pending_batch(sqlite_session, limit=10)
+
+    assert result.published_count == 1
+    message_id, values = redis_db.xrange(STREAM_CRAWL_COMMANDS, count=1)[0]
+    assert isinstance(message_id, str)
+    payload = json.loads(values["data"])
+    assert payload["source_service"] == "ingest-worker"
+    sqlite_session.refresh(row)
+    assert row.status == "published"

@@ -1,20 +1,46 @@
-from sqlalchemy import Column, String, Text, DateTime, Boolean, JSON, ForeignKey, UUID, Integer, text
-from sqlalchemy.orm import relationship, deferred
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UUID,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.orm import deferred, relationship
 from datetime import datetime, UTC
 import json
 from typing import Any, List, Optional
 from app.database import Base
 from app.utils.skill_taxonomy_policy import is_governed_visible_skill_instance
+from app.utils.source_identity import derive_source_job_id, normalize_source_site
 import uuid
 
 JOBSDB_BASE_URL = "https://hk.jobsdb.com/job"
 CTGOODJOBS_BASE_URL = "https://jobs.ctgoodjobs.hk/job"
 
 
+def _default_source_site(context) -> str:
+    return normalize_source_site(context.get_current_parameters().get("source_site"))
+
+
+def _default_source_job_id(context) -> str:
+    params = context.get_current_parameters()
+    source_site = normalize_source_site(params.get("source_site"))
+    return derive_source_job_id(source_site, params.get("job_id"))
+
+
 class Job(Base):
     """Job model for storing JobsDB job listings."""
 
     __tablename__ = "jobs"
+    __table_args__ = (
+        UniqueConstraint("source_site", "source_job_id", name="uq_jobs_source_job_key"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     job_id = Column(String(255), unique=True, nullable=False, index=True)
@@ -25,8 +51,16 @@ class Job(Base):
         Column(
             String(32),
             nullable=False,
-            default="jobsdb",
+            default=_default_source_site,
             server_default=text("'jobsdb'"),
+            index=True,
+        )
+    )
+    source_job_id = deferred(
+        Column(
+            String(255),
+            nullable=False,
+            default=_default_source_job_id,
             index=True,
         )
     )

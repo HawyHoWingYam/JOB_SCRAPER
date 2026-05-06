@@ -153,6 +153,8 @@ def map_scraped_company_to_db(scraped_job: Dict[str, Any]) -> Dict[str, Any]:
     try:
         # Handle both list API and detail scraper formats
         company_data = {
+            "source_site": "jobsdb",
+            "source_company_id": scraped_job.get("advertiser_id") or scraped_job.get("company_id"),
             "company_id": scraped_job.get("advertiser_id") or scraped_job.get("company_id"),
             "name": (
                 scraped_job.get("company_name") or
@@ -210,6 +212,8 @@ def map_scraped_job_to_db(
         job_data = {
             # job_id: detail scraper uses jobsdb_id, list API uses external_id
             "job_id": scraped_job.get("external_id") or scraped_job.get("jobsdb_id"),
+            "source_site": "jobsdb",
+            "source_job_id": scraped_job.get("external_id") or scraped_job.get("jobsdb_id"),
             "company_id": company_id,
             "title": scraped_job.get("title"),
             "description": description,
@@ -242,6 +246,8 @@ def map_source_scraped_company_to_db(scraped_job: Dict[str, Any]) -> Dict[str, A
     company_data = map_scraped_company_to_db(scraped_job)
     source_site = scraped_job.get("source_site")
     if source_site == "ctgoodjobs":
+        company_data["source_site"] = "ctgoodjobs"
+        company_data["source_company_id"] = str(scraped_job.get("company_id") or "").strip() or None
         company_data["company_id"] = _namespace_ctgoodjobs_id(company_data.get("company_id"))
         if not company_data.get("industry"):
             industry = scraped_job.get("source_classification_name")
@@ -295,6 +301,7 @@ def map_ctgoodjobs_scraped_job_to_db(scraped_job: Dict[str, Any], company_id: st
     return {
         "job_id": scraped_job.get("job_id"),
         "source_site": scraped_job.get("source_site") or "ctgoodjobs",
+        "source_job_id": str(scraped_job.get("job_id") or "").removeprefix("ctgoodjobs:"),
         "company_id": company_id,
         "title": scraped_job.get("title"),
         "description": description,

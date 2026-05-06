@@ -116,7 +116,7 @@ class CrawlJobRepository:
         if error_message is not _UNSET:
             crawl_job.error_message = error_message
         if metrics is not None:
-            crawl_job.metrics = metrics
+            crawl_job.metrics = self._merge_metrics(crawl_job.metrics, metrics)
 
         self.append_event(
             db,
@@ -126,6 +126,35 @@ class CrawlJobRepository:
             emitted_by=emitted_by,
             auto_commit=False,
         )
+
+        if auto_commit:
+            db.commit()
+            db.refresh(crawl_job)
+        else:
+            db.flush()
+        return crawl_job
+
+    def increment_metrics(
+        self,
+        db: Session,
+        *,
+        crawl_job_id,
+        metrics_delta: dict[str, Any],
+        auto_commit: bool = True,
+    ) -> CrawlJob:
+        crawl_job = (
+            db.query(CrawlJob)
+            .filter(CrawlJob.id == crawl_job_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if crawl_job is None:
+            raise ValueError(f"Crawl job not found: {crawl_job_id}")
+
+        merged_metrics = self._merge_metrics(crawl_job.metrics, {})
+        for key, value in metrics_delta.items():
+            merged_metrics[key] = int(merged_metrics.get(key) or 0) + int(value)
+        crawl_job.metrics = merged_metrics
 
         if auto_commit:
             db.commit()
@@ -149,3 +178,9 @@ class CrawlJobRepository:
             .limit(limit)
             .all()
         )
+
+    def _merge_metrics(self, existing_metrics, metrics_patch: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(existing_metrics or {})
+        for key, value in (metrics_patch or {}).items():
+            merged[key] = value
+        return merged

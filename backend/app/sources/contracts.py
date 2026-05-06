@@ -4,6 +4,18 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 
+def _normalize_salary_range(value: Any) -> str | None:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    if isinstance(value, dict):
+        for key in ("label", "display", "text"):
+            label = value.get(key)
+            if isinstance(label, str) and label.strip():
+                return label.strip()
+    return None
+
+
 @dataclass(frozen=True)
 class CanonicalScrapedJob:
     source_site: str
@@ -40,7 +52,7 @@ def build_jobsdb_canonical_job(
         description=parsed_job.get("description_html") or parsed_job.get("abstract"),
         company_name=parsed_job.get("advertiser_name"),
         location=parsed_job.get("location"),
-        salary_range=parsed_job.get("salary"),
+        salary_range=_normalize_salary_range(parsed_job.get("salary")),
         employment_type=parsed_job.get("work_type"),
         source_classification_id=parsed_job.get("classification_id"),
         source_classification_name=parsed_job.get("classification"),

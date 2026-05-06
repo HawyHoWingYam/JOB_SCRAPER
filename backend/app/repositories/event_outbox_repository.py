@@ -21,6 +21,7 @@ class EventOutboxRepository:
         aggregate_id: str,
         event_type: str,
         payload: dict[str, Any],
+        source_service: str = "outbox-publisher",
         available_at: datetime | None = None,
         auto_commit: bool = True,
     ) -> EventOutbox:
@@ -29,6 +30,7 @@ class EventOutboxRepository:
             aggregate_type=aggregate_type,
             aggregate_id=aggregate_id,
             event_type=event_type,
+            source_service=source_service,
             payload=payload,
             available_at=available_at or utc_now(),
         )

@@ -16,6 +16,7 @@ class EventOutbox(Base):
     aggregate_type = Column(String(100), nullable=False)
     aggregate_id = Column(String(100), nullable=False, index=True)
     event_type = Column(String(100), nullable=False)
+    source_service = Column(String(100), nullable=False, default="outbox-publisher")
     payload = Column(JSON, nullable=False)
     status = Column(String(32), nullable=False, default="pending", index=True)
     attempt_count = Column(Integer, nullable=False, default=0)

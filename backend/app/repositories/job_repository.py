@@ -5,18 +5,61 @@ Handles job lookup, creation, updates, and upsert logic.
 """
 
 import logging
+from datetime import UTC, datetime
+import json
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from uuid import UUID
 
 from app.models.job import Job
+from app.utils.source_identity import normalize_source_site
 
 logger = logging.getLogger(__name__)
 
 
 class JobRepository:
     """Repository for Job database operations."""
+
+    def upsert_source_job(
+        self,
+        db: Session,
+        job_data: Dict[str, Any],
+        auto_commit: bool = True,
+    ) -> tuple[Job, str]:
+        source_site = normalize_source_site(job_data.get("source_site"))
+        source_job_id = str(job_data.get("source_job_id") or "").strip()
+        if not source_job_id:
+            raise ValueError("source_job_id is required for source-aware upsert")
+
+        normalized_data = dict(job_data)
+        normalized_data["source_site"] = source_site
+        normalized_data["source_job_id"] = source_job_id
+        existing = self.get_job_by_source_key(
+            db,
+            source_site=source_site,
+            source_job_id=source_job_id,
+        )
+        if existing is None:
+            return self.create_job(db, normalized_data, auto_commit=auto_commit), "created"
+
+        changed = False
+        for key, value in normalized_data.items():
+            if not hasattr(existing, key) or key in {"id", "created_at"}:
+                continue
+            if not self._values_equal(getattr(existing, key), value):
+                setattr(existing, key, value)
+                changed = True
+
+        if not changed:
+            return existing, "skipped"
+
+        if auto_commit:
+            db.commit()
+            db.refresh(existing)
+        else:
+            db.flush()
+        return existing, "updated"
 
     def upsert_job(
         self,
@@ -87,6 +130,32 @@ class JobRepository:
             logger.error(f"Error querying job by job_id {job_id}: {e}")
             return None
 
+    def get_job_by_source_key(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+        source_job_id: str,
+    ) -> Optional[Job]:
+        try:
+            return (
+                db.query(Job)
+                .filter(
+                    Job.source_site == normalize_source_site(source_site),
+                    Job.source_job_id == str(source_job_id).strip(),
+                    Job.is_deleted == False,
+                )
+                .first()
+            )
+        except Exception as e:
+            logger.error(
+                "Error querying job by source key %s/%s: %s",
+                source_site,
+                source_job_id,
+                e,
+            )
+            return None
+
     def create_job(
         self, db: Session, job_data: Dict[str, Any], auto_commit: bool = True
     ) -> Job:
@@ -107,6 +176,7 @@ class JobRepository:
             job = Job(
                 job_id=job_data.get("job_id"),
                 source_site=job_data.get("source_site") or "jobsdb",
+                source_job_id=job_data.get("source_job_id"),
                 company_id=job_data.get("company_id"),
                 title=job_data.get("title"),
                 description=job_data.get("description"),
@@ -191,3 +261,26 @@ class JobRepository:
                 db.rollback()
             logger.error(f"Error updating job {job_id}: {e}")
             raise
+
+    def _values_equal(self, left, right) -> bool:
+        return self._normalize_comparable_value(left) == self._normalize_comparable_value(right)
+
+    def _normalize_comparable_value(self, value):
+        if isinstance(value, datetime):
+            return self._normalize_datetime(value)
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, sort_keys=True)
+        if isinstance(value, str):
+            normalized = value.strip()
+            try:
+                parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+                return self._normalize_datetime(parsed)
+            except ValueError:
+                return normalized
+        return value
+
+    def _normalize_datetime(self, value: datetime) -> str:
+        normalized = value
+        if normalized.tzinfo is not None:
+            normalized = normalized.astimezone(UTC).replace(tzinfo=None)
+        return normalized.isoformat()

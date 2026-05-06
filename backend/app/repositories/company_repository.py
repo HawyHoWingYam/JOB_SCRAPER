@@ -10,12 +10,80 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.models.company import Company
+from app.utils.source_identity import normalize_source_site
 
 logger = logging.getLogger(__name__)
 
 
 class CompanyRepository:
     """Repository for Company database operations."""
+
+    def upsert_company(
+        self,
+        db: Session,
+        company_data: Dict[str, Any],
+        auto_commit: bool = True,
+    ) -> tuple[Company, str]:
+        source_site = normalize_source_site(company_data.get("source_site"))
+        source_company_id = str(company_data.get("source_company_id") or "").strip()
+        if not source_company_id:
+            raise ValueError("source_company_id is required for source-aware upsert")
+
+        existing = self.get_company_by_source_key(
+            db,
+            source_site=source_site,
+            source_company_id=source_company_id,
+        )
+        normalized_data = dict(company_data)
+        normalized_data["source_site"] = source_site
+        normalized_data["source_company_id"] = source_company_id
+
+        if existing is None:
+            return self.create_company(db, normalized_data, auto_commit=auto_commit), "created"
+
+        changed = False
+        for key, value in normalized_data.items():
+            if not hasattr(existing, key) or key in {"id", "created_at"}:
+                continue
+            if getattr(existing, key) != value:
+                setattr(existing, key, value)
+                changed = True
+
+        if not changed:
+            return existing, "skipped"
+
+        if auto_commit:
+            db.commit()
+            db.refresh(existing)
+        else:
+            db.flush()
+        return existing, "updated"
+
+    def get_company_by_source_key(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+        source_company_id: str,
+    ) -> Optional[Company]:
+        try:
+            return (
+                db.query(Company)
+                .filter(
+                    Company.source_site == normalize_source_site(source_site),
+                    Company.source_company_id == str(source_company_id).strip(),
+                    Company.is_deleted == False,
+                )
+                .first()
+            )
+        except Exception as e:
+            logger.error(
+                "Error querying company by source key %s/%s: %s",
+                source_site,
+                source_company_id,
+                e,
+            )
+            return None
 
     def get_or_create_company(
         self, db: Session, company_data: Dict[str, Any], auto_commit: bool = True
@@ -35,6 +103,20 @@ class CompanyRepository:
         Returns:
             (Company, created: bool) - Company instance and whether it was created
         """
+        if company_data.get("source_site") and company_data.get("source_company_id"):
+            company = self.get_company_by_source_key(
+                db,
+                source_site=str(company_data["source_site"]),
+                source_company_id=str(company_data["source_company_id"]),
+            )
+            if company:
+                logger.debug(
+                    "Found company by source key: %s/%s",
+                    company_data["source_site"],
+                    company_data["source_company_id"],
+                )
+                return company, False
+
         # Try lookup by company_id first
         if company_data.get("company_id"):
             company = self.get_company_by_company_id(db, company_data["company_id"])
@@ -117,6 +199,8 @@ class CompanyRepository:
         try:
             company = Company(
                 company_id=company_data.get("company_id"),
+                source_site=normalize_source_site(company_data.get("source_site")),
+                source_company_id=company_data.get("source_company_id"),
                 name=company_data.get("name"),
                 industry=company_data.get("industry"),
                 location=company_data.get("location"),
