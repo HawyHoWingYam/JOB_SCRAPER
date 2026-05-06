@@ -235,6 +235,35 @@ def test_recover_interrupted_operations_keeps_ai_and_company_results_when_schedu
         db.close()
 
 
+def test_recover_interrupted_operations_can_skip_selected_subsystems():
+    db = _build_sqlite_session()
+    try:
+        service = StartupRecoveryService(db)
+        call_order = []
+
+        service._recover_ai_runs = lambda: call_order.append("ai") or 1
+        service._recover_company_runs = lambda: call_order.append("company") or 2
+        service._recover_crawl_jobs = lambda: call_order.append("crawl") or 3
+        service._recover_schedule_executions = lambda: call_order.append("schedule") or 4
+
+        summary = service.recover_interrupted_operations(
+            recover_ai_runs=False,
+            recover_company_runs=True,
+            recover_crawl_jobs=False,
+            recover_schedule_executions=True,
+        )
+
+        assert call_order == ["company", "schedule"]
+        assert summary == {
+            "ai_runs_recovered": 0,
+            "company_runs_recovered": 2,
+            "crawl_jobs_recovered": 0,
+            "schedule_executions_recovered": 4,
+        }
+    finally:
+        db.close()
+
+
 def test_recover_crawl_jobs_marks_running_jobs_failed():
     db = _build_sqlite_session()
     try:

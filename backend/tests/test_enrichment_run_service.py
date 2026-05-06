@@ -17,10 +17,19 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.config import settings
 from app.database import Base
 from app.models.app_runtime_settings import AppRuntimeSettings
-from app.models import JobSkill, JobSkillMention, Skill, SkillCategory, SkillTechnology
+from app.models import (
+    CrawlJob,
+    EventOutbox,
+    JobSkill,
+    JobSkillMention,
+    Skill,
+    SkillCategory,
+    SkillTechnology,
+)
 from app.models.skill_review_candidate import SkillReviewCandidate
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
+from app.messaging.topics import STREAM_JOB_LIFECYCLE
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.services.enrichment_run_service import EnrichmentRunService
 
@@ -48,8 +57,10 @@ def _build_sqlite_session():
             JobSkill.__table__,
             SkillReviewCandidate.__table__,
             JobSkillMention.__table__,
+            CrawlJob.__table__,
             EnrichmentRun.__table__,
             EnrichmentRunItem.__table__,
+            EventOutbox.__table__,
         ],
     )
     Session = sessionmaker(bind=engine)
@@ -128,6 +139,29 @@ def _create_run_with_items(
 
     db.commit()
     return run
+
+
+def _create_crawl_job(
+    db,
+    *,
+    status="running",
+    metrics=None,
+    source_site="jobsdb",
+):
+    crawl_job = CrawlJob(
+        id=uuid.uuid4(),
+        source_site=source_site,
+        trigger_type="manual",
+        status=status,
+        request_payload={"category_ids": [6281], "max_pages": 1},
+        requested_by="pytest",
+        metrics=metrics or {},
+        created_at=datetime(2026, 5, 5, 12, 0, 0),
+        updated_at=datetime(2026, 5, 5, 12, 0, 0),
+    )
+    db.add(crawl_job)
+    db.commit()
+    return crawl_job
 
 
 def test_create_manual_pending_run_skips_jobs_missing_source_classification():
@@ -401,6 +435,102 @@ def test_get_overview_counts_only_latest_unrecovered_failed_jobs():
 
         assert overview["failed_jobs"] == 2
         assert overview["failed_items"] == 6
+    finally:
+        db.close()
+
+
+def test_append_job_to_crawl_auto_run_creates_pending_crawl_scoped_run_and_deduplicates_items():
+    db = _build_sqlite_session()
+    try:
+        crawl_job = _create_crawl_job(
+            db,
+            status="completed",
+            metrics={"items_emitted": 1, "ingest_items_seen": 1},
+        )
+        job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 5, 12, 30, 0),
+            title="Auto Run Job",
+        )
+
+        service = EnrichmentRunService(db)
+        first_run = service.append_job_to_crawl_auto_run(
+            crawl_job_id=str(crawl_job.id),
+            job_id=str(job.id),
+        )
+        second_run = service.append_job_to_crawl_auto_run(
+            crawl_job_id=str(crawl_job.id),
+            job_id=str(job.id),
+        )
+        db.commit()
+
+        assert first_run is not None
+        assert second_run is not None
+        assert first_run.id == second_run.id
+
+        persisted_run = service.get_run(first_run.id)
+        assert persisted_run is not None
+        assert persisted_run.source_type == "crawl_auto"
+        assert str(persisted_run.trigger_crawl_job_id) == str(crawl_job.id)
+        assert persisted_run.status == "pending"
+        assert persisted_run.total_items == 1
+        assert persisted_run.pending_items == 1
+        assert persisted_run.job_ids == [str(job.id)]
+
+        items = service.list_run_items(first_run.id)
+        assert len(items) == 1
+        assert str(items[0].job_id) == str(job.id)
+    finally:
+        db.close()
+
+
+def test_request_crawl_auto_run_if_ready_waits_for_terminal_crawl_and_full_ingest_before_enqueueing():
+    db = _build_sqlite_session()
+    try:
+        crawl_job = _create_crawl_job(
+            db,
+            status="running",
+            metrics={"items_emitted": 2, "ingest_items_seen": 1},
+        )
+        jobs = [
+            _create_job(
+                db,
+                source_classification_id="6281",
+                created_at=datetime(2026, 5, 5, 13, index, 0),
+                title=f"Queued Auto Job {index + 1}",
+            )
+            for index in range(2)
+        ]
+
+        service = EnrichmentRunService(db)
+        for job in jobs:
+            service.append_job_to_crawl_auto_run(
+                crawl_job_id=str(crawl_job.id),
+                job_id=str(job.id),
+            )
+        db.commit()
+
+        assert service.request_crawl_auto_run_if_ready(str(crawl_job.id)) is False
+        assert db.query(EventOutbox).count() == 0
+
+        crawl_job.status = "completed"
+        db.commit()
+        assert service.request_crawl_auto_run_if_ready(str(crawl_job.id)) is False
+        assert db.query(EventOutbox).count() == 0
+
+        crawl_job.metrics = {"items_emitted": 2, "ingest_items_seen": 2}
+        db.commit()
+        assert service.request_crawl_auto_run_if_ready(str(crawl_job.id)) is True
+
+        outbox_rows = db.query(EventOutbox).all()
+        assert len(outbox_rows) == 1
+        assert outbox_rows[0].topic == STREAM_JOB_LIFECYCLE
+        assert outbox_rows[0].event_type == "enrichment.run.requested"
+        assert outbox_rows[0].payload["run_id"]
+
+        assert service.request_crawl_auto_run_if_ready(str(crawl_job.id)) is False
+        assert db.query(EventOutbox).count() == 1
     finally:
         db.close()
 

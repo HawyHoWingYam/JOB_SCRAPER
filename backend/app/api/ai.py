@@ -2,24 +2,32 @@
 AI Enrichment API Endpoints
 """
 
+import asyncio
 import logging
 from typing import List, Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 
 from app.database import SessionLocal, get_db
+from app.messaging.outbox_publisher import OutboxPublisher
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
+from app.models.job_category import JobCategory
 from app.models.job import Job
-from app.services.ai_enrichment_service import get_ai_enrichment_service
+from app.models.job_skill_mention import JobSkillMention
+from app.models.job_subcategory import JobSubcategory
+from app.models.skill import Skill
+from app.models.skill_technology import SkillTechnology
+from app.schemas import JobDetailSchema
 from app.services.enrichment_run_service import EnrichmentRunService
 from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
+ACTIVE_AI_RUN_STATUSES = {"pending", "running"}
 
 
 class EnrichRequest(BaseModel):
@@ -85,6 +93,7 @@ def _serialize_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
     return {
         "id": run.id,
         "source_type": run.source_type,
+        "trigger_crawl_job_id": str(run.trigger_crawl_job_id) if getattr(run, "trigger_crawl_job_id", None) else None,
         "status": run.status,
         "job_ids": list(run.job_ids or []),
         "total_items": run.total_items,
@@ -116,29 +125,60 @@ def _serialize_item(item: EnrichmentRunItem) -> dict:
     }
 
 
-async def _run_persisted_enrichment(run_id: str) -> None:
-    """Execute a persisted run in the background."""
-    db = SessionLocal()
-    try:
-        await EnrichmentRunService(db).execute_run(run_id)
-        db.commit()
-    except Exception as exc:
-        db.rollback()
+def _publish_run_request(
+    db: Session,
+    *,
+    service: EnrichmentRunService,
+    run_id: str,
+    source_service: str = "ai-api",
+) -> None:
+    service.request_run_execution(run_id, source_service=source_service)
+    db.commit()
+    OutboxPublisher().publish_pending_batch(db, limit=100)
+
+
+async def _wait_for_terminal_run(run_id: str) -> EnrichmentRun:
+    while True:
+        wait_db = SessionLocal()
         try:
-            EnrichmentRunService(db).mark_run_failed(run_id, str(exc))
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to persist failure state for enrichment run %s", run_id)
-        logger.exception("Persisted enrichment run %s failed", run_id)
+            run = EnrichmentRunService(wait_db).get_run(run_id)
+            if run is None:
+                raise HTTPException(status_code=404, detail="Run not found")
+            if str(run.status or "").lower() not in ACTIVE_AI_RUN_STATUSES:
+                return run
+        finally:
+            wait_db.close()
+        await asyncio.sleep(0.1)
+
+
+def _load_job_snapshot(job_id: UUID) -> dict:
+    snapshot_db = SessionLocal()
+    try:
+        job = (
+            snapshot_db.query(Job)
+            .options(
+                joinedload(Job.company),
+                joinedload(Job.job_skill_mentions)
+                .joinedload(JobSkillMention.skill)
+                .joinedload(Skill.technology)
+                .joinedload(SkillTechnology.category),
+                joinedload(Job.subcategory)
+                .joinedload(JobSubcategory.category)
+                .joinedload(JobCategory.domain),
+            )
+            .filter(Job.id == job_id, Job.is_deleted.is_(False))
+            .first()
+        )
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return JobDetailSchema.model_validate(job).model_dump(mode="json")
     finally:
-        db.close()
+        snapshot_db.close()
 
 
 @router.post("/enrich")
 async def start_enrichment(
     request: EnrichRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """Start batch AI enrichment for unenriched jobs."""
@@ -151,9 +191,8 @@ async def start_enrichment(
     if run is None:
         return {"task_id": None, "run_id": None, "status": "no_jobs"}
 
-    db.commit()
-    background_tasks.add_task(_run_persisted_enrichment, run.id)
-    return {"task_id": run.id, "run_id": run.id, "status": "started"}
+    _publish_run_request(db, service=EnrichmentRunService(db), run_id=run.id)
+    return {"task_id": run.id, "run_id": run.id, "status": "queued"}
 
 
 @router.get("/status/{task_id}")
@@ -191,7 +230,6 @@ async def get_ai_overview(db: Session = Depends(get_db)):
 @router.post("/runs")
 async def create_enrichment_run(
     request: CreateRunRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """Create a persisted enrichment run."""
@@ -226,9 +264,8 @@ async def create_enrichment_run(
     if run is None:
         return {"status": "empty", "run": None}
 
-    run_id = run.id
-    db.commit()
-    background_tasks.add_task(_run_persisted_enrichment, run_id)
+    _publish_run_request(db, service=service, run_id=run.id)
+    db.refresh(run)
     return _serialize_run(run, db)
 
 
@@ -279,7 +316,6 @@ async def get_enrichment_run_items(
 @router.post("/runs/{run_id}/retry-failed")
 async def retry_failed_enrichment_run(
     run_id: str,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """Create a retry run from the failed items of a previous run."""
@@ -290,15 +326,14 @@ async def retry_failed_enrichment_run(
         run = service.create_retry_run_from_failed_items(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    retry_run_id = run.id
-    db.commit()
-    background_tasks.add_task(_run_persisted_enrichment, retry_run_id)
+    _publish_run_request(db, service=service, run_id=run.id)
+    db.refresh(run)
     return _serialize_run(run, db)
 
 
 @router.post("/enrich-job/{job_id}")
 async def enrich_single_job(job_id: UUID, db: Session = Depends(get_db)):
-    """Enrich a single job immediately."""
+    """Enrich a single job through the worker-owned run pipeline."""
     try:
         ensure_profile_runtime_ready("jobs")
     except ProfileRuntimeNotReadyError as exc:
@@ -308,9 +343,14 @@ async def enrich_single_job(job_id: UUID, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    service = get_ai_enrichment_service()
-    result = await service.enrich_job(job, db)
-    return result
+    service = EnrichmentRunService(db)
+    run = service.create_manual_single_job_run(str(job_id))
+    _publish_run_request(db, service=service, run_id=run.id)
+    terminal_run = await _wait_for_terminal_run(run.id)
+    return {
+        "run": _serialize_run(terminal_run),
+        "job": _load_job_snapshot(job_id),
+    }
 
 
 @router.get("/stats")

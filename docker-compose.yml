@@ -139,6 +139,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
+    command: python -m app.workers.run_enrichment_worker
     environment:
       DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
       REDIS_URL: redis://redis-mq:6379/0

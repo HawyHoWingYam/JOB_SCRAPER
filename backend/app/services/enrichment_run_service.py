@@ -7,7 +7,10 @@ from typing import Dict, Iterable, List, Optional
 from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import Session
 
+from app.messaging.topics import STREAM_JOB_LIFECYCLE
+from app.models.crawl_job import CrawlJob
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
+from app.models.event_outbox import EventOutbox
 from app.models.job_skill import JobSkill
 from app.models.job_skill_mention import JobSkillMention
 from app.models.job import Job
@@ -15,6 +18,7 @@ from app.models.skill import Skill
 from app.models.skill_category import SkillCategory
 from app.models.skill_review_candidate import SkillReviewCandidate
 from app.models.skill_technology import SkillTechnology
+from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.utils.time import utc_now
 
@@ -48,17 +52,25 @@ class EnrichmentRunService:
 
     def __init__(self, db: Session):
         self.db = db
+        self.event_outbox_repository = EventOutboxRepository()
 
     def create_post_scrape_run(self, job_ids: List[str]) -> EnrichmentRun:
         """Persist a post-scrape run for internal `jobs.id` UUID values."""
         return self._create_run(source_type="post_scrape", job_ids=job_ids)
 
-    def _create_run(self, source_type: str, job_ids: List[str]) -> EnrichmentRun:
+    def _create_run(
+        self,
+        source_type: str,
+        job_ids: List[str],
+        *,
+        trigger_crawl_job_id: str | uuid.UUID | None = None,
+    ) -> EnrichmentRun:
         """Persist a run and its pending items for internal `jobs.id` UUID values."""
         normalized_job_ids = [str(job_id) for job_id in job_ids]
         item_count = len(normalized_job_ids)
         run = EnrichmentRun(
             source_type=source_type,
+            trigger_crawl_job_id=uuid.UUID(str(trigger_crawl_job_id)) if trigger_crawl_job_id else None,
             status="pending",
             job_ids=normalized_job_ids,
             total_items=item_count,
@@ -94,6 +106,10 @@ class EnrichmentRunService:
         if not job_ids:
             return None
         return self._create_run(source_type="manual_batch", job_ids=job_ids)
+
+    def create_manual_single_job_run(self, job_id: str) -> EnrichmentRun:
+        """Create a worker-owned run for a single explicitly requested job."""
+        return self._create_run(source_type="manual_single", job_ids=[job_id])
 
     def create_manual_query_run(
         self,
@@ -133,6 +149,125 @@ class EnrichmentRunService:
         if not job_ids:
             return None
         return self._create_run(source_type="manual_pending", job_ids=job_ids)
+
+    def get_crawl_auto_run(self, crawl_job_id: str) -> Optional[EnrichmentRun]:
+        crawl_job_uuid = uuid.UUID(str(crawl_job_id))
+        return (
+            self.db.query(EnrichmentRun)
+            .filter(
+                EnrichmentRun.source_type == "crawl_auto",
+                EnrichmentRun.trigger_crawl_job_id == crawl_job_uuid,
+            )
+            .order_by(
+                EnrichmentRun.created_at.desc(),
+                EnrichmentRun.id.desc(),
+            )
+            .first()
+        )
+
+    def append_job_to_crawl_auto_run(self, *, crawl_job_id: str, job_id: str) -> EnrichmentRun:
+        crawl_job_uuid = uuid.UUID(str(crawl_job_id))
+        job_uuid = uuid.UUID(str(job_id))
+        run = self.get_crawl_auto_run(str(crawl_job_uuid))
+        if run is None:
+            run = self._create_run(
+                source_type="crawl_auto",
+                job_ids=[],
+                trigger_crawl_job_id=crawl_job_uuid,
+            )
+            run.total_items = 0
+            run.pending_items = 0
+            run.completed_items = 0
+            run.failed_items = 0
+            run.job_ids = []
+            self.db.flush()
+
+        existing_item = (
+            self.db.query(EnrichmentRunItem)
+            .filter(
+                EnrichmentRunItem.run_id == run.id,
+                EnrichmentRunItem.job_id == job_uuid,
+            )
+            .first()
+        )
+        if existing_item is not None:
+            return run
+
+        if run.status != "pending":
+            raise RuntimeError(f"Cannot append job to non-pending crawl auto run {run.id}")
+
+        next_position = len(list(run.job_ids or []))
+        run.job_ids = list(run.job_ids or []) + [str(job_uuid)]
+        run.total_items = int(run.total_items or 0) + 1
+        run.pending_items = int(run.pending_items or 0) + 1
+        self.db.add(
+            EnrichmentRunItem(
+                run_id=run.id,
+                job_id=job_uuid,
+                position=next_position,
+                status="pending",
+            )
+        )
+        self.db.flush()
+        return run
+
+    def request_run_execution(self, run_id: str, *, source_service: str = "ai-api") -> bool:
+        run = (
+            self.db.query(EnrichmentRun)
+            .filter(EnrichmentRun.id == run_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if run is None or run.status != "pending":
+            return False
+
+        existing_request = (
+            self.db.query(EventOutbox.id)
+            .filter(
+                EventOutbox.aggregate_type == "enrichment_run",
+                EventOutbox.aggregate_id == run.id,
+                EventOutbox.event_type == "enrichment.run.requested",
+            )
+            .first()
+        )
+        if existing_request is not None:
+            return False
+
+        self.event_outbox_repository.enqueue(
+            self.db,
+            topic=STREAM_JOB_LIFECYCLE,
+            aggregate_type="enrichment_run",
+            aggregate_id=run.id,
+            event_type="enrichment.run.requested",
+            payload=self._build_run_requested_payload(run),
+            source_service=source_service,
+            auto_commit=False,
+        )
+        self.db.flush()
+        return True
+
+    def request_crawl_auto_run_if_ready(self, crawl_job_id: str) -> bool:
+        crawl_job_uuid = uuid.UUID(str(crawl_job_id))
+        crawl_job = (
+            self.db.query(CrawlJob)
+            .filter(CrawlJob.id == crawl_job_uuid)
+            .first()
+        )
+        run = self.get_crawl_auto_run(str(crawl_job_uuid))
+        if crawl_job is None or run is None:
+            return False
+        if run.status != "pending" or not run.total_items:
+            return False
+        if crawl_job.status not in {"completed", "failed"}:
+            return False
+
+        metrics = dict(crawl_job.metrics or {})
+        items_emitted = int(metrics.get("items_emitted") or 0)
+        ingest_items_seen = int(metrics.get("ingest_items_seen") or 0)
+        if items_emitted <= 0 or ingest_items_seen < items_emitted:
+            return False
+
+        return self.request_run_execution(run.id, source_service="enrichment-worker")
 
     def _select_manual_query_job_ids(
         self,
@@ -260,6 +395,26 @@ class EnrichmentRunService:
             .filter(EnrichmentRun.id == run_id)
             .first()
         )
+
+    def claim_run(self, run_id: str) -> Optional[EnrichmentRun]:
+        run = (
+            self.db.query(EnrichmentRun)
+            .filter(EnrichmentRun.id == run_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if run is None or run.status != "pending":
+            return None
+
+        now = utc_now()
+        run.status = "running"
+        run.started_at = run.started_at or now
+        run.completed_at = None
+        run.error_message = None
+        run.current_job_title = None
+        self.db.commit()
+        self.db.refresh(run)
+        return run
 
     def list_runs(
         self,
@@ -576,6 +731,7 @@ class EnrichmentRunService:
         if result.get("status") == "success":
             item.status = "completed"
             item.error_message = None
+            self._enqueue_job_enriched_event(run=run, item=item)
         else:
             item.status = "failed"
             item.error_message = str(result.get("error") or "missing result for run item")
@@ -594,11 +750,44 @@ class EnrichmentRunService:
         effective_settings = AIRuntimeSettingsService(self.db).get_effective_settings()
         return max(1, int(effective_settings.ai_enrichment_run_concurrency or 1))
 
-    async def execute_run(self, run_id: str, enrichment_service=None) -> EnrichmentRun:
+    def _build_run_requested_payload(self, run: EnrichmentRun) -> dict[str, object]:
+        return {
+            "run_id": run.id,
+            "source_type": run.source_type,
+            "trigger_crawl_job_id": str(run.trigger_crawl_job_id) if run.trigger_crawl_job_id else None,
+            "total_items": int(run.total_items or 0),
+        }
+
+    def _enqueue_job_enriched_event(self, *, run: EnrichmentRun, item: EnrichmentRunItem) -> None:
+        self.event_outbox_repository.enqueue(
+            self.db,
+            topic=STREAM_JOB_LIFECYCLE,
+            aggregate_type="job",
+            aggregate_id=str(item.job_id),
+            event_type="job.enriched",
+            payload={
+                "run_id": run.id,
+                "job_id": str(item.job_id),
+                "source_type": run.source_type,
+                "crawl_job_id": str(run.trigger_crawl_job_id) if run.trigger_crawl_job_id else None,
+            },
+            source_service="enrichment-worker",
+            auto_commit=False,
+        )
+
+    async def execute_run(self, run_id: str, enrichment_service=None, *, claim: bool = True) -> EnrichmentRun:
         """Execute a persisted run and update item/run status from enrichment results."""
         from app.services.ai_enrichment_service import get_ai_enrichment_service
 
         service = enrichment_service or get_ai_enrichment_service()
+
+        if claim:
+            claimed_run = self.claim_run(run_id)
+            if claimed_run is None:
+                run = self.get_run(run_id)
+                if run is None:
+                    raise ValueError(f"Enrichment run not found: {run_id}")
+                return run
 
         run = self.db.query(EnrichmentRun).filter(EnrichmentRun.id == run_id).one()
         items = (
@@ -607,13 +796,14 @@ class EnrichmentRunService:
             .order_by(EnrichmentRunItem.position.asc())
             .all()
         )
-        now = utc_now()
-        run.status = "running"
-        run.started_at = run.started_at or now
-        run.completed_at = None
-        run.error_message = None
-        run.current_job_title = None
-        self.db.commit()
+        if not claim:
+            now = utc_now()
+            run.status = "running"
+            run.started_at = run.started_at or now
+            run.completed_at = None
+            run.error_message = None
+            run.current_job_title = None
+            self.db.commit()
 
         concurrency = self._resolve_run_concurrency()
         item_queue: asyncio.Queue[EnrichmentRunItem] = asyncio.Queue()

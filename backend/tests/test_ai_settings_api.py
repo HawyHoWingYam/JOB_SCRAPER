@@ -67,6 +67,7 @@ def _build_test_client(monkeypatch):
         "get_effective_runtime_settings",
         lambda scope="jobs": AIRuntimeSettingsService(Session()).get_effective_settings(scope),
     )
+    monkeypatch.setattr(llm_client_module, "SessionLocal", Session)
     transport = httpx.ASGITransport(app=app)
     client = httpx.AsyncClient(transport=transport, base_url="http://testserver")
     return client, Session

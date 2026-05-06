@@ -14,6 +14,12 @@ class EnrichmentRun(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     source_type = Column(String(50), nullable=False, index=True)
+    trigger_crawl_job_id = Column(
+        Uuid(as_uuid=True),
+        ForeignKey("crawl_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     status = Column(String(32), nullable=False, default="pending", index=True)
     job_ids = Column(JSON, nullable=False)
     total_items = Column(Integer, nullable=False)

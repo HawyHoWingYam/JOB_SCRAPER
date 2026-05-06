@@ -25,6 +25,21 @@ configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 
+def run_api_startup_recovery() -> dict[str, int]:
+    startup_db = SessionLocal()
+    try:
+        summary = StartupRecoveryService(startup_db).recover_interrupted_operations(
+            recover_ai_runs=False,
+            recover_company_runs=True,
+            recover_crawl_jobs=True,
+            recover_schedule_executions=True,
+        )
+        startup_db.commit()
+        return summary
+    finally:
+        startup_db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run application startup and shutdown lifecycle."""
@@ -32,15 +47,11 @@ async def lifespan(app: FastAPI):
     logger.info("Debug mode: %s", settings.debug)
     logger.info("Database: %s", redact_url(settings.database_url))
 
-    startup_db = SessionLocal()
     try:
-        recovery_summary = StartupRecoveryService(startup_db).recover_interrupted_operations()
+        recovery_summary = run_api_startup_recovery()
         logger.info("Startup recovery summary: %s", recovery_summary)
     except Exception:
-        startup_db.rollback()
         logger.exception("Startup recovery sweep failed")
-    finally:
-        startup_db.close()
 
     await initialize_scheduler_runtime()
 

@@ -28,26 +28,41 @@ class StartupRecoveryService:
     def __init__(self, db: Session):
         self.db = db
 
-    def recover_interrupted_operations(self) -> dict[str, int]:
-        ai_run_count = self._recover_ai_runs()
-        company_run_count = self._recover_company_runs()
+    def recover_interrupted_operations(
+        self,
+        *,
+        recover_ai_runs: bool = True,
+        recover_company_runs: bool = True,
+        recover_crawl_jobs: bool = True,
+        recover_schedule_executions: bool = True,
+    ) -> dict[str, int]:
+        ai_run_count = 0
+        if recover_ai_runs:
+            ai_run_count = self._recover_ai_runs()
+
+        company_run_count = 0
+        if recover_company_runs:
+            company_run_count = self._recover_company_runs()
+
         self.db.commit()
 
         crawl_job_recovery_count = 0
-        try:
-            crawl_job_recovery_count = self._recover_crawl_jobs()
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            logger.exception("Startup crawl job recovery failed")
+        if recover_crawl_jobs:
+            try:
+                crawl_job_recovery_count = self._recover_crawl_jobs()
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                logger.exception("Startup crawl job recovery failed")
 
         schedule_recovery_count = 0
-        try:
-            schedule_recovery_count = self._recover_schedule_executions()
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            logger.exception("Startup schedule execution recovery failed")
+        if recover_schedule_executions:
+            try:
+                schedule_recovery_count = self._recover_schedule_executions()
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                logger.exception("Startup schedule execution recovery failed")
 
         return {
             "ai_runs_recovered": ai_run_count,
@@ -55,6 +70,11 @@ class StartupRecoveryService:
             "crawl_jobs_recovered": crawl_job_recovery_count,
             "schedule_executions_recovered": schedule_recovery_count,
         }
+
+    def recover_ai_runs_only(self) -> int:
+        ai_run_count = self._recover_ai_runs()
+        self.db.commit()
+        return ai_run_count
 
     def _recover_ai_runs(self) -> int:
         active_runs = (

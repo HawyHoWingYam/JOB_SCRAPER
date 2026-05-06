@@ -928,7 +928,11 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
         "configured_provider": configured_provider or None,
         "active_provider": (
             (_provider_names.get(scope, "") or configured_provider)
-            if (_ready_states.get(scope) and not _degraded_states.get(scope, False))
+            if (
+                _ready_states.get(scope)
+                and not _degraded_states.get(scope, False)
+                and not _requires_test_states.get(scope, False)
+            )
             else None
         ),
         "active_model": _active_models.get(scope),
