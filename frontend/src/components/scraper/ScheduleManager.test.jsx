@@ -104,6 +104,7 @@ function createFetchMock({
   ctgoodjobsCategories = CTGOODJOBS_CATEGORIES,
   scrapeProgress = { active: {}, all: {}, has_active: false },
   scrapeProgressError = null,
+  crawlJobId = 'crawl-job-123',
 } = {}) {
   return vi.fn((input, init) => {
     const url = String(input);
@@ -132,8 +133,8 @@ function createFetchMock({
       return mockJsonResponse(scrapeProgress);
     }
 
-    if (url === '/api/v1/schedules/run-now' && init?.method === 'POST') {
-      return mockJsonResponse({ message: 'Scraping started' });
+    if (url === '/api/v1/crawl-jobs' && init?.method === 'POST') {
+      return mockJsonResponse({ id: crawlJobId, status: 'queued' });
     }
 
     if (url === '/api/v1/schedules' && init?.method === 'POST') {
@@ -185,7 +186,7 @@ describe('ScheduleManager', () => {
     expect(screen.queryByText('JobsDB Nightly')).not.toBeInTheDocument();
   });
 
-  it('posts jobsdb run-now payloads with integer category ids and source_site', async () => {
+  it('posts jobsdb crawl-job payloads with integer category ids and source_site', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
     await screen.findByText('Task Control Board');
@@ -194,12 +195,12 @@ describe('ScheduleManager', () => {
     fireEvent.click(screen.getByRole('button', { name: /engage scanner/i }));
 
     await waitFor(() => {
-      const runNowCall = globalThis.fetch.mock.calls.find(
-        ([url, request]) => url === '/api/v1/schedules/run-now' && request?.method === 'POST',
+      const crawlJobCall = globalThis.fetch.mock.calls.find(
+        ([url, request]) => url === '/api/v1/crawl-jobs' && request?.method === 'POST',
       );
 
-      expect(runNowCall).toBeTruthy();
-      expect(JSON.parse(runNowCall[1].body)).toEqual({
+      expect(crawlJobCall).toBeTruthy();
+      expect(JSON.parse(crawlJobCall[1].body)).toEqual({
         source_site: 'jobsdb',
         category_ids: [1200],
         max_pages: 3,
@@ -218,6 +219,7 @@ describe('ScheduleManager', () => {
     await screen.findByText('Scrape Progress Stub');
 
     expect(JSON.parse(sessionStorage.getItem(DIRECT_OVERRIDE_MARKER_KEY))).toEqual({
+      crawlJobId: 'crawl-job-123',
       sourceSite: 'jobsdb',
       startedAt: new Date(FIXED_NOW).toISOString(),
     });
@@ -229,7 +231,7 @@ describe('ScheduleManager', () => {
     expect(screen.getByTestId('progress-recovery-window')).toHaveTextContent('20000');
   });
 
-  it('posts ctgoodjobs run-now payloads with string category ids and source_site', async () => {
+  it('posts ctgoodjobs crawl-job payloads with string category ids and source_site', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
     fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
@@ -240,12 +242,12 @@ describe('ScheduleManager', () => {
     fireEvent.click(screen.getByRole('button', { name: /engage scanner/i }));
 
     await waitFor(() => {
-      const runNowCall = globalThis.fetch.mock.calls.find(
-        ([url, request]) => url === '/api/v1/schedules/run-now' && request?.method === 'POST',
+      const crawlJobCall = globalThis.fetch.mock.calls.find(
+        ([url, request]) => url === '/api/v1/crawl-jobs' && request?.method === 'POST',
       );
 
-      expect(runNowCall).toBeTruthy();
-      expect(JSON.parse(runNowCall[1].body)).toEqual({
+      expect(crawlJobCall).toBeTruthy();
+      expect(JSON.parse(crawlJobCall[1].body)).toEqual({
         source_site: 'ctgoodjobs',
         category_ids: ['ctgoodjobs:021'],
         max_pages: 3,
@@ -283,7 +285,7 @@ describe('ScheduleManager', () => {
     const startedAt = new Date(FIXED_NOW - 10_000).toISOString();
     sessionStorage.setItem(
       DIRECT_OVERRIDE_MARKER_KEY,
-      JSON.stringify({ sourceSite: 'jobsdb', startedAt }),
+      JSON.stringify({ crawlJobId: 'crawl-job-123', sourceSite: 'jobsdb', startedAt }),
     );
 
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
@@ -299,6 +301,7 @@ describe('ScheduleManager', () => {
     sessionStorage.setItem(
       DIRECT_OVERRIDE_MARKER_KEY,
       JSON.stringify({
+        crawlJobId: 'crawl-job-123',
         sourceSite: 'jobsdb',
         startedAt: new Date(FIXED_NOW - 20_001).toISOString(),
       }),
@@ -317,7 +320,7 @@ describe('ScheduleManager', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     sessionStorage.setItem(
       DIRECT_OVERRIDE_MARKER_KEY,
-      JSON.stringify({ sourceSite: 'jobsdb', startedAt }),
+      JSON.stringify({ crawlJobId: 'crawl-job-123', sourceSite: 'jobsdb', startedAt }),
     );
     vi.stubGlobal(
       'fetch',
@@ -334,7 +337,7 @@ describe('ScheduleManager', () => {
     expect(screen.getByTestId('progress-recovery-started-at')).toHaveTextContent(startedAt);
   });
 
-  it('does not wipe a newer recovery state when an in-flight bootstrap finishes after run-now succeeds', async () => {
+  it('does not wipe a newer recovery state when an in-flight bootstrap finishes after crawl-job success', async () => {
     const progressDeferred = createDeferred();
     vi.stubGlobal(
       'fetch',
@@ -372,12 +375,13 @@ describe('ScheduleManager', () => {
       new Date(FIXED_NOW).toISOString(),
     );
     expect(JSON.parse(sessionStorage.getItem(DIRECT_OVERRIDE_MARKER_KEY))).toEqual({
+      crawlJobId: 'crawl-job-123',
       sourceSite: 'jobsdb',
       startedAt: new Date(FIXED_NOW).toISOString(),
     });
   });
 
-  it('still shows progress after run-now success when sessionStorage.setItem throws', async () => {
+  it('still shows progress after crawl-job success when sessionStorage.setItem throws', async () => {
     const originalSetItem = Storage.prototype.setItem;
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItem(key, value) {
       if (key === DIRECT_OVERRIDE_MARKER_KEY) {
@@ -407,7 +411,7 @@ describe('ScheduleManager', () => {
     const startedAt = new Date(FIXED_NOW - 5_000).toISOString();
     sessionStorage.setItem(
       DIRECT_OVERRIDE_MARKER_KEY,
-      JSON.stringify({ sourceSite: 'jobsdb', startedAt }),
+      JSON.stringify({ crawlJobId: 'crawl-job-123', sourceSite: 'jobsdb', startedAt }),
     );
 
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
@@ -425,7 +429,7 @@ describe('ScheduleManager', () => {
     const startedAt = new Date(FIXED_NOW - 5_000).toISOString();
     sessionStorage.setItem(
       DIRECT_OVERRIDE_MARKER_KEY,
-      JSON.stringify({ sourceSite: 'jobsdb', startedAt }),
+      JSON.stringify({ crawlJobId: 'crawl-job-123', sourceSite: 'jobsdb', startedAt }),
     );
 
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);

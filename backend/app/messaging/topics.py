@@ -1,0 +1,13 @@
+STREAM_CRAWL_COMMANDS = "stream.crawl.commands"
+STREAM_CRAWL_PROGRESS = "stream.crawl.progress"
+STREAM_JOB_INGEST = "stream.job.ingest"
+STREAM_JOB_LIFECYCLE = "stream.job.lifecycle"
+STREAM_JOB_EMBEDDING = "stream.job.embedding"
+
+ALL_STREAM_TOPICS = {
+    STREAM_CRAWL_COMMANDS,
+    STREAM_CRAWL_PROGRESS,
+    STREAM_JOB_INGEST,
+    STREAM_JOB_LIFECYCLE,
+    STREAM_JOB_EMBEDDING,
+}

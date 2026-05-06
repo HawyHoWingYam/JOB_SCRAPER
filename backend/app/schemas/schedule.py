@@ -133,6 +133,7 @@ class ExecutionSchema(BaseModel):
 
     id: UUID
     schedule_id: UUID
+    crawl_job_id: Optional[UUID]
     status: str
     started_at: datetime
     completed_at: Optional[datetime]

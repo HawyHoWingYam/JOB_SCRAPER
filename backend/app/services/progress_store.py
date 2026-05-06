@@ -1,5 +1,5 @@
 """
-Shared Progress Store - Thread-safe singleton for scraping progress.
+Shared Progress Store - Transitional thread-safe singleton for scraping progress.
 """
 import threading
 from typing import Dict, Optional, TypeAlias

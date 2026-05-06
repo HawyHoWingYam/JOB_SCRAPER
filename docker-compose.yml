@@ -1,6 +1,6 @@
 services:
   postgres-db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: postgres-db
     environment:
       POSTGRES_DB: jobsdb
@@ -74,6 +74,133 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - jobsdb-network
+
+  scheduler-worker:
+    profiles:
+      - workers
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
+      REDIS_URL: redis://redis-mq:6379/0
+      WORKER_NAME: scheduler-worker
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis-mq:
+        condition: service_healthy
+    networks:
+      - jobsdb-network
+
+  crawl-worker:
+    profiles:
+      - workers
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    command: python -m app.workers.run_crawl_worker
+    environment:
+      DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
+      REDIS_URL: redis://redis-mq:6379/0
+      WORKER_NAME: crawl-worker
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis-mq:
+        condition: service_healthy
+    networks:
+      - jobsdb-network
+
+  ingest-worker:
+    profiles:
+      - workers
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
+      REDIS_URL: redis://redis-mq:6379/0
+      WORKER_NAME: ingest-worker
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis-mq:
+        condition: service_healthy
+    networks:
+      - jobsdb-network
+
+  enrichment-worker:
+    profiles:
+      - workers
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
+      REDIS_URL: redis://redis-mq:6379/0
+      WORKER_NAME: enrichment-worker
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis-mq:
+        condition: service_healthy
+    networks:
+      - jobsdb-network
+
+  embedding-worker:
+    profiles:
+      - workers
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
+      REDIS_URL: redis://redis-mq:6379/0
+      WORKER_NAME: embedding-worker
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis-mq:
+        condition: service_healthy
+    networks:
+      - jobsdb-network
+
+  retrieval-api:
+    profiles:
+      - workers
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
+      REDIS_URL: redis://redis-mq:6379/0
+      WORKER_NAME: retrieval-api
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis-mq:
+        condition: service_healthy
+    networks:
+      - jobsdb-network
+
+  recommendation-api:
+    profiles:
+      - workers
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
+      REDIS_URL: redis://redis-mq:6379/0
+      WORKER_NAME: recommendation-api
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      redis-mq:
+        condition: service_healthy
     networks:
       - jobsdb-network
 

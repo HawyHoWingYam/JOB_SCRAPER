@@ -18,7 +18,7 @@ from app.api.stats import router as stats_router
 from app.api.skills import router as skills_router
 from app.logging_config import configure_logging, redact_url
 from app.database import SessionLocal
-from app.services.scheduler_service import SchedulerService
+from app.services.scheduler_runtime import initialize_scheduler_runtime, shutdown_scheduler_runtime
 from app.services.startup_recovery_service import StartupRecoveryService
 
 configure_logging(settings.log_level)
@@ -42,14 +42,13 @@ async def lifespan(app: FastAPI):
     finally:
         startup_db.close()
 
-    scheduler = SchedulerService.get_instance()
-    await scheduler.initialize()
+    await initialize_scheduler_runtime()
 
     try:
         yield
     finally:
         logger.info("Shutting down JobsDB Scraper API")
-        scheduler.shutdown()
+        shutdown_scheduler_runtime()
 
 # Initialize FastAPI application
 app = FastAPI(

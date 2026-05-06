@@ -237,7 +237,11 @@ function ProgressItem({ data, onNavigateToAI }) {
     const aiProcessedItems = ai_completed_items + ai_failed_items;
     const aiTotalItems = ai_total_items || save_total || jobs_saved || total_jobs || jobs_scraped || aiProcessedItems;
 
-    if (phase === 1) {
+    if (status === 'queued') {
+        percentage = 0;
+        statusText = 'Queued';
+        detailText = 'Awaiting crawl worker dispatch';
+    } else if (phase === 1) {
         percentage = total_pages ? (current_page / total_pages) * 25 : 0;
         statusText = 'Collecting IDs';
         detailText = `Page ${current_page || 0}/${total_pages || '?'} (${job_ids_collected} found)`;
@@ -287,6 +291,9 @@ function ProgressItem({ data, onNavigateToAI }) {
     } else if (status === 'failed') {
         statusText = 'Failed';
         detailText = error || 'Unknown error';
+    } else if (status === 'cancelled') {
+        statusText = 'Cancelled';
+        detailText = error || 'Cancelled';
     }
 
     const formatTime = (seconds) => {
@@ -301,6 +308,8 @@ function ProgressItem({ data, onNavigateToAI }) {
             ? 'success'
             : status === 'failed'
               ? 'error'
+              : status === 'cancelled'
+                ? 'warning'
               : status === 'completed_with_ai_failures'
                 ? 'warning'
                 : 'running';

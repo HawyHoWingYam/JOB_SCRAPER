@@ -48,6 +48,7 @@ class ScrapeSchedule(Base):
         cascade="all, delete-orphan",
         order_by="desc(ScheduleExecution.started_at)"
     )
+    crawl_jobs = relationship("CrawlJob", back_populates="schedule")
 
     def __repr__(self):
         return f"<ScrapeSchedule(id={self.id}, name={self.name}, cron={self.cron_expression})>"
@@ -64,6 +65,12 @@ class ScheduleExecution(Base):
         ForeignKey("scrape_schedules.id", ondelete="CASCADE"),
         nullable=False,
         index=True
+    )
+    crawl_job_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("crawl_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     # Execution details
@@ -99,6 +106,7 @@ class ScheduleExecution(Base):
 
     # Relationships
     schedule = relationship("ScrapeSchedule", back_populates="executions")
+    crawl_job = relationship("CrawlJob", back_populates="schedule_executions")
 
     def __repr__(self):
         return f"<ScheduleExecution(id={self.id}, status={self.status})>"

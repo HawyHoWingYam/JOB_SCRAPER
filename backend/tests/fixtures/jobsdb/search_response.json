@@ -1,0 +1,55 @@
+{
+  "totalCount": 1,
+  "data": [
+    {
+      "id": "123456",
+      "title": "Senior Data Analyst",
+      "companyName": "ACME Ltd",
+      "advertiser": {
+        "id": "adv-1",
+        "description": "ACME Ltd"
+      },
+      "bulletPoints": [
+        "Analyze data",
+        "Build reports"
+      ],
+      "locations": [
+        {
+          "label": "Hong Kong",
+          "countryCode": "HK"
+        }
+      ],
+      "classifications": [
+        {
+          "classification": {
+            "id": "6281",
+            "description": "Information & Communication Technology"
+          }
+        }
+      ],
+      "workTypes": [
+        "Full-time",
+        "Permanent"
+      ],
+      "workArrangements": {
+        "data": [
+          {
+            "label": {
+              "text": "Hybrid"
+            }
+          }
+        ]
+      },
+      "salaryLabel": "HK$30,000 - HK$40,000",
+      "listingDate": "2026-05-01T12:00:00+00:00",
+      "listingDateDisplay": "1 May 2026",
+      "teaser": "Build reports",
+      "branding": {
+        "serpLogoUrl": "https://example.com/logo.png"
+      }
+    }
+  ],
+  "suggestions": {
+    "query": "data analyst"
+  }
+}
