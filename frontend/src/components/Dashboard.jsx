@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react';
 import { Activity, Database, BrainCircuit, AlertTriangle, Clock3 } from 'lucide-react';
 import SkillChart from './charts/SkillChart';
 import CategoryChart from './charts/CategoryChart';
+import { API_BASE_URL } from '../api/base';
 import './Dashboard.css';
 
-const API_URL = import.meta.env.VITE_API_URL || '';
+const API_URL = API_BASE_URL;
 
 export default function Dashboard({ onNavigateToAI }) {
   const [stats, setStats] = useState(null);

@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Zap, AlertTriangle, CalendarClock } from 'lucide-react';
+import { API_BASE_URL } from '../../api/base';
 import ScheduleForm from './ScheduleForm';
 import ScheduleList from './ScheduleList';
 import ScheduleHistory from './ScheduleHistory';
 import ScrapeProgressPanel from './ScrapeProgressPanel';
 import './Scheduler.css';
 
-const API_URL = import.meta.env.VITE_API_URL || '';
+const API_URL = API_BASE_URL;
 const API_BASE = `${API_URL}/api/v1`;
 const CATEGORY_API_BASE = `${API_URL}/api`;
 const DIRECT_OVERRIDE_RUN_KEY = 'scheduler.directOverrideRun';

@@ -9,10 +9,11 @@ import {
   RefreshCcw,
   Sparkles,
 } from 'lucide-react';
+import { API_BASE_URL } from '../../api/base';
 import '../Dashboard.css';
 import './AIEnrichmentPage.css';
 
-const API_URL = import.meta.env.VITE_API_URL || '';
+const API_URL = API_BASE_URL;
 const ACTIVE_RUN_STATUSES = new Set(['pending', 'running']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', 'failed']);
 const DEGRADED_PLACEHOLDER = 'Unavailable';

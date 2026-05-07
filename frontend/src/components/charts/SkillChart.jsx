@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { API_BASE_URL } from '../../api/base';
 
-const API_URL = import.meta.env.VITE_API_URL || '';
+const API_URL = API_BASE_URL;
 
 const SKILL_BUCKET_ORDER = [
   'Backend',
