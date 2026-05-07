@@ -26,6 +26,7 @@ from app.schemas.job_search import (
     JobSearchScopeSchema,
     JobSearchLayerSummarySchema,
 )
+from app.services.retrieval_service import RetrievalService
 from app.utils.location_normalizer import (
     DISTRICT_TO_REGION,
     REGION_ORDER,
@@ -508,17 +509,33 @@ def _build_search_response(
     page_size: int,
     applied_scope: Optional[JobSearchScopeSchema] = None,
     layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None,
+    preserve_query_order: bool = False,
 ):
     offset = (page - 1) * page_size
     total = query.order_by(None).count()
-    results = (
-        query
-        .order_by(Job.posted_date.desc().nullslast())
-        .offset(offset)
-        .limit(page_size)
-        .all()
+    results_query = query
+    if not preserve_query_order:
+        results_query = results_query.order_by(Job.posted_date.desc().nullslast())
+    results = results_query.offset(offset).limit(page_size).all()
+    return _build_search_response_from_results(
+        results,
+        total=total,
+        page=page,
+        page_size=page_size,
+        applied_scope=applied_scope,
+        layer_summaries=layer_summaries,
     )
 
+
+def _build_search_response_from_results(
+    results,
+    *,
+    total: int,
+    page: int,
+    page_size: int,
+    applied_scope: Optional[JobSearchScopeSchema] = None,
+    layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None,
+):
     jobs = []
     for job, company in results:
         jobs.append(JobWithCompanySchema(
@@ -697,12 +714,8 @@ async def search_jobs_post(
 ):
     _validate_scope_expressions(request)
 
-    query = _build_query_from_scope(db, request.scope)
-    return _build_search_response(
-        query,
-        page=request.page,
-        page_size=request.page_size,
-        applied_scope=request.scope,
+    return RetrievalService(db).search(
+        request,
         layer_summaries=[_summarize_layer(layer) for layer in request.scope.layers],
     )
 

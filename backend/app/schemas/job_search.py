@@ -1,6 +1,6 @@
 from datetime import date
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 
 class SearchClauseSchema(BaseModel):
@@ -56,6 +56,7 @@ class JobSearchScopeSchema(BaseModel):
 
 class JobSearchRequestSchema(BaseModel):
     scope: JobSearchScopeSchema
+    retrieval_mode: Literal["lexical", "semantic", "hybrid"] = "lexical"
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
 
