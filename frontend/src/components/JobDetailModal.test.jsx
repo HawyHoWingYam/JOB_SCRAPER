@@ -55,6 +55,33 @@ function renderModalWithPayload(payload) {
   );
 }
 
+function renderModalWithDetailAndRecommendations(payload, recommendations) {
+  globalThis.fetch = vi.fn((input) => {
+    const url = new URL(String(input), 'http://localhost');
+
+    if (url.pathname === '/api/v1/jobs/job-1') {
+      return mockJsonResponse(payload);
+    }
+
+    if (url.pathname === '/api/v1/jobs/job-1/similar') {
+      return mockJsonResponse({
+        source_job_id: payload.id,
+        recommendations,
+      });
+    }
+
+    return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
+  });
+
+  render(
+    <JobDetailModal
+      jobId="job-1"
+      apiUrl="http://localhost:8000"
+      onClose={vi.fn()}
+    />,
+  );
+}
+
 describe('JobDetailModal', () => {
   beforeEach(() => {
     vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-04-16T00:00:00Z').getTime());
@@ -176,5 +203,31 @@ describe('JobDetailModal', () => {
       'href',
       'https://jobs.ctgoodjobs.hk/job/10090657',
     );
+  });
+
+  it('renders related job recommendations when the similar-jobs endpoint returns matches', async () => {
+    renderModalWithDetailAndRecommendations(
+      createJobPayload(),
+      [
+        {
+          id: 'job-2',
+          job_id: 'platform-engineer-456',
+          title: 'Platform Backend Engineer',
+          company_name: 'Atlas Systems',
+          location: 'Hong Kong',
+          employment_type: 'Full-time',
+          posted_date: '2026-04-15T00:00:00Z',
+          job_taxonomy: {
+            path: 'Information & Communication Technology / Software Development / Backend Development',
+          },
+          combined_score: 0.97,
+        },
+      ],
+    );
+
+    expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /related jobs/i })).toBeInTheDocument();
+    expect(screen.getByText('Platform Backend Engineer')).toBeInTheDocument();
+    expect(screen.getByText('Atlas Systems')).toBeInTheDocument();
   });
 });

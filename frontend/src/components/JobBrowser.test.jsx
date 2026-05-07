@@ -233,8 +233,27 @@ describe('JobBrowser', () => {
     expect(getSearchCalls(globalThis.fetch)).toHaveLength(1);
     expect(getLatestSearchBody(globalThis.fetch)).toEqual({
       scope: { layers: [] },
+      retrieval_mode: 'lexical',
       page: 1,
       page_size: 24,
+    });
+  });
+
+  it('submits the selected retrieval mode with search requests', async () => {
+    render(<JobBrowser />);
+
+    await screen.findByText('Healthcare ERP Lead');
+
+    fireEvent.change(screen.getByLabelText(/retrieval mode/i), {
+      target: { value: 'semantic' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/query titles, companies/i), {
+      target: { value: 'erp' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /search all jobs/i }));
+
+    await waitFor(() => {
+      expect(getLatestSearchBody(globalThis.fetch).retrieval_mode).toBe('semantic');
     });
   });
 
@@ -269,6 +288,7 @@ describe('JobBrowser', () => {
           },
         },
       ]);
+      expect(latestBody.retrieval_mode).toBe('lexical');
     });
 
     expect(screen.getByRole('button', { name: /search within results/i })).toBeInTheDocument();
@@ -443,6 +463,7 @@ describe('JobBrowser', () => {
           },
         ],
       },
+      retrieval_mode: 'lexical',
     });
     expect(screen.getByText(/export uses current results, not pending edits/i)).toBeInTheDocument();
     expect(globalThis.URL.createObjectURL).toHaveBeenCalled();

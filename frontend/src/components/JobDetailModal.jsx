@@ -153,21 +153,63 @@ function JobDetailModal({ jobId, apiUrl, onClose }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [relatedJobs, setRelatedJobs] = useState([]);
+  const [relatedJobsLoading, setRelatedJobsLoading] = useState(true);
+  const [relatedJobsError, setRelatedJobsError] = useState('');
 
   useEffect(() => {
+    let isActive = true;
+    setLoading(true);
+    setError(null);
+    setRelatedJobs([]);
+    setRelatedJobsError('');
+    setRelatedJobsLoading(true);
+
     fetch(`${apiUrl}/api/v1/jobs/${jobId}`)
       .then((res) => {
         if (!res.ok) throw new Error('Job not found');
         return res.json();
       })
       .then((data) => {
+        if (!isActive) {
+          return;
+        }
         setJob(data);
         setLoading(false);
       })
       .catch((err) => {
+        if (!isActive) {
+          return;
+        }
         setError(err.message);
         setLoading(false);
       });
+
+    fetch(`${apiUrl}/api/v1/jobs/${jobId}/similar`)
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error('Related jobs are unavailable right now');
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (!isActive) {
+          return;
+        }
+        setRelatedJobs(data.recommendations || []);
+        setRelatedJobsLoading(false);
+      })
+      .catch((err) => {
+        if (!isActive) {
+          return;
+        }
+        setRelatedJobsError(err.message);
+        setRelatedJobsLoading(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
   }, [jobId, apiUrl]);
 
   const handleOverlayClick = (e) => {
@@ -295,6 +337,39 @@ function JobDetailModal({ jobId, apiUrl, onClose }) {
                 className="modal-description"
                 dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(job.description ?? '') }}
               />
+            </section>
+
+            <section className="modal-section">
+              <h3>Related Jobs</h3>
+              {relatedJobsLoading ? (
+                <p className="modal-empty">Loading related jobs...</p>
+              ) : relatedJobs.length > 0 ? (
+                <div className="related-jobs-list">
+                  {relatedJobs.map((relatedJob) => (
+                    <article key={relatedJob.id} className="related-job-card">
+                      <div className="related-job-card-header">
+                        <h4>{relatedJob.title}</h4>
+                        <span className="related-job-score">
+                          {Math.round((relatedJob.combined_score || 0) * 100)}%
+                        </span>
+                      </div>
+                      <p className="related-job-company">{relatedJob.company_name || 'Unknown company'}</p>
+                      <div className="related-job-meta">
+                        {relatedJob.location && <span>{relatedJob.location}</span>}
+                        {relatedJob.employment_type && <span>{relatedJob.employment_type}</span>}
+                        {relatedJob.posted_date && <span>{formatRelativePostedState(relatedJob.posted_date)}</span>}
+                      </div>
+                      {relatedJob.job_taxonomy?.path && (
+                        <p className="related-job-taxonomy">{relatedJob.job_taxonomy.path}</p>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="modal-empty">
+                  {relatedJobsError || 'No related jobs available yet'}
+                </p>
+              )}
             </section>
           </>
         )}

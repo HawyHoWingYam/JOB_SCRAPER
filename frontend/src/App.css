@@ -1277,6 +1277,70 @@
   color: var(--color-text-secondary);
 }
 
+.job-detail-modal .related-jobs-list {
+  display: grid;
+  gap: 14px;
+}
+
+.job-detail-modal .related-job-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.job-detail-modal .related-job-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.job-detail-modal .related-job-card-header h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--color-text-primary);
+}
+
+.job-detail-modal .related-job-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(0, 242, 254, 0.12);
+  border: 1px solid rgba(0, 242, 254, 0.24);
+  color: var(--color-primary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.job-detail-modal .related-job-company,
+.job-detail-modal .related-job-taxonomy {
+  margin: 8px 0 0 0;
+}
+
+.job-detail-modal .related-job-company {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.job-detail-modal .related-job-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+}
+
+.job-detail-modal .related-job-taxonomy {
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
 .modal-description {
   color: var(--color-text-secondary);
   line-height: 1.6;

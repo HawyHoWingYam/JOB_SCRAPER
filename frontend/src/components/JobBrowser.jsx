@@ -166,6 +166,7 @@ function JobBrowser() {
         totalPages: 0
     });
     const [selectedJobId, setSelectedJobId] = useState(null);
+    const [retrievalMode, setRetrievalMode] = useState('lexical');
 
     const hasPendingChanges = hasPendingLayerChanges(createEmptyJobBrowserLayer(), draftLayer);
     const draftDatePreset = getDatePresetForQuery(draftLayer.structured_filters);
@@ -190,6 +191,7 @@ function JobBrowser() {
                 },
                 body: JSON.stringify({
                     scope,
+                    retrieval_mode: retrievalMode,
                     page,
                     page_size: pageSize,
                 }),
@@ -376,6 +378,7 @@ function JobBrowser() {
                 },
                 body: JSON.stringify({
                     scope: activeScope,
+                    retrieval_mode: retrievalMode,
                 }),
             });
 
@@ -411,6 +414,13 @@ function JobBrowser() {
                             <span className="console-pill">
                                 {activeScope.layers.length > 0 ? 'Layered scope active' : 'Open query scope'}
                             </span>
+                            <span className="console-pill">
+                                {retrievalMode === 'lexical'
+                                    ? 'Lexical retrieval'
+                                    : retrievalMode === 'hybrid'
+                                        ? 'Hybrid retrieval'
+                                        : 'Semantic retrieval'}
+                            </span>
                             <span className="console-pill console-pill-muted">
                                 {hasPendingChanges
                                     ? 'Draft refinement armed'
@@ -429,6 +439,26 @@ function JobBrowser() {
                             isLoading={isLoading}
                             placeholder="Query titles, companies, or deep scan descriptions..."
                         />
+
+                        <div className="query-mode-row">
+                            <label className="filter-label" htmlFor="job-browser-retrieval-mode">
+                                Retrieval mode
+                            </label>
+                            <select
+                                id="job-browser-retrieval-mode"
+                                className="premium-select highlight-select query-mode-select"
+                                value={retrievalMode}
+                                onChange={(event) => setRetrievalMode(event.target.value)}
+                                disabled={isLoading}
+                            >
+                                <option value="lexical">Lexical</option>
+                                <option value="hybrid">Hybrid</option>
+                                <option value="semantic">Semantic</option>
+                            </select>
+                            <p className="query-mode-note">
+                                Lexical is the default. Hybrid blends filters with embeddings. Semantic leans on embedding-backed intent matching.
+                            </p>
+                        </div>
 
                         <div className="query-action-row">
                             <button
