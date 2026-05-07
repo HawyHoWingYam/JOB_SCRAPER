@@ -1,17 +1,19 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
+from pathlib import Path
 from typing import Optional
 
 SUPPORTED_LLM_PROVIDERS = ("anthropic", "claude", "custom", "gemini", "zhipu", "mock")
 AI_ENRICHMENT_RUN_CONCURRENCY_MIN = 1
 AI_ENRICHMENT_RUN_CONCURRENCY_MAX = 50
+DEFAULT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file="../../.env",
+        env_file=str(DEFAULT_ENV_FILE),
         case_sensitive=False,
         extra="ignore",
     )
@@ -46,8 +48,16 @@ class Settings(BaseSettings):
     custom_base_url: Optional[str] = None
     custom_api_format: str = "anthropic"
     custom_model: str = "claude-sonnet-4-5"
+    retrieval_api_url: Optional[str] = None
 
-    @field_validator('anthropic_base_url', 'anthropic_api_key', 'custom_api_key', 'custom_base_url', mode='before')
+    @field_validator(
+        'anthropic_base_url',
+        'anthropic_api_key',
+        'custom_api_key',
+        'custom_base_url',
+        'retrieval_api_url',
+        mode='before',
+    )
     @classmethod
     def empty_str_to_none(cls, v):
         return None if v == "" else v

@@ -26,11 +26,20 @@ A production-grade job scraping application with AI enrichment.
 # Start all services
 docker-compose up -d
 
+# Rebuild the backend image after Python dependency changes.
+docker compose up -d --build backend-api
+
+# Start ML-backed retrieval services when you need semantic/hybrid search
+# or the embedding worker runtime.
+docker compose --profile workers up -d retrieval-api embedding-worker
+
 # Access
 # Frontend: http://localhost:5173
 # Backend: http://localhost:8000
 # API Docs: http://localhost:8000/docs
 ```
+
+The default `backend-api` image only supports the lexical search baseline. Semantic and hybrid retrieval run behind the internal `retrieval-api` service, and embedding generation runs in `embedding-worker`, both built with `backend/requirements-ml.txt`.
 
 ## Backend Migrations
 

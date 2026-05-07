@@ -29,7 +29,12 @@ def _build_default_query_embedding_model():
 class RetrievalService:
     def __init__(self, db, *, query_embedding_model: Any | None = None):
         self.db = db
-        self.query_embedding_model = query_embedding_model or _build_default_query_embedding_model()
+        self.query_embedding_model = query_embedding_model
+
+    def _get_query_embedding_model(self):
+        if self.query_embedding_model is None:
+            self.query_embedding_model = _build_default_query_embedding_model()
+        return self.query_embedding_model
 
     def search(self, request, *, layer_summaries=None):
         from app.api import jobs as jobs_api
@@ -57,7 +62,7 @@ class RetrievalService:
             )
 
         candidate_scope = build_semantic_candidate_scope(request.scope)
-        query_vector = self.query_embedding_model.encode(
+        query_vector = self._get_query_embedding_model().encode(
             query_text,
             normalize_embeddings=True,
         )

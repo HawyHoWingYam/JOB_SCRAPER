@@ -16,7 +16,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.api import jobs as jobs_api
+from app.api import retrieval as retrieval_api
 from app.database import Base, get_db
 from app.models import (
     Company,
@@ -36,7 +36,7 @@ from app.services.retrieval_service import RetrievalService
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://admin:dev_password@localhost:5434/jobsdb",
+    "postgresql://admin:dev_password@localhost:5433/jobsdb",
 )
 
 
@@ -104,7 +104,7 @@ def _build_postgres_session():
 
 def _build_test_client(Session, monkeypatch):
     app = FastAPI()
-    app.include_router(jobs_api.router, prefix="/api/v1")
+    app.include_router(retrieval_api.router, prefix="/api/v1")
 
     def override_get_db():
         db = Session()
@@ -115,7 +115,7 @@ def _build_test_client(Session, monkeypatch):
 
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr(
-        jobs_api,
+        retrieval_api,
         "RetrievalService",
         lambda db: RetrievalService(db, query_embedding_model=FakeQueryEmbeddingModel()),
         raising=False,
@@ -222,7 +222,7 @@ async def test_post_search_defaults_to_lexical_mode(monkeypatch):
             db.close()
 
         response = await client.post(
-            "/api/v1/jobs/search",
+            "/api/v1/internal/jobs/search",
             json={
                 "scope": {
                     "layers": [
@@ -261,7 +261,7 @@ async def test_semantic_mode_uses_only_last_layer_text_and_preserves_prior_filte
             db.close()
 
         response = await client.post(
-            "/api/v1/jobs/search",
+            "/api/v1/internal/jobs/search",
             json={
                 "scope": {
                     "layers": [
@@ -306,7 +306,7 @@ async def test_hybrid_mode_uses_same_last_layer_semantic_contract(monkeypatch):
             db.close()
 
         response = await client.post(
-            "/api/v1/jobs/search",
+            "/api/v1/internal/jobs/search",
             json={
                 "scope": {
                     "layers": [
@@ -351,7 +351,7 @@ async def test_semantic_mode_falls_back_to_lexical_when_last_layer_query_is_empt
             db.close()
 
         response = await client.post(
-            "/api/v1/jobs/search",
+            "/api/v1/internal/jobs/search",
             json={
                 "scope": {
                     "layers": [

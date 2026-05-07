@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from app.database import get_db
 from app.api.job_search_parser import parse_search_expression, SearchExpressionError
 from app.api.job_search_query import apply_parsed_clauses
+from app.config import settings
 from app.models import Job, Company
 from app.models.skill import Skill
 from app.models.job_skill import JobSkill
@@ -25,6 +26,11 @@ from app.schemas.job_search import (
     JobSearchLayerSchema,
     JobSearchScopeSchema,
     JobSearchLayerSummarySchema,
+)
+from app.services.retrieval_client import (
+    RetrievalClient,
+    RetrievalClientResponseError,
+    RetrievalClientUnavailableError,
 )
 from app.services.retrieval_service import RetrievalService
 from app.utils.location_normalizer import (
@@ -645,6 +651,34 @@ def _build_export_rows(query):
     return rows
 
 
+async def _search_via_retrieval_api(
+    request: JobSearchRequestSchema,
+    *,
+    layer_summaries: List[JobSearchLayerSummarySchema],
+) -> JobSearchResponse:
+    payload = request.model_dump(mode="json")
+    payload["layer_summaries"] = [
+        layer_summary.model_dump(mode="json")
+        for layer_summary in layer_summaries
+    ]
+
+    client = RetrievalClient(base_url=settings.retrieval_api_url)
+    try:
+        response_payload = await client.search_jobs(payload)
+    except RetrievalClientResponseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except RetrievalClientUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "retrieval_api_unavailable",
+                "message": str(exc),
+            },
+        ) from exc
+
+    return JobSearchResponse.model_validate(response_payload)
+
+
 @router.get("", response_model=list[JobSchema])
 async def list_jobs(
     skip: int = Query(0, ge=0),
@@ -713,10 +747,17 @@ async def search_jobs_post(
     db: Session = Depends(get_db),
 ):
     _validate_scope_expressions(request)
+    layer_summaries = [_summarize_layer(layer) for layer in request.scope.layers]
+
+    if request.retrieval_mode != "lexical":
+        return await _search_via_retrieval_api(
+            request,
+            layer_summaries=layer_summaries,
+        )
 
     return RetrievalService(db).search(
         request,
-        layer_summaries=[_summarize_layer(layer) for layer in request.scope.layers],
+        layer_summaries=layer_summaries,
     )
 
 

@@ -1,0 +1,12 @@
+# Trimmed runtime for retrieval-api and embedding-worker only.
+# Keep this file lean so ML image builds do not pull unrelated scraper or LLM client dependencies.
+fastapi==0.135.2
+uvicorn[standard]==0.24.0
+pydantic==2.12.5
+pydantic-settings==2.1.0
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+redis==5.0.1
+python-dotenv==1.0.0
+httpx>=0.28.1
+pgvector>=0.3.6

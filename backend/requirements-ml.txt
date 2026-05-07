@@ -1,0 +1,3 @@
+# Incremental ML dependencies layered on top of the retrieval/embedding runtime base.
+# Install after `requirements-runtime.txt` or another compatible shared runtime set.
+sentence-transformers>=3.0.1

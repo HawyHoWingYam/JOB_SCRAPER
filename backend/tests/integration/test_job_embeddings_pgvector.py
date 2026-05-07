@@ -20,7 +20,7 @@ from app.repositories.job_embedding_repository import JobEmbeddingRepository
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://admin:dev_password@localhost:5434/jobsdb",
+    "postgresql://admin:dev_password@localhost:5433/jobsdb",
 )
 
 
