@@ -18,8 +18,8 @@ from app.api.crawl_jobs import router as crawl_jobs_router
 from app.api.progress import router as progress_router
 from app.database import Base, get_db
 from app.models import CrawlJob, CrawlJobEvent, EventOutbox, ScrapeSchedule, ScheduleExecution
-from app.services.progress_store import get_progress_store
 import app.api.progress as progress_module
+import app.api.crawl_jobs as crawl_jobs_module
 
 if not hasattr(SQLiteTypeCompiler, "visit_UUID"):
     SQLiteTypeCompiler.visit_UUID = lambda self, type_, **kw: "CHAR(32)"
@@ -58,7 +58,6 @@ def _build_test_client(monkeypatch):
 
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr(progress_module, "SessionLocal", Session)
-    get_progress_store()._progress.clear()
     transport = httpx.ASGITransport(app=app)
     client = httpx.AsyncClient(transport=transport, base_url="http://testserver")
     return client, Session
@@ -95,6 +94,7 @@ async def test_post_crawl_jobs_creates_durable_rows_and_exposes_progress(monkeyp
             assert crawl_job.status == "queued"
             assert crawl_job.trigger_type == "manual"
             assert crawl_job.request_payload["category_ids"] == [1200]
+            assert crawl_job.request_payload["crawl_mode"] == "headed"
             assert [event.event_type for event in events] == ["crawl.requested"]
             assert events[0].sequence_no == 1
             assert len(outbox_rows) == 1
@@ -109,6 +109,75 @@ async def test_post_crawl_jobs_creates_durable_rows_and_exposes_progress(monkeyp
         assert progress_payload["has_active"] is True
         assert progress_payload["all"][crawl_job_id]["status"] == "queued"
         assert progress_payload["all"][crawl_job_id]["crawl_job_id"] == crawl_job_id
+        assert progress_payload["all"][crawl_job_id]["crawl_mode"] == "headed"
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_post_crawl_jobs_allows_explicit_headless_mode(monkeypatch):
+    client, Session = _build_test_client(monkeypatch)
+    try:
+        response = await client.post(
+            "/api/v1/crawl-jobs",
+            json={
+                "source_site": "jobsdb",
+                "category_ids": [1200],
+                "max_pages": 3,
+                "crawl_mode": "headless",
+            },
+        )
+
+        assert response.status_code == 202
+        crawl_job_id = response.json()["id"]
+
+        db = Session()
+        try:
+            crawl_job = db.query(CrawlJob).filter(CrawlJob.id == uuid.UUID(crawl_job_id)).one()
+            outbox_rows = db.query(EventOutbox).all()
+
+            assert crawl_job.request_payload["crawl_mode"] == "headless"
+            assert outbox_rows[0].topic == "stream.crawl.commands"
+        finally:
+            db.close()
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_post_crawl_jobs_defaults_ctgoodjobs_to_headed(monkeypatch):
+    client, Session = _build_test_client(monkeypatch)
+    monkeypatch.setattr(
+        crawl_jobs_module,
+        "get_source_category_registry",
+        lambda: type(
+            "Registry",
+            (),
+            {"list_categories": lambda self, *, source_site=None: [{"id": "ctgoodjobs:021"}]},
+        )(),
+    )
+    try:
+        response = await client.post(
+            "/api/v1/crawl-jobs",
+            json={
+                "source_site": "ctgoodjobs",
+                "category_ids": ["ctgoodjobs:021"],
+                "max_pages": 3,
+            },
+        )
+
+        assert response.status_code == 202
+        crawl_job_id = response.json()["id"]
+
+        db = Session()
+        try:
+            crawl_job = db.query(CrawlJob).filter(CrawlJob.id == uuid.UUID(crawl_job_id)).one()
+            outbox_rows = db.query(EventOutbox).all()
+
+            assert crawl_job.request_payload["crawl_mode"] == "headed"
+            assert outbox_rows[0].topic == "stream.crawl.commands.headed"
+        finally:
+            db.close()
     finally:
         await client.aclose()
 

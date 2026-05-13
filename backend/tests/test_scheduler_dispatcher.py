@@ -1,4 +1,5 @@
 import sys
+import types
 import uuid
 from pathlib import Path
 
@@ -14,10 +15,51 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+
+class _DummyAsyncIOScheduler:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+    def start(self):
+        return None
+
+
+class _DummySQLAlchemyJobStore:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+
+class _DummyCronTrigger:
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+
+
+apscheduler_module = types.ModuleType("apscheduler")
+apscheduler_schedulers_module = types.ModuleType("apscheduler.schedulers")
+apscheduler_asyncio_module = types.ModuleType("apscheduler.schedulers.asyncio")
+apscheduler_jobstores_module = types.ModuleType("apscheduler.jobstores")
+apscheduler_sqlalchemy_module = types.ModuleType("apscheduler.jobstores.sqlalchemy")
+apscheduler_triggers_module = types.ModuleType("apscheduler.triggers")
+apscheduler_cron_module = types.ModuleType("apscheduler.triggers.cron")
+
+apscheduler_asyncio_module.AsyncIOScheduler = _DummyAsyncIOScheduler
+apscheduler_sqlalchemy_module.SQLAlchemyJobStore = _DummySQLAlchemyJobStore
+apscheduler_cron_module.CronTrigger = _DummyCronTrigger
+
+sys.modules.setdefault("apscheduler", apscheduler_module)
+sys.modules.setdefault("apscheduler.schedulers", apscheduler_schedulers_module)
+sys.modules.setdefault("apscheduler.schedulers.asyncio", apscheduler_asyncio_module)
+sys.modules.setdefault("apscheduler.jobstores", apscheduler_jobstores_module)
+sys.modules.setdefault("apscheduler.jobstores.sqlalchemy", apscheduler_sqlalchemy_module)
+sys.modules.setdefault("apscheduler.triggers", apscheduler_triggers_module)
+sys.modules.setdefault("apscheduler.triggers.cron", apscheduler_cron_module)
+
 from app.api.schedules import router as schedules_router
 from app.database import Base, get_db
 from app.models import CrawlJob, CrawlJobEvent, EventOutbox, ScrapeSchedule, ScheduleExecution
-from app.services.progress_store import get_progress_store
 from app.services.scheduler_service import SchedulerService
 import app.services.scheduler_service as scheduler_service_module
 
@@ -45,7 +87,6 @@ def _build_engine_and_session():
         ],
     )
     Session = sessionmaker(bind=engine)
-    get_progress_store()._progress.clear()
     return engine, Session
 
 
@@ -58,6 +99,7 @@ def _create_schedule(Session, *, source_site="jobsdb", category_ids=None):
             cron_expression="0 2 * * *",
             timezone="Asia/Hong_Kong",
             source_site=source_site,
+            crawl_mode=None,
             category_ids=category_ids if category_ids is not None else [1200],
             max_pages=3,
             is_active=True,
@@ -108,6 +150,7 @@ async def test_schedule_run_endpoint_queues_crawl_job_and_links_execution(monkey
             assert crawl_job.id == execution.crawl_job_id
             assert crawl_job.status == "queued"
             assert crawl_job.trigger_type == "manual"
+            assert crawl_job.request_payload["crawl_mode"] == "headed"
         finally:
             db.close()
     finally:
@@ -143,5 +186,29 @@ async def test_scheduler_service_dispatches_cron_runs_into_durable_control_plane
         assert execution.crawl_job_id == crawl_job.id
         assert [event.event_type for event in events] == ["crawl.requested"]
         assert outbox_rows[0].event_type == "crawl.requested"
+        assert crawl_job.request_payload["crawl_mode"] == "headed"
     finally:
         db.close()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_startup_loads_ctgoodjobs_schedules_without_live_registry_validation(monkeypatch):
+    _engine, Session = _build_engine_and_session()
+    schedule = _create_schedule(Session, source_site="ctgoodjobs", category_ids=["ctgoodjobs:021"])
+
+    monkeypatch.setattr(scheduler_service_module, "SessionLocal", Session)
+    service = SchedulerService()
+    added_jobs = []
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("startup should not perform live CTgoodjobs registry validation")
+
+    def record_add_job(schedule, db=None, **kwargs):
+        added_jobs.append((schedule.id, kwargs.get("ctgoodjobs_validated")))
+
+    monkeypatch.setattr(service, "_validate_ctgoodjobs_schedule", fail_if_called)
+    monkeypatch.setattr(service, "_add_job", record_add_job)
+
+    await service._load_active_schedules()
+
+    assert added_jobs == [(schedule.id, True)]

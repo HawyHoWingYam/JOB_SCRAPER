@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import logging
 
-import httpx
-
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL, parse_category_registry
 from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError
-from app.scraper.ctgoodjobs.detail_scraper import fetch_detail_page_html
-from app.scraper.ctgoodjobs.list_scraper import category_page_url, fetch_category_page_html
+from app.scraper.ctgoodjobs.list_scraper import category_page_url
+from app.scraper.ctgoodjobs_browser_page_scraper import CTGoodJobsBrowserPageScraper
 from app.sources.contracts import CanonicalScrapedJob, build_ctgoodjobs_canonical_job
 from app.sources.ctgoodjobs.parsers import parse_category_page, parse_detail_page
 from app.utils.time import utc_now
@@ -19,7 +17,7 @@ def build_canonical_job(parsed_job: dict) -> CanonicalScrapedJob:
     return build_ctgoodjobs_canonical_job(parsed_job)
 
 
-class CTGoodJobsSpider:
+class CTGoodJobsHeadedSpider:
     source_site = "ctgoodjobs"
 
     async def crawl(
@@ -36,9 +34,15 @@ class CTGoodJobsSpider:
         items_emitted = 0
         detail_pages_skipped = 0
 
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            registry_html = await fetch_category_page_html(f"{CTGOODJOBS_BASE_URL}/jobs", client=client)
-            registry = {category.source_classification_id: category for category in parse_category_registry(registry_html)}
+        async with CTGoodJobsBrowserPageScraper() as page_scraper:
+            registry_html = await page_scraper.fetch_page_html(
+                f"{CTGOODJOBS_BASE_URL}/jobs",
+                stage="registry",
+            )
+            registry = {
+                category.source_classification_id: category
+                for category in parse_category_registry(registry_html)
+            }
 
             for category_id in category_ids:
                 category = registry.get(str(category_id))
@@ -48,7 +52,11 @@ class CTGoodJobsSpider:
                 job_urls: dict[str, str] = {}
                 for page in range(1, max_pages + 1):
                     url = category_page_url(category.url, page=page)
-                    page_html = await fetch_category_page_html(url, client=client)
+                    page_html = await page_scraper.fetch_page_html(
+                        url,
+                        stage="category_page",
+                        referer=f"{CTGOODJOBS_BASE_URL}/jobs",
+                    )
                     parsed_page = parse_category_page(
                         page_html,
                         category_slug=category.slug,
@@ -72,17 +80,22 @@ class CTGoodJobsSpider:
 
                 for job_id, job_url in job_urls.items():
                     try:
-                        detail_html = await fetch_detail_page_html(job_url, client=client, referer=category.url)
+                        detail_html = await page_scraper.fetch_page_html(
+                            job_url,
+                            stage="detail_page",
+                            referer=category.url,
+                        )
                     except CTGoodJobsFetchError as exc:
                         detail_pages_skipped += 1
                         logger.warning(
-                            "Skipping CTGoodJobs detail page after retry exhaustion: category_id=%s job_id=%s job_url=%s error=%s",
+                            "Skipping CTGoodJobs headed detail page after retry exhaustion: category_id=%s job_id=%s job_url=%s error=%s",
                             category.source_classification_id,
                             job_id,
                             job_url,
                             exc,
                         )
                         continue
+
                     parsed_detail = parse_detail_page(
                         detail_html,
                         source_classification_id=category.source_classification_id,

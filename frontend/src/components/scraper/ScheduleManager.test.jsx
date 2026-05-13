@@ -16,6 +16,7 @@ vi.mock('./ScheduleForm', () => ({
           onSubmit({
             name: `${sourceSite} automation`,
             cron_expression: '0 2 * * *',
+            crawl_mode: 'headed',
             category_ids: categories.slice(0, 1).map((category) => category.id),
             max_pages: 4,
           });
@@ -202,6 +203,7 @@ describe('ScheduleManager', () => {
       expect(crawlJobCall).toBeTruthy();
       expect(JSON.parse(crawlJobCall[1].body)).toEqual({
         source_site: 'jobsdb',
+        crawl_mode: 'headed',
         category_ids: [1200],
         max_pages: 3,
       });
@@ -249,6 +251,7 @@ describe('ScheduleManager', () => {
       expect(crawlJobCall).toBeTruthy();
       expect(JSON.parse(crawlJobCall[1].body)).toEqual({
         source_site: 'ctgoodjobs',
+        crawl_mode: 'headed',
         category_ids: ['ctgoodjobs:021'],
         max_pages: 3,
       });
@@ -470,6 +473,7 @@ describe('ScheduleManager', () => {
         name: 'ctgoodjobs automation',
         cron_expression: '0 2 * * *',
         source_site: 'ctgoodjobs',
+        crawl_mode: 'headed',
         category_ids: ['ctgoodjobs:021'],
         max_pages: 4,
       });

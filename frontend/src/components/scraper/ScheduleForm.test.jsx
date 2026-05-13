@@ -44,6 +44,7 @@ describe('ScheduleForm', () => {
     expect(onSubmit).toHaveBeenCalledWith({
       name: 'Nightly scrape',
       cron_expression: '0 2 * * *',
+      crawl_mode: 'headed',
       category_ids: [],
       max_pages: 5,
     });
@@ -72,5 +73,51 @@ describe('ScheduleForm', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /engineering/i }));
 
     expect(onDirty).toHaveBeenLastCalledWith(true);
+  });
+
+  it('defaults crawl mode by source and lets the operator override it', () => {
+    const onSubmit = vi.fn();
+
+    const { rerender } = render(
+      <ScheduleForm
+        categories={JOBSDB_CATEGORIES}
+        sourceSite="jobsdb"
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        onSourceScopedDirtyChange={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByRole('combobox', { name: /crawl mode/i })).toHaveValue('headed');
+
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl mode/i }), {
+      target: { value: 'headless' },
+    });
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'JobsDB Manual' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create automation/i }));
+
+    expect(onSubmit).toHaveBeenLastCalledWith({
+      name: 'JobsDB Manual',
+      cron_expression: '0 2 * * *',
+      crawl_mode: 'headless',
+      category_ids: [],
+      max_pages: 3,
+    });
+
+    rerender(
+      <ScheduleForm
+        categories={CTGOODJOBS_CATEGORIES}
+        sourceSite="ctgoodjobs"
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        onSourceScopedDirtyChange={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByRole('combobox', { name: /crawl mode/i })).toHaveValue('headed');
   });
 });
