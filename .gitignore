@@ -77,6 +77,10 @@ runtime/
 backend/runtime/
 .playwright-mcp/
 .superpowers/brainstorm/
+.firecrawl/
+.serena/
+backend/.host_browser_profiles/
+backend/.host_worker_venv/
 
 # Misc
 .claude/
