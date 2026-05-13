@@ -62,3 +62,32 @@ class RetrievalClient:
             raise RetrievalClientResponseError(status_code=response.status_code, detail=detail)
 
         return response.json()
+
+    async def export_jobs_csv(self, payload: dict[str, Any]) -> bytes:
+        if not self.base_url:
+            raise RetrievalClientUnavailableError("retrieval_api_url is not configured")
+
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=self.timeout_s,
+                transport=self.transport,
+            ) as client:
+                response = await client.post("/api/v1/internal/jobs/search/export", json=payload)
+        except httpx.RequestError as exc:
+            raise RetrievalClientUnavailableError(
+                f"retrieval-api request failed: {exc.__class__.__name__}"
+            ) from exc
+
+        if response.is_error:
+            detail: Any
+            try:
+                detail = response.json()
+            except ValueError:
+                detail = {
+                    "code": "retrieval_api_error",
+                    "message": response.text,
+                }
+            raise RetrievalClientResponseError(status_code=response.status_code, detail=detail)
+
+        return response.content

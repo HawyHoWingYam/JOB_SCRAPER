@@ -45,6 +45,7 @@ class CategoryListScraper:
             "pageSize": self.PAGE_SIZE,
             "page": page,
             "locale": "en-HK",
+            "sortmode": "ListedDate",
         }
 
         should_close = client is None

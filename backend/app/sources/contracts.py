@@ -16,6 +16,27 @@ def _normalize_salary_range(value: Any) -> str | None:
     return None
 
 
+def _join_work_types(values: Any) -> str | None:
+    if not isinstance(values, list):
+        return None
+    normalized = [str(value).strip() for value in values if str(value).strip()]
+    if not normalized:
+        return None
+    return ", ".join(normalized)
+
+
+def _build_listing_description(teaser: Any, bullet_points: Any) -> str | None:
+    teaser_text = str(teaser).strip() if isinstance(teaser, str) and teaser.strip() else ""
+    bullets = [str(point).strip() for point in (bullet_points or []) if str(point).strip()]
+    if teaser_text and bullets:
+        return teaser_text + "\n\nHighlights:\n- " + "\n- ".join(bullets)
+    if teaser_text:
+        return teaser_text
+    if bullets:
+        return "Highlights:\n- " + "\n- ".join(bullets)
+    return None
+
+
 @dataclass(frozen=True)
 class CanonicalScrapedJob:
     source_site: str
@@ -56,6 +77,34 @@ def build_jobsdb_canonical_job(
         employment_type=parsed_job.get("work_type"),
         source_classification_id=parsed_job.get("classification_id"),
         source_classification_name=parsed_job.get("classification"),
+        source_subclassification_id=parsed_job.get("subclassification_id"),
+        source_subclassification_name=parsed_job.get("subclassification"),
+        posted_date=parsed_job.get("listing_date"),
+        raw_data=dict(parsed_job),
+    )
+
+
+def build_jobsdb_listing_canonical_job(
+    parsed_job: dict[str, Any],
+    *,
+    source_url: str,
+) -> CanonicalScrapedJob:
+    source_job_id = str(parsed_job.get("external_id") or "").strip()
+    return CanonicalScrapedJob(
+        source_site="jobsdb",
+        source_job_id=source_job_id,
+        source_url=source_url,
+        title=parsed_job.get("title") or "",
+        description=_build_listing_description(
+            parsed_job.get("teaser"),
+            parsed_job.get("bullet_points"),
+        ),
+        company_name=parsed_job.get("company_name"),
+        location=parsed_job.get("location"),
+        salary_range=_normalize_salary_range(parsed_job.get("salary_label")),
+        employment_type=_join_work_types(parsed_job.get("work_types")),
+        source_classification_id=parsed_job.get("classification_id"),
+        source_classification_name=parsed_job.get("classification_name"),
         source_subclassification_id=parsed_job.get("subclassification_id"),
         source_subclassification_name=parsed_job.get("subclassification"),
         posted_date=parsed_job.get("listing_date"),

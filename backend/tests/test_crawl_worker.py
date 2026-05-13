@@ -17,7 +17,12 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.database import Base
 from app.messaging.event_envelope import build_event_envelope
-from app.messaging.topics import STREAM_CRAWL_COMMANDS, STREAM_CRAWL_PROGRESS, STREAM_JOB_INGEST
+from app.messaging.topics import (
+    STREAM_CRAWL_COMMANDS,
+    STREAM_CRAWL_COMMANDS_HEADED,
+    STREAM_CRAWL_PROGRESS,
+    STREAM_JOB_INGEST,
+)
 from app.models import CrawlJob, CrawlJobEvent
 
 
@@ -32,8 +37,10 @@ class FakeBus:
         self.messages = messages
         self.published = []
         self.acked = []
+        self.groups = []
 
     def ensure_group(self, topic, group_name, start_id="0"):
+        self.groups.append((topic, group_name, start_id))
         return None
 
     def consume_group(self, topic, group_name, consumer_name, *, count=10, block_ms=1000):
@@ -313,3 +320,39 @@ def test_crawl_worker_persists_failed_lifecycle():
         assert events[1].payload["error"] == f"boom for {crawl_job_id}"
     finally:
         db.close()
+
+
+def test_crawl_worker_can_consume_headed_command_topic():
+    from app.workers.run_crawl_worker import CrawlWorkerService
+
+    session_factory = _build_sqlite_session_factory()
+    crawl_job_id = str(uuid.uuid4())
+    _create_crawl_job(session_factory, crawl_job_id=crawl_job_id)
+
+    envelope = build_event_envelope(
+        event_type="crawl.requested",
+        aggregate_type="crawl_job",
+        aggregate_id=crawl_job_id,
+        source_service="test-suite",
+        event_id="evt-headed",
+        payload={
+            "crawl_job_id": crawl_job_id,
+            "source_site": "jobsdb",
+            "request_payload": {"category_ids": [6281], "max_pages": 1, "crawl_mode": "headed"},
+        },
+    )
+    bus = FakeBus([FakeMessage(message_id="1-0", event=envelope)])
+    service = CrawlWorkerService(
+        bus=bus,
+        group_name="crawl-headed-workers",
+        consumer_name="worker-1",
+        command_topic=STREAM_CRAWL_COMMANDS_HEADED,
+        runner_registry={"jobsdb": FakeRunner()},
+        session_factory=session_factory,
+    )
+
+    processed = asyncio.run(service.run_once())
+
+    assert processed == 1
+    assert bus.groups == [(STREAM_CRAWL_COMMANDS_HEADED, "crawl-headed-workers", "0")]
+    assert bus.acked == [(STREAM_CRAWL_COMMANDS_HEADED, "crawl-headed-workers", "1-0")]

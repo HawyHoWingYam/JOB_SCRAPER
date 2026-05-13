@@ -30,3 +30,36 @@ def test_retrieval_api_url_env_var_overrides_env_file(monkeypatch):
     monkeypatch.setenv("RETRIEVAL_API_URL", override)
 
     assert Settings().retrieval_api_url == override
+
+
+def test_recommendation_api_url_env_var_overrides_env_file(monkeypatch):
+    override = "http://recommendation-api:8000"
+
+    monkeypatch.setenv("RECOMMENDATION_API_URL", override)
+
+    assert Settings().recommendation_api_url == override
+
+
+def test_uvicorn_reload_env_var_overrides_env_file(monkeypatch):
+    monkeypatch.setenv("UVICORN_RELOAD", "false")
+
+    assert Settings().uvicorn_reload is False
+
+
+def test_uvicorn_reload_force_polling_env_var_overrides_env_file(monkeypatch):
+    monkeypatch.setenv("UVICORN_RELOAD_FORCE_POLLING", "true")
+
+    assert Settings().uvicorn_reload_force_polling is True
+
+
+def test_jobsdb_headed_browser_channel_env_var_overrides_env_file(monkeypatch):
+    monkeypatch.setenv("JOBSDB_HEADED_BROWSER_CHANNEL", "chrome")
+
+    assert Settings().jobsdb_headed_browser_channel == "chrome"
+
+
+def test_jobsdb_headed_browser_user_data_dir_env_var_overrides_env_file(monkeypatch):
+    override = r"C:\browser-profiles\jobsdb"
+    monkeypatch.setenv("JOBSDB_HEADED_BROWSER_USER_DATA_DIR", override)
+
+    assert Settings().jobsdb_headed_browser_user_data_dir == override

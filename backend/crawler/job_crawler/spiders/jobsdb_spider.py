@@ -4,7 +4,11 @@ import httpx
 
 from app.scraper.category_scraper import CategoryListScraper
 from app.scraper.job_detail_scraper import JobDetailScraper
-from app.sources.contracts import CanonicalScrapedJob, build_jobsdb_canonical_job
+from app.sources.contracts import (
+    CanonicalScrapedJob,
+    build_jobsdb_canonical_job,
+    build_jobsdb_listing_canonical_job,
+)
 from app.sources.jobsdb.parsers import parse_search_response
 from app.utils.time import utc_now
 from app.config import settings
@@ -34,7 +38,7 @@ class JobsDBSpider:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for category_id in category_ids:
-                seen_ids: set[str] = set()
+                seen_jobs: dict[str, dict] = {}
                 total_pages = max_pages
                 for page in range(1, max_pages + 1):
                     payload = await list_scraper.fetch_page(int(category_id), page, client)
@@ -48,27 +52,27 @@ class JobsDBSpider:
                     jobs = parsed.get("jobs") or []
                     for job in jobs:
                         job_id = str(job.get("external_id") or "").strip()
-                        if not job_id or job_id in seen_ids:
+                        if not job_id or job_id in seen_jobs:
                             continue
-                        seen_ids.add(job_id)
+                        seen_jobs[job_id] = dict(job)
 
                     pages_processed += 1
                     emit_page_processed(
                         {
                             "current_page": page,
                             "total_pages": total_pages,
-                            "job_ids_collected": len(seen_ids),
+                            "job_ids_collected": len(seen_jobs),
                             "updated_at": utc_now().isoformat(),
                         }
                     )
 
-                for job_id in seen_ids:
+                for job_id, listing_job in seen_jobs.items():
                     detail = await detail_scraper.fetch_job_detail(job_id, client)
-                    if not detail:
-                        continue
-                    item = build_canonical_job(
-                        detail,
-                        source_url=f"{settings.jobsdb_base_url}/job/{job_id}",
+                    source_url = f"{settings.jobsdb_base_url}/job/{job_id}"
+                    item = (
+                        build_canonical_job(detail, source_url=source_url)
+                        if detail
+                        else build_jobsdb_listing_canonical_job(listing_job, source_url=source_url)
                     )
                     emit_item_emitted(item.to_dict())
                     items_emitted += 1

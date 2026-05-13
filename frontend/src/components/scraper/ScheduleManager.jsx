@@ -5,6 +5,7 @@ import ScheduleForm from './ScheduleForm';
 import ScheduleList from './ScheduleList';
 import ScheduleHistory from './ScheduleHistory';
 import ScrapeProgressPanel from './ScrapeProgressPanel';
+import { CRAWL_MODE_OPTIONS, resolveDefaultCrawlMode } from './crawlMode';
 import './Scheduler.css';
 
 const API_URL = API_BASE_URL;
@@ -136,6 +137,7 @@ function buildImmediateScrapePayload(form, sourceSite) {
     return {
         payload: {
             source_site: sourceSite,
+            crawl_mode: form?.crawl_mode || resolveDefaultCrawlMode(sourceSite),
             category_ids: categoryIds,
             max_pages: maxPages,
         },
@@ -154,6 +156,7 @@ function ScheduleManager({ onNavigateToAI }) {
     const [createFormHasSourceSelections, setCreateFormHasSourceSelections] = useState(false);
     const [showImmediateScrape, setShowImmediateScrape] = useState(false);
     const [immediateForm, setImmediateForm] = useState({
+        crawl_mode: resolveDefaultCrawlMode('jobsdb'),
         category_ids: [],
         max_pages: 3
     });
@@ -451,6 +454,7 @@ function ScheduleManager({ onNavigateToAI }) {
         setCreateFormHasSourceSelections(false);
         setImmediateForm((prev) => ({
             ...prev,
+            crawl_mode: resolveDefaultCrawlMode(nextSourceSite),
             category_ids: [],
         }));
     };
@@ -544,6 +548,25 @@ function ScheduleManager({ onNavigateToAI }) {
                 <div className="immediate-form-panel glass-panel">
                     <h3>Direct Override Sequence</h3>
                     <p className="form-hint">Select sectors to scan immediately. Process runs asynchronously.</p>
+
+                    <div className="cyber-form-group">
+                        <label htmlFor="immediate-crawl-mode">Crawl Mode</label>
+                        <select
+                            id="immediate-crawl-mode"
+                            className="premium-select"
+                            value={immediateForm.crawl_mode}
+                            onChange={(e) => setImmediateForm(prev => ({
+                                ...prev,
+                                crawl_mode: e.target.value,
+                            }))}
+                        >
+                            {CRAWL_MODE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                    {option.label}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
 
                     <div className="cyber-form-group">
                         <label>Target Sectors</label>

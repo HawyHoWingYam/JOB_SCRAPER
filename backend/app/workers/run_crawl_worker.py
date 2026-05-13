@@ -14,7 +14,11 @@ from app.database import SessionLocal
 from app.logging_config import configure_logging
 from app.messaging.event_envelope import build_event_envelope
 from app.messaging.redis_stream_bus import RedisStreamBus, StreamMessage
-from app.messaging.topics import STREAM_CRAWL_COMMANDS, STREAM_CRAWL_PROGRESS, STREAM_JOB_INGEST
+from app.messaging.topics import (
+    STREAM_CRAWL_COMMANDS,
+    STREAM_CRAWL_PROGRESS,
+    STREAM_JOB_INGEST,
+)
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.utils.time import utc_now
 
@@ -51,6 +55,7 @@ class CrawlWorkerService:
         bus: RedisStreamBus | Any | None = None,
         group_name: str = "crawl-workers",
         consumer_name: str = "crawl-worker",
+        command_topic: str = STREAM_CRAWL_COMMANDS,
         runner_registry: dict[str, Any] | None = None,
         crawl_job_repository: CrawlJobRepository | None = None,
         session_factory: Any | None = None,
@@ -58,14 +63,15 @@ class CrawlWorkerService:
         self.bus = bus or RedisStreamBus()
         self.group_name = group_name
         self.consumer_name = consumer_name
+        self.command_topic = command_topic
         self.runner_registry = runner_registry or _default_runner_registry()
         self.crawl_job_repository = crawl_job_repository or CrawlJobRepository()
         self.session_factory = session_factory or SessionLocal
-        self.bus.ensure_group(STREAM_CRAWL_COMMANDS, self.group_name)
+        self.bus.ensure_group(self.command_topic, self.group_name)
 
     async def run_once(self) -> int:
         messages = self.bus.consume_group(
-            STREAM_CRAWL_COMMANDS,
+            self.command_topic,
             self.group_name,
             self.consumer_name,
             count=10,
@@ -78,7 +84,7 @@ class CrawlWorkerService:
     async def _handle_message(self, message: StreamMessage | Any) -> None:
         event = message.event
         if event.event_type != "crawl.requested":
-            self.bus.ack(STREAM_CRAWL_COMMANDS, self.group_name, message.message_id)
+            self.bus.ack(self.command_topic, self.group_name, message.message_id)
             return
 
         payload = dict(event.payload or {})
@@ -124,7 +130,7 @@ class CrawlWorkerService:
                     job_ids_collected=0,
                 ),
             )
-            self.bus.ack(STREAM_CRAWL_COMMANDS, self.group_name, message.message_id)
+            self.bus.ack(self.command_topic, self.group_name, message.message_id)
             return
 
         self._publish_progress(
@@ -273,7 +279,7 @@ class CrawlWorkerService:
                 ),
             )
         finally:
-            self.bus.ack(STREAM_CRAWL_COMMANDS, self.group_name, message.message_id)
+            self.bus.ack(self.command_topic, self.group_name, message.message_id)
 
     def _publish_progress(
         self,

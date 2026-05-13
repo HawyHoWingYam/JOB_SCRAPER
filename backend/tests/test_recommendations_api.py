@@ -1,5 +1,4 @@
 import sys
-import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,16 +10,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.api import recommendations as recommendations_api
 from app.database import get_db
-
-
-def _load_recommendations_api_module():
-    module_path = BACKEND_ROOT / "app" / "api" / "recommendations.py"
-    spec = importlib.util.spec_from_file_location("recommendations_api_under_test", module_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
 
 
 RECOMMENDATIONS_RESPONSE = {
@@ -54,7 +45,6 @@ RECOMMENDATIONS_RESPONSE = {
 
 
 def _build_test_client():
-    recommendations_api = _load_recommendations_api_module()
     app = FastAPI()
     app.include_router(recommendations_api.router, prefix="/api/v1")
 
@@ -63,24 +53,30 @@ def _build_test_client():
 
     app.dependency_overrides[get_db] = override_get_db
     transport = httpx.ASGITransport(app=app)
-    return httpx.AsyncClient(transport=transport, base_url="http://testserver"), recommendations_api
+    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
 
 
 @pytest.mark.asyncio
-async def test_similar_jobs_endpoint_uses_recommendation_service(monkeypatch):
-    client, recommendations_api = _build_test_client()
+async def test_similar_jobs_endpoint_proxies_to_recommendation_api(monkeypatch):
+    client = _build_test_client()
     captured = {}
 
-    class FakeRecommendationService:
+    class FailingRecommendationService:
         def __init__(self, db):
-            captured["db"] = db
+            raise AssertionError("public recommendations should not instantiate local JobRecommendationService")
 
-        def recommend_for_job(self, job_id, *, limit=5):
+    class FakeRecommendationClient:
+        def __init__(self, *, base_url=None, **kwargs):
+            captured["base_url"] = base_url
+
+        async def get_job_recommendations(self, job_id, *, limit=5):
             captured["job_id"] = job_id
             captured["limit"] = limit
-            return RECOMMENDATIONS_RESPONSE["recommendations"]
+            return RECOMMENDATIONS_RESPONSE
 
-    monkeypatch.setattr(recommendations_api, "JobRecommendationService", FakeRecommendationService)
+    monkeypatch.setattr(recommendations_api, "JobRecommendationService", FailingRecommendationService)
+    monkeypatch.setattr(recommendations_api, "RecommendationClient", FakeRecommendationClient, raising=False)
+    monkeypatch.setattr(recommendations_api.settings, "recommendation_api_url", "http://recommendation-api:8000")
 
     try:
         response = await client.get(f"/api/v1/jobs/{RECOMMENDATIONS_RESPONSE['source_job_id']}/similar?limit=3")
@@ -91,26 +87,25 @@ async def test_similar_jobs_endpoint_uses_recommendation_service(monkeypatch):
     payload = response.json()
     assert payload["source_job_id"] == RECOMMENDATIONS_RESPONSE["source_job_id"]
     assert payload["recommendations"][0]["job_id"] == "candidate-1"
+    assert captured["base_url"] == "http://recommendation-api:8000"
     assert captured["limit"] == 3
 
 
 @pytest.mark.asyncio
-async def test_recommendations_endpoint_returns_404_for_unknown_source_job(monkeypatch):
-    client, recommendations_api = _build_test_client()
+async def test_recommendations_endpoint_returns_503_for_unconfigured_proxy(monkeypatch):
+    client = _build_test_client()
 
-    class FakeRecommendationService:
+    class FailingRecommendationService:
         def __init__(self, db):
-            self.db = db
+            raise AssertionError("public recommendations should not instantiate local JobRecommendationService")
 
-        def recommend_for_job(self, job_id, *, limit=5):
-            raise ValueError(f"Job not found: {job_id}")
-
-    monkeypatch.setattr(recommendations_api, "JobRecommendationService", FakeRecommendationService)
+    monkeypatch.setattr(recommendations_api, "JobRecommendationService", FailingRecommendationService)
+    monkeypatch.setattr(recommendations_api.settings, "recommendation_api_url", None)
 
     try:
         response = await client.get(f"/api/v1/recommendations/jobs?job_id={uuid4()}")
     finally:
         await client.aclose()
 
-    assert response.status_code == 404
-    assert response.json()["detail"].startswith("Job not found:")
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "recommendation_api_unavailable"

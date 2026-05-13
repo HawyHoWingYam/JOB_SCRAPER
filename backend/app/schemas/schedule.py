@@ -8,6 +8,7 @@ from pydantic import (
     model_validator,
 )
 from typing import Optional, List
+from app.crawl_modes import normalize_crawl_mode, resolve_crawl_mode
 from datetime import datetime
 from uuid import UUID
 
@@ -58,6 +59,7 @@ class ScheduleCreateSchema(BaseModel):
     cron_expression: str = Field(..., min_length=9, max_length=100)
     timezone: str = Field(default="Asia/Hong_Kong")
     source_site: str = Field(default="jobsdb", max_length=32)
+    crawl_mode: Optional[str] = Field(default=None, max_length=32)
     category_ids: Optional[List[CategoryId]] = None
     keywords: Optional[str] = None
     location: str = Field(default="Hong Kong")
@@ -69,9 +71,15 @@ class ScheduleCreateSchema(BaseModel):
     def normalize_source_site_field(cls, v):
         return normalize_source_site(v)
 
+    @field_validator("crawl_mode", mode="before")
+    @classmethod
+    def normalize_crawl_mode_field(cls, v):
+        return normalize_crawl_mode(v)
+
     @model_validator(mode="after")
     def validate_category_ids(self) -> "ScheduleCreateSchema":
         validate_category_ids_for_source_site(self.source_site, self.category_ids)
+        self.crawl_mode = resolve_crawl_mode(self.source_site, self.crawl_mode)
         return self
 
 
@@ -83,6 +91,7 @@ class ScheduleUpdateSchema(BaseModel):
     cron_expression: Optional[str] = Field(None, min_length=9, max_length=100)
     timezone: Optional[str] = None
     source_site: Optional[str] = Field(default=None, max_length=32)
+    crawl_mode: Optional[str] = Field(default=None, max_length=32)
     category_ids: Optional[List[CategoryId]] = None
     keywords: Optional[str] = None
     location: Optional[str] = None
@@ -95,6 +104,11 @@ class ScheduleUpdateSchema(BaseModel):
         if v is None:
             return None
         return normalize_source_site(v)
+
+    @field_validator("crawl_mode", mode="before")
+    @classmethod
+    def normalize_crawl_mode_field(cls, v):
+        return normalize_crawl_mode(v)
 
     @model_validator(mode="after")
     def validate_category_ids(self) -> "ScheduleUpdateSchema":
@@ -114,6 +128,7 @@ class ScheduleSchema(BaseModel):
     cron_expression: str
     timezone: str
     source_site: str
+    crawl_mode: Optional[str]
     category_ids: Optional[List[CategoryId]]
     keywords: Optional[str]
     location: str
@@ -123,6 +138,11 @@ class ScheduleSchema(BaseModel):
     next_run_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def resolve_output_crawl_mode(self) -> "ScheduleSchema":
+        self.crawl_mode = resolve_crawl_mode(self.source_site, self.crawl_mode)
+        return self
 
 # ============== Execution Schemas ==============
 
@@ -184,6 +204,7 @@ class ImmediateScrapeRequest(BaseModel):
     """Request for immediate scraping without schedule."""
 
     source_site: str = Field(default="jobsdb", max_length=32)
+    crawl_mode: Optional[str] = Field(default=None, max_length=32)
     category_ids: List[CategoryId] = Field(..., min_length=1)
     max_pages: int = Field(default=3, ge=1, le=1000)
     skip_existing: bool = Field(default=False, description="If True, skip jobs that already exist. If False, update existing jobs.")
@@ -193,7 +214,13 @@ class ImmediateScrapeRequest(BaseModel):
     def normalize_source_site_field(cls, v):
         return normalize_source_site(v)
 
+    @field_validator("crawl_mode", mode="before")
+    @classmethod
+    def normalize_crawl_mode_field(cls, v):
+        return normalize_crawl_mode(v)
+
     @model_validator(mode="after")
     def validate_category_ids(self) -> "ImmediateScrapeRequest":
         validate_category_ids_for_source_site(self.source_site, self.category_ids)
+        self.crawl_mode = resolve_crawl_mode(self.source_site, self.crawl_mode)
         return self

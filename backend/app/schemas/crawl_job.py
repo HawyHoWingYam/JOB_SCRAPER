@@ -5,12 +5,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.crawl_modes import normalize_crawl_mode, resolve_crawl_mode
 from app.schemas.schedule import CategoryId, normalize_source_site, validate_category_ids_for_source_site
 
 
 class CrawlJobCreateRequest(BaseModel):
     schedule_id: UUID | None = None
     source_site: str | None = Field(default=None, max_length=32)
+    crawl_mode: str | None = Field(default=None, max_length=32)
     category_ids: list[CategoryId] | None = None
     max_pages: int = Field(default=3, ge=1, le=1000)
     skip_existing: bool = Field(default=False)
@@ -23,12 +25,18 @@ class CrawlJobCreateRequest(BaseModel):
             return None
         return normalize_source_site(value)
 
+    @field_validator("crawl_mode", mode="before")
+    @classmethod
+    def normalize_crawl_mode_field(cls, value):
+        return normalize_crawl_mode(value)
+
     @model_validator(mode="after")
     def validate_request_shape(self) -> "CrawlJobCreateRequest":
         if self.schedule_id is not None:
             return self
 
         self.source_site = normalize_source_site(self.source_site)
+        self.crawl_mode = resolve_crawl_mode(self.source_site, self.crawl_mode)
         if not self.category_ids:
             raise ValueError("category_ids must be provided when schedule_id is omitted")
 
@@ -41,6 +49,7 @@ class CrawlJobSchema(BaseModel):
 
     id: UUID
     source_site: str
+    crawl_mode: str | None = None
     trigger_type: str
     schedule_id: UUID | None
     status: str
@@ -53,6 +62,12 @@ class CrawlJobSchema(BaseModel):
     metrics: dict | None
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def resolve_output_crawl_mode(self) -> "CrawlJobSchema":
+        payload = self.request_payload if isinstance(self.request_payload, dict) else {}
+        self.crawl_mode = resolve_crawl_mode(self.source_site, payload.get("crawl_mode"))
+        return self
 
 
 class CrawlJobEventSchema(BaseModel):

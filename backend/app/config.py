@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     scraper_max_delay: float = 5.0
     scraper_max_retries: int = 3
     scraper_use_playwright_fallback: bool = True
+    jobsdb_headed_browser_channel: str = "msedge"
+    jobsdb_headed_browser_user_data_dir: Optional[str] = None
+    jobsdb_headed_browser_executable_path: Optional[str] = None
+    jobsdb_headed_navigation_timeout_ms: int = 60000
+    jobsdb_headed_worker_lock_port: int = 47651
 
     # LLM Configuration
     llm_provider: str = "gemini"  # Options: anthropic, claude, custom, gemini, zhipu, mock
@@ -49,6 +54,7 @@ class Settings(BaseSettings):
     custom_api_format: str = "anthropic"
     custom_model: str = "claude-sonnet-4-5"
     retrieval_api_url: Optional[str] = None
+    recommendation_api_url: Optional[str] = None
 
     @field_validator(
         'anthropic_base_url',
@@ -56,6 +62,9 @@ class Settings(BaseSettings):
         'custom_api_key',
         'custom_base_url',
         'retrieval_api_url',
+        'recommendation_api_url',
+        'jobsdb_headed_browser_user_data_dir',
+        'jobsdb_headed_browser_executable_path',
         mode='before',
     )
     @classmethod
@@ -79,6 +88,8 @@ class Settings(BaseSettings):
 
     # Application
     debug: bool = False
+    uvicorn_reload: Optional[bool] = None
+    uvicorn_reload_force_polling: bool = False
     sqlalchemy_echo: bool = False
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"

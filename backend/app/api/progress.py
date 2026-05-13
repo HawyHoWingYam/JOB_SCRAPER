@@ -12,8 +12,8 @@ from fastapi.responses import StreamingResponse
 
 from app.database import SessionLocal
 from app.repositories.crawl_job_repository import CrawlJobRepository
-from app.services.progress_store import get_progress_store
 from app.utils.time import utc_now
+from app.crawl_modes import resolve_crawl_mode
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scrape", tags=["progress"])
@@ -63,6 +63,7 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
         "category_name": category_label,
         "category_ids": category_ids,
         "source_site": crawl_job.source_site,
+        "crawl_mode": resolve_crawl_mode(crawl_job.source_site, request_payload.get("crawl_mode")),
         "trigger_type": crawl_job.trigger_type,
         "schedule_id": str(crawl_job.schedule_id) if crawl_job.schedule_id else None,
         "request_payload": request_payload,
@@ -96,7 +97,6 @@ def _collect_progress_payload() -> dict[str, Any]:
     now = utc_now()
     all_progress: dict[str, dict[str, Any]] = {}
     active_progress: dict[str, dict[str, Any]] = {}
-    progress_store = get_progress_store()
 
     db = SessionLocal()
     try:
@@ -117,13 +117,6 @@ def _collect_progress_payload() -> dict[str, Any]:
                 active_progress[key] = snapshot
     finally:
         db.close()
-
-    progress_store.clear_completed(max_age_seconds=60)
-    for key, value in progress_store.get_all().items():
-        crawl_job_id = str(value.get("crawl_job_id") or key)
-        all_progress.setdefault(crawl_job_id, value)
-        if value.get("status") not in TERMINAL_CRAWL_JOB_STATUSES:
-            active_progress.setdefault(crawl_job_id, value)
 
     return {
         "active": active_progress,

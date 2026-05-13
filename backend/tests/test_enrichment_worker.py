@@ -20,6 +20,7 @@ from app.database import Base
 from app.messaging.event_envelope import build_event_envelope
 from app.messaging.topics import STREAM_CRAWL_PROGRESS, STREAM_JOB_LIFECYCLE
 from app.models import AppRuntimeSettings, CrawlJob, EnrichmentRun, EnrichmentRunItem, EventOutbox, Job
+from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 
 
 @dataclass
@@ -142,6 +143,26 @@ def _create_crawl_job(session_factory, *, crawl_job_id, status="completed", metr
         db.close()
 
 
+def _mark_jobs_profile_ready(session_factory):
+    db = session_factory()
+    try:
+        service = AIRuntimeSettingsService(db)
+        service.update_settings({"llm_provider": "mock"})
+        fingerprint = service.build_config_fingerprint("jobs", service._row_values(service.get_or_create()))
+        service.record_profile_test_result(
+            "jobs",
+            ok=True,
+            configured_provider="mock",
+            model=None,
+            latency_ms=1,
+            config_fingerprint=fingerprint,
+            error_message=None,
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
 def _job_ingested_message(*, message_id, crawl_job_id, job_id):
     envelope = build_event_envelope(
         event_type="job.ingested",
@@ -188,6 +209,7 @@ def test_enrichment_worker_aggregates_crawl_auto_run_and_executes_after_dispatch
         status="completed",
         metrics={"items_emitted": 2, "ingest_items_seen": 2},
     )
+    _mark_jobs_profile_ready(session_factory)
 
     bus = FakeBus(
         {

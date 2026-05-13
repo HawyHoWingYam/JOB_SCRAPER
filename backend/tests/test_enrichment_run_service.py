@@ -164,6 +164,26 @@ def _create_crawl_job(
     return crawl_job
 
 
+def _mark_jobs_profile_ready(db):
+    service = AIRuntimeSettingsService(db)
+    service.update_settings(
+        {
+            "llm_provider": "mock",
+        }
+    )
+    fingerprint = service.build_config_fingerprint("jobs", service._row_values(service.get_or_create()))
+    service.record_profile_test_result(
+        "jobs",
+        ok=True,
+        configured_provider="mock",
+        model=None,
+        latency_ms=1,
+        config_fingerprint=fingerprint,
+        error_message=None,
+    )
+    db.commit()
+
+
 def test_create_manual_pending_run_skips_jobs_missing_source_classification():
     db = _build_sqlite_session()
     try:
@@ -521,6 +541,7 @@ def test_request_crawl_auto_run_if_ready_waits_for_terminal_crawl_and_full_inges
 
         crawl_job.metrics = {"items_emitted": 2, "ingest_items_seen": 2}
         db.commit()
+        _mark_jobs_profile_ready(db)
         assert service.request_crawl_auto_run_if_ready(str(crawl_job.id)) is True
 
         outbox_rows = db.query(EventOutbox).all()
@@ -531,6 +552,35 @@ def test_request_crawl_auto_run_if_ready_waits_for_terminal_crawl_and_full_inges
 
         assert service.request_crawl_auto_run_if_ready(str(crawl_job.id)) is False
         assert db.query(EventOutbox).count() == 1
+    finally:
+        db.close()
+
+
+def test_request_crawl_auto_run_if_ready_does_not_enqueue_when_jobs_profile_is_not_ready():
+    db = _build_sqlite_session()
+    try:
+        crawl_job = _create_crawl_job(
+            db,
+            status="completed",
+            metrics={"items_emitted": 1, "ingest_items_seen": 1},
+        )
+        job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 5, 13, 30, 0),
+            title="Queued Auto Job Without Profile",
+        )
+
+        service = EnrichmentRunService(db)
+        service.append_job_to_crawl_auto_run(
+            crawl_job_id=str(crawl_job.id),
+            job_id=str(job.id),
+        )
+        db.commit()
+
+        assert AIRuntimeSettingsService(db).get_profile_runtime_metadata("jobs").is_ready is False
+        assert service.request_crawl_auto_run_if_ready(str(crawl_job.id)) is False
+        assert db.query(EventOutbox).count() == 0
     finally:
         db.close()
 

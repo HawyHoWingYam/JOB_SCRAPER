@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Save, X } from 'lucide-react';
+import { CRAWL_MODE_OPTIONS, resolveDefaultCrawlMode } from './crawlMode';
 
 // Cron presets
 const CRON_PRESETS = [
@@ -22,6 +23,7 @@ function ScheduleForm({
         name: '',
         cronPreset: '0 2 * * *',
         customCron: '',
+        crawlMode: resolveDefaultCrawlMode(sourceSite),
         categoryIds: [],
         maxPages: 3,
     });
@@ -33,6 +35,7 @@ function ScheduleForm({
     useEffect(() => {
         setFormData(prev => ({
             ...prev,
+            crawlMode: resolveDefaultCrawlMode(sourceSite),
             categoryIds: [],
         }));
     }, [sourceSite]);
@@ -60,6 +63,7 @@ function ScheduleForm({
         onSubmit({
             name: formData.name,
             cron_expression: cronExpression,
+            crawl_mode: formData.crawlMode,
             category_ids: formData.categoryIds,
             max_pages: parseInt(formData.maxPages),
         });
@@ -118,6 +122,25 @@ function ScheduleForm({
                     />
                 </div>
             )}
+
+            <div className="cyber-form-group">
+                <label htmlFor="schedule-crawl-mode">Crawl Mode</label>
+                <select
+                    id="schedule-crawl-mode"
+                    name="crawlMode"
+                    className="premium-select"
+                    value={formData.crawlMode}
+                    onChange={handleChange}
+                    disabled={isLoading}
+                    aria-label="Crawl Mode"
+                >
+                    {CRAWL_MODE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                            {option.label}
+                        </option>
+                    ))}
+                </select>
+            </div>
 
             <div className="cyber-form-group">
                 <label>Max Depth (Pages per Sector)</label>

@@ -172,6 +172,49 @@ def _find_jobcats_container(payload: Any) -> dict[str, Any] | None:
     return None
 
 
+def _extract_json_array_after_marker(payload_text: str, marker: str) -> list[dict[str, Any]] | None:
+    start = payload_text.find(marker)
+    if start < 0:
+        return None
+
+    bracket_start = payload_text.find("[", start)
+    if bracket_start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(bracket_start, len(payload_text)):
+        char = payload_text[index]
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+        if char == "[":
+            depth += 1
+            continue
+        if char == "]":
+            depth -= 1
+            if depth == 0:
+                snippet = payload_text[bracket_start : index + 1]
+                try:
+                    parsed = json.loads(snippet)
+                except json.JSONDecodeError:
+                    return None
+                return parsed if isinstance(parsed, list) else None
+    return None
+
+
 def parse_category_registry(page_html: str) -> list[CTGoodJobsCategory]:
     """Parse the CTgoodjobs /jobs registry page into top-level categories."""
 
@@ -181,14 +224,11 @@ def parse_category_registry(page_html: str) -> list[CTGoodJobsCategory]:
     for match in _NEXT_F_PUSH_PATTERN.finditer(page_html):
         payload_text = _decode_rendered_text(match.group("payload"))
         payload_obj = _decode_next_f_payload_json(payload_text)
-        if payload_obj is None:
-            continue
-
-        container = _find_jobcats_container(payload_obj)
-        if container is None:
-            continue
-
-        jobcats = container.get("jobcats")
+        container = _find_jobcats_container(payload_obj) if payload_obj is not None else None
+        if container is not None:
+            jobcats = container.get("jobcats")
+        else:
+            jobcats = _extract_json_array_after_marker(payload_text, '"jobcats"')
         if not isinstance(jobcats, list):
             continue
 

@@ -2,11 +2,12 @@
 
 > Date: 2026-05-06
 > Scope: execution progress update for the AI-ready eventized architecture plan
-> Source of truth for implementation work: `main` at commit `94c7b6af`
+> Historical landed baseline: `main` at commit `dfcd3369`
+> Current local follow-up baseline: uncommitted working tree atop `main`
 
 ## Summary
 
-Execution started in isolated git worktrees and has now completed Tasks 1 through 9.
+Execution started in isolated git worktrees and completed Tasks 1 through 10 on `main`. An initial Task 11 slice is present on `main`, and the current local follow-up working tree now completes the remaining Task 11 runtime split plus the Task 12 cutover/cleanup slice.
 
 Task 5 and Task 6 were landed together on the feature branch in commit:
 
@@ -24,6 +25,18 @@ Task 9 was then landed directly onto `main` in commit:
 
 - `94c7b6af` - `feat: extract ai enrichment onto dedicated worker`
 
+Task 10 was then landed on feature branch commit:
+
+- `d2c6d268` - `feat: add embedding worker and semantic job retrieval`
+
+That work was then merged into `main` on 2026-05-07 in commit:
+
+- `a537c61a` - `Merge branch 'feat/task10-embedding-semantic'`
+
+An initial Task 11 slice was then landed directly onto `main` in commit:
+
+- `dfcd3369` - `feat: add job recommendations and retrieval mode controls`
+
 Completed in `main`:
 
 - Task 1: Dependency and Container Foundation
@@ -33,11 +46,30 @@ Completed in `main`:
 - Task 5: Shared Source Contracts and Parser Extraction
 - Task 6: Crawl Worker Runtime and Multi-Source Canonical Emission
 - Task 7: Ingest Worker and Durable Upsert Flow
+- Task 10: Embedding Worker and Semantic Retrieval
 - Task 9: Enrichment Worker Extraction
+
+Partially completed in `main`:
+
+- Task 11: Recommendation Service and Frontend Search Modes
+  - backend recommendation endpoints are now live in the control plane
+  - frontend retrieval-mode controls and related-jobs modal rendering are now live
+  - dedicated `recommendation-api` runtime extraction remains open
+
+Completed in the current local working tree:
+
+- Task 11: Recommendation Service and Frontend Search Modes
+  - dedicated `recommendation-api` runtime now exists
+  - public recommendation endpoints now proxy to the internal recommendation runtime
+  - semantic / hybrid export now follows the retrieval runtime instead of silently falling back to lexical export
+- Task 12: Cutover, Recovery, and Cleanup
+  - legacy category-scrape entrypoints were removed from the runtime path
+  - transitional in-memory `progress_store` usage was removed from the runtime path
+  - scrape progress is now derived only from durable `crawl_jobs` + `crawl_job_events`
 
 Next planned task:
 
-- Task 10: Embedding Worker and Semantic Retrieval
+- Run worker-profile real-data QA for retrieval, embeddings, recommendations, and durable progress; then land the local Task 11/12 follow-up slice
 
 This update records:
 
@@ -66,11 +98,13 @@ Historical feature-branch milestones:
 - `fc95800a` - `feat: land source-owned crawl worker runtime`
 - `09ab8887` - `feat: add ingest worker and source-aware upsert flow`
 - `94c7b6af` - `feat: extract ai enrichment onto dedicated worker`
+- `d2c6d268` - `feat: add embedding worker and semantic job retrieval`
+- `dfcd3369` - `feat: add job recommendations and retrieval mode controls`
 
 Integrated `main` state:
 
 - merge commit: `7e36f014`
-- current `main` head: `94c7b6af`
+- current `main` head: `dfcd3369`
 - local feature branch `feat/ai-ready-eventized` has been deleted
 - isolated worktree `.worktrees/ai-ready-eventized` has been removed
 - local feature branch `feat/task7-ingest-worker` has been deleted
@@ -78,11 +112,14 @@ Integrated `main` state:
 
 Current architecture status:
 
-- Tasks 1 through 9 are now present on `main`
+- Tasks 1 through 10 are now present on `main`
 - the crawl-worker runtime has passed both unit/contract verification and live external smoke validation
 - the ingest-worker runtime has passed both regression verification and live end-to-end persistence smoke validation
 - the enrichment-worker runtime has now passed targeted regression coverage and a live worker-owned smoke validation
-- the next execution target should be Task 10, while Task 8 remains a hardening/cutover follow-up track rather than the critical path
+- embedding-worker and retrieval-api code paths are now present on `main`, with lexical-mode fallback preserved in `backend-api`
+- recommendation endpoints and frontend retrieval-mode controls are now present on `main`, but dedicated recommendation runtime extraction remains open there
+- the current local working tree adds a real `recommendation-api`, retrieval-backed non-lexical export, and durable-only progress aggregation
+- the next execution target is no longer Task 11 implementation work; it is worker-profile real-data QA and then landing the current local follow-up, while Task 8 remains a hardening/cutover follow-up track
 
 ## Task 1 Status
 
@@ -751,6 +788,196 @@ GREEN:
 - automatic enrichment dispatch now waits for crawl terminal state plus ingest catch-up before starting the run
 - the critical-path architecture gap after Task 7 is now closed; the next main-path gap is downstream embedding/retrieval enablement
 
+## Task 10 Status
+
+### Completed, Merged, and Runtime-Split
+
+Task 10 is complete in feature-branch commit:
+
+- `d2c6d268`
+
+and merged into `main` via:
+
+- `a537c61a`
+
+### What Was Added
+
+Embedding/retrieval runtime:
+
+- `backend/app/workers/run_embedding_worker.py`
+- `backend/app/services/embedding_document_builder.py`
+- `backend/app/services/retrieval_service.py`
+- `backend/app/services/retrieval_client.py`
+- `backend/app/retrieval_main.py`
+- `backend/app/api/retrieval.py`
+- `backend/app/search/lexical_query.py`
+- `backend/app/search/semantic_query.py`
+- `backend/app/search/hybrid_ranker.py`
+
+Runtime/image split:
+
+- `backend/requirements-runtime.txt`
+- `backend/requirements-ml.txt`
+- `backend/Dockerfile.ml`
+- `docker-compose.yml`
+- `README.md`
+
+Tests:
+
+- `backend/tests/test_embedding_worker.py`
+- `backend/tests/test_embedding_document_builder.py`
+- `backend/tests/test_retrieval_service.py`
+- `backend/tests/test_retrieval_api.py`
+- `backend/tests/test_retrieval_client.py`
+- `backend/tests/integration/test_job_embeddings_pgvector.py`
+- `backend/tests/integration/test_semantic_search_api.py`
+
+### Behavior Landed
+
+- a real `embedding-worker` runtime now consumes `job.ingested` and `job.enriched`
+- deterministic embedding documents are now built from current job state and re-embedded only when `document_hash` changes
+- `job_embeddings` are now updated durably and emit `job.embedded`
+- semantic and hybrid search now run behind the internal `retrieval-api` runtime
+- `POST /api/v1/jobs/search` remains stable and now accepts `retrieval_mode`
+- lexical mode remains the default and still works without ML dependencies in the default `backend-api` image
+
+### Verification Performed
+
+GREEN:
+
+- `pytest -q backend/tests/test_retrieval_service.py backend/tests/test_retrieval_client.py backend/tests/test_retrieval_api.py backend/tests/integration/test_job_embeddings_pgvector.py backend/tests/integration/test_semantic_search_api.py`
+- result: targeted retrieval / embedding coverage passed during Task 10 landing and 2026-05-07 recovery follow-up
+
+- live runtime smoke was also preserved through the 2026-05-07 recovery path:
+  - lexical search remains available from `backend-api`
+  - semantic / hybrid paths are wired behind `retrieval-api`
+  - embedding runtime dependencies are isolated behind `backend/requirements-ml.txt`
+
+### Notes
+
+- Task 10 is complete as an implementation slice
+- the main remaining gap after Task 10 is no longer embedding/retrieval bring-up; it is recommendation/runtime completion and cutover cleanup
+- semantic/hybrid container use still depends on explicitly running the worker-profile ML services
+
+## Task 11 Status
+
+### Baseline Slice Landed on `main`
+
+Task 11 started on `main` in commit:
+
+- `dfcd3369`
+
+That landed the first user-facing slice:
+
+- public recommendation endpoints in the control plane
+- frontend retrieval-mode controls (`lexical`, `hybrid`, `semantic`)
+- related-jobs rendering in `JobDetailModal`
+
+### Local Follow-Up Completed in the Current Working Tree
+
+Additional runtime split / export consistency work now present locally:
+
+- `backend/app/api/internal_recommendations.py`
+- `backend/app/recommendation_main.py`
+- `backend/app/services/recommendation_client.py`
+- `backend/app/schemas/recommendations.py`
+- `backend/app/api/recommendations.py`
+- `backend/app/config.py`
+- `backend/app/api/jobs.py`
+- `backend/app/api/retrieval.py`
+- `backend/app/services/retrieval_client.py`
+- `backend/app/services/retrieval_service.py`
+- `docker-compose.yml`
+
+Tests added or updated for this follow-up:
+
+- `backend/tests/test_internal_recommendations_api.py`
+- `backend/tests/test_recommendations_api.py`
+- `backend/tests/test_retrieval_api.py`
+- `backend/tests/test_retrieval_client.py`
+- `backend/tests/test_config.py`
+
+### Behavior Now Present Locally
+
+- `GET /api/v1/jobs/{job_id}/similar` and `GET /api/v1/recommendations/jobs?job_id=...` now proxy through a dedicated internal `recommendation-api` runtime boundary instead of executing recommendation ranking directly in the public FastAPI control plane
+- `recommendation-api` now has a real app entrypoint and health endpoint:
+  - `uvicorn app.recommendation_main:app`
+  - `GET /health`
+- the internal recommendation service now exposes:
+  - `GET /api/v1/internal/jobs/{job_id}/similar`
+  - `GET /api/v1/internal/recommendations/jobs`
+- `POST /api/v1/jobs/search/export` now mirrors `retrieval_mode`
+  - `lexical` stays local
+  - `semantic` / `hybrid` export now proxy through `retrieval-api`
+- the original Task 11 ranking behavior remains the same:
+  - semantic similarity from existing job embeddings
+  - governed skill overlap
+  - taxonomy-path prefix match
+  - freshness bonus
+
+### Verification Performed
+
+GREEN:
+
+- `python -m pytest tests/test_config.py tests/test_category_routes.py tests/test_retrieval_service.py tests/test_retrieval_api.py tests/test_retrieval_client.py tests/test_job_recommendation_service.py tests/test_recommendations_api.py tests/test_internal_recommendations_api.py tests/test_crawl_jobs_api.py tests/test_scheduler_dispatcher.py tests/test_startup_recovery_service.py -q`
+- result: `30 passed`
+
+- `npm test -- --run src/components/JobBrowser.test.jsx src/components/JobDetailModal.test.jsx src/components/scraper/ScrapeProgressPanel.test.jsx`
+- result: `33 passed`
+
+- `npm run build`
+- result: success
+
+### Notes
+
+- Task 11 implementation is complete in the current local working tree
+- this Task 11 follow-up is not yet committed or merged onto `main`
+- worker-profile real-data QA is still outstanding before calling the runtime split operationally complete
+
+## Task 12 Status
+
+### Completed in the Current Working Tree
+
+The cutover / cleanup slice is now implemented locally.
+
+### What Was Changed
+
+- `backend/app/api/category_routes.py`
+  - removed legacy category-level scrape/status endpoints from the runtime path
+- `backend/app/api/progress.py`
+  - progress payloads are now derived only from durable `crawl_jobs` + `crawl_job_events`
+- `backend/app/services/crawl_job_dispatch_service.py`
+  - no longer seeds the transitional in-memory progress snapshot path
+- removed:
+  - `backend/app/services/progress_store.py`
+  - `backend/app/services/category_scrape_service.py`
+  - `backend/app/services/ctgoodjobs_scrape_service.py`
+- updated tests:
+  - `backend/tests/test_category_routes.py`
+  - `backend/tests/test_crawl_jobs_api.py`
+  - `backend/tests/test_scheduler_dispatcher.py`
+
+### Behavior Now Present Locally
+
+- the public runtime no longer exposes the old in-process category scrape execution path
+- scrape progress is now sourced only from durable control-plane state and event history
+- direct override / schedule-driven execution continues through `crawl_jobs`
+- the frontend progress consumers still use the same public endpoints:
+  - `GET /api/v1/scrape/progress`
+  - `GET /api/v1/scrape/progress/stream`
+
+### Verification Performed
+
+GREEN:
+
+- covered by the same targeted backend / frontend verification set listed in Task 11
+
+### Notes
+
+- Task 12 implementation is complete in the current local working tree
+- this cleanup is not yet landed on `main`
+- Task 8 remains separate follow-up work for CTgoodjobs hardening / cutover safety
+
 ## Temporary Runtime and Environment Notes
 
 ### Python Dependencies
@@ -831,14 +1058,23 @@ Reason:
 - Task 5: Shared Source Contracts and Parser Extraction
 - Task 6: Crawl Worker Runtime and Multi-Source Canonical Emission
 - Task 7: Ingest Worker and Durable Upsert Flow
+- Task 10: Embedding Worker and Semantic Retrieval
 - Task 9: Enrichment Worker Extraction
 
-### Not Started Yet
+### Completed in the Current Local Working Tree
 
-- Task 8: CTgoodjobs Hardening / Cutover Follow-Up
-- Task 10: Embedding Worker and Semantic Retrieval
 - Task 11: Recommendation Service and Frontend Search Modes
 - Task 12: Cutover, Recovery, and Cleanup
+
+### Remaining Follow-Up
+
+- Task 8: CTgoodjobs Hardening / Cutover Follow-Up
+- worker-profile real-data QA for:
+  - semantic search
+  - hybrid search
+  - non-lexical export
+  - related jobs recommendations
+  - durable progress behavior
 
 ## 2026-05-07 Local Runtime Recovery Follow-Up
 
@@ -967,11 +1203,19 @@ The local stack is now reproducible for the current lexical-search / control-pla
 Immediate operational next step:
 
 - keep the current rebuilt `backend-api` image as the default lexical-search / crawler-control runtime baseline
-- if semantic / hybrid retrieval or the embedding worker must run in containers next, wire `backend/requirements-ml.txt` into a dedicated image/runtime path as part of Task 10
+- start the worker-profile runtimes required by the local follow-up:
+  - `docker compose --profile workers up -d retrieval-api embedding-worker recommendation-api`
+- verify that a realistic local dataset has enough populated `job_embeddings` rows to support:
+  - semantic search
+  - hybrid search
+  - non-lexical export
+  - related jobs recommendations
+- run one direct-override crawl and confirm `/api/v1/scrape/progress` and `/api/v1/scrape/progress/stream` still reflect durable crawl-job state correctly
 
 Architecture next step:
 
-- start Task 10: Embedding Worker and Semantic Retrieval
+- if worker-profile QA is green, commit and land the current Task 11 / Task 12 follow-up slice
+- then move the roadmap focus to Task 8 CTgoodjobs hardening / cutover follow-up
 
 The most important thing not to lose is this:
 
@@ -981,13 +1225,16 @@ The most important thing not to lose is this:
 - source-aware durable persistence is now proven live for both JobsDB and CTgoodjobs
 - `job.ingested` now exists as a stable downstream contract
 - `job.enriched` now exists as a stable downstream contract
+- `job.embedded` now exists as a stable downstream contract
 
-Task 10 should now focus on exactly these outcomes:
+Task 11 and Task 12 are now implemented locally. The remaining execution focus is:
 
-- build `run_embedding_worker.py`
-- consume both `job.ingested` and `job.enriched`
-- generate and upsert `job_embeddings`
-- keep semantic retrieval downstream of the now-proven crawl -> ingest -> enrichment chain
-- finish with one smoke that proves enrichment completion can trigger embedding work durably
-
-Task 8 should remain on the roadmap, but only as a focused CTgoodjobs hardening/cutover follow-up rather than the main execution path.
+- run real-data QA on:
+  - lexical search
+  - semantic search
+  - hybrid search
+  - non-lexical export
+  - related jobs ranking quality
+  - durable progress behavior
+- land the current local follow-up onto `main`
+- then resume with Task 8 as a focused CTgoodjobs hardening / cutover follow-up rather than the main execution path

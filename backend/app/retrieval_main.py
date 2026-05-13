@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.api.retrieval import router as retrieval_router
 from app.config import settings
 from app.logging_config import configure_logging, redact_url
+from app.server_runtime import run_api_app
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
@@ -36,3 +37,11 @@ app.include_router(retrieval_router, prefix="/api/v1")
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "retrieval-api"}
+
+
+def main() -> None:
+    run_api_app("app.retrieval_main:app", settings_obj=settings)
+
+
+if __name__ == "__main__":
+    main()

@@ -73,7 +73,7 @@ def _build_candidate_query(db, *, include_enriched: bool):
             Job.source_classification_id.isnot(None),
             Job.source_classification_id != "",
         )
-        .order_by(Job.created_at.asc(), Job.id.asc())
+        .order_by(Job.ai_enriched_at.isnot(None).asc(), Job.created_at.asc(), Job.id.asc())
     )
     if not include_enriched:
         query = query.filter(Job.ai_enriched_at.is_(None))

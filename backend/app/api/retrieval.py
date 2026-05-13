@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.api.jobs import JobSearchResponse, _summarize_layer, _validate_scope_expressions
@@ -18,4 +18,20 @@ async def search_jobs_internal(
     return RetrievalService(db).search(
         request,
         layer_summaries=[_summarize_layer(layer) for layer in request.scope.layers],
+    )
+
+
+@router.post("/search/export")
+async def export_jobs_internal(
+    request: JobSearchRequestSchema,
+    db: Session = Depends(get_db),
+):
+    _validate_scope_expressions(request)
+    csv_content = RetrievalService(db).export_csv(request)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="job-search-export.csv"',
+        },
     )

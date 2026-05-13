@@ -5,13 +5,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.messaging.topics import STREAM_CRAWL_COMMANDS
+from app.crawl_modes import resolve_crawl_mode
+from app.messaging.outbox_publisher import OutboxPublisher
+from app.messaging.topics import STREAM_CRAWL_COMMANDS, STREAM_CRAWL_COMMANDS_HEADED
 from app.models.crawl_job import CrawlJob
 from app.models.schedule import ScrapeSchedule, ScheduleExecution
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.schedule_repository import ScheduleRepository
-from app.services.progress_store import get_progress_store
 from app.utils.time import utc_now
 
 
@@ -29,18 +30,20 @@ class CrawlJobDispatchService:
         *,
         crawl_job_repository: CrawlJobRepository | None = None,
         event_outbox_repository: EventOutboxRepository | None = None,
+        outbox_publisher: OutboxPublisher | None = None,
         schedule_repository: ScheduleRepository | None = None,
     ):
         self.crawl_job_repository = crawl_job_repository or CrawlJobRepository()
         self.event_outbox_repository = event_outbox_repository or EventOutboxRepository()
+        self.outbox_publisher = outbox_publisher or OutboxPublisher()
         self.schedule_repository = schedule_repository or ScheduleRepository()
-        self.progress_store = get_progress_store()
 
     def dispatch_manual_crawl_job(
         self,
         db: Session,
         *,
         source_site: str,
+        crawl_mode: str | None = None,
         category_ids: list[int | str],
         max_pages: int,
         skip_existing: bool = False,
@@ -52,6 +55,7 @@ class CrawlJobDispatchService:
             trigger_type="manual",
             request_payload={
                 "source_site": source_site,
+                "crawl_mode": resolve_crawl_mode(source_site, crawl_mode),
                 "category_ids": category_ids,
                 "max_pages": max_pages,
                 "skip_existing": skip_existing,
@@ -69,6 +73,7 @@ class CrawlJobDispatchService:
     ) -> CrawlJobDispatchResult:
         request_payload = {
             "source_site": schedule.source_site,
+            "crawl_mode": resolve_crawl_mode(schedule.source_site, getattr(schedule, "crawl_mode", None)),
             "category_ids": list(schedule.category_ids or []),
             "keywords": schedule.keywords,
             "location": schedule.location,
@@ -96,6 +101,7 @@ class CrawlJobDispatchService:
         schedule_execution: ScheduleExecution | None = None,
     ) -> CrawlJobDispatchResult:
         payload = dict(request_payload)
+        payload["crawl_mode"] = resolve_crawl_mode(source_site, payload.get("crawl_mode"))
         if schedule_id is not None:
             payload.setdefault("schedule_id", str(schedule_id))
 
@@ -130,7 +136,7 @@ class CrawlJobDispatchService:
         )
         self.event_outbox_repository.enqueue(
             db,
-            topic=STREAM_CRAWL_COMMANDS,
+            topic=self._resolve_command_topic(source_site=source_site, crawl_mode=payload.get("crawl_mode")),
             aggregate_type="crawl_job",
             aggregate_id=str(crawl_job.id),
             event_type="crawl.requested",
@@ -145,8 +151,7 @@ class CrawlJobDispatchService:
         db.refresh(crawl_job)
         if execution is not None:
             db.refresh(execution)
-
-        self.progress_store.update(str(crawl_job.id), self._build_progress_snapshot(crawl_job))
+        self.outbox_publisher.publish_pending_batch(db, limit=100)
         return CrawlJobDispatchResult(crawl_job=crawl_job, schedule_execution=execution)
 
     def cancel_crawl_job(
@@ -171,6 +176,10 @@ class CrawlJobDispatchService:
         event_payload = {
             "crawl_job_id": str(crawl_job.id),
             "source_site": crawl_job.source_site,
+            "crawl_mode": resolve_crawl_mode(
+                crawl_job.source_site,
+                (crawl_job.request_payload or {}).get("crawl_mode"),
+            ),
             "schedule_id": str(crawl_job.schedule_id) if crawl_job.schedule_id else None,
             "reason": reason,
             "requested_by": requested_by,
@@ -186,7 +195,10 @@ class CrawlJobDispatchService:
         )
         self.event_outbox_repository.enqueue(
             db,
-            topic=STREAM_CRAWL_COMMANDS,
+            topic=self._resolve_command_topic(
+                source_site=crawl_job.source_site,
+                crawl_mode=(crawl_job.request_payload or {}).get("crawl_mode"),
+            ),
             aggregate_type="crawl_job",
             aggregate_id=str(crawl_job.id),
             event_type="crawl.cancelled",
@@ -196,21 +208,17 @@ class CrawlJobDispatchService:
 
         db.commit()
         db.refresh(crawl_job)
-        self.progress_store.update(
-            str(crawl_job.id),
-            {
-                **self._build_progress_snapshot(crawl_job),
-                "status": "cancelled",
-                "completed_at": crawl_job.completed_at.isoformat() if crawl_job.completed_at else None,
-                "error": reason,
-            },
-        )
+        self.outbox_publisher.publish_pending_batch(db, limit=100)
         return crawl_job
 
     def _build_requested_event_payload(self, crawl_job: CrawlJob) -> dict[str, Any]:
         return {
             "crawl_job_id": str(crawl_job.id),
             "source_site": crawl_job.source_site,
+            "crawl_mode": resolve_crawl_mode(
+                crawl_job.source_site,
+                (crawl_job.request_payload or {}).get("crawl_mode"),
+            ),
             "trigger_type": crawl_job.trigger_type,
             "schedule_id": str(crawl_job.schedule_id) if crawl_job.schedule_id else None,
             "requested_by": crawl_job.requested_by,
@@ -219,27 +227,9 @@ class CrawlJobDispatchService:
             "queued_at": crawl_job.queued_at.isoformat() if crawl_job.queued_at else None,
         }
 
-    def _build_progress_snapshot(self, crawl_job: CrawlJob) -> dict[str, Any]:
-        request_payload = crawl_job.request_payload or {}
-        category_ids = list(request_payload.get("category_ids") or [])
-        category_label = ", ".join(str(category_id) for category_id in category_ids[:3])
-        if len(category_ids) > 3:
-            category_label = f"{category_label}, +{len(category_ids) - 3}"
-        if not category_label:
-            category_label = f"{crawl_job.source_site} crawl"
-
-        return {
-            "crawl_job_id": str(crawl_job.id),
-            "status": crawl_job.status,
-            "phase": 0,
-            "source_site": crawl_job.source_site,
-            "trigger_type": crawl_job.trigger_type,
-            "schedule_id": str(crawl_job.schedule_id) if crawl_job.schedule_id else None,
-            "category_name": category_label,
-            "category_ids": category_ids,
-            "request_payload": request_payload,
-            "queued_at": crawl_job.queued_at.isoformat() if crawl_job.queued_at else None,
-            "updated_at": crawl_job.updated_at.isoformat() if crawl_job.updated_at else None,
-            "elapsed_seconds": 0,
-            "phase_rate": 0,
-        }
+    def _resolve_command_topic(self, *, source_site: str, crawl_mode: str | None) -> str:
+        return (
+            STREAM_CRAWL_COMMANDS_HEADED
+            if resolve_crawl_mode(source_site, crawl_mode) == "headed"
+            else STREAM_CRAWL_COMMANDS
+        )

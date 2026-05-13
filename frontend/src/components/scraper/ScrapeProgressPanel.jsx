@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../../api/base';
+import { formatCrawlModeLabel } from './crawlMode';
 
 const API_URL = API_BASE_URL;
 const API_BASE = `${API_URL}/api/v1`;
@@ -206,6 +207,7 @@ function ProgressItem({ data, onNavigateToAI }) {
     const {
         status,
         category_name,
+        crawl_mode,
         phase,
         // Phase 1
         job_ids_collected = 0,
@@ -314,11 +316,14 @@ function ProgressItem({ data, onNavigateToAI }) {
               : status === 'completed_with_ai_failures'
                 ? 'warning'
                 : 'running';
+    const headingLabel = crawl_mode
+        ? `${category_name} · ${formatCrawlModeLabel(crawl_mode)}`
+        : category_name;
 
     return (
         <div className={`progress-item ${statusClass}`}>
             <div className="progress-item-header">
-                <span className="category-name">{category_name}</span>
+                <span className="category-name">{headingLabel}</span>
                 <span className={`status-badge status-${statusClass}`}>
                     {statusText}
                 </span>

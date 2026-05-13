@@ -11,7 +11,6 @@ from uuid import UUID
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.triggers.cron import CronTrigger
-from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.database import SessionLocal
@@ -77,9 +76,8 @@ class SchedulerService:
             schedules = self.repository.get_active_schedules(db)
             for schedule in schedules:
                 if normalize_source_site(getattr(schedule, "source_site", "jobsdb")) == "ctgoodjobs":
-                    is_valid, validation_error, should_deactivate = await run_in_threadpool(
-                        self._validate_ctgoodjobs_schedule,
-                        schedule,
+                    is_valid, validation_error, should_deactivate = self._validate_ctgoodjobs_schedule_shape(
+                        schedule
                     )
                     if not is_valid:
                         logger.info(
@@ -89,11 +87,6 @@ class SchedulerService:
                         )
                         if should_deactivate and getattr(schedule, "is_active", False):
                             self.repository.update_schedule(db, schedule.id, {"is_active": False})
-                            continue
-
-                        # Startup should not permanently unschedule CTgoodjobs rows only because
-                        # registry validation could not be performed right now.
-                        self._add_job(schedule, db=db, ctgoodjobs_validated=True)
                         continue
 
                     self._add_job(schedule, db=db, ctgoodjobs_validated=True)
@@ -104,17 +97,27 @@ class SchedulerService:
         finally:
             db.close()
 
-    def _validate_ctgoodjobs_schedule(self, schedule: ScrapeSchedule) -> tuple[bool, str | None, bool]:
-        """Validate persisted CTgoodjobs schedules for scheduler use.
-
-        Returns `(is_valid, error_message, should_deactivate)`.
-        """
+    def _validate_ctgoodjobs_schedule_shape(
+        self, schedule: ScrapeSchedule
+    ) -> tuple[bool, str | None, bool]:
+        """Validate persisted CTgoodjobs schedules without any network dependency."""
         category_ids = getattr(schedule, "category_ids", None)
 
         try:
             validate_category_ids_for_source_site("ctgoodjobs", category_ids)
         except ValueError as exc:
             return False, str(exc), True
+
+        return True, None, False
+
+    def _validate_ctgoodjobs_schedule(self, schedule: ScrapeSchedule) -> tuple[bool, str | None, bool]:
+        """Validate persisted CTgoodjobs schedules for scheduler use.
+
+        Returns `(is_valid, error_message, should_deactivate)`.
+        """
+        is_valid, validation_error, should_deactivate = self._validate_ctgoodjobs_schedule_shape(schedule)
+        if not is_valid:
+            return is_valid, validation_error, should_deactivate
 
         try:
             categories = get_source_category_registry().list_categories(source_site="ctgoodjobs")

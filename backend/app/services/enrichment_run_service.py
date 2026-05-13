@@ -258,6 +258,8 @@ class EnrichmentRunService:
             return False
         if run.status != "pending" or not run.total_items:
             return False
+        if not AIRuntimeSettingsService(self.db).get_profile_runtime_metadata("jobs").is_ready:
+            return False
         if crawl_job.status not in {"completed", "failed"}:
             return False
 

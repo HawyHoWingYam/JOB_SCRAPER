@@ -187,3 +187,75 @@ async def test_search_jobs_post_returns_503_when_semantic_proxy_is_unconfigured(
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "retrieval_api_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_export_jobs_search_scope_proxies_semantic_requests_to_retrieval_api(monkeypatch):
+    client = _build_test_client()
+    captured = {}
+
+    class FakeRetrievalClient:
+        def __init__(self, *, base_url=None, **kwargs):
+            captured["base_url"] = base_url
+
+        async def export_jobs_csv(self, payload):
+            captured["payload"] = payload
+            return b"job_id,title\r\ncandidate-1,Platform Engineer\r\n"
+
+    monkeypatch.setattr(jobs_api, "RetrievalClient", FakeRetrievalClient, raising=False)
+    monkeypatch.setattr(jobs_api.settings, "retrieval_api_url", "http://retrieval-api:8000")
+    try:
+        response = await client.post(
+            "/api/v1/jobs/search/export",
+            json={
+                "scope": {
+                    "layers": [
+                        {
+                            "client_id": "root",
+                            "text_expression": "platform",
+                            "structured_filters": {},
+                        }
+                    ]
+                },
+                "retrieval_mode": "semantic",
+                "page": 1,
+                "page_size": 20,
+            },
+        )
+    finally:
+        await client.aclose()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "job_id,title" in response.text
+    assert captured["base_url"] == "http://retrieval-api:8000"
+    assert captured["payload"]["retrieval_mode"] == "semantic"
+
+
+@pytest.mark.asyncio
+async def test_export_jobs_search_scope_returns_503_when_semantic_proxy_is_unconfigured(monkeypatch):
+    client = _build_test_client()
+    monkeypatch.setattr(jobs_api.settings, "retrieval_api_url", None)
+    try:
+        response = await client.post(
+            "/api/v1/jobs/search/export",
+            json={
+                "scope": {
+                    "layers": [
+                        {
+                            "client_id": "root",
+                            "text_expression": "platform",
+                            "structured_filters": {},
+                        }
+                    ]
+                },
+                "retrieval_mode": "hybrid",
+                "page": 1,
+                "page_size": 20,
+            },
+        )
+    finally:
+        await client.aclose()
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "retrieval_api_unavailable"

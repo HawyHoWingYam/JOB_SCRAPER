@@ -94,3 +94,44 @@ async def test_internal_retrieval_search_uses_local_retrieval_service(monkeypatc
     assert payload["applied_scope"]["layers"][0]["text_expression"] == "platform"
     assert captured["request"].retrieval_mode == "semantic"
     assert captured["layer_summaries"][0].label == "Broad: platform"
+
+
+@pytest.mark.asyncio
+async def test_internal_retrieval_export_uses_local_retrieval_service(monkeypatch):
+    client = _build_test_client()
+    captured = {}
+
+    class FakeRetrievalService:
+        def __init__(self, db):
+            captured["db"] = db
+
+        def export_csv(self, request):
+            captured["request"] = request
+            return "job_id,title\r\ncandidate-1,Platform Engineer\r\n"
+
+    monkeypatch.setattr(retrieval_api, "RetrievalService", FakeRetrievalService)
+    try:
+        response = await client.post(
+            "/api/v1/internal/jobs/search/export",
+            json={
+                "scope": {
+                    "layers": [
+                        {
+                            "client_id": "root",
+                            "text_expression": "platform",
+                            "structured_filters": {},
+                        }
+                    ]
+                },
+                "retrieval_mode": "hybrid",
+                "page": 1,
+                "page_size": 20,
+            },
+        )
+    finally:
+        await client.aclose()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "job_id,title" in response.text
+    assert captured["request"].retrieval_mode == "hybrid"

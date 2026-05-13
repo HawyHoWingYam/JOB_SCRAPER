@@ -18,6 +18,7 @@ from app.api.stats import router as stats_router
 from app.api.skills import router as skills_router
 from app.logging_config import configure_logging, redact_url
 from app.database import SessionLocal
+from app.server_runtime import run_api_app
 from app.services.scheduler_runtime import initialize_scheduler_runtime, shutdown_scheduler_runtime
 from app.services.startup_recovery_service import StartupRecoveryService
 
@@ -101,12 +102,9 @@ async def root():
     }
 
 
-if __name__ == "__main__":
-    import uvicorn
+def main() -> None:
+    run_api_app("app.main:app", settings_obj=settings)
 
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=settings.debug,
-    )
+
+if __name__ == "__main__":
+    main()

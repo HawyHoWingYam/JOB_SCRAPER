@@ -46,6 +46,33 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 JOB_SEARCH_EXPORT_MAX_ROWS = 10000
 JOBSDB_BASE_URL = "https://hk.jobsdb.com/job"
 CTGOODJOBS_BASE_URL = "https://jobs.ctgoodjobs.hk/job"
+JOB_SEARCH_EXPORT_FIELDNAMES = [
+    "job_id",
+    "original_job_url",
+    "title",
+    "company_name",
+    "company_industry",
+    "location",
+    "employment_type",
+    "posted_date",
+    "expiry_date",
+    "is_expired",
+    "salary_range",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "source_classification_name",
+    "source_subclassification_name",
+    "job_taxonomy_path",
+    "ai_summary",
+    "experience_level",
+    "experience_min_years",
+    "experience_max_years",
+    "experience_summary",
+    "skills",
+    "company_ai_description",
+    "description_text",
+]
 
 
 # Response schemas for search
@@ -617,6 +644,10 @@ def _strip_html_text(value: Optional[str]) -> str:
 
 def _build_export_rows(query):
     results = query.order_by(Job.posted_date.desc().nullslast()).all()
+    return _build_export_rows_from_results(results)
+
+
+def _build_export_rows_from_results(results):
     rows = []
     for job, company in results:
         rows.append(
@@ -651,6 +682,38 @@ def _build_export_rows(query):
     return rows
 
 
+def _serialize_export_rows(rows) -> str:
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=JOB_SEARCH_EXPORT_FIELDNAMES)
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+def _build_csv_export_response(rows) -> Response:
+    return Response(
+        content=_serialize_export_rows(rows),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="job-search-export.csv"',
+        },
+    )
+
+
+def _validate_export_row_limit(total: int) -> None:
+    if total > JOB_SEARCH_EXPORT_MAX_ROWS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "job_search_export_too_large",
+                "message": (
+                    f"Export scope contains {total} rows, exceeding the limit of "
+                    f"{JOB_SEARCH_EXPORT_MAX_ROWS}. Narrow the scope before exporting."
+                ),
+            },
+        )
+
+
 async def _search_via_retrieval_api(
     request: JobSearchRequestSchema,
     *,
@@ -677,6 +740,32 @@ async def _search_via_retrieval_api(
         ) from exc
 
     return JobSearchResponse.model_validate(response_payload)
+
+
+async def _export_via_retrieval_api(request: JobSearchRequestSchema) -> Response:
+    payload = request.model_dump(mode="json")
+
+    client = RetrievalClient(base_url=settings.retrieval_api_url)
+    try:
+        csv_content = await client.export_jobs_csv(payload)
+    except RetrievalClientResponseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except RetrievalClientUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "retrieval_api_unavailable",
+                "message": str(exc),
+            },
+        ) from exc
+
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="job-search-export.csv"',
+        },
+    )
 
 
 @router.get("", response_model=list[JobSchema])
@@ -767,62 +856,15 @@ async def export_jobs_search_scope(
     db: Session = Depends(get_db),
 ):
     _validate_scope_expressions(request)
+    if request.retrieval_mode != "lexical":
+        return await _export_via_retrieval_api(request)
 
     query = _build_query_from_scope(db, request.scope)
     total = query.order_by(None).count()
-    if total > JOB_SEARCH_EXPORT_MAX_ROWS:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "job_search_export_too_large",
-                "message": (
-                    f"Export scope contains {total} rows, exceeding the limit of "
-                    f"{JOB_SEARCH_EXPORT_MAX_ROWS}. Narrow the scope before exporting."
-                ),
-            },
-        )
+    _validate_export_row_limit(total)
 
     rows = _build_export_rows(query)
-    fieldnames = [
-        "job_id",
-        "original_job_url",
-        "title",
-        "company_name",
-        "company_industry",
-        "location",
-        "employment_type",
-        "posted_date",
-        "expiry_date",
-        "is_expired",
-        "salary_range",
-        "salary_min",
-        "salary_max",
-        "salary_currency",
-        "source_classification_name",
-        "source_subclassification_name",
-        "job_taxonomy_path",
-        "ai_summary",
-        "experience_level",
-        "experience_min_years",
-        "experience_max_years",
-        "experience_summary",
-        "skills",
-        "company_ai_description",
-        "description_text",
-    ]
-
-    buffer = StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(rows)
-
-    return Response(
-        content=buffer.getvalue(),
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": 'attachment; filename="job-search-export.csv"',
-        },
-    )
+    return _build_csv_export_response(rows)
 
 
 @router.get("/filters", response_model=FilterOptionsResponse)

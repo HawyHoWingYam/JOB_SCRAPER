@@ -25,6 +25,7 @@ class ScrapeSchedule(Base):
         server_default=text("'jobsdb'"),
         index=True,
     )
+    crawl_mode = Column(String(32), nullable=True)
 
     # Scraping parameters
     category_ids = Column(JSON, nullable=True)  # List of category IDs [1200, 6281, ...]

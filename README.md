@@ -29,9 +29,12 @@ docker-compose up -d
 # Rebuild the backend image after Python dependency changes.
 docker compose up -d --build backend-api
 
-# Start ML-backed retrieval services when you need semantic/hybrid search
-# or the embedding worker runtime.
-docker compose --profile workers up -d retrieval-api embedding-worker
+# Start default worker-profile services (headless crawling + ingest + enrichment + retrieval/recommendations).
+docker compose --profile workers up -d crawl-worker ingest-worker enrichment-worker retrieval-api embedding-worker recommendation-api
+
+# Start ML-backed services when you need semantic/hybrid search,
+# non-lexical export, embedding generation, or related-job recommendations.
+docker compose --profile workers up -d retrieval-api embedding-worker recommendation-api
 
 # Access
 # Frontend: http://localhost:5173
@@ -39,7 +42,79 @@ docker compose --profile workers up -d retrieval-api embedding-worker
 # API Docs: http://localhost:8000/docs
 ```
 
-The default `backend-api` image only supports the lexical search baseline. Semantic and hybrid retrieval run behind the internal `retrieval-api` service, and embedding generation runs in `embedding-worker`, both built with `backend/requirements-ml.txt`.
+The default `backend-api` image only supports the lexical search baseline. Semantic and hybrid retrieval, plus non-lexical export, run behind the internal `retrieval-api` service. Embedding generation runs in `embedding-worker`, and related-job recommendations run behind `recommendation-api`.
+
+## Runtime Notes
+
+- Docker API containers now default to stable non-reload startup. This avoids `watchfiles` crashes on bind-mounted `/app` volumes while keeping the app behavior unchanged.
+- To opt into live reload for any API container, set `UVICORN_RELOAD=true`. If Docker-mounted file watching is still unstable, also set `UVICORN_RELOAD_FORCE_POLLING=true`.
+- If `UVICORN_RELOAD` is unset, direct `python -m app.main`, `python -m app.retrieval_main`, and `python -m app.recommendation_main` runs still fall back to `DEBUG`.
+- Crawl jobs now support explicit `crawl_mode` values: `headless` and `headed`.
+- Recommended operational defaults are source-aware:
+  - `JobsDB` defaults to `headed`
+  - `CTGoodJobs` defaults to `headless`
+- `POST /api/v1/jobs/search` supports `lexical`, `semantic`, and `hybrid`, but the non-lexical modes require `retrieval-api`.
+- `POST /api/v1/jobs/search/export` mirrors the active retrieval mode. `semantic` and `hybrid` export require `retrieval-api`.
+- `GET /api/v1/jobs/{job_id}/similar` and `GET /api/v1/recommendations/jobs` proxy to `recommendation-api`.
+- Scrape progress is sourced from durable `crawl_jobs` and `crawl_job_events`; the legacy in-process category scrape endpoints are no longer part of the runtime path.
+
+## Headed Crawl Worker
+
+`JobsDB` full detail capture is currently expected to run through the local host-side headed worker because direct HTTP and containerized headless browser fetches can be blocked by Cloudflare.
+
+Typical local setup:
+
+```bash
+# Keep the normal Docker control plane and headless workers running.
+docker compose up -d postgres-db redis-mq backend-api frontend-ui
+docker compose --profile workers up -d crawl-worker ingest-worker enrichment-worker
+
+# Then run the headed crawl worker on the Windows host.
+backend\scripts\run_headed_crawl_worker_host.cmd
+
+# Or launch it in a dedicated visible cmd window.
+backend\scripts\launch_headed_crawl_worker_window.cmd
+```
+
+Recommended profile setup:
+
+- use a dedicated browser profile directory via `JOBSDB_HEADED_BROWSER_USER_DATA_DIR`
+- pick `JOBSDB_HEADED_BROWSER_CHANNEL=msedge` or `chrome`
+- open a JobsDB detail page once in that automation profile and complete any anti-bot challenge before relying on automated headed runs
+- keep the `.cmd` window open while you want headed JobsDB jobs to keep progressing
+- if you want a separate persistent window without blocking your current shell, use `launch_headed_crawl_worker_window.cmd`
+- only run one headed worker at a time; the host worker now holds a localhost lock port (default `47651`) and exits early if another instance is already running
+
+Behavior notes:
+
+- `headed` crawl jobs are published onto a separate Redis stream and consumed by the host-side headed worker
+- `headless` crawl jobs continue to be consumed by the Docker `crawl-worker`
+- `CTGoodJobs` can still run in either mode from the control plane, but it does not currently require the headed worker to capture full details
+
+## JobsDB Detail Repair
+
+To repair previously ingested short `JobsDB` descriptions after the headed worker path is available:
+
+```bash
+python backend/scripts/backfill_jobsdb_details.py
+```
+
+This script targets degraded `JobsDB` rows and rewrites detail-related fields only when richer detail payloads are recovered.
+
+## Worker-Profile QA
+
+Bring up the ML/runtime profile before validating semantic search, non-lexical export, or related jobs:
+
+```bash
+docker compose --profile workers up -d retrieval-api embedding-worker recommendation-api
+```
+
+Recommended manual checks:
+
+- search in `semantic` mode and confirm results return successfully
+- search in `hybrid` mode and export the same scope
+- open a job detail modal and confirm related jobs load
+- trigger a direct override crawl and confirm `/api/v1/scrape/progress` reports the queued/running job
 
 ## Backend Migrations
 
@@ -50,6 +125,12 @@ alembic -c backend/alembic.ini history
 Alembic reads `DATABASE_URL` from the project `.env`. The local development default points at the PostgreSQL container on `localhost:5433`.
 
 This repository does not have a full Alembic baseline yet. The current first revision only tracks the enrichment-run tables added in Task 2.
+
+`docker compose up` now runs a one-shot `db-bootstrap` service that ensures the `vector` extension exists and creates the current ORM tables before the API and worker services start. If your `pg_data` volume predates this change and the stack is already unhealthy, run:
+
+```bash
+docker compose up db-bootstrap
+```
 
 For a fresh local database, bootstrap the existing application schema first:
 
@@ -71,6 +152,8 @@ Use `cd backend && alembic upgrade head` only for databases that already have th
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/v1/jobs/search` | Search jobs |
+| `POST /api/v1/jobs/search/export` | Export search results |
+| `GET /api/v1/jobs/{job_id}/similar` | Related job recommendations |
 | `POST /api/v1/ai/enrich` | AI enrichment |
 | `GET /api/v1/stats/skills` | Skill statistics |
 | `GET /api/v1/stats/categories` | Category distribution |

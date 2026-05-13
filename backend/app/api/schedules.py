@@ -288,6 +288,7 @@ async def run_immediate_scrape(
     dispatch_result = crawl_job_dispatch_service.dispatch_manual_crawl_job(
         db,
         source_site=request.source_site,
+        crawl_mode=request.crawl_mode,
         category_ids=list(request.category_ids),
         max_pages=request.max_pages,
         skip_existing=request.skip_existing,

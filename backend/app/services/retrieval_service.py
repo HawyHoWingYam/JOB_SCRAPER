@@ -99,3 +99,52 @@ class RetrievalService:
             )
 
         raise ValueError(f"Unsupported retrieval_mode: {retrieval_mode}")
+
+    def export_csv(self, request) -> str:
+        from app.api import jobs as jobs_api
+
+        rows = self._collect_export_rows(request)
+        return jobs_api._serialize_export_rows(rows)
+
+    def _collect_export_rows(self, request):
+        from app.api import jobs as jobs_api
+
+        retrieval_mode = getattr(request, "retrieval_mode", "lexical")
+        if retrieval_mode == "lexical":
+            query = build_lexical_query(self.db, request.scope)
+            total = query.order_by(None).count()
+            jobs_api._validate_export_row_limit(total)
+            return jobs_api._build_export_rows(query)
+
+        query_text = extract_semantic_query_text(request.scope)
+        if not query_text:
+            query = build_lexical_query(self.db, request.scope)
+            total = query.order_by(None).count()
+            jobs_api._validate_export_row_limit(total)
+            return jobs_api._build_export_rows(query)
+
+        candidate_scope = build_semantic_candidate_scope(request.scope)
+        query_vector = self._get_query_embedding_model().encode(
+            query_text,
+            normalize_embeddings=True,
+        )
+
+        if retrieval_mode == "semantic":
+            query = build_lexical_query(self.db, candidate_scope)
+            ranked_query = apply_semantic_order(query, query_vector)
+            total = ranked_query.order_by(None).count()
+            jobs_api._validate_export_row_limit(total)
+            return jobs_api._build_export_rows_from_results(ranked_query.all())
+
+        if retrieval_mode == "hybrid":
+            candidate_query = build_lexical_query(self.db, candidate_scope)
+            rows = fetch_embedding_rows(candidate_query)
+            ranked_rows = rank_hybrid_rows(
+                rows,
+                query_text=query_text,
+                query_vector=list(query_vector),
+            )
+            jobs_api._validate_export_row_limit(len(ranked_rows))
+            return jobs_api._build_export_rows_from_results(ranked_rows)
+
+        raise ValueError(f"Unsupported retrieval_mode: {retrieval_mode}")
