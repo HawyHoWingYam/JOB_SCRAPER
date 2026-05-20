@@ -37,6 +37,6 @@ class ManualActionRequiredError(RuntimeError):
             "browser_profile_path": browser_profile_path,
             "resume_supported": resume_supported,
             "message": self.message,
-            "instructions": self.instructions,
-            "resume_context": self.resume_context,
+            "instructions": list(self.instructions),
+            "resume_context": dict(self.resume_context),
         }

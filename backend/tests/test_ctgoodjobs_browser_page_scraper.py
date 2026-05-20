@@ -51,17 +51,54 @@ async def test_ctgoodjobs_browser_page_scraper_retries_transient_failures(monkey
 
 
 @pytest.mark.asyncio
-async def test_ctgoodjobs_browser_page_scraper_rejects_interstitial_html():
+async def test_ctgoodjobs_browser_page_scraper_retries_interstitial_html_before_succeeding(monkeypatch):
     from app.scraper.ctgoodjobs_browser_page_scraper import CTGoodJobsBrowserPageScraper
-    from app.scraper.manual_action import ManualActionRequiredError
+    from app.utils import anti_detection
+
+    call_count = 0
 
     async def fake_fetch_page_content(url: str) -> str:
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            return "<html><head><title>Just a moment...</title></head><body>Cloudflare</body></html>"
+        return "<html><body>detail</body></html>"
+
+    async def no_wait(self, attempt: int) -> None:
+        return None
+
+    monkeypatch.setattr(anti_detection.ExponentialBackoff, "wait", no_wait)
+    scraper = CTGoodJobsBrowserPageScraper(page_content_fetcher=fake_fetch_page_content, max_attempts=3)
+
+    html = await scraper.fetch_page_html("https://jobs.ctgoodjobs.hk/job/10108385", stage="detail_page")
+
+    assert html == "<html><body>detail</body></html>"
+    assert call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_browser_page_scraper_rejects_interstitial_html(monkeypatch):
+    from app.scraper.ctgoodjobs_browser_page_scraper import CTGoodJobsBrowserPageScraper
+    from app.scraper.manual_action import ManualActionRequiredError
+    from app.utils import anti_detection
+
+    call_count = 0
+
+    async def fake_fetch_page_content(url: str) -> str:
+        nonlocal call_count
+        call_count += 1
         return "<html><head><title>Just a moment...</title></head><body>Cloudflare</body></html>"
 
-    scraper = CTGoodJobsBrowserPageScraper(page_content_fetcher=fake_fetch_page_content)
+    async def no_wait(self, attempt: int) -> None:
+        return None
+
+    monkeypatch.setattr(anti_detection.ExponentialBackoff, "wait", no_wait)
+    scraper = CTGoodJobsBrowserPageScraper(page_content_fetcher=fake_fetch_page_content, max_attempts=3)
 
     with pytest.raises(ManualActionRequiredError, match=r"CTGoodJobs detail_page fetch blocked by human verification"):
         await scraper.fetch_page_html("https://jobs.ctgoodjobs.hk/job/10108385", stage="detail_page")
+
+    assert call_count == 3
 
 
 @pytest.mark.asyncio
@@ -114,6 +151,33 @@ async def test_ctgoodjobs_browser_page_scraper_raises_manual_action_required_for
     assert exc.blocked_url == "https://jobs.ctgoodjobs.hk/jobs"
     assert exc.referer is None
     assert exc.resume_context == {}
+
+
+@pytest.mark.asyncio
+async def test_manual_action_required_error_to_payload_returns_defensive_copies():
+    from app.scraper.manual_action import ManualActionRequiredError
+
+    instructions = ["Open Edge using the listed profile."]
+    resume_context = {"job_id": "crawl-123"}
+    error = ManualActionRequiredError(
+        source_site="ctgoodjobs",
+        stage="registry",
+        blocked_url="https://jobs.ctgoodjobs.hk/jobs",
+        message="CTGoodJobs registry fetch blocked by human verification",
+        instructions=instructions,
+        resume_context=resume_context,
+    )
+
+    payload = error.to_payload(
+        crawl_mode="headed",
+        browser_channel="msedge",
+        browser_profile_path="C:/profile",
+    )
+
+    assert payload["instructions"] == instructions
+    assert payload["resume_context"] == resume_context
+    assert payload["instructions"] is not instructions
+    assert payload["resume_context"] is not resume_context
 
 
 @pytest.mark.asyncio
