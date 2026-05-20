@@ -197,6 +197,21 @@ class CrawlJobRepository:
             .all()
         )
 
+    def list_crawl_jobs_by_statuses(
+        self,
+        db: Session,
+        *,
+        statuses: set[str] | list[str],
+    ) -> list[CrawlJob]:
+        if not statuses:
+            return []
+        return (
+            db.query(CrawlJob)
+            .filter(CrawlJob.status.in_(list(statuses)))
+            .order_by(desc(CrawlJob.queued_at), desc(CrawlJob.created_at))
+            .all()
+        )
+
     def _merge_metrics(self, existing_metrics, metrics_patch: dict[str, Any]) -> dict[str, Any]:
         merged = dict(existing_metrics or {})
         for key, value in (metrics_patch or {}).items():

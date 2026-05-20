@@ -171,7 +171,16 @@ def _collect_progress_payload() -> dict[str, Any]:
 
     db = SessionLocal()
     try:
+        crawl_jobs_by_id: dict[str, Any] = {}
+        for crawl_job in repository.list_crawl_jobs_by_statuses(
+            db,
+            statuses=ACTIVE_CRAWL_JOB_STATUSES | ACTIONABLE_CRAWL_JOB_STATUSES,
+        ):
+            crawl_jobs_by_id[str(crawl_job.id)] = crawl_job
         for crawl_job in repository.list_recent_crawl_jobs(db, limit=50):
+            crawl_jobs_by_id[str(crawl_job.id)] = crawl_job
+
+        for crawl_job in crawl_jobs_by_id.values():
             events = repository.list_events(db, crawl_job.id)
             latest_event = events[-1] if events else None
             snapshot = _build_progress_snapshot(crawl_job, latest_event, now=now)

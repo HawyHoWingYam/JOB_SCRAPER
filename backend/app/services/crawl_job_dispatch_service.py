@@ -254,6 +254,9 @@ class CrawlJobDispatchService:
         request_payload["is_resume"] = True
         request_payload["resume_context"] = resume_context
         if resume_context.get("crawl_phase") == "detail":
+            source_listing_crawl_job_id = resume_context.get("source_listing_crawl_job_id")
+            if source_listing_crawl_job_id and not request_payload.get("source_listing_crawl_job_id"):
+                request_payload["source_listing_crawl_job_id"] = source_listing_crawl_job_id
             request_payload["detail_statuses"] = ["manual_action_required", "pending"]
 
         crawl_job.status = "dispatching"

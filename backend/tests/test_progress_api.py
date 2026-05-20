@@ -8,7 +8,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.api.progress import _build_progress_snapshot
+from app.api.progress import _build_progress_snapshot, _collect_progress_payload
+import app.api.progress as progress_module
 from app.utils.time import utc_now
 
 
@@ -165,3 +166,70 @@ def test_build_progress_snapshot_includes_manual_action_details():
         },
         "error": error_message,
     }
+
+
+def test_collect_progress_payload_keeps_older_manual_action_job_visible_outside_recent_limit(monkeypatch):
+    now = utc_now()
+    older_manual_action_job = _build_crawl_job(
+        status="manual_action_required",
+        metrics={
+            "pages_processed": 51,
+            "job_ids_collected": 287,
+            "items_emitted": 0,
+            "ingest_items_seen": 0,
+        },
+        started_offset_seconds=7200,
+    )
+    recent_completed_job = _build_crawl_job(
+        status="completed",
+        metrics={
+            "pages_processed": 2,
+            "job_ids_collected": 3,
+            "items_emitted": 3,
+            "ingest_items_seen": 3,
+        },
+        started_offset_seconds=15,
+    )
+    recent_completed_job.updated_at = now
+
+    events_by_job_id = {
+        older_manual_action_job.id: [
+            SimpleNamespace(
+                payload={
+                    "manual_action": {
+                        "source_site": "ctgoodjobs",
+                        "stage": "category_page",
+                    }
+                }
+            )
+        ],
+        recent_completed_job.id: [SimpleNamespace(payload={})],
+    }
+
+    class FakeSession:
+        def close(self):
+            return None
+
+    class FakeRepository:
+        def list_crawl_jobs_by_statuses(self, db, *, statuses):
+            assert statuses == (
+                progress_module.ACTIVE_CRAWL_JOB_STATUSES | progress_module.ACTIONABLE_CRAWL_JOB_STATUSES
+            )
+            return [older_manual_action_job]
+
+        def list_recent_crawl_jobs(self, db, *, limit=50):
+            assert limit == 50
+            return [recent_completed_job]
+
+        def list_events(self, db, crawl_job_id):
+            return list(events_by_job_id.get(crawl_job_id, []))
+
+    monkeypatch.setattr(progress_module, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(progress_module, "repository", FakeRepository())
+    monkeypatch.setattr(progress_module, "utc_now", lambda: now)
+
+    payload = _collect_progress_payload()
+
+    assert str(older_manual_action_job.id) in payload["active"]
+    assert str(older_manual_action_job.id) in payload["all"]
+    assert str(recent_completed_job.id) in payload["all"]
