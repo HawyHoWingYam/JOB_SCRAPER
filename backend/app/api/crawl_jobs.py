@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
+from app.crawl_phases import resolve_crawl_phase
 from app.database import get_db
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.schedule_repository import ScheduleRepository
@@ -107,14 +108,19 @@ async def create_crawl_job(
             detail="Unsupported source_site for execution",
         )
 
-    await _validate_effective_category_ids(effective_source_site, request.category_ids)
+    if request.category_ids:
+        await _validate_effective_category_ids(effective_source_site, request.category_ids)
 
     dispatch_result = dispatch_service.dispatch_manual_crawl_job(
         db,
         source_site=effective_source_site,
+        crawl_phase=resolve_crawl_phase(request.crawl_phase),
         crawl_mode=request.crawl_mode,
         category_ids=list(request.category_ids or []),
         max_pages=request.max_pages,
+        source_listing_crawl_job_id=request.source_listing_crawl_job_id,
+        detail_limit=request.detail_limit,
+        detail_statuses=request.detail_statuses,
         skip_existing=request.skip_existing,
         requested_by=request.requested_by or "api",
     )
@@ -147,6 +153,22 @@ async def list_crawl_job_events(crawl_job_id: UUID, db: Session = Depends(get_db
 async def cancel_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
     try:
         crawl_job = dispatch_service.cancel_crawl_job(
+            db,
+            crawl_job_id=crawl_job_id,
+            requested_by="api",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return crawl_job
+
+
+@router.post("/{crawl_job_id}/resume", response_model=CrawlJobSchema)
+async def resume_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
+    try:
+        crawl_job = dispatch_service.resume_crawl_job(
             db,
             crawl_job_id=crawl_job_id,
             requested_by="api",

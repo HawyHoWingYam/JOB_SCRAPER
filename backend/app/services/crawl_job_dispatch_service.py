@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.crawl_phases import resolve_crawl_phase
 from app.crawl_modes import resolve_crawl_mode
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.topics import STREAM_CRAWL_COMMANDS, STREAM_CRAWL_COMMANDS_HEADED
@@ -43,9 +44,13 @@ class CrawlJobDispatchService:
         db: Session,
         *,
         source_site: str,
+        crawl_phase: str | None = None,
         crawl_mode: str | None = None,
         category_ids: list[int | str],
         max_pages: int,
+        source_listing_crawl_job_id=None,
+        detail_limit: int = 100,
+        detail_statuses: list[str] | None = None,
         skip_existing: bool = False,
         requested_by: str | None = None,
     ) -> CrawlJobDispatchResult:
@@ -55,9 +60,15 @@ class CrawlJobDispatchService:
             trigger_type="manual",
             request_payload={
                 "source_site": source_site,
+                "crawl_phase": resolve_crawl_phase(crawl_phase),
                 "crawl_mode": resolve_crawl_mode(source_site, crawl_mode),
                 "category_ids": category_ids,
                 "max_pages": max_pages,
+                "source_listing_crawl_job_id": str(source_listing_crawl_job_id)
+                if source_listing_crawl_job_id is not None
+                else None,
+                "detail_limit": int(detail_limit),
+                "detail_statuses": list(detail_statuses or ["pending"]),
                 "skip_existing": skip_existing,
             },
             requested_by=requested_by,
@@ -73,11 +84,14 @@ class CrawlJobDispatchService:
     ) -> CrawlJobDispatchResult:
         request_payload = {
             "source_site": schedule.source_site,
+            "crawl_phase": resolve_crawl_phase(getattr(schedule, "crawl_phase", None)),
             "crawl_mode": resolve_crawl_mode(schedule.source_site, getattr(schedule, "crawl_mode", None)),
             "category_ids": list(schedule.category_ids or []),
             "keywords": schedule.keywords,
             "location": schedule.location,
             "max_pages": schedule.max_pages or 3,
+            "detail_limit": int(getattr(schedule, "detail_limit", 100) or 100),
+            "detail_statuses": ["pending"],
             "skip_existing": True,
         }
         return self.dispatch_crawl_job(
@@ -101,6 +115,7 @@ class CrawlJobDispatchService:
         schedule_execution: ScheduleExecution | None = None,
     ) -> CrawlJobDispatchResult:
         payload = dict(request_payload)
+        payload["crawl_phase"] = resolve_crawl_phase(payload.get("crawl_phase"))
         payload["crawl_mode"] = resolve_crawl_mode(source_site, payload.get("crawl_mode"))
         if schedule_id is not None:
             payload.setdefault("schedule_id", str(schedule_id))
@@ -176,6 +191,7 @@ class CrawlJobDispatchService:
         event_payload = {
             "crawl_job_id": str(crawl_job.id),
             "source_site": crawl_job.source_site,
+            "crawl_phase": resolve_crawl_phase((crawl_job.request_payload or {}).get("crawl_phase")),
             "crawl_mode": resolve_crawl_mode(
                 crawl_job.source_site,
                 (crawl_job.request_payload or {}).get("crawl_mode"),
@@ -211,10 +227,88 @@ class CrawlJobDispatchService:
         self.outbox_publisher.publish_pending_batch(db, limit=100)
         return crawl_job
 
+    def resume_crawl_job(
+        self,
+        db: Session,
+        *,
+        crawl_job_id,
+        requested_by: str | None = None,
+    ) -> CrawlJob:
+        crawl_job = self.crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
+        if crawl_job is None:
+            raise ValueError(f"Crawl job not found: {crawl_job_id}")
+
+        if crawl_job.status != "manual_action_required":
+            raise RuntimeError(f"Crawl job cannot be resumed from status '{crawl_job.status}'")
+
+        latest_event = self.crawl_job_repository.get_latest_event(db, crawl_job_id)
+        if latest_event is None or latest_event.event_type != "crawl.manual_action_required":
+            raise RuntimeError("Crawl job is not resumable from its latest event")
+
+        manual_action = dict((latest_event.payload or {}).get("manual_action") or {})
+        if not manual_action.get("resume_supported"):
+            raise RuntimeError("Crawl job manual action does not support resume")
+
+        resume_context = dict(manual_action.get("resume_context") or {})
+        request_payload = dict(crawl_job.request_payload or {})
+        request_payload["is_resume"] = True
+        request_payload["resume_context"] = resume_context
+        if resume_context.get("crawl_phase") == "detail":
+            request_payload["detail_statuses"] = ["manual_action_required", "pending"]
+
+        crawl_job.status = "dispatching"
+        crawl_job.completed_at = None
+        crawl_job.error_message = None
+        crawl_job.request_payload = request_payload
+
+        resume_requested_payload = {
+            "crawl_job_id": str(crawl_job.id),
+            "source_site": crawl_job.source_site,
+            "requested_by": requested_by,
+            "status": crawl_job.status,
+            "manual_action": manual_action,
+        }
+        self.crawl_job_repository.append_event(
+            db,
+            crawl_job_id=crawl_job.id,
+            event_type="crawl.resume_requested",
+            payload=resume_requested_payload,
+            emitted_by=requested_by or "api",
+            auto_commit=False,
+        )
+
+        requested_payload = self._build_requested_event_payload(crawl_job)
+        self.crawl_job_repository.append_event(
+            db,
+            crawl_job_id=crawl_job.id,
+            event_type="crawl.requested",
+            payload=requested_payload,
+            emitted_by=requested_by or "api",
+            auto_commit=False,
+        )
+        self.event_outbox_repository.enqueue(
+            db,
+            topic=self._resolve_command_topic(
+                source_site=crawl_job.source_site,
+                crawl_mode=request_payload.get("crawl_mode"),
+            ),
+            aggregate_type="crawl_job",
+            aggregate_id=str(crawl_job.id),
+            event_type="crawl.requested",
+            payload=requested_payload,
+            auto_commit=False,
+        )
+
+        db.commit()
+        db.refresh(crawl_job)
+        self.outbox_publisher.publish_pending_batch(db, limit=100)
+        return crawl_job
+
     def _build_requested_event_payload(self, crawl_job: CrawlJob) -> dict[str, Any]:
         return {
             "crawl_job_id": str(crawl_job.id),
             "source_site": crawl_job.source_site,
+            "crawl_phase": resolve_crawl_phase((crawl_job.request_payload or {}).get("crawl_phase")),
             "crawl_mode": resolve_crawl_mode(
                 crawl_job.source_site,
                 (crawl_job.request_payload or {}).get("crawl_mode"),

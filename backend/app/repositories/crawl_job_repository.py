@@ -3,9 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import desc, func
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
+from app.models.schedule import ScheduleExecution
+from app.utils.time import utc_now
 
 _UNSET = object()
 
@@ -126,6 +129,12 @@ class CrawlJobRepository:
             emitted_by=emitted_by,
             auto_commit=False,
         )
+        self._sync_linked_schedule_execution(
+            db,
+            crawl_job=crawl_job,
+            event_type=event_type,
+            payload=payload,
+        )
 
         if auto_commit:
             db.commit()
@@ -155,6 +164,7 @@ class CrawlJobRepository:
         for key, value in metrics_delta.items():
             merged_metrics[key] = int(merged_metrics.get(key) or 0) + int(value)
         crawl_job.metrics = merged_metrics
+        self._sync_linked_schedule_execution(db, crawl_job=crawl_job)
 
         if auto_commit:
             db.commit()
@@ -171,6 +181,14 @@ class CrawlJobRepository:
             .all()
         )
 
+    def get_latest_event(self, db: Session, crawl_job_id) -> CrawlJobEvent | None:
+        return (
+            db.query(CrawlJobEvent)
+            .filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
+            .order_by(CrawlJobEvent.sequence_no.desc())
+            .first()
+        )
+
     def list_recent_crawl_jobs(self, db: Session, *, limit: int = 100) -> list[CrawlJob]:
         return (
             db.query(CrawlJob)
@@ -184,3 +202,94 @@ class CrawlJobRepository:
         for key, value in (metrics_patch or {}).items():
             merged[key] = value
         return merged
+
+    def _sync_linked_schedule_execution(
+        self,
+        db: Session,
+        *,
+        crawl_job: CrawlJob,
+        event_type: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            execution = (
+                db.query(ScheduleExecution)
+                .filter(ScheduleExecution.crawl_job_id == crawl_job.id)
+                .order_by(desc(ScheduleExecution.started_at), desc(ScheduleExecution.created_at))
+                .first()
+            )
+        except (OperationalError, ProgrammingError):
+            return
+        if execution is None:
+            return
+
+        metrics = dict(crawl_job.metrics or {})
+        payload = dict(payload or {})
+        items_emitted = self._metric_as_int(metrics.get("items_emitted"))
+        ingest_items_seen = self._metric_as_int(metrics.get("ingest_items_seen"))
+        ids_collected = self._metric_as_int(metrics.get("job_ids_collected"))
+        pages_processed = self._metric_as_int(metrics.get("pages_processed"))
+
+        execution.started_at = crawl_job.started_at or execution.started_at
+        execution.ids_collected = ids_collected
+        execution.jobs_scraped = items_emitted
+        execution.jobs_saved = ingest_items_seen
+
+        current_page = self._metric_as_int(payload.get("current_page"))
+        total_pages = self._metric_as_int(payload.get("total_pages"))
+        if (total_pages > 0 and current_page >= total_pages) or (
+            pages_processed > 0 and crawl_job.status in {"completed", "failed", "cancelled"}
+        ):
+            execution.phase1_completed = True
+
+        if event_type in {"crawl.completed", "crawl.failed", "crawl.cancelled"}:
+            execution.phase2_completed = True
+
+        save_backlog_remaining = items_emitted > ingest_items_seen
+        execution.phase4_completed = items_emitted == 0 or not save_backlog_remaining
+
+        if crawl_job.status in {"queued", "dispatching"}:
+            execution.status = "pending"
+            execution.completed_at = None
+            execution.duration_seconds = None
+            execution.error_message = None
+            return
+
+        if crawl_job.status == "running":
+            execution.status = "running"
+            execution.completed_at = None
+            execution.duration_seconds = None
+            execution.error_message = None
+            return
+
+        if crawl_job.status == "completed" and save_backlog_remaining:
+            execution.status = "running"
+            execution.completed_at = None
+            execution.duration_seconds = None
+            execution.error_message = None
+            return
+
+        terminal_status = "failed" if crawl_job.status == "cancelled" else crawl_job.status
+        execution.status = terminal_status
+        execution.error_message = crawl_job.error_message if terminal_status == "failed" else None
+        execution.completed_at = crawl_job.completed_at or execution.completed_at or utc_now()
+        if execution.started_at is not None and execution.completed_at is not None:
+            started_at = execution.started_at
+            completed_at = execution.completed_at
+            if started_at.tzinfo is not None and completed_at.tzinfo is None:
+                completed_at = completed_at.replace(tzinfo=started_at.tzinfo)
+            elif started_at.tzinfo is None and completed_at.tzinfo is not None:
+                started_at = started_at.replace(tzinfo=completed_at.tzinfo)
+            try:
+                execution.duration_seconds = max(
+                    0,
+                    int((completed_at - started_at).total_seconds()),
+                )
+            except TypeError:
+                execution.duration_seconds = None
+
+    def _metric_as_int(self, value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0

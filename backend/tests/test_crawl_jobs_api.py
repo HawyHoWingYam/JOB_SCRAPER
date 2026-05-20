@@ -63,6 +63,78 @@ def _build_test_client(monkeypatch):
     return client, Session
 
 
+def _seed_manual_action_crawl_job(
+    Session,
+    *,
+    source_site: str = "ctgoodjobs",
+    request_payload: dict | None = None,
+    manual_action: dict | None = None,
+    status: str = "manual_action_required",
+    event_type: str = "crawl.manual_action_required",
+):
+    crawl_job_id = uuid.uuid4()
+    payload = request_payload or {
+        "source_site": source_site,
+        "category_ids": ["ctgoodjobs:021"],
+        "max_pages": 52,
+        "crawl_mode": "headed",
+        "crawl_phase": "listing",
+    }
+    manual_action_payload = manual_action or {
+        "action_type": "human_verification",
+        "source_site": source_site,
+        "stage": "category_page",
+        "blocked_url": "https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=52",
+        "referer": "https://jobs.ctgoodjobs.hk/jobs",
+        "crawl_mode": "headed",
+        "browser_channel": "msedge",
+        "browser_profile_path": None,
+        "resume_supported": True,
+        "message": "CTGoodJobs category_page fetch blocked by human verification",
+        "instructions": ["Complete the human verification challenge in the headed browser."],
+        "resume_context": {
+            "crawl_phase": "listing",
+            "category_id": "ctgoodjobs:021",
+            "page": 52,
+            "page_direction": "descending",
+        },
+    }
+
+    db = Session()
+    try:
+        crawl_job = CrawlJob(
+            id=crawl_job_id,
+            source_site=source_site,
+            trigger_type="manual",
+            status=status,
+            request_payload=payload,
+            requested_by="api",
+            error_message=manual_action_payload["message"],
+        )
+        db.add(crawl_job)
+        db.flush()
+        db.add(
+            CrawlJobEvent(
+                crawl_job_id=crawl_job_id,
+                sequence_no=1,
+                event_type=event_type,
+                payload={
+                    "crawl_job_id": str(crawl_job_id),
+                    "source_site": source_site,
+                    "request_payload": payload,
+                    "error": manual_action_payload["message"],
+                    "manual_action": manual_action_payload,
+                },
+                emitted_by="crawl-worker",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    return str(crawl_job_id)
+
+
 @pytest.mark.asyncio
 async def test_post_crawl_jobs_creates_durable_rows_and_exposes_progress(monkeypatch):
     client, Session = _build_test_client(monkeypatch)
@@ -95,6 +167,7 @@ async def test_post_crawl_jobs_creates_durable_rows_and_exposes_progress(monkeyp
             assert crawl_job.trigger_type == "manual"
             assert crawl_job.request_payload["category_ids"] == [1200]
             assert crawl_job.request_payload["crawl_mode"] == "headed"
+            assert crawl_job.request_payload["crawl_phase"] == "listing"
             assert [event.event_type for event in events] == ["crawl.requested"]
             assert events[0].sequence_no == 1
             assert len(outbox_rows) == 1
@@ -137,6 +210,7 @@ async def test_post_crawl_jobs_allows_explicit_headless_mode(monkeypatch):
             outbox_rows = db.query(EventOutbox).all()
 
             assert crawl_job.request_payload["crawl_mode"] == "headless"
+            assert crawl_job.request_payload["crawl_phase"] == "listing"
             assert outbox_rows[0].topic == "stream.crawl.commands"
         finally:
             db.close()
@@ -175,7 +249,39 @@ async def test_post_crawl_jobs_defaults_ctgoodjobs_to_headed(monkeypatch):
             outbox_rows = db.query(EventOutbox).all()
 
             assert crawl_job.request_payload["crawl_mode"] == "headed"
+            assert crawl_job.request_payload["crawl_phase"] == "listing"
             assert outbox_rows[0].topic == "stream.crawl.commands.headed"
+        finally:
+            db.close()
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_post_crawl_jobs_accepts_detail_phase_with_target_listing_batch(monkeypatch):
+    client, Session = _build_test_client(monkeypatch)
+    target_listing_crawl_job_id = uuid.uuid4()
+    try:
+        response = await client.post(
+            "/api/v1/crawl-jobs",
+            json={
+                "source_site": "jobsdb",
+                "crawl_phase": "detail",
+                "source_listing_crawl_job_id": str(target_listing_crawl_job_id),
+                "detail_limit": 15,
+            },
+        )
+
+        assert response.status_code == 202
+        crawl_job_id = response.json()["id"]
+
+        db = Session()
+        try:
+            crawl_job = db.query(CrawlJob).filter(CrawlJob.id == uuid.UUID(crawl_job_id)).one()
+
+            assert crawl_job.request_payload["crawl_phase"] == "detail"
+            assert crawl_job.request_payload["source_listing_crawl_job_id"] == str(target_listing_crawl_job_id)
+            assert crawl_job.request_payload["detail_limit"] == 15
         finally:
             db.close()
     finally:
@@ -209,5 +315,57 @@ async def test_cancel_crawl_job_updates_status_and_event_history(monkeypatch):
             "crawl.cancelled",
         ]
         assert [event["sequence_no"] for event in events_response.json()["events"]] == [1, 2]
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resume_crawl_job_requeues_same_job_id(monkeypatch):
+    client, Session = _build_test_client(monkeypatch)
+    crawl_job_id = _seed_manual_action_crawl_job(Session)
+    try:
+        response = await client.post(f"/api/v1/crawl-jobs/{crawl_job_id}/resume")
+
+        assert response.status_code == 200
+        assert response.json()["id"] == crawl_job_id
+
+        db = Session()
+        try:
+            stored = db.query(CrawlJob).filter(CrawlJob.id == uuid.UUID(crawl_job_id)).one()
+            events = (
+                db.query(CrawlJobEvent)
+                .filter(CrawlJobEvent.crawl_job_id == stored.id)
+                .order_by(CrawlJobEvent.sequence_no.asc())
+                .all()
+            )
+            latest_outbox_row = db.query(EventOutbox).order_by(EventOutbox.id.desc()).first()
+
+            assert stored.status == "dispatching"
+            assert stored.error_message is None
+            assert [event.event_type for event in events] == [
+                "crawl.manual_action_required",
+                "crawl.resume_requested",
+                "crawl.requested",
+            ]
+            assert latest_outbox_row.aggregate_id == crawl_job_id
+            assert latest_outbox_row.event_type == "crawl.requested"
+        finally:
+            db.close()
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resume_crawl_job_rejects_non_manual_action_status(monkeypatch):
+    client, Session = _build_test_client(monkeypatch)
+    crawl_job_id = _seed_manual_action_crawl_job(
+        Session,
+        status="failed",
+        event_type="crawl.failed",
+    )
+    try:
+        response = await client.post(f"/api/v1/crawl-jobs/{crawl_job_id}/resume")
+
+        assert response.status_code == 409
     finally:
         await client.aclose()
