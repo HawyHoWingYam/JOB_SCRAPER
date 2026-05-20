@@ -6,6 +6,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.models.crawl_job import CrawlJob
+from app.models.crawl_job_listing import CrawlJobListing
 from app.models.company_enrichment_run import CompanyEnrichmentRun, CompanyEnrichmentRunItem
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.utils.time import utc_now
@@ -17,6 +18,8 @@ SCHEDULE_RESTART_MESSAGE = "Service restarted before scheduled scrape execution 
 ACTIVE_SCHEDULE_EXECUTION_STATUSES = ("pending", "running", "ai_running")
 ACTIVE_AI_RUN_STATUSES = ("pending", "running")
 ACTIVE_COMPANY_RUN_STATUSES = ("pending", "running")
+# Manual-action-required crawl jobs are intentionally left resumable and must not
+# be collapsed into startup recovery failures.
 ACTIVE_CRAWL_JOB_STATUSES = ("dispatching", "running")
 
 logger = logging.getLogger(__name__)
@@ -172,10 +175,28 @@ class StartupRecoveryService:
             return 0
 
         timestamp = utc_now()
+        recovered_job_ids = [job.id for job in active_jobs]
         for crawl_job in active_jobs:
             crawl_job.status = "failed"
             crawl_job.completed_at = crawl_job.completed_at or timestamp
             crawl_job.error_message = CRAWL_JOB_RESTART_MESSAGE
+
+        if "crawl_job_listings" in inspector.get_table_names():
+            (
+                self.db.query(CrawlJobListing)
+                .filter(
+                    CrawlJobListing.last_detail_crawl_job_id.in_(recovered_job_ids),
+                    CrawlJobListing.detail_status == "running",
+                )
+                .update(
+                    {
+                        CrawlJobListing.detail_status: "failed",
+                        CrawlJobListing.detail_error_message: CRAWL_JOB_RESTART_MESSAGE,
+                        CrawlJobListing.detail_completed_at: timestamp,
+                    },
+                    synchronize_session=False,
+                )
+            )
 
         return len(active_jobs)
 

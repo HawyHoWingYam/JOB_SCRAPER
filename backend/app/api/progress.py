@@ -20,6 +20,7 @@ router = APIRouter(prefix="/scrape", tags=["progress"])
 repository = CrawlJobRepository()
 TERMINAL_CRAWL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 ACTIVE_CRAWL_JOB_STATUSES = {"queued", "running", "dispatching"}
+ACTIONABLE_CRAWL_JOB_STATUSES = {"manual_action_required"}
 RECENT_TERMINAL_WINDOW = timedelta(seconds=60)
 
 
@@ -54,11 +55,23 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
             category_label = f"{crawl_job.source_site} crawl"
 
     metrics = crawl_job.metrics if isinstance(crawl_job.metrics, dict) else {}
-    phase = event_payload.get("phase", 0 if crawl_job.status == "queued" else 1)
+    job_ids_collected = _to_int(event_payload.get("job_ids_collected", metrics.get("job_ids_collected", 0)))
+    jobs_scraped = _to_int(event_payload.get("jobs_scraped", metrics.get("items_emitted", 0)))
+    jobs_saved = _to_int(event_payload.get("jobs_saved", metrics.get("ingest_items_seen", 0)))
+    save_total = _to_int(event_payload.get("save_total", jobs_scraped))
+    total_jobs = _to_int(event_payload.get("total_jobs", max(job_ids_collected, jobs_scraped)))
+    status = _derive_progress_status(crawl_job.status, jobs_scraped=jobs_scraped, jobs_saved=jobs_saved)
+    phase = _derive_progress_phase(
+        crawl_job.status,
+        jobs_scraped=jobs_scraped,
+        jobs_saved=jobs_saved,
+        job_ids_collected=job_ids_collected,
+        explicit_phase=event_payload.get("phase"),
+    )
 
     return {
         "crawl_job_id": str(crawl_job.id),
-        "status": crawl_job.status,
+        "status": status,
         "phase": phase,
         "category_name": category_label,
         "category_ids": category_ids,
@@ -73,13 +86,17 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
         "updated_at": crawl_job.updated_at.isoformat() if crawl_job.updated_at else None,
         "elapsed_seconds": _elapsed_seconds(now, crawl_job.started_at or crawl_job.queued_at),
         "phase_rate": float(event_payload.get("phase_rate") or 0),
+        "eta_seconds": event_payload.get("eta_seconds"),
+        "current_job_title": event_payload.get("current_job_title"),
+        "detail_job_index": event_payload.get("detail_job_index"),
+        "detail_job_total": event_payload.get("detail_job_total"),
         "current_page": event_payload.get("current_page"),
         "total_pages": event_payload.get("total_pages"),
-        "job_ids_collected": event_payload.get("job_ids_collected", metrics.get("job_ids_collected", 0)),
-        "jobs_scraped": event_payload.get("jobs_scraped", metrics.get("jobs_scraped", 0)),
-        "total_jobs": event_payload.get("total_jobs", metrics.get("total_jobs", 0)),
-        "jobs_saved": event_payload.get("jobs_saved", metrics.get("jobs_saved", 0)),
-        "save_total": event_payload.get("save_total", metrics.get("save_total", 0)),
+        "job_ids_collected": job_ids_collected,
+        "jobs_scraped": jobs_scraped,
+        "total_jobs": total_jobs,
+        "jobs_saved": jobs_saved,
+        "save_total": save_total,
         "jobs_classified": event_payload.get("jobs_classified", metrics.get("jobs_classified", 0)),
         "classification_total": event_payload.get(
             "classification_total",
@@ -89,8 +106,62 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
         "ai_completed_items": event_payload.get("ai_completed_items", metrics.get("ai_completed_items", 0)),
         "ai_failed_items": event_payload.get("ai_failed_items", metrics.get("ai_failed_items", 0)),
         "ai_total_items": event_payload.get("ai_total_items", metrics.get("ai_total_items", 0)),
+        "manual_action": event_payload.get("manual_action"),
         "error": crawl_job.error_message or event_payload.get("error"),
     }
+
+
+def _to_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _derive_progress_status(status: str, *, jobs_scraped: int, jobs_saved: int) -> str:
+    if status == "completed" and jobs_saved < jobs_scraped:
+        return "running"
+    return status
+
+
+def _derive_progress_phase(
+    status: str,
+    *,
+    jobs_scraped: int,
+    jobs_saved: int,
+    job_ids_collected: int,
+    explicit_phase: Any,
+) -> int:
+    if status == "queued":
+        return 0
+    if status == "completed" and jobs_saved < jobs_scraped:
+        return 4
+    if explicit_phase is not None:
+        return _to_int(explicit_phase)
+    if status == "running":
+        if jobs_scraped > 0:
+            return 2
+        return 1
+    if status in {"failed", "cancelled"}:
+        if jobs_saved < jobs_scraped:
+            return 4
+        if jobs_scraped > 0:
+            return 2
+        if job_ids_collected > 0:
+            return 1
+    if jobs_scraped > 0:
+        return 4
+    if job_ids_collected > 0:
+        return 1
+    return 0
+
+
+def _is_snapshot_active(snapshot: dict[str, Any]) -> bool:
+    if snapshot["status"] in ACTIVE_CRAWL_JOB_STATUSES:
+        return True
+    if snapshot["status"] in ACTIONABLE_CRAWL_JOB_STATUSES:
+        return True
+    return _to_int(snapshot.get("jobs_saved")) < _to_int(snapshot.get("save_total"))
 
 
 def _collect_progress_payload() -> dict[str, Any]:
@@ -105,7 +176,7 @@ def _collect_progress_payload() -> dict[str, Any]:
             latest_event = events[-1] if events else None
             snapshot = _build_progress_snapshot(crawl_job, latest_event, now=now)
             key = str(crawl_job.id)
-            is_active = crawl_job.status in ACTIVE_CRAWL_JOB_STATUSES
+            is_active = _is_snapshot_active(snapshot)
             is_recent_terminal = (
                 crawl_job.status in TERMINAL_CRAWL_JOB_STATUSES
                 and crawl_job.updated_at is not None

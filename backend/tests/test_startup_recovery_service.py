@@ -16,6 +16,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.database import Base
 from app.models.company import Company
 from app.models.crawl_job import CrawlJob
+from app.models.crawl_job_listing import CrawlJobListing
 from app.models.company_enrichment_run import CompanyEnrichmentRun, CompanyEnrichmentRunItem
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
@@ -45,6 +46,7 @@ def _build_sqlite_session():
             CompanyEnrichmentRun.__table__,
             CompanyEnrichmentRunItem.__table__,
             CrawlJob.__table__,
+            CrawlJobListing.__table__,
             ScrapeSchedule.__table__,
             ScheduleExecution.__table__,
         ],
@@ -285,5 +287,73 @@ def test_recover_crawl_jobs_marks_running_jobs_failed():
         assert crawl_job.status == "failed"
         assert crawl_job.completed_at is not None
         assert "restarted" in (crawl_job.error_message or "").lower()
+    finally:
+        db.close()
+
+
+def test_recover_crawl_jobs_marks_running_detail_listings_failed():
+    db = _build_sqlite_session()
+    try:
+        crawl_job = CrawlJob(
+            id=uuid.uuid4(),
+            source_site="jobsdb",
+            trigger_type="manual",
+            status="running",
+            request_payload={"category_ids": [1200], "max_pages": 3, "crawl_phase": "detail"},
+            requested_by="pytest",
+        )
+        db.add(crawl_job)
+        db.flush()
+
+        listing = CrawlJobListing(
+            id=uuid.uuid4(),
+            crawl_job_id=uuid.uuid4(),
+            source_site="jobsdb",
+            source_job_id="123456",
+            source_url="https://hk.jobsdb.com/job/123456",
+            source_classification_id="6281",
+            source_classification_name="Information & Communication Technology",
+            listing_page=3,
+            listing_rank=1,
+            listing_payload={"external_id": "123456"},
+            detail_status="running",
+            last_detail_crawl_job_id=crawl_job.id,
+        )
+        db.add(listing)
+        db.commit()
+
+        recovered = StartupRecoveryService(db)._recover_crawl_jobs()
+        db.commit()
+        db.refresh(listing)
+
+        assert recovered == 1
+        assert listing.detail_status == "failed"
+        assert listing.detail_completed_at is not None
+        assert "restarted" in (listing.detail_error_message or "").lower()
+    finally:
+        db.close()
+
+
+def test_recover_crawl_jobs_leaves_manual_action_required_job_untouched():
+    db = _build_sqlite_session()
+    try:
+        crawl_job = CrawlJob(
+            source_site="ctgoodjobs",
+            trigger_type="manual",
+            status="manual_action_required",
+            request_payload={"category_ids": ["ctgoodjobs:021"], "crawl_mode": "headed", "crawl_phase": "listing"},
+            requested_by="pytest",
+            error_message="CTGoodJobs category_page fetch blocked by human verification",
+        )
+        db.add(crawl_job)
+        db.commit()
+
+        recovered = StartupRecoveryService(db)._recover_crawl_jobs()
+        db.commit()
+        db.refresh(crawl_job)
+
+        assert recovered == 0
+        assert crawl_job.status == "manual_action_required"
+        assert crawl_job.error_message == "CTGoodJobs category_page fetch blocked by human verification"
     finally:
         db.close()
