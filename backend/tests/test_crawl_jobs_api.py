@@ -322,7 +322,29 @@ async def test_cancel_crawl_job_updates_status_and_event_history(monkeypatch):
 @pytest.mark.asyncio
 async def test_resume_crawl_job_requeues_same_job_id(monkeypatch):
     client, Session = _build_test_client(monkeypatch)
-    crawl_job_id = _seed_manual_action_crawl_job(Session)
+    expected_resume_context = {
+        "crawl_phase": "listing",
+        "category_id": "ctgoodjobs:021",
+        "page": 52,
+        "page_direction": "descending",
+    }
+    crawl_job_id = _seed_manual_action_crawl_job(
+        Session,
+        manual_action={
+            "action_type": "human_verification",
+            "source_site": "ctgoodjobs",
+            "stage": "category_page",
+            "blocked_url": "https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=52",
+            "referer": "https://jobs.ctgoodjobs.hk/jobs",
+            "crawl_mode": "headed",
+            "browser_channel": "msedge",
+            "browser_profile_path": None,
+            "resume_supported": True,
+            "message": "CTGoodJobs category_page fetch blocked by human verification",
+            "instructions": ["Complete the human verification challenge in the headed browser."],
+            "resume_context": expected_resume_context,
+        },
+    )
     try:
         response = await client.post(f"/api/v1/crawl-jobs/{crawl_job_id}/resume")
 
@@ -338,17 +360,90 @@ async def test_resume_crawl_job_requeues_same_job_id(monkeypatch):
                 .order_by(CrawlJobEvent.sequence_no.asc())
                 .all()
             )
+            requested_event = next(event for event in reversed(events) if event.event_type == "crawl.requested")
             latest_outbox_row = db.query(EventOutbox).order_by(EventOutbox.id.desc()).first()
 
             assert stored.status == "dispatching"
             assert stored.error_message is None
+            assert stored.request_payload["is_resume"] is True
+            assert stored.request_payload["resume_context"] == expected_resume_context
             assert [event.event_type for event in events] == [
                 "crawl.manual_action_required",
                 "crawl.resume_requested",
                 "crawl.requested",
             ]
+            assert requested_event.payload["request_payload"]["is_resume"] is True
+            assert requested_event.payload["request_payload"]["resume_context"] == expected_resume_context
             assert latest_outbox_row.aggregate_id == crawl_job_id
             assert latest_outbox_row.event_type == "crawl.requested"
+        finally:
+            db.close()
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resume_crawl_job_detail_phase_requeues_with_manual_action_and_pending_statuses(monkeypatch):
+    client, Session = _build_test_client(monkeypatch)
+    expected_resume_context = {
+        "crawl_phase": "detail",
+        "listing_id": "listing-1",
+        "source_listing_crawl_job_id": "listing-crawl-1",
+        "source_job_id": "10108385",
+    }
+    crawl_job_id = _seed_manual_action_crawl_job(
+        Session,
+        request_payload={
+            "source_site": "ctgoodjobs",
+            "category_ids": ["ctgoodjobs:021"],
+            "max_pages": 52,
+            "crawl_mode": "headed",
+            "crawl_phase": "detail",
+            "source_listing_crawl_job_id": "listing-crawl-1",
+            "detail_limit": 10,
+            "detail_statuses": ["pending"],
+        },
+        manual_action={
+            "action_type": "human_verification",
+            "source_site": "ctgoodjobs",
+            "stage": "job_detail",
+            "blocked_url": "https://jobs.ctgoodjobs.hk/job/10108385",
+            "referer": "https://jobs.ctgoodjobs.hk/jobs",
+            "crawl_mode": "headed",
+            "browser_channel": "msedge",
+            "browser_profile_path": None,
+            "resume_supported": True,
+            "message": "CTGoodJobs job detail fetch blocked by human verification",
+            "instructions": ["Complete the human verification challenge in the headed browser."],
+            "resume_context": expected_resume_context,
+        },
+    )
+    try:
+        response = await client.post(f"/api/v1/crawl-jobs/{crawl_job_id}/resume")
+
+        assert response.status_code == 200
+
+        db = Session()
+        try:
+            stored = db.query(CrawlJob).filter(CrawlJob.id == uuid.UUID(crawl_job_id)).one()
+            requested_event = (
+                db.query(CrawlJobEvent)
+                .filter(
+                    CrawlJobEvent.crawl_job_id == stored.id,
+                    CrawlJobEvent.event_type == "crawl.requested",
+                )
+                .order_by(CrawlJobEvent.sequence_no.desc())
+                .first()
+            )
+
+            assert stored.request_payload["is_resume"] is True
+            assert stored.request_payload["resume_context"] == expected_resume_context
+            assert stored.request_payload["detail_statuses"] == ["manual_action_required", "pending"]
+            assert requested_event.payload["request_payload"]["detail_statuses"] == [
+                "manual_action_required",
+                "pending",
+            ]
+            assert requested_event.payload["request_payload"]["resume_context"] == expected_resume_context
         finally:
             db.close()
     finally:
