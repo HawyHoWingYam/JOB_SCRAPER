@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -140,6 +140,73 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
+  it('shows saved counters during the detail scraping phase', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            status: 'running',
+            category_name: 'Engineering',
+            phase: 2,
+            jobs_scraped: 2,
+            total_jobs: 5,
+            jobs_saved: 1,
+            save_total: 2,
+            elapsed_seconds: 18,
+            phase_rate: 0.5,
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/2\/5 jobs/i)).toBeInTheDocument();
+    expect(screen.getByText(/1\/2 saved/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('shows current detail target, live index, eta, and updates the detail-phase progress bar', async () => {
+    const { container, unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            status: 'running',
+            category_name: 'Engineering',
+            phase: 2,
+            jobs_scraped: 2,
+            total_jobs: 12,
+            detail_job_index: 3,
+            detail_job_total: 12,
+            current_job_title: 'Senior Data Analyst',
+            jobs_saved: 1,
+            save_total: 2,
+            elapsed_seconds: 18,
+            phase_rate: 1.5,
+            eta_seconds: 6,
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/3\/12 jobs/i)).toBeInTheDocument();
+    expect(screen.getByText(/current: senior data analyst/i)).toBeInTheDocument();
+    expect(screen.getByText(/rate: 1\.5\/s/i)).toBeInTheDocument();
+    expect(screen.getByText(/eta: 6s/i)).toBeInTheDocument();
+
+    const progressBarFill = container.querySelector('.progress-bar-fill');
+    expect(progressBarFill).toHaveStyle({ width: '31.25%' });
+
+    unmount();
+  });
+
   it('renders completed_with_ai_failures as a distinct terminal state', async () => {
     const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
 
@@ -165,6 +232,73 @@ describe('ScrapeProgressPanel', () => {
 
     expect(await screen.findByText(/completed with ai failures/i)).toBeInTheDocument();
     expect(screen.getByText(/3 succeeded · 1 failed/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('renders manual action guidance and resumes the blocked crawl job from SSE progress', async () => {
+    const writeText = vi.fn();
+    Object.defineProperty(Object.getPrototypeOf(window.navigator), 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const onResumeCrawlJob = vi.fn();
+
+    const { unmount } = render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        onResumeCrawlJob={onResumeCrawlJob}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-123': {
+            crawl_job_id: 'crawl-job-123',
+            status: 'manual_action_required',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              stage: 'category_page',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=52',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: [
+                'Open the headed browser profile.',
+                'Complete the human verification challenge.',
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/manual action required/i)).toBeInTheDocument();
+    expect(screen.getByText(/stage: category_page/i)).toBeInTheDocument();
+    expect(
+      screen.getByText('https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=52')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/c:\\profiles\\ctgoodjobs-headed/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /copy url/i }));
+    expect(writeText).toHaveBeenCalledWith(
+      'https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=52'
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
+    expect(onResumeCrawlJob).toHaveBeenCalledWith('crawl-job-123');
 
     unmount();
   });

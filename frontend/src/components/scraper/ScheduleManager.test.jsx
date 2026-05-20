@@ -16,9 +16,11 @@ vi.mock('./ScheduleForm', () => ({
           onSubmit({
             name: `${sourceSite} automation`,
             cron_expression: '0 2 * * *',
+            crawl_phase: 'listing',
             crawl_mode: 'headed',
             category_ids: categories.slice(0, 1).map((category) => category.id),
             max_pages: 4,
+            detail_limit: 100,
           });
         }}
       >
@@ -42,6 +44,12 @@ vi.mock('./ScrapeProgressPanel', () => ({
         <div data-testid="progress-initial">{JSON.stringify(props.initialProgress ?? null)}</div>
         <div data-testid="progress-recovery-started-at">{props.recoveryStartedAt ?? ''}</div>
         <div data-testid="progress-recovery-window">{String(props.recoveryWindowMs ?? '')}</div>
+        <div data-testid="progress-has-resume-handler">
+          {String(typeof props.onResumeCrawlJob === 'function')}
+        </div>
+        <div data-testid="progress-has-cancel-handler">
+          {String(typeof props.onCancelCrawlJob === 'function')}
+        </div>
         <button type="button" onClick={() => props.onClose?.('manual_close')}>
           Close Progress Stub
         </button>
@@ -103,6 +111,7 @@ function createFetchMock({
   schedules = MIXED_SCHEDULES,
   jobsdbCategories = JOBSDB_CATEGORIES,
   ctgoodjobsCategories = CTGOODJOBS_CATEGORIES,
+  ctgoodjobsCategoryErrorDetail = null,
   scrapeProgress = { active: {}, all: {}, has_active: false },
   scrapeProgressError = null,
   crawlJobId = 'crawl-job-123',
@@ -123,6 +132,12 @@ function createFetchMock({
     }
 
     if (url === '/api/categories?source_site=ctgoodjobs') {
+      if (ctgoodjobsCategoryErrorDetail) {
+        return Promise.resolve({
+          ok: false,
+          json: async () => ({ detail: ctgoodjobsCategoryErrorDetail }),
+        });
+      }
       return mockJsonResponse({ categories: ctgoodjobsCategories });
     }
 
@@ -187,6 +202,24 @@ describe('ScheduleManager', () => {
     expect(screen.queryByText('JobsDB Nightly')).not.toBeInTheDocument();
   });
 
+  it('shows backend category error detail when ctgoodjobs categories fail to load', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        ctgoodjobsCategoryErrorDetail: 'CTgoodjobs category registry unavailable',
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
+      target: { value: 'ctgoodjobs' },
+    });
+
+    expect(await screen.findByText('CTgoodjobs category registry unavailable')).toBeInTheDocument();
+  });
+
   it('posts jobsdb crawl-job payloads with integer category ids and source_site', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
@@ -203,9 +236,11 @@ describe('ScheduleManager', () => {
       expect(crawlJobCall).toBeTruthy();
       expect(JSON.parse(crawlJobCall[1].body)).toEqual({
         source_site: 'jobsdb',
+        crawl_phase: 'listing',
         crawl_mode: 'headed',
         category_ids: [1200],
         max_pages: 3,
+        detail_limit: 100,
       });
     });
   });
@@ -251,9 +286,11 @@ describe('ScheduleManager', () => {
       expect(crawlJobCall).toBeTruthy();
       expect(JSON.parse(crawlJobCall[1].body)).toEqual({
         source_site: 'ctgoodjobs',
+        crawl_phase: 'listing',
         crawl_mode: 'headed',
         category_ids: ['ctgoodjobs:021'],
         max_pages: 3,
+        detail_limit: 100,
       });
     });
   });
@@ -282,6 +319,33 @@ describe('ScheduleManager', () => {
       }),
     );
     expect(screen.getByTestId('progress-recovery-started-at')).toHaveTextContent('');
+  });
+
+  it('passes both resume and cancel handlers into the scrape progress panel', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        scrapeProgress: {
+          active: { 'crawl-job-123': { status: 'manual_action_required' } },
+          all: {
+            'crawl-job-123': {
+              crawl_job_id: 'crawl-job-123',
+              status: 'manual_action_required',
+              category_name: 'Engineering',
+              crawl_mode: 'headed',
+            },
+          },
+          has_active: true,
+        },
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Scrape Progress Stub');
+
+    expect(screen.getByTestId('progress-has-resume-handler')).toHaveTextContent('true');
+    expect(screen.getByTestId('progress-has-cancel-handler')).toHaveTextContent('true');
   });
 
   it('restores recovery mode on mount when progress is empty but the marker is fresh', async () => {
@@ -473,9 +537,43 @@ describe('ScheduleManager', () => {
         name: 'ctgoodjobs automation',
         cron_expression: '0 2 * * *',
         source_site: 'ctgoodjobs',
+        crawl_phase: 'listing',
         crawl_mode: 'headed',
         category_ids: ['ctgoodjobs:021'],
         max_pages: 4,
+        detail_limit: 100,
+      });
+    });
+  });
+
+  it('posts detail crawl payloads with detail_limit and optional source listing batch id', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '250' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /source listing crawl job id/i }), {
+      target: { value: 'listing-crawl-123' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /engage scanner/i }));
+
+    await waitFor(() => {
+      const crawlJobCall = globalThis.fetch.mock.calls.find(
+        ([url, request]) => url === '/api/v1/crawl-jobs' && request?.method === 'POST',
+      );
+
+      expect(crawlJobCall).toBeTruthy();
+      expect(JSON.parse(crawlJobCall[1].body)).toEqual({
+        source_site: 'jobsdb',
+        crawl_phase: 'detail',
+        crawl_mode: 'headed',
+        category_ids: [],
+        max_pages: 3,
+        detail_limit: 250,
+        source_listing_crawl_job_id: 'listing-crawl-123',
       });
     });
   });

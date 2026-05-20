@@ -12,7 +12,9 @@ function ScrapeProgressPanel({
     recoveryStartedAt,
     recoveryWindowMs,
     onClose,
-    onNavigateToAI
+    onNavigateToAI,
+    onResumeCrawlJob,
+    onCancelCrawlJob
 }) {
     const [progress, setProgress] = useState(initialProgress);
     const [isConnected, setIsConnected] = useState(false);
@@ -195,7 +197,13 @@ function ScrapeProgressPanel({
                     </div>
                 ) : (
                     progressEntries.map(([categoryId, data]) => (
-                        <ProgressItem key={categoryId} data={data} onNavigateToAI={onNavigateToAI} />
+                        <ProgressItem
+                            key={categoryId}
+                            data={data}
+                            onNavigateToAI={onNavigateToAI}
+                            onResumeCrawlJob={onResumeCrawlJob}
+                            onCancelCrawlJob={onCancelCrawlJob}
+                        />
                     ))
                 )}
             </div>
@@ -203,12 +211,27 @@ function ScrapeProgressPanel({
     );
 }
 
-function ProgressItem({ data, onNavigateToAI }) {
+function formatSourceLabel(sourceSite) {
+    if (sourceSite === 'ctgoodjobs') {
+        return 'CTgoodjobs';
+    }
+
+    if (sourceSite === 'jobsdb') {
+        return 'JobsDB';
+    }
+
+    return sourceSite;
+}
+
+function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob }) {
     const {
+        crawl_job_id,
         status,
+        source_site,
         category_name,
         crawl_mode,
         phase,
+        manual_action,
         // Phase 1
         job_ids_collected = 0,
         current_page,
@@ -217,6 +240,8 @@ function ProgressItem({ data, onNavigateToAI }) {
         jobs_scraped = 0,
         total_jobs = 0,
         current_job_title,
+        detail_job_index,
+        detail_job_total,
         // Phase 3
         jobs_classified = 0,
         classification_total = 0,
@@ -231,14 +256,119 @@ function ProgressItem({ data, onNavigateToAI }) {
         // Timing
         elapsed_seconds = 0,
         phase_rate = 0,
+        eta_seconds,
         error
     } = data;
+
+    if (status === 'manual_action_required' && manual_action) {
+        const sourceLabel = formatSourceLabel(manual_action.source_site || source_site);
+        const headingParts = [sourceLabel, category_name].filter(Boolean);
+        const headingLabel = crawl_mode
+            ? `${headingParts.join(' / ')} · ${formatCrawlModeLabel(crawl_mode)}`
+            : headingParts.join(' / ');
+        const instructions = Array.isArray(manual_action.instructions)
+            ? manual_action.instructions.filter(Boolean)
+            : [];
+
+        const handleCopyValue = (value) => {
+            if (!value) {
+                return;
+            }
+
+            window.navigator.clipboard?.writeText?.(value);
+        };
+
+        const handleResume = async () => {
+            if (!crawl_job_id) {
+                return;
+            }
+
+            try {
+                await onResumeCrawlJob?.(crawl_job_id);
+            } catch (resumeError) {
+                console.error('Failed to resume crawl job:', resumeError);
+            }
+        };
+
+        const handleCancel = async () => {
+            if (!crawl_job_id) {
+                return;
+            }
+
+            try {
+                await onCancelCrawlJob?.(crawl_job_id);
+            } catch (cancelError) {
+                console.error('Failed to cancel crawl job:', cancelError);
+            }
+        };
+
+        return (
+            <div className="progress-item warning">
+                <div className="progress-item-header">
+                    <span className="category-name">{headingLabel}</span>
+                    <span className="status-badge status-warning">Manual Action Required</span>
+                </div>
+
+                <div className="progress-details">
+                    <div className="progress-text">Stage: {manual_action.stage || '-'}</div>
+                    <div className="progress-text">{manual_action.blocked_url || '-'}</div>
+                    <div className="progress-text">
+                        Browser Profile Path: {manual_action.browser_profile_path || '-'}
+                    </div>
+                    <div className="progress-text">
+                        Browser Channel: {manual_action.browser_channel || '-'}
+                    </div>
+                    {instructions.length > 0 && (
+                        <ul className="progress-manual-action-list">
+                            {instructions.map((instruction) => (
+                                <li key={instruction}>{instruction}</li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+
+                <div className="progress-actions">
+                    <button
+                        type="button"
+                        className="progress-link-button"
+                        onClick={() => handleCopyValue(manual_action.blocked_url)}
+                    >
+                        Copy URL
+                    </button>
+                    <button
+                        type="button"
+                        className="progress-link-button"
+                        onClick={() => handleCopyValue(manual_action.browser_profile_path)}
+                    >
+                        Copy Profile Path
+                    </button>
+                    <button
+                        type="button"
+                        className="progress-link-button"
+                        onClick={handleResume}
+                    >
+                        Resume
+                    </button>
+                    <button
+                        type="button"
+                        className="progress-link-button"
+                        onClick={handleCancel}
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     let percentage = 0;
     let statusText = '';
     let detailText = '';
+    let secondaryText = '';
     const aiProcessedItems = ai_completed_items + ai_failed_items;
     const aiTotalItems = ai_total_items || save_total || jobs_saved || total_jobs || jobs_scraped || aiProcessedItems;
+    const effectiveDetailIndex = detail_job_index || jobs_scraped;
+    const effectiveDetailTotal = detail_job_total || total_jobs;
 
     if (status === 'queued') {
         percentage = 0;
@@ -249,11 +379,14 @@ function ProgressItem({ data, onNavigateToAI }) {
         statusText = 'Collecting IDs';
         detailText = `Page ${current_page || 0}/${total_pages || '?'} (${job_ids_collected} found)`;
     } else if (phase === 2) {
-        percentage = 25 + (total_jobs ? (jobs_scraped / total_jobs) * 25 : 0);
+        percentage = 25 + (effectiveDetailTotal ? (effectiveDetailIndex / effectiveDetailTotal) * 25 : 0);
         statusText = 'Scraping Details';
-        detailText = `${jobs_scraped}/${total_jobs} jobs`;
+        detailText = `${effectiveDetailIndex}/${effectiveDetailTotal || '?'} jobs`;
         if (current_job_title) {
-            detailText += ` - ${current_job_title}`;
+            secondaryText = `Current: ${current_job_title}`;
+        }
+        if (save_total > 0) {
+            detailText += ` | ${jobs_saved}/${save_total} saved`;
         }
     } else if (phase === 3) {
         percentage = 50 + (classification_total ? (jobs_classified / classification_total) * 25 : 0);
@@ -300,11 +433,15 @@ function ProgressItem({ data, onNavigateToAI }) {
     }
 
     const formatTime = (seconds) => {
-        if (seconds < 60) return `${seconds}s`;
-        const mins = Math.floor(seconds / 60);
-        const secs = seconds % 60;
+        if (seconds == null || Number.isNaN(Number(seconds))) return '-';
+        const wholeSeconds = Math.max(0, Math.round(Number(seconds)));
+        if (wholeSeconds < 60) return `${wholeSeconds}s`;
+        const mins = Math.floor(wholeSeconds / 60);
+        const secs = wholeSeconds % 60;
         return `${mins}m ${secs}s`;
     };
+
+    const etaLabel = formatTime(eta_seconds);
 
     const statusClass =
         status === 'completed'
@@ -338,10 +475,12 @@ function ProgressItem({ data, onNavigateToAI }) {
 
             <div className="progress-details">
                 <div className="progress-text">{detailText}</div>
+                {secondaryText && <div className="progress-text">{secondaryText}</div>}
                 {status !== 'completed' && status !== 'failed' && status !== 'completed_with_ai_failures' && (
                     <div className="progress-stats">
                         <span>Time: {formatTime(elapsed_seconds)}</span>
                         <span>Rate: {phase_rate.toFixed(1)}/s</span>
+                        {eta_seconds != null && <span>ETA: {etaLabel}</span>}
                     </div>
                 )}
             </div>

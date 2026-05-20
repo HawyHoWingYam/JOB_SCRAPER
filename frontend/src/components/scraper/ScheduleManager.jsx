@@ -6,6 +6,7 @@ import ScheduleList from './ScheduleList';
 import ScheduleHistory from './ScheduleHistory';
 import ScrapeProgressPanel from './ScrapeProgressPanel';
 import { CRAWL_MODE_OPTIONS, resolveDefaultCrawlMode } from './crawlMode';
+import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
 import './Scheduler.css';
 
 const API_URL = API_BASE_URL;
@@ -119,27 +120,45 @@ function normalizeCategoryIdsForSource(sourceSite, categoryIds) {
 }
 
 function buildImmediateScrapePayload(form, sourceSite) {
+    const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
     const categoryIds = normalizeCategoryIdsForSource(sourceSite, form?.category_ids);
     const maxPages = Number.parseInt(`${form?.max_pages ?? ''}`, 10);
+    const detailLimit = Number.parseInt(`${form?.detail_limit ?? ''}`, 10);
+    const sourceListingCrawlJobId = `${form?.source_listing_crawl_job_id ?? ''}`.trim();
 
-    if (categoryIds.length === 0) {
+    if (crawlPhase === 'listing' && categoryIds.length === 0) {
         return {
             error: '请至少选择一个分类 (Please select at least one category)',
         };
     }
 
-    if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 1000) {
+    if (crawlPhase === 'listing' && (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 1000)) {
         return {
             error: 'Max pages must be a whole number between 1 and 1000.',
+        };
+    }
+
+    if (crawlPhase === 'detail' && categoryIds.length === 0 && !sourceListingCrawlJobId) {
+        return {
+            error: 'Detail runs need categories or a source listing crawl job ID.',
+        };
+    }
+
+    if (crawlPhase === 'detail' && (!Number.isInteger(detailLimit) || detailLimit < 1 || detailLimit > 5000)) {
+        return {
+            error: 'Detail batch size must be a whole number between 1 and 5000.',
         };
     }
 
     return {
         payload: {
             source_site: sourceSite,
+            crawl_phase: crawlPhase,
             crawl_mode: form?.crawl_mode || resolveDefaultCrawlMode(sourceSite),
             category_ids: categoryIds,
             max_pages: maxPages,
+            detail_limit: crawlPhase === 'detail' ? detailLimit : 100,
+            ...(sourceListingCrawlJobId ? { source_listing_crawl_job_id: sourceListingCrawlJobId } : {}),
         },
     };
 }
@@ -156,9 +175,12 @@ function ScheduleManager({ onNavigateToAI }) {
     const [createFormHasSourceSelections, setCreateFormHasSourceSelections] = useState(false);
     const [showImmediateScrape, setShowImmediateScrape] = useState(false);
     const [immediateForm, setImmediateForm] = useState({
+        crawl_phase: resolveDefaultCrawlPhase(),
         crawl_mode: resolveDefaultCrawlMode('jobsdb'),
         category_ids: [],
-        max_pages: 3
+        max_pages: 3,
+        detail_limit: 100,
+        source_listing_crawl_job_id: '',
     });
     const [scrapeStatus, setScrapeStatus] = useState(null);
     const [progressRecoveryNotice, setProgressRecoveryNotice] = useState(null);
@@ -187,11 +209,23 @@ function ScheduleManager({ onNavigateToAI }) {
             const response = await fetch(
                 `${CATEGORY_API_BASE}/categories?source_site=${encodeURIComponent(sourceSite)}`
             );
+            if (!response.ok) {
+                let detail = '';
+                try {
+                    const payload = await response.json();
+                    detail = typeof payload?.detail === 'string' ? payload.detail : '';
+                } catch {
+                    detail = '';
+                }
+                throw new Error(detail || 'Failed to load categories');
+            }
             if (!response.ok) throw new Error('获取分类列表失败');
             const data = await response.json();
             setCategories(data.categories || []);
         } catch (err) {
             console.error('Failed to fetch categories:', err);
+            setCategories([]);
+            setError(err.message);
         }
     }, []);
 
@@ -274,6 +308,52 @@ function ScheduleManager({ onNavigateToAI }) {
                 detail: 'The run was likely interrupted by a restart or connection loss. Re-run the scrape if you still need it.',
             });
         }
+    }, []);
+
+    const handleResumeCrawlJob = useCallback(async (crawlJobId) => {
+        const response = await fetch(`${API_BASE}/crawl-jobs/${crawlJobId}/resume`, {
+            method: 'POST',
+        });
+
+        if (!response.ok) {
+            let detail = 'Failed to resume crawl job';
+
+            try {
+                const payload = await response.json();
+                detail = formatApiErrorDetail(payload.detail, detail);
+            } catch {
+                // Fall back to the default message when no JSON error is available.
+            }
+
+            setError(detail);
+            throw new Error(detail);
+        }
+
+        setError(null);
+        return response.json();
+    }, []);
+
+    const handleCancelCrawlJob = useCallback(async (crawlJobId) => {
+        const response = await fetch(`${API_BASE}/crawl-jobs/${crawlJobId}/cancel`, {
+            method: 'POST',
+        });
+
+        if (!response.ok) {
+            let detail = 'Failed to cancel crawl job';
+
+            try {
+                const payload = await response.json();
+                detail = formatApiErrorDetail(payload.detail, detail);
+            } catch {
+                // Fall back to the default message when no JSON error is available.
+            }
+
+            setError(detail);
+            throw new Error(detail);
+        }
+
+        setError(null);
+        return response.json();
     }, []);
 
     // Initial load
@@ -454,6 +534,7 @@ function ScheduleManager({ onNavigateToAI }) {
         setCreateFormHasSourceSelections(false);
         setImmediateForm((prev) => ({
             ...prev,
+            crawl_phase: resolveDefaultCrawlPhase(),
             crawl_mode: resolveDefaultCrawlMode(nextSourceSite),
             category_ids: [],
         }));
@@ -541,6 +622,8 @@ function ScheduleManager({ onNavigateToAI }) {
                     recoveryWindowMs={DIRECT_OVERRIDE_RECOVERY_WINDOW_MS}
                     onClose={handleProgressClose}
                     onNavigateToAI={onNavigateToAI}
+                    onResumeCrawlJob={handleResumeCrawlJob}
+                    onCancelCrawlJob={handleCancelCrawlJob}
                 />
             )}
 
@@ -548,6 +631,25 @@ function ScheduleManager({ onNavigateToAI }) {
                 <div className="immediate-form-panel glass-panel">
                     <h3>Direct Override Sequence</h3>
                     <p className="form-hint">Select sectors to scan immediately. Process runs asynchronously.</p>
+
+                    <div className="cyber-form-group">
+                        <label htmlFor="immediate-crawl-phase">Crawl Phase</label>
+                        <select
+                            id="immediate-crawl-phase"
+                            className="premium-select"
+                            value={immediateForm.crawl_phase}
+                            onChange={(e) => setImmediateForm(prev => ({
+                                ...prev,
+                                crawl_phase: e.target.value,
+                            }))}
+                        >
+                            {CRAWL_PHASE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                    {option.label}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
 
                     <div className="cyber-form-group">
                         <label htmlFor="immediate-crawl-mode">Crawl Mode</label>
@@ -585,19 +687,38 @@ function ScheduleManager({ onNavigateToAI }) {
                     </div>
 
                     <div className="cyber-form-group">
-                        <label>Max Depth (Pages)</label>
+                        <label>{immediateForm.crawl_phase === 'detail' ? 'Detail Batch Size' : 'Max Depth (Pages)'}</label>
                         <input
                             type="number"
                             min="1"
-                            max="1000"
+                            max={immediateForm.crawl_phase === 'detail' ? '5000' : '1000'}
                             className="premium-input w-24"
-                            value={immediateForm.max_pages}
+                            value={immediateForm.crawl_phase === 'detail' ? immediateForm.detail_limit : immediateForm.max_pages}
                             onChange={(e) => setImmediateForm(prev => ({
                                 ...prev,
-                                max_pages: parseInt(e.target.value) || 3
+                                ...(immediateForm.crawl_phase === 'detail'
+                                    ? { detail_limit: parseInt(e.target.value) || 100 }
+                                    : { max_pages: parseInt(e.target.value) || 3 })
                             }))}
                         />
                     </div>
+
+                    {immediateForm.crawl_phase === 'detail' && (
+                        <div className="cyber-form-group">
+                            <label htmlFor="source-listing-crawl-job-id">Source Listing Crawl Job ID</label>
+                            <input
+                                id="source-listing-crawl-job-id"
+                                type="text"
+                                className="premium-input"
+                                value={immediateForm.source_listing_crawl_job_id}
+                                onChange={(e) => setImmediateForm(prev => ({
+                                    ...prev,
+                                    source_listing_crawl_job_id: e.target.value,
+                                }))}
+                                placeholder="Optional specific listing batch"
+                            />
+                        </div>
+                    )}
 
                     <div className="form-actions mt-6">
                         <button
