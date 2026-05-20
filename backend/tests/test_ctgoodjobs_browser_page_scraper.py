@@ -53,14 +53,67 @@ async def test_ctgoodjobs_browser_page_scraper_retries_transient_failures(monkey
 @pytest.mark.asyncio
 async def test_ctgoodjobs_browser_page_scraper_rejects_interstitial_html():
     from app.scraper.ctgoodjobs_browser_page_scraper import CTGoodJobsBrowserPageScraper
+    from app.scraper.manual_action import ManualActionRequiredError
 
     async def fake_fetch_page_content(url: str) -> str:
         return "<html><head><title>Just a moment...</title></head><body>Cloudflare</body></html>"
 
     scraper = CTGoodJobsBrowserPageScraper(page_content_fetcher=fake_fetch_page_content)
 
-    with pytest.raises(Exception, match=r"detail_page.*InterstitialChallenge.*10108385"):
+    with pytest.raises(ManualActionRequiredError, match=r"CTGoodJobs detail_page fetch blocked by human verification"):
         await scraper.fetch_page_html("https://jobs.ctgoodjobs.hk/job/10108385", stage="detail_page")
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_browser_page_scraper_rejects_human_verification_interstitial():
+    from app.scraper.ctgoodjobs_browser_page_scraper import CTGoodJobsBrowserPageScraper
+    from app.scraper.manual_action import ManualActionRequiredError
+
+    async def fake_fetch_page_content(url: str) -> str:
+        return """
+        <html>
+          <body>
+            <h1>Let's confirm you are human</h1>
+            <p>Complete the security check before continuing.</p>
+          </body>
+        </html>
+        """
+
+    scraper = CTGoodJobsBrowserPageScraper(page_content_fetcher=fake_fetch_page_content)
+
+    with pytest.raises(ManualActionRequiredError, match=r"CTGoodJobs registry fetch blocked by human verification"):
+        await scraper.fetch_page_html("https://jobs.ctgoodjobs.hk/jobs", stage="registry")
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_browser_page_scraper_raises_manual_action_required_for_human_verification():
+    from app.scraper.ctgoodjobs_browser_page_scraper import CTGoodJobsBrowserPageScraper
+    from app.scraper.manual_action import ManualActionRequiredError
+
+    async def fake_fetch_page_content(url: str) -> str:
+        return """
+        <html>
+          <body>
+            <h1>Let's confirm you are human</h1>
+            <p>Complete the security check before continuing.</p>
+          </body>
+        </html>
+        """
+
+    scraper = CTGoodJobsBrowserPageScraper(page_content_fetcher=fake_fetch_page_content)
+
+    with pytest.raises(ManualActionRequiredError) as exc_info:
+        await scraper.fetch_page_html(
+            "https://jobs.ctgoodjobs.hk/jobs",
+            stage="registry",
+        )
+
+    exc = exc_info.value
+    assert exc.source_site == "ctgoodjobs"
+    assert exc.stage == "registry"
+    assert exc.blocked_url == "https://jobs.ctgoodjobs.hk/jobs"
+    assert exc.referer is None
+    assert exc.resume_context == {}
 
 
 @pytest.mark.asyncio

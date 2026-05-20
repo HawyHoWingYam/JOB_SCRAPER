@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from app.config import settings
-from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError
+from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError, looks_like_interstitial_html
+from app.scraper.manual_action import ManualActionRequiredError
 from app.utils.anti_detection import ExponentialBackoff
 
 
@@ -75,16 +76,23 @@ class CTGoodJobsBrowserPageScraper:
                 html = await self._fetch_page_content(url)
                 if self._looks_like_interstitial(html):
                     if attempt == self.max_attempts - 1:
-                        raise CTGoodJobsFetchError(
+                        raise ManualActionRequiredError(
+                            source_site="ctgoodjobs",
                             stage=stage,
-                            url=url,
-                            attempts=attempt + 1,
-                            exception_type="InterstitialChallenge",
+                            blocked_url=url,
+                            referer=referer,
+                            message=f"CTGoodJobs {stage} fetch blocked by human verification",
+                            instructions=[
+                                "Open Edge using the listed profile.",
+                                "Visit the blocked URL and complete the verification challenge.",
+                                "Close the manual browser window.",
+                                "Return to the app and click Resume.",
+                            ],
                         )
                     await backoff.wait(attempt)
                     continue
                 return html
-            except CTGoodJobsFetchError:
+            except (CTGoodJobsFetchError, ManualActionRequiredError):
                 raise
             except Exception as exc:
                 if attempt == self.max_attempts - 1:
@@ -148,13 +156,7 @@ class CTGoodJobsBrowserPageScraper:
         return self._sync_page.content()
 
     def _looks_like_interstitial(self, html: str) -> bool:
-        lowered = (html or "").lower()
-        return (
-            "just a moment" in lowered
-            or "cf-challenge" in lowered
-            or "challenges.cloudflare.com" in lowered
-            or "verify you are human" in lowered
-        )
+        return looks_like_interstitial_html(html)
 
     def _resolve_user_data_dir(self) -> Path:
         if self.user_data_dir:
