@@ -6,7 +6,6 @@ from app.crawl_phases import resolve_crawl_phase
 from app.scraper.manual_action import ManualActionRequiredError
 from app.scraper.ctgoodjobs.category_registry import (
     CTGOODJOBS_BASE_URL,
-    get_static_ctgoodjobs_categories,
     parse_category_registry,
 )
 from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError
@@ -50,20 +49,14 @@ class CTGoodJobsHeadedSpider:
         listing_rank = 0
 
         async with CTGoodJobsBrowserPageScraper() as page_scraper:
-            try:
-                registry_html = await page_scraper.fetch_page_html(
-                    f"{CTGOODJOBS_BASE_URL}/jobs",
-                    stage="registry",
-                )
-                registry = {
-                    category.source_classification_id: category
-                    for category in parse_category_registry(registry_html)
-                }
-            except Exception:
-                registry = {
-                    category.source_classification_id: category
-                    for category in get_static_ctgoodjobs_categories()
-                }
+            registry_html = await page_scraper.fetch_page_html(
+                f"{CTGOODJOBS_BASE_URL}/jobs",
+                stage="registry",
+            )
+            registry = {
+                category.source_classification_id: category
+                for category in parse_category_registry(registry_html)
+            }
 
             if crawl_phase == "detail":
                 import time

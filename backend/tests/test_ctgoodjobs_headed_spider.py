@@ -163,33 +163,22 @@ async def test_ctgoodjobs_headed_spider_detail_phase_skips_failed_pages(monkeypa
 @pytest.mark.asyncio
 async def test_ctgoodjobs_headed_spider_raises_when_registry_browser_fetch_fails(monkeypatch):
     async def fetch_impl(*, url: str, stage: str, referer: str | None = None):
-        if stage == "registry":
-            raise fetch_error_type(
-                stage=stage,
-                url=url,
-                attempts=3,
-                exception_type="RuntimeError",
-            )
-        return "<html>category page</html>"
+        raise fetch_error_type(
+            stage=stage,
+            url=url,
+            attempts=3,
+            exception_type="RuntimeError",
+        )
 
     spider_module, _category, fetch_error_type = _patch_ctgoodjobs_headed_spider(monkeypatch, fetch_impl)
-    monkeypatch.setattr(
-        spider_module,
-        "parse_category_page",
-        lambda *args, **kwargs: {"job_ids": ["10108385"], "job_urls": ["https://jobs.ctgoodjobs.hk/job/10108385"]},
-    )
 
-    emitted_listings = []
-    result = await spider_module.CTGoodJobsHeadedSpider().crawl(
-        crawl_job_id="headed-ct-3",
-        request_payload={"category_ids": ["ctgoodjobs:021"], "max_pages": 1, "crawl_mode": "headed", "crawl_phase": "listing"},
-        emit_page_processed=lambda payload: None,
-        emit_item_emitted=lambda item: None,
-        emit_listing_emitted=emitted_listings.append,
-    )
-
-    assert result["pages_processed"] == 1
-    assert emitted_listings[0]["source_classification_id"] == "ctgoodjobs:021"
+    with pytest.raises(Exception, match=r"registry.*RuntimeError.*https://jobs\.ctgoodjobs\.hk/jobs"):
+        await spider_module.CTGoodJobsHeadedSpider().crawl(
+            crawl_job_id="headed-ct-3",
+            request_payload={"category_ids": ["ctgoodjobs:021"], "max_pages": 1, "crawl_mode": "headed", "crawl_phase": "listing"},
+            emit_page_processed=lambda payload: None,
+            emit_item_emitted=lambda item: None,
+        )
 
 
 @pytest.mark.asyncio
