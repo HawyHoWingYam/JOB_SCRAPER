@@ -50,6 +50,12 @@ vi.mock('./ScrapeProgressPanel', () => ({
         <div data-testid="progress-has-cancel-handler">
           {String(typeof props.onCancelCrawlJob === 'function')}
         </div>
+        <button type="button" onClick={() => props.onResumeCrawlJob?.('crawl-job-123')}>
+          Resume Progress Stub
+        </button>
+        <button type="button" onClick={() => props.onCancelCrawlJob?.('crawl-job-123')}>
+          Cancel Progress Stub
+        </button>
         <button type="button" onClick={() => props.onClose?.('manual_close')}>
           Close Progress Stub
         </button>
@@ -151,6 +157,14 @@ function createFetchMock({
 
     if (url === '/api/v1/crawl-jobs' && init?.method === 'POST') {
       return mockJsonResponse({ id: crawlJobId, status: 'queued' });
+    }
+
+    if (url === '/api/v1/crawl-jobs/crawl-job-123/resume' && init?.method === 'POST') {
+      return mockJsonResponse({ id: 'crawl-job-123', status: 'dispatching' });
+    }
+
+    if (url === '/api/v1/crawl-jobs/crawl-job-123/cancel' && init?.method === 'POST') {
+      return mockJsonResponse({ id: 'crawl-job-123', status: 'cancelled' });
     }
 
     if (url === '/api/v1/schedules' && init?.method === 'POST') {
@@ -346,6 +360,42 @@ describe('ScheduleManager', () => {
 
     expect(screen.getByTestId('progress-has-resume-handler')).toHaveTextContent('true');
     expect(screen.getByTestId('progress-has-cancel-handler')).toHaveTextContent('true');
+  });
+
+  it('posts resume and cancel requests when the progress panel invokes its action handlers', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        scrapeProgress: {
+          active: { 'crawl-job-123': { status: 'manual_action_required' } },
+          all: {
+            'crawl-job-123': {
+              crawl_job_id: 'crawl-job-123',
+              status: 'manual_action_required',
+              category_name: 'Engineering',
+              crawl_mode: 'headed',
+            },
+          },
+          has_active: true,
+        },
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Scrape Progress Stub');
+
+    fireEvent.click(screen.getByRole('button', { name: /resume progress stub/i }));
+    fireEvent.click(screen.getByRole('button', { name: /cancel progress stub/i }));
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/crawl-jobs/crawl-job-123/resume', {
+        method: 'POST',
+      });
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/crawl-jobs/crawl-job-123/cancel', {
+        method: 'POST',
+      });
+    });
   });
 
   it('restores recovery mode on mount when progress is empty but the marker is fresh', async () => {

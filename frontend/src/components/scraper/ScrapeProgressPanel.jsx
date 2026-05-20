@@ -320,8 +320,8 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
                     </div>
                     {instructions.length > 0 && (
                         <ul className="progress-manual-action-list">
-                            {instructions.map((instruction) => (
-                                <li key={instruction}>{instruction}</li>
+                            {instructions.map((instruction, index) => (
+                                <li key={`${index}-${instruction}`}>{instruction}</li>
                             ))}
                         </ul>
                     )}

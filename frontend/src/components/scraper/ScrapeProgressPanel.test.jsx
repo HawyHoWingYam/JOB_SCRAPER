@@ -251,12 +251,14 @@ describe('ScrapeProgressPanel', () => {
       value: { writeText },
     });
     const onResumeCrawlJob = vi.fn();
+    const onCancelCrawlJob = vi.fn();
 
     const { unmount } = render(
       <ScrapeProgressPanel
         isVisible
         onClose={vi.fn()}
         onResumeCrawlJob={onResumeCrawlJob}
+        onCancelCrawlJob={onCancelCrawlJob}
       />
     );
 
@@ -299,6 +301,9 @@ describe('ScrapeProgressPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /resume/i }));
     expect(onResumeCrawlJob).toHaveBeenCalledWith('crawl-job-123');
+
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(onCancelCrawlJob).toHaveBeenCalledWith('crawl-job-123');
 
     unmount();
   });
