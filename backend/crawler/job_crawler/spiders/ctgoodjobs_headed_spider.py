@@ -42,11 +42,15 @@ class CTGoodJobsHeadedSpider:
         category_ids = list(request_payload.get("category_ids") or [])
         resume_context = dict(request_payload.get("resume_context") or {})
         resume_listing = bool(request_payload.get("is_resume")) and resume_context.get("crawl_phase") == "listing"
+        normalized_resume_category_id = str(resume_context.get("category_id") or "").strip()
+        category_id_anchor_available = normalized_resume_category_id and any(
+            str(category_id).strip() == normalized_resume_category_id for category_id in category_ids
+        )
         max_pages = max(1, int(request_payload.get("max_pages") or 1))
         pages_processed = 0
         items_emitted = 0
         detail_pages_skipped = 0
-        listing_rank = 0
+        listing_rank = int(resume_context.get("listing_rank") or 0) if resume_listing else 0
 
         async with CTGoodJobsBrowserPageScraper() as page_scraper:
             registry_html = await page_scraper.fetch_page_html(
@@ -152,16 +156,34 @@ class CTGoodJobsHeadedSpider:
 
             resume_category_index = int(resume_context.get("category_index") or 0)
             resume_page = max(1, int(resume_context.get("page") or max_pages))
+            seeded_seen_job_ids = {
+                str(job_id).strip()
+                for job_id in (resume_context.get("seen_job_ids") or [])
+                if str(job_id).strip()
+            }
+            resume_anchor_reached = not resume_listing
             for category_index, category_id in enumerate(category_ids):
-                if resume_listing and category_index < resume_category_index:
-                    continue
                 category = registry.get(str(category_id))
                 if category is None:
                     continue
 
-                seen_job_ids: set[str] = set()
+                is_resume_target_category = False
+                if resume_listing:
+                    if category_id_anchor_available:
+                        if not resume_anchor_reached:
+                            if category.source_classification_id != normalized_resume_category_id:
+                                continue
+                            resume_anchor_reached = True
+                            is_resume_target_category = True
+                    else:
+                        if category_index < resume_category_index:
+                            continue
+                        is_resume_target_category = category_index == resume_category_index
+                        resume_anchor_reached = True
+
+                seen_job_ids: set[str] = set(seeded_seen_job_ids) if is_resume_target_category else set()
                 if crawl_phase == "listing":
-                    if resume_listing and category_index == resume_category_index:
+                    if is_resume_target_category:
                         page_range = range(resume_page, 0, -1)
                     else:
                         page_range = range(max_pages, 0, -1)
@@ -183,6 +205,8 @@ class CTGoodJobsHeadedSpider:
                                 "category_index": category_index,
                                 "page": page,
                                 "page_direction": "descending",
+                                "seen_job_ids": sorted(seen_job_ids),
+                                "listing_rank": listing_rank,
                             }
                         )
                         raise
