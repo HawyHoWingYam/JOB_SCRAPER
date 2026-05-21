@@ -53,6 +53,10 @@ def test_bootstrap_database_enables_vector_extension_before_creating_tables():
     assert connection.statements == [
         "CREATE EXTENSION IF NOT EXISTS vector",
         "ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_mode VARCHAR(32)",
+        "ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_phase VARCHAR(32)",
+        "ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS detail_limit INTEGER",
         "UPDATE scrape_schedules SET crawl_mode = CASE WHEN COALESCE(NULLIF(source_site, ''), 'jobsdb') IN ('jobsdb', 'ctgoodjobs') THEN 'headed' ELSE 'headless' END WHERE crawl_mode IS NULL",
+        "UPDATE scrape_schedules SET crawl_phase = 'listing' WHERE crawl_phase IS NULL",
+        "UPDATE scrape_schedules SET detail_limit = 100 WHERE detail_limit IS NULL",
     ]
     assert metadata.bound_engine is engine

@@ -92,7 +92,7 @@ def test_build_progress_snapshot_uses_detail_progress_fields_for_live_job_contex
     assert snapshot["eta_seconds"] == 6
 
 
-def test_build_progress_snapshot_keeps_completed_crawl_active_while_ingest_backlog_remains():
+def test_build_progress_snapshot_marks_completed_crawl_with_downstream_backlog_not_running():
     crawl_job = _build_crawl_job(
         status="completed",
         metrics={
@@ -112,12 +112,39 @@ def test_build_progress_snapshot_keeps_completed_crawl_active_while_ingest_backl
 
     snapshot = _build_progress_snapshot(crawl_job, latest_event, now=utc_now())
 
-    assert snapshot["status"] == "running"
+    assert snapshot["status"] == "completed"
+    assert snapshot["operator_state"] == "completed_with_downstream_backlog"
     assert snapshot["phase"] == 4
     assert snapshot["jobs_scraped"] == 3
     assert snapshot["total_jobs"] == 3
     assert snapshot["jobs_saved"] == 1
     assert snapshot["save_total"] == 3
+    assert progress_module._is_snapshot_active(snapshot) is False
+
+
+def test_build_progress_snapshot_exposes_split_pipeline_counters():
+    crawl_job = _build_crawl_job(
+        status="completed",
+        metrics={
+            "pages_processed": 3,
+            "job_ids_collected": 96,
+            "items_emitted": 0,
+            "ingest_items_seen": 0,
+            "listings_staged": 96,
+            "detail_pending": 96,
+            "detail_completed": 0,
+            "detail_failed": 0,
+        },
+    )
+
+    snapshot = _build_progress_snapshot(crawl_job, SimpleNamespace(payload={}), now=utc_now())
+
+    assert snapshot["operator_state"] == "completed_with_downstream_backlog"
+    assert snapshot["listings_staged"] == 96
+    assert snapshot["detail_pending"] == 96
+    assert snapshot["detail_completed"] == 0
+    assert snapshot["detail_failed"] == 0
+    assert snapshot["jobs_ingested"] == 0
 
 
 def test_build_progress_snapshot_includes_manual_action_details():
@@ -233,3 +260,44 @@ def test_collect_progress_payload_keeps_older_manual_action_job_visible_outside_
     assert str(older_manual_action_job.id) in payload["active"]
     assert str(older_manual_action_job.id) in payload["all"]
     assert str(recent_completed_job.id) in payload["all"]
+
+
+def test_collect_progress_payload_excludes_completed_backlog_from_active(monkeypatch):
+    now = utc_now()
+    completed_backlog_job = _build_crawl_job(
+        status="completed",
+        metrics={
+            "pages_processed": 2,
+            "job_ids_collected": 3,
+            "items_emitted": 3,
+            "ingest_items_seen": 1,
+        },
+        started_offset_seconds=15,
+    )
+    completed_backlog_job.updated_at = now
+
+    class FakeSession:
+        def close(self):
+            return None
+
+    class FakeRepository:
+        def list_crawl_jobs_by_statuses(self, db, *, statuses):
+            return []
+
+        def list_recent_crawl_jobs(self, db, *, limit=50):
+            return [completed_backlog_job]
+
+        def list_events(self, db, crawl_job_id):
+            return []
+
+    monkeypatch.setattr(progress_module, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(progress_module, "repository", FakeRepository())
+    monkeypatch.setattr(progress_module, "utc_now", lambda: now)
+
+    payload = _collect_progress_payload()
+
+    key = str(completed_backlog_job.id)
+    assert key not in payload["active"]
+    assert payload["all"][key]["operator_state"] == "completed_with_downstream_backlog"
+    assert payload["backlog"][key]["operator_state"] == "completed_with_downstream_backlog"
+    assert payload["has_active"] is False

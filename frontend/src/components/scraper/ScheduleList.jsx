@@ -1,6 +1,7 @@
 import React from 'react';
 import { Clock, Play, History, Trash2, Calendar, FileText, CheckCircle2, XCircle } from 'lucide-react';
 import { formatCrawlModeLabel } from './crawlMode';
+import { formatCrawlPhaseLabel } from './crawlPhase';
 
 // 频率预设映射
 const CRON_PRESETS = {
@@ -28,6 +29,7 @@ function formatDate(dateString) {
 function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLoading }) {
     const isActive = schedule.is_active;
     const sourceLabel = formatSourceLabel(schedule.source_site || 'jobsdb');
+    const crawlPhaseLabel = formatCrawlPhaseLabel(schedule.crawl_phase);
     const crawlModeLabel = formatCrawlModeLabel(schedule.crawl_mode);
 
     return (
@@ -68,6 +70,14 @@ function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLo
                         <div className="info-content">
                             <span className="label">Categories</span>
                             <span className="value">{schedule.category_ids?.length || 0} selected</span>
+                        </div>
+                    </div>
+
+                    <div className="info-block">
+                        <Play size={16} className="info-icon" />
+                        <div className="info-content">
+                            <span className="label">Phase</span>
+                            <span className="value">{crawlPhaseLabel}</span>
                         </div>
                     </div>
 

@@ -17,7 +17,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.api.crawl_jobs import router as crawl_jobs_router
 from app.api.progress import router as progress_router
 from app.database import Base, get_db
-from app.models import CrawlJob, CrawlJobEvent, EventOutbox, ScrapeSchedule, ScheduleExecution
+from app.models import CrawlJob, CrawlJobEvent, CrawlJobListing, EventOutbox, ScrapeSchedule, ScheduleExecution
 import app.api.progress as progress_module
 import app.api.crawl_jobs as crawl_jobs_module
 
@@ -40,6 +40,7 @@ def _build_test_client(monkeypatch):
             ScrapeSchedule.__table__,
             CrawlJob.__table__,
             CrawlJobEvent.__table__,
+            CrawlJobListing.__table__,
             EventOutbox.__table__,
             ScheduleExecution.__table__,
         ],
@@ -284,6 +285,104 @@ async def test_post_crawl_jobs_accepts_detail_phase_with_target_listing_batch(mo
             assert crawl_job.request_payload["detail_limit"] == 15
         finally:
             db.close()
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_list_listing_batches_returns_recent_batch_counts(monkeypatch):
+    client, Session = _build_test_client(monkeypatch)
+    listing_crawl_job_id = uuid.uuid4()
+    other_source_crawl_job_id = uuid.uuid4()
+    try:
+        db = Session()
+        try:
+            db.add_all(
+                [
+                    CrawlJob(
+                        id=listing_crawl_job_id,
+                        source_site="jobsdb",
+                        trigger_type="manual",
+                        status="completed",
+                        request_payload={
+                            "source_site": "jobsdb",
+                            "crawl_phase": "listing",
+                            "category_ids": [1200],
+                            "max_pages": 3,
+                        },
+                        requested_by="pytest",
+                        metrics={"pages_processed": 3, "job_ids_collected": 4},
+                    ),
+                    CrawlJob(
+                        id=other_source_crawl_job_id,
+                        source_site="ctgoodjobs",
+                        trigger_type="manual",
+                        status="completed",
+                        request_payload={
+                            "source_site": "ctgoodjobs",
+                            "crawl_phase": "listing",
+                            "category_ids": ["ctgoodjobs:021"],
+                            "max_pages": 3,
+                        },
+                        requested_by="pytest",
+                    ),
+                ]
+            )
+            db.flush()
+            for source_job_id, detail_status in [
+                ("job-1", "pending"),
+                ("job-2", "pending"),
+                ("job-3", "completed"),
+                ("job-4", "manual_action_required"),
+            ]:
+                db.add(
+                    CrawlJobListing(
+                        crawl_job_id=listing_crawl_job_id,
+                        source_site="jobsdb",
+                        source_job_id=source_job_id,
+                        source_url=f"https://hk.jobsdb.com/job/{source_job_id}",
+                        source_classification_id="1200",
+                        source_classification_name="Engineering",
+                        listing_payload={"title": source_job_id},
+                        detail_status=detail_status,
+                    )
+                )
+            db.add(
+                CrawlJobListing(
+                    crawl_job_id=other_source_crawl_job_id,
+                    source_site="ctgoodjobs",
+                    source_job_id="ct-1",
+                    source_url="https://jobs.ctgoodjobs.hk/job/ct-1",
+                    source_classification_id="ctgoodjobs:021",
+                    source_classification_name="Information Technology",
+                    listing_payload={"title": "ct-1"},
+                    detail_status="pending",
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        response = await client.get("/api/v1/crawl-jobs/listing-batches?source_site=jobsdb")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["batches"] == [
+            {
+                "crawl_job_id": str(listing_crawl_job_id),
+                "source_site": "jobsdb",
+                "status": "completed",
+                "category_ids": [1200],
+                "queued_at": payload["batches"][0]["queued_at"],
+                "completed_at": payload["batches"][0]["completed_at"],
+                "listings_staged": 4,
+                "detail_pending": 2,
+                "detail_running": 0,
+                "detail_completed": 1,
+                "detail_failed": 0,
+                "detail_manual_action_required": 1,
+            }
+        ]
     finally:
         await client.aclose()
 

@@ -15,6 +15,15 @@ _TRANSIENT_EXCEPTIONS = (
     httpx.ReadTimeout,
     httpx.RemoteProtocolError,
 )
+_INTERSTITIAL_MARKERS = (
+    "just a moment",
+    "cf-challenge",
+    "challenges.cloudflare.com",
+    "verify you are human",
+    "let's confirm you are human",
+    "lets confirm you are human",
+    "complete the security check before continuing",
+)
 
 
 class CTGoodJobsFetchError(RuntimeError):
@@ -40,6 +49,11 @@ class CTGoodJobsFetchError(RuntimeError):
         self.attempts = attempts
         self.status_code = status_code
         self.exception_type = exception_type
+
+
+def looks_like_interstitial_html(html: str) -> bool:
+    lowered = (html or "").lower()
+    return any(marker in lowered for marker in _INTERSTITIAL_MARKERS)
 
 
 def build_document_headers(*, referer: str | None = None) -> dict[str, str]:
@@ -81,6 +95,23 @@ async def fetch_html_document(
             try:
                 response = await client.get(url, headers=build_document_headers(referer=referer))
                 response.raise_for_status()
+                if looks_like_interstitial_html(response.text):
+                    if attempt == max_attempts - 1:
+                        raise CTGoodJobsFetchError(
+                            stage=stage,
+                            url=url,
+                            attempts=attempt + 1,
+                            exception_type="InterstitialChallenge",
+                        )
+                    logger.warning(
+                        "CTGoodJobs %s fetch hit human-verification interstitial: url=%s attempt=%s/%s",
+                        stage,
+                        url,
+                        attempt + 1,
+                        max_attempts,
+                    )
+                    await backoff.wait(attempt)
+                    continue
                 return response.text
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code if exc.response is not None else None

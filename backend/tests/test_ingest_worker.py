@@ -22,6 +22,9 @@ from app.models import Company, CrawlJob, CrawlJobEvent, EventOutbox, Job
 from app.workers.run_ingest_worker import IngestWorkerService
 
 
+STREAM_JOB_INGEST_DEAD_LETTER = "stream.job.ingest.dead_letter"
+
+
 @dataclass
 class FakeMessage:
     message_id: str
@@ -86,12 +89,18 @@ def _build_sqlite_session_factory():
     return sessionmaker(bind=engine)
 
 
-def _create_crawl_job(session_factory, *, crawl_job_id: str, metrics: dict | None = None):
+def _create_crawl_job(
+    session_factory,
+    *,
+    crawl_job_id: str,
+    source_site: str = "jobsdb",
+    metrics: dict | None = None,
+):
     db = session_factory()
     try:
         crawl_job = CrawlJob(
             id=uuid.UUID(crawl_job_id),
-            source_site="jobsdb",
+            source_site=source_site,
             trigger_type="manual",
             status="completed",
             request_payload={"category_ids": [6281], "max_pages": 1},
@@ -124,6 +133,32 @@ def _canonical_jobsdb_payload():
             "jobsdb_id": "91890673",
             "advertiser_id": "61347806",
             "advertiser_name": "ACME Ltd",
+        },
+    }
+
+
+def _canonical_ctgoodjobs_payload():
+    return {
+        "source_site": "ctgoodjobs",
+        "source_job_id": "10070449",
+        "source_url": "https://jobs.ctgoodjobs.hk/job/10070449",
+        "title": "Enterprise Architect",
+        "description": "Own enterprise application architecture.",
+        "company_name": "ConnectedGroup Limited",
+        "location": "Central and Western District",
+        "salary_range": "N/A",
+        "employment_type": "Full-time",
+        "source_classification_id": "ctgoodjobs:021",
+        "source_classification_name": "Information Technology",
+        "source_subclassification_id": None,
+        "source_subclassification_name": None,
+        "posted_date": "2026-04-15",
+        "raw_data": {
+            "source_site": "ctgoodjobs",
+            "job_id": "10070449",
+            "company_name": "ConnectedGroup Limited",
+            "description_text": "Own enterprise application architecture.",
+            "errors": [],
         },
     }
 
@@ -295,5 +330,134 @@ def test_ingest_worker_normalizes_jobsdb_salary_objects_before_persisting():
         assert job.salary_range == "$11,490 per month"
         assert job.salary_min == 11490
         assert job.salary_max == 11490
+    finally:
+        db.close()
+
+
+def test_ingest_worker_dead_letters_malformed_ctgoodjobs_payload_and_continues():
+    session_factory = _build_sqlite_session_factory()
+    bad_crawl_job_id = str(uuid.uuid4())
+    valid_crawl_job_id = str(uuid.uuid4())
+    _create_crawl_job(session_factory, crawl_job_id=bad_crawl_job_id, source_site="ctgoodjobs")
+    _create_crawl_job(session_factory, crawl_job_id=valid_crawl_job_id)
+
+    malformed = build_event_envelope(
+        event_type="crawl.item_emitted",
+        aggregate_type="crawl_job",
+        aggregate_id=bad_crawl_job_id,
+        source_service="crawl-worker",
+        event_id="evt-ingest-bad",
+        payload={
+            "crawl_job_id": bad_crawl_job_id,
+            "source_site": "ctgoodjobs",
+            "job": {
+                "source_site": "ctgoodjobs",
+                "source_job_id": "10104982",
+                "source_url": "https://jobs.ctgoodjobs.hk/job/10104982",
+                "title": "",
+                "description": None,
+                "company_name": None,
+                "raw_data": {
+                    "errors": ["missing_job_content"],
+                    "field_coverage": {"required_total": 16, "required_present": 4},
+                },
+            },
+        },
+    )
+    valid = build_event_envelope(
+        event_type="crawl.item_emitted",
+        aggregate_type="crawl_job",
+        aggregate_id=valid_crawl_job_id,
+        source_service="crawl-worker",
+        event_id="evt-ingest-valid",
+        payload={
+            "crawl_job_id": valid_crawl_job_id,
+            "source_site": "jobsdb",
+            "job": _canonical_jobsdb_payload(),
+        },
+    )
+    bus = FakeBus(
+        [
+            FakeMessage(message_id="1-0", event=malformed),
+            FakeMessage(message_id="2-0", event=valid),
+        ]
+    )
+    service = IngestWorkerService(
+        bus=bus,
+        group_name="ingest-workers",
+        consumer_name="worker-1",
+        session_factory=session_factory,
+    )
+
+    processed = asyncio.run(service.run_once())
+
+    assert processed == 2
+    assert bus.acked == [
+        (STREAM_JOB_INGEST, "ingest-workers", "1-0"),
+        (STREAM_JOB_INGEST, "ingest-workers", "2-0"),
+    ]
+    assert [topic for topic, _ in bus.published] == [
+        STREAM_JOB_INGEST_DEAD_LETTER,
+        STREAM_JOB_LIFECYCLE,
+    ]
+    dead_letter = bus.published[0][1]
+    assert dead_letter["event_type"] == "ingest.message_dead_lettered"
+    assert dead_letter["payload"]["reason"] == "missing_job_content"
+    assert dead_letter["payload"]["original_event_id"] == "evt-ingest-bad"
+
+    db = session_factory()
+    try:
+        bad_crawl_job = db.query(CrawlJob).filter(CrawlJob.id == uuid.UUID(bad_crawl_job_id)).one()
+        assert bad_crawl_job.metrics["ingest_items_failed"] == 1
+        assert bad_crawl_job.metrics["ingest_dead_lettered"] == 1
+        assert bad_crawl_job.metrics["ingest_failure_missing_job_content"] == 1
+        assert db.query(Job).count() == 1
+    finally:
+        db.close()
+
+
+def test_ingest_worker_derives_fallback_company_identity_from_company_name():
+    session_factory = _build_sqlite_session_factory()
+    crawl_job_id = str(uuid.uuid4())
+    _create_crawl_job(session_factory, crawl_job_id=crawl_job_id, source_site="ctgoodjobs")
+
+    payload = _canonical_ctgoodjobs_payload()
+    payload["raw_data"].pop("company_id", None)
+
+    envelope = build_event_envelope(
+        event_type="crawl.item_emitted",
+        aggregate_type="crawl_job",
+        aggregate_id=crawl_job_id,
+        source_service="crawl-worker",
+        event_id="evt-ingest-fallback-company",
+        payload={
+            "crawl_job_id": crawl_job_id,
+            "source_site": "ctgoodjobs",
+            "job": payload,
+        },
+    )
+    bus = FakeBus([FakeMessage(message_id="1-0", event=envelope)])
+    service = IngestWorkerService(
+        bus=bus,
+        group_name="ingest-workers",
+        consumer_name="worker-1",
+        session_factory=session_factory,
+    )
+
+    processed = asyncio.run(service.run_once())
+
+    assert processed == 1
+    assert [topic for topic, _ in bus.published] == [STREAM_JOB_LIFECYCLE]
+
+    db = session_factory()
+    try:
+        company = db.query(Company).one()
+        job = db.query(Job).one()
+        assert company.source_site == "ctgoodjobs"
+        assert company.source_company_id.startswith("fallback:name:")
+        assert company.company_id.startswith("ctgoodjobs:fallback:name:")
+        assert company.name == "ConnectedGroup Limited"
+        assert job.source_site == "ctgoodjobs"
+        assert job.source_job_id == "10070449"
     finally:
         db.close()

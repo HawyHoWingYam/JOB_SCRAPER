@@ -15,6 +15,21 @@ from typing import Any
 
 CTGOODJOBS_BASE_URL = "https://jobs.ctgoodjobs.hk"
 
+_STATIC_CTGOODJOBS_CATEGORY_SNAPSHOT: list[dict[str, str]] = [
+    {"id": "001", "name": "Accounting / Auditing", "slug": "accounting-auditing"},
+    {"id": "007", "name": "Banking / Finance", "slug": "banking-finance"},
+    {"id": "015", "name": "Engineering", "slug": "engineering"},
+    {"id": "018", "name": "Hotel / Catering / Club", "slug": "hotel-catering-club"},
+    {"id": "021", "name": "Information Technology", "slug": "information-technology"},
+    {"id": "022", "name": "Insurance", "slug": "insurance"},
+    {"id": "026", "name": "Marketing / Public Relations", "slug": "marketing-public-relations"},
+    {"id": "027", "name": "Medical / Pharmaceutical", "slug": "medical-pharmaceutical"},
+    {"id": "032", "name": "Property", "slug": "property"},
+    {"id": "037", "name": "Merchandising / Purchasing / Trading / Retail", "slug": "merchandising-purchasing-trading-retail"},
+    {"id": "039", "name": "Social Services", "slug": "social-services"},
+    {"id": "048", "name": "Administration", "slug": "administration"},
+]
+
 
 @dataclass(frozen=True)
 class CategoryMapping:
@@ -38,6 +53,31 @@ class CTGoodJobsCategory:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def get_static_ctgoodjobs_categories() -> list["CTGoodJobsCategory"]:
+    categories: list[CTGoodJobsCategory] = []
+    for item in _STATIC_CTGOODJOBS_CATEGORY_SNAPSHOT:
+        source_id = f"ctgoodjobs:{item['id']}"
+        mapping = CTGOODJOBS_CATEGORY_MAPPINGS.get(
+            source_id,
+            CategoryMapping("General", "taxonomy_debt", "Static fallback snapshot"),
+        )
+        categories.append(
+            CTGoodJobsCategory(
+                source_site="ctgoodjobs",
+                source_classification_id=source_id,
+                ctgoodjobs_id=item["id"],
+                name=item["name"],
+                slug=item["slug"],
+                url=f"{CTGOODJOBS_BASE_URL}/jobs/jobs-in-{item['slug']}",
+                child_count=0,
+                proposed_internal_domain=mapping.proposed_internal_domain,
+                mapping_status=mapping.mapping_status,
+                mapping_notes="Static fallback snapshot",
+            )
+        )
+    return categories
 
 
 CTGOODJOBS_CATEGORY_MAPPINGS: dict[str, CategoryMapping] = {

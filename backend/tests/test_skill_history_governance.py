@@ -596,6 +596,59 @@ def test_apply_skill_history_governance_merges_into_created_canonical_skill_with
         db.close()
 
 
+def test_audit_review_candidates_preserves_distinct_curation_keys_for_technical_symbols(tmp_path):
+    db = _build_sqlite_session()
+    try:
+        candidate_c_sharp = _create_review_candidate(
+            db,
+            "C#",
+            "c#",
+            occurrence_count=2,
+        )
+        candidate_c_plus_plus = _create_review_candidate(
+            db,
+            "C++",
+            "c++",
+            occurrence_count=1,
+        )
+        db.commit()
+
+        curations_path = _write_curations(
+            tmp_path,
+            {
+                "C#": {
+                    "action": "merge",
+                    "target": {
+                        "category": "Backend",
+                        "technology": ".NET",
+                        "skill": "C#",
+                    },
+                },
+                "C++": {
+                    "action": "generic",
+                    "generic_tag": "C++",
+                },
+            },
+            minimum_distinct_jobs=1,
+        )
+
+        report = govern_skill_review_candidates.audit_review_candidates(
+            db,
+            min_occurrence_count=1,
+            curation_path=curations_path,
+        )
+        entries = {
+            entry["review_candidate"]["normalized_name"]: entry
+            for entry in report["entries"]
+        }
+
+        assert entries[candidate_c_sharp.normalized_name]["action"] == "merge"
+        assert entries[candidate_c_plus_plus.normalized_name]["action"] == "generic"
+        assert report["summary"] == {"merge": 1, "generic": 1, "review": 0}
+    finally:
+        db.close()
+
+
 def test_apply_skill_review_candidate_governance_merges_into_created_canonical_skill(
     tmp_path,
 ):

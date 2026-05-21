@@ -52,7 +52,7 @@ The default `backend-api` image only supports the lexical search baseline. Seman
 - Crawl jobs now support explicit `crawl_mode` values: `headless` and `headed`.
 - Recommended operational defaults are source-aware:
   - `JobsDB` defaults to `headed`
-  - `CTGoodJobs` defaults to `headless`
+  - `CTGoodJobs` defaults to `headed`
 - `POST /api/v1/jobs/search` supports `lexical`, `semantic`, and `hybrid`, but the non-lexical modes require `retrieval-api`.
 - `POST /api/v1/jobs/search/export` mirrors the active retrieval mode. `semantic` and `hybrid` export require `retrieval-api`.
 - `GET /api/v1/jobs/{job_id}/similar` and `GET /api/v1/recommendations/jobs` proxy to `recommendation-api`.
@@ -80,7 +80,7 @@ Recommended profile setup:
 
 - use a dedicated browser profile directory via `JOBSDB_HEADED_BROWSER_USER_DATA_DIR`
 - pick `JOBSDB_HEADED_BROWSER_CHANNEL=msedge` or `chrome`
-- open a JobsDB detail page once in that automation profile and complete any anti-bot challenge before relying on automated headed runs
+- open a JobsDB or CTGoodJobs page once in that automation profile and complete any anti-bot challenge before relying on automated headed runs
 - keep the `.cmd` window open while you want headed JobsDB jobs to keep progressing
 - if you want a separate persistent window without blocking your current shell, use `launch_headed_crawl_worker_window.cmd`
 - only run one headed worker at a time; the host worker now holds a localhost lock port (default `47651`) and exits early if another instance is already running
@@ -89,7 +89,7 @@ Behavior notes:
 
 - `headed` crawl jobs are published onto a separate Redis stream and consumed by the host-side headed worker
 - `headless` crawl jobs continue to be consumed by the Docker `crawl-worker`
-- `CTGoodJobs` can still run in either mode from the control plane, but it does not currently require the headed worker to capture full details
+- `CTGoodJobs` can still run in either mode from the control plane, but the current default is `headed` because its listing/detail pages can also present human-verification interstitials to automated sessions
 
 ## JobsDB Detail Repair
 

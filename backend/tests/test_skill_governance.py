@@ -199,6 +199,48 @@ def test_skill_normalizer_preserves_distinct_review_candidate_keys_for_technical
         db.close()
 
 
+def test_skill_normalizer_does_not_match_c_plus_plus_to_existing_c_sharp():
+    db = _build_sqlite_session()
+    try:
+        backend = SkillCategory(
+            id=uuid.uuid4(),
+            name="Backend",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        dotnet = SkillTechnology(
+            id=uuid.uuid4(),
+            category_id=backend.id,
+            name=".NET",
+            created_by="seed",
+            is_auto_created=False,
+        )
+        c_sharp = Skill(
+            id=uuid.uuid4(),
+            technology_id=dotnet.id,
+            name="C#",
+            aliases=None,
+            created_by="seed",
+            is_auto_created=False,
+        )
+        db.add(backend)
+        db.add(dotnet)
+        db.add(c_sharp)
+        db.commit()
+
+        normalizer = SkillNormalizer(db)
+
+        result = normalizer.resolve_extracted_skill(
+            {"name": "C++", "kind": "technical", "resolution": "unresolved"}
+        )
+
+        assert result["action"] == "review_candidate"
+        assert result["raw_name"] == "C++"
+        assert normalizer.normalize_review_candidate_key(result["normalized_name"]) == "c++"
+    finally:
+        db.close()
+
+
 def test_skill_normalizer_preserves_non_ascii_review_candidate_keys():
     from app.models.skill_review_candidate import SkillReviewCandidate
 

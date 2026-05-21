@@ -21,6 +21,7 @@ from app.messaging.event_envelope import build_event_envelope
 from app.messaging.topics import STREAM_CRAWL_PROGRESS, STREAM_JOB_LIFECYCLE
 from app.models import AppRuntimeSettings, CrawlJob, EnrichmentRun, EnrichmentRunItem, EventOutbox, Job
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
+from app.services.enrichment_run_service import EnrichmentRunService
 
 
 @dataclass
@@ -265,3 +266,62 @@ def test_enrichment_worker_aggregates_crawl_auto_run_and_executes_after_dispatch
         assert [item.status for item in items] == ["completed", "completed"]
     finally:
         db.close()
+
+
+def test_enrichment_worker_acks_late_job_ingested_for_terminal_crawl_auto_run():
+    from app.workers.run_enrichment_worker import EnrichmentWorkerService
+
+    session_factory = _build_sqlite_session_factory()
+    crawl_job_id = str(uuid.uuid4())
+    _create_crawl_job(
+        session_factory,
+        crawl_job_id=crawl_job_id,
+        status="completed",
+        metrics={"items_emitted": 2, "ingest_items_seen": 2},
+    )
+
+    db = session_factory()
+    try:
+        original_job = _create_job(
+            db,
+            title="Original Worker Auto Job",
+            created_at=datetime(2026, 5, 5, 15, 0, 0),
+        )
+        late_job = _create_job(
+            db,
+            title="Late Worker Auto Job",
+            created_at=datetime(2026, 5, 5, 15, 1, 0),
+        )
+        append_result = EnrichmentRunService(db).append_job_to_crawl_auto_run(
+            crawl_job_id=crawl_job_id,
+            job_id=str(original_job.id),
+        )
+        append_result.run.status = "failed"
+        db.commit()
+        late_job_id = late_job.id
+    finally:
+        db.close()
+
+    bus = FakeBus(
+        {
+            STREAM_JOB_LIFECYCLE: [
+                _job_ingested_message(
+                    message_id="1-0",
+                    crawl_job_id=crawl_job_id,
+                    job_id=late_job_id,
+                ),
+            ],
+            STREAM_CRAWL_PROGRESS: [],
+        }
+    )
+    service = EnrichmentWorkerService(
+        bus=bus,
+        session_factory=session_factory,
+        enrichment_service=RecordingEnrichmentService(),
+    )
+
+    processed = asyncio.run(service.run_once())
+
+    assert processed == 1
+    assert bus.acked == [(STREAM_JOB_LIFECYCLE, "enrichment-workers", "1-0")]
+    assert bus.published == []

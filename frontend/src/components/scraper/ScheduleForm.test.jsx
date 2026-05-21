@@ -44,9 +44,11 @@ describe('ScheduleForm', () => {
     expect(onSubmit).toHaveBeenCalledWith({
       name: 'Nightly scrape',
       cron_expression: '0 2 * * *',
+      crawl_phase: 'listing',
       crawl_mode: 'headed',
       category_ids: [],
       max_pages: 5,
+      detail_limit: 100,
     });
   });
 
@@ -102,9 +104,11 @@ describe('ScheduleForm', () => {
     expect(onSubmit).toHaveBeenLastCalledWith({
       name: 'JobsDB Manual',
       cron_expression: '0 2 * * *',
+      crawl_phase: 'listing',
       crawl_mode: 'headless',
       category_ids: [],
       max_pages: 3,
+      detail_limit: 100,
     });
 
     rerender(
@@ -119,5 +123,39 @@ describe('ScheduleForm', () => {
     );
 
     expect(screen.getByRole('combobox', { name: /crawl mode/i })).toHaveValue('headed');
+  });
+
+  it('submits detail schedules with detail_limit and phase metadata', () => {
+    const onSubmit = vi.fn();
+
+    render(
+      <ScheduleForm
+        categories={JOBSDB_CATEGORIES}
+        sourceSite="jobsdb"
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        onSourceScopedDirtyChange={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'Detail backlog' },
+    });
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '250' } });
+    fireEvent.click(screen.getByRole('button', { name: /create automation/i }));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      name: 'Detail backlog',
+      cron_expression: '0 2 * * *',
+      crawl_phase: 'detail',
+      crawl_mode: 'headed',
+      category_ids: [],
+      max_pages: 3,
+      detail_limit: 250,
+    });
   });
 });

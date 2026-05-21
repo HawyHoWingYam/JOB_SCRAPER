@@ -227,6 +227,7 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
     const {
         crawl_job_id,
         status,
+        operator_state,
         source_site,
         category_name,
         crawl_mode,
@@ -248,6 +249,8 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
         // Phase 4
         jobs_saved = 0,
         save_total = 0,
+        listings_staged = 0,
+        detail_pending = 0,
         // Phase 5
         ai_run_id,
         ai_completed_items = 0,
@@ -369,6 +372,8 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
     const aiTotalItems = ai_total_items || save_total || jobs_saved || total_jobs || jobs_scraped || aiProcessedItems;
     const effectiveDetailIndex = detail_job_index || jobs_scraped;
     const effectiveDetailTotal = detail_job_total || total_jobs;
+    const hasDownstreamBacklog = operator_state === 'completed_with_downstream_backlog'
+        || operator_state === 'stale_downstream_backlog';
 
     if (status === 'queued') {
         percentage = 0;
@@ -408,7 +413,15 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
         }
     }
 
-    if (status === 'completed' && (phase === 5 || ai_run_id)) {
+    if (hasDownstreamBacklog) {
+        const ingestTotal = save_total || jobs_scraped || listings_staged || total_jobs;
+        percentage = 100;
+        statusText = 'Downstream Backlog';
+        detailText = `${jobs_saved}/${ingestTotal || '?'} ingested`;
+        if (detail_pending > 0) {
+            secondaryText = `${detail_pending} details pending`;
+        }
+    } else if (status === 'completed' && (phase === 5 || ai_run_id)) {
         percentage = 100;
         statusText = 'Completed';
         detailText = ai_failed_items > 0
@@ -444,7 +457,9 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
     const etaLabel = formatTime(eta_seconds);
 
     const statusClass =
-        status === 'completed'
+        hasDownstreamBacklog
+            ? 'warning'
+        : status === 'completed'
             ? 'success'
             : status === 'failed'
               ? 'error'

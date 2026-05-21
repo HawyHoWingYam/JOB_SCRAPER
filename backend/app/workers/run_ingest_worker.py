@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from dataclasses import dataclass
@@ -10,9 +11,11 @@ from typing import Any
 from app.config import settings
 from app.database import SessionLocal
 from app.logging_config import configure_logging
+from app.messaging.event_envelope import build_event_envelope
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.redis_stream_bus import RedisStreamBus, StreamMessage
-from app.messaging.topics import STREAM_JOB_INGEST, STREAM_JOB_LIFECYCLE
+from app.messaging.topics import STREAM_JOB_INGEST, STREAM_JOB_INGEST_DEAD_LETTER, STREAM_JOB_LIFECYCLE
+from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
@@ -39,6 +42,12 @@ class IngestActionResult:
     source_job_id: str
 
 
+class InvalidIngestPayloadError(ValueError):
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
 class IngestWorkerService:
     def __init__(
         self,
@@ -47,6 +56,7 @@ class IngestWorkerService:
         outbox_publisher: OutboxPublisher | None = None,
         group_name: str = "ingest-workers",
         consumer_name: str = "ingest-worker",
+        crawl_job_listing_repository: CrawlJobListingRepository | None = None,
         company_repository: CompanyRepository | None = None,
         crawl_job_repository: CrawlJobRepository | None = None,
         event_outbox_repository: EventOutboxRepository | None = None,
@@ -57,6 +67,7 @@ class IngestWorkerService:
         self.outbox_publisher = outbox_publisher or OutboxPublisher(stream_bus=self.bus)
         self.group_name = group_name
         self.consumer_name = consumer_name
+        self.crawl_job_listing_repository = crawl_job_listing_repository or CrawlJobListingRepository()
         self.company_repository = company_repository or CompanyRepository()
         self.crawl_job_repository = crawl_job_repository or CrawlJobRepository()
         self.event_outbox_repository = event_outbox_repository or EventOutboxRepository()
@@ -93,6 +104,16 @@ class IngestWorkerService:
                 result.source_job_id,
                 result.action,
             )
+        except InvalidIngestPayloadError as exc:
+            db.rollback()
+            self._record_ingest_failure(db, event, exc)
+            db.commit()
+            self._publish_dead_letter(message, exc)
+            logger.warning(
+                "ingest worker dead-lettered event_id=%s reason=%s",
+                getattr(event, "event_id", None),
+                exc.reason,
+            )
         except Exception:
             db.rollback()
             logger.exception("ingest worker failed for event_id=%s", getattr(event, "event_id", None))
@@ -103,7 +124,8 @@ class IngestWorkerService:
         self.bus.ack(STREAM_JOB_INGEST, self.group_name, message.message_id)
 
     def _persist_event(self, db, event) -> IngestActionResult:
-        canonical_job, crawl_job_id = self._extract_canonical_job(event)
+        canonical_job, crawl_job_id, listing_id = self._extract_canonical_job(event)
+        self._validate_canonical_job(canonical_job)
         source_site = normalize_source_site(canonical_job["source_site"])
         source_job_id = str(canonical_job["source_job_id"]).strip()
 
@@ -120,6 +142,13 @@ class IngestWorkerService:
             job_data,
             auto_commit=False,
         )
+        if listing_id is not None:
+            self.crawl_job_listing_repository.attach_published_job(
+                db,
+                listing_id=uuid.UUID(listing_id),
+                published_job_id=job.id,
+                auto_commit=False,
+            )
 
         if crawl_job_id is not None:
             metrics_delta = {"ingest_items_seen": 1}
@@ -165,7 +194,7 @@ class IngestWorkerService:
             source_job_id=source_job_id,
         )
 
-    def _extract_canonical_job(self, event) -> tuple[dict[str, Any], str | None]:
+    def _extract_canonical_job(self, event) -> tuple[dict[str, Any], str | None, str | None]:
         payload = dict(event.payload or {})
         if isinstance(payload.get("job"), dict):
             canonical_job = dict(payload["job"])
@@ -173,11 +202,35 @@ class IngestWorkerService:
         else:
             canonical_job = payload
             crawl_job_id = payload.get("crawl_job_id")
+        listing_id = payload.get("listing_id")
 
         if not canonical_job.get("source_site") and payload.get("source_site"):
             canonical_job["source_site"] = payload["source_site"]
 
-        return canonical_job, str(crawl_job_id) if crawl_job_id else None
+        return (
+            canonical_job,
+            str(crawl_job_id) if crawl_job_id else None,
+            str(listing_id) if listing_id else None,
+        )
+
+    def _validate_canonical_job(self, canonical_job: dict[str, Any]) -> None:
+        source_site = normalize_source_site(canonical_job.get("source_site"))
+        source_job_id = str(canonical_job.get("source_job_id") or "").strip()
+        if not source_site:
+            raise InvalidIngestPayloadError("missing_source_site", "Missing source_site")
+        if not source_job_id:
+            raise InvalidIngestPayloadError("missing_source_job_id", "Missing source_job_id")
+
+        raw_data = canonical_job.get("raw_data")
+        raw_errors = raw_data.get("errors") if isinstance(raw_data, dict) else []
+        normalized_errors = {str(error).strip() for error in (raw_errors or []) if str(error).strip()}
+        title = str(canonical_job.get("title") or "").strip()
+        description = str(canonical_job.get("description") or "").strip()
+        if "missing_job_content" in normalized_errors or (not title and not description):
+            raise InvalidIngestPayloadError(
+                "missing_job_content",
+                f"Missing job content for source_site={source_site} source_job_id={source_job_id}",
+            )
 
     def _build_company_data(self, canonical_job: dict[str, Any]) -> dict[str, Any]:
         source_site = normalize_source_site(canonical_job.get("source_site"))
@@ -185,10 +238,18 @@ class IngestWorkerService:
             source_site,
             canonical_job.get("raw_data"),
         )
+        company_name = str(canonical_job.get("company_name") or "").strip()
         if not source_company_id:
-            raise ValueError(f"Missing source company id for source_site={source_site}")
+            if not company_name:
+                raise InvalidIngestPayloadError(
+                    "missing_company_identity",
+                    f"Missing source company id and company name for source_site={source_site}",
+                )
+            source_company_id = self._derive_fallback_source_company_id(
+                source_site=source_site,
+                company_name=company_name,
+            )
 
-        company_name = str(canonical_job.get("company_name") or "").strip() or "Unknown Company"
         return {
             "source_site": source_site,
             "source_company_id": source_company_id,
@@ -199,8 +260,65 @@ class IngestWorkerService:
             "extra_data": {
                 "source_url": canonical_job.get("source_url"),
                 "raw_data": canonical_job.get("raw_data"),
+                "source_identity": "fallback_company_name"
+                if str(source_company_id).startswith("fallback:name:")
+                else "source_company_id",
             },
         }
+
+    def _derive_fallback_source_company_id(self, *, source_site: str, company_name: str) -> str:
+        normalized_company_name = " ".join(str(company_name or "").strip().lower().split())
+        digest = hashlib.sha1(f"{source_site}:{normalized_company_name}".encode("utf-8")).hexdigest()[:16]
+        return f"fallback:name:{digest}"
+
+    def _record_ingest_failure(self, db, event, exc: InvalidIngestPayloadError) -> None:
+        payload = dict(event.payload or {})
+        crawl_job_id = payload.get("crawl_job_id") or getattr(event, "aggregate_id", None)
+        if not crawl_job_id:
+            return
+
+        safe_reason = "".join(ch if ch.isalnum() else "_" for ch in exc.reason).strip("_") or "unknown"
+        try:
+            self.crawl_job_repository.increment_metrics(
+                db,
+                crawl_job_id=uuid.UUID(str(crawl_job_id)),
+                metrics_delta={
+                    "ingest_items_failed": 1,
+                    "ingest_dead_lettered": 1,
+                    f"ingest_failure_{safe_reason}": 1,
+                },
+                auto_commit=False,
+            )
+        except ValueError:
+            logger.warning("could not attach ingest failure to missing crawl_job_id=%s", crawl_job_id)
+
+    def _publish_dead_letter(self, message: StreamMessage | Any, exc: InvalidIngestPayloadError) -> None:
+        event = message.event
+        original_event = event.to_dict() if hasattr(event, "to_dict") else {
+            "event_id": getattr(event, "event_id", None),
+            "event_type": getattr(event, "event_type", None),
+            "payload": getattr(event, "payload", None),
+        }
+        payload = dict(getattr(event, "payload", None) or {})
+        envelope = build_event_envelope(
+            event_type="ingest.message_dead_lettered",
+            aggregate_type=getattr(event, "aggregate_type", "crawl_job"),
+            aggregate_id=str(getattr(event, "aggregate_id", payload.get("crawl_job_id") or "")),
+            source_service="ingest-worker",
+            payload={
+                "reason": exc.reason,
+                "error": str(exc),
+                "original_message_id": getattr(message, "message_id", None),
+                "original_event_id": getattr(event, "event_id", None),
+                "crawl_job_id": payload.get("crawl_job_id"),
+                "source_site": payload.get("source_site"),
+                "source_job_id": (payload.get("job") or {}).get("source_job_id")
+                if isinstance(payload.get("job"), dict)
+                else payload.get("source_job_id"),
+                "original_event": original_event,
+            },
+        )
+        self.bus.publish(STREAM_JOB_INGEST_DEAD_LETTER, envelope)
 
     def _build_job_data(self, canonical_job: dict[str, Any], company_id) -> dict[str, Any]:
         source_site = normalize_source_site(canonical_job.get("source_site"))

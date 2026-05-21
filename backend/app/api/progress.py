@@ -60,6 +60,17 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
     jobs_saved = _to_int(event_payload.get("jobs_saved", metrics.get("ingest_items_seen", 0)))
     save_total = _to_int(event_payload.get("save_total", jobs_scraped))
     total_jobs = _to_int(event_payload.get("total_jobs", max(job_ids_collected, jobs_scraped)))
+    listings_staged = _to_int(event_payload.get("listings_staged", metrics.get("listings_staged", 0)))
+    detail_pending = _to_int(event_payload.get("detail_pending", metrics.get("detail_pending", 0)))
+    detail_running = _to_int(event_payload.get("detail_running", metrics.get("detail_running", 0)))
+    detail_completed = _to_int(event_payload.get("detail_completed", metrics.get("detail_completed", 0)))
+    detail_failed = _to_int(event_payload.get("detail_failed", metrics.get("detail_failed", 0)))
+    detail_manual_action_required = _to_int(
+        event_payload.get(
+            "detail_manual_action_required",
+            metrics.get("detail_manual_action_required", 0),
+        )
+    )
     status = _derive_progress_status(crawl_job.status, jobs_scraped=jobs_scraped, jobs_saved=jobs_saved)
     phase = _derive_progress_phase(
         crawl_job.status,
@@ -68,10 +79,19 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
         job_ids_collected=job_ids_collected,
         explicit_phase=event_payload.get("phase"),
     )
+    operator_state = _derive_operator_state(
+        status,
+        jobs_saved=jobs_saved,
+        save_total=save_total,
+        detail_pending=detail_pending,
+        detail_running=detail_running,
+        detail_manual_action_required=detail_manual_action_required,
+    )
 
     return {
         "crawl_job_id": str(crawl_job.id),
         "status": status,
+        "operator_state": operator_state,
         "phase": phase,
         "category_name": category_label,
         "category_ids": category_ids,
@@ -97,6 +117,13 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
         "total_jobs": total_jobs,
         "jobs_saved": jobs_saved,
         "save_total": save_total,
+        "jobs_ingested": jobs_saved,
+        "listings_staged": listings_staged,
+        "detail_pending": detail_pending,
+        "detail_running": detail_running,
+        "detail_completed": detail_completed,
+        "detail_failed": detail_failed,
+        "detail_manual_action_required": detail_manual_action_required,
         "jobs_classified": event_payload.get("jobs_classified", metrics.get("jobs_classified", 0)),
         "classification_total": event_payload.get(
             "classification_total",
@@ -119,8 +146,32 @@ def _to_int(value: Any) -> int:
 
 
 def _derive_progress_status(status: str, *, jobs_scraped: int, jobs_saved: int) -> str:
-    if status == "completed" and jobs_saved < jobs_scraped:
-        return "running"
+    return status
+
+
+def _derive_operator_state(
+    status: str,
+    *,
+    jobs_saved: int,
+    save_total: int,
+    detail_pending: int,
+    detail_running: int,
+    detail_manual_action_required: int,
+) -> str:
+    if status in ACTIVE_CRAWL_JOB_STATUSES:
+        return "live"
+    if status in ACTIONABLE_CRAWL_JOB_STATUSES:
+        return "manual_action_required"
+    has_downstream_backlog = (
+        (save_total > 0 and jobs_saved < save_total)
+        or detail_pending > 0
+        or detail_running > 0
+        or detail_manual_action_required > 0
+    )
+    if status == "completed" and has_downstream_backlog:
+        return "completed_with_downstream_backlog"
+    if status in TERMINAL_CRAWL_JOB_STATUSES and has_downstream_backlog:
+        return "stale_downstream_backlog"
     return status
 
 
@@ -161,13 +212,21 @@ def _is_snapshot_active(snapshot: dict[str, Any]) -> bool:
         return True
     if snapshot["status"] in ACTIONABLE_CRAWL_JOB_STATUSES:
         return True
-    return _to_int(snapshot.get("jobs_saved")) < _to_int(snapshot.get("save_total"))
+    return False
+
+
+def _is_snapshot_backlog(snapshot: dict[str, Any]) -> bool:
+    return snapshot.get("operator_state") in {
+        "completed_with_downstream_backlog",
+        "stale_downstream_backlog",
+    }
 
 
 def _collect_progress_payload() -> dict[str, Any]:
     now = utc_now()
     all_progress: dict[str, dict[str, Any]] = {}
     active_progress: dict[str, dict[str, Any]] = {}
+    backlog_progress: dict[str, dict[str, Any]] = {}
 
     db = SessionLocal()
     try:
@@ -186,22 +245,27 @@ def _collect_progress_payload() -> dict[str, Any]:
             snapshot = _build_progress_snapshot(crawl_job, latest_event, now=now)
             key = str(crawl_job.id)
             is_active = _is_snapshot_active(snapshot)
+            is_backlog = _is_snapshot_backlog(snapshot)
             is_recent_terminal = (
                 crawl_job.status in TERMINAL_CRAWL_JOB_STATUSES
                 and crawl_job.updated_at is not None
                 and now - crawl_job.updated_at <= RECENT_TERMINAL_WINDOW
             )
-            if is_active or is_recent_terminal:
+            if is_active or is_recent_terminal or is_backlog:
                 all_progress[key] = snapshot
             if is_active:
                 active_progress[key] = snapshot
+            if is_backlog:
+                backlog_progress[key] = snapshot
     finally:
         db.close()
 
     return {
         "active": active_progress,
         "all": all_progress,
+        "backlog": backlog_progress,
         "has_active": len(active_progress) > 0,
+        "has_backlog": len(backlog_progress) > 0,
     }
 
 

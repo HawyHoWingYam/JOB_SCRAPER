@@ -2,6 +2,7 @@ STREAM_CRAWL_COMMANDS = "stream.crawl.commands"
 STREAM_CRAWL_COMMANDS_HEADED = "stream.crawl.commands.headed"
 STREAM_CRAWL_PROGRESS = "stream.crawl.progress"
 STREAM_JOB_INGEST = "stream.job.ingest"
+STREAM_JOB_INGEST_DEAD_LETTER = "stream.job.ingest.dead_letter"
 STREAM_JOB_LIFECYCLE = "stream.job.lifecycle"
 STREAM_JOB_EMBEDDING = "stream.job.embedding"
 
@@ -10,6 +11,7 @@ ALL_STREAM_TOPICS = {
     STREAM_CRAWL_COMMANDS_HEADED,
     STREAM_CRAWL_PROGRESS,
     STREAM_JOB_INGEST,
+    STREAM_JOB_INGEST_DEAD_LETTER,
     STREAM_JOB_LIFECYCLE,
     STREAM_JOB_EMBEDDING,
 }

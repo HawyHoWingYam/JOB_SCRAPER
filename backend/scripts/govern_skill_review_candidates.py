@@ -20,11 +20,10 @@ from app.database import SessionLocal
 from app.models import Job, JobSkillMention, SkillReviewCandidate
 from app.repositories.job_skill_repository import JobSkillRepository
 from app.services.skill_recommendation_service import SkillRecommendationService
-from app.services.skill_normalizer import SkillNormalizer
+from app.services.skill_normalizer import SkillNormalizer, normalize_exact_skill_key
 from scripts.govern_skill_history import (
     _ensure_target_skill,
     load_backfill_curations,
-    normalize_lookup_key,
     rebuild_skill_taxonomy_metrics,
 )
 
@@ -55,7 +54,7 @@ def audit_review_candidates(
     entries = []
     summary = {"merge": 0, "generic": 0, "review": 0}
     for candidate in candidates:
-        key = normalize_lookup_key(candidate.normalized_name or candidate.raw_name)
+        key = normalize_exact_skill_key(candidate.normalized_name or candidate.raw_name)
         curation = dict(curations["entries"].get(key) or {})
         action = str(curation.get("action") or "review").strip()
         entry = {
@@ -66,7 +65,10 @@ def audit_review_candidates(
                 "normalized_name": candidate.normalized_name,
                 "occurrence_count": int(candidate.occurrence_count or 0),
             },
-            "cluster_id": cluster_ids.get(candidate.normalized_name, normalize_lookup_key(candidate.normalized_name or candidate.raw_name)),
+            "cluster_id": cluster_ids.get(
+                candidate.normalized_name,
+                normalize_exact_skill_key(candidate.normalized_name or candidate.raw_name),
+            ),
             "recommendations": recommendation_service.recommend_for_candidate(candidate),
         }
         if action == "merge":

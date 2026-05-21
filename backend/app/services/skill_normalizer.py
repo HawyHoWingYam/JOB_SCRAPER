@@ -20,6 +20,29 @@ def _data_path(filename: str) -> Path:
     return Path(__file__).resolve().parents[1] / "data" / filename
 
 
+def normalize_unicode_text(value: str) -> str:
+    text = str(value or "").strip()
+    for dash in ("\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"):
+        text = text.replace(dash, "-")
+    return re.sub(r"\s+", " ", text)
+
+
+def normalize_lookup_key(value: str) -> str:
+    text = normalize_unicode_text(value).lower().strip()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_exact_skill_key(value: str) -> str:
+    text = normalize_unicode_text(value).lower().strip()
+    text = re.sub(r"[^a-z0-9+#./\-\s]+", " ", text)
+    text = re.sub(r"\s*([+#./-])\s*", r"\1", text)
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if normalized:
+        return normalized
+    return normalize_unicode_text(value).lower().strip()
+
+
 class SkillNormalizer:
     _ROLE_MODE_CANONICAL_OVERRIDES = {
         "product_ba_support": {
@@ -49,6 +72,7 @@ class SkillNormalizer:
         self.db = db
         self._rules = self._load_rules()
         self._skill_cache: Dict[str, uuid.UUID] = {}
+        self._exact_skill_cache: Dict[str, uuid.UUID] = {}
         self._normalized_skill_cache: Dict[str, uuid.UUID] = {}
         self._load_cache()
 
@@ -69,7 +93,7 @@ class SkillNormalizer:
 
         alias_map = {}
         for raw_key, canonical_name in rules.get("canonical_aliases", {}).items():
-            alias_map[self._normalize_lookup_key(raw_key)] = canonical_name
+            alias_map[normalize_exact_skill_key(raw_key)] = canonical_name
         rules["canonical_alias_lookup"] = alias_map
 
         review_only_terms = rules.get("review_only_terms", [])
@@ -99,6 +123,7 @@ class SkillNormalizer:
     def _load_cache(self):
         """Load all skills with aliases into memory cache."""
         self._skill_cache.clear()
+        self._exact_skill_cache.clear()
         self._normalized_skill_cache.clear()
 
         skills = self.db.query(Skill).all()
@@ -130,37 +155,30 @@ class SkillNormalizer:
         if key:
             self._skill_cache[key] = skill_id
 
+        exact_key = normalize_exact_skill_key(value)
+        if exact_key:
+            self._exact_skill_cache[exact_key] = skill_id
+
         normalized_key = self._normalize_lookup_key(value)
         if normalized_key:
             self._normalized_skill_cache[normalized_key] = skill_id
 
     def _normalize_lookup_key(self, value: str) -> str:
-        text = self._normalize_unicode(value).lower().strip()
-        text = re.sub(r"[^a-z0-9]+", " ", text)
-        return re.sub(r"\s+", " ", text).strip()
+        return normalize_lookup_key(value)
 
     def normalize_review_candidate_key(self, value: str) -> str:
-        text = self._normalize_unicode(value).lower().strip()
-        text = re.sub(r"[^a-z0-9+#./\-\s]+", " ", text)
-        text = re.sub(r"\s*([+#./-])\s*", r"\1", text)
-        normalized = re.sub(r"\s+", " ", text).strip()
-        if normalized:
-            return normalized
-        return self._normalize_unicode(value).lower().strip()
+        return normalize_exact_skill_key(value)
 
     def normalize_generic_tag_key(self, value: str) -> str:
         return self._normalize_lookup_key(value)
 
     def _normalize_unicode(self, value: str) -> str:
-        text = str(value or "").strip()
-        for dash in ("\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"):
-            text = text.replace(dash, "-")
-        return re.sub(r"\s+", " ", text)
+        return normalize_unicode_text(value)
 
     def _canonicalize_name(self, name: str) -> str:
         normalized = self._normalize_unicode(name)
         alias_lookup = self._rules.get("canonical_alias_lookup", {})
-        alias_hit = alias_lookup.get(self._normalize_lookup_key(normalized))
+        alias_hit = alias_lookup.get(normalize_exact_skill_key(normalized))
         return alias_hit or normalized
 
     def canonicalize_generic_tag(self, value: str) -> Optional[str]:
@@ -210,16 +228,16 @@ class SkillNormalizer:
         raw_key = name.lower().strip()
         skill_id = self._skill_cache.get(raw_key)
         if skill_id is None:
-            normalized_key = self._normalize_lookup_key(name)
-            skill_id = self._normalized_skill_cache.get(normalized_key)
+            normalized_key = normalize_exact_skill_key(name)
+            skill_id = self._exact_skill_cache.get(normalized_key)
         if skill_id is None:
             return None
         return self.db.query(Skill).filter_by(id=skill_id).first()
 
     def _find_non_polluted_duplicate_for_key(self, name: str) -> Optional[Skill]:
         raw_key = name.lower().strip()
-        normalized_key = self._normalize_lookup_key(name)
-        if not raw_key and not normalized_key:
+        exact_key = normalize_exact_skill_key(name)
+        if not raw_key and not exact_key:
             return None
 
         for skill in self.db.query(Skill).all():
@@ -228,13 +246,13 @@ class SkillNormalizer:
 
             keys = {
                 skill.name.lower().strip(),
-                self._normalize_lookup_key(skill.name),
+                normalize_exact_skill_key(skill.name),
             }
             for alias in self._coerce_aliases(skill.aliases):
-                    keys.add(alias.lower().strip())
-                    keys.add(self._normalize_lookup_key(alias))
+                keys.add(alias.lower().strip())
+                keys.add(normalize_exact_skill_key(alias))
 
-            if raw_key in keys or normalized_key in keys:
+            if raw_key in keys or exact_key in keys:
                 return skill
 
         return None
@@ -384,14 +402,20 @@ class SkillNormalizer:
 
     def _fuzzy_match(self, name: str) -> Optional[Skill]:
         """Find a high-confidence fuzzy match among normalized names only."""
-        normalized_name = self._normalize_lookup_key(name)
+        exact_name = normalize_exact_skill_key(name)
+        broad_name = self._normalize_lookup_key(name)
+        symbol_sensitive = exact_name != broad_name and any(
+            token in exact_name for token in "+#./-"
+        )
+        normalized_name = exact_name if symbol_sensitive else broad_name
         if not normalized_name:
             return None
 
         best_ratio = 0.0
         best_id = None
+        cache = self._exact_skill_cache if symbol_sensitive else self._normalized_skill_cache
 
-        for cached_name, skill_id in self._normalized_skill_cache.items():
+        for cached_name, skill_id in cache.items():
             ratio = SequenceMatcher(None, normalized_name, cached_name).ratio()
             if ratio > 0.93 and ratio > best_ratio:
                 matched_skill = self.db.query(Skill).filter_by(id=skill_id).first()

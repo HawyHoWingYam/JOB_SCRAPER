@@ -16,6 +16,8 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
     with db_engine.begin() as connection:
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_mode VARCHAR(32)"))
+        connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_phase VARCHAR(32)"))
+        connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS detail_limit INTEGER"))
         connection.execute(
             text(
                 "UPDATE scrape_schedules "
@@ -25,6 +27,8 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
                 "WHERE crawl_mode IS NULL"
             )
         )
+        connection.execute(text("UPDATE scrape_schedules SET crawl_phase = 'listing' WHERE crawl_phase IS NULL"))
+        connection.execute(text("UPDATE scrape_schedules SET detail_limit = 100 WHERE detail_limit IS NULL"))
 
     metadata.create_all(bind=db_engine)
 

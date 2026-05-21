@@ -167,6 +167,8 @@ function ScheduleManager({ onNavigateToAI }) {
     // State
     const [schedules, setSchedules] = useState([]);
     const [categories, setCategories] = useState([]);
+    const [operatorHealth, setOperatorHealth] = useState(null);
+    const [listingBatches, setListingBatches] = useState([]);
     const [currentSourceSite, setCurrentSourceSite] = useState('jobsdb');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -226,6 +228,35 @@ function ScheduleManager({ onNavigateToAI }) {
             console.error('Failed to fetch categories:', err);
             setCategories([]);
             setError(err.message);
+        }
+    }, []);
+
+    const fetchOperatorHealth = useCallback(async () => {
+        try {
+            const response = await fetch(`${API_URL}/health`);
+            if (!response.ok) {
+                return;
+            }
+            const data = await response.json();
+            setOperatorHealth(data.operator || null);
+        } catch (err) {
+            console.error('Failed to fetch operator health:', err);
+        }
+    }, []);
+
+    const fetchListingBatches = useCallback(async (sourceSite) => {
+        try {
+            const response = await fetch(
+                `${API_BASE}/crawl-jobs/listing-batches?source_site=${encodeURIComponent(sourceSite)}&limit=20`
+            );
+            if (!response.ok) {
+                throw new Error('Failed to load listing batches');
+            }
+            const data = await response.json();
+            setListingBatches(Array.isArray(data.batches) ? data.batches : []);
+        } catch (err) {
+            console.error('Failed to fetch listing batches:', err);
+            setListingBatches([]);
         }
     }, []);
 
@@ -360,8 +391,17 @@ function ScheduleManager({ onNavigateToAI }) {
     useEffect(() => {
         fetchSchedules();
         fetchCategories(currentSourceSite);
+        fetchOperatorHealth();
         bootstrapProgressPanel();
-    }, [bootstrapProgressPanel, currentSourceSite, fetchCategories, fetchSchedules]);
+    }, [bootstrapProgressPanel, currentSourceSite, fetchCategories, fetchOperatorHealth, fetchSchedules]);
+
+    useEffect(() => {
+        if (!showImmediateScrape || immediateForm.crawl_phase !== 'detail') {
+            return;
+        }
+
+        fetchListingBatches(currentSourceSite);
+    }, [currentSourceSite, fetchListingBatches, immediateForm.crawl_phase, showImmediateScrape]);
 
     // Create schedule
     const handleCreate = async (formData) => {
@@ -537,6 +577,7 @@ function ScheduleManager({ onNavigateToAI }) {
             crawl_phase: resolveDefaultCrawlPhase(),
             crawl_mode: resolveDefaultCrawlMode(nextSourceSite),
             category_ids: [],
+            source_listing_crawl_job_id: '',
         }));
     };
 
@@ -582,6 +623,20 @@ function ScheduleManager({ onNavigateToAI }) {
                     ))}
                 </select>
             </div>
+
+            {operatorHealth && operatorHealth.status !== 'healthy' && (
+                <div className="operator-health-banner glass-panel">
+                    <AlertTriangle size={20} />
+                    <div>
+                        <strong>Pipeline attention required</strong>
+                        <div className="operator-health-issues">
+                            {(operatorHealth.issues || []).slice(0, 3).map((issue) => (
+                                <span key={issue}>{issue}</span>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {error && (
                 <div className="error-banner glass-panel">
@@ -641,6 +696,9 @@ function ScheduleManager({ onNavigateToAI }) {
                             onChange={(e) => setImmediateForm(prev => ({
                                 ...prev,
                                 crawl_phase: e.target.value,
+                                source_listing_crawl_job_id: e.target.value === 'detail'
+                                    ? prev.source_listing_crawl_job_id
+                                    : '',
                             }))}
                         >
                             {CRAWL_PHASE_OPTIONS.map((option) => (
@@ -705,18 +763,23 @@ function ScheduleManager({ onNavigateToAI }) {
 
                     {immediateForm.crawl_phase === 'detail' && (
                         <div className="cyber-form-group">
-                            <label htmlFor="source-listing-crawl-job-id">Source Listing Crawl Job ID</label>
-                            <input
+                            <label htmlFor="source-listing-crawl-job-id">Listing Batch</label>
+                            <select
                                 id="source-listing-crawl-job-id"
-                                type="text"
-                                className="premium-input"
+                                className="premium-select"
                                 value={immediateForm.source_listing_crawl_job_id}
                                 onChange={(e) => setImmediateForm(prev => ({
                                     ...prev,
                                     source_listing_crawl_job_id: e.target.value,
                                 }))}
-                                placeholder="Optional specific listing batch"
-                            />
+                            >
+                                <option value="">Any pending listing batch</option>
+                                {listingBatches.map((batch) => (
+                                    <option key={batch.crawl_job_id} value={batch.crawl_job_id}>
+                                        {`${batch.source_site} ${batch.queued_at || batch.crawl_job_id} · ${batch.detail_pending || 0} pending / ${batch.listings_staged || 0} staged`}
+                                    </option>
+                                ))}
+                            </select>
                         </div>
                     )}
 

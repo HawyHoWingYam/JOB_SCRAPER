@@ -236,6 +236,36 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
+  it('renders completed crawls with downstream backlog as a warning state', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            status: 'completed',
+            operator_state: 'completed_with_downstream_backlog',
+            category_name: 'Engineering',
+            phase: 4,
+            jobs_scraped: 96,
+            jobs_saved: 12,
+            save_total: 96,
+            listings_staged: 96,
+            detail_pending: 74,
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/downstream backlog/i)).toBeInTheDocument();
+    expect(screen.getByText(/12\/96 ingested/i)).toBeInTheDocument();
+    expect(screen.getByText(/74 details pending/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
   it('renders manual action guidance and resumes the blocked crawl job from SSE progress', async () => {
     const writeText = vi.fn();
     Object.defineProperty(Object.getPrototypeOf(window.navigator), 'clipboard', {

@@ -9,6 +9,7 @@ Task 2 scope:
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -16,9 +17,10 @@ from typing import Any, Literal
 from app.scraper.categories import get_all_categories
 from app.scraper.ctgoodjobs.category_registry import (
     CTGOODJOBS_BASE_URL,
+    get_static_ctgoodjobs_categories,
     parse_category_registry,
 )
-from app.scraper.ctgoodjobs.research_probe import HttpxHtmlClient
+from app.scraper.ctgoodjobs.list_scraper import fetch_category_page_html
 
 SourceSite = Literal["jobsdb", "ctgoodjobs"]
 
@@ -33,16 +35,7 @@ def _fetch_ctgoodjobs_registry_html() -> str:
     Kept as a standalone function so tests can monkeypatch it to avoid network.
     """
 
-    client = HttpxHtmlClient(timeout_s=20.0)
-    try:
-        resp = client.get(f"{CTGOODJOBS_BASE_URL}/jobs")
-        status_code = getattr(resp, "status_code", None)
-        if status_code != 200:
-            raise RuntimeError(f"CTgoodjobs registry fetch returned status_code={status_code}")
-        text = getattr(resp, "text", "")
-        return text if isinstance(text, str) else ""
-    finally:
-        client.close()
+    return asyncio.run(fetch_category_page_html(f"{CTGOODJOBS_BASE_URL}/jobs"))
 
 
 @dataclass
@@ -66,6 +59,7 @@ class _TtlCache:
 class SourceCategoryRegistry:
     def __init__(self, *, ctgoodjobs_ttl_s: float = 60.0 * 60.0):
         self._ctgoodjobs_cache = _TtlCache(ttl_s=ctgoodjobs_ttl_s)
+        self._ctgoodjobs_last_value: list[dict[str, Any]] | None = None
 
     def list_categories(self, *, source_site: str | None = None) -> list[dict[str, Any]]:
         normalized = _normalize_source_site(source_site)
@@ -85,13 +79,52 @@ class SourceCategoryRegistry:
             if isinstance(cached, list):
                 return cached
 
-            html = _fetch_ctgoodjobs_registry_html()
+            try:
+                html = _fetch_ctgoodjobs_registry_html()
+            except Exception:
+                if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
+                    return self._ctgoodjobs_last_value
+                payload = [
+                    {
+                        "id": category.source_classification_id,
+                        "name": category.name,
+                        "slug": category.slug,
+                        "source_site": "ctgoodjobs",
+                    }
+                    for category in get_static_ctgoodjobs_categories()
+                ]
+                self._ctgoodjobs_last_value = payload
+                return payload
             if not html.strip():
-                raise RuntimeError("CTgoodjobs registry fetch returned empty HTML")
+                if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
+                    return self._ctgoodjobs_last_value
+                payload = [
+                    {
+                        "id": category.source_classification_id,
+                        "name": category.name,
+                        "slug": category.slug,
+                        "source_site": "ctgoodjobs",
+                    }
+                    for category in get_static_ctgoodjobs_categories()
+                ]
+                self._ctgoodjobs_last_value = payload
+                return payload
 
             registry = parse_category_registry(html)
             if not registry:
-                raise RuntimeError("CTgoodjobs registry parsed to an empty registry")
+                if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
+                    return self._ctgoodjobs_last_value
+                payload = [
+                    {
+                        "id": category.source_classification_id,
+                        "name": category.name,
+                        "slug": category.slug,
+                        "source_site": "ctgoodjobs",
+                    }
+                    for category in get_static_ctgoodjobs_categories()
+                ]
+                self._ctgoodjobs_last_value = payload
+                return payload
 
             payload = [
                 {
@@ -106,6 +139,7 @@ class SourceCategoryRegistry:
                 # Defensive: don't cache/return an "empty success" payload.
                 raise RuntimeError("CTgoodjobs registry produced empty payload")
             self._ctgoodjobs_cache.set(payload)
+            self._ctgoodjobs_last_value = payload
             return payload
 
         raise ValueError(f"Unsupported source_site: {normalized}")

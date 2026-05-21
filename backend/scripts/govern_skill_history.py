@@ -28,7 +28,7 @@ from app.models import (
     SkillTechnology,
 )
 from app.repositories.job_skill_mention_repository import JobSkillMentionRepository
-from app.services.skill_normalizer import SkillNormalizer
+from app.services.skill_normalizer import SkillNormalizer, normalize_exact_skill_key
 from app.utils.skill_taxonomy_policy import polluted_other_general_clause
 
 
@@ -86,7 +86,7 @@ def load_backfill_curations(path: str | Path | None = None) -> dict[str, Any]:
         action = str((config or {}).get("action") or "").strip()
         if action not in {"merge", "generic", "review"}:
             raise ValueError(f"Unsupported curation action for '{raw_key}': {action}")
-        normalized_entries[normalize_lookup_key(raw_key)] = dict(config)
+        normalized_entries[normalize_exact_skill_key(raw_key)] = dict(config)
 
     return {
         "path": str(curation_path),
@@ -182,7 +182,7 @@ def _classify_skill_row(
     normalizer: SkillNormalizer,
 ) -> dict[str, Any]:
     source_name = row["skill_name"]
-    normalized_name = normalize_lookup_key(source_name)
+    normalized_name = normalize_exact_skill_key(source_name)
     curation = dict(curations["entries"].get(normalized_name) or {})
 
     if not curation and int(row["distinct_jobs"] or 0) <= 1 and _looks_phrase_like(source_name):

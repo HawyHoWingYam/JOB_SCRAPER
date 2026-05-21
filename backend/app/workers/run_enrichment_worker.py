@@ -82,11 +82,19 @@ class EnrichmentWorkerService:
                 job_id = payload.get("job_id")
                 if crawl_job_id and job_id:
                     service = EnrichmentRunService(db)
-                    service.append_job_to_crawl_auto_run(
+                    append_result = service.append_job_to_crawl_auto_run(
                         crawl_job_id=str(crawl_job_id),
                         job_id=str(job_id),
                     )
-                    service.request_crawl_auto_run_if_ready(str(crawl_job_id))
+                    if append_result.action == "skipped_terminal":
+                        logger.info(
+                            "skipped late job.ingested for terminal crawl_auto run_id=%s crawl_job_id=%s reason=%s",
+                            append_result.run.id,
+                            crawl_job_id,
+                            append_result.skipped_reason,
+                        )
+                    else:
+                        service.request_crawl_auto_run_if_ready(str(crawl_job_id))
                     db.commit()
                     self.outbox_publisher.publish_pending_batch(db, limit=100)
             except Exception:

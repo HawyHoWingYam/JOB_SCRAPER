@@ -164,3 +164,77 @@ def test_record_runtime_event_merges_metrics_without_dropping_existing_keys():
         }
     finally:
         db.close()
+
+
+def test_schedule_execution_syncs_running_and_completed_save_metrics_from_crawl_job():
+    db = _build_sqlite_session()
+    try:
+        repository = CrawlJobRepository()
+        schedule = ScrapeSchedule(
+            id=uuid.uuid4(),
+            name="nightly jobsdb",
+            cron_expression="0 2 * * *",
+            timezone="Asia/Hong_Kong",
+            source_site="jobsdb",
+            category_ids=[6281],
+            max_pages=2,
+            is_active=True,
+        )
+        db.add(schedule)
+        db.commit()
+
+        crawl_job = repository.create_crawl_job(
+            db,
+            source_site="jobsdb",
+            trigger_type="manual",
+            request_payload={"category_ids": [6281], "max_pages": 2},
+            requested_by="pytest",
+            schedule_id=schedule.id,
+        )
+        execution = ScheduleExecution(
+            schedule_id=schedule.id,
+            crawl_job_id=crawl_job.id,
+            status="pending",
+        )
+        db.add(execution)
+        db.commit()
+
+        repository.record_runtime_event(
+            db,
+            crawl_job_id=crawl_job.id,
+            status="running",
+            event_type="crawl.page_processed",
+            payload={"current_page": 2, "total_pages": 2, "job_ids_collected": 3},
+            metrics={"pages_processed": 2, "job_ids_collected": 3},
+        )
+        repository.increment_metrics(
+            db,
+            crawl_job_id=crawl_job.id,
+            metrics_delta={"items_emitted": 3},
+        )
+        repository.record_runtime_event(
+            db,
+            crawl_job_id=crawl_job.id,
+            status="completed",
+            event_type="crawl.completed",
+            payload={"status": "completed"},
+            metrics={},
+        )
+        repository.increment_metrics(
+            db,
+            crawl_job_id=crawl_job.id,
+            metrics_delta={"ingest_items_seen": 3},
+        )
+
+        db.refresh(execution)
+        assert execution.status == "completed"
+        assert execution.ids_collected == 3
+        assert execution.jobs_scraped == 3
+        assert execution.jobs_saved == 3
+        assert execution.phase1_completed is True
+        assert execution.phase2_completed is True
+        assert execution.phase4_completed is True
+        assert execution.completed_at is not None
+        assert execution.duration_seconds is not None
+    finally:
+        db.close()

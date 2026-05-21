@@ -136,6 +136,22 @@
         "skill": "Azure"
       }
     },
+    "docker": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Containers",
+        "skill": "Docker"
+      }
+    },
+    "kubernetes": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Containers",
+        "skill": "Kubernetes"
+      }
+    },
     "microsoft azure": {
       "action": "merge",
       "target": {
@@ -174,6 +190,22 @@
         "category": "DevOps",
         "technology": "Version Control",
         "skill": "Git"
+      }
+    },
+    "django": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "Python",
+        "skill": "Django"
+      }
+    },
+    "fastapi": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "Python",
+        "skill": "FastAPI"
       }
     },
     "terraform": {
@@ -256,6 +288,14 @@
         "skill": "Linux"
       }
     },
+    "mongodb": {
+      "action": "merge",
+      "target": {
+        "category": "Database",
+        "technology": "NoSQL",
+        "skill": "MongoDB"
+      }
+    },
     "api": {
       "action": "merge",
       "target": {
@@ -277,6 +317,14 @@
       "note": "Operational phrase requires manual taxonomy curation."
     },
     "windows": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "Operating Systems",
+        "skill": "Windows"
+      }
+    },
+    "microsoft windows": {
       "action": "merge",
       "target": {
         "category": "DevOps",
@@ -348,12 +396,28 @@
         "skill": "Networking"
       }
     },
+    "sql server": {
+      "action": "merge",
+      "target": {
+        "category": "Database",
+        "technology": "SQL",
+        "skill": "SQL Server"
+      }
+    },
     "business intelligence": {
       "action": "merge",
       "target": {
         "category": "Data",
         "technology": "Business Intelligence",
         "skill": "Business Intelligence"
+      }
+    },
+    "springboot": {
+      "action": "merge",
+      "target": {
+        "category": "Backend",
+        "technology": "Java",
+        "skill": "Spring Boot"
       }
     },
     "restful apis": {
@@ -370,6 +434,38 @@
         "category": "Backend",
         "technology": "API Development",
         "skill": "API Integration"
+      }
+    },
+    "jira": {
+      "action": "merge",
+      "target": {
+        "category": "Platforms",
+        "technology": "Collaboration Tools",
+        "skill": "Jira"
+      }
+    },
+    "confluence": {
+      "action": "merge",
+      "target": {
+        "category": "Platforms",
+        "technology": "Collaboration Tools",
+        "skill": "Confluence"
+      }
+    },
+    "jenkins": {
+      "action": "merge",
+      "target": {
+        "category": "DevOps",
+        "technology": "CI/CD",
+        "skill": "Jenkins"
+      }
+    },
+    "mysql": {
+      "action": "merge",
+      "target": {
+        "category": "Database",
+        "technology": "SQL",
+        "skill": "MySQL"
       }
     },
     "microsoft 365": {

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Save, X } from 'lucide-react';
 import { CRAWL_MODE_OPTIONS, resolveDefaultCrawlMode } from './crawlMode';
+import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
 
 // Cron presets
 const CRON_PRESETS = [
@@ -23,9 +24,11 @@ function ScheduleForm({
         name: '',
         cronPreset: '0 2 * * *',
         customCron: '',
+        crawlPhase: resolveDefaultCrawlPhase(),
         crawlMode: resolveDefaultCrawlMode(sourceSite),
         categoryIds: [],
         maxPages: 3,
+        detailLimit: 100,
     });
 
     useEffect(() => {
@@ -63,9 +66,11 @@ function ScheduleForm({
         onSubmit({
             name: formData.name,
             cron_expression: cronExpression,
+            crawl_phase: formData.crawlPhase,
             crawl_mode: formData.crawlMode,
             category_ids: formData.categoryIds,
             max_pages: parseInt(formData.maxPages),
+            detail_limit: parseInt(formData.detailLimit),
         });
     };
 
@@ -124,6 +129,25 @@ function ScheduleForm({
             )}
 
             <div className="cyber-form-group">
+                <label htmlFor="schedule-crawl-phase">Crawl Phase</label>
+                <select
+                    id="schedule-crawl-phase"
+                    name="crawlPhase"
+                    className="premium-select"
+                    value={formData.crawlPhase}
+                    onChange={handleChange}
+                    disabled={isLoading}
+                    aria-label="Crawl Phase"
+                >
+                    {CRAWL_PHASE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                            {option.label}
+                        </option>
+                    ))}
+                </select>
+            </div>
+
+            <div className="cyber-form-group">
                 <label htmlFor="schedule-crawl-mode">Crawl Mode</label>
                 <select
                     id="schedule-crawl-mode"
@@ -143,15 +167,15 @@ function ScheduleForm({
             </div>
 
             <div className="cyber-form-group">
-                <label>Max Depth (Pages per Sector)</label>
+                <label>{formData.crawlPhase === 'detail' ? 'Detail Batch Size' : 'Max Depth (Pages per Sector)'}</label>
                 <input
                     type="number"
-                    name="maxPages"
+                    name={formData.crawlPhase === 'detail' ? 'detailLimit' : 'maxPages'}
                     className="premium-input w-24"
-                    value={formData.maxPages}
+                    value={formData.crawlPhase === 'detail' ? formData.detailLimit : formData.maxPages}
                     onChange={handleChange}
                     min="1"
-                    max="1000"
+                    max={formData.crawlPhase === 'detail' ? '5000' : '1000'}
                     disabled={isLoading}
                 />
             </div>

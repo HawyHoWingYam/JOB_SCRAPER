@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import case
+from sqlalchemy import case, desc, func
 from sqlalchemy.orm import Session
 
+from app.crawl_phases import resolve_crawl_phase
+from app.models.crawl_job import CrawlJob
 from app.models.crawl_job_listing import CrawlJobListing
 from app.utils.time import utc_now
 
@@ -122,6 +124,57 @@ class CrawlJobListingRepository:
             .limit(limit)
             .all()
         )
+
+    def list_listing_batches(
+        self,
+        db: Session,
+        *,
+        source_site: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        query = db.query(CrawlJob).order_by(desc(CrawlJob.queued_at), desc(CrawlJob.created_at))
+        if source_site:
+            query = query.filter(CrawlJob.source_site == str(source_site).strip().lower())
+
+        batches: list[dict[str, Any]] = []
+        for crawl_job in query.limit(max(int(limit or 20) * 5, int(limit or 20))).all():
+            request_payload = crawl_job.request_payload if isinstance(crawl_job.request_payload, dict) else {}
+            if resolve_crawl_phase(request_payload.get("crawl_phase")) != "listing":
+                continue
+
+            status_counts = {
+                str(status): int(count)
+                for status, count in (
+                    db.query(CrawlJobListing.detail_status, func.count(CrawlJobListing.id))
+                    .filter(CrawlJobListing.crawl_job_id == crawl_job.id)
+                    .group_by(CrawlJobListing.detail_status)
+                    .all()
+                )
+            }
+            listings_staged = sum(status_counts.values())
+            if listings_staged == 0:
+                continue
+
+            batches.append(
+                {
+                    "crawl_job_id": str(crawl_job.id),
+                    "source_site": crawl_job.source_site,
+                    "status": crawl_job.status,
+                    "category_ids": list(request_payload.get("category_ids") or []),
+                    "queued_at": crawl_job.queued_at.isoformat() if crawl_job.queued_at else None,
+                    "completed_at": crawl_job.completed_at.isoformat() if crawl_job.completed_at else None,
+                    "listings_staged": listings_staged,
+                    "detail_pending": status_counts.get("pending", 0),
+                    "detail_running": status_counts.get("running", 0),
+                    "detail_completed": status_counts.get("completed", 0),
+                    "detail_failed": status_counts.get("failed", 0),
+                    "detail_manual_action_required": status_counts.get("manual_action_required", 0),
+                }
+            )
+            if len(batches) >= int(limit or 20):
+                break
+
+        return batches
 
     def mark_detail_running(
         self,

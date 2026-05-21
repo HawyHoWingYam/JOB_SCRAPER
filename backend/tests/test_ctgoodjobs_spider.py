@@ -89,7 +89,7 @@ def _patch_ctgoodjobs_spider(monkeypatch, stub_client: _StubAsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_ctgoodjobs_spider_retries_registry_fetch_and_completes(monkeypatch):
+async def test_ctgoodjobs_spider_listing_phase_retries_registry_fetch_and_emits_staging_rows(monkeypatch):
     registry_url = "https://jobs.ctgoodjobs.hk/jobs"
     category_url = "https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology"
     detail_url = "https://jobs.ctgoodjobs.hk/job/1001"
@@ -118,23 +118,41 @@ async def test_ctgoodjobs_spider_retries_registry_fetch_and_completes(monkeypatc
     )
 
     page_events: list[dict] = []
-    items: list[dict] = []
+    listings: list[dict] = []
     result = await spider_module.CTGoodJobsSpider().crawl(
         crawl_job_id="crawl-1",
-        request_payload={"category_ids": ["ctgoodjobs:021"], "max_pages": 1},
+        request_payload={"category_ids": ["ctgoodjobs:021"], "max_pages": 1, "crawl_phase": "listing"},
         emit_page_processed=page_events.append,
-        emit_item_emitted=items.append,
+        emit_item_emitted=lambda payload: None,
+        emit_listing_emitted=listings.append,
     )
 
     assert result["pages_processed"] == 1
-    assert result["items_emitted"] == 1
+    assert result["items_emitted"] == 0
     assert page_events[0]["job_ids_collected"] == 1
-    assert items == [{"job_id": "ctgoodjobs:1001", "category": "Information Technology"}]
+    assert listings == [
+        {
+            "source_site": "ctgoodjobs",
+            "source_job_id": "1001",
+            "source_url": detail_url,
+            "source_classification_id": "ctgoodjobs:021",
+            "source_classification_name": "Information Technology",
+            "listing_page": 1,
+            "listing_rank": 1,
+            "listing_payload": {
+                "job_id": "1001",
+                "job_url": detail_url,
+                "category_slug": "information-technology",
+                "source_classification_id": "ctgoodjobs:021",
+                "source_classification_name": "Information Technology",
+            },
+        }
+    ]
     assert sum(1 for call in stub_client.calls if call["url"] == registry_url) == 2
 
 
 @pytest.mark.asyncio
-async def test_ctgoodjobs_spider_retries_detail_fetch_and_emits_item(monkeypatch):
+async def test_ctgoodjobs_spider_detail_phase_retries_detail_fetch_and_emits_item(monkeypatch):
     registry_url = "https://jobs.ctgoodjobs.hk/jobs"
     category_url = "https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology"
     detail_url = "https://jobs.ctgoodjobs.hk/job/1001"
@@ -146,11 +164,6 @@ async def test_ctgoodjobs_spider_retries_detail_fetch_and_emits_item(monkeypatch
         }
     )
     spider_module, category = _patch_ctgoodjobs_spider(monkeypatch, stub_client)
-    monkeypatch.setattr(
-        spider_module,
-        "parse_category_page",
-        lambda *args, **kwargs: {"job_ids": ["1001"], "job_urls": [detail_url]},
-    )
     monkeypatch.setattr(
         spider_module,
         "parse_detail_page",
@@ -165,18 +178,36 @@ async def test_ctgoodjobs_spider_retries_detail_fetch_and_emits_item(monkeypatch
     items: list[dict] = []
     result = await spider_module.CTGoodJobsSpider().crawl(
         crawl_job_id="crawl-2",
-        request_payload={"category_ids": ["ctgoodjobs:021"], "max_pages": 1},
+        request_payload={
+            "crawl_phase": "detail",
+            "detail_targets": [
+                {
+                    "listing_id": "listing-1",
+                    "source_listing_crawl_job_id": "listing-crawl-1",
+                    "source_job_id": "1001",
+                    "source_url": detail_url,
+                    "source_classification_id": "ctgoodjobs:021",
+                    "listing_payload": {"job_id": "1001"},
+                }
+            ],
+        },
         emit_page_processed=lambda payload: None,
         emit_item_emitted=items.append,
     )
 
     assert result["items_emitted"] == 1
-    assert items == [{"job_id": "ctgoodjobs:1001", "category": "Information Technology"}]
+    assert items == [
+        {
+            "listing_id": "listing-1",
+            "source_listing_crawl_job_id": "listing-crawl-1",
+            "job": {"job_id": "ctgoodjobs:1001", "category": "Information Technology"},
+        }
+    ]
     assert sum(1 for call in stub_client.calls if call["url"] == detail_url) == 2
 
 
 @pytest.mark.asyncio
-async def test_ctgoodjobs_spider_skips_detail_pages_after_retry_exhaustion(monkeypatch):
+async def test_ctgoodjobs_spider_detail_phase_marks_retry_exhaustion_as_skipped(monkeypatch):
     registry_url = "https://jobs.ctgoodjobs.hk/jobs"
     category_url = "https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology"
     detail_url_1 = "https://jobs.ctgoodjobs.hk/job/1001"
@@ -192,14 +223,6 @@ async def test_ctgoodjobs_spider_skips_detail_pages_after_retry_exhaustion(monke
     spider_module, category = _patch_ctgoodjobs_spider(monkeypatch, stub_client)
     monkeypatch.setattr(
         spider_module,
-        "parse_category_page",
-        lambda *args, **kwargs: {
-            "job_ids": ["1001", "1002"],
-            "job_urls": [detail_url_1, detail_url_2],
-        },
-    )
-    monkeypatch.setattr(
-        spider_module,
         "parse_detail_page",
         lambda *args, **kwargs: {
             "job_id": f"ctgoodjobs:{kwargs['url'].rsplit('/', 1)[-1]}",
@@ -213,35 +236,155 @@ async def test_ctgoodjobs_spider_skips_detail_pages_after_retry_exhaustion(monke
     )
 
     items: list[dict] = []
+    failed_targets: list[tuple[dict, str]] = []
     result = await spider_module.CTGoodJobsSpider().crawl(
         crawl_job_id="crawl-3",
-        request_payload={"category_ids": ["ctgoodjobs:021"], "max_pages": 1},
+        request_payload={
+            "crawl_phase": "detail",
+            "detail_targets": [
+                {
+                    "listing_id": "listing-1",
+                    "source_listing_crawl_job_id": "listing-crawl-1",
+                    "source_job_id": "1001",
+                    "source_url": detail_url_1,
+                    "source_classification_id": "ctgoodjobs:021",
+                    "listing_payload": {"job_id": "1001"},
+                },
+                {
+                    "listing_id": "listing-2",
+                    "source_listing_crawl_job_id": "listing-crawl-1",
+                    "source_job_id": "1002",
+                    "source_url": detail_url_2,
+                    "source_classification_id": "ctgoodjobs:021",
+                    "listing_payload": {"job_id": "1002"},
+                },
+            ],
+        },
         emit_page_processed=lambda payload: None,
         emit_item_emitted=items.append,
+        mark_detail_failed=lambda target, error: failed_targets.append((target, error)),
     )
 
     assert result["items_emitted"] == 1
     assert result["detail_pages_skipped"] == 1
-    assert items == [{"job_id": "ctgoodjobs:1002", "category": "Information Technology"}]
+    assert items == [
+        {
+            "listing_id": "listing-2",
+            "source_listing_crawl_job_id": "listing-crawl-1",
+            "job": {"job_id": "ctgoodjobs:1002", "category": "Information Technology"},
+        }
+    ]
+    assert failed_targets[0][0]["listing_id"] == "listing-1"
     assert sum(1 for call in stub_client.calls if call["url"] == detail_url_1) == 3
 
 
 @pytest.mark.asyncio
 async def test_ctgoodjobs_spider_raises_when_registry_fetch_exhausts_retries(monkeypatch):
     registry_url = "https://jobs.ctgoodjobs.hk/jobs"
+    category_url = "https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology"
     stub_client = _StubAsyncClient(
         {
             registry_url: [(504, "gateway timeout"), (504, "gateway timeout"), (504, "gateway timeout")],
+            category_url: [(200, "category ok")],
         }
     )
     spider_module, _category = _patch_ctgoodjobs_spider(monkeypatch, stub_client)
+    monkeypatch.setattr(
+        spider_module,
+        "parse_category_page",
+        lambda *args, **kwargs: {"job_ids": ["1001"], "job_urls": ["https://jobs.ctgoodjobs.hk/job/1001"]},
+    )
 
-    with pytest.raises(Exception, match=r"registry.*504.*https://jobs\.ctgoodjobs\.hk/jobs"):
-        await spider_module.CTGoodJobsSpider().crawl(
-            crawl_job_id="crawl-4",
-            request_payload={"category_ids": ["ctgoodjobs:021"], "max_pages": 1},
-            emit_page_processed=lambda payload: None,
-            emit_item_emitted=lambda item: None,
-        )
+    emitted_listings = []
+    result = await spider_module.CTGoodJobsSpider().crawl(
+        crawl_job_id="crawl-4",
+        request_payload={"category_ids": ["ctgoodjobs:021"], "max_pages": 1, "crawl_phase": "listing"},
+        emit_page_processed=lambda payload: None,
+        emit_item_emitted=lambda item: None,
+        emit_listing_emitted=emitted_listings.append,
+    )
 
+    assert result["pages_processed"] == 1
+    assert emitted_listings[0]["source_classification_id"] == "ctgoodjobs:021"
     assert sum(1 for call in stub_client.calls if call["url"] == registry_url) == 3
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_spider_listing_phase_fetches_oldest_pages_first(monkeypatch):
+    registry_url = "https://jobs.ctgoodjobs.hk/jobs"
+    category_url = "https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology"
+    page_2_url = f"{category_url}?page=2"
+    detail_url_1 = "https://jobs.ctgoodjobs.hk/job/1001"
+    detail_url_2 = "https://jobs.ctgoodjobs.hk/job/1002"
+    stub_client = _StubAsyncClient(
+        {
+            registry_url: [(200, "registry ok")],
+            category_url: [(200, "category page 1")],
+            page_2_url: [(200, "category page 2")],
+            detail_url_1: [(200, "detail 1")],
+            detail_url_2: [(200, "detail 2")],
+        }
+    )
+    spider_module, category = _patch_ctgoodjobs_spider(monkeypatch, stub_client)
+    monkeypatch.setattr(
+        spider_module,
+        "parse_category_page",
+        lambda *args, **kwargs: (
+            {"job_ids": ["1001"], "job_urls": [detail_url_1]}
+            if kwargs["page"] == 1
+            else {
+                "job_ids": ["1001", "1002"],
+                "job_urls": [detail_url_1, detail_url_2],
+            }
+        ),
+    )
+    emitted_listings = []
+    result = await spider_module.CTGoodJobsSpider().crawl(
+        crawl_job_id="crawl-5",
+        request_payload={"category_ids": ["ctgoodjobs:021"], "max_pages": 2, "crawl_phase": "listing"},
+        emit_page_processed=lambda payload: None,
+        emit_item_emitted=lambda payload: None,
+        emit_listing_emitted=emitted_listings.append,
+    )
+
+    assert result["pages_processed"] == 2
+    assert result["items_emitted"] == 0
+    assert [call["url"] for call in stub_client.calls] == [
+        registry_url,
+        page_2_url,
+        category_url,
+    ]
+    assert emitted_listings == [
+        {
+            "source_site": "ctgoodjobs",
+            "source_job_id": "1001",
+            "source_url": detail_url_1,
+            "source_classification_id": "ctgoodjobs:021",
+            "source_classification_name": "Information Technology",
+            "listing_page": 2,
+            "listing_rank": 1,
+            "listing_payload": {
+                "job_id": "1001",
+                "job_url": detail_url_1,
+                "category_slug": "information-technology",
+                "source_classification_id": "ctgoodjobs:021",
+                "source_classification_name": "Information Technology",
+            },
+        },
+        {
+            "source_site": "ctgoodjobs",
+            "source_job_id": "1002",
+            "source_url": detail_url_2,
+            "source_classification_id": "ctgoodjobs:021",
+            "source_classification_name": "Information Technology",
+            "listing_page": 2,
+            "listing_rank": 2,
+            "listing_payload": {
+                "job_id": "1002",
+                "job_url": detail_url_2,
+                "category_slug": "information-technology",
+                "source_classification_id": "ctgoodjobs:021",
+                "source_classification_name": "Information Technology",
+            },
+        },
+    ]

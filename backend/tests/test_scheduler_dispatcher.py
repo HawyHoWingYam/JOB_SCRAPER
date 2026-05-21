@@ -90,7 +90,7 @@ def _build_engine_and_session():
     return engine, Session
 
 
-def _create_schedule(Session, *, source_site="jobsdb", category_ids=None):
+def _create_schedule(Session, *, source_site="jobsdb", category_ids=None, crawl_phase="listing", detail_limit=100):
     db = Session()
     try:
         schedule = ScrapeSchedule(
@@ -99,7 +99,9 @@ def _create_schedule(Session, *, source_site="jobsdb", category_ids=None):
             cron_expression="0 2 * * *",
             timezone="Asia/Hong_Kong",
             source_site=source_site,
+            crawl_phase=crawl_phase,
             crawl_mode=None,
+            detail_limit=detail_limit,
             category_ids=category_ids if category_ids is not None else [1200],
             max_pages=3,
             is_active=True,
@@ -151,6 +153,7 @@ async def test_schedule_run_endpoint_queues_crawl_job_and_links_execution(monkey
             assert crawl_job.status == "queued"
             assert crawl_job.trigger_type == "manual"
             assert crawl_job.request_payload["crawl_mode"] == "headed"
+            assert crawl_job.request_payload["crawl_phase"] == "listing"
         finally:
             db.close()
     finally:
@@ -187,6 +190,7 @@ async def test_scheduler_service_dispatches_cron_runs_into_durable_control_plane
         assert [event.event_type for event in events] == ["crawl.requested"]
         assert outbox_rows[0].event_type == "crawl.requested"
         assert crawl_job.request_payload["crawl_mode"] == "headed"
+        assert crawl_job.request_payload["crawl_phase"] == "listing"
     finally:
         db.close()
 
@@ -212,3 +216,25 @@ async def test_scheduler_startup_loads_ctgoodjobs_schedules_without_live_registr
     await service._load_active_schedules()
 
     assert added_jobs == [(schedule.id, True)]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_service_dispatches_detail_schedules_with_detail_limit(monkeypatch):
+    _engine, Session = _build_engine_and_session()
+    schedule = _create_schedule(
+        Session,
+        source_site="jobsdb",
+        category_ids=[6281],
+        crawl_phase="detail",
+        detail_limit=30,
+    )
+
+    monkeypatch.setattr(scheduler_service_module, "SessionLocal", Session)
+    service = SchedulerService()
+
+    crawl_job = await service._dispatch_schedule(schedule.id, trigger_type="schedule")
+
+    assert crawl_job is not None
+    assert crawl_job.request_payload["crawl_phase"] == "detail"
+    assert crawl_job.request_payload["detail_limit"] == 30
+    assert crawl_job.request_payload["category_ids"] == [6281]

@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.crawl_phases import resolve_crawl_phase
 from app.database import get_db
 from app.repositories.crawl_job_repository import CrawlJobRepository
+from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.crawl_job import (
     CrawlJobCreateRequest,
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/crawl-jobs", tags=["crawl-jobs"])
 
 crawl_job_repository = CrawlJobRepository()
+crawl_job_listing_repository = CrawlJobListingRepository()
 schedule_repository = ScheduleRepository()
 dispatch_service = CrawlJobDispatchService()
 SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs"}
@@ -126,6 +128,27 @@ async def create_crawl_job(
     )
     response.headers["X-Crawl-Job-Id"] = str(dispatch_result.crawl_job.id)
     return dispatch_result.crawl_job
+
+
+@router.get("/listing-batches")
+async def list_listing_batches(
+    source_site: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    effective_source_site = normalize_source_site(source_site) if source_site else None
+    if effective_source_site is not None and effective_source_site not in SUPPORTED_SOURCE_SITES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported source_site",
+        )
+    return {
+        "batches": crawl_job_listing_repository.list_listing_batches(
+            db,
+            source_site=effective_source_site,
+            limit=limit,
+        )
+    }
 
 
 @router.get("/{crawl_job_id}", response_model=CrawlJobSchema)

@@ -556,6 +556,57 @@ def test_request_crawl_auto_run_if_ready_waits_for_terminal_crawl_and_full_inges
         db.close()
 
 
+def test_append_job_to_terminal_crawl_auto_run_skips_late_event_without_throwing():
+    db = _build_sqlite_session()
+    try:
+        crawl_job = _create_crawl_job(
+            db,
+            status="completed",
+            metrics={"items_emitted": 2, "ingest_items_seen": 2},
+        )
+        original_job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 5, 12, 30, 0),
+            title="Original Auto Run Job",
+        )
+        late_job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 5, 12, 31, 0),
+            title="Late Auto Run Job",
+        )
+
+        service = EnrichmentRunService(db)
+        first_result = service.append_job_to_crawl_auto_run(
+            crawl_job_id=str(crawl_job.id),
+            job_id=str(original_job.id),
+        )
+        first_result.run.status = "failed"
+        db.commit()
+
+        late_result = service.append_job_to_crawl_auto_run(
+            crawl_job_id=str(crawl_job.id),
+            job_id=str(late_job.id),
+        )
+        db.commit()
+
+        assert late_result.action == "skipped_terminal"
+        assert late_result.run.id == first_result.run.id
+        assert late_result.skipped_reason == "run_status=failed"
+
+        persisted_run = service.get_run(first_result.run.id)
+        assert persisted_run is not None
+        assert persisted_run.status == "failed"
+        assert persisted_run.total_items == 1
+        assert persisted_run.job_ids == [str(original_job.id)]
+        assert [str(item.job_id) for item in service.list_run_items(persisted_run.id)] == [
+            str(original_job.id)
+        ]
+    finally:
+        db.close()
+
+
 def test_request_crawl_auto_run_if_ready_does_not_enqueue_when_jobs_profile_is_not_ready():
     db = _build_sqlite_session()
     try:

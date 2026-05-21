@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from uuid import UUID
 
+from app.crawl_phases import resolve_crawl_phase
 from app.crawl_modes import resolve_crawl_mode
 from app.models.schedule import ScrapeSchedule, ScheduleExecution
 from app.schemas.schedule import normalize_source_site
@@ -29,6 +30,7 @@ class ScheduleRepository:
         raw_source_site = normalized.get("source_site")
         source_site = normalize_source_site(raw_source_site)
         normalized["source_site"] = source_site
+        normalized["crawl_phase"] = resolve_crawl_phase(normalized.get("crawl_phase"))
         normalized["crawl_mode"] = resolve_crawl_mode(source_site, normalized.get("crawl_mode"))
         if source_site not in self.SUPPORTED_SOURCE_SITES:
             normalized["is_active"] = False

@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+from dataclasses import dataclass
 from datetime import timedelta
 import re
 from typing import Dict, Iterable, List, Optional
@@ -45,6 +46,20 @@ def _normalize_review_candidate_key(value: str) -> str:
     text_value = _REVIEW_KEY_PATTERN.sub(" ", text_value)
     text_value = re.sub(r"\s*([+#./-])\s*", r"\1", text_value)
     return re.sub(r"\s+", " ", text_value).strip()
+
+
+@dataclass(frozen=True)
+class CrawlAutoRunAppendResult:
+    run: EnrichmentRun
+    action: str
+    skipped_reason: str | None = None
+
+    @property
+    def id(self):
+        return self.run.id
+
+    def __getattr__(self, name):
+        return getattr(self.run, name)
 
 
 class EnrichmentRunService:
@@ -165,7 +180,7 @@ class EnrichmentRunService:
             .first()
         )
 
-    def append_job_to_crawl_auto_run(self, *, crawl_job_id: str, job_id: str) -> EnrichmentRun:
+    def append_job_to_crawl_auto_run(self, *, crawl_job_id: str, job_id: str) -> CrawlAutoRunAppendResult:
         crawl_job_uuid = uuid.UUID(str(crawl_job_id))
         job_uuid = uuid.UUID(str(job_id))
         run = self.get_crawl_auto_run(str(crawl_job_uuid))
@@ -191,10 +206,14 @@ class EnrichmentRunService:
             .first()
         )
         if existing_item is not None:
-            return run
+            return CrawlAutoRunAppendResult(run=run, action="duplicate")
 
         if run.status != "pending":
-            raise RuntimeError(f"Cannot append job to non-pending crawl auto run {run.id}")
+            return CrawlAutoRunAppendResult(
+                run=run,
+                action="skipped_terminal",
+                skipped_reason=f"run_status={run.status}",
+            )
 
         next_position = len(list(run.job_ids or []))
         run.job_ids = list(run.job_ids or []) + [str(job_uuid)]
@@ -209,7 +228,7 @@ class EnrichmentRunService:
             )
         )
         self.db.flush()
-        return run
+        return CrawlAutoRunAppendResult(run=run, action="added")
 
     def request_run_execution(self, run_id: str, *, source_service: str = "ai-api") -> bool:
         run = (

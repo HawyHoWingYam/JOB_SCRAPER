@@ -60,6 +60,8 @@ def _create_schedule(db, *, source_site="jobsdb", category_ids=None):
         cron_expression="0 2 * * *",
         timezone="Asia/Hong_Kong",
         source_site=source_site,
+        crawl_phase="listing",
+        detail_limit=100,
         category_ids=category_ids if category_ids is not None else [1200],
         max_pages=3,
         is_active=True,
@@ -92,6 +94,7 @@ def test_dispatch_manual_crawl_job_publishes_crawl_requested_event():
         assert len(outbox_rows) == 1
         assert outbox_rows[0].status == "published"
         assert outbox_rows[0].published_at is not None
+        assert result.crawl_job.request_payload["crawl_phase"] == "listing"
         assert len(bus.published) == 1
         assert bus.published[0][0] == STREAM_CRAWL_COMMANDS_HEADED
         assert bus.published[0][1].event_type == "crawl.requested"
@@ -119,8 +122,37 @@ def test_dispatch_manual_crawl_job_can_force_headless_topic():
         outbox_rows = db.query(EventOutbox).order_by(EventOutbox.id.asc()).all()
 
         assert result.crawl_job.request_payload["crawl_mode"] == "headless"
+        assert result.crawl_job.request_payload["crawl_phase"] == "listing"
         assert outbox_rows[0].topic == STREAM_CRAWL_COMMANDS
         assert bus.published[0][0] == STREAM_CRAWL_COMMANDS
+    finally:
+        db.close()
+
+
+def test_dispatch_manual_detail_crawl_job_publishes_target_batch_and_limit():
+    db = _build_session()
+    bus = RecordingBus()
+    service = CrawlJobDispatchService(
+        outbox_publisher=OutboxPublisher(stream_bus=bus),
+    )
+
+    try:
+        source_listing_crawl_job_id = uuid.uuid4()
+        result = service.dispatch_manual_crawl_job(
+            db,
+            source_site="jobsdb",
+            category_ids=[],
+            max_pages=3,
+            crawl_phase="detail",
+            source_listing_crawl_job_id=source_listing_crawl_job_id,
+            detail_limit=25,
+            requested_by="api",
+        )
+
+        assert result.crawl_job.request_payload["crawl_phase"] == "detail"
+        assert result.crawl_job.request_payload["source_listing_crawl_job_id"] == str(source_listing_crawl_job_id)
+        assert result.crawl_job.request_payload["detail_limit"] == 25
+        assert bus.published[0][0] == STREAM_CRAWL_COMMANDS_HEADED
     finally:
         db.close()
 
@@ -149,8 +181,37 @@ def test_dispatch_schedule_crawl_job_publishes_crawl_requested_event():
         assert outbox_rows[0].status == "published"
         assert outbox_rows[0].topic == STREAM_CRAWL_COMMANDS_HEADED
         assert result.crawl_job.request_payload["crawl_mode"] == "headed"
+        assert result.crawl_job.request_payload["crawl_phase"] == "listing"
         assert len(bus.published) == 1
         assert bus.published[0][1].event_type == "crawl.requested"
+    finally:
+        db.close()
+
+
+def test_dispatch_schedule_detail_crawl_job_uses_schedule_phase_and_detail_limit():
+    db = _build_session()
+    bus = RecordingBus()
+    service = CrawlJobDispatchService(
+        outbox_publisher=OutboxPublisher(stream_bus=bus),
+    )
+
+    try:
+        schedule = _create_schedule(db, source_site="jobsdb", category_ids=[6281])
+        schedule.crawl_phase = "detail"
+        schedule.detail_limit = 40
+        db.commit()
+        db.refresh(schedule)
+
+        result = service.dispatch_schedule_crawl_job(
+            db,
+            schedule=schedule,
+            requested_by="scheduler-worker",
+            trigger_type="schedule",
+        )
+
+        assert result.crawl_job.request_payload["crawl_phase"] == "detail"
+        assert result.crawl_job.request_payload["detail_limit"] == 40
+        assert result.crawl_job.request_payload["category_ids"] == [6281]
     finally:
         db.close()
 
