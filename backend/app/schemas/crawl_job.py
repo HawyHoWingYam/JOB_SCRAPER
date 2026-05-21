@@ -7,7 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.crawl_phases import normalize_crawl_phase, normalize_detail_statuses, resolve_crawl_phase
 from app.crawl_modes import normalize_crawl_mode, resolve_crawl_mode
-from app.schemas.schedule import CategoryId, normalize_source_site, validate_category_ids_for_source_site
+from app.services.crawl_request_validation import (
+    CategoryId,
+    normalize_source_site,
+    validate_crawl_request,
+)
 
 
 class CrawlJobCreateRequest(BaseModel):
@@ -50,19 +54,17 @@ class CrawlJobCreateRequest(BaseModel):
         if self.schedule_id is not None:
             return self
 
-        self.source_site = normalize_source_site(self.source_site)
-        self.crawl_phase = resolve_crawl_phase(self.crawl_phase)
-        self.crawl_mode = resolve_crawl_mode(self.source_site, self.crawl_mode)
-        if self.crawl_phase == "listing":
-            if not self.category_ids:
-                raise ValueError("category_ids must be provided for listing crawl jobs")
-            validate_category_ids_for_source_site(self.source_site, self.category_ids)
-            return self
-
-        if self.source_listing_crawl_job_id is None and not self.category_ids:
-            raise ValueError("detail crawl jobs require source_listing_crawl_job_id or category_ids")
-        if self.category_ids:
-            validate_category_ids_for_source_site(self.source_site, self.category_ids)
+        validated = validate_crawl_request(
+            source_site=self.source_site,
+            crawl_phase=self.crawl_phase,
+            crawl_mode=self.crawl_mode,
+            category_ids=self.category_ids,
+            source_listing_crawl_job_id=self.source_listing_crawl_job_id,
+        )
+        self.source_site = validated.source_site
+        self.crawl_phase = validated.crawl_phase
+        self.crawl_mode = validated.crawl_mode
+        self.category_ids = validated.category_ids
         return self
 
 

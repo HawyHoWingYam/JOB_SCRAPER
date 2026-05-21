@@ -2,52 +2,20 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    StrictInt,
-    StrictStr,
     field_validator,
     model_validator,
 )
 from typing import Optional, List
 from app.crawl_phases import normalize_crawl_phase, resolve_crawl_phase
 from app.crawl_modes import normalize_crawl_mode, resolve_crawl_mode
+from app.services.crawl_request_validation import (
+    CategoryId,
+    normalize_source_site,
+    validate_category_ids_for_source_site,
+    validate_crawl_request,
+)
 from datetime import datetime
 from uuid import UUID
-
-
-CategoryId = StrictInt | StrictStr
-
-
-def normalize_source_site(source_site: Optional[str]) -> str:
-    """Normalize schedule source site values to the persisted default."""
-    return (source_site or "").strip().lower() or "jobsdb"
-
-
-def validate_category_ids_for_source_site(
-    source_site: Optional[str],
-    category_ids: Optional[List[CategoryId]],
-) -> None:
-    """Enforce source-specific category id types."""
-    normalized_source_site = normalize_source_site(source_site)
-
-    if normalized_source_site == "ctgoodjobs" and not category_ids:
-        raise ValueError("CTgoodjobs category_ids must be provided and non-empty")
-
-    if category_ids is None:
-        return
-
-    if normalized_source_site == "jobsdb":
-        if any(not isinstance(category_id, int) for category_id in category_ids):
-            raise ValueError("JobsDB category_ids must be integers")
-        return
-
-    if normalized_source_site == "ctgoodjobs":
-        invalid_category_ids = [
-            category_id
-            for category_id in category_ids
-            if not isinstance(category_id, str) or not category_id.startswith("ctgoodjobs:")
-        ]
-        if invalid_category_ids:
-            raise ValueError("CTgoodjobs category_ids must be strings like 'ctgoodjobs:021'")
 
 
 # ============== Schedule Schemas ==============
@@ -86,14 +54,17 @@ class ScheduleCreateSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_category_ids(self) -> "ScheduleCreateSchema":
-        self.crawl_phase = resolve_crawl_phase(self.crawl_phase)
-        if self.crawl_phase == "listing":
-            validate_category_ids_for_source_site(self.source_site, self.category_ids)
-        else:
-            if not self.category_ids:
-                raise ValueError("detail schedules must provide category_ids")
-            validate_category_ids_for_source_site(self.source_site, self.category_ids)
-        self.crawl_mode = resolve_crawl_mode(self.source_site, self.crawl_mode)
+        validated = validate_crawl_request(
+            source_site=self.source_site,
+            crawl_phase=self.crawl_phase,
+            crawl_mode=self.crawl_mode,
+            category_ids=self.category_ids,
+            source_listing_crawl_job_id=None,
+        )
+        self.source_site = validated.source_site
+        self.crawl_phase = validated.crawl_phase
+        self.crawl_mode = validated.crawl_mode
+        self.category_ids = validated.category_ids
         return self
 
 
@@ -134,7 +105,16 @@ class ScheduleUpdateSchema(BaseModel):
     @model_validator(mode="after")
     def validate_category_ids(self) -> "ScheduleUpdateSchema":
         if self.category_ids is not None and self.source_site is not None:
-            validate_category_ids_for_source_site(self.source_site, self.category_ids)
+            if self.category_ids:
+                validate_crawl_request(
+                    source_site=self.source_site,
+                    crawl_phase=self.crawl_phase,
+                    crawl_mode=self.crawl_mode,
+                    category_ids=self.category_ids,
+                    source_listing_crawl_job_id=None,
+                )
+            else:
+                validate_category_ids_for_source_site(self.source_site, self.category_ids)
         return self
 
 
@@ -253,15 +233,15 @@ class ImmediateScrapeRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_category_ids(self) -> "ImmediateScrapeRequest":
-        self.crawl_phase = resolve_crawl_phase(self.crawl_phase)
-        if self.crawl_phase == "listing":
-            if not self.category_ids:
-                raise ValueError("listing runs require category_ids")
-            validate_category_ids_for_source_site(self.source_site, self.category_ids)
-        else:
-            if self.source_listing_crawl_job_id is None and not self.category_ids:
-                raise ValueError("detail runs require source_listing_crawl_job_id or category_ids")
-            if self.category_ids:
-                validate_category_ids_for_source_site(self.source_site, self.category_ids)
-        self.crawl_mode = resolve_crawl_mode(self.source_site, self.crawl_mode)
+        validated = validate_crawl_request(
+            source_site=self.source_site,
+            crawl_phase=self.crawl_phase,
+            crawl_mode=self.crawl_mode,
+            category_ids=self.category_ids,
+            source_listing_crawl_job_id=self.source_listing_crawl_job_id,
+        )
+        self.source_site = validated.source_site
+        self.crawl_phase = validated.crawl_phase
+        self.crawl_mode = validated.crawl_mode
+        self.category_ids = validated.category_ids
         return self
