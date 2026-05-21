@@ -60,6 +60,7 @@ class ScheduleCreateSchema(BaseModel):
             crawl_mode=self.crawl_mode,
             category_ids=self.category_ids,
             source_listing_crawl_job_id=None,
+            require_listing_categories=False,
         )
         self.source_site = validated.source_site
         self.crawl_phase = validated.crawl_phase

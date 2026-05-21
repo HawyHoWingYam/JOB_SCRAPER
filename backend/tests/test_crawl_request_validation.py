@@ -50,6 +50,30 @@ def test_validate_ctgoodjobs_requires_string_categories():
         )
 
 
+def test_validate_jobsdb_runtime_category_ids_reject_bool():
+    with pytest.raises(ValueError, match="JobsDB category_ids must be integers"):
+        validate_crawl_request(
+            source_site="jobsdb",
+            crawl_phase="listing",
+            crawl_mode=None,
+            category_ids=[True],
+            source_listing_crawl_job_id=None,
+        )
+
+
+def test_schedule_create_preserves_jobsdb_listing_without_categories():
+    schedule = ScheduleCreateSchema(
+        name="jobsdb all categories",
+        cron_expression="0 2 * * *",
+        source_site="jobsdb",
+        crawl_phase="listing",
+        category_ids=None,
+    )
+
+    assert schedule.category_ids is None
+    assert schedule.crawl_phase == "listing"
+
+
 def test_schedule_category_ids_reject_float_without_coercion():
     with pytest.raises(ValidationError):
         ScheduleCreateSchema(

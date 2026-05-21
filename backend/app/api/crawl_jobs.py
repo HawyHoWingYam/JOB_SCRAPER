@@ -18,7 +18,7 @@ from app.schemas.crawl_job import (
     CrawlJobEventSchema,
     CrawlJobSchema,
 )
-from app.schemas.schedule import normalize_source_site, validate_category_ids_for_source_site
+from app.services.crawl_request_validation import normalize_source_site, validate_category_ids_for_source_site
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.services.source_category_registry import get_source_category_registry
 

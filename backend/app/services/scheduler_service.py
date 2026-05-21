@@ -16,7 +16,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models.schedule import ScrapeSchedule
 from app.repositories.schedule_repository import ScheduleRepository
-from app.schemas.schedule import normalize_source_site, validate_category_ids_for_source_site
+from app.services.crawl_request_validation import normalize_source_site, validate_category_ids_for_source_site
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.services.source_category_registry import get_source_category_registry
 from app.utils.time import utc_now

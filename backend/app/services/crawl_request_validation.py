@@ -28,6 +28,7 @@ def validate_crawl_request(
     crawl_mode: str | None,
     category_ids: Sequence[CategoryId] | None,
     source_listing_crawl_job_id: UUID | None,
+    require_listing_categories: bool = True,
 ) -> ValidatedCrawlRequest:
     normalized_source = normalize_source_site(source_site)
     resolved_phase = resolve_crawl_phase(crawl_phase)
@@ -35,7 +36,7 @@ def validate_crawl_request(
     normalized_categories = list(category_ids) if category_ids else None
 
     if resolved_phase == "listing":
-        if not normalized_categories:
+        if require_listing_categories and not normalized_categories:
             raise ValueError("listing runs require category_ids")
         validate_category_ids_for_source_site(normalized_source, normalized_categories)
     else:
@@ -67,7 +68,7 @@ def validate_category_ids_for_source_site(
     if not category_ids:
         return
     if normalized_source_site == "jobsdb":
-        if any(not isinstance(category_id, int) for category_id in category_ids):
+        if any(type(category_id) is not int for category_id in category_ids):
             raise ValueError("JobsDB category_ids must be integers")
     if normalized_source_site == "ctgoodjobs":
         if any(
