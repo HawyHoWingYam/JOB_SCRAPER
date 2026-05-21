@@ -388,6 +388,50 @@ async def test_list_listing_batches_returns_recent_batch_counts(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_listing_batches_forwards_category_and_detail_status_filters(monkeypatch):
+    captured = {}
+
+    class FakeListingRepository:
+        def list_listing_batches(
+            self,
+            db,
+            *,
+            source_site=None,
+            category_id=None,
+            detail_status=None,
+            limit=20,
+        ):
+            captured.update(
+                {
+                    "source_site": source_site,
+                    "category_id": category_id,
+                    "detail_status": detail_status,
+                    "limit": limit,
+                }
+            )
+            return []
+
+    monkeypatch.setattr(crawl_jobs_module, "crawl_job_listing_repository", FakeListingRepository())
+    client, _Session = _build_test_client(monkeypatch)
+    try:
+        response = await client.get(
+            "/api/v1/crawl-jobs/listing-batches"
+            "?source_site=jobsdb&category_id=6281&detail_status=pending&limit=7"
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"batches": []}
+        assert captured == {
+            "source_site": "jobsdb",
+            "category_id": "6281",
+            "detail_status": "pending",
+            "limit": 7,
+        }
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_cancel_crawl_job_updates_status_and_event_history(monkeypatch):
     client, Session = _build_test_client(monkeypatch)
     try:

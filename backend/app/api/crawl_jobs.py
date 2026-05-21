@@ -133,6 +133,8 @@ async def create_crawl_job(
 @router.get("/listing-batches")
 async def list_listing_batches(
     source_site: str | None = None,
+    category_id: str | None = None,
+    detail_status: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
@@ -146,6 +148,8 @@ async def list_listing_batches(
         "batches": crawl_job_listing_repository.list_listing_batches(
             db,
             source_site=effective_source_site,
+            category_id=category_id,
+            detail_status=detail_status,
             limit=limit,
         )
     }

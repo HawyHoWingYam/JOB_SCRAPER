@@ -293,3 +293,63 @@ def test_list_detail_candidates_prioritizes_manual_action_required_before_pendin
         assert [row.id for row in candidates] == [manual_action_listing.id, pending_listing.id]
     finally:
         db.close()
+
+
+def test_list_listing_batches_filters_by_category_and_detail_status():
+    db = _build_sqlite_session()
+    try:
+        jobsdb_batch = _create_crawl_job(db, source_site="jobsdb")
+        ctgoodjobs_batch = _create_crawl_job(db, source_site="ctgoodjobs")
+        repository = CrawlJobListingRepository()
+
+        first, _ = repository.upsert_listing(
+            db,
+            crawl_job_id=jobsdb_batch.id,
+            source_site="jobsdb",
+            source_job_id="123456",
+            source_url="https://hk.jobsdb.com/job/123456",
+            source_classification_id="6281",
+            source_classification_name="ICT",
+            listing_page=1,
+            listing_rank=1,
+            listing_payload={"title": "Pending"},
+        )
+        second, _ = repository.upsert_listing(
+            db,
+            crawl_job_id=ctgoodjobs_batch.id,
+            source_site="ctgoodjobs",
+            source_job_id="10090657",
+            source_url="https://jobs.ctgoodjobs.hk/job/10090657",
+            source_classification_id="ctgoodjobs:021",
+            source_classification_name="Information Technology",
+            listing_page=1,
+            listing_rank=1,
+            listing_payload={"title": "Failed"},
+        )
+        detail_crawl_job = _create_crawl_job(db, source_site="ctgoodjobs")
+        repository.mark_detail_failed(
+            db,
+            listing_id=second.id,
+            detail_crawl_job_id=detail_crawl_job.id,
+            error_message="blocked",
+        )
+
+        jobsdb_pending = repository.list_listing_batches(
+            db,
+            source_site="jobsdb",
+            category_id="6281",
+            detail_status="pending",
+        )
+        ctgoodjobs_failed = repository.list_listing_batches(
+            db,
+            source_site="ctgoodjobs",
+            category_id="ctgoodjobs:021",
+            detail_status="failed",
+        )
+
+        assert [batch["crawl_job_id"] for batch in jobsdb_pending] == [str(jobsdb_batch.id)]
+        assert jobsdb_pending[0]["detail_pending"] == 1
+        assert [batch["crawl_job_id"] for batch in ctgoodjobs_failed] == [str(ctgoodjobs_batch.id)]
+        assert ctgoodjobs_failed[0]["detail_failed"] == 1
+    finally:
+        db.close()
