@@ -302,7 +302,7 @@ def test_list_listing_batches_filters_by_category_and_detail_status():
         ctgoodjobs_batch = _create_crawl_job(db, source_site="ctgoodjobs")
         repository = CrawlJobListingRepository()
 
-        first, _ = repository.upsert_listing(
+        repository.upsert_listing(
             db,
             crawl_job_id=jobsdb_batch.id,
             source_site="jobsdb",
@@ -313,6 +313,30 @@ def test_list_listing_batches_filters_by_category_and_detail_status():
             listing_page=1,
             listing_rank=1,
             listing_payload={"title": "Pending"},
+        )
+        completed_listing, _ = repository.upsert_listing(
+            db,
+            crawl_job_id=jobsdb_batch.id,
+            source_site="jobsdb",
+            source_job_id="234567",
+            source_url="https://hk.jobsdb.com/job/234567",
+            source_classification_id="6281",
+            source_classification_name="ICT",
+            listing_page=1,
+            listing_rank=2,
+            listing_payload={"title": "Completed"},
+        )
+        failed_listing, _ = repository.upsert_listing(
+            db,
+            crawl_job_id=jobsdb_batch.id,
+            source_site="jobsdb",
+            source_job_id="345678",
+            source_url="https://hk.jobsdb.com/job/345678",
+            source_classification_id="6281",
+            source_classification_name="ICT",
+            listing_page=1,
+            listing_rank=3,
+            listing_payload={"title": "Failed"},
         )
         second, _ = repository.upsert_listing(
             db,
@@ -326,11 +350,24 @@ def test_list_listing_batches_filters_by_category_and_detail_status():
             listing_rank=1,
             listing_payload={"title": "Failed"},
         )
-        detail_crawl_job = _create_crawl_job(db, source_site="ctgoodjobs")
+        jobsdb_detail_crawl_job = _create_crawl_job(db, source_site="jobsdb")
+        repository.mark_detail_completed(
+            db,
+            listing_id=completed_listing.id,
+            detail_crawl_job_id=jobsdb_detail_crawl_job.id,
+            published_job_id=uuid.uuid4(),
+        )
+        repository.mark_detail_failed(
+            db,
+            listing_id=failed_listing.id,
+            detail_crawl_job_id=jobsdb_detail_crawl_job.id,
+            error_message="timeout",
+        )
+        ctgoodjobs_detail_crawl_job = _create_crawl_job(db, source_site="ctgoodjobs")
         repository.mark_detail_failed(
             db,
             listing_id=second.id,
-            detail_crawl_job_id=detail_crawl_job.id,
+            detail_crawl_job_id=ctgoodjobs_detail_crawl_job.id,
             error_message="blocked",
         )
 
@@ -349,6 +386,8 @@ def test_list_listing_batches_filters_by_category_and_detail_status():
 
         assert [batch["crawl_job_id"] for batch in jobsdb_pending] == [str(jobsdb_batch.id)]
         assert jobsdb_pending[0]["detail_pending"] == 1
+        assert jobsdb_pending[0]["detail_completed"] == 1
+        assert jobsdb_pending[0]["detail_failed"] == 1
         assert [batch["crawl_job_id"] for batch in ctgoodjobs_failed] == [str(ctgoodjobs_batch.id)]
         assert ctgoodjobs_failed[0]["detail_failed"] == 1
     finally:

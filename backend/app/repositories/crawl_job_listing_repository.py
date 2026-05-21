@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import case, desc, func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.models.crawl_job import CrawlJob
@@ -138,10 +138,8 @@ class CrawlJobListingRepository:
         normalized_category_id = str(category_id).strip() if category_id else None
         normalized_detail_status = str(detail_status).strip().lower() if detail_status else None
 
-        grouped_query = db.query(
-            CrawlJobListing.crawl_job_id,
-            func.max(CrawlJobListing.created_at).label("latest_listing_at"),
-        )
+        latest_listing_at = func.max(CrawlJobListing.created_at).label("latest_listing_at")
+        grouped_query = db.query(CrawlJobListing.crawl_job_id, latest_listing_at)
         if normalized_source_site:
             grouped_query = grouped_query.filter(CrawlJobListing.source_site == normalized_source_site)
         if normalized_category_id:
@@ -151,36 +149,77 @@ class CrawlJobListingRepository:
 
         grouped_rows = (
             grouped_query.group_by(CrawlJobListing.crawl_job_id)
-            .order_by(desc("latest_listing_at"))
+            .order_by(latest_listing_at.desc(), CrawlJobListing.crawl_job_id.desc())
             .limit(effective_limit)
             .all()
         )
 
+        crawl_job_ids = [crawl_job_id for crawl_job_id, _latest_listing_at in grouped_rows]
+        if not crawl_job_ids:
+            return []
+
+        crawl_jobs_by_id = {
+            crawl_job.id: crawl_job
+            for crawl_job in db.query(CrawlJob).filter(CrawlJob.id.in_(crawl_job_ids)).all()
+        }
+
+        counts_query = db.query(
+            CrawlJobListing.crawl_job_id,
+            CrawlJobListing.detail_status,
+            func.count(CrawlJobListing.id),
+        ).filter(CrawlJobListing.crawl_job_id.in_(crawl_job_ids))
+        if normalized_source_site:
+            counts_query = counts_query.filter(CrawlJobListing.source_site == normalized_source_site)
+        if normalized_category_id:
+            counts_query = counts_query.filter(CrawlJobListing.source_classification_id == normalized_category_id)
+
+        status_counts_by_job_id: dict[Any, dict[str, int]] = {}
+        for crawl_job_id, status, count in counts_query.group_by(
+            CrawlJobListing.crawl_job_id,
+            CrawlJobListing.detail_status,
+        ).all():
+            status_counts_by_job_id.setdefault(crawl_job_id, {})[str(status)] = int(count)
+
+        category_ids_by_job_id: dict[Any, list[str]] = {}
+        jobs_needing_category_lookup: list[Any] = []
+        for crawl_job_id in crawl_job_ids:
+            crawl_job = crawl_jobs_by_id.get(crawl_job_id)
+            if crawl_job is None:
+                continue
+            request_payload = crawl_job.request_payload if isinstance(crawl_job.request_payload, dict) else {}
+            if not normalized_category_id and not list(request_payload.get("category_ids") or []):
+                jobs_needing_category_lookup.append(crawl_job_id)
+
+        if jobs_needing_category_lookup:
+            category_query = (
+                db.query(CrawlJobListing.crawl_job_id, CrawlJobListing.source_classification_id)
+                .filter(CrawlJobListing.crawl_job_id.in_(jobs_needing_category_lookup))
+                .filter(CrawlJobListing.source_classification_id.isnot(None))
+            )
+            if normalized_source_site:
+                category_query = category_query.filter(CrawlJobListing.source_site == normalized_source_site)
+
+            for crawl_job_id, source_classification_id in (
+                category_query.group_by(
+                    CrawlJobListing.crawl_job_id,
+                    CrawlJobListing.source_classification_id,
+                )
+                .order_by(
+                    CrawlJobListing.crawl_job_id.asc(),
+                    CrawlJobListing.source_classification_id.asc(),
+                )
+                .all()
+            ):
+                category_ids_by_job_id.setdefault(crawl_job_id, []).append(str(source_classification_id))
+
         batches: list[dict[str, Any]] = []
         for crawl_job_id, _latest_listing_at in grouped_rows:
-            crawl_job = db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
+            crawl_job = crawl_jobs_by_id.get(crawl_job_id)
             if crawl_job is None:
                 continue
 
             request_payload = crawl_job.request_payload if isinstance(crawl_job.request_payload, dict) else {}
-
-            counts_query = db.query(CrawlJobListing.detail_status, func.count(CrawlJobListing.id)).filter(
-                CrawlJobListing.crawl_job_id == crawl_job.id
-            )
-            category_query = db.query(CrawlJobListing.source_classification_id).filter(
-                CrawlJobListing.crawl_job_id == crawl_job.id
-            )
-            if normalized_source_site:
-                counts_query = counts_query.filter(CrawlJobListing.source_site == normalized_source_site)
-                category_query = category_query.filter(CrawlJobListing.source_site == normalized_source_site)
-            if normalized_category_id:
-                counts_query = counts_query.filter(CrawlJobListing.source_classification_id == normalized_category_id)
-                category_query = category_query.filter(CrawlJobListing.source_classification_id == normalized_category_id)
-
-            status_counts = {
-                str(status): int(count)
-                for status, count in counts_query.group_by(CrawlJobListing.detail_status).all()
-            }
+            status_counts = status_counts_by_job_id.get(crawl_job.id, {})
             listings_staged = sum(status_counts.values())
             if listings_staged == 0:
                 continue
@@ -191,11 +230,7 @@ class CrawlJobListingRepository:
             elif payload_category_ids:
                 category_ids = payload_category_ids
             else:
-                category_ids = [
-                    str(row[0])
-                    for row in category_query.distinct().order_by(CrawlJobListing.source_classification_id.asc()).all()
-                    if row[0] is not None
-                ]
+                category_ids = category_ids_by_job_id.get(crawl_job.id, [])
 
             batches.append(
                 {
