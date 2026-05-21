@@ -5,7 +5,7 @@ from app.ai.llm_client import refresh_llm_status
 from app.database import SessionLocal
 from app.messaging.redis_stream_bus import RedisStreamBus
 from app.messaging.topics import STREAM_JOB_INGEST, STREAM_JOB_LIFECYCLE
-from app.models import CrawlJobListing, EnrichmentRun, Job, JobEmbedding, JobSkillMention
+from app.models import CrawlJobListing, EnrichmentRun, EventOutbox, Job, JobEmbedding, JobSkillMention
 
 router = APIRouter(tags=["health"])
 
@@ -85,17 +85,33 @@ def build_operator_health_summary() -> dict:
             .group_by(EnrichmentRun.status)
             .all()
         )
+        outbox_status_rows = (
+            db.query(EventOutbox.status, func.count(EventOutbox.id))
+            .group_by(EventOutbox.status)
+            .all()
+        )
+        total_embeddings = db.query(JobEmbedding).count()
         newest_skill_mention_at = db.query(func.max(JobSkillMention.created_at)).scalar()
         newest_embedding_at = db.query(func.max(JobEmbedding.updated_at)).scalar()
 
         detail_counts = {str(status): int(count) for status, count in listing_status_rows}
         enrichment_counts = {str(status): int(count) for status, count in enrichment_status_rows}
+        outbox_counts = {str(status): int(count) for status, count in outbox_status_rows}
         pending_detail = int(detail_counts.get("pending", 0))
         pending_ai = max(total_jobs - enriched_jobs, 0)
+        missing_current_embeddings = max(total_jobs - total_embeddings, 0)
+        pending_outbox = int(outbox_counts.get("pending", 0))
+        failed_outbox = int(outbox_counts.get("failed", 0))
         if pending_detail:
             issues.append(f"crawl_job_listings has {pending_detail} pending detail rows")
         if total_jobs and pending_ai:
             issues.append(f"AI enrichment pending for {pending_ai} of {total_jobs} jobs")
+        if pending_outbox:
+            issues.append(f"event_outbox has {pending_outbox} pending rows")
+        if failed_outbox:
+            issues.append(f"event_outbox has {failed_outbox} failed rows")
+        if missing_current_embeddings:
+            issues.append(f"embeddings missing for {missing_current_embeddings} of {total_jobs} jobs")
 
         freshness = {
             "jobs": {
@@ -112,8 +128,11 @@ def build_operator_health_summary() -> dict:
             "skills": {
                 "newest_mention_at": _isoformat_or_none(newest_skill_mention_at),
             },
+            "outbox": outbox_counts,
             "embeddings": {
                 "newest_updated_at": _isoformat_or_none(newest_embedding_at),
+                "current_embeddings": total_embeddings,
+                "missing_current_embeddings": missing_current_embeddings,
             },
         }
     except Exception as exc:
