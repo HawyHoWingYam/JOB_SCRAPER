@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from typing import Sequence
 from uuid import UUID
 
+from pydantic import StrictInt, StrictStr
+
 from app.crawl_modes import resolve_crawl_mode
 from app.crawl_phases import resolve_crawl_phase
 
-CategoryId = int | str
+CategoryId = StrictInt | StrictStr
 
 
 @dataclass(frozen=True)

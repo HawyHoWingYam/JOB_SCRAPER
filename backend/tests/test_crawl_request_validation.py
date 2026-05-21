@@ -3,11 +3,14 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.schemas.crawl_job import CrawlJobCreateRequest
+from app.schemas.schedule import ScheduleCreateSchema
 from app.services.crawl_request_validation import validate_crawl_request
 
 
@@ -44,4 +47,24 @@ def test_validate_ctgoodjobs_requires_string_categories():
             crawl_mode=None,
             category_ids=[1200],
             source_listing_crawl_job_id=None,
+        )
+
+
+def test_schedule_category_ids_reject_float_without_coercion():
+    with pytest.raises(ValidationError):
+        ScheduleCreateSchema(
+            name="bad category",
+            cron_expression="0 2 * * *",
+            source_site="jobsdb",
+            crawl_phase="listing",
+            category_ids=[1.0],
+        )
+
+
+def test_crawl_job_category_ids_reject_bool_without_coercion():
+    with pytest.raises(ValidationError):
+        CrawlJobCreateRequest(
+            source_site="jobsdb",
+            crawl_phase="listing",
+            category_ids=[True],
         )
