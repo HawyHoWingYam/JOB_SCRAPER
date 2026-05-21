@@ -107,6 +107,10 @@ def test_operator_health_summary_includes_backlog_outbox_and_embedding_metrics(m
 
     payload = health_module.build_operator_health_summary()
 
+    assert payload["status"] == "degraded"
+    assert "event_outbox has 5 pending rows" in payload["issues"]
+    assert "event_outbox has 1 failed rows" in payload["issues"]
+    assert "embeddings missing for 6 of 10 jobs" in payload["issues"]
     assert payload["freshness"]["crawl_job_listings"]["pending"] == 7
     assert payload["freshness"]["crawl_job_listings"]["failed"] == 2
     assert payload["freshness"]["outbox"]["pending"] == 5
