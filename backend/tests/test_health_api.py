@@ -40,16 +40,22 @@ async def test_health_check_includes_operator_runtime_summary(monkeypatch):
 
 def test_operator_health_summary_includes_backlog_outbox_and_embedding_metrics(monkeypatch):
     class _Query:
-        def __init__(self, value=None, rows=None, count_value=0):
+        def __init__(self, value=None, rows=None, count_value=0, joined_count_value=None):
             self.value = value
             self.rows = rows or []
             self.count_value = count_value
+            self.joined_count_value = joined_count_value
 
         def scalar(self):
             return self.value
 
         def count(self):
             return self.count_value
+
+        def join(self, *args, **kwargs):
+            if self.joined_count_value is not None:
+                return _Query(count_value=self.joined_count_value)
+            return self
 
         def filter(self, *args, **kwargs):
             return self
@@ -71,7 +77,7 @@ def test_operator_health_summary_includes_backlog_outbox_and_embedding_metrics(m
             if "EventOutbox.status" in text:
                 return _Query(rows=[("pending", 5), ("failed", 1)])
             if "JobEmbedding" in text:
-                return _Query(count_value=4)
+                return _Query(count_value=12, joined_count_value=4)
             if "Job" in text:
                 return _Query(count_value=10)
             return _Query()
@@ -105,4 +111,6 @@ def test_operator_health_summary_includes_backlog_outbox_and_embedding_metrics(m
     assert payload["freshness"]["crawl_job_listings"]["failed"] == 2
     assert payload["freshness"]["outbox"]["pending"] == 5
     assert payload["freshness"]["outbox"]["failed"] == 1
+    assert payload["freshness"]["embeddings"]["total_embeddings"] == 12
+    assert payload["freshness"]["embeddings"]["current_embeddings"] == 4
     assert payload["freshness"]["embeddings"]["missing_current_embeddings"] == 6

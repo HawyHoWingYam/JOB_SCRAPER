@@ -91,6 +91,9 @@ def build_operator_health_summary() -> dict:
             .all()
         )
         total_embeddings = db.query(JobEmbedding).count()
+        current_embeddings = (
+            db.query(JobEmbedding).join(Job, JobEmbedding.job_id == Job.id).filter(Job.is_deleted == False).count()
+        )
         newest_skill_mention_at = db.query(func.max(JobSkillMention.created_at)).scalar()
         newest_embedding_at = db.query(func.max(JobEmbedding.updated_at)).scalar()
 
@@ -99,7 +102,7 @@ def build_operator_health_summary() -> dict:
         outbox_counts = {str(status): int(count) for status, count in outbox_status_rows}
         pending_detail = int(detail_counts.get("pending", 0))
         pending_ai = max(total_jobs - enriched_jobs, 0)
-        missing_current_embeddings = max(total_jobs - total_embeddings, 0)
+        missing_current_embeddings = max(total_jobs - current_embeddings, 0)
         pending_outbox = int(outbox_counts.get("pending", 0))
         failed_outbox = int(outbox_counts.get("failed", 0))
         if pending_detail:
@@ -131,7 +134,8 @@ def build_operator_health_summary() -> dict:
             "outbox": outbox_counts,
             "embeddings": {
                 "newest_updated_at": _isoformat_or_none(newest_embedding_at),
-                "current_embeddings": total_embeddings,
+                "total_embeddings": total_embeddings,
+                "current_embeddings": current_embeddings,
                 "missing_current_embeddings": missing_current_embeddings,
             },
         }
