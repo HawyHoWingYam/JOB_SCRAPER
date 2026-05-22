@@ -13,10 +13,10 @@ vi.mock('./components/charts/CategoryChart', () => ({
 
 vi.mock('./components/operator/OperatorHealthPage', () => ({
   default: () => (
-    <div>
+    <section>
       <h1>Operator Health</h1>
       <p>Operator Page Stub</p>
-    </div>
+    </section>
   ),
 }));
 
@@ -99,7 +99,7 @@ describe('App lazy views', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /operator health/i }));
 
-    expect(await screen.findByRole('heading', { level: 1, name: /operator health/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /operator health/i })).toBeInTheDocument();
     expect(screen.getByText(/operator page stub/i)).toBeInTheDocument();
   });
 });

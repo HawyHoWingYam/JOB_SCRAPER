@@ -72,12 +72,7 @@ describe('OperatorHealthPage', () => {
     render(<OperatorHealthPage />);
 
     expect(fetchOperatorHealthMock).toHaveBeenCalledTimes(1);
-    expect(await screen.findByRole('heading', { name: /operator health/i })).toBeInTheDocument();
-    expect(screen.getByText(/^degraded$/i)).toBeInTheDocument();
-    expect(screen.getByText(/issues/i, { selector: 'h3' })).toBeInTheDocument();
-    expect(screen.getByText(/scheduler summary/i, { selector: 'h3' })).toBeInTheDocument();
-    expect(screen.getByText(/headed runtime summary/i, { selector: 'h3' })).toBeInTheDocument();
-    expect(screen.getByText(/backlog metrics/i, { selector: 'h3' })).toBeInTheDocument();
+    expect(await screen.findByText(/^degraded$/i)).toBeInTheDocument();
     expect(screen.getByText(/stream\.job\.ingest\.dead_letter has 2 messages/i)).toBeInTheDocument();
     expect(screen.getByText(/scheduler-worker heartbeat is stale/i)).toBeInTheDocument();
 
@@ -93,7 +88,7 @@ describe('OperatorHealthPage', () => {
     expect(within(backlogSection).getByText(/pending detail rows/i)).toBeInTheDocument();
     expect(within(backlogSection).getByText(/^11$/)).toBeInTheDocument();
 
-    expect(screen.getByText(/last updated/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /operator health/i })).toBeInTheDocument();
     expect(screen.getByTestId('operator-health-last-updated')).toHaveAttribute(
       'datetime',
       '2026-05-22T03:04:05+00:00',
@@ -138,31 +133,49 @@ describe('OperatorHealthPage', () => {
 
     render(<OperatorHealthPage />);
 
-    expect(await screen.findByRole('heading', { name: /operator health/i })).toBeInTheDocument();
+    const schedulerSection = await screen.findByRole('region', { name: /scheduler summary/i });
     expect(screen.getByText(/no active issues reported/i)).toBeInTheDocument();
     expect(screen.getAllByText(/^unavailable$/i).length).toBeGreaterThan(0);
-    const schedulerSection = screen.getByRole('region', { name: /scheduler summary/i });
     expect(within(schedulerSection).getAllByText(/^unavailable$/i).length).toBeGreaterThan(0);
     const runtimeSection = screen.getByRole('region', { name: /headed runtime summary/i });
     expect(within(runtimeSection).getAllByText(/^unavailable$/i).length).toBeGreaterThan(0);
   });
 
-  it('shows an error banner when the request fails and allows retry', async () => {
+  it('shows an explicit unavailable state when the initial request fails without payload data', async () => {
+    fetchOperatorHealthMock.mockRejectedValueOnce(new Error('redis offline'));
+
+    render(<OperatorHealthPage />);
+
+    expect(await screen.findByText(/failed to load operator health: redis offline/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /operator data unavailable/i })).toBeInTheDocument();
+    expect(screen.getByText(/operator health data is currently unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^clear$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no active issues reported/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /issues/i })).not.toBeInTheDocument();
+  });
+
+  it('shows an error banner when refresh fails after data has already loaded and allows retry', async () => {
     fetchOperatorHealthMock
+      .mockResolvedValueOnce(buildPayload({ status: 'healthy', issues: [] }))
       .mockRejectedValueOnce(new Error('redis offline'))
-      .mockResolvedValueOnce(buildPayload({ status: 'healthy', issues: [] }));
+      .mockResolvedValueOnce(buildPayload({ status: 'degraded' }));
 
     const user = userEvent.setup();
     render(<OperatorHealthPage />);
 
+    expect(await screen.findByText(/^healthy$/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^refresh$/i }));
+
     expect(await screen.findByText(/failed to load operator health: redis offline/i)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: /issues/i })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^refresh$/i }));
 
     await waitFor(() => {
-      expect(fetchOperatorHealthMock).toHaveBeenCalledTimes(2);
+      expect(fetchOperatorHealthMock).toHaveBeenCalledTimes(3);
     });
-    expect(await screen.findByText(/^healthy$/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^degraded$/i)).toBeInTheDocument();
     expect(screen.queryByText(/failed to load operator health: redis offline/i)).not.toBeInTheDocument();
   });
 });

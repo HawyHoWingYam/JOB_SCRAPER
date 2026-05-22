@@ -93,6 +93,8 @@ export default function OperatorHealthPage() {
   const scheduler = health?.scheduler || null;
   const headedRuntime = health?.headed_runtime || null;
   const backlogs = health?.backlogs || null;
+  const hasPayload = health !== null;
+  const showUnavailableState = Boolean(error) && !hasPayload;
 
   return (
     <section className="dashboard-container operator-health-page">
@@ -122,17 +124,18 @@ export default function OperatorHealthPage() {
       )}
 
       <div className="stats-grid">
-        <SummaryCard label="Overall Status" value={health?.status || (loading ? 'Loading...' : UNAVAILABLE_LABEL)} icon={ShieldCheck} />
+        <SummaryCard
+          label="Overall Status"
+          value={health?.status || (loading ? 'Loading...' : UNAVAILABLE_LABEL)}
+          icon={ShieldCheck}
+        />
         <article className="stat-card glass-panel operator-health-stat-card">
           <div className="stat-icon-wrapper purple-glow">
             <Clock3 size={24} className="stat-icon" />
           </div>
           <div className="stat-info">
             <div className="stat-value operator-health-timestamp">
-              <time
-                data-testid="operator-health-last-updated"
-                dateTime={health?.generated_at || ''}
-              >
+              <time data-testid="operator-health-last-updated" dateTime={health?.generated_at || ''}>
                 {loading && !health ? 'Loading...' : formatTimestamp(health?.generated_at)}
               </time>
             </div>
@@ -148,7 +151,18 @@ export default function OperatorHealthPage() {
         </div>
       )}
 
-      {(!loading || health) && (
+      {showUnavailableState && (
+        <div className="glass-panel operator-health-panel operator-health-panel-wide" role="status" aria-live="polite">
+          <div className="operator-health-panel-header">
+            <h3>Operator Data Unavailable</h3>
+          </div>
+          <p className="operator-health-empty-state">
+            Operator health data is currently unavailable. Refresh to try again.
+          </p>
+        </div>
+      )}
+
+      {hasPayload && (
         <div className="operator-health-grid">
           <section
             className="glass-panel operator-health-panel operator-health-panel-wide"
