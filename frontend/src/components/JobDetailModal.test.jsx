@@ -263,4 +263,50 @@ describe('JobDetailModal', () => {
       globalThis.fetch.mock.calls.some(([input]) => String(input).includes('/api/v1/jobs/job-1/similar')),
     ).toBe(false);
   });
+
+  it('waits for runtime capabilities before deciding whether to request related jobs', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = new URL(String(input), 'http://localhost');
+
+      if (url.pathname === '/api/v1/jobs/job-1') {
+        return mockJsonResponse(createJobPayload());
+      }
+
+      if (url.pathname === '/api/v1/jobs/job-1/similar') {
+        return mockJsonResponse({ source_job_id: 'job-1', recommendations: [] });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
+    });
+
+    const modalProps = {
+      jobId: 'job-1',
+      apiUrl: 'http://localhost:8000',
+      onClose: vi.fn(),
+    };
+    const { rerender } = render(
+      <JobDetailModal
+        {...modalProps}
+        capabilities={null}
+        capabilitiesLoading
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
+
+    rerender(
+      <JobDetailModal
+        {...modalProps}
+        capabilities={{ recommendations: { similar_jobs: { available: false } } }}
+        capabilitiesLoading={false}
+      />,
+    );
+
+    expect(
+      await screen.findByText('Related jobs are unavailable in the current runtime profile.'),
+    ).toBeInTheDocument();
+    expect(
+      globalThis.fetch.mock.calls.some(([input]) => String(input).includes('/api/v1/jobs/job-1/similar')),
+    ).toBe(false);
+  });
 });

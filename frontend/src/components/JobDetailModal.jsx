@@ -151,7 +151,7 @@ function getExpiryLabel(job) {
   return `Application closes ${formatted}`;
 }
 
-function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null }) {
+function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilitiesLoading = false }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -195,6 +195,13 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null }) {
     setRelatedJobs([]);
     setRelatedJobsError('');
 
+    if (capabilitiesLoading) {
+      setRelatedJobsLoading(true);
+      return () => {
+        isActive = false;
+      };
+    }
+
     if (!recommendationsAvailable) {
       setRelatedJobsLoading(false);
       setRelatedJobsError(RELATED_JOBS_UNAVAILABLE_MESSAGE);
@@ -230,7 +237,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null }) {
     return () => {
       isActive = false;
     };
-  }, [jobId, apiUrl, recommendationsAvailable]);
+  }, [jobId, apiUrl, capabilitiesLoading, recommendationsAvailable]);
 
   const handleOverlayClick = (e) => {
     if (e.target === e.currentTarget) {

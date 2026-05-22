@@ -169,6 +169,7 @@ function JobBrowser() {
     const [selectedJobId, setSelectedJobId] = useState(null);
     const [retrievalMode, setRetrievalMode] = useState('lexical');
     const [capabilities, setCapabilities] = useState(null);
+    const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
 
     const hasPendingChanges = hasPendingLayerChanges(createEmptyJobBrowserLayer(), draftLayer);
     const draftDatePreset = getDatePresetForQuery(draftLayer.structured_filters);
@@ -278,11 +279,13 @@ function JobBrowser() {
             .then((payload) => {
                 if (!cancelled) {
                     setCapabilities(payload);
+                    setCapabilitiesLoading(false);
                 }
             })
             .catch(() => {
                 if (!cancelled) {
                     setCapabilities(null);
+                    setCapabilitiesLoading(false);
                 }
             });
 
@@ -663,6 +666,7 @@ function JobBrowser() {
                     jobId={selectedJobId}
                     apiUrl={API_URL}
                     capabilities={capabilities}
+                    capabilitiesLoading={capabilitiesLoading}
                     onClose={() => setSelectedJobId(null)}
                 />
             )}
