@@ -68,6 +68,44 @@ def _workspace_temp_dir(name: str) -> Path:
     return path
 
 
+def _base_freshness() -> dict:
+    return {
+        "jobs": {"total": 0, "newest_updated_at": None},
+        "ai": {"total_jobs": 0, "enriched_jobs": 0, "pending_jobs": 0, "run_status_counts": {}},
+        "skills": {"newest_mention_at": None},
+        "embeddings": {
+            "newest_updated_at": None,
+            "total_embeddings": 0,
+            "current_embeddings": 0,
+            "missing_current_embeddings": 0,
+        },
+    }
+
+
+def _healthy_scheduler() -> dict:
+    return {
+        "owner": "scheduler-worker",
+        "worker_name": "scheduler-worker",
+        "available": True,
+        "manual_run_available": True,
+        "heartbeat_status": "fresh",
+        "reason": None,
+    }
+
+
+def _healthy_headed_runtime() -> dict:
+    return {
+        "configured": True,
+        "browser_channel": "msedge",
+        "browser_user_data_dir_configured": True,
+        "browser_user_data_dir_exists": True,
+        "lock_port": 47651,
+        "worker_group": "crawl-headed-workers",
+        "worker_status": "healthy",
+        "reason": None,
+    }
+
+
 def test_count_detail_statuses_groups_statuses_as_dict():
     db = _build_sqlite_session()
     try:
@@ -250,41 +288,86 @@ def test_build_operator_health_summary_marks_queue_backlog_as_critical():
         },
         detail_status_counts_loader=lambda: {},
         outbox_counts_loader=lambda: {},
-        freshness_loader=lambda: {
-            "jobs": {"total": 0, "newest_updated_at": None},
-            "ai": {"total_jobs": 0, "enriched_jobs": 0, "pending_jobs": 0, "run_status_counts": {}},
-            "skills": {"newest_mention_at": None},
-            "embeddings": {
-                "newest_updated_at": None,
-                "total_embeddings": 0,
-                "current_embeddings": 0,
-                "missing_current_embeddings": 0,
-            },
-        },
-        scheduler_status_loader=lambda: {
-            "owner": "scheduler-worker",
-            "worker_name": "scheduler-worker",
-            "available": True,
-            "manual_run_available": True,
-            "heartbeat_status": "fresh",
-            "reason": None,
-        },
-        headed_runtime_loader=lambda: {
-            "configured": True,
-            "browser_channel": "msedge",
-            "browser_user_data_dir_configured": True,
-            "browser_user_data_dir_exists": True,
-            "lock_port": 47651,
-            "worker_group": "crawl-headed-workers",
-            "worker_status": "healthy",
-            "reason": None,
-        },
+        freshness_loader=_base_freshness,
+        scheduler_status_loader=_healthy_scheduler,
+        headed_runtime_loader=_healthy_headed_runtime,
         dead_letter_count_loader=lambda: 0,
     )
 
     assert summary["status"] == "critical"
     assert "stream.job.ingest group ingest-workers lag is 8" in summary["issues"]
     assert "stream.job.ingest group ingest-workers has 4 pending messages" in summary["issues"]
+
+
+def test_build_operator_health_summary_with_only_pending_detail_rows_is_not_healthy():
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: {},
+        detail_status_counts_loader=lambda: {"pending": 2},
+        outbox_counts_loader=lambda: {},
+        freshness_loader=_base_freshness,
+        scheduler_status_loader=_healthy_scheduler,
+        headed_runtime_loader=_healthy_headed_runtime,
+        dead_letter_count_loader=lambda: 0,
+    )
+
+    assert summary["status"] == "degraded"
+    assert "crawl_job_listings has 2 pending detail rows" in summary["issues"]
+
+
+def test_build_operator_health_summary_with_only_outbox_pending_is_not_healthy():
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: {},
+        detail_status_counts_loader=lambda: {},
+        outbox_counts_loader=lambda: {"pending": 3},
+        freshness_loader=_base_freshness,
+        scheduler_status_loader=_healthy_scheduler,
+        headed_runtime_loader=_healthy_headed_runtime,
+        dead_letter_count_loader=lambda: 0,
+    )
+
+    assert summary["status"] == "degraded"
+    assert "event_outbox has 3 pending rows" in summary["issues"]
+
+
+def test_build_operator_health_summary_surfaces_loader_failure_as_degraded_issue():
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: (_ for _ in ()).throw(RuntimeError("redis offline")),
+        detail_status_counts_loader=lambda: {},
+        outbox_counts_loader=lambda: {},
+        freshness_loader=_base_freshness,
+        scheduler_status_loader=_healthy_scheduler,
+        headed_runtime_loader=_healthy_headed_runtime,
+        dead_letter_count_loader=lambda: 0,
+    )
+
+    assert summary["status"] == "degraded"
+    assert "operator dependency queue_summaries unavailable: redis offline" in summary["issues"]
+
+
+def test_build_operator_health_summary_surfaces_missing_consumer_group():
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: {
+            "stream.job.ingest": {
+                "group": "ingest-workers",
+                "length": 5,
+                "pending": 0,
+                "lag": 0,
+                "consumers": 0,
+                "reason": "consumer_group_missing",
+                "worker_name": "ingest-worker",
+            }
+        },
+        detail_status_counts_loader=lambda: {},
+        outbox_counts_loader=lambda: {},
+        freshness_loader=_base_freshness,
+        scheduler_status_loader=_healthy_scheduler,
+        headed_runtime_loader=_healthy_headed_runtime,
+        dead_letter_count_loader=lambda: 0,
+    )
+
+    assert summary["status"] == "degraded"
+    assert summary["workers"]["ingest-worker"]["status"] == "unavailable"
+    assert "stream.job.ingest group ingest-workers is missing" in summary["issues"]
 
 
 def test_build_headed_runtime_summary_reports_exact_contract():

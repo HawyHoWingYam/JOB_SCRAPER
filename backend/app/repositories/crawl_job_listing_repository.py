@@ -389,3 +389,4 @@ class CrawlJobListingRepository:
             db.flush()
         return listing
 
+

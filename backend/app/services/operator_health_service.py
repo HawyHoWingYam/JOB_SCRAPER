@@ -69,6 +69,17 @@ def _coerce_int(value: Any) -> int:
         return 0
 
 
+def _dependency_failure_issue(name: str, exc: Exception) -> str:
+    return f"operator dependency {name} unavailable: {exc}"
+
+
+def _load_dependency(name: str, loader: Callable[[], Any], fallback: Any) -> tuple[Any, str | None]:
+    try:
+        return loader(), None
+    except Exception as exc:  # pragma: no cover - exercised via callers/tests
+        return fallback, _dependency_failure_issue(name, exc)
+
+
 def load_stream_group_summaries(*, bus_factory: Callable[[], Any] = RedisStreamBus) -> dict[str, dict[str, Any]]:
     redis_client = bus_factory().redis
     summaries: dict[str, dict[str, Any]] = {}
@@ -85,16 +96,15 @@ def load_stream_group_summaries(*, bus_factory: Callable[[], Any] = RedisStreamB
             "lag": 0,
             "consumers": 0,
         }
-        try:
-            summary["length"] = _coerce_int(redis_client.xlen(stream_name))
-            group_rows = [_decode_redis_mapping(row) for row in redis_client.xinfo_groups(stream_name)]
-            group_row = next((row for row in group_rows if row.get("name") == group_name), None)
-            if group_row is not None:
-                summary["pending"] = _coerce_int(group_row.get("pending"))
-                summary["lag"] = _coerce_int(group_row.get("lag"))
-                summary["consumers"] = _coerce_int(group_row.get("consumers"))
-        except Exception as exc:
-            summary["error"] = str(exc)
+        summary["length"] = _coerce_int(redis_client.xlen(stream_name))
+        group_rows = [_decode_redis_mapping(row) for row in redis_client.xinfo_groups(stream_name)]
+        group_row = next((row for row in group_rows if row.get("name") == group_name), None)
+        if group_row is None:
+            summary["reason"] = "consumer_group_missing"
+        else:
+            summary["pending"] = _coerce_int(group_row.get("pending"))
+            summary["lag"] = _coerce_int(group_row.get("lag"))
+            summary["consumers"] = _coerce_int(group_row.get("consumers"))
         summaries[queue_key] = summary
     return summaries
 
@@ -180,8 +190,10 @@ def _headed_worker_status_from_summary(worker_summary: dict[str, Any] | None, *,
         return "misconfigured", None
     if not worker_summary:
         return "unknown", "headed_worker_status_unavailable"
+    if worker_summary.get("reason") == "consumer_group_missing":
+        return "unavailable", "headed_worker_group_missing"
     if worker_summary.get("error"):
-        return "unknown", "headed_worker_queue_unavailable"
+        return "unavailable", "headed_worker_queue_unavailable"
     if _coerce_int(worker_summary.get("lag")) or _coerce_int(worker_summary.get("pending")):
         return "degraded", "headed_worker_backlog"
     return "healthy", None
@@ -251,14 +263,9 @@ def _headed_runtime_issue(summary: dict[str, Any]) -> str | None:
         return "headed worker queue backlog is present"
     if reason == "headed_worker_status_unavailable":
         return "headed worker status is unavailable"
+    if reason == "headed_worker_group_missing":
+        return "headed worker consumer group is missing"
     return None
-
-
-def _load_or_default(loader: Callable[[], Any], default: Any) -> Any:
-    try:
-        return loader()
-    except Exception:
-        return default
 
 
 def build_operator_health_summary(
@@ -277,7 +284,12 @@ def build_operator_health_summary(
     critical_conditions = False
     degraded_conditions = False
 
-    queue_summaries = _load_or_default(queue_summary_loader, {}) or {}
+    queue_summaries, queue_error = _load_dependency("queue_summaries", queue_summary_loader, {})
+    if queue_error is not None:
+        issues.append(queue_error)
+        degraded_conditions = True
+    queue_summaries = dict(queue_summaries or {})
+
     queues: dict[str, dict[str, Any]] = {}
     for queue_key, raw_summary in queue_summaries.items():
         raw_summary = dict(raw_summary or {})
@@ -290,20 +302,31 @@ def build_operator_health_summary(
         }
         if raw_summary.get("stream"):
             queue_summary["stream"] = raw_summary.get("stream")
-        if raw_summary.get("error"):
+        worker_name = str(raw_summary.get("worker_name") or queue_key)
+        worker_status = "healthy"
+
+        if raw_summary.get("reason") == "consumer_group_missing":
+            queue_summary["reason"] = "consumer_group_missing"
+            issues.append(f"{queue_key} group {queue_summary['group']} is missing")
+            degraded_conditions = True
+            worker_status = "unavailable"
+        elif raw_summary.get("error"):
             queue_summary["error"] = str(raw_summary["error"])
             issues.append(f"{queue_key} queue health unavailable: {raw_summary['error']}")
             degraded_conditions = True
-        if queue_summary["lag"]:
-            issues.append(f"{queue_key} group {queue_summary['group']} lag is {queue_summary['lag']}")
-            critical_conditions = True
-        if queue_summary["pending"]:
-            issues.append(f"{queue_key} group {queue_summary['group']} has {queue_summary['pending']} pending messages")
-            critical_conditions = True
+            worker_status = "unknown"
+        else:
+            if queue_summary["lag"]:
+                issues.append(f"{queue_key} group {queue_summary['group']} lag is {queue_summary['lag']}")
+                critical_conditions = True
+                worker_status = "degraded"
+            if queue_summary["pending"]:
+                issues.append(f"{queue_key} group {queue_summary['group']} has {queue_summary['pending']} pending messages")
+                critical_conditions = True
+                worker_status = "degraded"
 
-        worker_name = str(raw_summary.get("worker_name") or queue_key)
         workers[worker_name] = {
-            "status": "degraded" if queue_summary["lag"] or queue_summary["pending"] else "healthy",
+            "status": worker_status,
             "stream": queue_summary.get("stream") or queue_key,
             "group": queue_summary["group"],
             "pending": queue_summary["pending"],
@@ -311,23 +334,54 @@ def build_operator_health_summary(
             "consumers": queue_summary["consumers"],
         }
         if raw_summary.get("error"):
-            workers[worker_name]["status"] = "unknown"
             workers[worker_name]["error"] = str(raw_summary["error"])
+        if raw_summary.get("reason") == "consumer_group_missing":
+            workers[worker_name]["reason"] = "consumer_group_missing"
         queues[queue_key] = queue_summary
 
-    detail_status_counts = {str(key): _coerce_int(value) for key, value in (_load_or_default(detail_status_counts_loader, {}) or {}).items()}
-    outbox_counts = {str(key): _coerce_int(value) for key, value in (_load_or_default(outbox_counts_loader, {}) or {}).items()}
-    freshness = dict(_load_or_default(freshness_loader, {}) or {})
-    scheduler = dict(_load_or_default(scheduler_status_loader, {}) or {})
+    detail_status_counts, detail_error = _load_dependency("detail_status_counts", detail_status_counts_loader, {})
+    if detail_error is not None:
+        issues.append(detail_error)
+        degraded_conditions = True
+    detail_status_counts = {str(key): _coerce_int(value) for key, value in dict(detail_status_counts or {}).items()}
+
+    outbox_counts, outbox_error = _load_dependency("outbox_counts", outbox_counts_loader, {})
+    if outbox_error is not None:
+        issues.append(outbox_error)
+        degraded_conditions = True
+    outbox_counts = {str(key): _coerce_int(value) for key, value in dict(outbox_counts or {}).items()}
+
+    freshness, freshness_error = _load_dependency("freshness", freshness_loader, {})
+    if freshness_error is not None:
+        issues.append(freshness_error)
+        degraded_conditions = True
+    freshness = dict(freshness or {})
+
+    scheduler, scheduler_error = _load_dependency("scheduler_status", scheduler_status_loader, {})
+    if scheduler_error is not None:
+        issues.append(scheduler_error)
+        degraded_conditions = True
+    scheduler = dict(scheduler or {})
+
     if headed_runtime_loader is None:
-        default_headed_runtime = build_headed_runtime_summary(
-            settings,
-            worker_summary=queue_summaries.get(STREAM_CRAWL_COMMANDS_HEADED),
+        headed_runtime = _normalize_headed_runtime_summary(
+            build_headed_runtime_summary(
+                settings,
+                worker_summary=queue_summaries.get(STREAM_CRAWL_COMMANDS_HEADED),
+            )
         )
-        headed_runtime = _normalize_headed_runtime_summary(default_headed_runtime)
     else:
-        headed_runtime = _normalize_headed_runtime_summary(_load_or_default(headed_runtime_loader, {}))
-    dead_letter_count = _coerce_int(_load_or_default(dead_letter_count_loader, 0))
+        headed_runtime_raw, headed_error = _load_dependency("headed_runtime", headed_runtime_loader, {})
+        if headed_error is not None:
+            issues.append(headed_error)
+            degraded_conditions = True
+        headed_runtime = _normalize_headed_runtime_summary(headed_runtime_raw)
+
+    dead_letter_count, dead_letter_error = _load_dependency("dead_letter_count", dead_letter_count_loader, 0)
+    if dead_letter_error is not None:
+        issues.append(dead_letter_error)
+        degraded_conditions = True
+    dead_letter_count = _coerce_int(dead_letter_count)
 
     pending_detail_rows = detail_status_counts.get("pending", 0)
     failed_detail_rows = detail_status_counts.get("failed", 0)
@@ -359,13 +413,16 @@ def build_operator_health_summary(
 
     if pending_detail_rows:
         issues.append(f"crawl_job_listings has {pending_detail_rows} pending detail rows")
+        degraded_conditions = True
     if failed_detail_rows:
         issues.append(f"crawl_job_listings has {failed_detail_rows} failed detail rows")
+        degraded_conditions = True
     if manual_action_detail_rows:
         issues.append(f"crawl_job_listings has {manual_action_detail_rows} manual-action detail rows")
         degraded_conditions = True
     if outbox_pending:
         issues.append(f"event_outbox has {outbox_pending} pending rows")
+        degraded_conditions = True
     if outbox_failed:
         issues.append(f"event_outbox has {outbox_failed} failed rows")
         degraded_conditions = True
@@ -378,6 +435,7 @@ def build_operator_health_summary(
         degraded_conditions = True
     if ai_backlog_jobs:
         issues.append(f"AI run backlog has {ai_backlog_jobs} queued items")
+        degraded_conditions = True
 
     scheduler_worker_name = str(scheduler.get("worker_name") or scheduler.get("owner") or "scheduler-worker")
     heartbeat_status = str(scheduler.get("heartbeat_status") or "unknown")
@@ -395,6 +453,9 @@ def build_operator_health_summary(
     elif heartbeat_status == "stale":
         last_seen = scheduler.get("last_heartbeat_at") or "unknown"
         issues.append(f"scheduler-worker heartbeat is stale (last seen {last_seen})")
+        degraded_conditions = True
+    elif heartbeat_status == "unknown" and scheduler_error is None and scheduler:
+        issues.append("scheduler-worker status is unknown")
         degraded_conditions = True
     elif not scheduler.get("available") and scheduler.get("reason"):
         issues.append(f"scheduler-worker status is {scheduler['reason']}")
