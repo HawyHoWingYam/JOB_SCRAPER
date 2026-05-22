@@ -99,6 +99,37 @@ async def list_schedules(
     return ScheduleListResponse(schedules=schedules, total=total)
 
 
+@router.post(
+    "/run-now",
+    response_model=CrawlJobSchema,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_immediate_scrape(
+    request: ImmediateScrapeRequest,
+    db: Session = Depends(get_db)
+):
+    """Run scraping immediately without creating a schedule."""
+    if request.source_site not in SUPPORTED_SOURCE_SITES:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported source_site for execution",
+        )
+
+    dispatch_result = crawl_job_dispatch_service.dispatch_manual_crawl_job(
+        db,
+        source_site=request.source_site,
+        crawl_phase=request.crawl_phase,
+        crawl_mode=request.crawl_mode,
+        category_ids=list(request.category_ids or []),
+        max_pages=request.max_pages,
+        source_listing_crawl_job_id=request.source_listing_crawl_job_id,
+        detail_limit=request.detail_limit,
+        skip_existing=request.skip_existing,
+        requested_by="api",
+    )
+    return dispatch_result.crawl_job
+
+
 @router.get("/{schedule_id}", response_model=ScheduleSchema)
 async def get_schedule(
     schedule_id: UUID,
@@ -269,34 +300,3 @@ async def get_schedule_history(
     return ExecutionListResponse(executions=executions, total=len(executions))
 
 
-@router.post(
-    "/run-now",
-    response_model=CrawlJobSchema,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def run_immediate_scrape(
-    request: ImmediateScrapeRequest,
-    db: Session = Depends(get_db)
-):
-    """Run scraping immediately without creating a schedule."""
-    if request.source_site not in SUPPORTED_SOURCE_SITES:
-        raise HTTPException(
-            status_code=400,
-            detail="Unsupported source_site for execution",
-        )
-
-    await _validate_effective_category_ids(request.source_site, request.category_ids)
-
-    dispatch_result = crawl_job_dispatch_service.dispatch_manual_crawl_job(
-        db,
-        source_site=request.source_site,
-        crawl_phase=request.crawl_phase,
-        crawl_mode=request.crawl_mode,
-        category_ids=list(request.category_ids or []),
-        max_pages=request.max_pages,
-        source_listing_crawl_job_id=request.source_listing_crawl_job_id,
-        detail_limit=request.detail_limit,
-        skip_existing=request.skip_existing,
-        requested_by="api",
-    )
-    return dispatch_result.crawl_job

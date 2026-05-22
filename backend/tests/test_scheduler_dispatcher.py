@@ -2,6 +2,7 @@ import sys
 import types
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -58,10 +59,12 @@ sys.modules.setdefault("apscheduler.triggers", apscheduler_triggers_module)
 sys.modules.setdefault("apscheduler.triggers.cron", apscheduler_cron_module)
 
 from app.api.schedules import router as schedules_router
+import app.api.schedules as schedules_api_module
 from app.database import Base, get_db
 from app.models import CrawlJob, CrawlJobEvent, EventOutbox, ScrapeSchedule, ScheduleExecution
 from app.services.scheduler_service import SchedulerService
 import app.services.scheduler_service as scheduler_service_module
+from app.utils.time import utc_now
 
 if not hasattr(SQLiteTypeCompiler, "visit_UUID"):
     SQLiteTypeCompiler.visit_UUID = lambda self, type_, **kw: "CHAR(32)"
@@ -238,3 +241,73 @@ async def test_scheduler_service_dispatches_detail_schedules_with_detail_limit(m
     assert crawl_job.request_payload["crawl_phase"] == "detail"
     assert crawl_job.request_payload["detail_limit"] == 30
     assert crawl_job.request_payload["category_ids"] == [6281]
+
+
+@pytest.mark.asyncio
+async def test_immediate_run_now_allows_ctgoodjobs_detail_batch_without_categories(monkeypatch):
+    _engine, Session = _build_engine_and_session()
+    source_listing_crawl_job_id = uuid.uuid4()
+    captured = {}
+
+    app = FastAPI()
+    app.include_router(schedules_router, prefix="/api/v1")
+
+    def override_get_db():
+        db = Session()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def dispatch_manual_crawl_job(db, **kwargs):
+        captured.update(kwargs)
+        now = utc_now()
+        crawl_job = CrawlJob(
+            id=uuid.uuid4(),
+            source_site=kwargs["source_site"],
+            trigger_type="manual",
+            schedule_id=None,
+            status="queued",
+            request_payload={
+                "source_site": kwargs["source_site"],
+                "crawl_phase": kwargs["crawl_phase"],
+                "crawl_mode": kwargs["crawl_mode"],
+                "category_ids": kwargs["category_ids"],
+                "source_listing_crawl_job_id": str(kwargs["source_listing_crawl_job_id"]),
+                "detail_limit": kwargs["detail_limit"],
+            },
+            requested_by=kwargs["requested_by"],
+            queued_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        return SimpleNamespace(crawl_job=crawl_job)
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(
+        schedules_api_module.crawl_job_dispatch_service,
+        "dispatch_manual_crawl_job",
+        dispatch_manual_crawl_job,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    client = httpx.AsyncClient(transport=transport, base_url="http://testserver")
+    try:
+        response = await client.post(
+            "/api/v1/schedules/run-now",
+            json={
+                "source_site": "ctgoodjobs",
+                "crawl_phase": "detail",
+                "crawl_mode": "headed",
+                "source_listing_crawl_job_id": str(source_listing_crawl_job_id),
+                "detail_limit": 200,
+            },
+        )
+
+        assert response.status_code == 202
+        assert captured["source_site"] == "ctgoodjobs"
+        assert captured["crawl_phase"] == "detail"
+        assert captured["category_ids"] == []
+        assert captured["source_listing_crawl_job_id"] == source_listing_crawl_job_id
+    finally:
+        await client.aclose()

@@ -26,7 +26,7 @@ function formatDate(dateString) {
     });
 }
 
-function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLoading }) {
+function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLoading, scheduleControlsDisabled }) {
     const isActive = schedule.is_active;
     const sourceLabel = formatSourceLabel(schedule.source_site || 'jobsdb');
     const crawlPhaseLabel = formatCrawlPhaseLabel(schedule.crawl_phase);
@@ -49,7 +49,7 @@ function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLo
                         type="checkbox"
                         checked={isActive}
                         onChange={() => onToggle(schedule.id)}
-                        disabled={isLoading}
+                        disabled={scheduleControlsDisabled}
                     />
                     <span className="cyber-slider"></span>
                 </label>
@@ -111,7 +111,7 @@ function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLo
                 <button
                     className="cyber-btn run-btn"
                     onClick={() => onRun(schedule.id)}
-                    disabled={isLoading}
+                    disabled={scheduleControlsDisabled}
                     title="Force Run Now"
                 >
                     <Play size={16} /> Execute
@@ -136,7 +136,16 @@ function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLo
     );
 }
 
-function ScheduleList({ schedules, currentSourceSite, onToggle, onDelete, onRun, onViewHistory, isLoading }) {
+function ScheduleList({
+    schedules,
+    currentSourceSite,
+    onToggle,
+    onDelete,
+    onRun,
+    onViewHistory,
+    isLoading,
+    scheduleControlsDisabled = isLoading,
+}) {
     const sourceLabel = formatSourceLabel(currentSourceSite);
 
     if (schedules.length === 0) {
@@ -162,6 +171,7 @@ function ScheduleList({ schedules, currentSourceSite, onToggle, onDelete, onRun,
                         onRun={onRun}
                         onViewHistory={onViewHistory}
                         isLoading={isLoading}
+                        scheduleControlsDisabled={scheduleControlsDisabled}
                     />
                 ))}
             </div>

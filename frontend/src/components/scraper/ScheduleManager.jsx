@@ -422,8 +422,15 @@ function ScheduleManager({ onNavigateToAI }) {
         fetchListingBatches(currentSourceSite);
     }, [currentSourceSite, fetchListingBatches, immediateForm.crawl_phase, showImmediateScrape]);
 
+    const schedulerAvailable = capabilities?.scheduler?.available !== false;
+    const scheduleControlsDisabled = isLoading || !schedulerAvailable;
+
     // Create schedule
     const handleCreate = async (formData) => {
+        if (!schedulerAvailable) {
+            setError('Scheduler dispatch is unavailable in the current runtime profile.');
+            return;
+        }
         setIsLoading(true);
         setError(null);
         const payload = {
@@ -453,6 +460,10 @@ function ScheduleManager({ onNavigateToAI }) {
 
     // Toggle schedule
     const handleToggle = async (id) => {
+        if (!schedulerAvailable) {
+            setError('Scheduler dispatch is unavailable in the current runtime profile.');
+            return;
+        }
         setIsLoading(true);
         try {
             const response = await fetch(`${API_BASE}/schedules/${id}/toggle`, {
@@ -486,6 +497,10 @@ function ScheduleManager({ onNavigateToAI }) {
 
     // Run now
     const handleRun = async (id) => {
+        if (!schedulerAvailable) {
+            setError('Scheduler dispatch is unavailable in the current runtime profile.');
+            return;
+        }
         setIsLoading(true);
         try {
             const response = await fetch(`${API_BASE}/crawl-jobs`, {
@@ -615,6 +630,7 @@ function ScheduleManager({ onNavigateToAI }) {
                     <button
                         className="cyber-btn primary-glow"
                         onClick={() => setShowForm(!showForm)}
+                        disabled={!schedulerAvailable && !showForm}
                     >
                         {showForm ? 'Close Form' : <><Plus size={18} /> New Automation</>}
                     </button>
@@ -847,6 +863,7 @@ function ScheduleManager({ onNavigateToAI }) {
                 onRun={handleRun}
                 onViewHistory={handleViewHistory}
                 isLoading={isLoading}
+                scheduleControlsDisabled={scheduleControlsDisabled}
             />
 
             {historyData && (

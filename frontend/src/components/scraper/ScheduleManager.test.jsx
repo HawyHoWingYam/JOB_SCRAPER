@@ -286,6 +286,26 @@ describe('ScheduleManager', () => {
     ).toBeInTheDocument();
   });
 
+  it('disables scheduled automation controls when scheduler dispatch is unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        capabilities: {
+          scheduler: { available: false, reason: 'scheduler_not_running' },
+        },
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    expect(
+      await screen.findByText('Scheduler dispatch is unavailable in the current runtime profile.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new automation/i })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: /execute/i })[0]).toBeDisabled();
+    expect(screen.getByRole('button', { name: /direct override/i })).not.toBeDisabled();
+  });
+
   it('posts jobsdb crawl-job payloads with integer category ids and source_site', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
