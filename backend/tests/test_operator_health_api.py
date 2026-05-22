@@ -1,0 +1,317 @@
+from __future__ import annotations
+
+import shutil
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+from sqlalchemy import create_engine
+from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.database import Base
+from app.models import CrawlJob, CrawlJobListing
+from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
+import app.services.operator_health_service as service_module
+
+if not hasattr(SQLiteTypeCompiler, "visit_UUID"):
+    SQLiteTypeCompiler.visit_UUID = lambda self, type_, **kw: "CHAR(32)"
+
+if not hasattr(SQLiteTypeCompiler, "visit_ARRAY"):
+    SQLiteTypeCompiler.visit_ARRAY = lambda self, type_, **kw: "TEXT"
+
+
+def _build_sqlite_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            CrawlJob.__table__,
+            CrawlJobListing.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine)
+    return Session()
+
+
+def _create_crawl_job(db, *, source_site: str = "jobsdb") -> CrawlJob:
+    crawl_job = CrawlJob(
+        id=uuid.uuid4(),
+        source_site=source_site,
+        trigger_type="manual",
+        status="queued",
+        request_payload={"source_site": source_site},
+        requested_by="pytest",
+    )
+    db.add(crawl_job)
+    db.commit()
+    db.refresh(crawl_job)
+    return crawl_job
+
+
+def _workspace_temp_dir(name: str) -> Path:
+    path = BACKEND_ROOT / "tests" / ".tmp_operator_health" / name
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True)
+    return path
+
+
+def test_count_detail_statuses_groups_statuses_as_dict():
+    db = _build_sqlite_session()
+    try:
+        listing_crawl_job = _create_crawl_job(db)
+        detail_crawl_job = _create_crawl_job(db)
+        repository = CrawlJobListingRepository()
+
+        repository.upsert_listing(
+            db,
+            crawl_job_id=listing_crawl_job.id,
+            source_site="jobsdb",
+            source_job_id="1001",
+            source_url="https://hk.jobsdb.com/job/1001",
+            source_classification_id="6281",
+            source_classification_name="ICT",
+            listing_page=1,
+            listing_rank=1,
+            listing_payload={"title": "Pending"},
+        )
+        second, _ = repository.upsert_listing(
+            db,
+            crawl_job_id=listing_crawl_job.id,
+            source_site="jobsdb",
+            source_job_id="1002",
+            source_url="https://hk.jobsdb.com/job/1002",
+            source_classification_id="6281",
+            source_classification_name="ICT",
+            listing_page=1,
+            listing_rank=2,
+            listing_payload={"title": "Manual action"},
+        )
+        third, _ = repository.upsert_listing(
+            db,
+            crawl_job_id=listing_crawl_job.id,
+            source_site="jobsdb",
+            source_job_id="1003",
+            source_url="https://hk.jobsdb.com/job/1003",
+            source_classification_id="6281",
+            source_classification_name="ICT",
+            listing_page=1,
+            listing_rank=3,
+            listing_payload={"title": "Failed"},
+        )
+
+        repository.mark_detail_manual_action_required(
+            db,
+            listing_id=second.id,
+            detail_crawl_job_id=detail_crawl_job.id,
+            error_message="captcha",
+        )
+        repository.mark_detail_failed(
+            db,
+            listing_id=third.id,
+            detail_crawl_job_id=detail_crawl_job.id,
+            error_message="timeout",
+        )
+
+        counts = repository.count_detail_statuses(db)
+
+        assert counts == {
+            "failed": 1,
+            "manual_action_required": 1,
+            "pending": 1,
+        }
+    finally:
+        db.close()
+
+
+def test_build_operator_health_summary_returns_exact_approved_contract():
+    generated_at = datetime(2026, 5, 22, 3, 4, 5, tzinfo=timezone.utc)
+    missing_profile_dir = BACKEND_ROOT / "tests" / ".tmp_operator_health" / "missing-profile"
+    if missing_profile_dir.exists():
+        shutil.rmtree(missing_profile_dir)
+    queue_summary = {
+        "stream.job.ingest": {"group": "ingest-workers", "length": 12, "pending": 0, "lag": 0, "consumers": 1},
+        "stream.job.lifecycle:enrichment-workers": {
+            "group": "enrichment-workers",
+            "length": 9,
+            "pending": 0,
+            "lag": 0,
+            "consumers": 1,
+        },
+        "stream.job.embedding": {"group": "embedding-workers", "length": 5, "pending": 0, "lag": 0, "consumers": 1},
+        "stream.crawl.commands.headed": {
+            "group": "crawl-headed-workers",
+            "length": 4,
+            "pending": 0,
+            "lag": 0,
+            "consumers": 1,
+        },
+    }
+
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: queue_summary,
+        detail_status_counts_loader=lambda: {
+            "pending": 11,
+            "failed": 3,
+            "manual_action_required": 2,
+            "completed": 7,
+        },
+        outbox_counts_loader=lambda: {"pending": 4, "failed": 1},
+        freshness_loader=lambda: {
+            "jobs": {"total": 20, "newest_updated_at": "2026-05-22T02:50:00+00:00"},
+            "ai": {
+                "total_jobs": 20,
+                "enriched_jobs": 15,
+                "pending_jobs": 5,
+                "run_status_counts": {"queued": 6, "failed": 1},
+            },
+            "skills": {"newest_mention_at": "2026-05-22T02:45:00+00:00"},
+            "embeddings": {
+                "newest_updated_at": "2026-05-22T02:40:00+00:00",
+                "total_embeddings": 18,
+                "current_embeddings": 17,
+                "missing_current_embeddings": 3,
+            },
+        },
+        scheduler_status_loader=lambda: {
+            "owner": "scheduler-worker",
+            "worker_name": "scheduler-worker",
+            "available": False,
+            "manual_run_available": True,
+            "heartbeat_status": "stale",
+            "last_heartbeat_at": "2026-05-22T02:55:00+00:00",
+            "last_reconcile_at": "2026-05-22T02:54:00+00:00",
+            "active_schedule_count": 3,
+            "registered_job_count": 3,
+            "reason": "scheduler_worker_stale",
+        },
+        headed_runtime_loader=lambda: {
+            "configured": False,
+            "browser_channel": "msedge",
+            "browser_user_data_dir_configured": True,
+            "browser_user_data_dir_exists": False,
+            "lock_port": 47651,
+            "worker_group": "crawl-headed-workers",
+            "worker_status": "misconfigured",
+            "reason": "browser_user_data_dir_missing",
+            "ignored": "extra",
+        },
+        dead_letter_count_loader=lambda: 2,
+        generated_at=generated_at,
+    )
+
+    assert summary["status"] == "degraded"
+    assert summary["generated_at"] == "2026-05-22T03:04:05+00:00"
+    assert summary["scheduler"]["heartbeat_status"] == "stale"
+    assert summary["headed_runtime"] == {
+        "configured": False,
+        "browser_channel": "msedge",
+        "browser_user_data_dir_configured": True,
+        "browser_user_data_dir_exists": False,
+        "lock_port": 47651,
+        "worker_group": "crawl-headed-workers",
+        "worker_status": "misconfigured",
+        "reason": "browser_user_data_dir_missing",
+    }
+    assert summary["backlogs"] == {
+        "pending_detail_rows": 11,
+        "failed_detail_rows": 3,
+        "manual_action_detail_rows": 2,
+        "outbox_pending": 4,
+        "outbox_failed": 1,
+        "dead_letter_count": 2,
+        "missing_current_embeddings": 3,
+        "ai_backlog_jobs": 6,
+    }
+    assert summary["freshness"]["crawl_job_listings"]["manual_action_required"] == 2
+    assert "stream.job.ingest.dead_letter has 2 messages" in summary["issues"]
+    assert "crawl_job_listings has 2 manual-action detail rows" in summary["issues"]
+    assert any("scheduler-worker heartbeat is stale" in issue for issue in summary["issues"])
+    assert "headed browser user data dir does not exist" in summary["issues"]
+    assert missing_profile_dir.exists() is False
+
+
+def test_build_operator_health_summary_marks_queue_backlog_as_critical():
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: {
+            "stream.job.ingest": {"group": "ingest-workers", "length": 15, "pending": 4, "lag": 8, "consumers": 1},
+        },
+        detail_status_counts_loader=lambda: {},
+        outbox_counts_loader=lambda: {},
+        freshness_loader=lambda: {
+            "jobs": {"total": 0, "newest_updated_at": None},
+            "ai": {"total_jobs": 0, "enriched_jobs": 0, "pending_jobs": 0, "run_status_counts": {}},
+            "skills": {"newest_mention_at": None},
+            "embeddings": {
+                "newest_updated_at": None,
+                "total_embeddings": 0,
+                "current_embeddings": 0,
+                "missing_current_embeddings": 0,
+            },
+        },
+        scheduler_status_loader=lambda: {
+            "owner": "scheduler-worker",
+            "worker_name": "scheduler-worker",
+            "available": True,
+            "manual_run_available": True,
+            "heartbeat_status": "fresh",
+            "reason": None,
+        },
+        headed_runtime_loader=lambda: {
+            "configured": True,
+            "browser_channel": "msedge",
+            "browser_user_data_dir_configured": True,
+            "browser_user_data_dir_exists": True,
+            "lock_port": 47651,
+            "worker_group": "crawl-headed-workers",
+            "worker_status": "healthy",
+            "reason": None,
+        },
+        dead_letter_count_loader=lambda: 0,
+    )
+
+    assert summary["status"] == "critical"
+    assert "stream.job.ingest group ingest-workers lag is 8" in summary["issues"]
+    assert "stream.job.ingest group ingest-workers has 4 pending messages" in summary["issues"]
+
+
+def test_build_headed_runtime_summary_reports_exact_contract():
+    profile_dir = _workspace_temp_dir("profile")
+    try:
+        summary = service_module.build_headed_runtime_summary(
+            SimpleNamespace(
+                jobsdb_headed_browser_channel="chrome",
+                jobsdb_headed_browser_user_data_dir=str(profile_dir),
+                jobsdb_headed_worker_lock_port=49000,
+            ),
+            worker_summary={
+                "group": "crawl-headed-workers",
+                "pending": 0,
+                "lag": 0,
+            },
+        )
+
+        assert summary == {
+            "configured": True,
+            "browser_channel": "chrome",
+            "browser_user_data_dir_configured": True,
+            "browser_user_data_dir_exists": True,
+            "lock_port": 49000,
+            "worker_group": "crawl-headed-workers",
+            "worker_status": "healthy",
+            "reason": None,
+        }
+    finally:
+        shutil.rmtree(profile_dir.parent, ignore_errors=True)
