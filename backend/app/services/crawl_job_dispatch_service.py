@@ -39,6 +39,47 @@ class CrawlJobDispatchService:
         self.outbox_publisher = outbox_publisher or OutboxPublisher()
         self.schedule_repository = schedule_repository or ScheduleRepository()
 
+    def build_manual_request_payload(
+        self,
+        *,
+        source_site: str,
+        crawl_phase: str | None = None,
+        crawl_mode: str | None = None,
+        category_ids: list[int | str],
+        max_pages: int,
+        source_listing_crawl_job_id=None,
+        detail_limit: int = 100,
+        detail_statuses: list[str] | None = None,
+        skip_existing: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "source_site": source_site,
+            "crawl_phase": resolve_crawl_phase(crawl_phase),
+            "crawl_mode": resolve_crawl_mode(source_site, crawl_mode),
+            "category_ids": list(category_ids),
+            "max_pages": max_pages,
+            "source_listing_crawl_job_id": str(source_listing_crawl_job_id)
+            if source_listing_crawl_job_id is not None
+            else None,
+            "detail_limit": int(detail_limit),
+            "detail_statuses": list(detail_statuses or ["pending"]),
+            "skip_existing": skip_existing,
+        }
+
+    def build_schedule_request_payload(self, *, schedule: ScrapeSchedule) -> dict[str, Any]:
+        return {
+            "source_site": schedule.source_site,
+            "crawl_phase": resolve_crawl_phase(getattr(schedule, "crawl_phase", None)),
+            "crawl_mode": resolve_crawl_mode(schedule.source_site, getattr(schedule, "crawl_mode", None)),
+            "category_ids": list(schedule.category_ids or []),
+            "keywords": schedule.keywords,
+            "location": schedule.location,
+            "max_pages": schedule.max_pages or 3,
+            "detail_limit": int(getattr(schedule, "detail_limit", 100) or 100),
+            "detail_statuses": ["pending"],
+            "skip_existing": True,
+        }
+
     def dispatch_manual_crawl_job(
         self,
         db: Session,
@@ -58,19 +99,17 @@ class CrawlJobDispatchService:
             db,
             source_site=source_site,
             trigger_type="manual",
-            request_payload={
-                "source_site": source_site,
-                "crawl_phase": resolve_crawl_phase(crawl_phase),
-                "crawl_mode": resolve_crawl_mode(source_site, crawl_mode),
-                "category_ids": category_ids,
-                "max_pages": max_pages,
-                "source_listing_crawl_job_id": str(source_listing_crawl_job_id)
-                if source_listing_crawl_job_id is not None
-                else None,
-                "detail_limit": int(detail_limit),
-                "detail_statuses": list(detail_statuses or ["pending"]),
-                "skip_existing": skip_existing,
-            },
+            request_payload=self.build_manual_request_payload(
+                source_site=source_site,
+                crawl_phase=crawl_phase,
+                crawl_mode=crawl_mode,
+                category_ids=category_ids,
+                max_pages=max_pages,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_limit=detail_limit,
+                detail_statuses=detail_statuses,
+                skip_existing=skip_existing,
+            ),
             requested_by=requested_by,
         )
 
@@ -82,23 +121,11 @@ class CrawlJobDispatchService:
         requested_by: str = "scheduler-worker",
         trigger_type: str = "schedule",
     ) -> CrawlJobDispatchResult:
-        request_payload = {
-            "source_site": schedule.source_site,
-            "crawl_phase": resolve_crawl_phase(getattr(schedule, "crawl_phase", None)),
-            "crawl_mode": resolve_crawl_mode(schedule.source_site, getattr(schedule, "crawl_mode", None)),
-            "category_ids": list(schedule.category_ids or []),
-            "keywords": schedule.keywords,
-            "location": schedule.location,
-            "max_pages": schedule.max_pages or 3,
-            "detail_limit": int(getattr(schedule, "detail_limit", 100) or 100),
-            "detail_statuses": ["pending"],
-            "skip_existing": True,
-        }
         return self.dispatch_crawl_job(
             db,
             source_site=schedule.source_site,
             trigger_type=trigger_type,
-            request_payload=request_payload,
+            request_payload=self.build_schedule_request_payload(schedule=schedule),
             requested_by=requested_by,
             schedule_id=schedule.id,
         )
@@ -140,6 +167,10 @@ class CrawlJobDispatchService:
             auto_commit=False,
         )
 
+        if execution is not None:
+            execution.crawl_job_id = crawl_job.id
+            execution.request_payload_snapshot = dict(payload)
+
         event_payload = self._build_requested_event_payload(crawl_job)
         self.crawl_job_repository.append_event(
             db,
@@ -158,9 +189,6 @@ class CrawlJobDispatchService:
             payload=event_payload,
             auto_commit=False,
         )
-
-        if execution is not None:
-            execution.crawl_job_id = crawl_job.id
 
         db.commit()
         db.refresh(crawl_job)

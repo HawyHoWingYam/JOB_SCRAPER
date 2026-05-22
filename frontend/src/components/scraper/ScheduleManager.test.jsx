@@ -119,7 +119,7 @@ function createFetchMock({
   ctgoodjobsCategories = CTGOODJOBS_CATEGORIES,
   ctgoodjobsCategoryErrorDetail = null,
   health = { status: 'healthy', operator: { status: 'healthy', issues: [] } },
-  capabilities = { scheduler: { available: true } },
+  capabilities = { scheduler: { available: true, manual_run_available: true, owner: 'scheduler-worker', worker_name: 'scheduler-worker', heartbeat_status: 'fresh', reason: null } },
   listingBatches = [],
   scrapeProgress = { active: {}, all: {}, has_active: false },
   scrapeProgressError = null,
@@ -171,6 +171,10 @@ function createFetchMock({
     }
 
     if (url === '/api/v1/crawl-jobs' && init?.method === 'POST') {
+      return mockJsonResponse({ id: crawlJobId, status: 'queued' });
+    }
+
+    if (/^\/api\/v1\/schedules\/[^/]+\/run$/.test(url) && init?.method === 'POST') {
       return mockJsonResponse({ id: crawlJobId, status: 'queued' });
     }
 
@@ -274,7 +278,14 @@ describe('ScheduleManager', () => {
       'fetch',
       createFetchMock({
         capabilities: {
-          scheduler: { available: false, reason: 'scheduler_not_running' },
+          scheduler: {
+            available: false,
+            manual_run_available: false,
+            owner: 'scheduler-worker',
+            worker_name: 'scheduler-worker',
+            heartbeat_status: 'missing',
+            reason: 'scheduler_not_running',
+          },
         },
       }),
     );
@@ -286,12 +297,19 @@ describe('ScheduleManager', () => {
     ).toBeInTheDocument();
   });
 
-  it('disables scheduled automation controls when scheduler dispatch is unavailable', async () => {
+  it('disables manual and scheduled controls when runtime capabilities explicitly disable scheduler dispatch', async () => {
     vi.stubGlobal(
       'fetch',
       createFetchMock({
         capabilities: {
-          scheduler: { available: false, reason: 'scheduler_not_running' },
+          scheduler: {
+            available: false,
+            manual_run_available: false,
+            owner: 'scheduler-worker',
+            worker_name: 'scheduler-worker',
+            heartbeat_status: 'missing',
+            reason: 'scheduler_not_running',
+          },
         },
       }),
     );
@@ -303,7 +321,42 @@ describe('ScheduleManager', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /new automation/i })).toBeDisabled();
     expect(screen.getAllByRole('button', { name: /execute/i })[0]).toBeDisabled();
+    expect(screen.getByRole('button', { name: /direct override/i })).toBeDisabled();
+  });
+
+  it('keeps manual actions available when the scheduler worker heartbeat is stale', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        capabilities: {
+          scheduler: {
+            available: false,
+            manual_run_available: true,
+            owner: 'scheduler-worker',
+            worker_name: 'scheduler-worker',
+            heartbeat_status: 'stale',
+            last_heartbeat_at: '2026-05-21T23:58:00+00:00',
+            reason: 'scheduler_worker_stale',
+          },
+        },
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    expect(await screen.findByText(/manual runs are still available/i)).toBeInTheDocument();
+    expect(screen.getByText(/scheduler owner: scheduler-worker/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new automation/i })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: /execute/i })[0]).not.toBeDisabled();
     expect(screen.getByRole('button', { name: /direct override/i })).not.toBeDisabled();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /execute/i })[0]);
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/schedules/jobsdb-nightly/run', {
+        method: 'POST',
+      });
+    });
   });
 
   it('posts jobsdb crawl-job payloads with integer category ids and source_site', async () => {

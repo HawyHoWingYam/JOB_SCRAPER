@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     jobsdb_headed_navigation_timeout_ms: int = 60000
     jobsdb_headed_worker_lock_port: int = 47651
 
+    # Scheduler worker runtime
+    scheduler_heartbeat_interval_seconds: int = 15
+    scheduler_reconcile_interval_seconds: int = 30
+    scheduler_heartbeat_stale_seconds: int = 60
+
     # LLM Configuration
     llm_provider: str = "gemini"  # Options: anthropic, claude, custom, gemini, zhipu, mock
     anthropic_api_key: Optional[str] = None

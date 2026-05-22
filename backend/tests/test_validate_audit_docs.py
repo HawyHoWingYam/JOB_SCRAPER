@@ -29,3 +29,10 @@ def test_validate_audit_docs_reports_missing_required_section():
         assert any(
             "missing required section: Optimization Backlog" in error for error in errors
         )
+
+
+def test_scheduler_worker_compose_service_has_explicit_command():
+    compose_text = (BACKEND_ROOT.parent / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "scheduler-worker:" in compose_text
+    assert "command: python -m app.workers.run_scheduler_worker" in compose_text

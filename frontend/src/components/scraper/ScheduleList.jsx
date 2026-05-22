@@ -26,7 +26,16 @@ function formatDate(dateString) {
     });
 }
 
-function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLoading, scheduleControlsDisabled }) {
+function ScheduleCard({
+    schedule,
+    onToggle,
+    onDelete,
+    onRun,
+    onViewHistory,
+    isLoading,
+    scheduleAutomationDisabled,
+    manualRunDisabled,
+}) {
     const isActive = schedule.is_active;
     const sourceLabel = formatSourceLabel(schedule.source_site || 'jobsdb');
     const crawlPhaseLabel = formatCrawlPhaseLabel(schedule.crawl_phase);
@@ -49,7 +58,7 @@ function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLo
                         type="checkbox"
                         checked={isActive}
                         onChange={() => onToggle(schedule.id)}
-                        disabled={scheduleControlsDisabled}
+                        disabled={scheduleAutomationDisabled}
                     />
                     <span className="cyber-slider"></span>
                 </label>
@@ -111,7 +120,7 @@ function ScheduleCard({ schedule, onToggle, onDelete, onRun, onViewHistory, isLo
                 <button
                     className="cyber-btn run-btn"
                     onClick={() => onRun(schedule.id)}
-                    disabled={scheduleControlsDisabled}
+                    disabled={manualRunDisabled}
                     title="Force Run Now"
                 >
                     <Play size={16} /> Execute
@@ -144,7 +153,8 @@ function ScheduleList({
     onRun,
     onViewHistory,
     isLoading,
-    scheduleControlsDisabled = isLoading,
+    scheduleAutomationDisabled = isLoading,
+    manualRunDisabled = isLoading,
 }) {
     const sourceLabel = formatSourceLabel(currentSourceSite);
 
@@ -171,7 +181,8 @@ function ScheduleList({
                         onRun={onRun}
                         onViewHistory={onViewHistory}
                         isLoading={isLoading}
-                        scheduleControlsDisabled={scheduleControlsDisabled}
+                        scheduleAutomationDisabled={scheduleAutomationDisabled}
+                        manualRunDisabled={manualRunDisabled}
                     />
                 ))}
             </div>

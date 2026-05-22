@@ -19,7 +19,6 @@ from app.api.skills import router as skills_router
 from app.logging_config import configure_logging, redact_url
 from app.database import SessionLocal
 from app.server_runtime import run_api_app
-from app.services.scheduler_runtime import initialize_scheduler_runtime, shutdown_scheduler_runtime
 from app.services.startup_recovery_service import StartupRecoveryService
 
 configure_logging(settings.log_level)
@@ -54,13 +53,10 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Startup recovery sweep failed")
 
-    await initialize_scheduler_runtime()
-
     try:
         yield
     finally:
         logger.info("Shutting down JobsDB Scraper API")
-        shutdown_scheduler_runtime()
 
 # Initialize FastAPI application
 app = FastAPI(

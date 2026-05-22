@@ -55,7 +55,7 @@ class ScrapeSchedule(Base):
         "ScheduleExecution",
         back_populates="schedule",
         cascade="all, delete-orphan",
-        order_by="desc(ScheduleExecution.started_at)"
+        order_by="desc(ScheduleExecution.started_at)",
     )
     crawl_jobs = relationship("CrawlJob", back_populates="schedule")
 
@@ -73,7 +73,7 @@ class ScheduleExecution(Base):
         UUID(as_uuid=True),
         ForeignKey("scrape_schedules.id", ondelete="CASCADE"),
         nullable=False,
-        index=True
+        index=True,
     )
     crawl_job_id = Column(
         UUID(as_uuid=True),
@@ -92,6 +92,7 @@ class ScheduleExecution(Base):
     jobs_scraped = Column(Integer, default=0)
     jobs_saved = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
+    request_payload_snapshot = Column(JSON, nullable=True)
 
     # Phase completion tracking
     phase1_completed = Column(Boolean, default=False)
@@ -119,3 +120,26 @@ class ScheduleExecution(Base):
 
     def __repr__(self):
         return f"<ScheduleExecution(id={self.id}, status={self.status})>"
+
+
+class SchedulerRuntimeHeartbeat(Base):
+    """Singleton row for scheduler-worker ownership and heartbeat status."""
+
+    __tablename__ = "scheduler_runtime_heartbeats"
+
+    id = Column(Integer, primary_key=True, default=1)
+    owner = Column(String(64), nullable=False)
+    worker_name = Column(String(255), nullable=True)
+    started_at = Column(DateTime, nullable=False)
+    last_heartbeat_at = Column(DateTime, nullable=False, index=True)
+    status = Column(String(50), nullable=False)
+    active_schedule_count = Column(Integer, nullable=False, default=0)
+    registered_job_count = Column(Integer, nullable=False, default=0)
+    last_reconcile_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+
+    def __repr__(self):
+        return (
+            f"<SchedulerRuntimeHeartbeat(owner={self.owner}, worker_name={self.worker_name}, "
+            f"status={self.status})>"
+        )

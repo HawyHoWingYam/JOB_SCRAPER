@@ -164,6 +164,54 @@ function buildImmediateScrapePayload(form, sourceSite) {
     };
 }
 
+function formatRuntimeTimestamp(value) {
+    if (!value) {
+        return 'Unknown';
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return `${value}`;
+    }
+
+    return parsed.toLocaleString('en-US');
+}
+
+function buildSchedulerRuntimeBanner(scheduler) {
+    if (!scheduler || scheduler.available !== false) {
+        return null;
+    }
+
+    const owner = scheduler.worker_name || scheduler.owner || 'scheduler-worker';
+    const manualRunAvailable = scheduler.manual_run_available !== false;
+
+    if (scheduler.heartbeat_status === 'stale' && manualRunAvailable) {
+        return {
+            title: 'Scheduler automation paused',
+            lines: [
+                `Manual runs are still available while ${owner} recovers.`,
+                scheduler.last_heartbeat_at
+                    ? `Last heartbeat: ${formatRuntimeTimestamp(scheduler.last_heartbeat_at)}`
+                    : 'Last heartbeat: unknown',
+            ],
+        };
+    }
+
+    if (scheduler.heartbeat_status === 'missing' && manualRunAvailable) {
+        return {
+            title: 'Scheduler worker not reporting',
+            lines: [
+                `Manual runs are still available, but ${owner} is offline for cron dispatch.`,
+            ],
+        };
+    }
+
+    return {
+        title: 'Scheduler dispatch unavailable',
+        lines: ['Scheduler dispatch is unavailable in the current runtime profile.'],
+    };
+}
+
 function ScheduleManager({ onNavigateToAI }) {
     // State
     const [schedules, setSchedules] = useState([]);
@@ -422,12 +470,17 @@ function ScheduleManager({ onNavigateToAI }) {
         fetchListingBatches(currentSourceSite);
     }, [currentSourceSite, fetchListingBatches, immediateForm.crawl_phase, showImmediateScrape]);
 
-    const schedulerAvailable = capabilities?.scheduler?.available !== false;
-    const scheduleControlsDisabled = isLoading || !schedulerAvailable;
+    const schedulerStatus = capabilities?.scheduler || null;
+    const schedulerAutomationAvailable = schedulerStatus?.available !== false;
+    const schedulerManualRunAvailable = schedulerStatus?.manual_run_available !== false;
+    const scheduleAutomationDisabled = isLoading || !schedulerAutomationAvailable;
+    const manualRunDisabled = isLoading || !schedulerManualRunAvailable;
+    const schedulerRuntimeOwner = schedulerStatus?.worker_name || schedulerStatus?.owner || 'scheduler-worker';
+    const schedulerBanner = buildSchedulerRuntimeBanner(schedulerStatus);
 
     // Create schedule
     const handleCreate = async (formData) => {
-        if (!schedulerAvailable) {
+        if (!schedulerAutomationAvailable) {
             setError('Scheduler dispatch is unavailable in the current runtime profile.');
             return;
         }
@@ -460,7 +513,7 @@ function ScheduleManager({ onNavigateToAI }) {
 
     // Toggle schedule
     const handleToggle = async (id) => {
-        if (!schedulerAvailable) {
+        if (!schedulerAutomationAvailable) {
             setError('Scheduler dispatch is unavailable in the current runtime profile.');
             return;
         }
@@ -497,16 +550,14 @@ function ScheduleManager({ onNavigateToAI }) {
 
     // Run now
     const handleRun = async (id) => {
-        if (!schedulerAvailable) {
+        if (!schedulerManualRunAvailable) {
             setError('Scheduler dispatch is unavailable in the current runtime profile.');
             return;
         }
         setIsLoading(true);
         try {
-            const response = await fetch(`${API_BASE}/crawl-jobs`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ schedule_id: id })
+            const response = await fetch(`${API_BASE}/schedules/${id}/run`, {
+                method: 'POST'
             });
             if (!response.ok) throw new Error('执行失败');
             await fetchSchedules();
@@ -535,6 +586,10 @@ function ScheduleManager({ onNavigateToAI }) {
 
     // Immediate scrape
     const handleImmediateScrape = async () => {
+        if (!schedulerManualRunAvailable) {
+            setError('Scheduler dispatch is unavailable in the current runtime profile.');
+            return;
+        }
         const request = buildImmediateScrapePayload(immediateForm, currentSourceSite);
         if (request.error) {
             setError(request.error);
@@ -630,13 +685,14 @@ function ScheduleManager({ onNavigateToAI }) {
                     <button
                         className="cyber-btn primary-glow"
                         onClick={() => setShowForm(!showForm)}
-                        disabled={!schedulerAvailable && !showForm}
+                        disabled={!schedulerAutomationAvailable && !showForm}
                     >
                         {showForm ? 'Close Form' : <><Plus size={18} /> New Automation</>}
                     </button>
                     <button
                         className="cyber-btn run-btn"
                         onClick={() => setShowImmediateScrape(!showImmediateScrape)}
+                        disabled={manualRunDisabled}
                     >
                         {showImmediateScrape ? 'Cancel' : <><Zap size={18} /> Direct Override</>}
                     </button>
@@ -658,7 +714,20 @@ function ScheduleManager({ onNavigateToAI }) {
                     ))}
                 </select>
             </div>
-
+            {schedulerStatus && (
+                <div className="scheduler-runtime-panel glass-panel">
+                    <strong>Scheduler owner: {schedulerRuntimeOwner}</strong>
+                    <div className="operator-health-issues">
+                        <span>Heartbeat: {schedulerStatus.heartbeat_status || 'fresh'}</span>
+                        {schedulerStatus.last_heartbeat_at && (
+                            <span>Last heartbeat: {formatRuntimeTimestamp(schedulerStatus.last_heartbeat_at)}</span>
+                        )}
+                        {schedulerStatus.last_reconcile_at && (
+                            <span>Last reconcile: {formatRuntimeTimestamp(schedulerStatus.last_reconcile_at)}</span>
+                        )}
+                    </div>
+                </div>
+            )}
             {operatorHealth && operatorHealth.status !== 'healthy' && (
                 <div className="operator-health-banner glass-panel">
                     <AlertTriangle size={20} />
@@ -673,13 +742,15 @@ function ScheduleManager({ onNavigateToAI }) {
                 </div>
             )}
 
-            {capabilities?.scheduler?.available === false && (
+            {schedulerBanner && (
                 <div className="operator-health-banner glass-panel">
                     <AlertTriangle size={20} />
                     <div>
-                        <strong>Scheduler dispatch unavailable</strong>
+                        <strong>{schedulerBanner.title}</strong>
                         <div className="operator-health-issues">
-                            <span>Scheduler dispatch is unavailable in the current runtime profile.</span>
+                            {schedulerBanner.lines.map((line) => (
+                                <span key={line}>{line}</span>
+                            ))}
                         </div>
                     </div>
                 </div>
@@ -863,9 +934,9 @@ function ScheduleManager({ onNavigateToAI }) {
                 onRun={handleRun}
                 onViewHistory={handleViewHistory}
                 isLoading={isLoading}
-                scheduleControlsDisabled={scheduleControlsDisabled}
+                scheduleAutomationDisabled={scheduleAutomationDisabled}
+                manualRunDisabled={manualRunDisabled}
             />
-
             {historyData && (
                 <ScheduleHistory
                     executions={historyData.executions}

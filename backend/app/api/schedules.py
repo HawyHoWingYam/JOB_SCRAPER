@@ -15,7 +15,6 @@ from app.database import get_db
 from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.crawl_job import CrawlJobSchema
 from app.services.source_category_registry import get_source_category_registry
-from app.services.scheduler_service import SchedulerService
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.schemas.schedule import (
     ScheduleSchema,
@@ -35,18 +34,6 @@ router = APIRouter(prefix="/schedules", tags=["schedules"])
 repository = ScheduleRepository()
 crawl_job_dispatch_service = CrawlJobDispatchService()
 SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs"}
-
-
-async def _add_schedule_to_scheduler(schedule) -> None:
-    """Offload scheduler registration from async route handlers."""
-    scheduler = SchedulerService.get_instance()
-    await run_in_threadpool(scheduler.add_schedule, schedule)
-
-
-async def _update_schedule_in_scheduler(schedule) -> None:
-    """Offload scheduler update from async route handlers."""
-    scheduler = SchedulerService.get_instance()
-    await run_in_threadpool(scheduler.update_schedule, schedule)
 
 
 async def _validate_ctgoodjobs_category_ids_exist(category_ids: list[str] | None) -> None:
@@ -149,12 +136,7 @@ async def create_schedule(
 ):
     """Create a new schedule."""
     await _validate_effective_category_ids(data.source_site, data.category_ids)
-    schedule = repository.create_schedule(db, data.model_dump())
-    
-    # Add to scheduler
-    await _add_schedule_to_scheduler(schedule)
-    
-    return schedule
+    return repository.create_schedule(db, data.model_dump())
 
 
 @router.put("/{schedule_id}", response_model=ScheduleSchema)
@@ -183,10 +165,8 @@ async def update_schedule(
     await _validate_effective_category_ids(effective_source_site, effective_category_ids)
 
     schedule = repository.update_schedule(db, schedule_id, update_data)
-    
-    # Update in scheduler
-    await _update_schedule_in_scheduler(schedule)
-    
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
     return schedule
 
 
@@ -196,15 +176,9 @@ async def delete_schedule(
     db: Session = Depends(get_db)
 ):
     """Delete a schedule."""
-    # Remove from scheduler first
-    scheduler = SchedulerService.get_instance()
-    scheduler.remove_schedule(schedule_id)
-    
-    # Delete from database
     deleted = repository.delete_schedule(db, schedule_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Schedule not found")
-    
     return {"message": "Schedule deleted"}
 
 
@@ -232,7 +206,6 @@ async def toggle_schedule(
                 raise
 
             schedule = repository.update_schedule(db, schedule_id, {"is_active": False})
-            await _update_schedule_in_scheduler(schedule)
             return ScheduleToggleResponse(
                 id=schedule.id,
                 is_active=schedule.is_active,
@@ -240,10 +213,9 @@ async def toggle_schedule(
             )
 
     schedule = repository.toggle_schedule(db, schedule_id)
-    
-    # Update in scheduler
-    await _update_schedule_in_scheduler(schedule)
-    
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
     return ScheduleToggleResponse(
         id=schedule.id,
         is_active=schedule.is_active,
@@ -276,13 +248,14 @@ async def run_schedule_now(
         effective_source_site,
         getattr(schedule, "category_ids", None),
     )
-    
-    scheduler = SchedulerService.get_instance()
-    crawl_job = await scheduler.run_now(schedule_id)
-    if crawl_job is None:
-        raise HTTPException(status_code=500, detail="Failed to queue crawl job")
 
-    return crawl_job
+    dispatch_result = crawl_job_dispatch_service.dispatch_schedule_crawl_job(
+        db,
+        schedule=schedule,
+        requested_by="api",
+        trigger_type="manual",
+    )
+    return dispatch_result.crawl_job
 
 
 @router.get("/{schedule_id}/history", response_model=ExecutionListResponse)
@@ -295,8 +268,6 @@ async def get_schedule_history(
     schedule = repository.get_schedule_by_id(db, schedule_id)
     if not schedule:
         raise HTTPException(status_code=404, detail="Schedule not found")
-    
+
     executions = repository.get_executions(db, schedule_id, limit)
     return ExecutionListResponse(executions=executions, total=len(executions))
-
-

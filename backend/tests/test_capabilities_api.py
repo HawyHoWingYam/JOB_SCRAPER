@@ -1,4 +1,5 @@
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import httpx
@@ -16,8 +17,11 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.api import router as api_router
 from app.database import Base
 from app.models.app_runtime_settings import AppRuntimeSettings
+from app.models.schedule import SchedulerRuntimeHeartbeat
 import app.services.runtime_capabilities_service as service_module
+import app.services.scheduler_runtime as scheduler_runtime_module
 from app.services.runtime_capabilities_service import build_runtime_capabilities
+from app.utils.time import utc_now
 
 if not hasattr(SQLiteTypeCompiler, "visit_UUID"):
     SQLiteTypeCompiler.visit_UUID = lambda self, type_, **kw: "CHAR(32)"
@@ -51,6 +55,90 @@ def _build_runtime_settings_session():
     return sessionmaker(bind=engine)
 
 
+def _build_scheduler_runtime_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(
+        engine,
+        tables=[SchedulerRuntimeHeartbeat.__table__],
+    )
+    return sessionmaker(bind=engine)
+
+
+def _write_scheduler_heartbeat(Session, *, last_heartbeat_at, last_reconcile_at=None, status="running"):
+    with Session() as db:
+        db.add(
+            SchedulerRuntimeHeartbeat(
+                id=1,
+                owner="scheduler-worker",
+                worker_name="scheduler-worker",
+                started_at=utc_now(),
+                last_heartbeat_at=last_heartbeat_at,
+                status=status,
+                active_schedule_count=3,
+                registered_job_count=3,
+                last_reconcile_at=last_reconcile_at,
+                last_error=None,
+            )
+        )
+        db.commit()
+
+
+def test_get_scheduler_runtime_status_reports_missing_fresh_and_stale_heartbeats(monkeypatch):
+    Session = _build_scheduler_runtime_session()
+    stale_after_seconds = 60
+
+    monkeypatch.setattr(scheduler_runtime_module, "SessionLocal", Session)
+    monkeypatch.setattr(
+        scheduler_runtime_module.settings,
+        "scheduler_heartbeat_stale_seconds",
+        stale_after_seconds,
+    )
+
+    missing = scheduler_runtime_module.get_scheduler_runtime_status()
+
+    assert missing["available"] is False
+    assert missing["manual_run_available"] is True
+    assert missing["owner"] == "scheduler-worker"
+    assert missing["heartbeat_status"] == "missing"
+    assert missing["reason"] == "scheduler_worker_missing"
+
+    fresh_now = utc_now()
+    _write_scheduler_heartbeat(
+        Session,
+        last_heartbeat_at=fresh_now,
+        last_reconcile_at=fresh_now,
+    )
+
+    fresh = scheduler_runtime_module.get_scheduler_runtime_status()
+
+    assert fresh["available"] is True
+    assert fresh["manual_run_available"] is True
+    assert fresh["owner"] == "scheduler-worker"
+    assert fresh["worker_name"] == "scheduler-worker"
+    assert fresh["heartbeat_status"] == "fresh"
+    assert fresh["reason"] is None
+    assert fresh["active_schedule_count"] == 3
+    assert fresh["registered_job_count"] == 3
+
+    with Session() as db:
+        heartbeat = db.query(SchedulerRuntimeHeartbeat).filter(SchedulerRuntimeHeartbeat.id == 1).one()
+        heartbeat.last_heartbeat_at = utc_now() - timedelta(seconds=stale_after_seconds + 1)
+        db.commit()
+
+    stale = scheduler_runtime_module.get_scheduler_runtime_status()
+
+    assert stale["available"] is False
+    assert stale["manual_run_available"] is True
+    assert stale["heartbeat_status"] == "stale"
+    assert stale["reason"] == "scheduler_worker_stale"
+    assert stale["active_schedule_count"] == 3
+    assert stale["registered_job_count"] == 3
+
+
 def test_build_runtime_capabilities_reports_lexical_baseline_without_sidecars(monkeypatch):
     monkeypatch.setattr(service_module.settings, "retrieval_api_url", None)
     monkeypatch.setattr(service_module.settings, "recommendation_api_url", None)
@@ -62,12 +150,23 @@ def test_build_runtime_capabilities_reports_lexical_baseline_without_sidecars(mo
     monkeypatch.setattr(
         service_module,
         "get_scheduler_runtime_status",
-        lambda: {"enabled": True, "running": True, "owner": "backend-api"},
+        lambda: {
+            "enabled": True,
+            "available": True,
+            "manual_run_available": True,
+            "running": True,
+            "owner": "scheduler-worker",
+            "worker_name": "scheduler-worker",
+            "heartbeat_status": "fresh",
+            "last_heartbeat_at": "2026-05-22T00:00:00+00:00",
+            "last_reconcile_at": "2026-05-22T00:00:00+00:00",
+            "reason": None,
+        },
     )
     monkeypatch.setattr(
         service_module,
         "build_operator_health_summary",
-        lambda: {"status": "healthy", "workers": {}, "queues": {}, "freshness": {}},
+        lambda: {"status": "healthy", "workers": {}, "queues": {}, "freshness": {}, "scheduler": {}},
     )
 
     payload = build_runtime_capabilities()
@@ -78,6 +177,9 @@ def test_build_runtime_capabilities_reports_lexical_baseline_without_sidecars(mo
     assert payload["recommendations"]["similar_jobs"]["available"] is False
     assert payload["ai"]["jobs"]["available"] is True
     assert payload["scheduler"]["available"] is True
+    assert payload["scheduler"]["manual_run_available"] is True
+    assert payload["scheduler"]["owner"] == "scheduler-worker"
+    assert payload["scheduler"]["heartbeat_status"] == "fresh"
     assert payload["sources"]["jobsdb"]["default_crawl_mode"] == "headed"
     assert payload["sources"]["ctgoodjobs"]["manual_action_supported"] is True
 
@@ -111,12 +213,23 @@ async def test_get_capabilities_route_returns_contract(monkeypatch):
     monkeypatch.setattr(
         service_module,
         "get_scheduler_runtime_status",
-        lambda: {"enabled": True, "running": True, "owner": "backend-api"},
+        lambda: {
+            "enabled": True,
+            "available": False,
+            "manual_run_available": True,
+            "running": False,
+            "owner": "scheduler-worker",
+            "worker_name": "scheduler-worker",
+            "heartbeat_status": "stale",
+            "last_heartbeat_at": "2026-05-21T23:58:00+00:00",
+            "last_reconcile_at": "2026-05-21T23:57:30+00:00",
+            "reason": "scheduler_worker_stale",
+        },
     )
     monkeypatch.setattr(
         service_module,
         "build_operator_health_summary",
-        lambda: {"status": "healthy", "workers": {}, "queues": {}, "freshness": {}},
+        lambda: {"status": "healthy", "workers": {}, "queues": {}, "freshness": {}, "scheduler": {}},
     )
     app = FastAPI()
     app.include_router(api_router)
@@ -130,3 +243,7 @@ async def test_get_capabilities_route_returns_contract(monkeypatch):
     assert payload["search"]["lexical"]["available"] is True
     assert payload["search"]["semantic"]["available"] is False
     assert payload["ai"]["jobs"]["provider"] == "custom"
+    assert payload["scheduler"]["available"] is False
+    assert payload["scheduler"]["manual_run_available"] is True
+    assert payload["scheduler"]["owner"] == "scheduler-worker"
+    assert payload["scheduler"]["heartbeat_status"] == "stale"

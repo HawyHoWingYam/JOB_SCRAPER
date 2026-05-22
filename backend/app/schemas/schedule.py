@@ -16,9 +16,23 @@ from app.services.crawl_request_validation import (
 )
 from datetime import datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 # ============== Schedule Schemas ==============
+
+def validate_timezone_identifier(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+
+    timezone = value.strip()
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"Invalid timezone identifier: {value}") from exc
+
+    return timezone
+
 
 class ScheduleCreateSchema(BaseModel):
     """Schema for creating a new schedule."""
@@ -51,6 +65,11 @@ class ScheduleCreateSchema(BaseModel):
     @classmethod
     def normalize_crawl_phase_field(cls, v):
         return normalize_crawl_phase(v)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone_field(cls, v):
+        return validate_timezone_identifier(v)
 
     @model_validator(mode="after")
     def validate_category_ids(self) -> "ScheduleCreateSchema":
@@ -103,6 +122,11 @@ class ScheduleUpdateSchema(BaseModel):
     def normalize_crawl_phase_field(cls, v):
         return normalize_crawl_phase(v)
 
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone_field(cls, v):
+        return validate_timezone_identifier(v)
+
     @model_validator(mode="after")
     def validate_category_ids(self) -> "ScheduleUpdateSchema":
         if self.category_ids is not None and self.source_site is not None:
@@ -149,6 +173,7 @@ class ScheduleSchema(BaseModel):
         self.crawl_mode = resolve_crawl_mode(self.source_site, self.crawl_mode)
         return self
 
+
 # ============== Execution Schemas ==============
 
 class ExecutionSchema(BaseModel):
@@ -173,7 +198,9 @@ class ExecutionSchema(BaseModel):
     ids_collected: int
     jobs_classified: int
     error_message: Optional[str]
+    request_payload_snapshot: dict | None = None
     created_at: datetime
+
 
 class ScheduleWithExecutionsSchema(ScheduleSchema):
     """Schedule with recent executions."""

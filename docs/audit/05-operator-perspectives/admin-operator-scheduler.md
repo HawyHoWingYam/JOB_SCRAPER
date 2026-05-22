@@ -2,42 +2,43 @@
 
 ## Current Responsibilities
 
-This perspective covers creating automation, selecting source site/categories, running direct overrides, selecting crawl phase/mode, and reviewing schedule history.
+This perspective covers creating automation, selecting source site and categories, running direct overrides, manually executing schedules, monitoring scheduler-worker ownership and heartbeat state, and reviewing schedule history with request snapshots.
 
 ## Current Implementation Map
 
 - Frontend: `frontend/src/components/scraper/ScheduleManager.jsx`, `ScheduleForm.jsx`, `ScheduleList.jsx`, `ScheduleHistory.jsx`
-- Backend: `backend/app/api/schedules.py`, `crawl_jobs.py`
+- Backend: `backend/app/api/schedules.py`, `crawl_jobs.py`, `health.py`
 - Runtime: `backend/app/services/scheduler_runtime.py`, `scheduler_service.py`
 
 ## Data and Control Flow
 
-Operators choose source, crawl phase, mode, categories, and run parameters. The UI calls schedules and crawl job APIs. Progress is shown through `ScrapeProgressPanel` and SSE-backed progress payloads.
+Operators choose source, crawl phase, mode, categories, and run parameters in `ScheduleManager`. The UI fetches `/api/v1/capabilities` and `/health` to surface scheduler-worker ownership, heartbeat freshness, and broader operator pipeline issues. `ScheduleList` displays `next_run_at` from the worker-reconciled schedule row.
+
+When scheduler-worker is stale or missing, the UI keeps API-owned manual actions available and surfaces the worker state instead of pretending cron automation is healthy. Schedule history now shows compact `request_payload_snapshot` details so operators can see which source, phase, mode, categories or listing batch, detail limit, and crawl job ID were used for each historical run.
 
 ## Tests and Coverage
 
 - `frontend/src/components/scraper/ScheduleManager.test.jsx`
-- `frontend/src/components/scraper/ScheduleForm.test.jsx`
+- `frontend/src/components/scraper/ScheduleHistory.test.jsx`
 - `backend/tests/test_scheduler_dispatcher.py`
-- `backend/tests/test_crawl_jobs_api.py`
+- `backend/tests/test_capabilities_api.py`
+- `backend/tests/test_health_api.py`
 
 ## Known Gaps or Risks
 
-- Detail schedule and detail direct override validation need to remain aligned.
-- Source switching clears category state and depends on operator confirmation.
-- Operator health banner depends on health endpoint reachability.
-- Scheduler ownership is ambiguous because API startup registers cron jobs while a scheduler worker service also exists.
-- Stored schedule timezone is not yet fully reflected in runtime dispatch behavior.
+- Schedule creation and toggling can succeed while cron automation is paused, so operators still need the heartbeat banner to understand when changes will actually execute.
+- Displayed `next_run_at` is only as fresh as the latest scheduler-worker reconcile.
+- Schedule history is more reproducible now, but it still compresses request details into a compact snapshot instead of a fully linked run explorer.
+- Operator health and capability state are read-only summaries; there is no UI action yet to restart or recover scheduler-worker.
 
 ## Optimization Backlog
 
-- Choose a single scheduler owner and expose readiness/status for that owner in the operator UI.
-- Share one frontend and backend request model between direct override and scheduled run creation.
-- Fetch backend source defaults/capabilities for crawl phase, mode, headed support, and detail limits instead of hard-coding UI assumptions.
-- Store and display schedule execution crawl payload snapshots with progress links for historical diagnosis.
+- Add a dedicated operator view for scheduler-worker heartbeat history and reconcile drift over time.
+- Link schedule history entries directly into crawl job event timelines for deeper troubleshooting.
+- Add explicit UI guidance for schedule edits made while cron automation is paused.
 
 ## Follow-up Audit Questions
 
-- Should direct override and scheduled run share one frontend form model?
-- Should source-specific default mode/capability be fetched from backend?
-- Should schedule history include crawl progress snapshots?
+- Should direct override and scheduled run eventually share one unified operator form model?
+- Should schedule history expose the raw JSON snapshot behind a compact summary toggle?
+- Should operator recovery controls include scheduler-worker restart or reconcile triggers from the console?

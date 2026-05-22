@@ -6,12 +6,16 @@ from app.services import operator_health_service
 router = APIRouter(tags=["health"])
 
 
+def build_operator_health_summary() -> dict:
+    return operator_health_service.build_operator_health_summary()
+
+
 @router.get("/health")
 async def health_check():
     """Health check endpoint for container orchestration."""
     job_llm_status = refresh_llm_status()
     company_llm_status = refresh_llm_status("companies")
-    operator_status = operator_health_service.build_operator_health_summary()
+    operator_status = build_operator_health_summary()
     degraded_issues = []
 
     if job_llm_status["is_degraded"]:

@@ -2,44 +2,47 @@
 
 ## Current Responsibilities
 
-The scheduler domain stores recurring scrape configurations, starts runs manually or by cron, and links schedule executions to durable crawl jobs.
+The scheduler domain stores recurring scrape configurations, keeps `scheduler-worker` as the single cron dispatcher, starts manual runs through API-owned endpoints, and links every scheduled execution to a durable crawl job plus an immutable request snapshot.
 
 ## Current Implementation Map
 
-- API: `backend/app/api/schedules.py`
+- API: `backend/app/api/schedules.py`, `backend/app/api/crawl_jobs.py`
 - Models: `backend/app/models/schedule.py`, `backend/app/models/crawl_job.py`
-- Runtime: `backend/app/services/scheduler_runtime.py`, `backend/app/services/scheduler_service.py`
+- Runtime: `backend/app/services/scheduler_runtime.py`, `backend/app/services/scheduler_service.py`, `backend/app/workers/run_scheduler_worker.py`
 - Repository: `backend/app/repositories/schedule_repository.py`
-- Frontend: `frontend/src/components/scraper/ScheduleManager.jsx`, `ScheduleForm.jsx`, `ScheduleList.jsx`
+- Dispatch: `backend/app/services/crawl_job_dispatch_service.py`
+- Frontend: `frontend/src/components/scraper/ScheduleManager.jsx`, `ScheduleForm.jsx`, `ScheduleList.jsx`, `ScheduleHistory.jsx`
 
 ## Data and Control Flow
 
-Schedules persist source site, crawl phase, crawl mode, category IDs, max pages, detail limit, and cron expression. API-created schedules are registered with scheduler runtime. Manual "run now" dispatches a crawl job and records schedule execution linkage.
+Schedules persist source site, crawl phase, crawl mode, category IDs, max pages, detail limits, cron expression, timezone, and worker-computed `next_run_at` in `scrape_schedules`. Schedule create/update schemas validate IANA timezone identifiers before persistence. `scheduler-worker` periodically reconciles APScheduler jobs from that table, applying each schedule's persisted timezone with `CronTrigger.from_crontab(..., timezone=ZoneInfo(schedule.timezone))` and writing the authoritative next run time from APScheduler job state.
+
+When a cron fire occurs, the worker dispatches a durable `crawl_jobs` row through `CrawlJobDispatchService`, creates a `schedule_executions` row, and stores `request_payload_snapshot` so the exact crawl request can be reconstructed later. Manual direct overrides and manual per-schedule execute actions stay API-owned and do not depend on scheduler-worker heartbeat freshness.
 
 ## Tests and Coverage
 
 - `backend/tests/test_scheduler_dispatcher.py`
-- `backend/tests/test_startup_recovery_service.py`
-- `frontend/src/components/scraper/ScheduleForm.test.jsx`
+- `backend/tests/test_crawl_request_validation.py`
+- `backend/tests/test_capabilities_api.py`
+- `backend/tests/test_health_api.py`
 - `frontend/src/components/scraper/ScheduleManager.test.jsx`
+- `frontend/src/components/scraper/ScheduleHistory.test.jsx`
 
 ## Known Gaps or Risks
 
-- Schedule validation currently differs from direct crawl validation, especially for detail runs.
-- The frontend stores source-specific category choices and has to reset state when source site changes.
-- Runtime scheduler behavior depends on API process lifecycle, not a standalone scheduler service in Docker.
-- `scheduler-worker` exists in the Compose topology, but cron ownership currently remains tied to API startup/runtime behavior.
-- Schedule rows store timezone, while runtime assumptions are still centered on `Asia/Hong_Kong`.
+- Schedule CRUD now persists cleanly without touching in-process APScheduler, but cron changes only take effect after the next worker reconcile loop.
+- `next_run_at` reflects the most recent successful scheduler-worker reconcile, so it can become stale when the worker is offline.
+- `apscheduler_jobs` remains operational cache state rather than an operator-friendly audit surface.
+- Schedule execution still carries legacy phase counters even though `crawl_jobs` and event streams now own most runtime detail.
+- Schedule timezone identifiers are validated at the API schema boundary, but the database still stores them as unconstrained strings.
 
 ## Optimization Backlog
 
-- Decide one scheduler owner: either make `scheduler-worker` the cron dispatcher or remove the dormant service path to avoid split-brain operations.
-- Centralize crawl request validation so direct override and scheduled runs share one schema for source, phase, mode, detail limits, and listing batch references.
-- Apply persisted schedule timezones in runtime dispatch and add tests for non-default timezone schedules.
-- Persist the exact crawl request payload on each schedule execution so historical runs remain reproducible after defaults change.
+- Expose richer operator drill-down for heartbeat history instead of only the latest scheduler-worker snapshot.
+- Add database-level timezone validation only if migration/runtime portability requirements justify a custom constraint strategy.
+- Reduce duplicated legacy phase fields in `schedule_executions` once downstream operator views fully rely on crawl job events.
 
 ## Follow-up Audit Questions
 
-- Should scheduler-worker become the single owner of cron dispatch instead of API lifespan?
-- Should detail schedules support `source_listing_crawl_job_id`, or remain category-scoped only?
-- Should schedule execution records include the full crawl request payload snapshot?
+- Should scheduler heartbeat history remain a singleton latest-row table, or grow into a time-series audit log?
+- Which legacy execution counters can be removed once operator history is fully request-snapshot and crawl-job driven?

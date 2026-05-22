@@ -10,7 +10,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.schemas.crawl_job import CrawlJobCreateRequest
-from app.schemas.schedule import ScheduleCreateSchema
+from app.schemas.schedule import ScheduleCreateSchema, ScheduleUpdateSchema
 from app.services.crawl_request_validation import validate_crawl_request
 
 
@@ -83,6 +83,22 @@ def test_schedule_category_ids_reject_float_without_coercion():
             crawl_phase="listing",
             category_ids=[1.0],
         )
+
+
+def test_schedule_create_rejects_unknown_timezone_identifier():
+    with pytest.raises(ValidationError, match="Invalid timezone identifier"):
+        ScheduleCreateSchema(
+            name="bad timezone",
+            cron_expression="0 2 * * *",
+            timezone="Mars/Olympus",
+            source_site="jobsdb",
+            crawl_phase="listing",
+        )
+
+
+def test_schedule_update_rejects_unknown_timezone_identifier():
+    with pytest.raises(ValidationError, match="Invalid timezone identifier"):
+        ScheduleUpdateSchema(timezone="Not/A_Timezone")
 
 
 def test_crawl_job_category_ids_reject_bool_without_coercion():

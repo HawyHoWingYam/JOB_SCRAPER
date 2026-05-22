@@ -158,5 +158,6 @@ def build_runtime_capabilities() -> dict[str, Any]:
             "workers": operator.get("workers", {}),
             "queues": operator.get("queues", {}),
             "freshness": operator.get("freshness", {}),
+            "scheduler": operator.get("scheduler", {}),
         },
     }
