@@ -11,6 +11,15 @@ vi.mock('./components/charts/CategoryChart', () => ({
   default: () => <div>Category Chart Stub</div>,
 }));
 
+vi.mock('./components/operator/OperatorHealthPage', () => ({
+  default: () => (
+    <div>
+      <h1>Operator Health</h1>
+      <p>Operator Page Stub</p>
+    </div>
+  ),
+}));
+
 import App from './App';
 
 describe('App lazy views', () => {
@@ -83,5 +92,14 @@ describe('App lazy views', () => {
     await userEvent.click(screen.getByRole('button', { name: /^settings$/i }));
 
     expect(await screen.findByRole('heading', { level: 1, name: /ai runtime/i })).toBeInTheDocument();
+  });
+
+  it('loads the operator view when navigated from the sidebar', async () => {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole('button', { name: /operator health/i }));
+
+    expect(await screen.findByRole('heading', { level: 1, name: /operator health/i })).toBeInTheDocument();
+    expect(screen.getByText(/operator page stub/i)).toBeInTheDocument();
   });
 });
