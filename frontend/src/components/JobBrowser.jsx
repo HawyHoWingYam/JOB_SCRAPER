@@ -5,6 +5,7 @@ import FilterPanel from './FilterPanel';
 import Pagination from './Pagination';
 import JobDetailModal from './JobDetailModal';
 import { API_BASE_URL } from '../api/base';
+import { fetchCapabilities } from '../api/capabilities';
 import {
     createEmptyJobBrowserLayer,
     createEmptyJobBrowserScope,
@@ -167,10 +168,13 @@ function JobBrowser() {
     });
     const [selectedJobId, setSelectedJobId] = useState(null);
     const [retrievalMode, setRetrievalMode] = useState('lexical');
+    const [capabilities, setCapabilities] = useState(null);
 
     const hasPendingChanges = hasPendingLayerChanges(createEmptyJobBrowserLayer(), draftLayer);
     const draftDatePreset = getDatePresetForQuery(draftLayer.structured_filters);
     const dateValidationError = getDateValidationError(draftLayer.structured_filters);
+    const semanticAvailable = capabilities?.search?.semantic?.available !== false;
+    const hybridAvailable = capabilities?.search?.hybrid?.available !== false;
 
     const fetchJobs = async ({
         scope,
@@ -266,6 +270,32 @@ function JobBrowser() {
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        fetchCapabilities()
+            .then((payload) => {
+                if (!cancelled) {
+                    setCapabilities(payload);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setCapabilities(null);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        if ((retrievalMode === 'semantic' && !semanticAvailable) || (retrievalMode === 'hybrid' && !hybridAvailable)) {
+            setRetrievalMode('lexical');
+        }
+    }, [hybridAvailable, retrievalMode, semanticAvailable]);
 
     const handleSearchChange = (query) => {
         setDraftLayer((prev) => ({
@@ -452,8 +482,8 @@ function JobBrowser() {
                                 disabled={isLoading}
                             >
                                 <option value="lexical">Lexical</option>
-                                <option value="hybrid">Hybrid</option>
-                                <option value="semantic">Semantic</option>
+                                <option value="hybrid" disabled={!hybridAvailable}>Hybrid</option>
+                                <option value="semantic" disabled={!semanticAvailable}>Semantic</option>
                             </select>
                             <p className="query-mode-note">
                                 Lexical is the default. Hybrid blends filters with embeddings. Semantic leans on embedding-backed intent matching.
@@ -632,6 +662,7 @@ function JobBrowser() {
                 <JobDetailModal
                     jobId={selectedJobId}
                     apiUrl={API_URL}
+                    capabilities={capabilities}
                     onClose={() => setSelectedJobId(null)}
                 />
             )}

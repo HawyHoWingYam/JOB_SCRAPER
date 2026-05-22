@@ -149,15 +149,31 @@ function mockSearchResponse(body) {
 describe('JobBrowser', () => {
   let exportShouldFail = false;
   let forcedSearchErrorDetail = null;
+  let capabilitiesPayload = null;
 
   beforeEach(() => {
     exportShouldFail = false;
     forcedSearchErrorDetail = null;
+    capabilitiesPayload = {
+      search: {
+        lexical: { available: true },
+        semantic: { available: true },
+        hybrid: { available: true },
+      },
+      recommendations: { similar_jobs: { available: true } },
+    };
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:job-export');
     globalThis.URL.revokeObjectURL = vi.fn();
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
+
+      if (url.pathname === '/api/v1/capabilities') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => capabilitiesPayload,
+        });
+      }
 
       if (url.pathname === '/api/v1/jobs/filters') {
         return Promise.resolve({
@@ -255,6 +271,23 @@ describe('JobBrowser', () => {
     await waitFor(() => {
       expect(getLatestSearchBody(globalThis.fetch).retrieval_mode).toBe('semantic');
     });
+  });
+
+  it('disables semantic and hybrid retrieval modes when capabilities report retrieval unavailable', async () => {
+    capabilitiesPayload = {
+      search: {
+        lexical: { available: true },
+        semantic: { available: false, reason: 'retrieval_api_url_not_configured' },
+        hybrid: { available: false, reason: 'retrieval_api_url_not_configured' },
+      },
+      recommendations: { similar_jobs: { available: false } },
+    };
+
+    render(<JobBrowser />);
+
+    const select = await screen.findByLabelText(/retrieval mode/i);
+    expect(within(select).getByRole('option', { name: /semantic/i })).toBeDisabled();
+    expect(within(select).getByRole('option', { name: /hybrid/i })).toBeDisabled();
   });
 
   it('replaces the active scope when search all jobs is pressed', async () => {
