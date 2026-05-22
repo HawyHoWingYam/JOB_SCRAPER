@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
 from sqlalchemy.orm import sessionmaker
@@ -16,6 +18,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+import app.api.operator as operator_api
 from app.database import Base
 from app.models import CrawlJob, CrawlJobListing
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
@@ -104,6 +107,50 @@ def _healthy_headed_runtime() -> dict:
         "worker_status": "healthy",
         "reason": None,
     }
+
+
+def test_operator_health_route_returns_unified_summary(monkeypatch):
+    app = FastAPI()
+    app.include_router(operator_api.router, prefix="/api/v1")
+    expected = {
+        "status": "degraded",
+        "generated_at": "2026-05-22T03:04:05+00:00",
+        "issues": ["operator dependency queue_summaries unavailable: redis offline"],
+        "workers": {"scheduler-worker": {"status": "healthy"}},
+        "queues": {},
+        "scheduler": {"heartbeat_status": "fresh", "available": True},
+        "headed_runtime": {
+            "configured": True,
+            "browser_channel": "msedge",
+            "browser_user_data_dir_configured": True,
+            "browser_user_data_dir_exists": True,
+            "lock_port": 47651,
+            "worker_group": "crawl-headed-workers",
+            "worker_status": "healthy",
+            "reason": None,
+        },
+        "backlogs": {
+            "pending_detail_rows": 0,
+            "failed_detail_rows": 0,
+            "manual_action_detail_rows": 0,
+            "outbox_pending": 0,
+            "outbox_failed": 0,
+            "dead_letter_count": 0,
+            "missing_current_embeddings": 0,
+            "ai_backlog_jobs": 0,
+        },
+        "freshness": _base_freshness(),
+    }
+    monkeypatch.setattr(
+        operator_api.operator_health_service,
+        "build_operator_health_summary",
+        lambda: expected,
+    )
+
+    response = TestClient(app).get("/api/v1/operator/health")
+
+    assert response.status_code == 200
+    assert response.json() == expected
 
 
 def test_summarize_detail_status_counts_groups_statuses_as_dict():
