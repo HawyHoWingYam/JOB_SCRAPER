@@ -106,7 +106,7 @@ def _healthy_headed_runtime() -> dict:
     }
 
 
-def test_count_detail_statuses_groups_statuses_as_dict():
+def test_summarize_detail_status_counts_groups_statuses_as_dict():
     db = _build_sqlite_session()
     try:
         listing_crawl_job = _create_crawl_job(db)
@@ -163,7 +163,7 @@ def test_count_detail_statuses_groups_statuses_as_dict():
             error_message="timeout",
         )
 
-        counts = repository.count_detail_statuses(db)
+        counts = repository.summarize_detail_status_counts(db)
 
         assert counts == {
             "failed": 1,
@@ -343,6 +343,21 @@ def test_build_operator_health_summary_surfaces_loader_failure_as_degraded_issue
     assert summary["status"] == "degraded"
     assert "operator dependency queue_summaries unavailable: redis offline" in summary["issues"]
 
+def test_build_operator_health_summary_with_empty_scheduler_payload_is_degraded():
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: {},
+        detail_status_counts_loader=lambda: {},
+        outbox_counts_loader=lambda: {},
+        freshness_loader=_base_freshness,
+        scheduler_status_loader=lambda: {},
+        headed_runtime_loader=_healthy_headed_runtime,
+        dead_letter_count_loader=lambda: 0,
+    )
+
+    assert summary["status"] == "degraded"
+    assert summary["workers"]["scheduler-worker"]["status"] == "unknown"
+    assert "scheduler-worker status payload is incomplete" in summary["issues"]
+
 
 def test_build_operator_health_summary_surfaces_missing_consumer_group():
     summary = service_module.build_operator_health_summary(
@@ -398,3 +413,4 @@ def test_build_headed_runtime_summary_reports_exact_contract():
         }
     finally:
         shutil.rmtree(profile_dir.parent, ignore_errors=True)
+

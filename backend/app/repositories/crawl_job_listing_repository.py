@@ -251,6 +251,17 @@ class CrawlJobListingRepository:
 
         return batches
 
+    def summarize_detail_status_counts(
+        self,
+        db: Session,
+    ) -> dict[str, int]:
+        rows = (
+            db.query(CrawlJobListing.detail_status, func.count(CrawlJobListing.id))
+            .group_by(CrawlJobListing.detail_status)
+            .all()
+        )
+        return {str(status): int(count) for status, count in rows}
+
     def count_detail_statuses(
         self,
         db: Session,
@@ -259,23 +270,7 @@ class CrawlJobListingRepository:
         source_listing_crawl_job_id=None,
         category_ids: Iterable[str | int] | None = None,
     ) -> dict[str, int]:
-        query = db.query(
-            CrawlJobListing.detail_status,
-            func.count(CrawlJobListing.id),
-        )
-
-        normalized_source_site = str(source_site).strip().lower() if source_site else None
-        if normalized_source_site:
-            query = query.filter(CrawlJobListing.source_site == normalized_source_site)
-        if source_listing_crawl_job_id is not None:
-            query = query.filter(CrawlJobListing.crawl_job_id == source_listing_crawl_job_id)
-
-        normalized_category_ids = [str(category_id).strip() for category_id in (category_ids or []) if str(category_id).strip()]
-        if normalized_category_ids:
-            query = query.filter(CrawlJobListing.source_classification_id.in_(normalized_category_ids))
-
-        rows = query.group_by(CrawlJobListing.detail_status).all()
-        return {str(status): int(count) for status, count in rows}
+        return self.summarize_detail_status_counts(db)
 
     def mark_detail_running(
         self,
@@ -388,5 +383,6 @@ class CrawlJobListingRepository:
         else:
             db.flush()
         return listing
+
 
 

@@ -121,7 +121,7 @@ def load_detail_status_counts(
     db = session_factory()
     try:
         repo = repository or CrawlJobListingRepository()
-        return repo.count_detail_statuses(db)
+        return repo.summarize_detail_status_counts(db)
     finally:
         db.close()
 
@@ -438,23 +438,27 @@ def build_operator_health_summary(
         degraded_conditions = True
 
     scheduler_worker_name = str(scheduler.get("worker_name") or scheduler.get("owner") or "scheduler-worker")
+    scheduler_payload_complete = bool(scheduler) and (scheduler.get("heartbeat_status") is not None)
     heartbeat_status = str(scheduler.get("heartbeat_status") or "unknown")
     workers[scheduler_worker_name] = {
-        "status": "healthy" if scheduler.get("available") and heartbeat_status == "fresh" else heartbeat_status,
+        "status": "healthy" if scheduler_payload_complete and scheduler.get("available") and heartbeat_status == "fresh" else heartbeat_status,
         "owner": scheduler.get("owner"),
         "last_heartbeat_at": scheduler.get("last_heartbeat_at"),
         "last_reconcile_at": scheduler.get("last_reconcile_at"),
         "active_schedule_count": _coerce_int(scheduler.get("active_schedule_count")),
         "registered_job_count": _coerce_int(scheduler.get("registered_job_count")),
     }
-    if heartbeat_status == "missing":
+    if not scheduler_payload_complete:
+        issues.append("scheduler-worker status payload is incomplete")
+        degraded_conditions = True
+    elif heartbeat_status == "missing":
         issues.append("scheduler-worker heartbeat is missing")
         degraded_conditions = True
     elif heartbeat_status == "stale":
         last_seen = scheduler.get("last_heartbeat_at") or "unknown"
         issues.append(f"scheduler-worker heartbeat is stale (last seen {last_seen})")
         degraded_conditions = True
-    elif heartbeat_status == "unknown" and scheduler_error is None and scheduler:
+    elif heartbeat_status == "unknown":
         issues.append("scheduler-worker status is unknown")
         degraded_conditions = True
     elif not scheduler.get("available") and scheduler.get("reason"):
@@ -490,3 +494,4 @@ def build_operator_health_summary(
         "backlogs": backlogs,
         "freshness": freshness,
     }
+
