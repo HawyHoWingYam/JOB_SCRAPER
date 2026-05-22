@@ -174,6 +174,78 @@ def test_summarize_detail_status_counts_groups_statuses_as_dict():
         db.close()
 
 
+def test_count_detail_statuses_preserves_filtered_behavior():
+    db = _build_sqlite_session()
+    try:
+        jobsdb_job = _create_crawl_job(db, source_site="jobsdb")
+        ct_job = _create_crawl_job(db, source_site="ctgoodjobs")
+        detail_crawl_job = _create_crawl_job(db)
+        repository = CrawlJobListingRepository()
+
+        repository.upsert_listing(
+            db,
+            crawl_job_id=jobsdb_job.id,
+            source_site="jobsdb",
+            source_job_id="2001",
+            source_url="https://hk.jobsdb.com/job/2001",
+            source_classification_id="6281",
+            source_classification_name="ICT",
+            listing_page=1,
+            listing_rank=1,
+            listing_payload={"title": "Pending jobsdb"},
+        )
+        manual, _ = repository.upsert_listing(
+            db,
+            crawl_job_id=jobsdb_job.id,
+            source_site="jobsdb",
+            source_job_id="2002",
+            source_url="https://hk.jobsdb.com/job/2002",
+            source_classification_id="6282",
+            source_classification_name="Data",
+            listing_page=1,
+            listing_rank=2,
+            listing_payload={"title": "Manual jobsdb"},
+        )
+        other, _ = repository.upsert_listing(
+            db,
+            crawl_job_id=ct_job.id,
+            source_site="ctgoodjobs",
+            source_job_id="3001",
+            source_url="https://jobs.ctgoodjobs.hk/job/3001",
+            source_classification_id="ctgoodjobs:021",
+            source_classification_name="IT",
+            listing_page=1,
+            listing_rank=1,
+            listing_payload={"title": "Pending ct"},
+        )
+        repository.mark_detail_manual_action_required(
+            db,
+            listing_id=manual.id,
+            detail_crawl_job_id=detail_crawl_job.id,
+            error_message="captcha",
+        )
+        repository.mark_detail_failed(
+            db,
+            listing_id=other.id,
+            detail_crawl_job_id=detail_crawl_job.id,
+            error_message="timeout",
+        )
+
+        counts = repository.count_detail_statuses(
+            db,
+            source_site="jobsdb",
+            source_listing_crawl_job_id=jobsdb_job.id,
+            category_ids=["6281", "6282"],
+        )
+
+        assert counts == {
+            "manual_action_required": 1,
+            "pending": 1,
+        }
+    finally:
+        db.close()
+
+
 def test_build_operator_health_summary_returns_exact_approved_contract():
     generated_at = datetime(2026, 5, 22, 3, 4, 5, tzinfo=timezone.utc)
     missing_profile_dir = BACKEND_ROOT / "tests" / ".tmp_operator_health" / "missing-profile"
@@ -343,6 +415,7 @@ def test_build_operator_health_summary_surfaces_loader_failure_as_degraded_issue
     assert summary["status"] == "degraded"
     assert "operator dependency queue_summaries unavailable: redis offline" in summary["issues"]
 
+
 def test_build_operator_health_summary_with_empty_scheduler_payload_is_degraded():
     summary = service_module.build_operator_health_summary(
         queue_summary_loader=lambda: {},
@@ -350,6 +423,38 @@ def test_build_operator_health_summary_with_empty_scheduler_payload_is_degraded(
         outbox_counts_loader=lambda: {},
         freshness_loader=_base_freshness,
         scheduler_status_loader=lambda: {},
+        headed_runtime_loader=_healthy_headed_runtime,
+        dead_letter_count_loader=lambda: 0,
+    )
+
+    assert summary["status"] == "degraded"
+    assert summary["workers"]["scheduler-worker"]["status"] == "unknown"
+    assert "scheduler-worker status payload is incomplete" in summary["issues"]
+
+
+def test_build_operator_health_summary_with_scheduler_missing_available_is_degraded():
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: {},
+        detail_status_counts_loader=lambda: {},
+        outbox_counts_loader=lambda: {},
+        freshness_loader=_base_freshness,
+        scheduler_status_loader=lambda: {"heartbeat_status": "fresh"},
+        headed_runtime_loader=_healthy_headed_runtime,
+        dead_letter_count_loader=lambda: 0,
+    )
+
+    assert summary["status"] == "degraded"
+    assert summary["workers"]["scheduler-worker"]["status"] == "unknown"
+    assert "scheduler-worker status payload is incomplete" in summary["issues"]
+
+
+def test_build_operator_health_summary_with_scheduler_missing_heartbeat_is_degraded():
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: {},
+        detail_status_counts_loader=lambda: {},
+        outbox_counts_loader=lambda: {},
+        freshness_loader=_base_freshness,
+        scheduler_status_loader=lambda: {"available": True},
         headed_runtime_loader=_healthy_headed_runtime,
         dead_letter_count_loader=lambda: 0,
     )
@@ -413,4 +518,3 @@ def test_build_headed_runtime_summary_reports_exact_contract():
         }
     finally:
         shutil.rmtree(profile_dir.parent, ignore_errors=True)
-
