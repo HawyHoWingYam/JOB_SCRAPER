@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { apiFetchJson, formatApiErrorDetail } from './client';
+import { fetchOperatorHealth } from './operatorHealth';
 
 describe('api client', () => {
   it('extracts backend detail messages from failed JSON responses', async () => {
@@ -46,6 +47,58 @@ describe('api client', () => {
 
       await vi.advanceTimersByTimeAsync(25);
 
+      expect(requestSignal.aborted).toBe(true);
+      expect((await requestRejection).message).toBe('request aborted');
+    } finally {
+      request?.catch(() => {});
+      vi.useRealTimers();
+    }
+  });
+
+  it('routes operator health requests through the shared JSON client with the operator endpoint', async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ status: 'ok' }),
+      }),
+    );
+
+    const result = await fetchOperatorHealth({ method: 'POST', headers: { 'X-Test': '1' }, timeoutMs: 2000 });
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/v1/operator/health',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'X-Test': '1' },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(result).toEqual({ status: 'ok' });
+  });
+
+  it('applies the default operator health timeout when no override is provided', async () => {
+    vi.useFakeTimers();
+    let requestSignal = null;
+    let request;
+
+    try {
+      globalThis.fetch = vi.fn((_url, init) => {
+        requestSignal = init.signal;
+
+        return new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            reject(new Error('request aborted'));
+          });
+        });
+      });
+
+      request = fetchOperatorHealth();
+      const requestRejection = request.catch((error) => error);
+
+      await vi.advanceTimersByTimeAsync(14999);
+      expect(requestSignal.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
       expect(requestSignal.aborted).toBe(true);
       expect((await requestRejection).message).toBe('request aborted');
     } finally {

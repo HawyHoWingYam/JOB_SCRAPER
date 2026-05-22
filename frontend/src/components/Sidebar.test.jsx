@@ -14,11 +14,22 @@ describe('Sidebar', () => {
     expect(screen.getByRole('button', { name: /job browser/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /companies/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /ai enrichment/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /operator health/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /scheduler/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: new RegExp(removedNetworkLabel, 'i') })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /scheduler/i }));
     expect(setActiveView).toHaveBeenCalledWith('scheduler');
+  });
+
+  it('routes the operator health nav item into the operator view', async () => {
+    const setActiveView = vi.fn();
+
+    render(<Sidebar activeView="dashboard" setActiveView={setActiveView} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /operator health/i }));
+
+    expect(setActiveView).toHaveBeenCalledWith('operator');
   });
 
   it('routes the footer settings button into the settings view', async () => {
