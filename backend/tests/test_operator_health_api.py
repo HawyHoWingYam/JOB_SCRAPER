@@ -463,6 +463,22 @@ def test_build_operator_health_summary_with_scheduler_missing_heartbeat_is_degra
     assert summary["workers"]["scheduler-worker"]["status"] == "unknown"
     assert "scheduler-worker status payload is incomplete" in summary["issues"]
 
+def test_build_operator_health_summary_with_scheduler_unavailable_fresh_heartbeat_is_not_fresh():
+    summary = service_module.build_operator_health_summary(
+        queue_summary_loader=lambda: {},
+        detail_status_counts_loader=lambda: {},
+        outbox_counts_loader=lambda: {},
+        freshness_loader=_base_freshness,
+        scheduler_status_loader=lambda: {"available": False, "heartbeat_status": "fresh", "reason": "scheduler_worker_paused"},
+        headed_runtime_loader=_healthy_headed_runtime,
+        dead_letter_count_loader=lambda: 0,
+    )
+
+    assert summary["status"] == "degraded"
+    assert summary["workers"]["scheduler-worker"]["status"] == "unavailable"
+    assert summary["workers"]["scheduler-worker"]["status"] != "fresh"
+    assert "scheduler-worker status is scheduler_worker_paused" in summary["issues"]
+
 
 def test_build_operator_health_summary_surfaces_missing_consumer_group():
     summary = service_module.build_operator_health_summary(
@@ -518,3 +534,4 @@ def test_build_headed_runtime_summary_reports_exact_contract():
         }
     finally:
         shutil.rmtree(profile_dir.parent, ignore_errors=True)
+

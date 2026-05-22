@@ -440,8 +440,19 @@ def build_operator_health_summary(
     scheduler_worker_name = str(scheduler.get("worker_name") or scheduler.get("owner") or "scheduler-worker")
     scheduler_payload_complete = bool(scheduler) and (scheduler.get("available") is not None) and (scheduler.get("heartbeat_status") is not None)
     heartbeat_status = str(scheduler.get("heartbeat_status") or "unknown")
+    scheduler_worker_status = "unknown"
+    if scheduler_payload_complete:
+        if scheduler.get("available") and heartbeat_status == "fresh":
+            scheduler_worker_status = "healthy"
+        elif heartbeat_status in {"missing", "stale", "unknown"}:
+            scheduler_worker_status = heartbeat_status
+        elif not scheduler.get("available"):
+            scheduler_worker_status = "unavailable"
+        else:
+            scheduler_worker_status = "degraded"
+
     workers[scheduler_worker_name] = {
-        "status": "healthy" if scheduler_payload_complete and scheduler.get("available") and heartbeat_status == "fresh" else (heartbeat_status if scheduler_payload_complete else "unknown"),
+        "status": scheduler_worker_status,
         "owner": scheduler.get("owner"),
         "last_heartbeat_at": scheduler.get("last_heartbeat_at"),
         "last_reconcile_at": scheduler.get("last_reconcile_at"),
@@ -494,6 +505,7 @@ def build_operator_health_summary(
         "backlogs": backlogs,
         "freshness": freshness,
     }
+
 
 
 
