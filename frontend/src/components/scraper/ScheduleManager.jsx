@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Zap, AlertTriangle, CalendarClock } from 'lucide-react';
 import { API_BASE_URL } from '../../api/base';
+import { fetchCapabilities } from '../../api/capabilities';
 import ScheduleForm from './ScheduleForm';
 import ScheduleList from './ScheduleList';
 import ScheduleHistory from './ScheduleHistory';
@@ -168,6 +169,7 @@ function ScheduleManager({ onNavigateToAI }) {
     const [schedules, setSchedules] = useState([]);
     const [categories, setCategories] = useState([]);
     const [operatorHealth, setOperatorHealth] = useState(null);
+    const [capabilities, setCapabilities] = useState(null);
     const [listingBatches, setListingBatches] = useState([]);
     const [currentSourceSite, setCurrentSourceSite] = useState('jobsdb');
     const [isLoading, setIsLoading] = useState(false);
@@ -241,6 +243,15 @@ function ScheduleManager({ onNavigateToAI }) {
             setOperatorHealth(data.operator || null);
         } catch (err) {
             console.error('Failed to fetch operator health:', err);
+        }
+    }, []);
+
+    const fetchRuntimeCapabilities = useCallback(async () => {
+        try {
+            setCapabilities(await fetchCapabilities());
+        } catch (err) {
+            console.error('Failed to fetch runtime capabilities:', err);
+            setCapabilities(null);
         }
     }, []);
 
@@ -392,8 +403,16 @@ function ScheduleManager({ onNavigateToAI }) {
         fetchSchedules();
         fetchCategories(currentSourceSite);
         fetchOperatorHealth();
+        fetchRuntimeCapabilities();
         bootstrapProgressPanel();
-    }, [bootstrapProgressPanel, currentSourceSite, fetchCategories, fetchOperatorHealth, fetchSchedules]);
+    }, [
+        bootstrapProgressPanel,
+        currentSourceSite,
+        fetchCategories,
+        fetchOperatorHealth,
+        fetchRuntimeCapabilities,
+        fetchSchedules,
+    ]);
 
     useEffect(() => {
         if (!showImmediateScrape || immediateForm.crawl_phase !== 'detail') {
@@ -633,6 +652,18 @@ function ScheduleManager({ onNavigateToAI }) {
                             {(operatorHealth.issues || []).slice(0, 3).map((issue) => (
                                 <span key={issue}>{issue}</span>
                             ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {capabilities?.scheduler?.available === false && (
+                <div className="operator-health-banner glass-panel">
+                    <AlertTriangle size={20} />
+                    <div>
+                        <strong>Scheduler dispatch unavailable</strong>
+                        <div className="operator-health-issues">
+                            <span>Scheduler dispatch is unavailable in the current runtime profile.</span>
                         </div>
                     </div>
                 </div>

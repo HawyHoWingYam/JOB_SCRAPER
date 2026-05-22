@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import DOMPurify from 'dompurify';
 import SkillTags from './SkillTags';
 
+const RELATED_JOBS_UNAVAILABLE_MESSAGE = 'Related jobs are unavailable in the current runtime profile.';
+
 function formatRelativePostedState(postedDate) {
   if (!postedDate) {
     return 'Posted date unavailable';
@@ -149,21 +151,19 @@ function getExpiryLabel(job) {
   return `Application closes ${formatted}`;
 }
 
-function JobDetailModal({ jobId, apiUrl, onClose }) {
+function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [relatedJobs, setRelatedJobs] = useState([]);
   const [relatedJobsLoading, setRelatedJobsLoading] = useState(true);
   const [relatedJobsError, setRelatedJobsError] = useState('');
+  const recommendationsAvailable = capabilities?.recommendations?.similar_jobs?.available !== false;
 
   useEffect(() => {
     let isActive = true;
     setLoading(true);
     setError(null);
-    setRelatedJobs([]);
-    setRelatedJobsError('');
-    setRelatedJobsLoading(true);
 
     fetch(`${apiUrl}/api/v1/jobs/${jobId}`)
       .then((res) => {
@@ -184,6 +184,26 @@ function JobDetailModal({ jobId, apiUrl, onClose }) {
         setError(err.message);
         setLoading(false);
       });
+
+    return () => {
+      isActive = false;
+    };
+  }, [jobId, apiUrl]);
+
+  useEffect(() => {
+    let isActive = true;
+    setRelatedJobs([]);
+    setRelatedJobsError('');
+
+    if (!recommendationsAvailable) {
+      setRelatedJobsLoading(false);
+      setRelatedJobsError(RELATED_JOBS_UNAVAILABLE_MESSAGE);
+      return () => {
+        isActive = false;
+      };
+    }
+
+    setRelatedJobsLoading(true);
 
     fetch(`${apiUrl}/api/v1/jobs/${jobId}/similar`)
       .then((res) => {
@@ -210,7 +230,7 @@ function JobDetailModal({ jobId, apiUrl, onClose }) {
     return () => {
       isActive = false;
     };
-  }, [jobId, apiUrl]);
+  }, [jobId, apiUrl, recommendationsAvailable]);
 
   const handleOverlayClick = (e) => {
     if (e.target === e.currentTarget) {

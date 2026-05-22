@@ -230,4 +230,37 @@ describe('JobDetailModal', () => {
     expect(screen.getByText('Platform Backend Engineer')).toBeInTheDocument();
     expect(screen.getByText('Atlas Systems')).toBeInTheDocument();
   });
+
+  it('skips related jobs requests when similar jobs are unavailable in the runtime profile', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = new URL(String(input), 'http://localhost');
+
+      if (url.pathname === '/api/v1/jobs/job-1') {
+        return mockJsonResponse(createJobPayload());
+      }
+
+      if (url.pathname === '/api/v1/jobs/job-1/similar') {
+        return mockJsonResponse({ source_job_id: 'job-1', recommendations: [] });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
+    });
+
+    render(
+      <JobDetailModal
+        jobId="job-1"
+        apiUrl="http://localhost:8000"
+        capabilities={{ recommendations: { similar_jobs: { available: false } } }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
+    expect(
+      screen.getByText('Related jobs are unavailable in the current runtime profile.'),
+    ).toBeInTheDocument();
+    expect(
+      globalThis.fetch.mock.calls.some(([input]) => String(input).includes('/api/v1/jobs/job-1/similar')),
+    ).toBe(false);
+  });
 });

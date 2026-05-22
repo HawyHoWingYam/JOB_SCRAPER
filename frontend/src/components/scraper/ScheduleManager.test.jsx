@@ -119,6 +119,7 @@ function createFetchMock({
   ctgoodjobsCategories = CTGOODJOBS_CATEGORIES,
   ctgoodjobsCategoryErrorDetail = null,
   health = { status: 'healthy', operator: { status: 'healthy', issues: [] } },
+  capabilities = { scheduler: { available: true } },
   listingBatches = [],
   scrapeProgress = { active: {}, all: {}, has_active: false },
   scrapeProgressError = null,
@@ -159,6 +160,10 @@ function createFetchMock({
 
     if (url === '/health') {
       return mockJsonResponse(health);
+    }
+
+    if (url === '/api/v1/capabilities') {
+      return mockJsonResponse(capabilities);
     }
 
     if (url.startsWith('/api/v1/crawl-jobs/listing-batches')) {
@@ -262,6 +267,23 @@ describe('ScheduleManager', () => {
 
     expect(await screen.findByText(/pipeline attention required/i)).toBeInTheDocument();
     expect(screen.getByText(/stream\.job\.ingest group ingest-workers lag is 5764/i)).toBeInTheDocument();
+  });
+
+  it('shows a scheduler warning when runtime capabilities report scheduler dispatch unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        capabilities: {
+          scheduler: { available: false, reason: 'scheduler_not_running' },
+        },
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    expect(
+      await screen.findByText('Scheduler dispatch is unavailable in the current runtime profile.'),
+    ).toBeInTheDocument();
   });
 
   it('posts jobsdb crawl-job payloads with integer category ids and source_site', async () => {
