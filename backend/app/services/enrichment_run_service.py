@@ -285,7 +285,10 @@ class EnrichmentRunService:
         metrics = dict(crawl_job.metrics or {})
         items_emitted = int(metrics.get("items_emitted") or 0)
         ingest_items_seen = int(metrics.get("ingest_items_seen") or 0)
-        if items_emitted <= 0 or ingest_items_seen < items_emitted:
+        ingest_items_failed = int(metrics.get("ingest_items_failed") or 0)
+        ingest_dead_lettered = int(metrics.get("ingest_dead_lettered") or 0)
+        ingest_items_settled = ingest_items_seen + max(ingest_items_failed, ingest_dead_lettered)
+        if items_emitted > 0 and ingest_items_settled < items_emitted:
             return False
 
         return self.request_run_execution(run.id, source_service="enrichment-worker")
@@ -581,6 +584,43 @@ class EnrichmentRunService:
         if run.started_at is None:
             run.started_at = timestamp
         run.completed_at = latest_failure_timestamp
+        run.current_job_title = None
+        run.error_message = error_message
+        self.db.flush()
+        return run
+
+    def cancel_run(self, run_id: str, error_message: str) -> Optional[EnrichmentRun]:
+        """Cancel an unclaimed run without converting its items into failed jobs."""
+        run = self.get_run(run_id)
+        if run is None:
+            return None
+
+        items = self.list_run_items(run_id)
+        timestamp = utc_now()
+        completed_items = 0
+        failed_items = 0
+
+        for item in items:
+            if item.status == "completed":
+                completed_items += 1
+                continue
+            if item.status == "failed":
+                failed_items += 1
+                continue
+
+            item.status = "cancelled"
+            item.error_message = error_message
+            if item.started_at is None:
+                item.started_at = timestamp
+            item.completed_at = timestamp
+
+        run.status = "cancelled"
+        run.pending_items = 0
+        run.completed_items = completed_items
+        run.failed_items = failed_items
+        if run.started_at is None:
+            run.started_at = timestamp
+        run.completed_at = timestamp
         run.current_job_title = None
         run.error_message = error_message
         self.db.flush()

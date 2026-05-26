@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import ScheduleHistory from './ScheduleHistory';
@@ -42,21 +42,22 @@ describe('ScheduleHistory', () => {
       />,
     );
 
-    expect(screen.getByText(/request snapshot/i)).toBeInTheDocument();
-    expect(screen.getByText(/source/i)).toBeInTheDocument();
-    expect(screen.getByText(/^jobsdb$/i)).toBeInTheDocument();
-    expect(screen.getByText(/phase/i)).toBeInTheDocument();
-    expect(screen.getByText(/^detail$/i)).toBeInTheDocument();
-    expect(screen.getByText(/mode/i)).toBeInTheDocument();
-    expect(screen.getByText(/^headed$/i)).toBeInTheDocument();
-    expect(screen.getByText(/categories/i)).toBeInTheDocument();
-    expect(screen.getByText(/2 selected/i)).toBeInTheDocument();
-    expect(screen.getByText(/detail batch/i)).toBeInTheDocument();
-    expect(screen.getByText(/listing-batch-777/i)).toBeInTheDocument();
-    expect(screen.getByText(/detail limit/i)).toBeInTheDocument();
-    expect(screen.getByText(/80/i)).toBeInTheDocument();
-    expect(screen.getByText(/crawl job/i)).toBeInTheDocument();
-    expect(screen.getByText(/crawl-job-123/i)).toBeInTheDocument();
+    const snapshot = screen.getByText(/request snapshot/i).closest('.execution-request-snapshot');
+    expect(snapshot).not.toBeNull();
+    expect(within(snapshot).getByText(/source/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/^jobsdb$/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/phase/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/^detail$/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/mode/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/^headed$/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/categories/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/2 selected/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/detail batch/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/listing-batch-777/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/detail limit/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/80/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/crawl job/i)).toBeInTheDocument();
+    expect(within(snapshot).getByText(/crawl-job-123/i)).toBeInTheDocument();
   });
 
   it('closes the modal when the close button is pressed', () => {

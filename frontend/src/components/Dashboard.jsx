@@ -86,7 +86,7 @@ export default function Dashboard({ onNavigateToAI }) {
       <header className="dashboard-header">
         <div className="dashboard-header-copy">
           <h2>Command Center</h2>
-          <p className="subtitle">Real-time scraping and analytics overview</p>
+          <p className="subtitle">Scrape volume, enrichment coverage, and queue posture.</p>
         </div>
         <button type="button" className="dashboard-link-button" onClick={onNavigateToAI}>
           Open AI Enrichment
@@ -99,10 +99,9 @@ export default function Dashboard({ onNavigateToAI }) {
             <article className="dashboard-hero-panel glass-panel">
               <div className="dashboard-hero-copy">
                 <p className="dashboard-panel-eyebrow">Operations Snapshot</p>
-                <h3>Signal over noise</h3>
+                <h3>Current operating posture</h3>
                 <p>
-                  The dashboard now keeps the queue posture, enrichment coverage, and failure watch in one place before
-                  you dive into the detailed consoles.
+                  Captured jobs, enrichment backlog, and failure pressure for the current dataset.
                 </p>
               </div>
 
@@ -139,7 +138,7 @@ export default function Dashboard({ onNavigateToAI }) {
 
             <article className="dashboard-action-panel glass-panel">
               <p className="dashboard-panel-eyebrow">Next Action</p>
-              <h3>Open the enrichment console</h3>
+              <h3>Enrichment queue</h3>
               <p className="dashboard-action-copy">
                 {pendingEnrichment > 0
                   ? `${pendingEnrichment.toLocaleString()} profiles are staged for AI processing. Use the enrichment console for batch runs and retry launches.`

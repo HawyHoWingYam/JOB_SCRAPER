@@ -4,13 +4,13 @@ import { API_BASE_URL } from '../../api/base';
 const API_URL = API_BASE_URL;
 
 const CATEGORY_COLORS = [
-  '#00f2fe',
-  '#10b981',
-  '#f59e0b',
-  '#8b5cf6',
-  '#3b82f6',
-  '#ef4444',
-  '#14b8a6',
+  '#6aa5ff',
+  '#4fbf8b',
+  '#e9b949',
+  '#c084fc',
+  '#f16f6f',
+  '#5cc8be',
+  '#a7afbc',
 ];
 
 function formatShare(value, total) {

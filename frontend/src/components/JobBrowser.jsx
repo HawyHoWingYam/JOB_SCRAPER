@@ -437,7 +437,7 @@ function JobBrowser() {
                         <div className="query-console-copy">
                             <p className="console-eyebrow">Query Console</p>
                             <h2>Data Explorer</h2>
-                            <p className="subtitle">Scan the captured market, then narrow by taxonomy and posting window.</p>
+                            <p className="subtitle">Captured listings, active filters, retrieval mode, and export state.</p>
                         </div>
 
                         <div className="query-console-status">
@@ -489,7 +489,7 @@ function JobBrowser() {
                                 <option value="semantic" disabled={!semanticAvailable}>Semantic</option>
                             </select>
                             <p className="query-mode-note">
-                                Lexical is the default. Hybrid blends filters with embeddings. Semantic leans on embedding-backed intent matching.
+                                Current retrieval profile for the submitted search scope.
                             </p>
                         </div>
 

@@ -29,7 +29,7 @@ def _repo_root() -> Path:
 
 
 def _is_leaf(path: Path) -> bool:
-    return path.name != "README.md"
+    return path.name != "README.md" and not path.name.startswith("generated-")
 
 
 def _headings(text: str) -> list[str]:

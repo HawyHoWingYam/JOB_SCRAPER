@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Briefcase, CalendarClock, Settings, Activity, BrainCircuit, Building2, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, Briefcase, CalendarClock, Settings, DatabaseZap, BrainCircuit, Building2 } from 'lucide-react';
 import './Sidebar.css';
 
 const Sidebar = ({ activeView, setActiveView }) => {
@@ -8,7 +8,6 @@ const Sidebar = ({ activeView, setActiveView }) => {
         { id: 'jobs', label: 'Job Browser', icon: Briefcase },
         { id: 'companies', label: 'Companies', icon: Building2 },
         { id: 'ai', label: 'AI Enrichment', icon: BrainCircuit },
-        { id: 'operator', label: 'Operator Health', icon: ShieldCheck },
         { id: 'scheduler', label: 'Scheduler', icon: CalendarClock },
     ];
 
@@ -16,10 +15,10 @@ const Sidebar = ({ activeView, setActiveView }) => {
         <aside className="sidebar glass-panel">
             <div className="sidebar-header">
                 <div className="logo-container">
-                    <Activity className="logo-icon" size={28} />
-                    <h1 className="logo-text">DataNexus</h1>
+                    <DatabaseZap className="logo-icon" size={26} />
+                    <h1 className="logo-text">JobsDB Ops</h1>
                 </div>
-                <div className="logo-subtitle">Enterprise Scraper Engine</div>
+                <div className="logo-subtitle">Crawler operations console</div>
             </div>
 
             <nav className="sidebar-nav">
@@ -31,6 +30,7 @@ const Sidebar = ({ activeView, setActiveView }) => {
                             key={item.id}
                             className={`nav-item ${isActive ? 'active' : ''}`}
                             onClick={() => setActiveView(item.id)}
+                            aria-label={item.label}
                         >
                             <Icon size={20} className="nav-icon" />
                             <span>{item.label}</span>
@@ -44,6 +44,7 @@ const Sidebar = ({ activeView, setActiveView }) => {
                 <button
                     className={`nav-item ${activeView === 'settings' ? 'active' : ''}`}
                     onClick={() => setActiveView('settings')}
+                    aria-label="Settings"
                 >
                     <Settings size={20} className="nav-icon" />
                     <span>Settings</span>

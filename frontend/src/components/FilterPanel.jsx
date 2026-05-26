@@ -58,9 +58,9 @@ function FilterPanel({
                 <div className="filter-deck-header">
                     <div>
                         <p className="filter-card-title">Search Lenses</p>
-                        <h3>Refine without losing the signal</h3>
+                        <h3>Filters</h3>
                         <p className="filter-card-hint">
-                            Focus by hiring taxonomy and limit the results to the post-date window you care about.
+                            Active taxonomy, industry, date, and experience constraints.
                         </p>
                     </div>
                     <div className="filter-deck-actions">
@@ -193,7 +193,7 @@ function FilterPanel({
                     <div className="filter-field filter-field-wide">
                         <span className="filter-label">Experience Matching</span>
                         <div className="filter-date-note">
-                            <span>Unspecified experience is treated as 0-1 years for filtering.</span>
+                            <span>Unspecified experience is counted as 0-1 years.</span>
                         </div>
                     </div>
 
@@ -214,7 +214,7 @@ function FilterPanel({
                         </div>
                         <div className="filter-date-note">
                             <CalendarRange size={16} />
-                            <span>Uses the job post date, so you can isolate fresh listings or backfill specific periods.</span>
+                            <span>Based on the job post date.</span>
                         </div>
                         {validationError && (
                             <p className="filter-validation-message">{validationError}</p>

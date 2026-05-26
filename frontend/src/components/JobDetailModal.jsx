@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import DOMPurify from 'dompurify';
+import { X } from 'lucide-react';
 import SkillTags from './SkillTags';
 
 const RELATED_JOBS_UNAVAILABLE_MESSAGE = 'Related jobs are unavailable in the current runtime profile.';
@@ -253,7 +254,9 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   return (
     <div className="modal-overlay" onClick={handleOverlayClick}>
       <div className="modal-content job-detail-modal">
-        <button className="modal-close" onClick={onClose}>×</button>
+        <button className="modal-close" onClick={onClose} aria-label="Close job details">
+          <X size={18} />
+        </button>
 
         {loading && <div className="modal-loading">Loading...</div>}
 

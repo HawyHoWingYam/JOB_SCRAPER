@@ -19,6 +19,9 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
         connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_phase VARCHAR(32)"))
         connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS detail_limit INTEGER"))
         connection.execute(
+            text("ALTER TABLE schedule_executions ADD COLUMN IF NOT EXISTS request_payload_snapshot JSON")
+        )
+        connection.execute(
             text(
                 "UPDATE scrape_schedules "
                 "SET crawl_mode = CASE "
@@ -29,6 +32,16 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
         )
         connection.execute(text("UPDATE scrape_schedules SET crawl_phase = 'listing' WHERE crawl_phase IS NULL"))
         connection.execute(text("UPDATE scrape_schedules SET detail_limit = 100 WHERE detail_limit IS NULL"))
+        connection.execute(
+            text(
+                "UPDATE schedule_executions AS executions "
+                "SET request_payload_snapshot = crawl_jobs.request_payload "
+                "FROM crawl_jobs "
+                "WHERE executions.crawl_job_id = crawl_jobs.id "
+                "AND executions.request_payload_snapshot IS NULL "
+                "AND crawl_jobs.request_payload IS NOT NULL"
+            )
+        )
 
     metadata.create_all(bind=db_engine)
 

@@ -1,16 +1,17 @@
 import React from 'react';
+import { X } from 'lucide-react';
 
 function formatDate(dateString) {
     if (!dateString) return '-';
-    return new Date(dateString).toLocaleString('zh-CN');
+    return new Date(dateString).toLocaleString('en-US');
 }
 
 function formatDuration(seconds) {
     if (!seconds) return '-';
-    if (seconds < 60) return `${seconds} 秒`;
+    if (seconds < 60) return `${seconds}s`;
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins} 分 ${secs} 秒`;
+    return `${mins}m ${secs}s`;
 }
 
 function getStatusClass(status) {
@@ -24,10 +25,10 @@ function getStatusClass(status) {
 
 function getStatusText(status) {
     switch (status) {
-        case 'completed': return '完成';
-        case 'failed': return '失败';
-        case 'running': return '运行中';
-        default: return '等待中';
+        case 'completed': return 'Completed';
+        case 'failed': return 'Failed';
+        case 'running': return 'Running';
+        default: return 'Pending';
     }
 }
 
@@ -36,11 +37,11 @@ function getDetailedStatus(exec) {
         return '-';
     }
     const phases = [];
-    if (exec.phase1_completed) phases.push('收集ID');
-    if (exec.phase2_completed) phases.push('爬取详情');
-    if (exec.phase3_completed) phases.push('AI分类');
-    if (exec.phase4_completed) phases.push('保存数据');
-    return phases.join(' → ');
+    if (exec.phase1_completed) phases.push('Collect IDs');
+    if (exec.phase2_completed) phases.push('Fetch Details');
+    if (exec.phase3_completed) phases.push('AI Classify');
+    if (exec.phase4_completed) phases.push('Persist Data');
+    return phases.join(' -> ');
 }
 
 function renderSnapshotItem(label, value) {
@@ -94,24 +95,26 @@ function ScheduleHistory({ executions, scheduleName, onClose }) {
         <div className="schedule-history-modal">
             <div className="schedule-history-content">
                 <div className="schedule-history-header">
-                    <h3>执行历史 - {scheduleName}</h3>
-                    <button className="btn-close" aria-label="Close history" onClick={onClose}>×</button>
+                    <h3>Execution History - {scheduleName}</h3>
+                    <button className="btn-close" aria-label="Close history" onClick={onClose}>
+                        <X size={18} />
+                    </button>
                 </div>
 
                 <div className="schedule-history-body">
                     {executions.length === 0 ? (
-                        <p className="no-history">暂无执行记录</p>
+                        <p className="no-history">No execution records yet.</p>
                     ) : (
                         <table className="history-table">
                             <thead>
                                 <tr>
-                                    <th>状态</th>
-                                    <th>执行阶段</th>
-                                    <th>开始时间</th>
-                                    <th>完成时间</th>
-                                    <th>耗时</th>
-                                    <th>爬取数量</th>
-                                    <th>错误信息</th>
+                                    <th>Status</th>
+                                    <th>Execution Phase</th>
+                                    <th>Started</th>
+                                    <th>Completed</th>
+                                    <th>Duration</th>
+                                    <th>Rows</th>
+                                    <th>Error</th>
                                 </tr>
                             </thead>
                             <tbody>

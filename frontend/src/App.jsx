@@ -6,7 +6,6 @@ const Dashboard = lazy(() => import('./components/Dashboard'));
 const JobBrowser = lazy(() => import('./components/JobBrowser'));
 const AIEnrichmentPage = lazy(() => import('./components/ai/AIEnrichmentPage'));
 const CompaniesPage = lazy(() => import('./components/companies/CompaniesPage'));
-const OperatorHealthPage = lazy(() => import('./components/operator/OperatorHealthPage'));
 const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage'));
 const ScheduleManager = lazy(() => import('./components/scraper/ScheduleManager'));
 
@@ -25,7 +24,6 @@ function App() {
             {activeView === 'jobs' && <JobBrowser />}
             {activeView === 'companies' && <CompaniesPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
-            {activeView === 'operator' && <OperatorHealthPage />}
             {activeView === 'settings' && <AISettingsPage />}
             {activeView === 'scheduler' && <ScheduleManager onNavigateToAI={navigateToAI} />}
           </Suspense>

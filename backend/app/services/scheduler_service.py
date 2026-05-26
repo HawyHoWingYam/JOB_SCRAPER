@@ -37,6 +37,11 @@ def _normalize_next_run_at(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC).replace(tzinfo=None)
 
 
+async def run_scheduled_crawl_job(schedule_id: str, *, trigger_type: str = "schedule"):
+    """Serializable APScheduler entrypoint that dispatches a persisted schedule."""
+    return await SchedulerService.get_instance()._dispatch_schedule(UUID(str(schedule_id)), trigger_type=trigger_type)
+
+
 class SchedulerService:
     """Service for managing scheduled scraping tasks."""
 
@@ -245,10 +250,10 @@ class SchedulerService:
                 timezone=ZoneInfo(getattr(schedule, "timezone", None) or "Asia/Hong_Kong"),
             )
             job = self.scheduler.add_job(
-                self._dispatch_schedule,
+                run_scheduled_crawl_job,
                 trigger=trigger,
                 id=str(schedule.id),
-                args=[schedule.id],
+                args=[str(schedule.id)],
                 replace_existing=True,
             )
             if db is not None:

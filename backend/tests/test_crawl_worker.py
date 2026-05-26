@@ -306,7 +306,19 @@ def test_crawl_worker_listing_phase_persists_staging_rows_without_publishing_ing
 
     db = session_factory()
     try:
+        crawl_job = db.query(CrawlJob).filter(CrawlJob.id == uuid.UUID(crawl_job_id)).one()
         listings = db.query(CrawlJobListing).all()
+        assert crawl_job.metrics == {
+            "pages_processed": 1,
+            "items_emitted": 0,
+            "job_ids_collected": 1,
+            "listings_staged": 1,
+            "detail_pending": 1,
+            "detail_running": 0,
+            "detail_completed": 0,
+            "detail_failed": 0,
+            "detail_manual_action_required": 0,
+        }
         assert len(listings) == 1
         assert listings[0].source_job_id == "123456"
         assert listings[0].detail_status == "pending"
@@ -369,6 +381,7 @@ def test_crawl_worker_detail_phase_marks_listing_completed_and_publishes_ingest(
     db = session_factory()
     try:
         crawl_job = db.query(CrawlJob).filter(CrawlJob.id == uuid.UUID(detail_crawl_job_id)).one()
+        listing_crawl_job = db.query(CrawlJob).filter(CrawlJob.id == uuid.UUID(listing_crawl_job_id)).one()
         listing_row = db.query(CrawlJobListing).filter(CrawlJobListing.id == listing.id).one()
         events = (
             db.query(CrawlJobEvent)
@@ -385,6 +398,14 @@ def test_crawl_worker_detail_phase_marks_listing_completed_and_publishes_ingest(
             "pages_processed": 0,
             "items_emitted": 1,
             "job_ids_collected": 1,
+        }
+        assert listing_crawl_job.metrics == {
+            "listings_staged": 1,
+            "detail_pending": 0,
+            "detail_running": 0,
+            "detail_completed": 1,
+            "detail_failed": 0,
+            "detail_manual_action_required": 0,
         }
         assert [event.event_type for event in events] == [
             "crawl.started",

@@ -28,6 +28,13 @@ from app.utils.time import utc_now
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 _UNSET = object()
+DETAIL_STATUS_METRIC_KEYS = {
+    "pending": "detail_pending",
+    "running": "detail_running",
+    "completed": "detail_completed",
+    "failed": "detail_failed",
+    "manual_action_required": "detail_manual_action_required",
+}
 
 CRAWLER_ROOT = Path(__file__).resolve().parents[2] / "crawler"
 BACKEND_ROOT = CRAWLER_ROOT.parent
@@ -533,7 +540,14 @@ class CrawlWorkerService:
                 listing_page=payload.get("listing_page"),
                 listing_rank=payload.get("listing_rank"),
                 listing_payload=dict(payload.get("listing_payload") or {}),
+                auto_commit=False,
             )
+            self._sync_listing_detail_status_metrics(
+                db,
+                source_listing_crawl_job_id=normalized_crawl_job_id,
+                source_site=str(payload.get("source_site") or ""),
+            )
+            db.commit()
         finally:
             db.close()
 
@@ -579,11 +593,18 @@ class CrawlWorkerService:
     def _mark_detail_running(self, *, listing_id: str, detail_crawl_job_id: str) -> None:
         db = self.session_factory()
         try:
-            self.crawl_job_listing_repository.mark_detail_running(
+            listing = self.crawl_job_listing_repository.mark_detail_running(
                 db,
                 listing_id=self._normalize_crawl_job_id(listing_id),
                 detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
+                auto_commit=False,
             )
+            self._sync_listing_detail_status_metrics(
+                db,
+                source_listing_crawl_job_id=listing.crawl_job_id,
+                source_site=listing.source_site,
+            )
+            db.commit()
         finally:
             db.close()
 
@@ -596,12 +617,19 @@ class CrawlWorkerService:
     ) -> None:
         db = self.session_factory()
         try:
-            self.crawl_job_listing_repository.mark_detail_completed(
+            listing = self.crawl_job_listing_repository.mark_detail_completed(
                 db,
                 listing_id=self._normalize_crawl_job_id(listing_id),
                 detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
                 detail_payload=detail_payload,
+                auto_commit=False,
             )
+            self._sync_listing_detail_status_metrics(
+                db,
+                source_listing_crawl_job_id=listing.crawl_job_id,
+                source_site=listing.source_site,
+            )
+            db.commit()
         finally:
             db.close()
 
@@ -614,12 +642,19 @@ class CrawlWorkerService:
     ) -> None:
         db = self.session_factory()
         try:
-            self.crawl_job_listing_repository.mark_detail_failed(
+            listing = self.crawl_job_listing_repository.mark_detail_failed(
                 db,
                 listing_id=self._normalize_crawl_job_id(listing_id),
                 detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
                 error_message=error_message,
+                auto_commit=False,
             )
+            self._sync_listing_detail_status_metrics(
+                db,
+                source_listing_crawl_job_id=listing.crawl_job_id,
+                source_site=listing.source_site,
+            )
+            db.commit()
         finally:
             db.close()
 
@@ -632,14 +667,55 @@ class CrawlWorkerService:
     ) -> None:
         db = self.session_factory()
         try:
-            self.crawl_job_listing_repository.mark_detail_manual_action_required(
+            listing = self.crawl_job_listing_repository.mark_detail_manual_action_required(
                 db,
                 listing_id=self._normalize_crawl_job_id(listing_id),
                 detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
                 error_message=error_message,
+                auto_commit=False,
             )
+            self._sync_listing_detail_status_metrics(
+                db,
+                source_listing_crawl_job_id=listing.crawl_job_id,
+                source_site=listing.source_site,
+            )
+            db.commit()
         finally:
             db.close()
+
+    def _sync_listing_detail_status_metrics(
+        self,
+        db,
+        *,
+        source_listing_crawl_job_id,
+        source_site: str | None = None,
+    ) -> None:
+        counts = self.crawl_job_listing_repository.count_detail_statuses(
+            db,
+            source_site=source_site,
+            source_listing_crawl_job_id=source_listing_crawl_job_id,
+        )
+        exact_metrics = {
+            "listings_staged": sum(int(value) for value in counts.values()),
+            **{
+                metric_key: int(counts.get(status, 0))
+                for status, metric_key in DETAIL_STATUS_METRIC_KEYS.items()
+            },
+        }
+        crawl_job = self.crawl_job_repository.get_crawl_job_by_id(db, source_listing_crawl_job_id)
+        current_metrics = dict(crawl_job.metrics or {}) if crawl_job is not None else {}
+        metrics_delta = {
+            key: value - int(current_metrics.get(key) or 0)
+            for key, value in exact_metrics.items()
+            if key not in current_metrics or value != int(current_metrics.get(key) or 0)
+        }
+        if metrics_delta:
+            self.crawl_job_repository.increment_metrics(
+                db,
+                crawl_job_id=source_listing_crawl_job_id,
+                metrics_delta=metrics_delta,
+                auto_commit=False,
+            )
 
     def _build_runtime_metrics(
         self,

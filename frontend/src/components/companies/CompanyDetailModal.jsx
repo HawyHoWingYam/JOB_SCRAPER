@@ -1,4 +1,5 @@
 import React from 'react';
+import { X } from 'lucide-react';
 
 function CompanyDetailModal({ company, statusLabel, statusClassName, descriptionText, onClose }) {
     const handleOverlayClick = (event) => {
@@ -15,7 +16,7 @@ function CompanyDetailModal({ company, statusLabel, statusClassName, description
         <div className="modal-overlay" onClick={handleOverlayClick}>
             <div className="modal-content company-detail-modal" role="dialog" aria-modal="true" aria-labelledby="company-detail-title">
                 <button type="button" className="modal-close" onClick={onClose} aria-label="Close company details">
-                    ×
+                    <X size={18} />
                 </button>
 
                 <div className="modal-header">

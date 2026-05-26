@@ -118,7 +118,6 @@ function createFetchMock({
   jobsdbCategories = JOBSDB_CATEGORIES,
   ctgoodjobsCategories = CTGOODJOBS_CATEGORIES,
   ctgoodjobsCategoryErrorDetail = null,
-  health = { status: 'healthy', operator: { status: 'healthy', issues: [] } },
   capabilities = { scheduler: { available: true, manual_run_available: true, owner: 'scheduler-worker', worker_name: 'scheduler-worker', heartbeat_status: 'fresh', reason: null } },
   listingBatches = [],
   scrapeProgress = { active: {}, all: {}, has_active: false },
@@ -156,10 +155,6 @@ function createFetchMock({
       }
 
       return mockJsonResponse(scrapeProgress);
-    }
-
-    if (url === '/health') {
-      return mockJsonResponse(health);
     }
 
     if (url === '/api/v1/capabilities') {
@@ -251,26 +246,6 @@ describe('ScheduleManager', () => {
     });
 
     expect(await screen.findByText('CTgoodjobs category registry unavailable')).toBeInTheDocument();
-  });
-
-  it('shows an operator health banner when backend pipeline health is degraded', async () => {
-    vi.stubGlobal(
-      'fetch',
-      createFetchMock({
-        health: {
-          status: 'degraded',
-          operator: {
-            status: 'critical',
-            issues: ['stream.job.ingest group ingest-workers lag is 5764'],
-          },
-        },
-      }),
-    );
-
-    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
-
-    expect(await screen.findByText(/pipeline attention required/i)).toBeInTheDocument();
-    expect(screen.getByText(/stream\.job\.ingest group ingest-workers lag is 5764/i)).toBeInTheDocument();
   });
 
   it('shows a scheduler warning when runtime capabilities report scheduler dispatch unavailable', async () => {
@@ -778,6 +753,49 @@ describe('ScheduleManager', () => {
         source_listing_crawl_job_id: '11111111-1111-4111-8111-111111111111',
       });
     });
+  });
+
+  it('shows detail backlog guidance with selected listing batch counts', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        listingBatches: [
+          {
+            crawl_job_id: '11111111-1111-4111-8111-111111111111',
+            source_site: 'jobsdb',
+            status: 'completed',
+            category_ids: [1200],
+            queued_at: '2026-05-21T08:17:57Z',
+            completed_at: '2026-05-21T08:18:57Z',
+            listings_staged: 96,
+            detail_pending: 74,
+            detail_running: 0,
+            detail_completed: 22,
+            detail_failed: 0,
+            detail_manual_action_required: 0,
+          },
+        ],
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    expect(await screen.findByText(/detail backlog run/i)).toBeInTheDocument();
+    expect(screen.getByText(/use this to turn staged listing urls into full job records/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /listing batch/i }), {
+      target: { value: '11111111-1111-4111-8111-111111111111' },
+    });
+
+    expect(screen.getByText('74 pending')).toBeInTheDocument();
+    expect(screen.getByText('96 staged')).toBeInTheDocument();
+    expect(screen.getByText('22 completed')).toBeInTheDocument();
   });
 
   it('renders source-specific empty copy when the current source has no schedules', async () => {

@@ -102,12 +102,6 @@ def _source_capabilities() -> dict[str, dict[str, Any]]:
     }
 
 
-def build_operator_health_summary() -> dict[str, Any]:
-    from app.api.health import build_operator_health_summary as _build_summary
-
-    return _build_summary()
-
-
 def get_scheduler_runtime_status() -> dict:
     from app.services.scheduler_runtime import get_scheduler_runtime_status as _get_status
 
@@ -123,7 +117,6 @@ def build_runtime_capabilities() -> dict[str, Any]:
         settings.recommendation_api_url,
         configured_reason="recommendation_api_url_not_configured",
     )
-    operator = build_operator_health_summary()
     scheduler = get_scheduler_runtime_status()
 
     return {
@@ -148,16 +141,5 @@ def build_runtime_capabilities() -> dict[str, Any]:
             "available": bool(scheduler.get("enabled", True)),
             **scheduler,
         },
-        "operator_recovery": {
-            "available": True,
-            "health_status": operator.get("status", "unknown"),
-        },
         "sources": _source_capabilities(),
-        "operator": {
-            "status": operator.get("status", "unknown"),
-            "workers": operator.get("workers", {}),
-            "queues": operator.get("queues", {}),
-            "freshness": operator.get("freshness", {}),
-            "scheduler": operator.get("scheduler", {}),
-        },
     }

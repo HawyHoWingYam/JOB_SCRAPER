@@ -332,7 +332,7 @@ function ProfileSection({
           disabled={saving || testing}
         >
           <FlaskConical size={16} />
-          <span>{testing ? 'Testing…' : `Test ${profileLabel} configuration`}</span>
+          <span>{testing ? 'Testing...' : `Test ${profileLabel} configuration`}</span>
         </button>
       </div>
 
@@ -691,7 +691,7 @@ export default function AISettingsPage() {
           </p>
         </div>
         <div className="ai-settings-hero-badges">
-          <span className="ai-settings-chip">{saving ? 'Saving…' : 'Editable'}</span>
+          <span className="ai-settings-chip">{saving ? 'Saving...' : 'Editable'}</span>
           <span className={`ai-settings-chip ${isAnyDegraded ? 'warning' : 'success'}`}>
             {isAnyDegraded ? 'Needs test' : 'Runtime ready'}
           </span>
@@ -749,7 +749,7 @@ export default function AISettingsPage() {
             </div>
             <button className="ai-settings-save-button" type="submit" disabled={saving}>
               <Save size={16} />
-              <span>{saving ? 'Saving…' : 'Save settings'}</span>
+              <span>{saving ? 'Saving...' : 'Save settings'}</span>
             </button>
           </div>
         </section>

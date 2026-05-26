@@ -386,6 +386,28 @@ describe('AIEnrichmentPage', () => {
     );
   });
 
+  it('explains the AI backlog run and reports the submitted pending limit', async () => {
+    const user = userEvent.setup();
+    render(<AIEnrichmentPage />);
+
+    expect(await screen.findByText(/ai backlog run/i)).toBeInTheDocument();
+    expect(screen.getByText(/processes up to the pending limit from jobs without ai insights/i)).toBeInTheDocument();
+
+    const limitInput = screen.getByLabelText(/pending limit/i);
+    await user.clear(limitInput);
+    await user.type(limitInput, '3');
+    await user.click(screen.getByRole('button', { name: /run pending/i }));
+
+    expect(await screen.findByText(/ai backlog run submitted for up to 3 pending jobs/i)).toBeInTheDocument();
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/ai/runs'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ mode: 'pending', limit: 3 }),
+      }),
+    );
+  });
+
   it('hides the retry target when no visible monitor slot is retryable', async () => {
     render(<AIEnrichmentPage />);
 
@@ -1196,6 +1218,66 @@ describe('AIEnrichmentPage', () => {
     expect(cards[1]).toHaveTextContent(/last failed/i);
     expect(screen.getByText(/staff data engineer/i)).toBeInTheDocument();
     expect(screen.getByText(/retry available via queue controls/i)).toBeInTheDocument();
+  });
+
+  it('treats cancelled stale auto runs as terminal without enabling retry', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 400,
+          enriched_jobs: 4,
+          pending_jobs: 396,
+          active_runs: 0,
+          failed_items: 0,
+          last_completed_run: null,
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        return mockJsonResponse({
+          runs: [
+            {
+              id: 'run-cancelled-stale-auto',
+              source_type: 'crawl_auto',
+              status: 'cancelled',
+              created_at: '2026-04-15T12:00:00Z',
+              started_at: '2026-04-15T12:00:00Z',
+              completed_at: '2026-04-15T12:01:00Z',
+              total_items: 1701,
+              pending_items: 0,
+              completed_items: 0,
+              failed_items: 0,
+              error_message: 'stale crawl_auto run cancelled',
+            },
+            {
+              id: 'run-completed-prev',
+              source_type: 'manual_pending',
+              status: 'completed',
+              created_at: '2026-04-15T11:00:00Z',
+              started_at: '2026-04-15T11:00:00Z',
+              completed_at: '2026-04-15T11:02:00Z',
+              total_items: 1,
+              pending_items: 0,
+              completed_items: 1,
+              failed_items: 0,
+            },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<AIEnrichmentPage />);
+
+    const cards = await screen.findAllByTestId('run-monitor-card');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toHaveTextContent('run-cancelled-stale-auto');
+    expect(cards[0]).toHaveTextContent(/cancelled/i);
+    expect(screen.queryByText(/retry target/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry failed/i })).toBeDisabled();
   });
 
   it('shows backend failure detail on terminal failure cards', async () => {

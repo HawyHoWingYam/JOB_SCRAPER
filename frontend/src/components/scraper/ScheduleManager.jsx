@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Zap, AlertTriangle, CalendarClock } from 'lucide-react';
+import { Plus, Zap, AlertTriangle, CalendarClock, X } from 'lucide-react';
 import { API_BASE_URL } from '../../api/base';
 import { fetchCapabilities } from '../../api/capabilities';
 import ScheduleForm from './ScheduleForm';
@@ -72,7 +72,7 @@ function isFreshDirectOverrideRunMarker(marker) {
     return Date.now() - startedAtMs <= DIRECT_OVERRIDE_RECOVERY_WINDOW_MS;
 }
 
-function formatApiErrorDetail(detail, fallback = '启动失败') {
+function formatApiErrorDetail(detail, fallback = 'Start failed') {
     if (typeof detail === 'string' && detail.trim()) {
         return detail;
     }
@@ -129,7 +129,7 @@ function buildImmediateScrapePayload(form, sourceSite) {
 
     if (crawlPhase === 'listing' && categoryIds.length === 0) {
         return {
-            error: '请至少选择一个分类 (Please select at least one category)',
+            error: 'Please select at least one category.',
         };
     }
 
@@ -177,6 +177,10 @@ function formatRuntimeTimestamp(value) {
     return parsed.toLocaleString('en-US');
 }
 
+function formatBacklogCount(value) {
+    return Number(value || 0).toLocaleString();
+}
+
 function buildSchedulerRuntimeBanner(scheduler) {
     if (!scheduler || scheduler.available !== false) {
         return null;
@@ -216,7 +220,6 @@ function ScheduleManager({ onNavigateToAI }) {
     // State
     const [schedules, setSchedules] = useState([]);
     const [categories, setCategories] = useState([]);
-    const [operatorHealth, setOperatorHealth] = useState(null);
     const [capabilities, setCapabilities] = useState(null);
     const [listingBatches, setListingBatches] = useState([]);
     const [currentSourceSite, setCurrentSourceSite] = useState('jobsdb');
@@ -247,7 +250,7 @@ function ScheduleManager({ onNavigateToAI }) {
     const fetchSchedules = useCallback(async () => {
         try {
             const response = await fetch(`${API_BASE}/schedules`);
-            if (!response.ok) throw new Error('获取任务列表失败');
+            if (!response.ok) throw new Error('Failed to load schedules');
             const data = await response.json();
             setSchedules(data.schedules || []);
         } catch (err) {
@@ -271,26 +274,13 @@ function ScheduleManager({ onNavigateToAI }) {
                 }
                 throw new Error(detail || 'Failed to load categories');
             }
-            if (!response.ok) throw new Error('获取分类列表失败');
+            if (!response.ok) throw new Error('Failed to load categories');
             const data = await response.json();
             setCategories(data.categories || []);
         } catch (err) {
             console.error('Failed to fetch categories:', err);
             setCategories([]);
             setError(err.message);
-        }
-    }, []);
-
-    const fetchOperatorHealth = useCallback(async () => {
-        try {
-            const response = await fetch(`${API_URL}/health`);
-            if (!response.ok) {
-                return;
-            }
-            const data = await response.json();
-            setOperatorHealth(data.operator || null);
-        } catch (err) {
-            console.error('Failed to fetch operator health:', err);
         }
     }, []);
 
@@ -359,7 +349,7 @@ function ScheduleManager({ onNavigateToAI }) {
         try {
             const response = await fetch(`${API_BASE}/scrape/progress`);
             if (!response.ok) {
-                throw new Error('获取抓取进度失败');
+                throw new Error('Failed to load crawl progress');
             }
 
             const data = await response.json();
@@ -450,14 +440,12 @@ function ScheduleManager({ onNavigateToAI }) {
     useEffect(() => {
         fetchSchedules();
         fetchCategories(currentSourceSite);
-        fetchOperatorHealth();
         fetchRuntimeCapabilities();
         bootstrapProgressPanel();
     }, [
         bootstrapProgressPanel,
         currentSourceSite,
         fetchCategories,
-        fetchOperatorHealth,
         fetchRuntimeCapabilities,
         fetchSchedules,
     ]);
@@ -499,7 +487,7 @@ function ScheduleManager({ onNavigateToAI }) {
             });
             if (!response.ok) {
                 const errData = await response.json();
-                throw new Error(errData.detail || '创建失败');
+                throw new Error(errData.detail || 'Failed to create schedule');
             }
             await fetchSchedules();
             setShowForm(false);
@@ -522,7 +510,7 @@ function ScheduleManager({ onNavigateToAI }) {
             const response = await fetch(`${API_BASE}/schedules/${id}/toggle`, {
                 method: 'POST'
             });
-            if (!response.ok) throw new Error('切换状态失败');
+            if (!response.ok) throw new Error('Failed to toggle schedule');
             await fetchSchedules();
         } catch (err) {
             setError(err.message);
@@ -533,13 +521,13 @@ function ScheduleManager({ onNavigateToAI }) {
 
     // Delete schedule
     const handleDelete = async (id) => {
-        if (!window.confirm('确定要删除此定时任务吗？')) return;
+        if (!window.confirm('Delete this schedule?')) return;
         setIsLoading(true);
         try {
             const response = await fetch(`${API_BASE}/schedules/${id}`, {
                 method: 'DELETE'
             });
-            if (!response.ok) throw new Error('删除失败');
+            if (!response.ok) throw new Error('Failed to delete schedule');
             await fetchSchedules();
         } catch (err) {
             setError(err.message);
@@ -559,7 +547,7 @@ function ScheduleManager({ onNavigateToAI }) {
             const response = await fetch(`${API_BASE}/schedules/${id}/run`, {
                 method: 'POST'
             });
-            if (!response.ok) throw new Error('执行失败');
+            if (!response.ok) throw new Error('Failed to run schedule');
             await fetchSchedules();
         } catch (err) {
             setError(err.message);
@@ -572,12 +560,12 @@ function ScheduleManager({ onNavigateToAI }) {
     const handleViewHistory = async (id) => {
         try {
             const response = await fetch(`${API_BASE}/schedules/${id}/history`);
-            if (!response.ok) throw new Error('获取历史失败');
+            if (!response.ok) throw new Error('Failed to load execution history');
             const data = await response.json();
             const schedule = schedules.find(s => s.id === id);
             setHistoryData({
                 executions: data.executions || [],
-                scheduleName: schedule?.name || '未知任务'
+                scheduleName: schedule?.name || 'Unknown schedule'
             });
         } catch (err) {
             setError(err.message);
@@ -673,13 +661,16 @@ function ScheduleManager({ onNavigateToAI }) {
     const filteredSchedules = schedules.filter(
         (schedule) => (schedule.source_site || 'jobsdb') === currentSourceSite
     );
+    const selectedListingBatch = listingBatches.find(
+        (batch) => batch.crawl_job_id === immediateForm.source_listing_crawl_job_id
+    ) || null;
 
     return (
         <div className="scheduler-container">
             <header className="scheduler-header">
                 <div>
                     <h2><CalendarClock className="title-icon" /> Task Control Board</h2>
-                    <p className="subtitle">Manage automated and direct scraping vectors</p>
+                    <p className="subtitle">Automations, direct runs, and crawl progress.</p>
                 </div>
                 <div className="header-actions">
                     <button
@@ -728,20 +719,6 @@ function ScheduleManager({ onNavigateToAI }) {
                     </div>
                 </div>
             )}
-            {operatorHealth && operatorHealth.status !== 'healthy' && (
-                <div className="operator-health-banner glass-panel">
-                    <AlertTriangle size={20} />
-                    <div>
-                        <strong>Pipeline attention required</strong>
-                        <div className="operator-health-issues">
-                            {(operatorHealth.issues || []).slice(0, 3).map((issue) => (
-                                <span key={issue}>{issue}</span>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-
             {schedulerBanner && (
                 <div className="operator-health-banner glass-panel">
                     <AlertTriangle size={20} />
@@ -760,7 +737,14 @@ function ScheduleManager({ onNavigateToAI }) {
                 <div className="error-banner glass-panel">
                     <AlertTriangle size={20} />
                     <span>{error}</span>
-                    <button onClick={() => setError(null)} className="close-error">×</button>
+                    <button
+                        type="button"
+                        onClick={() => setError(null)}
+                        className="close-error"
+                        aria-label="Dismiss error"
+                    >
+                        <X size={16} />
+                    </button>
                 </div>
             )}
 
@@ -779,10 +763,12 @@ function ScheduleManager({ onNavigateToAI }) {
                         {progressRecoveryNotice.detail}
                     </span>
                     <button
+                        type="button"
                         onClick={() => setProgressRecoveryNotice(null)}
                         className="close-error"
+                        aria-label="Dismiss recovery notice"
                     >
-                        ×
+                        <X size={16} />
                     </button>
                 </div>
             )}
@@ -803,7 +789,7 @@ function ScheduleManager({ onNavigateToAI }) {
             {showImmediateScrape && (
                 <div className="immediate-form-panel glass-panel">
                     <h3>Direct Override Sequence</h3>
-                    <p className="form-hint">Select sectors to scan immediately. Process runs asynchronously.</p>
+                    <p className="form-hint">Direct crawl job configuration.</p>
 
                     <div className="cyber-form-group">
                         <label htmlFor="immediate-crawl-phase">Crawl Phase</label>
@@ -894,10 +880,38 @@ function ScheduleManager({ onNavigateToAI }) {
                                 <option value="">Any pending listing batch</option>
                                 {listingBatches.map((batch) => (
                                     <option key={batch.crawl_job_id} value={batch.crawl_job_id}>
-                                        {`${batch.source_site} ${batch.queued_at || batch.crawl_job_id} · ${batch.detail_pending || 0} pending / ${batch.listings_staged || 0} staged`}
+                                        {`${batch.source_site} ${batch.queued_at || batch.crawl_job_id} - ${batch.detail_pending || 0} pending / ${batch.listings_staged || 0} staged`}
                                     </option>
                                 ))}
                             </select>
+                            <div className="backlog-guidance-panel">
+                                <div>
+                                    <span className="backlog-guidance-label">Detail backlog run</span>
+                                    <p>
+                                        Use this to turn staged listing URLs into full job records with description, salary, company, and location details.
+                                    </p>
+                                </div>
+                                {selectedListingBatch ? (
+                                    <div className="backlog-metric-grid" aria-label="Selected listing batch backlog">
+                                        <div>
+                                            <strong>{formatBacklogCount(selectedListingBatch.detail_pending)} pending</strong>
+                                            <span>details left</span>
+                                        </div>
+                                        <div>
+                                            <strong>{formatBacklogCount(selectedListingBatch.listings_staged)} staged</strong>
+                                            <span>listings found</span>
+                                        </div>
+                                        <div>
+                                            <strong>{formatBacklogCount(selectedListingBatch.detail_completed)} completed</strong>
+                                            <span>details ingested</span>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <p className="backlog-guidance-muted">
+                                        Choose a listing batch to target a known backlog, or leave it open to process any pending listing for the selected source.
+                                    </p>
+                                )}
+                            </div>
                         </div>
                     )}
 

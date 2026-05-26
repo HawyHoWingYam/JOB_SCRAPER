@@ -231,7 +231,7 @@ describe('ScrapeProgressPanel', () => {
     });
 
     expect(await screen.findByText(/completed with ai failures/i)).toBeInTheDocument();
-    expect(screen.getByText(/3 succeeded · 1 failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/3 succeeded - 1 failed/i)).toBeInTheDocument();
 
     unmount();
   });

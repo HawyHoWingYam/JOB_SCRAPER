@@ -3,12 +3,11 @@ import { Clock, Play, History, Trash2, Calendar, FileText, CheckCircle2, XCircle
 import { formatCrawlModeLabel } from './crawlMode';
 import { formatCrawlPhaseLabel } from './crawlPhase';
 
-// 频率预设映射
 const CRON_PRESETS = {
-    '0 2 * * *': '每天凌晨 2 点',
-    '0 */6 * * *': '每 6 小时',
-    '0 */12 * * *': '每 12 小时',
-    '0 9 * * 1': '每周一早上 9 点'
+    '0 2 * * *': 'Daily at 02:00',
+    '0 */6 * * *': 'Every 6 hours',
+    '0 */12 * * *': 'Every 12 hours',
+    '0 9 * * 1': 'Mondays at 09:00'
 };
 
 function formatSourceLabel(sourceSite) {
@@ -21,7 +20,7 @@ function formatCron(cronExpression) {
 
 function formatDate(dateString) {
     if (!dateString) return '-';
-    return new Date(dateString).toLocaleString('zh-CN', {
+    return new Date(dateString).toLocaleString('en-US', {
         month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
     });
 }

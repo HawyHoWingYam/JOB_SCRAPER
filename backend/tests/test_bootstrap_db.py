@@ -55,8 +55,10 @@ def test_bootstrap_database_enables_vector_extension_before_creating_tables():
         "ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_mode VARCHAR(32)",
         "ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_phase VARCHAR(32)",
         "ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS detail_limit INTEGER",
+        "ALTER TABLE schedule_executions ADD COLUMN IF NOT EXISTS request_payload_snapshot JSON",
         "UPDATE scrape_schedules SET crawl_mode = CASE WHEN COALESCE(NULLIF(source_site, ''), 'jobsdb') IN ('jobsdb', 'ctgoodjobs') THEN 'headed' ELSE 'headless' END WHERE crawl_mode IS NULL",
         "UPDATE scrape_schedules SET crawl_phase = 'listing' WHERE crawl_phase IS NULL",
         "UPDATE scrape_schedules SET detail_limit = 100 WHERE detail_limit IS NULL",
+        "UPDATE schedule_executions AS executions SET request_payload_snapshot = crawl_jobs.request_payload FROM crawl_jobs WHERE executions.crawl_job_id = crawl_jobs.id AND executions.request_payload_snapshot IS NULL AND crawl_jobs.request_payload IS NOT NULL",
     ]
     assert metadata.bound_engine is engine

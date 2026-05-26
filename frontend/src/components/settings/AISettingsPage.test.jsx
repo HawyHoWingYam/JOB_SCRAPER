@@ -284,7 +284,11 @@ describe('AISettingsPage', () => {
 
     render(<App />);
 
-    await user.click(screen.getByRole('button', { name: /^settings$/i }));
+    await user.click(await screen.findByRole('button', { name: /^settings$/i }));
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/settings/ai');
+    });
 
     expect(await screen.findByRole('heading', { level: 1, name: /ai runtime/i })).toBeInTheDocument();
     expect(await screen.findByRole('heading', { level: 2, name: /ai enrichment throughput/i })).toBeInTheDocument();

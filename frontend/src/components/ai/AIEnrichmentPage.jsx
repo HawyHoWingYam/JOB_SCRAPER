@@ -15,7 +15,7 @@ import './AIEnrichmentPage.css';
 
 const API_URL = API_BASE_URL;
 const ACTIVE_RUN_STATUSES = new Set(['pending', 'running']);
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', 'failed']);
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', 'failed', 'cancelled']);
 const DEGRADED_PLACEHOLDER = 'Unavailable';
 const REFRESH_REQUEST_TIMEOUT_MS = 8000;
 
@@ -405,7 +405,7 @@ export default function AIEnrichmentPage() {
         throw new Error(`Run request failed with ${response.status}`);
       }
 
-      setActionMessage('Pending enrichment run submitted.');
+      setActionMessage(`AI backlog run submitted for up to ${normalizedLimit.toLocaleString()} pending jobs.`);
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (err) {
       setActionError(err.message);
@@ -503,6 +503,14 @@ export default function AIEnrichmentPage() {
                   <span className="ai-last-run-label">Last Completed</span>
                   <strong>{lastCompletedDisplay}</strong>
                 </div>
+              </div>
+
+              <div className="ai-backlog-guidance">
+                <span className="ai-ribbon-label">AI backlog run</span>
+                <p>
+                  Processes up to the pending limit from jobs without AI insights, then writes summaries, skills, taxonomy, and experience fields back to Job Browser.
+                </p>
+                <strong>{backlogWindowDisplay} waiting for AI enrichment</strong>
               </div>
 
               <div className="ai-actions-row">

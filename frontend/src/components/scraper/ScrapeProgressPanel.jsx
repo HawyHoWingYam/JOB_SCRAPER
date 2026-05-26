@@ -267,7 +267,7 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
         const sourceLabel = formatSourceLabel(manual_action.source_site || source_site);
         const headingParts = [sourceLabel, category_name].filter(Boolean);
         const headingLabel = crawl_mode
-            ? `${headingParts.join(' / ')} · ${formatCrawlModeLabel(crawl_mode)}`
+            ? `${headingParts.join(' / ')} - ${formatCrawlModeLabel(crawl_mode)}`
             : headingParts.join(' / ');
         const instructions = Array.isArray(manual_action.instructions)
             ? manual_action.instructions.filter(Boolean)
@@ -409,7 +409,7 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
         statusText = 'AI Enrichment';
         detailText = `${aiProcessedItems}/${aiTotalItems || '?'} items processed`;
         if (ai_failed_items > 0) {
-            detailText += ` · ${ai_failed_items} failed`;
+            detailText += ` - ${ai_failed_items} failed`;
         }
     }
 
@@ -425,7 +425,7 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
         percentage = 100;
         statusText = 'Completed';
         detailText = ai_failed_items > 0
-            ? `${ai_completed_items} succeeded · ${ai_failed_items} failed`
+            ? `${ai_completed_items} succeeded - ${ai_failed_items} failed`
             : `${ai_completed_items || aiTotalItems || jobs_scraped} items enriched`;
     } else if (status === 'completed') {
         percentage = 100;
@@ -434,7 +434,7 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
     } else if (status === 'completed_with_ai_failures') {
         percentage = 100;
         statusText = 'Completed With AI Failures';
-        detailText = `${ai_completed_items} succeeded · ${ai_failed_items} failed`;
+        detailText = `${ai_completed_items} succeeded - ${ai_failed_items} failed`;
     } else if (status === 'ai_running') {
         statusText = 'AI Enrichment';
     } else if (status === 'failed') {
@@ -469,7 +469,7 @@ function ProgressItem({ data, onNavigateToAI, onResumeCrawlJob, onCancelCrawlJob
                 ? 'warning'
                 : 'running';
     const headingLabel = crawl_mode
-        ? `${category_name} · ${formatCrawlModeLabel(crawl_mode)}`
+        ? `${category_name} - ${formatCrawlModeLabel(crawl_mode)}`
         : category_name;
 
     return (

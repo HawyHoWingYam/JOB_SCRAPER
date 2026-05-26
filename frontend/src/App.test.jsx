@@ -11,15 +11,6 @@ vi.mock('./components/charts/CategoryChart', () => ({
   default: () => <div>Category Chart Stub</div>,
 }));
 
-vi.mock('./components/operator/OperatorHealthPage', () => ({
-  default: () => (
-    <section>
-      <h1>Operator Health</h1>
-      <p>Operator Page Stub</p>
-    </section>
-  ),
-}));
-
 import App from './App';
 
 describe('App lazy views', () => {
@@ -94,12 +85,60 @@ describe('App lazy views', () => {
     expect(await screen.findByRole('heading', { level: 1, name: /ai runtime/i })).toBeInTheDocument();
   });
 
-  it('loads the operator view when navigated from the sidebar', async () => {
+  it('loads the scheduler view when navigated from the sidebar', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url === '/api/v1/schedules') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ schedules: [] }),
+        });
+      }
+
+      if (url === '/api/categories?source_site=jobsdb') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ categories: [] }),
+        });
+      }
+
+      if (url === '/api/v1/capabilities') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            scheduler: {
+              available: true,
+              manual_run_available: true,
+              owner: 'scheduler-worker',
+              worker_name: 'scheduler-worker',
+              heartbeat_status: 'fresh',
+              last_heartbeat_at: null,
+              last_reconcile_at: null,
+              reason: null,
+            },
+          }),
+        });
+      }
+
+      if (url === '/api/v1/scrape/progress') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ active: {}, all: {}, has_active: false }),
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
     render(<App />);
 
-    await userEvent.click(screen.getByRole('button', { name: /operator health/i }));
+    await userEvent.click(screen.getByRole('button', { name: /scheduler/i }));
 
-    expect(await screen.findByRole('heading', { name: /operator health/i })).toBeInTheDocument();
-    expect(screen.getByText(/operator page stub/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /task control board/i })).toBeInTheDocument();
   });
 });

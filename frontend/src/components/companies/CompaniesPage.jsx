@@ -320,7 +320,7 @@ function CompaniesPage() {
           <p className="companies-eyebrow">Company Intelligence</p>
           <h2>Companies</h2>
           <p className="companies-subtitle">
-            Review companies with server-side filters, then run AI description generation against the full pending backlog.
+            Company rows, AI description coverage, and the global generation queue.
           </p>
 
           <div className="companies-hero-stats">
@@ -408,7 +408,7 @@ function CompaniesPage() {
 
           <div className="companies-batch-group">
             <p className="companies-batch-hint">
-              Runs against all companies without AI descriptions, not just the current filters.
+              Targets all companies without AI descriptions.
             </p>
             <button
               type="button"

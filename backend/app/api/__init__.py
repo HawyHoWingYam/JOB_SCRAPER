@@ -7,7 +7,6 @@ from app.api import (
     filters,
     health,
     jobs,
-    operator,
     recommendations,
     settings,
 )
@@ -22,7 +21,6 @@ router.include_router(crawl_jobs.router, prefix="/api/v1")
 router.include_router(filters.router, prefix="/api/v1")
 router.include_router(recommendations.router, prefix="/api/v1")
 router.include_router(capabilities.router, prefix="/api/v1")
-router.include_router(operator.router, prefix="/api/v1")
 router.include_router(settings.router)
 
 __all__ = ["router"]

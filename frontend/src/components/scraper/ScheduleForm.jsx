@@ -5,11 +5,11 @@ import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
 
 // Cron presets
 const CRON_PRESETS = [
-    { label: '每天凌晨 2 点', value: '0 2 * * *' },
-    { label: '每 6 小时', value: '0 */6 * * *' },
-    { label: '每 12 小时', value: '0 */12 * * *' },
-    { label: '每周一早上 9 点', value: '0 9 * * 1' },
-    { label: '自定义 (Custom)', value: 'custom' },
+    { label: 'Daily at 02:00', value: '0 2 * * *' },
+    { label: 'Every 6 hours', value: '0 */6 * * *' },
+    { label: 'Every 12 hours', value: '0 */12 * * *' },
+    { label: 'Mondays at 09:00', value: '0 9 * * 1' },
+    { label: 'Custom', value: 'custom' },
 ];
 
 function ScheduleForm({
@@ -180,7 +180,7 @@ function ScheduleForm({
                 />
             </div>
 
-            <div className="cyber-form-group" style={{ gridColumn: '1 / -1' }}>
+            <div className="cyber-form-group schedule-form-wide">
                 <label>Target Sectors</label>
                 <div className="category-checkbox-grid">
                     {categories.map(cat => (
@@ -197,7 +197,7 @@ function ScheduleForm({
                 </div>
             </div>
 
-            <div className="form-actions mt-6" style={{ display: 'flex', gap: '1rem' }}>
+            <div className="form-actions mt-6">
                 <button type="submit" disabled={isLoading} className="cyber-btn primary-glow">
                     <Save size={16} /> {isLoading ? 'Building...' : 'Create Automation'}
                 </button>

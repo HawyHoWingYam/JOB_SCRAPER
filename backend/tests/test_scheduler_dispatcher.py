@@ -110,7 +110,7 @@ from app.models import (
     SchedulerRuntimeHeartbeat,
 )
 from app.repositories.schedule_repository import ScheduleRepository
-from app.services.scheduler_service import SchedulerService
+from app.services.scheduler_service import SchedulerService, run_scheduled_crawl_job
 import app.services.scheduler_service as scheduler_service_module
 from app.utils.time import utc_now
 
@@ -357,6 +357,10 @@ async def test_scheduler_reconcile_registers_updates_and_removes_active_schedule
         str(primary_schedule.id),
         str(secondary_schedule.id),
     }
+    assert service.scheduler.jobs[str(primary_schedule.id)].func is run_scheduled_crawl_job
+    assert service.scheduler.jobs[str(primary_schedule.id)].args == [str(primary_schedule.id)]
+    assert service.scheduler.jobs[str(secondary_schedule.id)].func is run_scheduled_crawl_job
+    assert service.scheduler.jobs[str(secondary_schedule.id)].args == [str(secondary_schedule.id)]
 
     db = Session()
     try:

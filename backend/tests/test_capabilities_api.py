@@ -163,11 +163,6 @@ def test_build_runtime_capabilities_reports_lexical_baseline_without_sidecars(mo
             "reason": None,
         },
     )
-    monkeypatch.setattr(
-        service_module,
-        "build_operator_health_summary",
-        lambda: {"status": "healthy", "workers": {}, "queues": {}, "freshness": {}, "scheduler": {}},
-    )
 
     payload = build_runtime_capabilities()
 
@@ -225,11 +220,6 @@ async def test_get_capabilities_route_returns_contract(monkeypatch):
             "last_reconcile_at": "2026-05-21T23:57:30+00:00",
             "reason": "scheduler_worker_stale",
         },
-    )
-    monkeypatch.setattr(
-        service_module,
-        "build_operator_health_summary",
-        lambda: {"status": "healthy", "workers": {}, "queues": {}, "freshness": {}, "scheduler": {}},
     )
     app = FastAPI()
     app.include_router(api_router)

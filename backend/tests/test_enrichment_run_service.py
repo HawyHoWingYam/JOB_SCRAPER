@@ -556,6 +556,80 @@ def test_request_crawl_auto_run_if_ready_waits_for_terminal_crawl_and_full_inges
         db.close()
 
 
+def test_request_crawl_auto_run_if_ready_treats_failed_ingest_items_as_settled():
+    db = _build_sqlite_session()
+    try:
+        crawl_job = _create_crawl_job(
+            db,
+            status="completed",
+            metrics={
+                "items_emitted": 2,
+                "ingest_items_seen": 1,
+                "ingest_items_failed": 1,
+                "ingest_dead_lettered": 1,
+            },
+        )
+        job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 5, 13, 15, 0),
+            title="Queued Auto Job With Dead Letter",
+        )
+
+        service = EnrichmentRunService(db)
+        service.append_job_to_crawl_auto_run(
+            crawl_job_id=str(crawl_job.id),
+            job_id=str(job.id),
+        )
+        db.commit()
+        _mark_jobs_profile_ready(db)
+
+        assert service.request_crawl_auto_run_if_ready(str(crawl_job.id)) is True
+
+        outbox_rows = db.query(EventOutbox).all()
+        assert len(outbox_rows) == 1
+        assert outbox_rows[0].event_type == "enrichment.run.requested"
+    finally:
+        db.close()
+
+
+def test_request_crawl_auto_run_if_ready_recovers_terminal_crawl_auto_run_with_pending_items():
+    db = _build_sqlite_session()
+    try:
+        crawl_job = _create_crawl_job(
+            db,
+            status="failed",
+            metrics={
+                "items_emitted": 0,
+                "ingest_items_seen": 1367,
+                "ingest_items_failed": 6,
+                "ingest_dead_lettered": 6,
+            },
+        )
+        job = _create_job(
+            db,
+            source_classification_id="6281",
+            created_at=datetime(2026, 5, 5, 13, 20, 0),
+            title="Recovered Legacy Auto Job",
+        )
+
+        service = EnrichmentRunService(db)
+        service.append_job_to_crawl_auto_run(
+            crawl_job_id=str(crawl_job.id),
+            job_id=str(job.id),
+        )
+        db.commit()
+        _mark_jobs_profile_ready(db)
+
+        assert service.request_crawl_auto_run_if_ready(str(crawl_job.id)) is True
+
+        outbox_rows = db.query(EventOutbox).all()
+        assert len(outbox_rows) == 1
+        assert outbox_rows[0].event_type == "enrichment.run.requested"
+    finally:
+        db.close()
+
+
 def test_append_job_to_terminal_crawl_auto_run_skips_late_event_without_throwing():
     db = _build_sqlite_session()
     try:
