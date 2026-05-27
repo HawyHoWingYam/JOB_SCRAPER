@@ -641,19 +641,21 @@ function ScheduleManager({ onNavigateToAI }) {
         });
     }, [postManualActionHelper]);
 
-    // Initial load
+    // Initial load for shared runtime data.
     useEffect(() => {
         fetchSchedules();
-        fetchCategories(currentSourceSite);
         fetchRuntimeCapabilities();
         bootstrapProgressPanel();
     }, [
         bootstrapProgressPanel,
-        currentSourceSite,
-        fetchCategories,
         fetchRuntimeCapabilities,
         fetchSchedules,
     ]);
+
+    // Source-specific catalog data refreshes when the operator changes source.
+    useEffect(() => {
+        fetchCategories(currentSourceSite);
+    }, [currentSourceSite, fetchCategories]);
 
     useEffect(() => {
         if (!showImmediateScrape || immediateForm.crawl_phase !== 'detail') {

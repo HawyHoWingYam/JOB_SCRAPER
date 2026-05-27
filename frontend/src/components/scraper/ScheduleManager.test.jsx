@@ -275,6 +275,35 @@ describe('ScheduleManager', () => {
     expect(screen.queryByText('JobsDB Nightly')).not.toBeInTheDocument();
   });
 
+  it('does not refetch shared schedules, runtime capabilities, or progress bootstrap when switching source', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await waitFor(() => {
+      const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+
+      expect(urls).toContain('/api/v1/schedules');
+      expect(urls).toContain('/api/v1/capabilities');
+      expect(urls).toContain('/api/v1/scrape/progress');
+      expect(urls).toContain('/api/categories?source_site=jobsdb');
+    });
+
+    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
+      target: { value: 'ctgoodjobs' },
+    });
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/categories?source_site=ctgoodjobs');
+    });
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+
+    expect(urls.filter((url) => url === '/api/v1/schedules')).toHaveLength(1);
+    expect(urls.filter((url) => url === '/api/v1/capabilities')).toHaveLength(1);
+    expect(urls.filter((url) => url === '/api/v1/scrape/progress')).toHaveLength(1);
+    expect(urls.filter((url) => url === '/api/categories?source_site=jobsdb')).toHaveLength(1);
+    expect(urls.filter((url) => url === '/api/categories?source_site=ctgoodjobs')).toHaveLength(1);
+  });
+
   it('shows backend category error detail when ctgoodjobs categories fail to load', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.stubGlobal(
