@@ -380,6 +380,7 @@ function ScheduleManager({ onNavigateToAI }) {
     });
     const directOverrideRecoveryRef = useRef(null);
     const scheduleHistoryCacheRef = useRef(new Map());
+    const listingBatchesCacheRef = useRef(new Map());
 
     // Fetch schedules
     const fetchSchedules = useCallback(async () => {
@@ -430,6 +431,13 @@ function ScheduleManager({ onNavigateToAI }) {
 
     const fetchListingBatches = useCallback(async (sourceSite) => {
         try {
+            const cachedListingBatches = listingBatchesCacheRef.current.get(sourceSite);
+            if (cachedListingBatches) {
+                setListingBatches(cachedListingBatches);
+                return;
+            }
+
+            setListingBatches([]);
             const response = await fetch(
                 `${API_BASE}/crawl-jobs/listing-batches?source_site=${encodeURIComponent(sourceSite)}&limit=20`
             );
@@ -437,7 +445,9 @@ function ScheduleManager({ onNavigateToAI }) {
                 throw new Error('Failed to load listing batches');
             }
             const data = await response.json();
-            setListingBatches(Array.isArray(data.batches) ? data.batches : []);
+            const nextBatches = Array.isArray(data.batches) ? data.batches : [];
+            listingBatchesCacheRef.current.set(sourceSite, nextBatches);
+            setListingBatches(nextBatches);
         } catch (err) {
             console.error('Failed to fetch listing batches:', err);
             setListingBatches([]);
@@ -832,6 +842,9 @@ function ScheduleManager({ onNavigateToAI }) {
                 sourceSite: currentSourceSite,
                 startedAt: new Date(Date.now()).toISOString(),
             };
+            if (request.payload.crawl_phase === 'listing') {
+                listingBatchesCacheRef.current.delete(currentSourceSite);
+            }
             directOverrideRecoveryRef.current = runMarker;
             try {
                 writeDirectOverrideRunMarker(runMarker);

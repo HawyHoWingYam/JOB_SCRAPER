@@ -618,6 +618,87 @@ describe('ScheduleManager', () => {
     expect(screen.getByText(/detail crawl will narrow recovery to the selected legacy listing batch/i)).toBeInTheDocument();
   });
 
+  it('reuses cached listing batches when reopening detail mode for the same source', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        listingBatches: [
+          {
+            crawl_job_id: 'listing-batch-123',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            listings_staged: 48,
+            detail_pending: 12,
+          },
+        ],
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    expect(await screen.findByRole('combobox', { name: /legacy listing batch filter/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+
+    expect(await screen.findByRole('combobox', { name: /legacy listing batch filter/i })).toBeInTheDocument();
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((url) => url === '/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20')).toHaveLength(1);
+  });
+
+  it('invalidates cached listing batches after launching a new listing crawl', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        listingBatches: [
+          {
+            crawl_job_id: 'listing-batch-123',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            listings_staged: 48,
+            detail_pending: 12,
+          },
+        ],
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+    expect(await screen.findByRole('combobox', { name: /legacy listing batch filter/i })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'listing' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: /engineering/i }));
+    fireEvent.click(screen.getByRole('button', { name: /start job id crawl/i }));
+    await screen.findByText('Scrape Progress Stub');
+    fireEvent.click(screen.getByRole('button', { name: /close progress stub/i }));
+    await waitFor(() => {
+      expect(screen.queryByText('Scrape Progress Stub')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+    expect(await screen.findByRole('combobox', { name: /legacy listing batch filter/i })).toBeInTheDocument();
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((url) => url === '/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20')).toHaveLength(2);
+  });
+
   it('restores the progress panel from active scrape progress on mount', async () => {
     vi.stubGlobal(
       'fetch',
