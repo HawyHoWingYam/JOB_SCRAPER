@@ -225,3 +225,62 @@ def test_collect_progress_payload_uses_latest_event_and_filtered_activity_events
     assert repository_stub.list_events_calls == [expected_event_types]
     assert payload["has_active"] is True
     assert payload["active"][str(crawl_job.id)]["jobs_scraped"] == 2
+
+
+def test_collect_progress_payload_reuses_category_registry_lookup_per_source(monkeypatch):
+    now = datetime(2026, 5, 27, 12, 20, tzinfo=UTC)
+    first_job = _build_crawl_job(
+        status="running",
+        request_payload={"crawl_phase": "listing", "category_ids": [1200]},
+    )
+    second_job = _build_crawl_job(
+        status="running",
+        request_payload={"crawl_phase": "listing", "category_ids": [1300]},
+    )
+    second_job.source_site = first_job.source_site
+    second_job.updated_at = now
+
+    class _RepositoryStub:
+        def list_crawl_jobs_by_statuses(self, db, *, statuses):
+            return [first_job, second_job]
+
+        def list_recent_crawl_jobs(self, db, *, limit):
+            return []
+
+        def get_latest_event(self, db, crawl_job_id):
+            if crawl_job_id == first_job.id:
+                return SimpleNamespace(payload={"request_payload": first_job.request_payload})
+            return SimpleNamespace(payload={"request_payload": second_job.request_payload})
+
+        def list_events(self, db, crawl_job_id, event_types=None):
+            return []
+
+    class _RegistryStub:
+        def __init__(self):
+            self.calls = 0
+
+        def list_categories(self, *, source_site=None):
+            self.calls += 1
+            assert source_site == "jobsdb"
+            return [
+                {"id": 1200, "name": "Engineering"},
+                {"id": 1300, "name": "Marketing"},
+            ]
+
+    class _SessionStub:
+        def close(self):
+            return None
+
+    repository_stub = _RepositoryStub()
+    registry_stub = _RegistryStub()
+
+    monkeypatch.setattr(progress, "repository", repository_stub)
+    monkeypatch.setattr(progress, "SessionLocal", lambda: _SessionStub())
+    monkeypatch.setattr(progress, "utc_now", lambda: now)
+    monkeypatch.setattr(progress, "get_source_category_registry", lambda: registry_stub)
+
+    payload = progress._collect_progress_payload()
+
+    assert registry_stub.calls == 1
+    assert payload["active"][str(first_job.id)]["category_name"] == "Engineering"
+    assert payload["active"][str(second_job.id)]["category_name"] == "Marketing"

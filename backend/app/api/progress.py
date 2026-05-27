@@ -51,9 +51,14 @@ def _elapsed_seconds(reference_time, timestamp) -> int:
         return 0
 
 
-def _resolve_category_label(*, source_site: str, category_ids: list[Any]) -> str | None:
-    if not category_ids:
-        return None
+def _resolve_category_lookup(
+    *,
+    source_site: str,
+    category_lookup_cache: dict[str, dict[str, str]] | None = None,
+) -> dict[str, str] | None:
+    cache_key = str(source_site)
+    if category_lookup_cache is not None and cache_key in category_lookup_cache:
+        return category_lookup_cache[cache_key]
 
     try:
         categories = get_source_category_registry().list_categories(source_site=source_site)
@@ -65,6 +70,27 @@ def _resolve_category_label(*, source_site: str, category_ids: list[Any]) -> str
         for category in categories
         if isinstance(category, dict) and category.get("id") and category.get("name")
     }
+    if category_lookup_cache is not None:
+        category_lookup_cache[cache_key] = lookup
+    return lookup
+
+
+def _resolve_category_label(
+    *,
+    source_site: str,
+    category_ids: list[Any],
+    category_lookup_cache: dict[str, dict[str, str]] | None = None,
+) -> str | None:
+    if not category_ids:
+        return None
+
+    lookup = _resolve_category_lookup(
+        source_site=source_site,
+        category_lookup_cache=category_lookup_cache,
+    )
+    if not lookup:
+        return None
+
     resolved = [lookup.get(str(category_id), str(category_id)) for category_id in category_ids[:3]]
     if not resolved:
         return None
@@ -124,7 +150,14 @@ def _calculate_active_elapsed_seconds(crawl_job, *, events: list[Any], now) -> i
     return _fallback_elapsed_seconds(crawl_job, now=now)
 
 
-def _build_progress_snapshot(crawl_job, latest_event, *, now, events: list[Any] | None = None) -> dict[str, Any]:
+def _build_progress_snapshot(
+    crawl_job,
+    latest_event,
+    *,
+    now,
+    events: list[Any] | None = None,
+    category_lookup_cache: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
     event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
     request_payload = event_payload.get("request_payload") or crawl_job.request_payload or {}
     category_ids = list(event_payload.get("category_ids") or request_payload.get("category_ids") or [])
@@ -133,6 +166,7 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now, events: list[Any] 
         category_label = _resolve_category_label(
             source_site=crawl_job.source_site,
             category_ids=category_ids,
+            category_lookup_cache=category_lookup_cache,
         )
     if not category_label:
         if category_ids:
@@ -427,6 +461,7 @@ def _collect_progress_payload() -> dict[str, Any]:
     all_progress: dict[str, dict[str, Any]] = {}
     active_progress: dict[str, dict[str, Any]] = {}
     backlog_progress: dict[str, dict[str, Any]] = {}
+    category_lookup_cache: dict[str, dict[str, str]] = {}
 
     db = SessionLocal()
     try:
@@ -446,7 +481,13 @@ def _collect_progress_payload() -> dict[str, Any]:
                 crawl_job.id,
                 event_types=ACTIVITY_INTERVAL_EVENT_TYPES,
             )
-            snapshot = _build_progress_snapshot(crawl_job, latest_event, now=now, events=events)
+            snapshot = _build_progress_snapshot(
+                crawl_job,
+                latest_event,
+                now=now,
+                events=events,
+                category_lookup_cache=category_lookup_cache,
+            )
             key = str(crawl_job.id)
             is_active = _is_snapshot_active(snapshot)
             is_backlog = _is_snapshot_backlog_visible(snapshot, crawl_job=crawl_job, now=now)
