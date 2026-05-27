@@ -31,6 +31,7 @@ INACTIVE_WORK_EVENT_TYPES = {
     "crawl.failed",
     "crawl.cancelled",
 }
+ACTIVITY_INTERVAL_EVENT_TYPES = ACTIVE_WORK_EVENT_TYPES | INACTIVE_WORK_EVENT_TYPES
 
 
 def _elapsed_seconds(reference_time, timestamp) -> int:
@@ -439,8 +440,12 @@ def _collect_progress_payload() -> dict[str, Any]:
             crawl_jobs_by_id[str(crawl_job.id)] = crawl_job
 
         for crawl_job in crawl_jobs_by_id.values():
-            events = repository.list_events(db, crawl_job.id)
-            latest_event = events[-1] if events else None
+            latest_event = repository.get_latest_event(db, crawl_job.id)
+            events = repository.list_events(
+                db,
+                crawl_job.id,
+                event_types=ACTIVITY_INTERVAL_EVENT_TYPES,
+            )
             snapshot = _build_progress_snapshot(crawl_job, latest_event, now=now, events=events)
             key = str(crawl_job.id)
             is_active = _is_snapshot_active(snapshot)

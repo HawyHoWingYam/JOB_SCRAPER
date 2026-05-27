@@ -160,3 +160,68 @@ def test_backlog_visibility_drops_stale_backlog_entries_from_live_progress():
     }
 
     assert progress._is_snapshot_backlog_visible(snapshot, crawl_job=crawl_job, now=now) is False
+
+
+def test_collect_progress_payload_uses_latest_event_and_filtered_activity_events(monkeypatch):
+    now = datetime(2026, 5, 27, 12, 20, tzinfo=UTC)
+    crawl_job = _build_crawl_job(
+        status="running",
+        request_payload={"crawl_phase": "detail", "category_ids": [1200]},
+        metrics={"items_emitted": 2},
+    )
+    crawl_job.updated_at = now
+    expected_event_types = progress.ACTIVE_WORK_EVENT_TYPES | progress.INACTIVE_WORK_EVENT_TYPES
+    latest_event = SimpleNamespace(
+        payload={
+            "request_payload": {"crawl_phase": "detail", "category_ids": [1200]},
+            "phase": 2,
+            "category_name": "Engineering",
+            "jobs_scraped": 2,
+            "total_jobs": 2,
+        }
+    )
+    activity_events = [
+        SimpleNamespace(
+            event_type="crawl.started",
+            created_at=now - timedelta(minutes=5),
+        )
+    ]
+
+    class _RepositoryStub:
+        def __init__(self):
+            self.latest_event_calls = 0
+            self.list_events_calls: list[set[str] | None] = []
+
+        def list_crawl_jobs_by_statuses(self, db, *, statuses):
+            return [crawl_job]
+
+        def list_recent_crawl_jobs(self, db, *, limit):
+            return []
+
+        def get_latest_event(self, db, crawl_job_id):
+            self.latest_event_calls += 1
+            assert crawl_job_id == crawl_job.id
+            return latest_event
+
+        def list_events(self, db, crawl_job_id, event_types=None):
+            self.list_events_calls.append(set(event_types) if event_types is not None else None)
+            assert crawl_job_id == crawl_job.id
+            assert set(event_types or set()) == expected_event_types
+            return activity_events
+
+    class _SessionStub:
+        def close(self):
+            return None
+
+    repository_stub = _RepositoryStub()
+
+    monkeypatch.setattr(progress, "repository", repository_stub)
+    monkeypatch.setattr(progress, "SessionLocal", lambda: _SessionStub())
+    monkeypatch.setattr(progress, "utc_now", lambda: now)
+
+    payload = progress._collect_progress_payload()
+
+    assert repository_stub.latest_event_calls == 1
+    assert repository_stub.list_events_calls == [expected_event_types]
+    assert payload["has_active"] is True
+    assert payload["active"][str(crawl_job.id)]["jobs_scraped"] == 2

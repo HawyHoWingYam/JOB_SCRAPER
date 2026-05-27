@@ -173,13 +173,16 @@ class CrawlJobRepository:
             db.flush()
         return crawl_job
 
-    def list_events(self, db: Session, crawl_job_id) -> list[CrawlJobEvent]:
-        return (
-            db.query(CrawlJobEvent)
-            .filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
-            .order_by(CrawlJobEvent.sequence_no.asc())
-            .all()
-        )
+    def list_events(
+        self,
+        db: Session,
+        crawl_job_id,
+        event_types: set[str] | list[str] | None = None,
+    ) -> list[CrawlJobEvent]:
+        query = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
+        if event_types:
+            query = query.filter(CrawlJobEvent.event_type.in_(list(event_types)))
+        return query.order_by(CrawlJobEvent.sequence_no.asc()).all()
 
     def get_latest_event(self, db: Session, crawl_job_id) -> CrawlJobEvent | None:
         return (
