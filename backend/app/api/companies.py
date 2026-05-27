@@ -184,8 +184,6 @@ async def list_companies(
     elif status != "all":
         raise HTTPException(status_code=422, detail="Unsupported company status filter")
 
-    total = query.count()
-    total_pages = (total + page_size - 1) // page_size if total else 0
     sort_pending_first = case((ai_missing_clause, 0), else_=1)
     companies = (
         query.order_by(sort_pending_first.asc(), Company.created_at.desc(), Company.id.desc())
@@ -193,6 +191,14 @@ async def list_companies(
         .limit(page_size)
         .all()
     )
+
+    if page == 1 and len(companies) < page_size:
+        total = len(companies)
+        total_pages = 1 if total else 0
+    else:
+        total = query.count()
+        total_pages = (total + page_size - 1) // page_size if total else 0
+
     return {
         "items": companies,
         "total": total,
