@@ -224,6 +224,34 @@ def _consume_web_search_flag(
     return web_search
 
 
+def _consume_image_kwargs(
+    kwargs: Dict[str, Any],
+    *,
+    provider_name: str,
+    supported: bool,
+) -> Optional[Dict[str, str]]:
+    image_base64 = kwargs.pop("image_base64", None)
+    image_media_type = kwargs.pop("image_media_type", None)
+
+    if image_base64 is None:
+        return None
+
+    if not supported:
+        raise LLMCapabilityError(
+            f"{provider_name} client does not support image-assisted requests"
+        )
+
+    normalized_image = str(image_base64).strip()
+    if not normalized_image:
+        return None
+
+    normalized_media_type = str(image_media_type or "image/png").strip() or "image/png"
+    return {
+        "image_base64": normalized_image,
+        "image_media_type": normalized_media_type,
+    }
+
+
 class LLMClient(ABC):
     """Abstract base class for LLM providers."""
 
@@ -307,6 +335,7 @@ class GeminiClient(LLMClient):
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate text using Gemini."""
         _consume_web_search_flag(kwargs, provider_name="gemini", supported=False)
+        _consume_image_kwargs(kwargs, provider_name="gemini", supported=False)
         try:
             client = self._get_client()
             response = await _call_with_retry(
@@ -348,6 +377,7 @@ class ZhipuClient(LLMClient):
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate text using Zhipu."""
         _consume_web_search_flag(kwargs, provider_name="zhipu", supported=False)
+        _consume_image_kwargs(kwargs, provider_name="zhipu", supported=False)
         try:
             client = self._get_client()
             response = await _call_with_retry(
@@ -417,7 +447,21 @@ class AnthropicClient(LLMClient):
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate text using Claude."""
         _consume_web_search_flag(kwargs, provider_name="anthropic", supported=False)
+        image_payload = _consume_image_kwargs(kwargs, provider_name="anthropic", supported=True)
         max_tokens = kwargs.pop("max_tokens", self._DEFAULT_TEXT_MAX_TOKENS)
+        user_content: Any = prompt
+        if image_payload is not None:
+            user_content = [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": image_payload["image_media_type"],
+                        "data": image_payload["image_base64"],
+                    },
+                },
+            ]
         try:
             client = self._get_client()
             message = await _call_with_retry(
@@ -425,7 +469,7 @@ class AnthropicClient(LLMClient):
                 lambda: client.messages.create(
                     model=self.model,
                     max_tokens=max_tokens,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=[{"role": "user", "content": user_content}],
                 ),
             )
             return self._extract_text_content(message)
@@ -484,13 +528,31 @@ class OpenAIResponsesClient(LLMClient):
             provider_name="custom",
             supported=True,
         )
+        image_payload = _consume_image_kwargs(kwargs, provider_name="custom", supported=True)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        input_payload: Any = prompt
+        if image_payload is not None:
+            input_payload = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt},
+                        {
+                            "type": "input_image",
+                            "image_url": (
+                                f"data:{image_payload['image_media_type']};base64,"
+                                f"{image_payload['image_base64']}"
+                            ),
+                        },
+                    ],
+                }
+            ]
         payload = {
             "model": self.model,
-            "input": prompt,
+            "input": input_payload,
             "stream": False,
             "max_output_tokens": kwargs.get("max_output_tokens", 1024),
         }
@@ -597,13 +659,24 @@ class MockClient(LLMClient):
     async def generate(self, prompt: str, **kwargs) -> str:
         """Return mock response."""
         _consume_web_search_flag(kwargs, provider_name="mock", supported=False)
+        _consume_image_kwargs(kwargs, provider_name="mock", supported=True)
         return "Mock LLM response for testing purposes."
 
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
         """Return mock JSON response based on prompt content."""
         _consume_web_search_flag(kwargs, provider_name="mock", supported=False)
+        _consume_image_kwargs(kwargs, provider_name="mock", supported=True)
         # Detect what kind of response is expected
         prompt_lower = prompt.lower()
+
+        if "manual-verification" in prompt_lower or "manual verification" in prompt_lower:
+            return {
+                "challenge_type": "unknown",
+                "confidence": 0.5,
+                "summary": "Mock manual-action analysis result.",
+                "recommended_actions": ["Open the verification browser and inspect the challenge."],
+                "should_resume": False,
+            }
 
         if "category" in prompt_lower or "classify" in prompt_lower:
             final_decision = {

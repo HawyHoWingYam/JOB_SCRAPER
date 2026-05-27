@@ -12,6 +12,10 @@ const CRON_PRESETS = [
     { label: 'Custom', value: 'custom' },
 ];
 
+function formatSourceLabel(sourceSite) {
+    return sourceSite === 'ctgoodjobs' ? 'CTgoodjobs' : 'JobsDB';
+}
+
 function ScheduleForm({
     onSubmit,
     onCancel,
@@ -74,12 +78,29 @@ function ScheduleForm({
         });
     };
 
+    const sourceLabel = formatSourceLabel(sourceSite);
+    const isDetailPhase = formData.crawlPhase === 'detail';
+    const recurringGuidance = `Use automations for recurring crawls on ${sourceLabel}.`;
+    const phaseGuidance = isDetailPhase
+        ? 'Detail crawl consumes staged listings into full records.'
+        : 'Job ID crawl stages listing URLs first.';
+    const volumeGuidance = isDetailPhase
+        ? 'How many staged listings this automation should expand per run.'
+        : 'Pages per run for each selected sector.';
+
     return (
         <form onSubmit={handleSubmit} className="schedule-form">
             <h3>Configure New Automation</h3>
             <p className="form-hint">
-                Creating automation for {sourceSite === 'ctgoodjobs' ? 'CTgoodjobs' : 'JobsDB'}.
+                Creating automation for {sourceLabel}.
             </p>
+
+            <div className="override-summary-panel schedule-form-guidance schedule-form-wide">
+                <span className="scheduler-panel-kicker">Recurring Crawl Guidance</span>
+                <strong className="override-summary-title">{recurringGuidance}</strong>
+                <p className="form-hint">{phaseGuidance}</p>
+                <p className="form-hint">{volumeGuidance}</p>
+            </div>
 
             <div className="cyber-form-group">
                 <label>Task Designation</label>

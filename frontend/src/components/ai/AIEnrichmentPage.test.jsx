@@ -386,6 +386,25 @@ describe('AIEnrichmentPage', () => {
     );
   });
 
+  it('submits a manual batch run for a specific job UUID', async () => {
+    const user = userEvent.setup();
+    render(<AIEnrichmentPage />);
+
+    const targetJobId = '11111111-2222-4333-8444-555555555555';
+    const targetInput = await screen.findByLabelText(/target job uuid/i);
+    await user.type(targetInput, targetJobId);
+    await user.click(screen.getByRole('button', { name: /run job/i }));
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/ai/runs'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ mode: 'batch', job_ids: [targetJobId] }),
+      }),
+    );
+    expect(await screen.findByText(/ai job run submitted/i)).toBeInTheDocument();
+  });
+
   it('explains the AI backlog run and reports the submitted pending limit', async () => {
     const user = userEvent.setup();
     render(<AIEnrichmentPage />);

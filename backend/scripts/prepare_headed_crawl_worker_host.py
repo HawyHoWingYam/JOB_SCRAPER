@@ -37,7 +37,16 @@ class HostRuntimePaths:
     requirements_marker_file: Path
 
 
-def resolve_runtime_paths(repo_root: str | Path | None = None) -> HostRuntimePaths:
+def resolve_runtime_paths(
+    repo_root: str | Path | None = None,
+    *,
+    browser_channel: str | None = None,
+) -> HostRuntimePaths:
+    browser_channel = (
+        browser_channel
+        or os.environ.get("JOBSDB_HEADED_BROWSER_CHANNEL")
+        or "msedge"
+    ).strip() or "msedge"
     resolved_repo_root = (
         Path(repo_root).resolve()
         if repo_root is not None
@@ -50,7 +59,7 @@ def resolve_runtime_paths(repo_root: str | Path | None = None) -> HostRuntimePat
         backend_dir=backend_dir,
         venv_dir=venv_dir,
         venv_python=venv_dir / "Scripts" / "python.exe",
-        profile_dir=backend_dir / ".host_browser_profiles" / "msedge",
+        profile_dir=backend_dir / ".host_browser_profiles" / browser_channel,
         requirements_file=backend_dir / "requirements-headed-host.txt",
         requirements_marker_file=venv_dir / ".requirements.sha256",
     )

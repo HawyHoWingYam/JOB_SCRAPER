@@ -7,6 +7,7 @@ import socket
 from urllib.parse import urlparse
 
 from app.config import settings
+from app.host_manual_action_helper import HostManualActionHelperServer
 from app.logging_config import configure_logging
 from app.messaging.topics import STREAM_CRAWL_COMMANDS_HEADED
 from app.workers.run_crawl_worker import CrawlWorkerService
@@ -88,6 +89,11 @@ async def main() -> None:
     logger.info("Headed worker browser channel: %s", runtime_info["browser_channel"])
     logger.info("Headed worker browser profile: %s", runtime_info["browser_user_data_dir"])
     logger.info("Headed worker lock port: %s", settings.jobsdb_headed_worker_lock_port)
+    helper_server = HostManualActionHelperServer(
+        port=settings.jobsdb_headed_manual_action_helper_port,
+    )
+    helper_server.start()
+    logger.info("Headed worker manual-action helper: http://127.0.0.1:%s", settings.jobsdb_headed_manual_action_helper_port)
     service = CrawlWorkerService(
         group_name="crawl-headed-workers",
         consumer_name="crawl-headed-worker",
@@ -100,6 +106,7 @@ async def main() -> None:
             if processed == 0:
                 await asyncio.sleep(1.0)
     finally:
+        helper_server.stop()
         lock_socket.close()
 
 

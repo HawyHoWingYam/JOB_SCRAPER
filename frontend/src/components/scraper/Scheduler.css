@@ -40,6 +40,12 @@
     gap: var(--space-3);
 }
 
+.scheduler-launchpad {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-4);
+}
+
 .header-actions {
     flex-wrap: wrap;
     justify-content: flex-end;
@@ -66,11 +72,66 @@
     padding: var(--space-4);
 }
 
+.scheduler-workstream-card,
+.override-summary-panel {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.scheduler-workstream-card p {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+    line-height: 1.7;
+}
+
+.scheduler-panel-kicker {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
 .form-hint {
     margin: 0 0 var(--space-4);
     color: var(--color-text-secondary);
     font-size: var(--text-sm);
     line-height: 1.6;
+}
+
+.override-summary-panel {
+    margin-bottom: var(--space-4);
+    border-color: rgba(106, 165, 255, 0.22);
+    background: rgba(106, 165, 255, 0.08);
+}
+
+.override-summary-title {
+    color: var(--color-text-primary);
+    font-size: var(--text-base);
+}
+
+.override-summary-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.override-summary-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 4px 10px;
+    border: 1px solid rgba(106, 165, 255, 0.22);
+    border-radius: var(--radius-full);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 700;
 }
 
 .backlog-guidance-panel {
@@ -496,6 +557,12 @@ input:checked + .cyber-slider::before {
     font-size: var(--text-xl);
 }
 
+.progress-count-hint {
+    margin-top: var(--space-1);
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+}
+
 .connection-status {
     display: flex;
     align-items: center;
@@ -550,6 +617,38 @@ input:checked + .cyber-slider::before {
     gap: var(--space-3);
 }
 
+.progress-heading-group {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.progress-task-id {
+    color: var(--color-text-primary);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: var(--text-sm);
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    overflow-wrap: anywhere;
+}
+
+.progress-context-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.progress-context-pill {
+    padding: 6px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
 .category-name {
     color: var(--color-text-primary);
     font-weight: 800;
@@ -580,22 +679,24 @@ input:checked + .cyber-slider::before {
     color: var(--color-text-secondary);
 }
 
-.progress-bar-container {
-    height: 8px;
-    overflow: hidden;
-    border-radius: var(--radius-full);
-    background: rgba(255, 255, 255, 0.08);
-}
-
-.progress-bar-fill {
-    height: 100%;
-    border-radius: inherit;
-    background: var(--color-primary);
-    transition: width 0.3s ease;
-}
-
 .progress-details {
     gap: var(--space-2);
+}
+
+.progress-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-2);
+}
+
+.progress-metric-card {
+    padding: var(--space-3);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+    font-weight: 700;
 }
 
 .progress-text,
@@ -617,7 +718,7 @@ input:checked + .cyber-slider::before {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: var(--space-3);
     padding-top: var(--space-3);
     border-top: 1px solid var(--color-border);
@@ -721,6 +822,7 @@ input:checked + .cyber-slider::before {
     }
 
     .schedule-form,
+    .scheduler-launchpad,
     .schedule-info-grid {
         grid-template-columns: 1fr;
     }

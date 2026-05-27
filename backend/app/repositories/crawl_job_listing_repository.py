@@ -88,6 +88,40 @@ class CrawlJobListingRepository:
             db.flush()
         return existing, "updated"
 
+    def list_source_job_ids_for_crawl_job(
+        self,
+        db: Session,
+        *,
+        crawl_job_id,
+        source_site: str | None = None,
+    ) -> set[str]:
+        query = db.query(CrawlJobListing.source_job_id).filter(
+            CrawlJobListing.crawl_job_id == crawl_job_id,
+        )
+        if source_site:
+            query = query.filter(
+                CrawlJobListing.source_site == str(source_site).strip().lower(),
+            )
+        rows = query.all()
+        return {str(source_job_id).strip() for (source_job_id,) in rows if str(source_job_id).strip()}
+
+    def get_max_listing_rank_for_crawl_job(
+        self,
+        db: Session,
+        *,
+        crawl_job_id,
+        source_site: str | None = None,
+    ) -> int:
+        query = db.query(func.max(CrawlJobListing.listing_rank)).filter(
+            CrawlJobListing.crawl_job_id == crawl_job_id,
+        )
+        if source_site:
+            query = query.filter(
+                CrawlJobListing.source_site == str(source_site).strip().lower(),
+            )
+        value = query.scalar()
+        return int(value or 0)
+
     def list_detail_candidates(
         self,
         db: Session,

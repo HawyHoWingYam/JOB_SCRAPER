@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from app.config import settings
+from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
 from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError, looks_like_interstitial_html
 from app.scraper.manual_action import ManualActionRequiredError
 from app.utils.anti_detection import ExponentialBackoff
@@ -49,7 +50,11 @@ class CTGoodJobsBrowserPageScraper:
         if self.page_content_fetcher is None and self.sync_page_content_fetcher is None:
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ctgoodjobs-headed")
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(self._executor, self._start_sync_runtime)
+            try:
+                await loop.run_in_executor(self._executor, self._start_sync_runtime)
+            except Exception as exc:
+                self._raise_if_profile_in_use(exc)
+                raise
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -157,6 +162,23 @@ class CTGoodJobsBrowserPageScraper:
 
     def _looks_like_interstitial(self, html: str) -> bool:
         return looks_like_interstitial_html(html)
+
+    def _raise_if_profile_in_use(self, exc: Exception) -> None:
+        message = str(exc or "")
+        if "launch_persistent_context" not in message or "Target page, context or browser has been closed" not in message:
+            return
+
+        raise ManualActionRequiredError(
+            source_site="ctgoodjobs",
+            stage="browser_profile_in_use",
+            blocked_url=f"{CTGOODJOBS_BASE_URL}/jobs",
+            message="Close all Edge windows using the automation profile, then click Resume.",
+            action_type="close_browser_window",
+            instructions=[
+                "Close all Edge windows that use the listed automation profile.",
+                "Return to the app and click Resume.",
+            ],
+        ) from exc
 
     def _resolve_user_data_dir(self) -> Path:
         if self.user_data_dir:

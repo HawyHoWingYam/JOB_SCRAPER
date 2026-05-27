@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from app.config import settings
+from app.scraper.manual_action import ManualActionRequiredError
 from app.sources.jobsdb.parsers import parse_detail_page as parse_jobsdb_detail_page
 
 
@@ -62,7 +63,18 @@ class JobsDBBrowserDetailScraper:
         url = f"https://hk.jobsdb.com/job/{job_id}"
         html = await self._fetch_page_content(url)
         if self._looks_like_interstitial(html):
-            return None
+            raise ManualActionRequiredError(
+                source_site="jobsdb",
+                stage="detail_page",
+                blocked_url=url,
+                referer=settings.jobsdb_base_url,
+                message="JobsDB detail fetch blocked by human verification",
+                instructions=[
+                    "Open the headed browser profile.",
+                    "Complete the human verification challenge.",
+                    "Return to the app and click Resume.",
+                ],
+            )
         return parse_jobsdb_detail_page(html, job_id=job_id)
 
     async def _fetch_page_content(self, url: str) -> str:

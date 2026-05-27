@@ -25,6 +25,7 @@ class JobRepository:
         self,
         db: Session,
         job_data: Dict[str, Any],
+        skip_existing: bool = False,
         auto_commit: bool = True,
     ) -> tuple[Job, str]:
         source_site = normalize_source_site(job_data.get("source_site"))
@@ -42,6 +43,8 @@ class JobRepository:
         )
         if existing is None:
             return self.create_job(db, normalized_data, auto_commit=auto_commit), "created"
+        if skip_existing:
+            return existing, "skipped"
 
         changed = False
         for key, value in normalized_data.items():
@@ -155,6 +158,37 @@ class JobRepository:
                 e,
             )
             return None
+
+    def list_existing_jobs_by_source_ids(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+        source_job_ids: List[str],
+    ) -> dict[str, Job]:
+        normalized_source_site = normalize_source_site(source_site)
+        normalized_source_job_ids = [str(source_job_id).strip() for source_job_id in source_job_ids if str(source_job_id).strip()]
+        if not normalized_source_job_ids:
+            return {}
+
+        try:
+            rows = (
+                db.query(Job)
+                .filter(
+                    Job.source_site == normalized_source_site,
+                    Job.source_job_id.in_(normalized_source_job_ids),
+                    Job.is_deleted == False,
+                )
+                .all()
+            )
+            return {str(job.source_job_id).strip(): job for job in rows if str(job.source_job_id).strip()}
+        except Exception as e:
+            logger.error(
+                "Error querying jobs by source ids for source_site=%s: %s",
+                normalized_source_site,
+                e,
+            )
+            return {}
 
     def create_job(
         self, db: Session, job_data: Dict[str, Any], auto_commit: bool = True

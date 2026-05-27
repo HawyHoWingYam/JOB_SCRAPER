@@ -12,7 +12,8 @@ from typing import List, Dict, Any, Optional
 import httpx
 
 from app.config import settings
-from app.scraper.categories import JOBSDB_CATEGORIES, get_category_name
+from app.scraper.categories import JOBSDB_CATEGORIES, get_category_by_id, get_category_name
+from app.scraper.manual_action import ManualActionRequiredError
 from app.utils.time import utc_now
 
 
@@ -59,10 +60,48 @@ class CategoryListScraper:
                 headers=self.headers,
             )
             response.raise_for_status()
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as exc:
+                if self._looks_like_interstitial_response(response):
+                    raise ManualActionRequiredError(
+                        source_site="jobsdb",
+                        stage="category_page",
+                        blocked_url=self._build_category_page_url(classification_id, page=page),
+                        referer=settings.jobsdb_base_url,
+                        message="JobsDB listing fetch blocked by human verification",
+                        instructions=[
+                            "Open the headed browser profile.",
+                            "Complete the human verification challenge.",
+                            "Return to the app and click Resume.",
+                        ],
+                    ) from exc
+                raise
         finally:
             if should_close:
                 await client.aclose()
+
+    def _looks_like_interstitial_response(self, response: httpx.Response) -> bool:
+        content_type = str(response.headers.get("content-type") or "").lower()
+        if "application/json" in content_type:
+            return False
+
+        lowered = str(getattr(response, "text", "") or "").lower()
+        return (
+            "just a moment" in lowered
+            or "cf-challenge" in lowered
+            or "challenges.cloudflare.com" in lowered
+        )
+
+    def _build_category_page_url(self, classification_id: int, *, page: int) -> str:
+        category = get_category_by_id(int(classification_id))
+        if category is None:
+            return settings.jobsdb_base_url
+
+        base_url = f"{settings.jobsdb_base_url}/jobs-in-{category.slug}"
+        if int(page or 1) > 1:
+            return f"{base_url}?page={int(page)}"
+        return base_url
 
     async def scrape_category(
         self,

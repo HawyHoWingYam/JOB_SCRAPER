@@ -4,7 +4,7 @@ AI Enrichment API Endpoints
 
 import asyncio
 import logging
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,8 +12,21 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 
+from app.host_manual_action_helper import (
+    _load_manual_action_payload,
+    capture_manual_action_screenshot,
+    close_profile_windows,
+    launch_browser_process,
+)
 from app.database import SessionLocal, get_db
 from app.messaging.outbox_publisher import OutboxPublisher
+from app.ai.llm_client import (
+    LLMCapabilityError,
+    LLMProfileNotReadyError,
+    get_llm_client,
+)
+from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
+from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job_category import JobCategory
 from app.models.job import Job
@@ -46,6 +59,23 @@ class CreateRunRequest(BaseModel):
     limit: Optional[int] = None
     job_ids: Optional[List[UUID]] = None
     query: Optional[QueryRunRequest] = None
+
+
+class ManualActionAnalysisRequest(BaseModel):
+    crawl_job_id: Optional[UUID] = None
+    source_site: str
+    stage: str
+    action_type: Optional[str] = None
+    blocked_url: str
+    content_type: str = "image/png"
+    image_base64: str
+
+
+class ManualActionAutoResolveRequest(BaseModel):
+    crawl_job_id: UUID
+    wait_for_clearance: bool = False
+    max_poll_attempts: int = 0
+    poll_interval_seconds: int = 5
 
 
 def _job_id_param(db: Session, job_id: UUID):
@@ -174,6 +204,158 @@ def _load_job_snapshot(job_id: UUID) -> dict:
         return JobDetailSchema.model_validate(job).model_dump(mode="json")
     finally:
         snapshot_db.close()
+
+
+def _build_manual_action_analysis_prompt(request: ManualActionAnalysisRequest) -> str:
+    return (
+        "You are analyzing a manual-verification screenshot from a job crawling workflow. "
+        "Inspect the screenshot and return JSON only with these keys: "
+        "challenge_type, confidence, summary, recommended_actions, should_resume. "
+        "challenge_type must be one of captcha, login, access_denied, rate_limit, browser_profile_in_use, verification_cleared, unknown. "
+        "recommended_actions must be a short array of actionable operator steps.\n\n"
+        f"source_site: {request.source_site}\n"
+        f"stage: {request.stage}\n"
+        f"action_type: {request.action_type or 'unknown'}\n"
+        f"blocked_url: {request.blocked_url}\n"
+        f"crawl_job_id: {request.crawl_job_id or 'unknown'}"
+    )
+
+
+def _resolve_manual_action_automation(
+    *,
+    challenge_type: str,
+    action_type: str | None,
+    should_resume: bool,
+) -> dict[str, Any]:
+    normalized_challenge_type = str(challenge_type or "unknown").strip().lower()
+    normalized_action_type = str(action_type or "").strip().lower()
+
+    if (
+        normalized_challenge_type == "browser_profile_in_use"
+        or (
+            normalized_action_type == "close_browser_window"
+            and normalized_challenge_type in {"unknown", "browser_profile_in_use"}
+        )
+    ):
+        return {
+            "suggested_action": "close_profile_windows",
+            "auto_apply_supported": True,
+            "auto_resume_after_action": bool(should_resume),
+        }
+
+    if normalized_action_type == "human_verification" and normalized_challenge_type in {
+        "captcha",
+        "login",
+        "access_denied",
+        "rate_limit",
+        "unknown",
+    }:
+        return {
+            "suggested_action": "open_browser",
+            "auto_apply_supported": True,
+            "auto_resume_after_action": False,
+        }
+
+    if normalized_challenge_type == "verification_cleared" and should_resume:
+        return {
+            "suggested_action": "resume_crawl_job",
+            "auto_apply_supported": True,
+            "auto_resume_after_action": True,
+        }
+
+    return {
+        "suggested_action": None,
+        "auto_apply_supported": False,
+        "auto_resume_after_action": False,
+    }
+
+
+def _normalize_manual_action_analysis_result(payload: dict, request: ManualActionAnalysisRequest) -> dict:
+    recommended_actions = payload.get("recommended_actions")
+    if isinstance(recommended_actions, list):
+        normalized_actions = [str(item).strip() for item in recommended_actions if str(item).strip()]
+    else:
+        normalized_actions = []
+
+    confidence = payload.get("confidence")
+    try:
+        normalized_confidence = float(confidence)
+    except (TypeError, ValueError):
+        normalized_confidence = 0.0
+
+    should_resume = bool(payload.get("should_resume"))
+    challenge_type = str(payload.get("challenge_type") or "unknown")
+    automation = _resolve_manual_action_automation(
+        challenge_type=challenge_type,
+        action_type=request.action_type,
+        should_resume=should_resume,
+    )
+
+    return {
+        "challenge_type": challenge_type,
+        "confidence": normalized_confidence,
+        "summary": str(payload.get("summary") or "").strip(),
+        "recommended_actions": normalized_actions,
+        "should_resume": should_resume,
+        **automation,
+    }
+
+
+async def _analyze_manual_action_request(
+    request: ManualActionAnalysisRequest,
+) -> dict[str, Any]:
+    ensure_profile_runtime_ready("jobs")
+    llm_client = get_llm_client("jobs")
+    prompt = _build_manual_action_analysis_prompt(request)
+    result = await llm_client.generate_json(
+        prompt,
+        image_base64=request.image_base64,
+        image_media_type=request.content_type,
+    )
+    return _normalize_manual_action_analysis_result(result, request)
+
+
+def _record_manual_action_resolution_event(
+    db: Session,
+    *,
+    crawl_job_repository: CrawlJobRepository,
+    crawl_job_id: UUID,
+    resolution_status: str,
+    manual_action: dict[str, Any],
+    analysis: dict[str, Any],
+    applied_actions: list[str],
+) -> None:
+    crawl_job = crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
+    if crawl_job is None:
+        raise HTTPException(status_code=404, detail="Crawl job not found")
+
+    payload = {
+        "crawl_job_id": str(crawl_job.id),
+        "source_site": crawl_job.source_site,
+        "request_payload": crawl_job.request_payload,
+        "manual_action": manual_action,
+        "manual_action_resolution": {
+            "resolution_status": resolution_status,
+            "applied_actions": list(applied_actions),
+            "suggested_action": analysis.get("suggested_action"),
+            "analysis": analysis,
+        },
+    }
+    crawl_job_repository.record_runtime_event(
+        db,
+        crawl_job_id=crawl_job.id,
+        status=crawl_job.status,
+        event_type=(
+            "crawl.manual_action_browser_opened"
+            if resolution_status == "opened_browser_for_manual_followup"
+            else "crawl.manual_action_auto_resolved"
+        ),
+        payload=payload,
+        completed_at=crawl_job.completed_at,
+        error_message=crawl_job.error_message,
+        metrics=dict(crawl_job.metrics or {}) if isinstance(crawl_job.metrics, dict) else None,
+        auto_commit=False,
+    )
 
 
 @router.post("/enrich")
@@ -350,6 +532,155 @@ async def enrich_single_job(job_id: UUID, db: Session = Depends(get_db)):
     return {
         "run": _serialize_run(terminal_run),
         "job": _load_job_snapshot(job_id),
+    }
+
+
+@router.post("/manual-action-analyze")
+async def analyze_manual_action(request: ManualActionAnalysisRequest):
+    """Analyze a manual-verification screenshot through the active AI runtime."""
+    try:
+        return await _analyze_manual_action_request(request)
+    except (ProfileRuntimeNotReadyError, LLMProfileNotReadyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LLMCapabilityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Manual action analysis failed")
+        raise HTTPException(status_code=502, detail=f"Manual action analysis failed: {exc}") from exc
+
+
+@router.post("/manual-action-auto-resolve")
+async def auto_resolve_manual_action(
+    request: ManualActionAutoResolveRequest,
+    db: Session = Depends(get_db),
+):
+    """Capture, analyze, and apply supported manual-action fixes in one API call."""
+    crawl_job_repository = CrawlJobRepository()
+    dispatch_service = CrawlJobDispatchService()
+
+    try:
+        manual_action = _load_manual_action_payload(
+            db,
+            crawl_job_id=request.crawl_job_id,
+            crawl_job_repository=crawl_job_repository,
+        )
+        screenshot_payload = capture_manual_action_screenshot(
+            browser_channel=str(manual_action.get("browser_channel") or "").strip(),
+            browser_profile_path=str(manual_action.get("browser_profile_path") or "").strip(),
+            blocked_url=str(manual_action.get("blocked_url") or "").strip(),
+        )
+        analysis = await _analyze_manual_action_request(
+            ManualActionAnalysisRequest(
+                crawl_job_id=request.crawl_job_id,
+                source_site=str(manual_action.get("source_site") or ""),
+                stage=str(manual_action.get("stage") or ""),
+                action_type=str(manual_action.get("action_type") or "") or None,
+                blocked_url=str(manual_action.get("blocked_url") or ""),
+                content_type=str(screenshot_payload.get("content_type") or "image/png"),
+                image_base64=str(screenshot_payload.get("image_base64") or ""),
+            )
+        )
+    except (ProfileRuntimeNotReadyError, LLMProfileNotReadyError, HTTPException):
+        raise
+    except LLMCapabilityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Manual action auto resolve failed")
+        raise HTTPException(status_code=502, detail=f"Manual action auto resolve failed: {exc}") from exc
+
+    if not analysis.get("auto_apply_supported"):
+        return {
+            "resolution_status": "analysis_only",
+            "analysis": analysis,
+            "applied_actions": [],
+            "crawl_job": {
+                "id": str(request.crawl_job_id),
+                "status": "manual_action_required",
+            },
+        }
+
+    applied_actions: list[str] = []
+    close_result: dict[str, Any] | None = None
+    if analysis.get("suggested_action") == "close_profile_windows":
+        close_result = close_profile_windows(
+            browser_channel=str(manual_action.get("browser_channel") or "").strip(),
+            browser_profile_path=str(manual_action.get("browser_profile_path") or "").strip(),
+        )
+        applied_actions.append("close_profile_windows")
+    elif analysis.get("suggested_action") == "open_browser":
+        launch_browser_process(
+            browser_channel=str(manual_action.get("browser_channel") or "").strip(),
+            browser_profile_path=str(manual_action.get("browser_profile_path") or "").strip(),
+            blocked_url=str(manual_action.get("blocked_url") or "").strip(),
+        )
+        applied_actions.append("open_browser")
+        if request.wait_for_clearance and int(request.max_poll_attempts or 0) > 0:
+            for _attempt in range(int(request.max_poll_attempts or 0)):
+                if int(request.poll_interval_seconds or 0) > 0:
+                    await asyncio.sleep(int(request.poll_interval_seconds or 0))
+                follow_up_screenshot = capture_manual_action_screenshot(
+                    browser_channel=str(manual_action.get("browser_channel") or "").strip(),
+                    browser_profile_path=str(manual_action.get("browser_profile_path") or "").strip(),
+                    blocked_url=str(manual_action.get("blocked_url") or "").strip(),
+                )
+                follow_up_analysis = await _analyze_manual_action_request(
+                    ManualActionAnalysisRequest(
+                        crawl_job_id=request.crawl_job_id,
+                        source_site=str(manual_action.get("source_site") or ""),
+                        stage=str(manual_action.get("stage") or ""),
+                        action_type=str(manual_action.get("action_type") or "") or None,
+                        blocked_url=str(manual_action.get("blocked_url") or ""),
+                        content_type=str(follow_up_screenshot.get("content_type") or "image/png"),
+                        image_base64=str(follow_up_screenshot.get("image_base64") or ""),
+                    )
+                )
+                analysis = follow_up_analysis
+                if analysis.get("suggested_action") == "resume_crawl_job" or analysis.get("auto_resume_after_action"):
+                    break
+
+    final_applied_actions = list(applied_actions)
+    if analysis.get("auto_resume_after_action"):
+        final_applied_actions.append("resume_crawl_job")
+
+    resolution_status = (
+        "resumed_after_verification_check"
+        if analysis.get("suggested_action") == "resume_crawl_job"
+        else "applied_and_resumed"
+        if analysis.get("auto_resume_after_action")
+        else "opened_browser_for_manual_followup"
+        if analysis.get("suggested_action") == "open_browser"
+        else "applied"
+    )
+    _record_manual_action_resolution_event(
+        db,
+        crawl_job_repository=crawl_job_repository,
+        crawl_job_id=request.crawl_job_id,
+        resolution_status=resolution_status,
+        manual_action=manual_action,
+        analysis=analysis,
+        applied_actions=final_applied_actions,
+    )
+
+    if analysis.get("auto_resume_after_action"):
+        crawl_job = dispatch_service.resume_crawl_job(
+            db,
+            crawl_job_id=request.crawl_job_id,
+            requested_by="manual-action-auto-resolve",
+        )
+        applied_actions = final_applied_actions
+    else:
+        db.commit()
+        crawl_job = crawl_job_repository.get_crawl_job_by_id(db, request.crawl_job_id)
+
+    return {
+        "resolution_status": resolution_status,
+        "analysis": analysis,
+        "applied_actions": applied_actions,
+        "close_result": close_result,
+        "crawl_job": {
+            "id": str(crawl_job.id),
+            "status": crawl_job.status,
+        },
     }
 
 

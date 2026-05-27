@@ -7,11 +7,12 @@ for %%I in ("%REPO%") do set "REPO=%%~fI"
 set "PREPARE=%REPO%\backend\scripts\prepare_headed_crawl_worker_host.py"
 set "PYTHON=%REPO%\backend\.host_worker_venv\Scripts\python.exe"
 set "SCRIPT=%REPO%\backend\scripts\run_headed_crawl_worker.py"
-set "PROFILE=%REPO%\backend\.host_browser_profiles\msedge"
+
+if not defined JOBSDB_HEADED_BROWSER_CHANNEL set "JOBSDB_HEADED_BROWSER_CHANNEL=msedge"
+set "PROFILE=%REPO%\backend\.host_browser_profiles\%JOBSDB_HEADED_BROWSER_CHANNEL%"
 
 set "DATABASE_URL=postgresql://admin:dev_password@localhost:5433/jobsdb"
 set "REDIS_URL=redis://localhost:6379/0"
-set "JOBSDB_HEADED_BROWSER_CHANNEL=msedge"
 set "JOBSDB_HEADED_BROWSER_USER_DATA_DIR=%PROFILE%"
 
 if not exist "%PREPARE%" (

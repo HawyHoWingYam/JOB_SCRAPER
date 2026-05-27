@@ -1,0 +1,4 @@
+DATABASE_URL=postgresql://admin:dev_password@localhost:5433/jobsdb
+REDIS_URL=redis://localhost:6379/0
+JOBSDB_HEADED_BROWSER_CHANNEL=msedge
+JOBSDB_HEADED_BROWSER_USER_DATA_DIR=C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\.host_browser_profiles\msedge

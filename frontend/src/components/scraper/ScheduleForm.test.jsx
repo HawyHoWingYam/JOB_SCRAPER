@@ -7,6 +7,30 @@ const JOBSDB_CATEGORIES = [{ id: 1200, name: 'Engineering' }];
 const CTGOODJOBS_CATEGORIES = [{ id: 'ctgoodjobs:021', name: 'Information Technology' }];
 
 describe('ScheduleForm', () => {
+  it('renders recurring automation guidance and phase-specific helper copy', () => {
+    render(
+      <ScheduleForm
+        categories={JOBSDB_CATEGORIES}
+        sourceSite="jobsdb"
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        onSourceScopedDirtyChange={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByText(/use automations for recurring crawls on jobsdb/i)).toBeInTheDocument();
+    expect(screen.getByText(/job id crawl stages listing urls first/i)).toBeInTheDocument();
+    expect(screen.getByText(/pages per run for each selected sector/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    expect(screen.getByText(/detail crawl consumes staged listings into full records/i)).toBeInTheDocument();
+    expect(screen.getByText(/how many staged listings this automation should expand per run/i)).toBeInTheDocument();
+  });
+
   it('clears category selections when sourceSite changes but preserves max pages', () => {
     const onSubmit = vi.fn();
     const onDirty = vi.fn();

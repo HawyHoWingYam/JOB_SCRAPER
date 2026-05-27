@@ -45,8 +45,8 @@ class JobsDBSpider:
 
         if crawl_phase == "listing":
             async with httpx.AsyncClient(timeout=30.0) as client:
+                seen_job_ids: set[str] = set()
                 for category_id in category_ids:
-                    seen_job_ids: set[str] = set()
                     total_pages = max_pages
                     for page in range(max_pages, 0, -1):
                         payload = await list_scraper.fetch_page(int(category_id), page, client)

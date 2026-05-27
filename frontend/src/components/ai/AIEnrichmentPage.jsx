@@ -183,6 +183,7 @@ export default function AIEnrichmentPage() {
   const [runs, setRuns] = useState([]);
   const [hasLoadedRuns, setHasLoadedRuns] = useState(false);
   const [pendingLimit, setPendingLimit] = useState('50');
+  const [targetJobId, setTargetJobId] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState(null);
@@ -414,6 +415,42 @@ export default function AIEnrichmentPage() {
     }
   }
 
+  async function runTargetJobEnrichment() {
+    const normalizedJobId = targetJobId.trim();
+    if (!normalizedJobId) {
+      setActionError('Target job UUID is required.');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      setActionError(null);
+      setActionMessage(null);
+
+      const response = await fetch(`${API_URL}/api/v1/ai/runs`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          mode: 'batch',
+          job_ids: [normalizedJobId],
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Job run request failed with ${response.status}`);
+      }
+
+      setActionMessage(`AI job run submitted for ${normalizedJobId}.`);
+      fetchAIConsole({ queueAfterInFlight: true });
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function retryFailedItems() {
     if (!retryTargetRun) {
       return;
@@ -539,6 +576,23 @@ export default function AIEnrichmentPage() {
                 >
                   <RefreshCcw size={16} />
                   <span>Retry Failed</span>
+                </button>
+              </div>
+
+              <div className="ai-actions-row">
+                <label className="ai-input-group ai-input-group-wide" htmlFor="target-job-id">
+                  <span>Target Job UUID</span>
+                  <input
+                    id="target-job-id"
+                    type="text"
+                    value={targetJobId}
+                    onChange={(event) => setTargetJobId(event.target.value)}
+                  />
+                </label>
+
+                <button type="button" className="ai-primary-button" disabled={submitting} onClick={runTargetJobEnrichment}>
+                  <Sparkles size={16} />
+                  <span>Run Job</span>
                 </button>
               </div>
 

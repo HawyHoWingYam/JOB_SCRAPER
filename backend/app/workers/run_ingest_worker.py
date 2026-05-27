@@ -128,6 +128,7 @@ class IngestWorkerService:
         self._validate_canonical_job(canonical_job)
         source_site = normalize_source_site(canonical_job["source_site"])
         source_job_id = str(canonical_job["source_job_id"]).strip()
+        skip_existing = self._resolve_skip_existing(db, crawl_job_id=crawl_job_id)
 
         company_data = self._build_company_data(canonical_job)
         company, _company_action = self.company_repository.upsert_company(
@@ -140,6 +141,7 @@ class IngestWorkerService:
         job, job_action = self.job_repository.upsert_source_job(
             db,
             job_data,
+            skip_existing=skip_existing,
             auto_commit=False,
         )
         if listing_id is not None:
@@ -193,6 +195,21 @@ class IngestWorkerService:
             source_site=source_site,
             source_job_id=source_job_id,
         )
+
+    def _resolve_skip_existing(self, db, *, crawl_job_id: str | None) -> bool:
+        if not crawl_job_id:
+            return False
+
+        try:
+            crawl_job = self.crawl_job_repository.get_crawl_job_by_id(db, uuid.UUID(str(crawl_job_id)))
+        except ValueError:
+            return False
+
+        if crawl_job is None:
+            return False
+
+        request_payload = crawl_job.request_payload if isinstance(crawl_job.request_payload, dict) else {}
+        return bool(request_payload.get("skip_existing"))
 
     def _extract_canonical_job(self, event) -> tuple[dict[str, Any], str | None, str | None]:
         payload = dict(event.payload or {})

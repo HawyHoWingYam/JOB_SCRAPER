@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     jobsdb_headed_browser_executable_path: Optional[str] = None
     jobsdb_headed_navigation_timeout_ms: int = 60000
     jobsdb_headed_worker_lock_port: int = 47651
+    jobsdb_headed_manual_action_helper_port: int = 47652
 
     # Scheduler worker runtime
     scheduler_heartbeat_interval_seconds: int = 15
@@ -97,6 +98,6 @@ class Settings(BaseSettings):
     uvicorn_reload_force_polling: bool = False
     sqlalchemy_echo: bool = False
     log_level: str = "INFO"
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
 
 settings = Settings()

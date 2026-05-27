@@ -77,6 +77,16 @@ def _sidecar_capability(url: str | None, *, configured_reason: str) -> dict[str,
     }
 
 
+def _host_manual_action_helper_capability() -> dict[str, Any]:
+    helper_url = f"http://127.0.0.1:{settings.jobsdb_headed_manual_action_helper_port}"
+    return {
+        "available": True,
+        "helper_url": helper_url,
+        "open_browser_supported": True,
+        "close_profile_windows_supported": True,
+    }
+
+
 def _source_capabilities() -> dict[str, dict[str, Any]]:
     return {
         "jobsdb": {
@@ -141,5 +151,6 @@ def build_runtime_capabilities() -> dict[str, Any]:
             "available": bool(scheduler.get("enabled", True)),
             **scheduler,
         },
+        "manual_actions": _host_manual_action_helper_capability(),
         "sources": _source_capabilities(),
     }

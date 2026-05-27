@@ -135,12 +135,12 @@ class CTGoodJobsSpider:
                     "detail_pages_skipped": detail_pages_skipped,
                 }
 
+            seen_job_ids: set[str] = set()
             for category_id in category_ids:
                 category = registry.get(str(category_id))
                 if category is None:
                     continue
 
-                seen_job_ids: set[str] = set()
                 total_pages = max_pages
                 page_range = range(max_pages, 0, -1) if crawl_phase == "listing" else range(1, max_pages + 1)
                 for page in page_range:

@@ -1,0 +1,86 @@
+2026-05-26 21:32:26,082 INFO [app.workers.run_headed_crawl_worker] Starting headed crawl worker
+2026-05-26 21:32:26,088 INFO [app.workers.run_headed_crawl_worker] Headed worker database: postgresql://admin:dev_password@localhost:5433/jobsdb
+2026-05-26 21:32:26,089 INFO [app.workers.run_headed_crawl_worker] Headed worker redis: redis://localhost:6379/0
+2026-05-26 21:32:26,089 INFO [app.workers.run_headed_crawl_worker] Headed worker browser channel: msedge
+2026-05-26 21:32:26,090 INFO [app.workers.run_headed_crawl_worker] Headed worker browser profile: C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\.host_browser_profiles\msedge
+2026-05-26 21:32:26,090 INFO [app.workers.run_headed_crawl_worker] Headed worker lock port: 47651
+2026-05-26 21:32:26,264 INFO [app.workers.run_headed_crawl_worker] Headed worker manual-action helper: http://127.0.0.1:47652
+2026-05-26 21:35:28,425 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 0.87s
+2026-05-26 21:35:32,476 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.14s
+2026-05-26 21:42:40,893 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 0.96s
+2026-05-26 21:42:45,150 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.35s
+2026-05-26 21:48:09,560 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.13s
+2026-05-26 21:48:14,035 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.16s
+2026-05-26 21:54:21,686 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.13s
+2026-05-26 21:54:26,047 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 1.70s
+2026-05-26 22:13:22,511 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 0.82s
+2026-05-26 22:13:26,558 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 1.87s
+2026-05-26 22:14:28,246 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 0.91s
+2026-05-26 22:14:32,317 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 1.78s
+2026-05-26 22:15:01,994 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.06s
+2026-05-26 22:15:06,221 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.44s
+2026-05-26 22:15:12,566 ERROR [app.workers.run_crawl_worker] crawl worker failed: crawl_job_id=183852e4-2df8-42b2-b3cf-bdea8239e591 source_site=ctgoodjobs
+Traceback (most recent call last):
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\app\scraper\ctgoodjobs_browser_page_scraper.py", line 81, in fetch_page_html
+    html = await self._fetch_page_content(url)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\app\scraper\ctgoodjobs_browser_page_scraper.py", line 121, in _fetch_page_content
+    return await loop.run_in_executor(self._executor, fetcher, url)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python311\Lib\concurrent\futures\thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\app\scraper\ctgoodjobs_browser_page_scraper.py", line 161, in _fetch_page_content_sync
+    return self._sync_page.content()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\.host_worker_venv\Lib\site-packages\playwright\sync_api\_generated.py", line 8950, in content
+    return mapping.from_maybe_impl(self._sync(self._impl_obj.content()))
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\.host_worker_venv\Lib\site-packages\playwright\_impl\_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\.host_worker_venv\Lib\site-packages\playwright\_impl\_page.py", line 535, in content
+    return await self._main_frame.content()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\.host_worker_venv\Lib\site-packages\playwright\_impl\_frame.py", line 475, in content
+    return await self._channel.send("content", None)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\.host_worker_venv\Lib\site-packages\playwright\_impl\_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\.host_worker_venv\Lib\site-packages\playwright\_impl\_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.Error: Page.content: Unable to retrieve content because the page is navigating and changing the content.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\app\workers\run_crawl_worker.py", line 305, in _handle_message
+    result = await result
+             ^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\crawler\job_crawler\spiders\ctgoodjobs_headed_spider.py", line 217, in crawl
+    page_html = await page_scraper.fetch_page_html(
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hawy.ho.HYAKUNOUSHA\Documents\github\job_scraper\JOB_SCRAPER\backend\app\scraper\ctgoodjobs_browser_page_scraper.py", line 104, in fetch_page_html
+    raise CTGoodJobsFetchError(
+app.scraper.ctgoodjobs.html_fetcher.CTGoodJobsFetchError: CTGoodJobs category_page fetch failed after 3 attempts (exception_type=Error) url=https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=200
+2026-05-26 22:20:16,968 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.03s
+2026-05-26 22:20:21,375 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.37s
+2026-05-26 22:26:28,803 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.16s
+2026-05-26 22:26:33,302 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 1.58s
+2026-05-26 22:39:29,264 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.10s
+2026-05-26 22:39:33,578 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.29s
+2026-05-26 23:38:20,858 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 0.82s
+2026-05-26 23:38:24,824 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.18s
+2026-05-26 23:43:50,734 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.00s
+2026-05-26 23:43:55,001 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.50s
+2026-05-26 23:44:29,065 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.24s
+2026-05-26 23:44:33,461 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 1.60s
+2026-05-26 23:45:06,187 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 0.97s
+2026-05-26 23:45:10,318 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 1.52s
+2026-05-26 23:50:49,400 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.11s
+2026-05-26 23:50:53,821 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.46s
+2026-05-26 23:51:39,476 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.17s
+2026-05-26 23:51:43,948 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.11s
+2026-05-26 23:53:13,748 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.15s
+2026-05-26 23:53:18,087 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.39s

@@ -10,6 +10,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.services.database_integrity_service import build_database_integrity_summary
@@ -26,6 +29,7 @@ def _format_ratio(value: Any) -> str:
 def render_markdown_report(summary: dict[str, Any]) -> str:
     schema = summary.get("schema") or {}
     staging = summary.get("staging") or {}
+    duplicates = summary.get("duplicates") or {}
     outbox = summary.get("outbox") or {}
     taxonomy = summary.get("taxonomy") or {}
     embeddings = summary.get("embeddings") or {}
@@ -69,6 +73,8 @@ def render_markdown_report(summary: dict[str, Any]) -> str:
         "## Operational Metrics",
         "",
         f"- Staged unpublished rows: {staging.get('staged_unpublished_rows', 0)}",
+        f"- Duplicate job source keys: {duplicates.get('jobs_source_key_duplicate_groups', 0)}",
+        f"- Duplicate staged listing keys: {duplicates.get('crawl_job_listings_source_key_duplicate_groups', 0)}",
         f"- Outbox retrying rows: {outbox.get('retrying_rows', 0)}",
         f"- Missing current embeddings: {embeddings.get('missing_current_embeddings', 0)}",
         "",
@@ -77,6 +83,8 @@ def render_markdown_report(summary: dict[str, Any]) -> str:
             f"| Total staged rows | {staging.get('total_staged_rows', 0)} |",
             f"| Staged published rows | {staging.get('staged_published_rows', 0)} |",
             f"| Staged unpublished rows | {staging.get('staged_unpublished_rows', 0)} |",
+            f"| Duplicate job source key groups | {duplicates.get('jobs_source_key_duplicate_groups', 0)} |",
+            f"| Duplicate staged listing key groups | {duplicates.get('crawl_job_listings_source_key_duplicate_groups', 0)} |",
             f"| Published jobs | {staging.get('published_jobs', 0)} |",
             f"| Staged-to-published ratio | {_format_ratio(staging.get('staged_to_published_ratio'))} |",
             f"| Outbox retrying rows | {outbox.get('retrying_rows', 0)} |",
@@ -121,17 +129,26 @@ def render_markdown_report(summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_session_factory_from_database_url(database_url: str):
+    engine = create_engine(database_url)
+    return sessionmaker(bind=engine)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", choices=("json", "markdown"), default="markdown")
     parser.add_argument("--output", type=str, default=None)
+    parser.add_argument("--database-url", type=str, default=None)
     parser.add_argument("--fail-on-critical", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    summary = build_database_integrity_summary()
+    summary_kwargs: dict[str, Any] = {}
+    if args.database_url:
+        summary_kwargs["session_factory"] = build_session_factory_from_database_url(args.database_url)
+    summary = build_database_integrity_summary(**summary_kwargs)
     rendered = render_json_report(summary) if args.format == "json" else render_markdown_report(summary)
 
     if args.output:

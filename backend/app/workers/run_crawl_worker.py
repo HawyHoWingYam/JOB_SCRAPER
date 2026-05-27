@@ -22,6 +22,7 @@ from app.messaging.topics import (
 )
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.crawl_job_repository import CrawlJobRepository
+from app.repositories.job_repository import JobRepository
 from app.scraper.manual_action import ManualActionRequiredError
 from app.utils.time import utc_now
 
@@ -69,6 +70,7 @@ class CrawlWorkerService:
         runner_registry: dict[str, Any] | None = None,
         crawl_job_listing_repository: CrawlJobListingRepository | None = None,
         crawl_job_repository: CrawlJobRepository | None = None,
+        job_repository: JobRepository | Any | None = None,
         session_factory: Any | None = None,
     ):
         self.bus = bus or RedisStreamBus()
@@ -78,6 +80,7 @@ class CrawlWorkerService:
         self.runner_registry = runner_registry or _default_runner_registry()
         self.crawl_job_listing_repository = crawl_job_listing_repository or CrawlJobListingRepository()
         self.crawl_job_repository = crawl_job_repository or CrawlJobRepository()
+        self.job_repository = job_repository or JobRepository()
         self.session_factory = session_factory or SessionLocal
         self.bus.ensure_group(self.command_topic, self.group_name)
 
@@ -170,9 +173,17 @@ class CrawlWorkerService:
 
         pages_processed = 0
         items_emitted = 0
+        pending_listing_payloads: list[dict[str, Any]] = []
 
         def emit_page_processed(progress_payload: dict[str, Any]) -> None:
             nonlocal pages_processed, job_ids_collected, latest_page_payload
+            if pending_listing_payloads:
+                self._persist_listing_batch(
+                    crawl_job_id=crawl_job_id,
+                    payloads=list(pending_listing_payloads),
+                    skip_existing=bool(request_payload.get("skip_existing")),
+                )
+                pending_listing_payloads.clear()
             pages_processed += 1
             if progress_payload.get("job_ids_collected") is not None:
                 job_ids_collected = int(progress_payload["job_ids_collected"])
@@ -218,10 +229,7 @@ class CrawlWorkerService:
             )
 
         def emit_listing_emitted(listing_payload: dict[str, Any]) -> None:
-            self._persist_listing(
-                crawl_job_id=crawl_job_id,
-                payload=listing_payload,
-            )
+            pending_listing_payloads.append(dict(listing_payload))
 
         def emit_detail_progress(progress_payload: dict[str, Any]) -> None:
             event_payload = {
@@ -283,10 +291,17 @@ class CrawlWorkerService:
         try:
             runner_request_payload = dict(request_payload)
             runner_request_payload["crawl_phase"] = crawl_phase
+            if crawl_phase == "listing" and request_payload.get("is_resume"):
+                runner_request_payload = self._merge_listing_resume_state(
+                    crawl_job_id=crawl_job_id,
+                    source_site=source_site,
+                    request_payload=runner_request_payload,
+                )
             if crawl_phase == "detail":
                 detail_targets = self._load_detail_targets(
                     source_site=source_site,
                     request_payload=request_payload,
+                    detail_crawl_job_id=crawl_job_id,
                 )
                 runner_request_payload["detail_targets"] = detail_targets
                 job_ids_collected = len(detail_targets)
@@ -309,6 +324,13 @@ class CrawlWorkerService:
                 pages_processed=pages_processed,
                 items_emitted=items_emitted,
             )
+            if pending_listing_payloads:
+                self._persist_listing_batch(
+                    crawl_job_id=crawl_job_id,
+                    payloads=list(pending_listing_payloads),
+                    skip_existing=bool(request_payload.get("skip_existing")),
+                )
+                pending_listing_payloads.clear()
             final_pages_processed = execution_result.pages_processed or pages_processed
             final_items_emitted = execution_result.items_emitted or items_emitted
             completed_payload = {
@@ -346,6 +368,10 @@ class CrawlWorkerService:
                 browser_channel=settings.jobsdb_headed_browser_channel,
                 browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
             )
+            # Preserve the original listing/detail resume anchor when a resumed crawl
+            # is temporarily blocked again before it can advance past startup.
+            if not manual_action_payload.get("resume_context") and request_payload.get("is_resume"):
+                manual_action_payload["resume_context"] = dict(request_payload.get("resume_context") or {})
             action_payload = {
                 **latest_page_payload,
                 "request_payload": request_payload,
@@ -525,27 +551,73 @@ class CrawlWorkerService:
         finally:
             db.close()
 
-    def _persist_listing(self, *, crawl_job_id: str, payload: dict[str, Any]) -> None:
+    def _persist_listing_batch(
+        self,
+        *,
+        crawl_job_id: str,
+        payloads: list[dict[str, Any]],
+        skip_existing: bool = False,
+    ) -> None:
+        if not payloads:
+            return
+
         normalized_crawl_job_id = self._normalize_crawl_job_id(crawl_job_id)
         db = self.session_factory()
         try:
-            self.crawl_job_listing_repository.upsert_listing(
-                db,
-                crawl_job_id=normalized_crawl_job_id,
-                source_site=str(payload.get("source_site") or ""),
-                source_job_id=str(payload.get("source_job_id") or ""),
-                source_url=str(payload.get("source_url") or ""),
-                source_classification_id=payload.get("source_classification_id"),
-                source_classification_name=payload.get("source_classification_name"),
-                listing_page=payload.get("listing_page"),
-                listing_rank=payload.get("listing_rank"),
-                listing_payload=dict(payload.get("listing_payload") or {}),
-                auto_commit=False,
-            )
+            normalized_source_site = str(payloads[0].get("source_site") or "")
+            listings = []
+            for payload in payloads:
+                listing, _action = self.crawl_job_listing_repository.upsert_listing(
+                    db,
+                    crawl_job_id=normalized_crawl_job_id,
+                    source_site=str(payload.get("source_site") or ""),
+                    source_job_id=str(payload.get("source_job_id") or ""),
+                    source_url=str(payload.get("source_url") or ""),
+                    source_classification_id=payload.get("source_classification_id"),
+                    source_classification_name=payload.get("source_classification_name"),
+                    listing_page=payload.get("listing_page"),
+                    listing_rank=payload.get("listing_rank"),
+                    listing_payload=dict(payload.get("listing_payload") or {}),
+                    auto_commit=False,
+                )
+                listings.append((listing, payload))
+
+            if skip_existing:
+                existing_jobs_by_source_id = self.job_repository.list_existing_jobs_by_source_ids(
+                    db,
+                    source_site=normalized_source_site,
+                    source_job_ids=[str(payload.get("source_job_id") or "") for payload in payloads],
+                )
+                skipped_existing_count = 0
+                for listing, payload in listings:
+                    existing_job = existing_jobs_by_source_id.get(str(payload.get("source_job_id") or "").strip())
+                    if existing_job is None:
+                        continue
+                    skipped_existing_count += 1
+                    self.crawl_job_listing_repository.mark_detail_completed(
+                        db,
+                        listing_id=listing.id,
+                        detail_crawl_job_id=normalized_crawl_job_id,
+                        detail_payload={
+                            "source_site": str(payload.get("source_site") or ""),
+                            "source_job_id": str(payload.get("source_job_id") or ""),
+                            "skip_existing": True,
+                            "skip_reason": "existing_job",
+                        },
+                        published_job_id=existing_job.id,
+                        auto_commit=False,
+                    )
+                if skipped_existing_count > 0:
+                    self.crawl_job_repository.increment_metrics(
+                        db,
+                        crawl_job_id=normalized_crawl_job_id,
+                        metrics_delta={"jobs_skipped_existing": skipped_existing_count},
+                        auto_commit=False,
+                    )
             self._sync_listing_detail_status_metrics(
                 db,
                 source_listing_crawl_job_id=normalized_crawl_job_id,
-                source_site=str(payload.get("source_site") or ""),
+                source_site=normalized_source_site,
             )
             db.commit()
         finally:
@@ -556,6 +628,7 @@ class CrawlWorkerService:
         *,
         source_site: str,
         request_payload: dict[str, Any],
+        detail_crawl_job_id: str,
     ) -> list[dict[str, Any]]:
         source_listing_crawl_job_id = request_payload.get("source_listing_crawl_job_id")
         detail_statuses = list(request_payload.get("detail_statuses") or ["pending"])
@@ -572,6 +645,54 @@ class CrawlWorkerService:
                 statuses=detail_statuses,
                 limit=detail_limit,
             )
+            active_rows = list(rows)
+            if request_payload.get("skip_existing"):
+                existing_jobs_by_source_id = self.job_repository.list_existing_jobs_by_source_ids(
+                    db,
+                    source_site=source_site,
+                    source_job_ids=[row.source_job_id for row in active_rows],
+                )
+                if existing_jobs_by_source_id:
+                    remaining_rows = []
+                    affected_listing_batches: set[tuple[Any, str]] = set()
+                    skipped_existing_count = 0
+                    for row in active_rows:
+                        existing_job = existing_jobs_by_source_id.get(str(row.source_job_id).strip())
+                        if existing_job is None:
+                            remaining_rows.append(row)
+                            continue
+                        skipped_existing_count += 1
+                        self.crawl_job_listing_repository.mark_detail_completed(
+                            db,
+                            listing_id=row.id,
+                            detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
+                            detail_payload={
+                                "source_site": row.source_site,
+                                "source_job_id": row.source_job_id,
+                                "skip_existing": True,
+                                "skip_reason": "existing_job",
+                            },
+                            published_job_id=existing_job.id,
+                            auto_commit=False,
+                        )
+                        affected_listing_batches.add((row.crawl_job_id, row.source_site))
+                    for batch_id, batch_source_site in affected_listing_batches:
+                        self._sync_listing_detail_status_metrics(
+                            db,
+                            source_listing_crawl_job_id=batch_id,
+                            source_site=batch_source_site,
+                        )
+                    if skipped_existing_count > 0:
+                        self.crawl_job_repository.increment_metrics(
+                            db,
+                            crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
+                            metrics_delta={"jobs_skipped_existing": skipped_existing_count},
+                            auto_commit=False,
+                        )
+                    if affected_listing_batches:
+                        db.commit()
+                    active_rows = remaining_rows
+
             return [
                 {
                     "listing_id": str(row.id),
@@ -585,10 +706,56 @@ class CrawlWorkerService:
                     "listing_rank": row.listing_rank,
                     "listing_payload": dict(row.listing_payload or {}),
                 }
-                for row in rows
+                for row in active_rows
             ]
         finally:
             db.close()
+
+    def _merge_listing_resume_state(
+        self,
+        *,
+        crawl_job_id: str,
+        source_site: str,
+        request_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        resume_context = dict(request_payload.get("resume_context") or {})
+        existing_seen_job_ids = {
+            str(job_id).strip()
+            for job_id in (resume_context.get("seen_job_ids") or [])
+            if str(job_id).strip()
+        }
+
+        db = self.session_factory()
+        try:
+            persisted_seen_job_ids = self.crawl_job_listing_repository.list_source_job_ids_for_crawl_job(
+                db,
+                crawl_job_id=self._normalize_crawl_job_id(crawl_job_id),
+                source_site=source_site,
+            )
+            persisted_listing_rank = self.crawl_job_listing_repository.get_max_listing_rank_for_crawl_job(
+                db,
+                crawl_job_id=self._normalize_crawl_job_id(crawl_job_id),
+                source_site=source_site,
+            )
+        finally:
+            db.close()
+
+        merged_seen_job_ids = sorted(existing_seen_job_ids | persisted_seen_job_ids)
+        merged_listing_rank = max(
+            int(resume_context.get("listing_rank") or 0),
+            int(persisted_listing_rank or 0),
+        )
+        if not merged_seen_job_ids and merged_listing_rank <= 0:
+            return request_payload
+
+        runtime_payload = dict(request_payload)
+        runtime_resume_context = dict(resume_context)
+        if merged_seen_job_ids:
+            runtime_resume_context["seen_job_ids"] = merged_seen_job_ids
+        if merged_listing_rank > 0:
+            runtime_resume_context["listing_rank"] = merged_listing_rank
+        runtime_payload["resume_context"] = runtime_resume_context
+        return runtime_payload
 
     def _mark_detail_running(self, *, listing_id: str, detail_crawl_job_id: str) -> None:
         db = self.session_factory()

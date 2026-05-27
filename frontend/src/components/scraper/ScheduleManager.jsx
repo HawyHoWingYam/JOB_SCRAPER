@@ -13,6 +13,7 @@ import './Scheduler.css';
 const API_URL = API_BASE_URL;
 const API_BASE = `${API_URL}/api/v1`;
 const CATEGORY_API_BASE = `${API_URL}/api`;
+const DEFAULT_MANUAL_ACTION_HELPER_URL = 'http://127.0.0.1:47652';
 const DIRECT_OVERRIDE_RUN_KEY = 'scheduler.directOverrideRun';
 const DIRECT_OVERRIDE_RECOVERY_WINDOW_MS = 20_000;
 const EMPTY_PROGRESS = {};
@@ -159,6 +160,7 @@ function buildImmediateScrapePayload(form, sourceSite) {
             category_ids: categoryIds,
             max_pages: maxPages,
             detail_limit: crawlPhase === 'detail' ? detailLimit : 100,
+            skip_existing: true,
             ...(sourceListingCrawlJobId ? { source_listing_crawl_job_id: sourceListingCrawlJobId } : {}),
         },
     };
@@ -179,6 +181,14 @@ function formatRuntimeTimestamp(value) {
 
 function formatBacklogCount(value) {
     return Number(value || 0).toLocaleString();
+}
+
+function formatSourceLabel(sourceSite) {
+    if (sourceSite === 'ctgoodjobs') {
+        return 'CTgoodjobs';
+    }
+
+    return 'JobsDB';
 }
 
 function buildSchedulerRuntimeBanner(scheduler) {
@@ -213,6 +223,51 @@ function buildSchedulerRuntimeBanner(scheduler) {
     return {
         title: 'Scheduler dispatch unavailable',
         lines: ['Scheduler dispatch is unavailable in the current runtime profile.'],
+    };
+}
+
+function formatSectorSelectionLabel(selectedCount) {
+    return `${selectedCount} sector${selectedCount === 1 ? '' : 's'} selected`;
+}
+
+function buildImmediateRunSummary(form, sourceSite) {
+    const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
+    const selectedSectorCount = Array.isArray(form?.category_ids) ? form.category_ids.length : 0;
+    const summaryMetrics = [formatSourceLabel(sourceSite)];
+
+    if (crawlPhase === 'detail') {
+        const detailLimit = Number.parseInt(`${form?.detail_limit ?? ''}`, 10);
+        const listingBatchId = `${form?.source_listing_crawl_job_id ?? ''}`.trim();
+
+        summaryMetrics.push(
+            `${Number.isInteger(detailLimit) ? detailLimit : 0} listings this run`,
+            listingBatchId ? `Listing batch: ${listingBatchId}` : 'Listing batch: Any pending listing batch'
+        );
+
+        if (selectedSectorCount > 0) {
+            summaryMetrics.push(formatSectorSelectionLabel(selectedSectorCount));
+        }
+
+        return {
+            title: 'Immediate Run for Backlog Recovery',
+            description: 'This run will start a job detail crawl.',
+            metrics: summaryMetrics,
+            actionLabel: 'Start Job Detail Crawl',
+        };
+    }
+
+    const maxPages = Number.parseInt(`${form?.max_pages ?? ''}`, 10);
+
+    summaryMetrics.push(
+        formatSectorSelectionLabel(selectedSectorCount),
+        `${Number.isInteger(maxPages) ? maxPages : 0} pages per sector`
+    );
+
+    return {
+        title: 'Immediate Run for Backlog Recovery',
+        description: 'This run will start a job ID crawl.',
+        metrics: summaryMetrics,
+        actionLabel: 'Start Job ID Crawl',
     };
 }
 
@@ -420,6 +475,144 @@ function ScheduleManager({ onNavigateToAI }) {
 
         if (!response.ok) {
             let detail = 'Failed to cancel crawl job';
+
+            try {
+                const payload = await response.json();
+                detail = formatApiErrorDetail(payload.detail, detail);
+            } catch {
+                // Fall back to the default message when no JSON error is available.
+            }
+
+            setError(detail);
+            throw new Error(detail);
+        }
+
+        setError(null);
+        return response.json();
+    }, []);
+
+    const getManualActionHelperUrl = useCallback(() => {
+        return capabilities?.manual_actions?.helper_url || DEFAULT_MANUAL_ACTION_HELPER_URL;
+    }, [capabilities]);
+
+    const handleOpenManualActionBrowser = useCallback(async (crawlJobId) => {
+        const response = await fetch(`${getManualActionHelperUrl()}/manual-actions/open-browser`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ crawl_job_id: crawlJobId }),
+        });
+
+        if (!response.ok) {
+            let detail = 'Failed to open verification browser';
+
+            try {
+                const payload = await response.json();
+                detail = formatApiErrorDetail(payload.detail, detail);
+            } catch {
+                // Fall back to the default message when no JSON error is available.
+            }
+
+            setError(detail);
+            throw new Error(detail);
+        }
+
+        setError(null);
+        return response.json();
+    }, [getManualActionHelperUrl]);
+
+    const handleCloseManualActionWindows = useCallback(async (crawlJobId) => {
+        const response = await fetch(`${getManualActionHelperUrl()}/manual-actions/close-profile-windows`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ crawl_job_id: crawlJobId }),
+        });
+
+        if (!response.ok) {
+            let detail = 'Failed to close profile windows';
+
+            try {
+                const payload = await response.json();
+                detail = formatApiErrorDetail(payload.detail, detail);
+            } catch {
+                // Fall back to the default message when no JSON error is available.
+            }
+
+            setError(detail);
+            throw new Error(detail);
+        }
+
+        setError(null);
+        return response.json();
+    }, [getManualActionHelperUrl]);
+
+    const handleCaptureManualActionAnalysis = useCallback(async (crawlJobId, manualAction = {}) => {
+        const captureResponse = await fetch(`${getManualActionHelperUrl()}/manual-actions/capture-screenshot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ crawl_job_id: crawlJobId }),
+        });
+
+        if (!captureResponse.ok) {
+            let detail = 'Failed to capture verification screenshot';
+
+            try {
+                const payload = await captureResponse.json();
+                detail = formatApiErrorDetail(payload.detail, detail);
+            } catch {
+                // Fall back to the default message when no JSON error is available.
+            }
+
+            setError(detail);
+            throw new Error(detail);
+        }
+
+        const screenshotPayload = await captureResponse.json();
+        const analysisResponse = await fetch(`${API_BASE}/ai/manual-action-analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                crawl_job_id: crawlJobId,
+                source_site: manualAction.source_site || currentSourceSite,
+                stage: manualAction.stage || 'unknown',
+                action_type: manualAction.action_type || null,
+                blocked_url: manualAction.blocked_url || '',
+                content_type: screenshotPayload.content_type || 'image/png',
+                image_base64: screenshotPayload.image_base64,
+            }),
+        });
+
+        if (!analysisResponse.ok) {
+            let detail = 'Failed to analyze verification screenshot';
+
+            try {
+                const payload = await analysisResponse.json();
+                detail = formatApiErrorDetail(payload.detail, detail);
+            } catch {
+                // Fall back to the default message when no JSON error is available.
+            }
+
+            setError(detail);
+            throw new Error(detail);
+        }
+
+        setError(null);
+        return analysisResponse.json();
+    }, [currentSourceSite, getManualActionHelperUrl]);
+
+    const handleAutoResolveManualAction = useCallback(async (crawlJobId) => {
+        const response = await fetch(`${API_BASE}/ai/manual-action-auto-resolve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                crawl_job_id: crawlJobId,
+                wait_for_clearance: true,
+                max_poll_attempts: 6,
+                poll_interval_seconds: 5,
+            }),
+        });
+
+        if (!response.ok) {
+            let detail = 'Failed to auto resolve manual action';
 
             try {
                 const payload = await response.json();
@@ -664,6 +857,7 @@ function ScheduleManager({ onNavigateToAI }) {
     const selectedListingBatch = listingBatches.find(
         (batch) => batch.crawl_job_id === immediateForm.source_listing_crawl_job_id
     ) || null;
+    const immediateRunSummary = buildImmediateRunSummary(immediateForm, currentSourceSite);
 
     return (
         <div className="scheduler-container">
@@ -705,6 +899,22 @@ function ScheduleManager({ onNavigateToAI }) {
                     ))}
                 </select>
             </div>
+
+            <div className="scheduler-launchpad">
+                <div className="scheduler-workstream-card glass-panel">
+                    <span className="scheduler-panel-kicker">Scheduled Automation</span>
+                    <p>
+                        Keep repeatable source scans on a cron so nightly and recurring workloads stay hands-free.
+                    </p>
+                </div>
+                <div className="scheduler-workstream-card glass-panel">
+                    <span className="scheduler-panel-kicker">Immediate Run for Backlog Recovery</span>
+                    <p>
+                        Launch an on-demand listing or detail crawl when you need to recover backlog or step through manual verification.
+                    </p>
+                </div>
+            </div>
+
             {schedulerStatus && (
                 <div className="scheduler-runtime-panel glass-panel">
                     <strong>Scheduler owner: {schedulerRuntimeOwner}</strong>
@@ -783,6 +993,10 @@ function ScheduleManager({ onNavigateToAI }) {
                     onNavigateToAI={onNavigateToAI}
                     onResumeCrawlJob={handleResumeCrawlJob}
                     onCancelCrawlJob={handleCancelCrawlJob}
+                    onOpenManualActionBrowser={handleOpenManualActionBrowser}
+                    onCloseManualActionWindows={handleCloseManualActionWindows}
+                    onCaptureManualActionAnalysis={handleCaptureManualActionAnalysis}
+                    onAutoResolveManualAction={handleAutoResolveManualAction}
                 />
             )}
 
@@ -790,6 +1004,18 @@ function ScheduleManager({ onNavigateToAI }) {
                 <div className="immediate-form-panel glass-panel">
                     <h3>Direct Override Sequence</h3>
                     <p className="form-hint">Direct crawl job configuration.</p>
+
+                    <div className="override-summary-panel">
+                        <span className="scheduler-panel-kicker">{immediateRunSummary.title}</span>
+                        <strong className="override-summary-title">{immediateRunSummary.description}</strong>
+                        <div className="override-summary-metrics">
+                            {immediateRunSummary.metrics.map((metric) => (
+                                <span key={metric} className="override-summary-chip">
+                                    {metric}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
 
                     <div className="cyber-form-group">
                         <label htmlFor="immediate-crawl-phase">Crawl Phase</label>
@@ -921,7 +1147,7 @@ function ScheduleManager({ onNavigateToAI }) {
                             onClick={handleImmediateScrape}
                             disabled={isLoading}
                         >
-                            <Zap size={18} /> {isLoading ? 'Initializing...' : 'Engage Scanner'}
+                            <Zap size={18} /> {isLoading ? 'Initializing...' : immediateRunSummary.actionLabel}
                         </button>
                     </div>
                 </div>

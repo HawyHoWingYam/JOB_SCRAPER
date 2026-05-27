@@ -269,8 +269,8 @@ class CrawlJobDispatchService:
         if crawl_job.status != "manual_action_required":
             raise RuntimeError(f"Crawl job cannot be resumed from status '{crawl_job.status}'")
 
-        latest_event = self.crawl_job_repository.get_latest_event(db, crawl_job_id)
-        if latest_event is None or latest_event.event_type != "crawl.manual_action_required":
+        latest_event = self.crawl_job_repository.get_latest_manual_action_event(db, crawl_job_id)
+        if latest_event is None:
             raise RuntimeError("Crawl job is not resumable from its latest event")
 
         manual_action = dict((latest_event.payload or {}).get("manual_action") or {})
@@ -278,6 +278,8 @@ class CrawlJobDispatchService:
             raise RuntimeError("Crawl job manual action does not support resume")
 
         resume_context = dict(manual_action.get("resume_context") or {})
+        if not resume_context:
+            resume_context = self._recover_previous_resume_context(db, crawl_job_id=crawl_job_id)
         request_payload = dict(crawl_job.request_payload or {})
         request_payload["is_resume"] = True
         request_payload["resume_context"] = resume_context
@@ -358,3 +360,18 @@ class CrawlJobDispatchService:
             if resolve_crawl_mode(source_site, crawl_mode) == "headed"
             else STREAM_CRAWL_COMMANDS
         )
+
+    def _recover_previous_resume_context(self, db: Session, *, crawl_job_id) -> dict[str, Any]:
+        for event in reversed(self.crawl_job_repository.list_events(db, crawl_job_id)):
+            payload = dict(event.payload or {})
+            manual_action = dict(payload.get("manual_action") or {})
+            manual_resume_context = dict(manual_action.get("resume_context") or {})
+            if manual_resume_context:
+                return manual_resume_context
+
+            request_payload = dict(payload.get("request_payload") or {})
+            request_resume_context = dict(request_payload.get("resume_context") or {})
+            if request_resume_context:
+                return request_resume_context
+
+        return {}

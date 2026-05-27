@@ -4,6 +4,7 @@ import httpx
 
 from app.crawl_phases import resolve_crawl_phase
 from app.scraper.category_scraper import CategoryListScraper
+from app.scraper.manual_action import ManualActionRequiredError
 from app.scraper.jobsdb_browser_detail_scraper import JobsDBBrowserDetailScraper
 from app.sources.contracts import build_jobsdb_canonical_job
 from app.sources.jobsdb.parsers import parse_search_response
@@ -29,19 +30,63 @@ class JobsDBHeadedSpider:
     ):
         crawl_phase = resolve_crawl_phase(request_payload.get("crawl_phase"))
         category_ids = list(request_payload.get("category_ids") or [])
+        resume_context = dict(request_payload.get("resume_context") or {})
+        resume_listing = bool(request_payload.get("is_resume")) and resume_context.get("crawl_phase") == "listing"
+        normalized_resume_category_id = str(resume_context.get("category_id") or "").strip()
+        category_id_anchor_available = normalized_resume_category_id and any(
+            str(category_id).strip() == normalized_resume_category_id for category_id in category_ids
+        )
         max_pages = max(1, int(request_payload.get("max_pages") or 1))
         list_scraper = CategoryListScraper()
         pages_processed = 0
         items_emitted = 0
-        listing_rank = 0
+        listing_rank = int(resume_context.get("listing_rank") or 0) if resume_listing else 0
 
         if crawl_phase == "listing":
+            resume_category_index = int(resume_context.get("category_index") or 0)
+            resume_page = max(1, int(resume_context.get("page") or max_pages))
+            seeded_seen_job_ids = {
+                str(job_id).strip()
+                for job_id in (resume_context.get("seen_job_ids") or [])
+                if str(job_id).strip()
+            }
+            seen_job_ids: set[str] = set(seeded_seen_job_ids)
+            resume_anchor_reached = not resume_listing
             async with httpx.AsyncClient(timeout=30.0) as client:
-                for category_id in category_ids:
-                    seen_job_ids: set[str] = set()
+                for category_index, category_id in enumerate(category_ids):
+                    is_resume_target_category = False
+                    if resume_listing:
+                        if category_id_anchor_available:
+                            if not resume_anchor_reached:
+                                if str(category_id).strip() != normalized_resume_category_id:
+                                    continue
+                                resume_anchor_reached = True
+                                is_resume_target_category = True
+                        else:
+                            if category_index < resume_category_index:
+                                continue
+                            is_resume_target_category = category_index == resume_category_index
+                            resume_anchor_reached = True
+
                     total_pages = max_pages
-                    for page in range(max_pages, 0, -1):
-                        payload = await list_scraper.fetch_page(int(category_id), page, client)
+                    if is_resume_target_category:
+                        page_range = range(resume_page, 0, -1)
+                    else:
+                        page_range = range(max_pages, 0, -1)
+                    for page in page_range:
+                        try:
+                            payload = await list_scraper.fetch_page(int(category_id), page, client)
+                        except ManualActionRequiredError as exc:
+                            exc.resume_context.update(
+                                {
+                                    "crawl_phase": "listing",
+                                    "category_id": int(category_id),
+                                    "category_index": category_index,
+                                    "page": page,
+                                    "page_direction": "descending",
+                                }
+                            )
+                            raise
                         parsed = parse_search_response(payload)
                         total_count = int(parsed.get("total_count") or 0)
                         if total_count > 0:
@@ -110,7 +155,18 @@ class JobsDBHeadedSpider:
                             "updated_at": utc_now().isoformat(),
                         }
                     )
-                detail = await detail_scraper.fetch_job_detail(job_id)
+                try:
+                    detail = await detail_scraper.fetch_job_detail(job_id)
+                except ManualActionRequiredError as exc:
+                    exc.resume_context.update(
+                        {
+                            "crawl_phase": "detail",
+                            "listing_id": str(target.get("listing_id") or ""),
+                            "source_listing_crawl_job_id": str(target.get("source_listing_crawl_job_id") or ""),
+                            "source_job_id": job_id,
+                        }
+                    )
+                    raise
                 if not detail:
                     if mark_detail_failed is not None:
                         mark_detail_failed(target, "detail fetch returned no result")

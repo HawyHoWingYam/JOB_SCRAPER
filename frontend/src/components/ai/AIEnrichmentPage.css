@@ -97,6 +97,11 @@
   font-weight: 700;
 }
 
+.ai-input-group-wide {
+  min-width: min(100%, 360px);
+  flex: 1;
+}
+
 .ai-input-group input {
   min-height: 42px;
   padding: 0 var(--space-3);

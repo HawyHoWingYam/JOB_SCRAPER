@@ -6,6 +6,7 @@ from app.crawl_phases import resolve_crawl_phase
 from app.scraper.manual_action import ManualActionRequiredError
 from app.scraper.ctgoodjobs.category_registry import (
     CTGOODJOBS_BASE_URL,
+    get_static_ctgoodjobs_categories,
     parse_category_registry,
 )
 from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError
@@ -53,14 +54,35 @@ class CTGoodJobsHeadedSpider:
         listing_rank = int(resume_context.get("listing_rank") or 0) if resume_listing else 0
 
         async with CTGoodJobsBrowserPageScraper() as page_scraper:
-            registry_html = await page_scraper.fetch_page_html(
-                f"{CTGOODJOBS_BASE_URL}/jobs",
-                stage="registry",
-            )
+            requested_category_ids = {
+                str(category_id).strip()
+                for category_id in category_ids
+                if str(category_id).strip()
+            }
+            if crawl_phase == "detail":
+                for target in request_payload.get("detail_targets") or []:
+                    listing_payload = dict(target.get("listing_payload") or {})
+                    source_classification_id = str(
+                        target.get("source_classification_id")
+                        or listing_payload.get("source_classification_id")
+                        or ""
+                    ).strip()
+                    if source_classification_id:
+                        requested_category_ids.add(source_classification_id)
+
             registry = {
                 category.source_classification_id: category
-                for category in parse_category_registry(registry_html)
+                for category in get_static_ctgoodjobs_categories()
             }
+            if not requested_category_ids or not requested_category_ids.issubset(set(registry)):
+                registry_html = await page_scraper.fetch_page_html(
+                    f"{CTGOODJOBS_BASE_URL}/jobs",
+                    stage="registry",
+                )
+                registry = {
+                    category.source_classification_id: category
+                    for category in parse_category_registry(registry_html)
+                }
 
             if crawl_phase == "detail":
                 import time
@@ -161,6 +183,7 @@ class CTGoodJobsHeadedSpider:
                 for job_id in (resume_context.get("seen_job_ids") or [])
                 if str(job_id).strip()
             }
+            seen_job_ids: set[str] = set(seeded_seen_job_ids)
             resume_anchor_reached = not resume_listing
             for category_index, category_id in enumerate(category_ids):
                 category = registry.get(str(category_id))
@@ -181,7 +204,6 @@ class CTGoodJobsHeadedSpider:
                         is_resume_target_category = category_index == resume_category_index
                         resume_anchor_reached = True
 
-                seen_job_ids: set[str] = set(seeded_seen_job_ids) if is_resume_target_category else set()
                 if crawl_phase == "listing":
                     if is_resume_target_category:
                         page_range = range(resume_page, 0, -1)
@@ -205,8 +227,6 @@ class CTGoodJobsHeadedSpider:
                                 "category_index": category_index,
                                 "page": page,
                                 "page_direction": "descending",
-                                "seen_job_ids": sorted(seen_job_ids),
-                                "listing_rank": listing_rank,
                             }
                         )
                         raise

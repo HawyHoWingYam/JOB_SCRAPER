@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, inspect
+from sqlalchemy import func, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.sqltypes import DateTime
 
@@ -302,6 +302,68 @@ def _load_staging_summary(db: Any, observed_tables: set[str]) -> dict[str, Any]:
     }
 
 
+def _load_duplicate_summary(db: Any, observed_tables: set[str]) -> dict[str, Any]:
+    summary = {
+        "jobs_source_key_duplicate_groups": 0,
+        "jobs_source_key_examples": [],
+        "crawl_job_listings_source_key_duplicate_groups": 0,
+        "crawl_job_listings_source_key_examples": [],
+    }
+
+    if "jobs" in observed_tables:
+        rows = db.execute(
+            text(
+                """
+                SELECT source_site, source_job_id, COUNT(*) AS duplicate_count
+                FROM jobs
+                WHERE source_site IS NOT NULL AND source_job_id IS NOT NULL
+                GROUP BY source_site, source_job_id
+                HAVING COUNT(*) > 1
+                ORDER BY duplicate_count DESC, source_site ASC, source_job_id ASC
+                LIMIT 10
+                """
+            )
+        ).mappings().all()
+        summary["jobs_source_key_duplicate_groups"] = len(rows)
+        summary["jobs_source_key_examples"] = [
+            {
+                "source_site": str(row["source_site"]),
+                "source_job_id": str(row["source_job_id"]),
+                "count": int(row["duplicate_count"]),
+            }
+            for row in rows
+        ]
+
+    if "crawl_job_listings" in observed_tables:
+        rows = db.execute(
+            text(
+                """
+                SELECT crawl_job_id, source_site, source_job_id, COUNT(*) AS duplicate_count
+                FROM crawl_job_listings
+                WHERE crawl_job_id IS NOT NULL
+                  AND source_site IS NOT NULL
+                  AND source_job_id IS NOT NULL
+                GROUP BY crawl_job_id, source_site, source_job_id
+                HAVING COUNT(*) > 1
+                ORDER BY duplicate_count DESC, crawl_job_id ASC, source_site ASC, source_job_id ASC
+                LIMIT 10
+                """
+            )
+        ).mappings().all()
+        summary["crawl_job_listings_source_key_duplicate_groups"] = len(rows)
+        summary["crawl_job_listings_source_key_examples"] = [
+            {
+                "crawl_job_id": str(row["crawl_job_id"]),
+                "source_site": str(row["source_site"]),
+                "source_job_id": str(row["source_job_id"]),
+                "count": int(row["duplicate_count"]),
+            }
+            for row in rows
+        ]
+
+    return summary
+
+
 def _load_outbox_summary(db: Any, observed_tables: set[str], reference_time: datetime) -> dict[str, Any]:
     status_counts = _safe_group_counts(db, EventOutbox, EventOutbox.status, observed_tables=observed_tables)
     if not _table_exists(EventOutbox.__tablename__, observed_tables):
@@ -408,6 +470,7 @@ def _derive_status_and_issues(
     *,
     schema: dict[str, Any],
     staging: dict[str, Any],
+    duplicates: dict[str, Any],
     detail_status_counts: dict[str, int],
     outbox: dict[str, Any],
     taxonomy: dict[str, Any],
@@ -427,6 +490,16 @@ def _derive_status_and_issues(
     if missing_columns:
         critical = True
         issues.append(f"missing expected database columns: {', '.join(missing_columns)}")
+
+    duplicate_job_groups = _coerce_int(duplicates.get("jobs_source_key_duplicate_groups"))
+    if duplicate_job_groups:
+        critical = True
+        issues.append(f"jobs has {duplicate_job_groups} duplicate source job key groups")
+
+    duplicate_listing_groups = _coerce_int(duplicates.get("crawl_job_listings_source_key_duplicate_groups"))
+    if duplicate_listing_groups:
+        critical = True
+        issues.append(f"crawl_job_listings has {duplicate_listing_groups} duplicate staged source key groups")
 
     staged_unpublished = _coerce_int(staging.get("staged_unpublished_rows"))
     if staged_unpublished:
@@ -497,6 +570,7 @@ def build_database_integrity_summary(
             observed_tables=observed_tables,
         )
         staging = _load_staging_summary(db, observed_tables)
+        duplicates = _load_duplicate_summary(db, observed_tables)
         outbox = _load_outbox_summary(db, observed_tables, reference)
         taxonomy = _load_taxonomy_summary(db, observed_tables)
         embeddings = _load_embedding_summary(db, observed_tables)
@@ -505,6 +579,7 @@ def build_database_integrity_summary(
         status, issues = _derive_status_and_issues(
             schema=schema,
             staging=staging,
+            duplicates=duplicates,
             detail_status_counts=detail_status_counts,
             outbox=outbox,
             taxonomy=taxonomy,
@@ -521,6 +596,7 @@ def build_database_integrity_summary(
             "advisory_findings": _load_advisory_findings(db, observed_tables),
             "timestamp_mix": _load_timestamp_mix(expected_tables),
             "staging": staging,
+            "duplicates": duplicates,
             "detail_status_counts": detail_status_counts,
             "outbox": outbox,
             "taxonomy": taxonomy,

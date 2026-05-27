@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from app.database import SessionLocal
 from app.repositories.crawl_job_repository import CrawlJobRepository
+from app.services.source_category_registry import get_source_category_registry
 from app.utils.time import utc_now
 from app.crawl_modes import resolve_crawl_mode
 
@@ -22,6 +23,13 @@ TERMINAL_CRAWL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 ACTIVE_CRAWL_JOB_STATUSES = {"queued", "running", "dispatching"}
 ACTIONABLE_CRAWL_JOB_STATUSES = {"manual_action_required"}
 RECENT_TERMINAL_WINDOW = timedelta(seconds=60)
+ACTIVE_WORK_EVENT_TYPES = {"crawl.started"}
+INACTIVE_WORK_EVENT_TYPES = {
+    "crawl.manual_action_required",
+    "crawl.completed",
+    "crawl.failed",
+    "crawl.cancelled",
+}
 
 
 def _elapsed_seconds(reference_time, timestamp) -> int:
@@ -41,11 +49,89 @@ def _elapsed_seconds(reference_time, timestamp) -> int:
         return 0
 
 
-def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
+def _resolve_category_label(*, source_site: str, category_ids: list[Any]) -> str | None:
+    if not category_ids:
+        return None
+
+    try:
+        categories = get_source_category_registry().list_categories(source_site=source_site)
+    except Exception:
+        return None
+
+    lookup = {
+        str(category.get("id")): str(category.get("name"))
+        for category in categories
+        if isinstance(category, dict) and category.get("id") and category.get("name")
+    }
+    resolved = [lookup.get(str(category_id), str(category_id)) for category_id in category_ids[:3]]
+    if not resolved:
+        return None
+    if len(category_ids) > 3:
+        return f"{', '.join(resolved)}, +{len(category_ids) - 3}"
+    return ", ".join(resolved)
+
+
+def _fallback_elapsed_seconds(crawl_job, *, now) -> int:
+    if crawl_job.status == "running":
+        return _elapsed_seconds(now, crawl_job.started_at or crawl_job.queued_at)
+
+    if crawl_job.status in TERMINAL_CRAWL_JOB_STATUSES:
+        return _elapsed_seconds(
+            crawl_job.completed_at or crawl_job.updated_at or now,
+            crawl_job.started_at or crawl_job.queued_at,
+        )
+
+    if crawl_job.status == "manual_action_required":
+        return _elapsed_seconds(
+            crawl_job.updated_at or now,
+            crawl_job.started_at or crawl_job.queued_at,
+        )
+
+    return 0
+
+
+def _calculate_active_elapsed_seconds(crawl_job, *, events: list[Any], now) -> int:
+    total_seconds = 0
+    active_started_at = None
+    saw_active_interval = False
+
+    for event in events:
+        event_type = getattr(event, "event_type", None)
+        created_at = getattr(event, "created_at", None)
+        if created_at is None:
+            continue
+
+        if event_type in ACTIVE_WORK_EVENT_TYPES:
+            active_started_at = created_at
+            saw_active_interval = True
+            continue
+
+        if active_started_at is None:
+            continue
+
+        if event_type in INACTIVE_WORK_EVENT_TYPES:
+            total_seconds += max(0, _elapsed_seconds(created_at, active_started_at))
+            active_started_at = None
+
+    if active_started_at is not None and crawl_job.status == "running":
+        total_seconds += max(0, _elapsed_seconds(now, active_started_at))
+
+    if saw_active_interval:
+        return total_seconds
+
+    return _fallback_elapsed_seconds(crawl_job, now=now)
+
+
+def _build_progress_snapshot(crawl_job, latest_event, *, now, events: list[Any] | None = None) -> dict[str, Any]:
     event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
     request_payload = event_payload.get("request_payload") or crawl_job.request_payload or {}
     category_ids = list(event_payload.get("category_ids") or request_payload.get("category_ids") or [])
     category_label = event_payload.get("category_name")
+    if not category_label:
+        category_label = _resolve_category_label(
+            source_site=crawl_job.source_site,
+            category_ids=category_ids,
+        )
     if not category_label:
         if category_ids:
             category_label = ", ".join(str(category_id) for category_id in category_ids[:3])
@@ -61,6 +147,9 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
     save_total = _to_int(event_payload.get("save_total", jobs_scraped))
     total_jobs = _to_int(event_payload.get("total_jobs", max(job_ids_collected, jobs_scraped)))
     listings_staged = _to_int(event_payload.get("listings_staged", metrics.get("listings_staged", 0)))
+    jobs_skipped_existing = _to_int(
+        event_payload.get("jobs_skipped_existing", metrics.get("jobs_skipped_existing", 0))
+    )
     detail_pending = _to_int(event_payload.get("detail_pending", metrics.get("detail_pending", 0)))
     detail_running = _to_int(event_payload.get("detail_running", metrics.get("detail_running", 0)))
     detail_completed = _to_int(event_payload.get("detail_completed", metrics.get("detail_completed", 0)))
@@ -104,7 +193,11 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
         "started_at": crawl_job.started_at.isoformat() if crawl_job.started_at else None,
         "completed_at": crawl_job.completed_at.isoformat() if crawl_job.completed_at else None,
         "updated_at": crawl_job.updated_at.isoformat() if crawl_job.updated_at else None,
-        "elapsed_seconds": _elapsed_seconds(now, crawl_job.started_at or crawl_job.queued_at),
+        "elapsed_seconds": _calculate_active_elapsed_seconds(
+            crawl_job,
+            events=list(events or []),
+            now=now,
+        ),
         "phase_rate": float(event_payload.get("phase_rate") or 0),
         "eta_seconds": event_payload.get("eta_seconds"),
         "current_job_title": event_payload.get("current_job_title"),
@@ -119,6 +212,7 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
         "save_total": save_total,
         "jobs_ingested": jobs_saved,
         "listings_staged": listings_staged,
+        "jobs_skipped_existing": jobs_skipped_existing,
         "detail_pending": detail_pending,
         "detail_running": detail_running,
         "detail_completed": detail_completed,
@@ -134,6 +228,7 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now) -> dict[str, Any]:
         "ai_failed_items": event_payload.get("ai_failed_items", metrics.get("ai_failed_items", 0)),
         "ai_total_items": event_payload.get("ai_total_items", metrics.get("ai_total_items", 0)),
         "manual_action": event_payload.get("manual_action"),
+        "manual_action_resolution": event_payload.get("manual_action_resolution"),
         "error": crawl_job.error_message or event_payload.get("error"),
     }
 
@@ -242,7 +337,7 @@ def _collect_progress_payload() -> dict[str, Any]:
         for crawl_job in crawl_jobs_by_id.values():
             events = repository.list_events(db, crawl_job.id)
             latest_event = events[-1] if events else None
-            snapshot = _build_progress_snapshot(crawl_job, latest_event, now=now)
+            snapshot = _build_progress_snapshot(crawl_job, latest_event, now=now, events=events)
             key = str(crawl_job.id)
             is_active = _is_snapshot_active(snapshot)
             is_backlog = _is_snapshot_backlog(snapshot)

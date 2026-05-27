@@ -122,7 +122,7 @@ function ScheduleCard({
                     disabled={manualRunDisabled}
                     title="Force Run Now"
                 >
-                    <Play size={16} /> Execute
+                    <Play size={16} /> Run Now
                 </button>
                 <button
                     className="cyber-btn history-btn"
@@ -169,7 +169,7 @@ function ScheduleList({
 
     return (
         <div className="schedule-list-container">
-            <h3 className="section-title">Active Automations</h3>
+            <h3 className="section-title">Scheduled Automation</h3>
             <div className="schedule-grid">
                 {schedules.map(schedule => (
                     <ScheduleCard
