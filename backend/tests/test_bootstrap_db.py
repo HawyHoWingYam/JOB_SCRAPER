@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.models.crawl_job import CrawlJobEvent
 from app.models.crawl_job_listing import CrawlJobListing
+from app.models.schedule import ScheduleExecution
 from scripts.bootstrap_db import bootstrap_database
 
 
@@ -102,3 +103,27 @@ def test_bootstrap_database_creates_crawl_job_event_indexes_for_existing_databas
     ]
 
     assert any("ix_crawl_job_events_job_event_sequence" in statement for statement in index_statements)
+
+
+def test_schedule_execution_declares_composite_indexes_for_history_queries():
+    index_names = {index.name for index in ScheduleExecution.__table__.indexes}
+
+    assert "ix_schedule_executions_schedule_started" in index_names
+    assert "ix_schedule_executions_crawl_job_started_created" in index_names
+
+
+def test_bootstrap_database_creates_schedule_execution_indexes_for_existing_databases():
+    connection = _FakeConnection()
+    engine = _FakeEngine(connection)
+    metadata = _FakeMetadata()
+
+    bootstrap_database(db_engine=engine, metadata=metadata)
+
+    index_statements = [
+        statement
+        for statement in connection.executed
+        if "CREATE INDEX IF NOT EXISTS" in statement
+    ]
+
+    assert any("ix_schedule_executions_schedule_started" in statement for statement in index_statements)
+    assert any("ix_schedule_executions_crawl_job_started_created" in statement for statement in index_statements)

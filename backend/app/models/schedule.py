@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, Boolean, JSON, Integer, ForeignKey, text
+from sqlalchemy import Column, String, Text, DateTime, Boolean, JSON, Integer, ForeignKey, Index, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -67,6 +67,19 @@ class ScheduleExecution(Base):
     """Model for tracking schedule execution history."""
 
     __tablename__ = "schedule_executions"
+    __table_args__ = (
+        Index(
+            "ix_schedule_executions_schedule_started",
+            "schedule_id",
+            "started_at",
+        ),
+        Index(
+            "ix_schedule_executions_crawl_job_started_created",
+            "crawl_job_id",
+            "started_at",
+            "created_at",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     schedule_id = Column(
