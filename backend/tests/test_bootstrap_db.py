@@ -171,3 +171,25 @@ def test_bootstrap_database_creates_crawl_job_recency_index_for_existing_databas
     ]
 
     assert any("ix_crawl_jobs_queued_created" in statement for statement in index_statements)
+
+
+def test_crawl_job_listing_declares_source_batch_recency_index():
+    index_names = {index.name for index in CrawlJobListing.__table__.indexes}
+
+    assert "ix_crawl_job_listings_source_job_created" in index_names
+
+
+def test_bootstrap_database_creates_crawl_job_listing_source_batch_recency_index_for_existing_databases():
+    connection = _FakeConnection()
+    engine = _FakeEngine(connection)
+    metadata = _FakeMetadata()
+
+    bootstrap_database(db_engine=engine, metadata=metadata)
+
+    index_statements = [
+        statement
+        for statement in connection.executed
+        if "CREATE INDEX IF NOT EXISTS" in statement
+    ]
+
+    assert any("ix_crawl_job_listings_source_job_created" in statement for statement in index_statements)

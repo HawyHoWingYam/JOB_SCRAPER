@@ -33,6 +33,12 @@ class CrawlJobListing(Base):
             "crawl_job_id",
             "detail_status",
         ),
+        Index(
+            "ix_crawl_job_listings_source_job_created",
+            "source_site",
+            "crawl_job_id",
+            "created_at",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)

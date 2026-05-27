@@ -35,6 +35,12 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
         )
         connection.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_crawl_job_listings_source_job_created "
+                "ON crawl_job_listings (source_site, crawl_job_id, created_at)"
+            )
+        )
+        connection.execute(
+            text(
                 "CREATE INDEX IF NOT EXISTS ix_crawl_job_events_job_event_sequence "
                 "ON crawl_job_events (crawl_job_id, event_type, sequence_no)"
             )
