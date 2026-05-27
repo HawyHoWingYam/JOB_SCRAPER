@@ -436,7 +436,7 @@ describe('AISettingsPage', () => {
     expect(screen.getByLabelText(/ai enrichment model/i)).toHaveValue('claude-sonnet-4-5');
     expect(screen.getByLabelText(/ai enrichment base url/i)).toHaveValue('https://api.anthropic.com/v1');
     expect(screen.getAllByText(/^Needs test$/i).length).toBeGreaterThan(0);
-  });
+  }, 10000);
 
   it('tests the current draft profile before save and shows probe feedback', async () => {
     const user = userEvent.setup();

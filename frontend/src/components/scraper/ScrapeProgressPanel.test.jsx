@@ -924,6 +924,8 @@ describe('ScrapeProgressPanel', () => {
     });
 
     expect(await screen.findByText(/proxy unstable/i)).toBeInTheDocument();
+    expect(screen.getByText(/needs attention/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^running or queued$/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /diagnostics/i })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText(/proxy requests: 8/i)).not.toBeInTheDocument();
   });

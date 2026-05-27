@@ -316,7 +316,9 @@ function formatMaybeCountPair(currentValue, totalValue) {
 }
 
 function classifyProgressEntry(data) {
-    if (data?.status === 'manual_action_required') {
+    const displayState = resolveDisplayState(data);
+
+    if (displayState === 'manual_action_required' || displayState === 'failed' || displayState === 'running_with_warning') {
         return 'attention';
     }
 
