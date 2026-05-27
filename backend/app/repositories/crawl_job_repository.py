@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 from sqlalchemy import desc, func
@@ -191,6 +192,64 @@ class CrawlJobRepository:
             .order_by(CrawlJobEvent.sequence_no.desc())
             .first()
         )
+
+    def list_latest_events_for_jobs(
+        self,
+        db: Session,
+        *,
+        crawl_job_ids,
+    ) -> dict[Any, CrawlJobEvent]:
+        normalized_job_ids = list(dict.fromkeys(crawl_job_ids))
+        if not normalized_job_ids:
+            return {}
+
+        latest_sequence_by_job = (
+            db.query(
+                CrawlJobEvent.crawl_job_id.label("crawl_job_id"),
+                func.max(CrawlJobEvent.sequence_no).label("latest_sequence_no"),
+            )
+            .filter(CrawlJobEvent.crawl_job_id.in_(normalized_job_ids))
+            .group_by(CrawlJobEvent.crawl_job_id)
+            .subquery()
+        )
+        latest_events = (
+            db.query(CrawlJobEvent)
+            .join(
+                latest_sequence_by_job,
+                (CrawlJobEvent.crawl_job_id == latest_sequence_by_job.c.crawl_job_id)
+                & (CrawlJobEvent.sequence_no == latest_sequence_by_job.c.latest_sequence_no),
+            )
+            .all()
+        )
+        latest_events_by_job = {event.crawl_job_id: event for event in latest_events}
+        return {
+            crawl_job_id: latest_events_by_job[crawl_job_id]
+            for crawl_job_id in normalized_job_ids
+            if crawl_job_id in latest_events_by_job
+        }
+
+    def list_events_by_job_ids(
+        self,
+        db: Session,
+        *,
+        crawl_job_ids,
+        event_types: set[str] | list[str] | None = None,
+    ) -> dict[Any, list[CrawlJobEvent]]:
+        normalized_job_ids = list(dict.fromkeys(crawl_job_ids))
+        if not normalized_job_ids:
+            return {}
+
+        query = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id.in_(normalized_job_ids))
+        if event_types:
+            query = query.filter(CrawlJobEvent.event_type.in_(list(event_types)))
+        events = (
+            query.order_by(CrawlJobEvent.crawl_job_id.asc(), CrawlJobEvent.sequence_no.asc()).all()
+        )
+
+        grouped_events: defaultdict[Any, list[CrawlJobEvent]] = defaultdict(list)
+        for event in events:
+            grouped_events[event.crawl_job_id].append(event)
+        return dict(grouped_events)
 
     def get_latest_manual_action_event(self, db: Session, crawl_job_id) -> CrawlJobEvent | None:
         return (

@@ -138,3 +138,149 @@ def test_list_events_can_filter_by_event_type_while_preserving_sequence_order():
     ]
 
     db.close()
+
+
+def test_list_latest_events_for_jobs_returns_latest_event_per_job():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    repository = CrawlJobRepository()
+
+    first_job = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="manual",
+        status="running",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        queued_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+    )
+    second_job = CrawlJob(
+        source_site="ctgoodjobs",
+        trigger_type="manual",
+        status="running",
+        request_payload={"crawl_phase": "detail", "source_site": "ctgoodjobs"},
+        queued_at=datetime(2026, 5, 27, 9, 5, tzinfo=UTC),
+    )
+    db.add_all([first_job, second_job])
+    db.commit()
+    db.refresh(first_job)
+    db.refresh(second_job)
+
+    db.add_all(
+        [
+            CrawlJobEvent(
+                crawl_job_id=first_job.id,
+                sequence_no=1,
+                event_type="crawl.started",
+                payload={"phase": 1},
+                created_at=datetime(2026, 5, 27, 9, 1, tzinfo=UTC),
+            ),
+            CrawlJobEvent(
+                crawl_job_id=first_job.id,
+                sequence_no=2,
+                event_type="crawl.page_processed",
+                payload={"current_page": 1},
+                created_at=datetime(2026, 5, 27, 9, 2, tzinfo=UTC),
+            ),
+            CrawlJobEvent(
+                crawl_job_id=second_job.id,
+                sequence_no=1,
+                event_type="crawl.started",
+                payload={"phase": 2},
+                created_at=datetime(2026, 5, 27, 9, 6, tzinfo=UTC),
+            ),
+            CrawlJobEvent(
+                crawl_job_id=second_job.id,
+                sequence_no=2,
+                event_type="crawl.manual_action_required",
+                payload={"manual_action": {"stage": "proxy_unavailable"}},
+                created_at=datetime(2026, 5, 27, 9, 7, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.commit()
+
+    latest_events = repository.list_latest_events_for_jobs(
+        db,
+        crawl_job_ids=[first_job.id, second_job.id],
+    )
+
+    assert latest_events[first_job.id].sequence_no == 2
+    assert latest_events[first_job.id].event_type == "crawl.page_processed"
+    assert latest_events[second_job.id].sequence_no == 2
+    assert latest_events[second_job.id].event_type == "crawl.manual_action_required"
+
+    db.close()
+
+
+def test_list_events_by_job_ids_can_filter_by_event_type_while_preserving_sequence_order():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    repository = CrawlJobRepository()
+
+    first_job = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="manual",
+        status="running",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        queued_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+    )
+    second_job = CrawlJob(
+        source_site="ctgoodjobs",
+        trigger_type="manual",
+        status="running",
+        request_payload={"crawl_phase": "detail", "source_site": "ctgoodjobs"},
+        queued_at=datetime(2026, 5, 27, 9, 5, tzinfo=UTC),
+    )
+    db.add_all([first_job, second_job])
+    db.commit()
+    db.refresh(first_job)
+    db.refresh(second_job)
+
+    db.add_all(
+        [
+            CrawlJobEvent(
+                crawl_job_id=first_job.id,
+                sequence_no=1,
+                event_type="crawl.started",
+                payload={"phase": 1},
+                created_at=datetime(2026, 5, 27, 9, 1, tzinfo=UTC),
+            ),
+            CrawlJobEvent(
+                crawl_job_id=first_job.id,
+                sequence_no=2,
+                event_type="crawl.page_processed",
+                payload={"current_page": 1},
+                created_at=datetime(2026, 5, 27, 9, 2, tzinfo=UTC),
+            ),
+            CrawlJobEvent(
+                crawl_job_id=second_job.id,
+                sequence_no=1,
+                event_type="crawl.started",
+                payload={"phase": 2},
+                created_at=datetime(2026, 5, 27, 9, 6, tzinfo=UTC),
+            ),
+            CrawlJobEvent(
+                crawl_job_id=second_job.id,
+                sequence_no=2,
+                event_type="crawl.manual_action_required",
+                payload={"manual_action": {"stage": "proxy_unavailable"}},
+                created_at=datetime(2026, 5, 27, 9, 7, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.commit()
+
+    grouped_events = repository.list_events_by_job_ids(
+        db,
+        crawl_job_ids=[first_job.id, second_job.id],
+        event_types={"crawl.started", "crawl.manual_action_required"},
+    )
+
+    assert [event.sequence_no for event in grouped_events[first_job.id]] == [1]
+    assert [event.event_type for event in grouped_events[first_job.id]] == ["crawl.started"]
+    assert [event.sequence_no for event in grouped_events[second_job.id]] == [1, 2]
+    assert [event.event_type for event in grouped_events[second_job.id]] == [
+        "crawl.started",
+        "crawl.manual_action_required",
+    ]
+
+    db.close()

@@ -162,7 +162,7 @@ def test_backlog_visibility_drops_stale_backlog_entries_from_live_progress():
     assert progress._is_snapshot_backlog_visible(snapshot, crawl_job=crawl_job, now=now) is False
 
 
-def test_collect_progress_payload_uses_latest_event_and_filtered_activity_events(monkeypatch):
+def test_collect_progress_payload_uses_batched_latest_and_filtered_activity_events(monkeypatch):
     now = datetime(2026, 5, 27, 12, 20, tzinfo=UTC)
     crawl_job = _build_crawl_job(
         status="running",
@@ -189,8 +189,8 @@ def test_collect_progress_payload_uses_latest_event_and_filtered_activity_events
 
     class _RepositoryStub:
         def __init__(self):
-            self.latest_event_calls = 0
-            self.list_events_calls: list[set[str] | None] = []
+            self.latest_event_batch_calls: list[list] = []
+            self.activity_event_batch_calls: list[tuple[list, set[str] | None]] = []
 
         def list_crawl_jobs_by_statuses(self, db, *, statuses):
             return [crawl_job]
@@ -198,16 +198,24 @@ def test_collect_progress_payload_uses_latest_event_and_filtered_activity_events
         def list_recent_crawl_jobs(self, db, *, limit):
             return []
 
+        def list_latest_events_for_jobs(self, db, *, crawl_job_ids):
+            self.latest_event_batch_calls.append(list(crawl_job_ids))
+            assert list(crawl_job_ids) == [crawl_job.id]
+            return {crawl_job.id: latest_event}
+
+        def list_events_by_job_ids(self, db, *, crawl_job_ids, event_types=None):
+            self.activity_event_batch_calls.append(
+                (list(crawl_job_ids), set(event_types) if event_types is not None else None)
+            )
+            assert list(crawl_job_ids) == [crawl_job.id]
+            assert set(event_types or set()) == expected_event_types
+            return {crawl_job.id: activity_events}
+
         def get_latest_event(self, db, crawl_job_id):
-            self.latest_event_calls += 1
-            assert crawl_job_id == crawl_job.id
-            return latest_event
+            raise AssertionError("progress payload should batch latest event lookups")
 
         def list_events(self, db, crawl_job_id, event_types=None):
-            self.list_events_calls.append(set(event_types) if event_types is not None else None)
-            assert crawl_job_id == crawl_job.id
-            assert set(event_types or set()) == expected_event_types
-            return activity_events
+            raise AssertionError("progress payload should batch activity event lookups")
 
     class _SessionStub:
         def close(self):
@@ -221,8 +229,8 @@ def test_collect_progress_payload_uses_latest_event_and_filtered_activity_events
 
     payload = progress._collect_progress_payload()
 
-    assert repository_stub.latest_event_calls == 1
-    assert repository_stub.list_events_calls == [expected_event_types]
+    assert repository_stub.latest_event_batch_calls == [[crawl_job.id]]
+    assert repository_stub.activity_event_batch_calls == [([crawl_job.id], expected_event_types)]
     assert payload["has_active"] is True
     assert payload["active"][str(crawl_job.id)]["jobs_scraped"] == 2
 
@@ -247,13 +255,22 @@ def test_collect_progress_payload_reuses_category_registry_lookup_per_source(mon
         def list_recent_crawl_jobs(self, db, *, limit):
             return []
 
+        def list_latest_events_for_jobs(self, db, *, crawl_job_ids):
+            assert list(crawl_job_ids) == [first_job.id, second_job.id]
+            return {
+                first_job.id: SimpleNamespace(payload={"request_payload": first_job.request_payload}),
+                second_job.id: SimpleNamespace(payload={"request_payload": second_job.request_payload}),
+            }
+
+        def list_events_by_job_ids(self, db, *, crawl_job_ids, event_types=None):
+            assert list(crawl_job_ids) == [first_job.id, second_job.id]
+            return {}
+
         def get_latest_event(self, db, crawl_job_id):
-            if crawl_job_id == first_job.id:
-                return SimpleNamespace(payload={"request_payload": first_job.request_payload})
-            return SimpleNamespace(payload={"request_payload": second_job.request_payload})
+            raise AssertionError("progress payload should batch latest event lookups")
 
         def list_events(self, db, crawl_job_id, event_types=None):
-            return []
+            raise AssertionError("progress payload should batch activity event lookups")
 
     class _RegistryStub:
         def __init__(self):

@@ -474,13 +474,21 @@ def _collect_progress_payload() -> dict[str, Any]:
         for crawl_job in repository.list_recent_crawl_jobs(db, limit=50):
             crawl_jobs_by_id[str(crawl_job.id)] = crawl_job
 
-        for crawl_job in crawl_jobs_by_id.values():
-            latest_event = repository.get_latest_event(db, crawl_job.id)
-            events = repository.list_events(
-                db,
-                crawl_job.id,
-                event_types=ACTIVITY_INTERVAL_EVENT_TYPES,
-            )
+        crawl_jobs = list(crawl_jobs_by_id.values())
+        crawl_job_ids = [crawl_job.id for crawl_job in crawl_jobs]
+        latest_events_by_job = repository.list_latest_events_for_jobs(
+            db,
+            crawl_job_ids=crawl_job_ids,
+        )
+        activity_events_by_job = repository.list_events_by_job_ids(
+            db,
+            crawl_job_ids=crawl_job_ids,
+            event_types=ACTIVITY_INTERVAL_EVENT_TYPES,
+        )
+
+        for crawl_job in crawl_jobs:
+            latest_event = latest_events_by_job.get(crawl_job.id)
+            events = activity_events_by_job.get(crawl_job.id, [])
             snapshot = _build_progress_snapshot(
                 crawl_job,
                 latest_event,
