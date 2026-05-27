@@ -273,4 +273,8 @@ async def get_schedule_history(
         raise HTTPException(status_code=404, detail="Schedule not found")
 
     executions = repository.get_executions(db, schedule_id, limit)
-    return ExecutionListResponse(executions=executions, total=len(executions))
+    if len(executions) < limit:
+        total = len(executions)
+    else:
+        total = repository.count_executions(db, schedule_id)
+    return ExecutionListResponse(executions=executions, total=total)

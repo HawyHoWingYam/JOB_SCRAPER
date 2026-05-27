@@ -35,10 +35,38 @@ def _build_schedule(name: str):
     )
 
 
+def _build_execution(*, schedule_id, status: str, started_at: str):
+    started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    return SimpleNamespace(
+        id=uuid4(),
+        schedule_id=schedule_id,
+        crawl_job_id=None,
+        status=status,
+        started_at=started,
+        completed_at=started,
+        duration_seconds=60,
+        jobs_scraped=10,
+        jobs_saved=8,
+        phase1_completed=True,
+        phase2_completed=False,
+        phase3_completed=False,
+        phase4_completed=False,
+        phase5_completed=False,
+        ids_collected=12,
+        jobs_classified=0,
+        error_message=None,
+        request_payload_snapshot={},
+        created_at=started,
+    )
+
+
 class FakeScheduleRepository:
-    def __init__(self, *, schedules_list):
+    def __init__(self, *, schedules_list, executions=None, execution_total=None):
         self.schedules_list = list(schedules_list)
+        self.executions = list(executions or [])
+        self.execution_total = execution_total
         self.count_calls = 0
+        self.execution_count_calls = 0
 
     def get_all_schedules(self, db, skip=0, limit=100):
         return list(self.schedules_list)
@@ -46,6 +74,18 @@ class FakeScheduleRepository:
     def count_schedules(self, db):
         self.count_calls += 1
         raise AssertionError("count_schedules() should be skipped when a short first page proves the total")
+
+    def get_schedule_by_id(self, db, schedule_id):
+        return next((schedule for schedule in self.schedules_list if schedule.id == schedule_id), None)
+
+    def get_executions(self, db, schedule_id, limit=20):
+        return list(self.executions)
+
+    def count_executions(self, db, schedule_id):
+        self.execution_count_calls += 1
+        if self.execution_total is None:
+            raise AssertionError("count_executions() should be skipped when a short history page proves the total")
+        return self.execution_total
 
 
 def test_list_schedules_skips_total_count_for_short_first_page(monkeypatch):
@@ -101,3 +141,76 @@ def test_list_schedules_skips_total_count_for_short_later_page(monkeypatch):
     payload = response.json()
     assert payload["total"] == 27
     assert [schedule["name"] for schedule in payload["schedules"]] == ["Batch 26", "Batch 27"]
+
+
+def test_schedule_history_skips_total_count_for_short_result_page(monkeypatch):
+    app = FastAPI()
+    app.include_router(schedules.router, prefix="/api/v1")
+    schedule = _build_schedule("JobsDB Nightly")
+    repository = FakeScheduleRepository(
+        schedules_list=[schedule],
+        executions=[
+            _build_execution(
+                schedule_id=schedule.id,
+                status="completed",
+                started_at="2026-05-28T08:00:00Z",
+            ),
+            _build_execution(
+                schedule_id=schedule.id,
+                status="failed",
+                started_at="2026-05-27T08:00:00Z",
+            ),
+        ],
+    )
+    db = object()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(schedules, "repository", repository)
+    client = TestClient(app)
+
+    response = client.get(f"/api/v1/schedules/{schedule.id}/history?limit=20")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert [execution["status"] for execution in payload["executions"]] == ["completed", "failed"]
+
+
+def test_schedule_history_uses_true_total_when_result_page_is_full(monkeypatch):
+    app = FastAPI()
+    app.include_router(schedules.router, prefix="/api/v1")
+    schedule = _build_schedule("JobsDB Nightly")
+    repository = FakeScheduleRepository(
+        schedules_list=[schedule],
+        executions=[
+            _build_execution(
+                schedule_id=schedule.id,
+                status="completed",
+                started_at="2026-05-28T08:00:00Z",
+            ),
+            _build_execution(
+                schedule_id=schedule.id,
+                status="failed",
+                started_at="2026-05-27T08:00:00Z",
+            ),
+        ],
+        execution_total=7,
+    )
+    db = object()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(schedules, "repository", repository)
+    client = TestClient(app)
+
+    response = client.get(f"/api/v1/schedules/{schedule.id}/history?limit=2")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 7
+    assert repository.execution_count_calls == 1

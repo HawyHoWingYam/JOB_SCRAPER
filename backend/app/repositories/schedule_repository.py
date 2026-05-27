@@ -164,6 +164,14 @@ class ScheduleRepository:
             .all()
         )
 
+    def count_executions(self, db: Session, schedule_id: UUID) -> int:
+        """Count total execution history rows for a schedule."""
+        return (
+            db.query(ScheduleExecution)
+            .filter(ScheduleExecution.schedule_id == schedule_id)
+            .count()
+        )
+
     def create_execution(
         self,
         db: Session,
