@@ -1001,6 +1001,50 @@ describe('ScrapeProgressPanel', () => {
     expect(screen.getByRole('button', { name: /diagnostics/i })).toHaveAttribute('aria-expanded', 'true');
   });
 
+  it('suppresses browser-reuse actions for proxy_unavailable manual-action runs', async () => {
+    const onResumeCrawlJob = vi.fn();
+
+    render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        onResumeCrawlJob={onResumeCrawlJob}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-proxy-missing': {
+            crawl_job_id: 'crawl-job-proxy-missing',
+            status: 'manual_action_required',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              stage: 'proxy_unavailable',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: [
+                'Verify the CTGoodJobs proxy settings and provider availability.',
+                'Return to the app and click Resume after proxy availability is restored.',
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/stage: proxy_unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /resume using open browser/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /open verification browser/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /close profile windows/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^resume fresh$/i })).toBeInTheDocument();
+  });
+
   it('renders browser_profile_in_use recovery action and closes the profile windows', async () => {
     const onCloseManualActionWindows = vi.fn();
 

@@ -706,6 +706,7 @@ function ProgressItem({
         const instructions = Array.isArray(manual_action.instructions)
             ? manual_action.instructions.filter(Boolean)
             : [];
+        const isProxyUnavailable = manual_action.stage === 'proxy_unavailable';
         const metricLines = [];
 
         if (phase === 1) {
@@ -912,23 +913,31 @@ function ProgressItem({
                     <button
                         type="button"
                         className="progress-link-button progress-primary-action"
-                        onClick={handleResumeUsingOpenBrowser}
-                        disabled={isReuseChecking || isResumeSubmitting === 'reuse_open_browser'}
+                        onClick={isProxyUnavailable ? handleResumeFresh : handleResumeUsingOpenBrowser}
+                        disabled={
+                            isProxyUnavailable
+                                ? isResumeSubmitting === 'fresh_profile'
+                                : isReuseChecking || isResumeSubmitting === 'reuse_open_browser'
+                        }
                     >
-                        {isReuseChecking || isResumeSubmitting === 'reuse_open_browser'
-                            ? 'Attaching...'
-                            : 'Resume Using Open Browser'}
+                        {isProxyUnavailable
+                            ? (isResumeSubmitting === 'fresh_profile' ? 'Resuming Fresh...' : 'Resume Fresh')
+                            : (isReuseChecking || isResumeSubmitting === 'reuse_open_browser'
+                                ? 'Attaching...'
+                                : 'Resume Using Open Browser')}
                     </button>
                     <div className="progress-secondary-actions">
-                        <button
-                            type="button"
-                            className="progress-link-button"
-                            onClick={handleResumeFresh}
-                            disabled={isResumeSubmitting === 'fresh_profile'}
-                        >
-                            Resume Fresh
-                        </button>
-                        {manual_action.browser_profile_path && (
+                        {!isProxyUnavailable && (
+                            <button
+                                type="button"
+                                className="progress-link-button"
+                                onClick={handleResumeFresh}
+                                disabled={isResumeSubmitting === 'fresh_profile'}
+                            >
+                                Resume Fresh
+                            </button>
+                        )}
+                        {!isProxyUnavailable && manual_action.browser_profile_path && (
                             <button
                                 type="button"
                                 className="progress-link-button"
@@ -1026,7 +1035,7 @@ function ProgressItem({
                                 <div className="progress-error">{reuseStatusError}</div>
                             )}
                             <div className="progress-secondary-actions">
-                                {manual_action.blocked_url && (
+                                {!isProxyUnavailable && manual_action.blocked_url && (
                                     <button
                                         type="button"
                                         className="progress-link-button"
@@ -1049,7 +1058,7 @@ function ProgressItem({
                                 >
                                     Copy Profile Path
                                 </button>
-                                {showReuseRecoveryPrompt && (
+                                {!isProxyUnavailable && showReuseRecoveryPrompt && (
                                     <button
                                         type="button"
                                         className="progress-link-button"
