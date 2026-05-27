@@ -40,8 +40,6 @@ services:
       context: ./backend
       dockerfile: Dockerfile.worker
     command: python /app/scripts/bootstrap_db.py
-    volumes:
-      - ./backend:/app
     environment:
       DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
     depends_on:
