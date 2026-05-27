@@ -380,6 +380,7 @@ function ScheduleManager({ onNavigateToAI }) {
     });
     const directOverrideRecoveryRef = useRef(null);
     const scheduleHistoryCacheRef = useRef(new Map());
+    const categoryCacheRef = useRef(new Map());
     const listingBatchesCacheRef = useRef(new Map());
 
     // Fetch schedules
@@ -397,6 +398,12 @@ function ScheduleManager({ onNavigateToAI }) {
     // Fetch categories
     const fetchCategories = useCallback(async (sourceSite) => {
         try {
+            const cachedCategories = categoryCacheRef.current.get(sourceSite);
+            if (cachedCategories) {
+                setCategories(cachedCategories);
+                return;
+            }
+
             const response = await fetch(
                 `${CATEGORY_API_BASE}/categories?source_site=${encodeURIComponent(sourceSite)}`
             );
@@ -412,7 +419,9 @@ function ScheduleManager({ onNavigateToAI }) {
             }
             if (!response.ok) throw new Error('Failed to load categories');
             const data = await response.json();
-            setCategories(data.categories || []);
+            const nextCategories = data.categories || [];
+            categoryCacheRef.current.set(sourceSite, nextCategories);
+            setCategories(nextCategories);
         } catch (err) {
             console.error('Failed to fetch categories:', err);
             setCategories([]);

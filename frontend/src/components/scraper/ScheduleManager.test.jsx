@@ -358,6 +358,31 @@ describe('ScheduleManager', () => {
     expect(urls.filter((url) => url === '/api/categories?source_site=ctgoodjobs')).toHaveLength(1);
   });
 
+  it('reuses cached categories when switching back to a previously visited source', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('JobsDB Nightly');
+
+    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
+      target: { value: 'ctgoodjobs' },
+    });
+    expect(await screen.findByText('CTgoodjobs Nightly')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
+      target: { value: 'jobsdb' },
+    });
+    expect(await screen.findByText('JobsDB Nightly')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
+      target: { value: 'ctgoodjobs' },
+    });
+    expect(await screen.findByText('CTgoodjobs Nightly')).toBeInTheDocument();
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((url) => url === '/api/categories?source_site=jobsdb')).toHaveLength(1);
+    expect(urls.filter((url) => url === '/api/categories?source_site=ctgoodjobs')).toHaveLength(1);
+  });
+
   it('shows backend category error detail when ctgoodjobs categories fail to load', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.stubGlobal(
