@@ -89,6 +89,7 @@ def _serialize_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
         - int(run.failed_items or 0),
         0,
     ) if str(run.status or "").lower() in {"pending", "running"} else 0
+    failed_items = int(run.failed_items or 0)
     return {
         "id": run.id,
         "source_type": run.source_type,
@@ -105,7 +106,11 @@ def _serialize_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
         "current_job_title": getattr(run, "current_job_title", None),
         "latest_started_job_title": getattr(run, "current_job_title", None),
         "in_progress_items": in_progress_items,
-        "last_failed_job_title": _derive_last_failed_job_title(db, run.id) if db is not None else None,
+        "last_failed_job_title": (
+            _derive_last_failed_job_title(db, run.id)
+            if db is not None and failed_items > 0
+            else None
+        ),
         "error_message": run.error_message,
     }
 
