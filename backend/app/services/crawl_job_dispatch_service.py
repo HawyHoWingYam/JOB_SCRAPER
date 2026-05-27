@@ -21,6 +21,11 @@ from app.scraper.manual_action import (
 )
 from app.utils.time import utc_now
 
+RESUME_CONTEXT_EVENT_TYPES = {
+    "crawl.manual_action_required",
+    "crawl.requested",
+}
+
 
 @dataclass(frozen=True)
 class CrawlJobDispatchResult:
@@ -385,7 +390,13 @@ class CrawlJobDispatchService:
         )
 
     def _recover_previous_resume_context(self, db: Session, *, crawl_job_id) -> dict[str, Any]:
-        for event in reversed(self.crawl_job_repository.list_events(db, crawl_job_id)):
+        for event in reversed(
+            self.crawl_job_repository.list_events(
+                db,
+                crawl_job_id,
+                event_types=RESUME_CONTEXT_EVENT_TYPES,
+            )
+        ):
             payload = dict(event.payload or {})
             manual_action = dict(payload.get("manual_action") or {})
             manual_resume_context = dict(manual_action.get("resume_context") or {})

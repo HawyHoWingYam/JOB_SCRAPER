@@ -48,6 +48,7 @@ class FakeCrawlJobRepository:
         self.latest_event = latest_event
         self.historical_events = list(historical_events or [])
         self.appended_events: list[dict[str, object]] = []
+        self.list_events_calls: list[dict[str, object]] = []
 
     def get_crawl_job_by_id(self, db, crawl_job_id):
         return self.crawl_job
@@ -75,7 +76,13 @@ class FakeCrawlJobRepository:
             }
         )
 
-    def list_events(self, db, crawl_job_id):
+    def list_events(self, db, crawl_job_id, event_types=None):
+        self.list_events_calls.append(
+            {
+                "crawl_job_id": crawl_job_id,
+                "event_types": set(event_types) if event_types is not None else None,
+            }
+        )
         return list(self.historical_events)
 
 
@@ -453,6 +460,64 @@ def test_resume_service_uses_fresh_profile_when_strategy_is_omitted():
 
     assert crawl_job.request_payload["resume_strategy"] == "fresh_profile"
     assert repository.appended_events[0]["payload"]["strategy"] == "fresh_profile"
+
+
+def test_resume_service_recovers_resume_context_from_filtered_history():
+    crawl_job = _build_crawl_job()
+    historical_events = [
+        SimpleNamespace(
+            event_type="crawl.page_processed",
+            payload={"current_page": 3},
+        ),
+        SimpleNamespace(
+            event_type="crawl.requested",
+            payload={
+                "request_payload": {
+                    "resume_context": {
+                        "crawl_phase": "listing",
+                        "cursor": "next-page",
+                    }
+                }
+            },
+        ),
+        SimpleNamespace(
+            event_type="crawl.manual_action_required",
+            payload={
+                "manual_action": {
+                    "resume_context": {
+                        "crawl_phase": "detail",
+                        "listing_id": "abc123",
+                        "source_listing_crawl_job_id": "listing-job-1",
+                    }
+                }
+            },
+        ),
+    ]
+    service, repository, _, _ = _build_service(
+        crawl_job=crawl_job,
+        manual_action={"resume_supported": True},
+        historical_events=historical_events,
+    )
+
+    service.resume_crawl_job(
+        FakeDB(),
+        crawl_job_id=crawl_job.id,
+        requested_by="api",
+    )
+
+    assert repository.list_events_calls == [
+        {
+            "crawl_job_id": crawl_job.id,
+            "event_types": {"crawl.manual_action_required", "crawl.requested"},
+        }
+    ]
+    assert crawl_job.request_payload["resume_context"] == {
+        "crawl_phase": "detail",
+        "listing_id": "abc123",
+        "source_listing_crawl_job_id": "listing-job-1",
+    }
+    assert crawl_job.request_payload["source_listing_crawl_job_id"] == "listing-job-1"
+    assert crawl_job.request_payload["detail_statuses"] == ["manual_action_required", "pending"]
 
 
 def test_dispatch_manual_crawl_job_publishes_its_command_row_immediately():
