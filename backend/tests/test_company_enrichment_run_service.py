@@ -8,8 +8,9 @@ from app.services.company_enrichment_run_service import CompanyEnrichmentRunServ
 
 
 class _FakeQuery:
-    def __init__(self, *, all_result=None):
+    def __init__(self, *, all_result=None, first_result=None):
         self.all_result = list(all_result or [])
+        self.first_result = first_result
 
     def filter(self, *args, **kwargs):
         return self
@@ -19,6 +20,9 @@ class _FakeQuery:
 
     def all(self):
         return list(self.all_result)
+
+    def first(self):
+        return self.first_result
 
 
 class _FakeDB:
@@ -75,3 +79,29 @@ def test_create_pending_run_with_force_company_ids_queries_ids_only_and_preserve
     assert run is not None
     items = [obj for obj in db.added if isinstance(obj, CompanyEnrichmentRunItem)]
     assert [item.company_id for item in items] == [company_id_b, company_id_a]
+
+
+def test_get_current_run_uses_single_query_for_active_or_latest_terminal_selection():
+    active_run = object()
+    db = _FakeDB([
+        _FakeQuery(first_result=active_run),
+    ])
+    service = CompanyEnrichmentRunService(db)
+
+    result = service.get_current_run()
+
+    assert result is active_run
+    assert len(db.query_calls) == 1
+
+
+def test_get_current_run_uses_single_query_when_only_terminal_run_exists():
+    terminal_run = object()
+    db = _FakeDB([
+        _FakeQuery(first_result=terminal_run),
+    ])
+    service = CompanyEnrichmentRunService(db)
+
+    result = service.get_current_run()
+
+    assert result is terminal_run
+    assert len(db.query_calls) == 1

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, case, or_
 from sqlalchemy.orm import Session
 
 from app.models import Company
@@ -57,7 +57,26 @@ class CompanyEnrichmentRunService:
         )
 
     def get_current_run(self) -> Optional[CompanyEnrichmentRun]:
-        return self.get_active_run() or self.get_latest_terminal_run()
+        current_statuses = ACTIVE_RUN_STATUSES + TERMINAL_RUN_STATUSES
+        status_priority = case(
+            (CompanyEnrichmentRun.status.in_(ACTIVE_RUN_STATUSES), 0),
+            else_=1,
+        )
+        recency_timestamp = case(
+            (CompanyEnrichmentRun.status.in_(ACTIVE_RUN_STATUSES), CompanyEnrichmentRun.created_at),
+            else_=CompanyEnrichmentRun.completed_at,
+        )
+        return (
+            self.db.query(CompanyEnrichmentRun)
+            .filter(CompanyEnrichmentRun.status.in_(current_statuses))
+            .order_by(
+                status_priority.asc(),
+                recency_timestamp.desc(),
+                CompanyEnrichmentRun.created_at.desc(),
+                CompanyEnrichmentRun.id.desc(),
+            )
+            .first()
+        )
 
     def get_run(self, run_id: str) -> Optional[CompanyEnrichmentRun]:
         return (
