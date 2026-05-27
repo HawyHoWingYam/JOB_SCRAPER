@@ -21,6 +21,11 @@ class CrawlJob(Base):
             "queued_at",
             "created_at",
         ),
+        Index(
+            "ix_crawl_jobs_queued_created",
+            "queued_at",
+            "created_at",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
