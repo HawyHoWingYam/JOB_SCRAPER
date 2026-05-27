@@ -696,7 +696,8 @@ function ScheduleManager({ onNavigateToAI }) {
                 const errData = await response.json();
                 throw new Error(errData.detail || 'Failed to create schedule');
             }
-            await fetchSchedules();
+            const createdSchedule = await response.json();
+            setSchedules((prev) => [createdSchedule, ...prev]);
             setShowForm(false);
             setCreateFormHasSourceSelections(false);
         } catch (err) {
@@ -718,7 +719,18 @@ function ScheduleManager({ onNavigateToAI }) {
                 method: 'POST'
             });
             if (!response.ok) throw new Error('Failed to toggle schedule');
-            await fetchSchedules();
+            const updatedSchedule = await response.json();
+            setSchedules((prev) =>
+                prev.map((schedule) =>
+                    schedule.id === id
+                        ? {
+                            ...schedule,
+                            is_active: updatedSchedule.is_active,
+                            next_run_at: updatedSchedule.next_run_at,
+                        }
+                        : schedule
+                )
+            );
         } catch (err) {
             setError(err.message);
         } finally {
@@ -735,7 +747,7 @@ function ScheduleManager({ onNavigateToAI }) {
                 method: 'DELETE'
             });
             if (!response.ok) throw new Error('Failed to delete schedule');
-            await fetchSchedules();
+            setSchedules((prev) => prev.filter((schedule) => schedule.id !== id));
         } catch (err) {
             setError(err.message);
         } finally {
@@ -755,7 +767,6 @@ function ScheduleManager({ onNavigateToAI }) {
                 method: 'POST'
             });
             if (!response.ok) throw new Error('Failed to run schedule');
-            await fetchSchedules();
         } catch (err) {
             setError(err.message);
         } finally {

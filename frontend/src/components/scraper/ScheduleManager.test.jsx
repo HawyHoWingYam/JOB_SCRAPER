@@ -150,13 +150,26 @@ function createFetchMock({
   scrapeProgress = { active: {}, all: {}, has_active: false },
   scrapeProgressError = null,
   crawlJobId = 'crawl-job-123',
+  createdSchedule = {
+    id: 'created-schedule',
+    name: 'jobsdb automation',
+    cron_expression: '0 2 * * *',
+    category_ids: [1200],
+    source_site: 'jobsdb',
+    crawl_phase: 'listing',
+    crawl_mode: 'headed',
+    is_active: true,
+    last_run_at: null,
+    next_run_at: null,
+  },
+  toggledSchedule = {
+    id: 'jobsdb-nightly',
+    is_active: false,
+    next_run_at: null,
+  },
 } = {}) {
   return vi.fn((input, init) => {
     const url = String(input);
-
-    if (url === '/api/v1/schedules') {
-      return mockJsonResponse({ schedules });
-    }
 
     if (url === '/api/categories') {
       return mockJsonResponse({ categories: jobsdbCategories });
@@ -208,6 +221,14 @@ function createFetchMock({
       return mockJsonResponse({ id: 'crawl-job-123', status: 'cancelled' });
     }
 
+    if (/^\/api\/v1\/schedules\/[^/]+\/toggle$/.test(url) && init?.method === 'POST') {
+      return mockJsonResponse(toggledSchedule);
+    }
+
+    if (/^\/api\/v1\/schedules\/[^/]+$/.test(url) && init?.method === 'DELETE') {
+      return mockJsonResponse({ message: 'Schedule deleted' });
+    }
+
     if (url === 'http://127.0.0.1:47652/manual-actions/open-browser' && init?.method === 'POST') {
       return mockJsonResponse({ browser_channel: 'msedge' });
     }
@@ -225,7 +246,11 @@ function createFetchMock({
     }
 
     if (url === '/api/v1/schedules' && init?.method === 'POST') {
-      return mockJsonResponse({ id: 'created-schedule' });
+      return mockJsonResponse(createdSchedule);
+    }
+
+    if (url === '/api/v1/schedules') {
+      return mockJsonResponse({ schedules });
     }
 
     return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -920,6 +945,94 @@ describe('ScheduleManager', () => {
         detail_limit: 100,
       });
     });
+  });
+
+  it('creates schedules with a local list update instead of refetching all schedules', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        createdSchedule: {
+          id: 'created-schedule',
+          name: 'jobsdb automation',
+          cron_expression: '0 2 * * *',
+          category_ids: [1200],
+          source_site: 'jobsdb',
+          crawl_phase: 'listing',
+          crawl_mode: 'headed',
+          is_active: true,
+          last_run_at: null,
+          next_run_at: null,
+        },
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('JobsDB Nightly');
+    fireEvent.click(screen.getByRole('button', { name: /new automation/i }));
+    fireEvent.click(screen.getByRole('button', { name: /submit schedule stub/i }));
+
+    expect(await screen.findByText('jobsdb automation')).toBeInTheDocument();
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((url) => url === '/api/v1/schedules')).toHaveLength(2);
+    expect(
+      urls.filter((url, index) => url === '/api/v1/schedules' && globalThis.fetch.mock.calls[index][1]?.method !== 'POST')
+    ).toHaveLength(1);
+  });
+
+  it('applies schedule toggle locally without refetching all schedules', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    const scheduleCard = (await screen.findByText('JobsDB Nightly')).closest('.schedule-card');
+    expect(scheduleCard).not.toBeNull();
+
+    const toggle = within(scheduleCard).getByRole('checkbox');
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(toggle).not.toBeChecked();
+    });
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((url) => url === '/api/v1/schedules')).toHaveLength(1);
+    expect(urls.filter((url) => /\/api\/v1\/schedules\/jobsdb-nightly\/toggle$/.test(url))).toHaveLength(1);
+  });
+
+  it('removes deleted schedules locally without refetching all schedules', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    const scheduleCard = (await screen.findByText('JobsDB Nightly')).closest('.schedule-card');
+    expect(scheduleCard).not.toBeNull();
+
+    const deleteButton = within(scheduleCard).getAllByRole('button')[2];
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => {
+      expect(screen.queryByText('JobsDB Nightly')).not.toBeInTheDocument();
+    });
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((url) => url === '/api/v1/schedules')).toHaveLength(1);
+    expect(urls.filter((url) => /\/api\/v1\/schedules\/jobsdb-nightly$/.test(url))).toHaveLength(1);
+  });
+
+  it('does not refetch all schedules after running a schedule immediately', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('JobsDB Nightly');
+    fireEvent.click(screen.getAllByRole('button', { name: /run now/i })[0]);
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/schedules/jobsdb-nightly/run', {
+        method: 'POST',
+      });
+    });
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((url) => url === '/api/v1/schedules')).toHaveLength(1);
   });
 
   it('posts detail crawl payloads with detail_limit and selected listing batch id', async () => {
