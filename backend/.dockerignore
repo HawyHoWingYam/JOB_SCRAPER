@@ -1,0 +1,15 @@
+.git
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/
+runtime/
+.host_browser_profiles/
+.host_worker_venv/
+tmp-*.png
+tmp-*.md
+*.log
