@@ -57,6 +57,11 @@ def _parse_provider_auth_header(value: str | None) -> dict[str, str]:
     return {name.strip(): raw_value.strip()}
 
 
+def _proxy_url_supports_https_tunneling(proxy_url: str) -> bool:
+    scheme = urlsplit(_normalize_proxy_url(proxy_url)).scheme.lower()
+    return scheme in {"http", "https", "socks5", "socks5h"}
+
+
 def _build_playwright_proxy_config_from_url(proxy_url: str) -> dict[str, str]:
     parsed = urlsplit(_normalize_proxy_url(proxy_url))
     netloc_without_auth = parsed.netloc.rsplit("@", 1)[-1]
@@ -99,7 +104,7 @@ class StaticProxyProvider:
             provider_name=self.provider_name,
             identity=None,
             metadata={
-                "https_capable": self.proxy_url.startswith("https://"),
+                "https_capable": _proxy_url_supports_https_tunneling(self.proxy_url),
             },
         )
 
@@ -140,7 +145,9 @@ class ProxyPoolApiProvider:
             provider_name=self.provider_name,
             identity=payload.get("identity"),
             metadata={
-                "https_capable": bool(payload.get("https_capable", proxy_url.startswith("https://"))),
+                "https_capable": bool(
+                    payload.get("https_capable", _proxy_url_supports_https_tunneling(proxy_url))
+                ),
                 "raw_proxy": payload.get("raw_proxy") or payload["proxy_url"],
             },
         )
@@ -190,7 +197,7 @@ class ProxyPoolApiProvider:
                 "proxy_url": payload,
                 "raw_proxy": payload,
                 "identity": payload,
-                "https_capable": payload.startswith("https://"),
+                "https_capable": _proxy_url_supports_https_tunneling(payload),
             }
 
         if not isinstance(payload, dict):

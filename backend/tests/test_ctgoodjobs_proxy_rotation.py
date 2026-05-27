@@ -317,6 +317,38 @@ async def test_playwright_proxy_config_splits_credentials_from_proxy_url():
 
 
 @pytest.mark.asyncio
+async def test_static_http_proxy_is_treated_as_https_capable_for_tunneling():
+    lease = await StaticProxyProvider(
+        proxy_url="http://proxy.example.com:8080",
+    ).acquire_lease()
+
+    assert lease.metadata["https_capable"] is True
+
+
+@pytest.mark.asyncio
+async def test_proxy_pool_provider_defaults_http_proxy_strings_to_https_capable():
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            text="http://10.0.0.5:9000",
+        )
+    )
+    client = httpx.AsyncClient(transport=transport)
+    provider = ProxyPoolApiProvider(
+        api_base_url="http://pool.local",
+        get_path="/get",
+        delete_path="/delete",
+        client=client,
+    )
+
+    lease = await provider.acquire_lease()
+
+    assert lease.metadata["https_capable"] is True
+
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_fetch_html_document_marks_challenge_exhaustion_errors(monkeypatch):
     provider = FakeProxyProvider(
         [
