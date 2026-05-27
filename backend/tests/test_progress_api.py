@@ -191,11 +191,15 @@ def test_collect_progress_payload_uses_batched_latest_and_filtered_activity_even
         def __init__(self):
             self.latest_event_batch_calls: list[list] = []
             self.activity_event_batch_calls: list[tuple[list, set[str] | None]] = []
+            self.recent_job_calls: list[dict[str, object]] = []
 
         def list_crawl_jobs_by_statuses(self, db, *, statuses):
             return [crawl_job]
 
-        def list_recent_crawl_jobs(self, db, *, limit):
+        def list_recent_crawl_jobs(self, db, *, limit, updated_since=None):
+            self.recent_job_calls.append({"limit": limit, "updated_since": updated_since})
+            assert limit == 50
+            assert updated_since == now - progress.BACKLOG_VISIBLE_WINDOW
             return []
 
         def list_latest_events_for_jobs(self, db, *, crawl_job_ids):
@@ -229,6 +233,12 @@ def test_collect_progress_payload_uses_batched_latest_and_filtered_activity_even
 
     payload = progress._collect_progress_payload()
 
+    assert repository_stub.recent_job_calls == [
+        {
+            "limit": 50,
+            "updated_since": now - progress.BACKLOG_VISIBLE_WINDOW,
+        }
+    ]
     assert repository_stub.latest_event_batch_calls == [[crawl_job.id]]
     assert repository_stub.activity_event_batch_calls == [([crawl_job.id], expected_event_types)]
     assert payload["has_active"] is True
@@ -249,10 +259,16 @@ def test_collect_progress_payload_reuses_category_registry_lookup_per_source(mon
     second_job.updated_at = now
 
     class _RepositoryStub:
+        def __init__(self):
+            self.recent_job_calls: list[dict[str, object]] = []
+
         def list_crawl_jobs_by_statuses(self, db, *, statuses):
             return [first_job, second_job]
 
-        def list_recent_crawl_jobs(self, db, *, limit):
+        def list_recent_crawl_jobs(self, db, *, limit, updated_since=None):
+            self.recent_job_calls.append({"limit": limit, "updated_since": updated_since})
+            assert limit == 50
+            assert updated_since == now - progress.BACKLOG_VISIBLE_WINDOW
             return []
 
         def list_latest_events_for_jobs(self, db, *, crawl_job_ids):
@@ -298,6 +314,12 @@ def test_collect_progress_payload_reuses_category_registry_lookup_per_source(mon
 
     payload = progress._collect_progress_payload()
 
+    assert repository_stub.recent_job_calls == [
+        {
+            "limit": 50,
+            "updated_since": now - progress.BACKLOG_VISIBLE_WINDOW,
+        }
+    ]
     assert registry_stub.calls == 1
     assert payload["active"][str(first_job.id)]["category_name"] == "Engineering"
     assert payload["active"][str(second_job.id)]["category_name"] == "Marketing"

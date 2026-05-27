@@ -279,13 +279,17 @@ class CrawlJobRepository:
             .first()
         )
 
-    def list_recent_crawl_jobs(self, db: Session, *, limit: int = 100) -> list[CrawlJob]:
-        return (
-            db.query(CrawlJob)
-            .order_by(desc(CrawlJob.queued_at), desc(CrawlJob.created_at))
-            .limit(limit)
-            .all()
-        )
+    def list_recent_crawl_jobs(
+        self,
+        db: Session,
+        *,
+        limit: int = 100,
+        updated_since=None,
+    ) -> list[CrawlJob]:
+        query = db.query(CrawlJob)
+        if updated_since is not None:
+            query = query.filter(CrawlJob.updated_at >= updated_since)
+        return query.order_by(desc(CrawlJob.queued_at), desc(CrawlJob.created_at)).limit(limit).all()
 
     def list_crawl_jobs_by_statuses(
         self,
