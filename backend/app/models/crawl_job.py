@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -51,6 +51,12 @@ class CrawlJobEvent(Base):
     __tablename__ = "crawl_job_events"
     __table_args__ = (
         UniqueConstraint("crawl_job_id", "sequence_no", name="uq_crawl_job_events_job_sequence"),
+        Index(
+            "ix_crawl_job_events_job_event_sequence",
+            "crawl_job_id",
+            "event_type",
+            "sequence_no",
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)

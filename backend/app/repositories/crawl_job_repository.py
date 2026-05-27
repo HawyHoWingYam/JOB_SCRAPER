@@ -190,18 +190,13 @@ class CrawlJobRepository:
         )
 
     def get_latest_manual_action_event(self, db: Session, crawl_job_id) -> CrawlJobEvent | None:
-        events = (
+        return (
             db.query(CrawlJobEvent)
             .filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
+            .filter(CrawlJobEvent.event_type == "crawl.manual_action_required")
             .order_by(CrawlJobEvent.sequence_no.desc())
-            .all()
+            .first()
         )
-        for event in events:
-            payload = event.payload if isinstance(event.payload, dict) else {}
-            manual_action = payload.get("manual_action")
-            if isinstance(manual_action, dict) and manual_action:
-                return event
-        return None
 
     def list_recent_crawl_jobs(self, db: Session, *, limit: int = 100) -> list[CrawlJob]:
         return (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.models.crawl_job import CrawlJobEvent
 from app.models.crawl_job_listing import CrawlJobListing
 from scripts.bootstrap_db import bootstrap_database
 
@@ -79,3 +80,25 @@ def test_bootstrap_database_creates_crawl_job_listing_indexes_for_existing_datab
 
     assert any("ix_crawl_job_listings_source_status_rank_created" in statement for statement in index_statements)
     assert any("ix_crawl_job_listings_job_status" in statement for statement in index_statements)
+
+
+def test_crawl_job_event_declares_manual_action_lookup_index():
+    index_names = {index.name for index in CrawlJobEvent.__table__.indexes}
+
+    assert "ix_crawl_job_events_job_event_sequence" in index_names
+
+
+def test_bootstrap_database_creates_crawl_job_event_indexes_for_existing_databases():
+    connection = _FakeConnection()
+    engine = _FakeEngine(connection)
+    metadata = _FakeMetadata()
+
+    bootstrap_database(db_engine=engine, metadata=metadata)
+
+    index_statements = [
+        statement
+        for statement in connection.executed
+        if "CREATE INDEX IF NOT EXISTS" in statement
+    ]
+
+    assert any("ix_crawl_job_events_job_event_sequence" in statement for statement in index_statements)
