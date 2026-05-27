@@ -348,6 +348,24 @@ function buildProgressSections(progressEntries) {
         groupedEntries[classifyProgressEntry(entry[1])].push(entry);
     });
 
+    const attentionPriority = {
+        manual_action_required: 0,
+        failed: 1,
+        running_with_warning: 2,
+    };
+    groupedEntries.attention.sort((leftEntry, rightEntry) => {
+        const leftState = resolveDisplayState(leftEntry[1]);
+        const rightState = resolveDisplayState(rightEntry[1]);
+        const leftPriority = attentionPriority[leftState] ?? 99;
+        const rightPriority = attentionPriority[rightState] ?? 99;
+
+        if (leftPriority !== rightPriority) {
+            return leftPriority - rightPriority;
+        }
+
+        return getProgressSortTimestamp(rightEntry[1]) - getProgressSortTimestamp(leftEntry[1]);
+    });
+
     const linkedBacklogBatchIds = new Set(
         [...groupedEntries.attention, ...groupedEntries.live]
             .map(([, data]) => `${data?.request_payload?.source_listing_crawl_job_id || ''}`.trim())

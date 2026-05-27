@@ -829,6 +829,60 @@ describe('ScrapeProgressPanel', () => {
     expect(screen.getAllByText(/ended:/i).length).toBeGreaterThan(0);
   });
 
+  it('orders needs-attention tasks by severity before recency', async () => {
+    const { container } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-warning-newer': {
+            crawl_job_id: 'crawl-job-warning-newer',
+            status: 'running',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headless',
+            phase: 2,
+            jobs_scraped: 3,
+            detail_target_rows: 12,
+            proxy_enabled: true,
+            proxy_provider: 'static',
+            proxy_requests_network_fail: 1,
+            updated_at: '2026-05-27T12:05:00.000Z',
+          },
+          'crawl-job-manual-older': {
+            crawl_job_id: 'crawl-job-manual-older',
+            status: 'manual_action_required',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            updated_at: '2026-05-27T12:00:00.000Z',
+            manual_action: {
+              stage: 'browser_profile_in_use',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: ['Close all Edge windows that use the listed automation profile.'],
+            },
+          },
+        },
+      });
+    });
+
+    await screen.findByText(/needs attention/i);
+
+    const section = Array.from(container.querySelectorAll('.progress-section')).find((element) =>
+      element.textContent?.includes('Needs Attention')
+    );
+    const taskLabels = Array.from(section.querySelectorAll('.progress-task-id')).map((node) => node.textContent);
+
+    expect(taskLabels).toEqual([
+      'Task crawl-job-manual-older',
+      'Task crawl-job-warning-newer',
+    ]);
+  });
+
   it('auto-expands diagnostics for manual-action runs and exposes a diagnostics toggle', async () => {
     render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
 
