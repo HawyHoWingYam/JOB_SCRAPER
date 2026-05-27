@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -401,4 +401,116 @@ describe('CompaniesPage', () => {
     expect(await screen.findByText(/finished generating descriptions for 2 companies\. 2 succeeded, 0 failed\./i)).toBeInTheDocument();
     expect(screen.getByText('Acme Health')).toBeInTheDocument();
   });
+
+  it('pauses company run polling while the page is hidden and refreshes immediately when visible again', async () => {
+    let runPollCalls = 0;
+    let isHidden = false;
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => isHidden);
+
+    currentRunResponses = [
+      {
+        id: 'run-current',
+        status: 'running',
+        total_items: 3,
+        pending_items: 2,
+        completed_items: 1,
+        failed_items: 0,
+        current_company_name: 'Acme Health',
+        error_message: null,
+        started_at: '2026-04-19T10:00:00Z',
+        completed_at: null,
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = new URL(String(input), 'http://localhost');
+
+      if (url.pathname === '/api/v1/companies' && (!init.method || init.method === 'GET')) {
+        const key = [
+          `status=${url.searchParams.get('status') || ''}`,
+          `q=${url.searchParams.get('q') || ''}`,
+          `page=${url.searchParams.get('page') || ''}`,
+          `page_size=${url.searchParams.get('page_size') || ''}`,
+        ].join('&');
+        companyRequests.push(key);
+        return mockJsonResponse(companyPages[key]);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
+        return mockJsonResponse(currentRunResponses[0]);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/run-current' && (!init.method || init.method === 'GET')) {
+        runPollCalls += 1;
+        const title = runPollCalls === 1 ? 'Beta Logistics' : 'Cyan Retail';
+        return mockJsonResponse({
+          id: 'run-current',
+          status: 'running',
+          total_items: 3,
+          pending_items: Math.max(0, 3 - (runPollCalls + 1)),
+          completed_items: runPollCalls + 1,
+          failed_items: 0,
+          current_company_name: title,
+          error_message: null,
+          started_at: '2026-04-19T10:00:00Z',
+          completed_at: null,
+          created_at: '2026-04-19T10:00:00Z',
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
+    });
+
+    vi.useFakeTimers();
+    render(<CompaniesPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/current company: acme health/i)).toBeInTheDocument();
+    const baselineCalls = runPollCalls;
+    expect(baselineCalls).toBeGreaterThanOrEqual(0);
+
+    isHidden = true;
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(runPollCalls).toBe(baselineCalls);
+    expect(screen.getByText(/current company: acme health/i)).toBeInTheDocument();
+
+    isHidden = false;
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(runPollCalls).toBe(baselineCalls + 1);
+    expect(screen.getByText(/current company: beta logistics/i)).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(runPollCalls).toBe(baselineCalls + 2);
+    expect(screen.getByText(/current company: cyan retail/i)).toBeInTheDocument();
+  }, 10000);
 });

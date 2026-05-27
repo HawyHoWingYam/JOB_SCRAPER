@@ -82,7 +82,15 @@ function CompaniesPage() {
   const [currentRun, setCurrentRun] = useState(null);
   const [isCreatingRun, setIsCreatingRun] = useState(false);
   const [selectedCompanyId, setSelectedCompanyId] = useState(null);
+  const [isPageVisible, setIsPageVisible] = useState(() => {
+    if (typeof document === 'undefined') {
+      return true;
+    }
+
+    return !document.hidden;
+  });
   const mountedRef = useRef(true);
+  const wasPageVisibleRef = useRef(typeof document === 'undefined' ? true : !document.hidden);
 
   const selectedCompany = companies.find((company) => company.id === selectedCompanyId) || null;
 
@@ -90,6 +98,21 @@ function CompaniesPage() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const handleVisibilityChange = () => {
+      setIsPageVisible(!document.hidden);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -183,7 +206,7 @@ function CompaniesPage() {
   }, [isLoading, selectedCompany, selectedCompanyId]);
 
   useEffect(() => {
-    if (!isActiveRun(currentRun)) {
+    if (!isActiveRun(currentRun) || !isPageVisible) {
       return undefined;
     }
 
@@ -232,7 +255,50 @@ function CompaniesPage() {
         window.clearTimeout(timeoutId);
       }
     };
-  }, [appliedQuery, currentRun, page, statusFilter]);
+  }, [appliedQuery, currentRun, isPageVisible, page, statusFilter]);
+
+  useEffect(() => {
+    const wasPageVisible = wasPageVisibleRef.current;
+    wasPageVisibleRef.current = isPageVisible;
+
+    if (!isPageVisible || wasPageVisible || !isActiveRun(currentRun)) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const refreshNow = async () => {
+      try {
+        const payload = await fetchRunById(currentRun.id);
+        if (cancelled || !mountedRef.current) {
+          return;
+        }
+
+        setCurrentRun(payload);
+        setRefreshError(null);
+
+        if (isTerminalRun(payload)) {
+          setActionMessage(formatRunCompletionMessage(payload));
+          await loadCompanies({
+            query: appliedQuery,
+            status: statusFilter,
+            pageNumber: page,
+            preserveMessage: true,
+          });
+        }
+      } catch (err) {
+        if (!cancelled && mountedRef.current) {
+          setRefreshError(`Refresh failed: ${err.message}`);
+        }
+      }
+    };
+
+    refreshNow();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedQuery, currentRun, isPageVisible, page, statusFilter]);
 
   const handleSearchSubmit = async (event) => {
     event.preventDefault();
