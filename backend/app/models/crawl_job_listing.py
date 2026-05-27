@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Column, DateTime, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -20,6 +20,18 @@ class CrawlJobListing(Base):
             "source_site",
             "source_job_id",
             name="uq_crawl_job_listings_job_source_key",
+        ),
+        Index(
+            "ix_crawl_job_listings_source_status_rank_created",
+            "source_site",
+            "detail_status",
+            "listing_rank",
+            "created_at",
+        ),
+        Index(
+            "ix_crawl_job_listings_job_status",
+            "crawl_job_id",
+            "detail_status",
         ),
     )
 

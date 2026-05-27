@@ -23,6 +23,18 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
         )
         connection.execute(
             text(
+                "CREATE INDEX IF NOT EXISTS ix_crawl_job_listings_source_status_rank_created "
+                "ON crawl_job_listings (source_site, detail_status, listing_rank, created_at)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_crawl_job_listings_job_status "
+                "ON crawl_job_listings (crawl_job_id, detail_status)"
+            )
+        )
+        connection.execute(
+            text(
                 "UPDATE scrape_schedules "
                 "SET crawl_mode = CASE "
                 "WHEN COALESCE(NULLIF(source_site, ''), 'jobsdb') = 'jobsdb' THEN 'headed' "

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.models.crawl_job_listing import CrawlJobListing
 from scripts.bootstrap_db import bootstrap_database
 
 
@@ -54,3 +55,27 @@ def test_bootstrap_database_backfills_ctgoodjobs_schedule_defaults_to_headless()
     assert " = 'jobsdb' THEN 'headed' " in crawl_mode_updates[0]
     assert " = 'ctgoodjobs' THEN 'headless' " in crawl_mode_updates[0]
     assert metadata.bind is engine
+
+
+def test_crawl_job_listing_declares_composite_indexes_for_backlog_queries():
+    index_names = {index.name for index in CrawlJobListing.__table__.indexes}
+
+    assert "ix_crawl_job_listings_source_status_rank_created" in index_names
+    assert "ix_crawl_job_listings_job_status" in index_names
+
+
+def test_bootstrap_database_creates_crawl_job_listing_indexes_for_existing_databases():
+    connection = _FakeConnection()
+    engine = _FakeEngine(connection)
+    metadata = _FakeMetadata()
+
+    bootstrap_database(db_engine=engine, metadata=metadata)
+
+    index_statements = [
+        statement
+        for statement in connection.executed
+        if "CREATE INDEX IF NOT EXISTS" in statement
+    ]
+
+    assert any("ix_crawl_job_listings_source_status_rank_created" in statement for statement in index_statements)
+    assert any("ix_crawl_job_listings_job_status" in statement for statement in index_statements)
