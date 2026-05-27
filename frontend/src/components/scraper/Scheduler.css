@@ -73,7 +73,9 @@
 }
 
 .scheduler-workstream-card,
-.override-summary-panel {
+.override-summary-panel,
+.override-mode-panel,
+.override-readiness-panel {
     display: grid;
     gap: var(--space-2);
     padding: var(--space-4);
@@ -108,6 +110,24 @@
     margin-bottom: var(--space-4);
     border-color: rgba(106, 165, 255, 0.22);
     background: rgba(106, 165, 255, 0.08);
+}
+
+.override-mode-panel {
+    margin-bottom: var(--space-4);
+}
+
+.override-readiness-panel {
+    margin-bottom: var(--space-4);
+}
+
+.override-readiness-panel.ready {
+    border-color: rgba(79, 191, 139, 0.28);
+    background: rgba(79, 191, 139, 0.08);
+}
+
+.override-readiness-panel.blocked {
+    border-color: rgba(233, 185, 73, 0.28);
+    background: rgba(233, 185, 73, 0.08);
 }
 
 .override-summary-title {

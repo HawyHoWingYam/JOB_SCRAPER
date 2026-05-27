@@ -462,6 +462,79 @@ describe('ScheduleManager', () => {
     });
   });
 
+  it('shows listing-mode readiness guidance before any sector is selected', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+
+    expect(await screen.findByText(/listing mode/i)).toBeInTheDocument();
+    expect(screen.getByText(/select at least one sector to launch this listing crawl/i)).toBeInTheDocument();
+    expect(screen.getByText(/launch blocked/i)).toBeInTheDocument();
+  });
+
+  it('shows detail-mode readiness guidance and explains the backlog scope when switched to detail mode', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    expect(await screen.findByText(/detail mode/i)).toBeInTheDocument();
+    expect(screen.getByText(/recover eligible detail backlog/i)).toBeInTheDocument();
+    expect(screen.getByText(/launch blocked/i)).toBeInTheDocument();
+  });
+
+  it('shows listing-specific numeric helper copy in listing mode and detail-specific helper copy in detail mode', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+
+    expect(screen.getByText(/set how many listing pages to scan per selected sector/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    expect(
+      await screen.findByText(/set the maximum number of eligible detail rows to recover/i)
+    ).toBeInTheDocument();
+  });
+
+  it('shows a readable launch summary for detail mode when a legacy batch filter is selected', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        listingBatches: [
+          {
+            crawl_job_id: 'listing-batch-123',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            listings_staged: 48,
+            detail_pending: 12,
+          },
+        ],
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    const batchSelect = await screen.findByRole('combobox', { name: /legacy listing batch filter/i });
+    fireEvent.change(batchSelect, { target: { value: 'listing-batch-123' } });
+
+    expect(await screen.findByText(/legacy batch filter: jobsdb batch listing-batch-123/i)).toBeInTheDocument();
+    expect(screen.getByText(/detail crawl will narrow recovery to the selected legacy listing batch/i)).toBeInTheDocument();
+  });
+
   it('restores the progress panel from active scrape progress on mount', async () => {
     vi.stubGlobal(
       'fetch',

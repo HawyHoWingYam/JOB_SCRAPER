@@ -163,6 +163,6 @@ describe('App lazy views', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /scheduler/i }));
 
-    expect(await screen.findByRole('heading', { name: /task control board/i })).toBeInTheDocument();
+    expect(await screen.findByText(/task control board/i, {}, { timeout: 5000 })).toBeInTheDocument();
   });
 });

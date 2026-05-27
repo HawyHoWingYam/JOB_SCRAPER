@@ -299,6 +299,57 @@ function buildImmediateRunSummary(form, sourceSite, categories) {
     };
 }
 
+function buildImmediateRunReadiness(form, sourceSite) {
+    const request = buildImmediateScrapePayload(form, sourceSite);
+    const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
+    const selectedSectorCount = Array.isArray(form?.category_ids) ? form.category_ids.length : 0;
+    const hasBatchFilter = Boolean(`${form?.source_listing_crawl_job_id ?? ''}`.trim());
+
+    if (request.error) {
+        let detail = request.error;
+
+        if (crawlPhase === 'listing' && selectedSectorCount === 0) {
+            detail = 'Select at least one sector to launch this listing crawl.';
+        } else if (crawlPhase === 'detail' && selectedSectorCount === 0 && !hasBatchFilter) {
+            detail = 'Select sectors or a legacy listing batch before launching this detail recovery run.';
+        }
+
+        return {
+            isReady: false,
+            statusLabel: 'Launch blocked',
+            detail,
+        };
+    }
+
+    return {
+        isReady: true,
+        statusLabel: 'Ready to launch',
+        detail: crawlPhase === 'listing'
+            ? `Listing crawl will scan ${selectedSectorCount} selected sector${selectedSectorCount === 1 ? '' : 's'}.`
+            : hasBatchFilter
+                ? 'Detail crawl will narrow recovery to the selected legacy listing batch.'
+                : 'Detail crawl will recover eligible backlog from the selected sector scope.',
+    };
+}
+
+function buildImmediateRunModeCopy(form) {
+    const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
+
+    if (crawlPhase === 'detail') {
+        return {
+            eyebrow: 'Detail Mode',
+            title: 'Recover eligible detail backlog',
+            description: 'Use sectors and optional legacy batch narrowing to target pending detail work.',
+        };
+    }
+
+    return {
+        eyebrow: 'Listing Mode',
+        title: 'Collect listing pages and job IDs',
+        description: 'Select sectors and page depth before dispatching a new listing crawl.',
+    };
+}
+
 function ScheduleManager({ onNavigateToAI }) {
     // State
     const [schedules, setSchedules] = useState([]);
@@ -819,6 +870,8 @@ function ScheduleManager({ onNavigateToAI }) {
         (batch) => batch.crawl_job_id === immediateForm.source_listing_crawl_job_id
     ) || null;
     const immediateRunSummary = buildImmediateRunSummary(immediateForm, currentSourceSite, categories);
+    const immediateRunReadiness = buildImmediateRunReadiness(immediateForm, currentSourceSite);
+    const immediateRunModeCopy = buildImmediateRunModeCopy(immediateForm);
 
     return (
         <div className="scheduler-container">
@@ -965,6 +1018,12 @@ function ScheduleManager({ onNavigateToAI }) {
                     <h3>Direct Override Sequence</h3>
                     <p className="form-hint">Direct crawl job configuration.</p>
 
+                    <div className="override-mode-panel">
+                        <span className="scheduler-panel-kicker">{immediateRunModeCopy.eyebrow}</span>
+                        <strong className="override-summary-title">{immediateRunModeCopy.title}</strong>
+                        <p className="form-hint">{immediateRunModeCopy.description}</p>
+                    </div>
+
                     <div className="override-summary-panel">
                         <span className="scheduler-panel-kicker">{immediateRunSummary.title}</span>
                         <strong className="override-summary-title">{immediateRunSummary.description}</strong>
@@ -975,6 +1034,11 @@ function ScheduleManager({ onNavigateToAI }) {
                                 </span>
                             ))}
                         </div>
+                    </div>
+
+                    <div className={`override-readiness-panel ${immediateRunReadiness.isReady ? 'ready' : 'blocked'}`}>
+                        <span className="scheduler-panel-kicker">{immediateRunReadiness.statusLabel}</span>
+                        <strong>{immediateRunReadiness.detail}</strong>
                     </div>
 
                     <div className="cyber-form-group">
@@ -1049,6 +1113,11 @@ function ScheduleManager({ onNavigateToAI }) {
                                     : { max_pages: parseInt(e.target.value) || 3 })
                             }))}
                         />
+                        <p className="form-hint">
+                            {immediateForm.crawl_phase === 'detail'
+                                ? 'Set the maximum number of eligible detail rows to recover in this run.'
+                                : 'Set how many listing pages to scan per selected sector.'}
+                        </p>
                     </div>
 
                     {immediateForm.crawl_phase === 'detail' && (
@@ -1070,6 +1139,9 @@ function ScheduleManager({ onNavigateToAI }) {
                                     </option>
                                 ))}
                             </select>
+                            <p className="form-hint backlog-guidance-muted">
+                                Optional narrowing control. Leave blank to recover eligible backlog across the selected sectors.
+                            </p>
                             <div className="backlog-guidance-panel">
                                 <div>
                                     <span className="backlog-guidance-label">Category-scoped backlog recovery</span>
