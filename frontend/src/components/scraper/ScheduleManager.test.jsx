@@ -453,7 +453,7 @@ describe('ScheduleManager', () => {
       expect(JSON.parse(crawlJobCall[1].body)).toEqual({
         source_site: 'ctgoodjobs',
         crawl_phase: 'listing',
-        crawl_mode: 'headed',
+        crawl_mode: 'headless',
         category_ids: ['ctgoodjobs:021'],
         max_pages: 3,
         detail_limit: 100,

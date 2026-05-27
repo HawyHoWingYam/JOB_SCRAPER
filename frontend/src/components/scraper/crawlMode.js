@@ -1,6 +1,6 @@
 const DEFAULT_CRAWL_MODE_BY_SOURCE = {
   jobsdb: 'headed',
-  ctgoodjobs: 'headed',
+  ctgoodjobs: 'headless',
 };
 
 export const CRAWL_MODE_OPTIONS = [

@@ -108,7 +108,10 @@ def _source_capabilities() -> dict[str, dict[str, Any]]:
             "headless_supported": True,
             "headed_supported": True,
             "manual_action_supported": True,
-            "default_crawl_mode": "headed",
+            "default_crawl_mode": "headless",
+            "proxy_supported": True,
+            "proxy_modes_supported": ["headless", "headed"],
+            "proxy_enabled": bool(settings.ctgoodjobs_proxy_enabled),
             "category_id_type": "string",
         },
     }
