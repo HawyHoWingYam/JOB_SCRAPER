@@ -38,7 +38,7 @@ services:
   db-bootstrap:
     build:
       context: ./backend
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile.worker
     command: python /app/scripts/bootstrap_db.py
     volumes:
       - ./backend:/app
