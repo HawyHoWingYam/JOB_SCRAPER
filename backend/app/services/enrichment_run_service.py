@@ -652,7 +652,7 @@ class EnrichmentRunService:
             .filter(EnrichmentRunItem.status == "failed")
             .count()
         )
-        failed_jobs = self._count_current_failed_jobs()
+        failed_jobs = self._count_current_failed_jobs() if failed_items > 0 else 0
         last_completed_run = (
             self.db.query(EnrichmentRun)
             .filter(
