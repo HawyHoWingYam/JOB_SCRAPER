@@ -14,6 +14,14 @@ class CrawlJob(Base):
     """Durable control-plane record for a crawl request."""
 
     __tablename__ = "crawl_jobs"
+    __table_args__ = (
+        Index(
+            "ix_crawl_jobs_status_queued_created",
+            "status",
+            "queued_at",
+            "created_at",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     source_site = Column(String(32), nullable=False, index=True)
