@@ -118,6 +118,7 @@ class CTGoodJobsBrowserPageScraper:
                                 "Return to the app and click Resume.",
                             ],
                         )
+                    await self._reset_runtime_for_retry()
                     await backoff.wait(attempt)
                     continue
                 if self._proxy_runtime.enabled:
@@ -141,6 +142,7 @@ class CTGoodJobsBrowserPageScraper:
                         attempts=attempt + 1,
                         exception_type=type(exc).__name__,
                     ) from exc
+                await self._reset_runtime_for_retry()
                 await backoff.wait(attempt)
 
         raise AssertionError("unreachable")
@@ -286,6 +288,18 @@ class CTGoodJobsBrowserPageScraper:
         finally:
             self._executor.shutdown(wait=True)
             self._executor = None
+
+    async def _reset_runtime_for_retry(self) -> None:
+        if (
+            self.resume_strategy != RESUME_STRATEGY_FRESH_PROFILE
+            or not self._proxy_runtime.enabled
+            or not self._runtime_started
+            or self._executor is None
+        ):
+            return
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self._executor, self._stop_sync_runtime)
 
     def _build_reuse_open_browser_unavailable_error(self, *, message: str) -> ManualActionRequiredError:
         return ManualActionRequiredError(

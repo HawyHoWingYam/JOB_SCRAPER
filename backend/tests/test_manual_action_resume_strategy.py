@@ -20,6 +20,7 @@ from app.manual_actions.live_browser_registry import LiveBrowserRegistry
 from app.scraper.ctgoodjobs_browser_page_scraper import CTGoodJobsBrowserPageScraper
 from app.scraper.jobsdb_browser_detail_scraper import JobsDBBrowserDetailScraper
 from app.scraper.manual_action import ManualActionRequiredError
+from app.scraper.proxy_rotation import ProxyLease
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 
 
@@ -715,6 +716,135 @@ def test_ctgoodjobs_fresh_profile_converts_missing_proxy_lease_into_manual_actio
     assert "proxy" in exc_info.value.message.lower()
     assert chromium.launch_calls == []
     assert handle.stopped is True
+
+
+def test_ctgoodjobs_fresh_profile_restarts_runtime_with_new_proxy_after_challenge(monkeypatch):
+    first_page = FakePage(html="Just a moment", title_text="Just a moment")
+    second_page = FakePage(html="<html>ok</html>", title_text="Recovered")
+    contexts = [FakeContext([first_page]), FakeContext([second_page])]
+
+    class SequencedChromium(FakeChromium):
+        def launch_persistent_context(self, *, user_data_dir: str, **kwargs) -> FakeContext:
+            self.launch_calls.append({"user_data_dir": user_data_dir, **kwargs})
+            return contexts.pop(0)
+
+    chromium = SequencedChromium()
+    _install_fake_playwright(monkeypatch, chromium)
+
+    class RotatingProxyRuntime:
+        enabled = True
+
+        def __init__(self) -> None:
+            self.leases = [
+                ProxyLease(proxy_url="http://proxy-a:8080", provider_name="static", identity="proxy-a"),
+                ProxyLease(proxy_url="http://proxy-b:8080", provider_name="static", identity="proxy-b"),
+            ]
+
+        async def acquire_lease(self):
+            return self.leases.pop(0)
+
+        def build_playwright_proxy_config(self, lease):
+            return {"server": lease.proxy_url}
+
+        async def report_challenge(self, **_kwargs):
+            return None
+
+        async def report_success(self, **_kwargs):
+            return None
+
+        async def report_network_failure(self, **_kwargs):
+            return None
+
+    async def run_scraper() -> str:
+        scraper = CTGoodJobsBrowserPageScraper(
+            request_payload={"resume_strategy": "fresh_profile"},
+            user_data_dir=r"C:\profiles\ctgoodjobs-rotating-proxy",
+            browser_channel="msedge",
+            max_attempts=2,
+        )
+        scraper._proxy_runtime = RotatingProxyRuntime()
+        async with scraper:
+            return await scraper.fetch_page_html(
+                "https://jobs.ctgoodjobs.hk/job/1001",
+                stage="detail_page",
+            )
+
+    html = asyncio.run(run_scraper())
+
+    assert html == "<html>ok</html>"
+    assert len(chromium.launch_calls) == 2
+    assert chromium.launch_calls[0]["proxy"] == {"server": "http://proxy-a:8080"}
+    assert chromium.launch_calls[1]["proxy"] == {"server": "http://proxy-b:8080"}
+
+
+def test_ctgoodjobs_fresh_profile_restarts_runtime_with_new_proxy_after_network_failure(monkeypatch):
+    class FailingGotoPage(FakePage):
+        def __init__(self) -> None:
+            super().__init__(html="<html>ok</html>", title_text="Recovered")
+            self.fail_once = True
+
+        def goto(self, url: str, *, wait_until: str, timeout: int | None = None):
+            if self.fail_once:
+                self.fail_once = False
+                raise RuntimeError("proxy connection dropped")
+            return super().goto(url, wait_until=wait_until, timeout=timeout)
+
+    first_page = FailingGotoPage()
+    second_page = FakePage(html="<html>ok</html>", title_text="Recovered")
+    contexts = [FakeContext([first_page]), FakeContext([second_page])]
+
+    class SequencedChromium(FakeChromium):
+        def launch_persistent_context(self, *, user_data_dir: str, **kwargs) -> FakeContext:
+            self.launch_calls.append({"user_data_dir": user_data_dir, **kwargs})
+            return contexts.pop(0)
+
+    chromium = SequencedChromium()
+    _install_fake_playwright(monkeypatch, chromium)
+
+    class RotatingProxyRuntime:
+        enabled = True
+
+        def __init__(self) -> None:
+            self.leases = [
+                ProxyLease(proxy_url="http://proxy-a:8080", provider_name="static", identity="proxy-a"),
+                ProxyLease(proxy_url="http://proxy-b:8080", provider_name="static", identity="proxy-b"),
+            ]
+
+        async def acquire_lease(self):
+            return self.leases.pop(0)
+
+        def build_playwright_proxy_config(self, lease):
+            return {"server": lease.proxy_url}
+
+        async def report_challenge(self, **_kwargs):
+            return None
+
+        async def report_success(self, **_kwargs):
+            return None
+
+        async def report_network_failure(self, **_kwargs):
+            return None
+
+    async def run_scraper() -> str:
+        scraper = CTGoodJobsBrowserPageScraper(
+            request_payload={"resume_strategy": "fresh_profile"},
+            user_data_dir=r"C:\profiles\ctgoodjobs-rotating-proxy-network",
+            browser_channel="msedge",
+            max_attempts=2,
+        )
+        scraper._proxy_runtime = RotatingProxyRuntime()
+        async with scraper:
+            return await scraper.fetch_page_html(
+                "https://jobs.ctgoodjobs.hk/job/1002",
+                stage="detail_page",
+            )
+
+    html = asyncio.run(run_scraper())
+
+    assert html == "<html>ok</html>"
+    assert len(chromium.launch_calls) == 2
+    assert chromium.launch_calls[0]["proxy"] == {"server": "http://proxy-a:8080"}
+    assert chromium.launch_calls[1]["proxy"] == {"server": "http://proxy-b:8080"}
 
 
 def test_jobsdb_fresh_profile_converts_profile_in_use_launch_failure_into_manual_action_error(
