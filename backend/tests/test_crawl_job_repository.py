@@ -401,3 +401,43 @@ def test_list_recent_crawl_jobs_can_filter_by_status_and_updated_since():
     assert [job.id for job in jobs] == [recent_terminal.id]
 
     db.close()
+
+
+def test_list_crawl_jobs_by_statuses_can_apply_limit_in_recency_order():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    repository = CrawlJobRepository()
+
+    oldest = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="manual",
+        status="running",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        queued_at=datetime(2026, 5, 27, 8, 0, tzinfo=UTC),
+    )
+    middle = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="manual",
+        status="manual_action_required",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        queued_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+    )
+    newest = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="manual",
+        status="queued",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        queued_at=datetime(2026, 5, 27, 10, 0, tzinfo=UTC),
+    )
+    db.add_all([oldest, middle, newest])
+    db.commit()
+
+    jobs = repository.list_crawl_jobs_by_statuses(
+        db,
+        statuses={"queued", "running", "manual_action_required"},
+        limit=2,
+    )
+
+    assert [job.id for job in jobs] == [newest.id, middle.id]
+
+    db.close()

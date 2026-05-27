@@ -469,6 +469,7 @@ def _collect_progress_payload() -> dict[str, Any]:
         for crawl_job in repository.list_crawl_jobs_by_statuses(
             db,
             statuses=ACTIVE_CRAWL_JOB_STATUSES | ACTIONABLE_CRAWL_JOB_STATUSES,
+            limit=50,
         ):
             crawl_jobs_by_id[str(crawl_job.id)] = crawl_job
         for crawl_job in repository.list_recent_crawl_jobs(

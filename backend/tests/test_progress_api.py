@@ -192,8 +192,11 @@ def test_collect_progress_payload_uses_batched_latest_and_filtered_activity_even
             self.latest_event_batch_calls: list[list] = []
             self.activity_event_batch_calls: list[tuple[list, set[str] | None]] = []
             self.recent_job_calls: list[dict[str, object]] = []
+            self.status_job_calls: list[dict[str, object]] = []
 
-        def list_crawl_jobs_by_statuses(self, db, *, statuses):
+        def list_crawl_jobs_by_statuses(self, db, *, statuses, limit=None):
+            self.status_job_calls.append({"statuses": statuses, "limit": limit})
+            assert limit == 50
             return [crawl_job]
 
         def list_recent_crawl_jobs(self, db, *, limit, updated_since=None, statuses=None):
@@ -234,6 +237,12 @@ def test_collect_progress_payload_uses_batched_latest_and_filtered_activity_even
 
     payload = progress._collect_progress_payload()
 
+    assert repository_stub.status_job_calls == [
+        {
+            "statuses": progress.ACTIVE_CRAWL_JOB_STATUSES | progress.ACTIONABLE_CRAWL_JOB_STATUSES,
+            "limit": 50,
+        }
+    ]
     assert repository_stub.recent_job_calls == [
         {
             "limit": 50,
@@ -263,8 +272,11 @@ def test_collect_progress_payload_reuses_category_registry_lookup_per_source(mon
     class _RepositoryStub:
         def __init__(self):
             self.recent_job_calls: list[dict[str, object]] = []
+            self.status_job_calls: list[dict[str, object]] = []
 
-        def list_crawl_jobs_by_statuses(self, db, *, statuses):
+        def list_crawl_jobs_by_statuses(self, db, *, statuses, limit=None):
+            self.status_job_calls.append({"statuses": statuses, "limit": limit})
+            assert limit == 50
             return [first_job, second_job]
 
         def list_recent_crawl_jobs(self, db, *, limit, updated_since=None, statuses=None):
@@ -317,6 +329,12 @@ def test_collect_progress_payload_reuses_category_registry_lookup_per_source(mon
 
     payload = progress._collect_progress_payload()
 
+    assert repository_stub.status_job_calls == [
+        {
+            "statuses": progress.ACTIVE_CRAWL_JOB_STATUSES | progress.ACTIONABLE_CRAWL_JOB_STATUSES,
+            "limit": 50,
+        }
+    ]
     assert repository_stub.recent_job_calls == [
         {
             "limit": 50,

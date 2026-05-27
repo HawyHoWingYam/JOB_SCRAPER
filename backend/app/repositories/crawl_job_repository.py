@@ -299,15 +299,18 @@ class CrawlJobRepository:
         db: Session,
         *,
         statuses: set[str] | list[str],
+        limit: int | None = None,
     ) -> list[CrawlJob]:
         if not statuses:
             return []
-        return (
+        query = (
             db.query(CrawlJob)
             .filter(CrawlJob.status.in_(list(statuses)))
             .order_by(desc(CrawlJob.queued_at), desc(CrawlJob.created_at))
-            .all()
         )
+        if limit is not None:
+            return query.limit(limit).all()
+        return query.all()
 
     def _merge_metrics(self, existing_metrics, metrics_patch: dict[str, Any]) -> dict[str, Any]:
         merged = dict(existing_metrics or {})
