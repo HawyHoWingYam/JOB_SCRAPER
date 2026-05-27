@@ -424,6 +424,8 @@ function buildStatusSignals({
     displayState,
     proxyEnabled,
     proxyWarningsPresent,
+    proxyChallengeCount = 0,
+    proxyQuarantinedTotal = 0,
 }) {
     const chips = [];
 
@@ -436,7 +438,13 @@ function buildStatusSignals({
     }
 
     if (displayState === 'running_with_warning' && proxyEnabled && proxyWarningsPresent) {
-        chips.push('Proxy unstable');
+        if (Number(proxyQuarantinedTotal || 0) > 0) {
+            chips.push('Lease quarantined');
+        } else if (Number(proxyChallengeCount || 0) > 0) {
+            chips.push('Challenge spike');
+        } else {
+            chips.push('Proxy unstable');
+        }
     }
 
     return chips;
@@ -652,6 +660,8 @@ function ProgressItem({
         displayState,
         proxyEnabled: proxy_enabled,
         proxyWarningsPresent,
+        proxyChallengeCount: proxy_requests_challenge,
+        proxyQuarantinedTotal: proxy_quarantined_total,
     });
 
     useEffect(() => {

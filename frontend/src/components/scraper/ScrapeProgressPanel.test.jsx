@@ -914,9 +914,10 @@ describe('ScrapeProgressPanel', () => {
             proxy_provider: 'static',
             proxy_requests_total: 8,
             proxy_requests_success: 6,
-            proxy_requests_challenge: 1,
+            proxy_requests_challenge: 0,
             proxy_requests_network_fail: 1,
-            proxy_quarantined_total: 1,
+            proxy_requests_http_fail: 1,
+            proxy_quarantined_total: 0,
           },
         },
       });
@@ -925,6 +926,74 @@ describe('ScrapeProgressPanel', () => {
     expect(await screen.findByText(/proxy unstable/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /diagnostics/i })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText(/proxy requests: 8/i)).not.toBeInTheDocument();
+  });
+
+  it('prefers a challenge-specific chip when proxy challenge counts are present without quarantines', async () => {
+    render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-proxy-challenge': {
+            crawl_job_id: 'crawl-job-proxy-challenge',
+            status: 'running',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headless',
+            phase: 2,
+            jobs_scraped: 5,
+            detail_target_rows: 24,
+            proxy_enabled: true,
+            proxy_provider: 'static',
+            proxy_requests_total: 8,
+            proxy_requests_success: 6,
+            proxy_requests_challenge: 2,
+            proxy_requests_network_fail: 0,
+            proxy_requests_http_fail: 0,
+            proxy_quarantined_total: 0,
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/challenge spike/i)).toBeInTheDocument();
+    expect(screen.queryByText(/proxy unstable/i)).not.toBeInTheDocument();
+  });
+
+  it('prefers a quarantine-specific chip when proxy leases have been quarantined', async () => {
+    render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-proxy-quarantine': {
+            crawl_job_id: 'crawl-job-proxy-quarantine',
+            status: 'running',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headless',
+            phase: 2,
+            jobs_scraped: 5,
+            detail_target_rows: 24,
+            proxy_enabled: true,
+            proxy_provider: 'static',
+            proxy_requests_total: 8,
+            proxy_requests_success: 6,
+            proxy_requests_challenge: 1,
+            proxy_requests_network_fail: 1,
+            proxy_requests_http_fail: 0,
+            proxy_quarantined_total: 1,
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/lease quarantined/i)).toBeInTheDocument();
+    expect(screen.queryByText(/proxy unstable/i)).not.toBeInTheDocument();
   });
 
   it('shows proxy runtime details when the backend includes proxy metadata', async () => {
