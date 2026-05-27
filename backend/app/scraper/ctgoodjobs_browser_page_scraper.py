@@ -11,6 +11,7 @@ from app.config import settings
 from app.manual_actions.live_browser_registry import get_live_browser_registry
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
 from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError, looks_like_interstitial_html
+from app.scraper.proxy_rotation import build_ctgoodjobs_proxy_runtime
 from app.scraper.manual_action import (
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
@@ -59,6 +60,8 @@ class CTGoodJobsBrowserPageScraper:
         self._sync_page = None
         self._last_page_title: str | None = None
         self._last_page_url: str | None = None
+        self._proxy_runtime = build_ctgoodjobs_proxy_runtime(settings_source=settings)
+        self._proxy_lease = None
 
     async def __aenter__(self):
         if self.page_content_fetcher is None and self.sync_page_content_fetcher is None:
@@ -96,6 +99,11 @@ class CTGoodJobsBrowserPageScraper:
             try:
                 html = await self._fetch_page_content(url)
                 if self._looks_like_interstitial(html):
+                    if self._proxy_runtime.enabled:
+                        await self._proxy_runtime.report_challenge(
+                            stage=stage,
+                            lease=self._proxy_lease,
+                        )
                     if attempt == self.max_attempts - 1:
                         raise ManualActionRequiredError(
                             source_site="ctgoodjobs",
@@ -112,10 +120,20 @@ class CTGoodJobsBrowserPageScraper:
                         )
                     await backoff.wait(attempt)
                     continue
+                if self._proxy_runtime.enabled:
+                    await self._proxy_runtime.report_success(
+                        stage=stage,
+                        lease=self._proxy_lease,
+                    )
                 return html
             except (CTGoodJobsFetchError, ManualActionRequiredError):
                 raise
             except Exception as exc:
+                if self._proxy_runtime.enabled:
+                    await self._proxy_runtime.report_network_failure(
+                        stage=stage,
+                        lease=self._proxy_lease,
+                    )
                 if attempt == self.max_attempts - 1:
                     raise CTGoodJobsFetchError(
                         stage=stage,
@@ -163,6 +181,15 @@ class CTGoodJobsBrowserPageScraper:
             launch_kwargs["executable_path"] = self.executable_path
         else:
             launch_kwargs["channel"] = self.browser_channel
+        if self._proxy_runtime.enabled:
+            try:
+                self._proxy_lease = asyncio.run(self._proxy_runtime.acquire_lease())
+            except Exception as exc:
+                self._raise_if_proxy_unavailable(exc)
+                raise
+            proxy_config = self._proxy_runtime.build_playwright_proxy_config(self._proxy_lease)
+            if proxy_config:
+                launch_kwargs["proxy"] = proxy_config
 
         self._sync_context = self._sync_playwright.chromium.launch_persistent_context(
             user_data_dir=str(self._resolve_user_data_dir()),
@@ -249,6 +276,7 @@ class CTGoodJobsBrowserPageScraper:
         self._runtime_started = False
         self._last_page_title = None
         self._last_page_url = None
+        self._proxy_lease = None
 
     async def _cleanup_failed_startup(self, loop) -> None:
         if self._executor is None:
@@ -314,6 +342,23 @@ class CTGoodJobsBrowserPageScraper:
             instructions=[
                 "Close all Edge windows that use the listed automation profile.",
                 "Return to the app and click Resume.",
+            ],
+        ) from exc
+
+    def _raise_if_proxy_unavailable(self, exc: Exception) -> None:
+        message = str(exc or "")
+        if "Unable to acquire a usable CTGoodJobs proxy lease" not in message:
+            return
+
+        raise ManualActionRequiredError(
+            source_site="ctgoodjobs",
+            stage="proxy_unavailable",
+            blocked_url=f"{CTGOODJOBS_BASE_URL}/jobs",
+            message="No usable CTGoodJobs proxy lease is available. Check the proxy configuration or try again later.",
+            instructions=[
+                "Verify the CTGoodJobs proxy settings and provider availability.",
+                "If you are using a pool, wait for a healthy lease or relax the filtering requirements.",
+                "Return to the app and click Resume after proxy availability is restored.",
             ],
         ) from exc
 

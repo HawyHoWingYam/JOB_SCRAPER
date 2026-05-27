@@ -687,6 +687,36 @@ def test_ctgoodjobs_fresh_profile_launches_persistent_context_with_proxy_credent
     }
 
 
+def test_ctgoodjobs_fresh_profile_converts_missing_proxy_lease_into_manual_action_error(monkeypatch):
+    persistent_context = FakeContext([FakePage()])
+    chromium = FakeChromium(persistent_context=persistent_context)
+    handle = _install_fake_playwright(monkeypatch, chromium)
+
+    class FailingProxyRuntime:
+        enabled = True
+
+        async def acquire_lease(self):
+            raise RuntimeError("Unable to acquire a usable CTGoodJobs proxy lease")
+
+        def build_playwright_proxy_config(self, _lease):
+            return None
+
+    scraper = CTGoodJobsBrowserPageScraper(
+        request_payload={"resume_strategy": "fresh_profile"},
+        user_data_dir=r"C:\profiles\ctgoodjobs-missing-proxy-lease",
+        browser_channel="msedge",
+    )
+    scraper._proxy_runtime = FailingProxyRuntime()
+
+    with pytest.raises(ManualActionRequiredError) as exc_info:
+        asyncio.run(_open_only(scraper))
+
+    assert exc_info.value.stage == "proxy_unavailable"
+    assert "proxy" in exc_info.value.message.lower()
+    assert chromium.launch_calls == []
+    assert handle.stopped is True
+
+
 def test_jobsdb_fresh_profile_converts_profile_in_use_launch_failure_into_manual_action_error(
     monkeypatch,
 ):
