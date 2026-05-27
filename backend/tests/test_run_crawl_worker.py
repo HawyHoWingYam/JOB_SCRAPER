@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -8,17 +9,30 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.messaging.event_envelope import build_event_envelope
+from app.messaging.topics import STREAM_CRAWL_PROGRESS
 from app.models.crawl_job import CrawlJob
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.schedule import ScrapeSchedule
 from app.repositories.crawl_job_repository import CrawlJobRepository
+from app.scraper.manual_action import ManualActionRequiredError
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.workers.run_crawl_worker import CrawlWorkerService
 
 
 class FakeBus:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, object]] = []
+        self.acked: list[tuple[object, ...]] = []
+
     def ensure_group(self, *_args, **_kwargs) -> None:
         return None
+
+    def publish(self, topic, envelope) -> None:
+        self.published.append((topic, envelope))
+
+    def ack(self, *args) -> None:
+        self.acked.append(args)
 
 
 class FakeJobRepository:
@@ -101,6 +115,19 @@ def test_build_manual_request_payload_defaults_detail_runs_to_retry_pool():
     assert payload["detail_statuses"] == ["pending", "failed", "manual_action_required"]
     assert payload["detail_limit"] == 250
     assert payload["source_listing_crawl_job_id"] is None
+
+
+def test_build_manual_request_payload_defaults_ctgoodjobs_to_headless():
+    service = CrawlJobDispatchService()
+
+    payload = service.build_manual_request_payload(
+        source_site="ctgoodjobs",
+        crawl_phase="listing",
+        category_ids=["ctgoodjobs:021"],
+        max_pages=2,
+    )
+
+    assert payload["crawl_mode"] == "headless"
 
 
 def test_load_detail_targets_uses_retry_pool_defaults_and_tracks_skip_existing_metrics():
@@ -307,3 +334,121 @@ def test_load_detail_targets_keeps_filling_until_detail_limit_after_skip_existin
     assert [row.detail_status for row in refreshed_skipped_rows] == ["completed", "completed"]
     assert refreshed_untouched_row.detail_status == "pending"
     verification_db.close()
+
+
+def test_ctgoodjobs_worker_started_payload_exposes_proxy_runtime_metadata(monkeypatch):
+    bus = FakeBus()
+
+    class FakeRunner:
+        async def crawl(self, **_kwargs):
+            return {
+                "pages_processed": 0,
+                "items_emitted": 0,
+            }
+
+    worker = CrawlWorkerService(
+        bus=bus,
+        runner_registry={"ctgoodjobs": FakeRunner()},
+        session_factory=_build_session_factory(),
+    )
+    monkeypatch.setattr(worker, "_persist_runtime_event", lambda **_kwargs: None)
+
+    event = build_event_envelope(
+        event_type="crawl.requested",
+        aggregate_type="crawl_job",
+        aggregate_id="job-1",
+        source_service="test",
+        payload={
+            "crawl_job_id": "job-1",
+            "source_site": "ctgoodjobs",
+            "request_payload": {
+                "source_site": "ctgoodjobs",
+                "crawl_phase": "listing",
+                "crawl_mode": "headless",
+                "category_ids": ["ctgoodjobs:021"],
+                "max_pages": 1,
+            },
+        },
+    )
+
+    asyncio.run(worker._handle_message(SimpleNamespace(event=event, message_id="message-1")))
+
+    started_envelopes = [
+        envelope
+        for topic, envelope in bus.published
+        if topic == STREAM_CRAWL_PROGRESS and envelope.event_type == "crawl.started"
+    ]
+    assert len(started_envelopes) == 1
+
+    started_payload = started_envelopes[0].payload
+    assert started_payload["proxy_enabled"] is False
+    assert started_payload["proxy_provider"] == "disabled"
+    assert started_payload["proxy_requests_total"] == 0
+    assert started_payload["proxy_requests_success"] == 0
+    assert started_payload["proxy_requests_challenge"] == 0
+    assert started_payload["proxy_requests_network_fail"] == 0
+    assert started_payload["proxy_requests_http_fail"] == 0
+    assert started_payload["proxy_quarantined_total"] == 0
+    assert started_payload["proxy_metrics_by_stage"]["registry"]["proxy_requests_total"] == 0
+    assert started_payload["proxy_metrics_by_stage"]["category_page"]["proxy_requests_total"] == 0
+    assert started_payload["proxy_metrics_by_stage"]["detail_page"]["proxy_requests_total"] == 0
+
+
+def test_ctgoodjobs_manual_action_progress_preserves_proxy_unavailable_stage(monkeypatch):
+    bus = FakeBus()
+
+    class FailingRunner:
+        async def crawl(self, **_kwargs):
+            raise ManualActionRequiredError(
+                source_site="ctgoodjobs",
+                stage="proxy_unavailable",
+                blocked_url="https://jobs.ctgoodjobs.hk/jobs",
+                message="No usable CTGoodJobs proxy lease is available. Check the proxy configuration or try again later.",
+                instructions=[
+                    "Verify the CTGoodJobs proxy settings and provider availability.",
+                    "Return to the app and click Resume after proxy availability is restored.",
+                ],
+            )
+
+    worker = CrawlWorkerService(
+        bus=bus,
+        runner_registry={"ctgoodjobs": FailingRunner()},
+        session_factory=_build_session_factory(),
+    )
+    monkeypatch.setattr(worker, "_persist_runtime_event", lambda **_kwargs: None)
+
+    event = build_event_envelope(
+        event_type="crawl.requested",
+        aggregate_type="crawl_job",
+        aggregate_id="job-proxy-unavailable",
+        source_service="test",
+        payload={
+            "crawl_job_id": "job-proxy-unavailable",
+            "source_site": "ctgoodjobs",
+            "request_payload": {
+                "source_site": "ctgoodjobs",
+                "crawl_phase": "listing",
+                "crawl_mode": "headed",
+                "category_ids": ["ctgoodjobs:021"],
+                "max_pages": 1,
+            },
+        },
+    )
+
+    asyncio.run(worker._handle_message(SimpleNamespace(event=event, message_id="message-proxy-unavailable")))
+
+    action_required_envelopes = [
+        envelope
+        for topic, envelope in bus.published
+        if topic == STREAM_CRAWL_PROGRESS and envelope.event_type == "crawl.manual_action_required"
+    ]
+    assert len(action_required_envelopes) == 1
+
+    payload = action_required_envelopes[0].payload
+    assert payload["error"] == "No usable CTGoodJobs proxy lease is available. Check the proxy configuration or try again later."
+    assert payload["manual_action"]["stage"] == "proxy_unavailable"
+    assert payload["manual_action"]["message"] == payload["error"]
+    assert payload["manual_action"]["instructions"] == [
+        "Verify the CTGoodJobs proxy settings and provider availability.",
+        "Return to the app and click Resume after proxy availability is restored.",
+    ]
