@@ -7,6 +7,7 @@ SUPPORTED_LLM_PROVIDERS = ("anthropic", "claude", "custom", "gemini", "zhipu", "
 AI_ENRICHMENT_RUN_CONCURRENCY_MIN = 1
 AI_ENRICHMENT_RUN_CONCURRENCY_MAX = 50
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+DEFAULT_RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtime"
 
 
 class Settings(BaseSettings):
@@ -38,7 +39,11 @@ class Settings(BaseSettings):
     jobsdb_headed_browser_executable_path: Optional[str] = None
     jobsdb_headed_navigation_timeout_ms: int = 60000
     jobsdb_headed_worker_lock_port: int = 47651
+    manual_action_helper_host: str = "127.0.0.1"
     jobsdb_headed_manual_action_helper_port: int = 47652
+    manual_action_registry_state_path: str = str(
+        DEFAULT_RUNTIME_DIR / "manual_actions" / "live_browser_sessions.json"
+    )
 
     # Scheduler worker runtime
     scheduler_heartbeat_interval_seconds: int = 15

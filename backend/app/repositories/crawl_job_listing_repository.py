@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from app.crawl_phases import resolve_detail_statuses
 from app.models.crawl_job import CrawlJob
 from app.models.crawl_job_listing import CrawlJobListing
 from app.utils.time import utc_now
@@ -129,15 +130,18 @@ class CrawlJobListingRepository:
         source_site: str,
         source_listing_crawl_job_id=None,
         category_ids: Iterable[str | int] | None = None,
-        statuses: Iterable[str] = ("pending",),
+        statuses: Iterable[str] | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[CrawlJobListing]:
         query = db.query(CrawlJobListing).filter(
             CrawlJobListing.source_site == str(source_site).strip().lower(),
         )
-        normalized_statuses = [str(status).strip().lower() for status in statuses if str(status).strip()]
-        if normalized_statuses:
-            query = query.filter(CrawlJobListing.detail_status.in_(normalized_statuses))
+        normalized_statuses = resolve_detail_statuses(
+            crawl_phase="detail",
+            detail_statuses=statuses,
+        )
+        query = query.filter(CrawlJobListing.detail_status.in_(normalized_statuses))
         if source_listing_crawl_job_id is not None:
             query = query.filter(CrawlJobListing.crawl_job_id == source_listing_crawl_job_id)
 
@@ -154,6 +158,7 @@ class CrawlJobListingRepository:
                 CrawlJobListing.listing_rank.asc().nullslast(),
                 CrawlJobListing.created_at.asc(),
             )
+            .offset(max(int(offset or 0), 0))
             .limit(limit)
             .all()
         )
@@ -318,6 +323,25 @@ class CrawlJobListingRepository:
         normalized_category_ids = [str(category_id).strip() for category_id in (category_ids or []) if str(category_id).strip()]
         if normalized_category_ids:
             query = query.filter(CrawlJobListing.source_classification_id.in_(normalized_category_ids))
+
+        rows = query.group_by(CrawlJobListing.detail_status).all()
+        return {str(status): int(count) for status, count in rows}
+
+    def count_detail_statuses_for_detail_crawl_job(
+        self,
+        db: Session,
+        *,
+        detail_crawl_job_id,
+        source_site: str | None = None,
+    ) -> dict[str, int]:
+        query = db.query(
+            CrawlJobListing.detail_status,
+            func.count(CrawlJobListing.id),
+        ).filter(CrawlJobListing.last_detail_crawl_job_id == detail_crawl_job_id)
+
+        normalized_source_site = str(source_site).strip().lower() if source_site else None
+        if normalized_source_site:
+            query = query.filter(CrawlJobListing.source_site == normalized_source_site)
 
         rows = query.group_by(CrawlJobListing.detail_status).all()
         return {str(status): int(count) for status, count in rows}

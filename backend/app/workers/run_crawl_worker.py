@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.crawl_phases import resolve_crawl_phase
+from app.crawl_phases import resolve_crawl_phase, resolve_detail_statuses
 from app.config import settings
 from app.database import SessionLocal
 from app.logging_config import configure_logging
@@ -47,6 +47,14 @@ if str(BACKEND_ROOT) not in sys.path:
 class CrawlExecutionResult:
     pages_processed: int = 0
     items_emitted: int = 0
+
+
+@dataclass(frozen=True)
+class DetailTargetLoadResult:
+    targets: list[dict[str, Any]]
+    selected_rows: int = 0
+    skipped_existing_rows: int = 0
+    target_rows: int = 0
 
 
 def _default_runner_registry() -> dict[str, Any]:
@@ -109,9 +117,26 @@ class CrawlWorkerService:
         crawl_phase = resolve_crawl_phase(request_payload.get("crawl_phase"))
         job_ids_collected = 0
         latest_page_payload: dict[str, Any] = {}
+        detail_runtime_scope_payload: dict[str, int] = {}
+        detail_targets: list[dict[str, Any]] = []
+
+        if crawl_phase == "detail":
+            detail_load_result = self._load_detail_targets(
+                source_site=source_site,
+                request_payload=request_payload,
+                detail_crawl_job_id=crawl_job_id,
+            )
+            detail_targets = list(detail_load_result.targets)
+            job_ids_collected = len(detail_targets)
+            detail_runtime_scope_payload = {
+                "detail_selected_rows": int(detail_load_result.selected_rows),
+                "detail_skipped_existing_rows": int(detail_load_result.skipped_existing_rows),
+                "detail_target_rows": int(detail_load_result.target_rows),
+            }
 
         started_payload = {
             "request_payload": request_payload,
+            **detail_runtime_scope_payload,
             **self._build_runtime_metrics_payload(
                 pages_processed=0,
                 items_emitted=0,
@@ -234,6 +259,7 @@ class CrawlWorkerService:
         def emit_detail_progress(progress_payload: dict[str, Any]) -> None:
             event_payload = {
                 **progress_payload,
+                **detail_runtime_scope_payload,
                 **self._build_runtime_metrics_payload(
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
@@ -298,13 +324,7 @@ class CrawlWorkerService:
                     request_payload=runner_request_payload,
                 )
             if crawl_phase == "detail":
-                detail_targets = self._load_detail_targets(
-                    source_site=source_site,
-                    request_payload=request_payload,
-                    detail_crawl_job_id=crawl_job_id,
-                )
                 runner_request_payload["detail_targets"] = detail_targets
-                job_ids_collected = len(detail_targets)
             result = runner.crawl(
                 crawl_job_id=crawl_job_id,
                 request_payload=runner_request_payload,
@@ -336,6 +356,7 @@ class CrawlWorkerService:
             completed_payload = {
                 **latest_page_payload,
                 "request_payload": request_payload,
+                **detail_runtime_scope_payload,
                 **self._build_runtime_metrics_payload(
                     pages_processed=final_pages_processed,
                     items_emitted=final_items_emitted,
@@ -377,6 +398,7 @@ class CrawlWorkerService:
                 "request_payload": request_payload,
                 "error": exc.message,
                 "manual_action": manual_action_payload,
+                **detail_runtime_scope_payload,
                 **self._build_runtime_metrics_payload(
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
@@ -417,6 +439,7 @@ class CrawlWorkerService:
                 **latest_page_payload,
                 "request_payload": request_payload,
                 "error": str(exc),
+                **detail_runtime_scope_payload,
                 **self._build_runtime_metrics_payload(
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
@@ -629,71 +652,102 @@ class CrawlWorkerService:
         source_site: str,
         request_payload: dict[str, Any],
         detail_crawl_job_id: str,
-    ) -> list[dict[str, Any]]:
-        source_listing_crawl_job_id = request_payload.get("source_listing_crawl_job_id")
-        detail_statuses = list(request_payload.get("detail_statuses") or ["pending"])
+    ) -> DetailTargetLoadResult:
+        source_listing_crawl_job_id = self._normalize_crawl_job_id(
+            request_payload.get("source_listing_crawl_job_id")
+        )
+        detail_statuses = resolve_detail_statuses(
+            crawl_phase="detail",
+            detail_statuses=request_payload.get("detail_statuses"),
+        )
         category_ids = list(request_payload.get("category_ids") or [])
         detail_limit = int(request_payload.get("detail_limit") or 100)
 
         db = self.session_factory()
         try:
-            rows = self.crawl_job_listing_repository.list_detail_candidates(
-                db,
-                source_site=source_site,
-                source_listing_crawl_job_id=self._normalize_crawl_job_id(source_listing_crawl_job_id),
-                category_ids=category_ids,
-                statuses=detail_statuses,
-                limit=detail_limit,
-            )
-            active_rows = list(rows)
-            if request_payload.get("skip_existing"):
-                existing_jobs_by_source_id = self.job_repository.list_existing_jobs_by_source_ids(
+            active_rows = []
+            skipped_existing_rows: list[tuple[Any, Any]] = []
+            selected_rows = 0
+            skipped_existing_count = 0
+            scan_offset = 0
+            scan_batch_size = max(detail_limit, 100)
+            should_skip_existing = bool(request_payload.get("skip_existing"))
+
+            while len(active_rows) < detail_limit:
+                rows = self.crawl_job_listing_repository.list_detail_candidates(
                     db,
                     source_site=source_site,
-                    source_job_ids=[row.source_job_id for row in active_rows],
+                    source_listing_crawl_job_id=source_listing_crawl_job_id,
+                    category_ids=category_ids,
+                    statuses=detail_statuses,
+                    limit=scan_batch_size,
+                    offset=scan_offset,
                 )
-                if existing_jobs_by_source_id:
-                    remaining_rows = []
-                    affected_listing_batches: set[tuple[Any, str]] = set()
-                    skipped_existing_count = 0
-                    for row in active_rows:
-                        existing_job = existing_jobs_by_source_id.get(str(row.source_job_id).strip())
-                        if existing_job is None:
-                            remaining_rows.append(row)
-                            continue
-                        skipped_existing_count += 1
-                        self.crawl_job_listing_repository.mark_detail_completed(
-                            db,
-                            listing_id=row.id,
-                            detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
-                            detail_payload={
-                                "source_site": row.source_site,
-                                "source_job_id": row.source_job_id,
-                                "skip_existing": True,
-                                "skip_reason": "existing_job",
-                            },
-                            published_job_id=existing_job.id,
-                            auto_commit=False,
-                        )
-                        affected_listing_batches.add((row.crawl_job_id, row.source_site))
-                    for batch_id, batch_source_site in affected_listing_batches:
-                        self._sync_listing_detail_status_metrics(
-                            db,
-                            source_listing_crawl_job_id=batch_id,
-                            source_site=batch_source_site,
-                        )
-                    if skipped_existing_count > 0:
-                        self.crawl_job_repository.increment_metrics(
-                            db,
-                            crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
-                            metrics_delta={"jobs_skipped_existing": skipped_existing_count},
-                            auto_commit=False,
-                        )
-                    if affected_listing_batches:
-                        db.commit()
-                    active_rows = remaining_rows
+                if not rows:
+                    break
 
-            return [
+                existing_jobs_by_source_id = {}
+                if should_skip_existing:
+                    existing_jobs_by_source_id = self.job_repository.list_existing_jobs_by_source_ids(
+                        db,
+                        source_site=source_site,
+                        source_job_ids=[row.source_job_id for row in rows],
+                    )
+
+                for row in rows:
+                    selected_rows += 1
+                    if should_skip_existing:
+                        existing_job = existing_jobs_by_source_id.get(str(row.source_job_id).strip())
+                        if existing_job is not None:
+                            skipped_existing_count += 1
+                            skipped_existing_rows.append((row, existing_job))
+                            continue
+                    active_rows.append(row)
+                    if len(active_rows) >= detail_limit:
+                        break
+
+                if len(active_rows) >= detail_limit or len(rows) < scan_batch_size:
+                    break
+                scan_offset += len(rows)
+
+            if skipped_existing_rows:
+                affected_listing_batches: set[tuple[Any, str]] = set()
+                for row, existing_job in skipped_existing_rows:
+                    self.crawl_job_listing_repository.mark_detail_completed(
+                        db,
+                        listing_id=row.id,
+                        detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
+                        detail_payload={
+                            "source_site": row.source_site,
+                            "source_job_id": row.source_job_id,
+                            "skip_existing": True,
+                            "skip_reason": "existing_job",
+                        },
+                        published_job_id=existing_job.id,
+                        auto_commit=False,
+                    )
+                    affected_listing_batches.add((row.crawl_job_id, row.source_site))
+                for batch_id, batch_source_site in affected_listing_batches:
+                    self._sync_listing_detail_status_metrics(
+                        db,
+                        source_listing_crawl_job_id=batch_id,
+                        source_site=batch_source_site,
+                    )
+                self.crawl_job_repository.increment_metrics(
+                    db,
+                    crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
+                    metrics_delta={"jobs_skipped_existing": skipped_existing_count},
+                    auto_commit=False,
+                )
+            self._sync_detail_run_scope_metrics(
+                db,
+                detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
+                selected_rows=selected_rows,
+                skipped_existing_rows=skipped_existing_count,
+            )
+            db.commit()
+
+            targets = [
                 {
                     "listing_id": str(row.id),
                     "source_listing_crawl_job_id": str(row.crawl_job_id),
@@ -708,6 +762,12 @@ class CrawlWorkerService:
                 }
                 for row in active_rows
             ]
+            return DetailTargetLoadResult(
+                targets=targets,
+                selected_rows=selected_rows,
+                skipped_existing_rows=skipped_existing_count,
+                target_rows=len(targets),
+            )
         finally:
             db.close()
 
@@ -771,6 +831,10 @@ class CrawlWorkerService:
                 source_listing_crawl_job_id=listing.crawl_job_id,
                 source_site=listing.source_site,
             )
+            self._sync_detail_run_scope_metrics(
+                db,
+                detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
+            )
             db.commit()
         finally:
             db.close()
@@ -795,6 +859,10 @@ class CrawlWorkerService:
                 db,
                 source_listing_crawl_job_id=listing.crawl_job_id,
                 source_site=listing.source_site,
+            )
+            self._sync_detail_run_scope_metrics(
+                db,
+                detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
             )
             db.commit()
         finally:
@@ -821,6 +889,10 @@ class CrawlWorkerService:
                 source_listing_crawl_job_id=listing.crawl_job_id,
                 source_site=listing.source_site,
             )
+            self._sync_detail_run_scope_metrics(
+                db,
+                detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
+            )
             db.commit()
         finally:
             db.close()
@@ -845,6 +917,10 @@ class CrawlWorkerService:
                 db,
                 source_listing_crawl_job_id=listing.crawl_job_id,
                 source_site=listing.source_site,
+            )
+            self._sync_detail_run_scope_metrics(
+                db,
+                detail_crawl_job_id=self._normalize_crawl_job_id(detail_crawl_job_id),
             )
             db.commit()
         finally:
@@ -880,6 +956,59 @@ class CrawlWorkerService:
             self.crawl_job_repository.increment_metrics(
                 db,
                 crawl_job_id=source_listing_crawl_job_id,
+                metrics_delta=metrics_delta,
+                auto_commit=False,
+            )
+
+    def _sync_detail_run_scope_metrics(
+        self,
+        db,
+        *,
+        detail_crawl_job_id,
+        selected_rows: int | None = None,
+        skipped_existing_rows: int | None = None,
+    ) -> None:
+        crawl_job = self.crawl_job_repository.get_crawl_job_by_id(db, detail_crawl_job_id)
+        current_metrics = dict(crawl_job.metrics or {}) if crawl_job is not None else {}
+        status_counts = self.crawl_job_listing_repository.count_detail_statuses_for_detail_crawl_job(
+            db,
+            detail_crawl_job_id=detail_crawl_job_id,
+        )
+
+        resolved_selected_rows = int(
+            selected_rows
+            if selected_rows is not None
+            else current_metrics.get("detail_selected_rows") or 0
+        )
+        resolved_skipped_existing_rows = int(
+            skipped_existing_rows
+            if skipped_existing_rows is not None
+            else current_metrics.get("detail_skipped_existing_rows") or 0
+        )
+        exact_metrics = {
+            "detail_selected_rows": resolved_selected_rows,
+            "detail_skipped_existing_rows": resolved_skipped_existing_rows,
+            "detail_target_rows": max(resolved_selected_rows - resolved_skipped_existing_rows, 0),
+            "detail_run_running": int(status_counts.get("running", 0)),
+            "detail_run_completed": int(status_counts.get("completed", 0)),
+            "detail_run_failed": int(status_counts.get("failed", 0)),
+            "detail_run_manual_action_required": int(status_counts.get("manual_action_required", 0)),
+        }
+        exact_metrics["detail_run_terminal_rows"] = (
+            exact_metrics["detail_run_completed"]
+            + exact_metrics["detail_run_failed"]
+            + exact_metrics["detail_run_manual_action_required"]
+        )
+
+        metrics_delta = {
+            key: value - int(current_metrics.get(key) or 0)
+            for key, value in exact_metrics.items()
+            if key not in current_metrics or value != int(current_metrics.get(key) or 0)
+        }
+        if metrics_delta:
+            self.crawl_job_repository.increment_metrics(
+                db,
+                crawl_job_id=detail_crawl_job_id,
                 metrics_delta=metrics_delta,
                 auto_commit=False,
             )

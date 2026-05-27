@@ -78,11 +78,13 @@ def _sidecar_capability(url: str | None, *, configured_reason: str) -> dict[str,
 
 
 def _host_manual_action_helper_capability() -> dict[str, Any]:
-    helper_url = f"http://127.0.0.1:{settings.jobsdb_headed_manual_action_helper_port}"
+    helper_url = f"http://{settings.manual_action_helper_host}:{settings.jobsdb_headed_manual_action_helper_port}"
     return {
         "available": True,
         "helper_url": helper_url,
+        "health_url": f"{helper_url}/health",
         "open_browser_supported": True,
+        "reuse_open_browser_supported": True,
         "close_profile_windows_supported": True,
     }
 

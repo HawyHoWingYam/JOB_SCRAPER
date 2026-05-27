@@ -2,25 +2,34 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import logging
 import os
 from pathlib import Path
 from typing import Awaitable, Callable
 
 from app.config import settings
+from app.manual_actions.live_browser_registry import get_live_browser_registry
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
 from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError, looks_like_interstitial_html
-from app.scraper.manual_action import ManualActionRequiredError
+from app.scraper.manual_action import (
+    ManualActionRequiredError,
+    RESUME_STRATEGY_FRESH_PROFILE,
+    RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+)
 from app.utils.anti_detection import ExponentialBackoff
 
 
 PageContentFetcher = Callable[[str], Awaitable[str]]
 SyncPageContentFetcher = Callable[[str], str]
 
+logger = logging.getLogger(__name__)
+
 
 class CTGoodJobsBrowserPageScraper:
     def __init__(
         self,
         *,
+        request_payload: dict | None = None,
         page_content_fetcher: PageContentFetcher | None = None,
         sync_page_content_fetcher: SyncPageContentFetcher | None = None,
         browser_channel: str | None = None,
@@ -29,6 +38,8 @@ class CTGoodJobsBrowserPageScraper:
         navigation_timeout_ms: int | None = None,
         max_attempts: int = 3,
     ):
+        self.request_payload = dict(request_payload or {})
+        self.resume_strategy = self.request_payload.get("resume_strategy") or RESUME_STRATEGY_FRESH_PROFILE
         self.page_content_fetcher = page_content_fetcher
         self.sync_page_content_fetcher = sync_page_content_fetcher
         self.browser_channel = browser_channel or settings.jobsdb_headed_browser_channel
@@ -43,8 +54,11 @@ class CTGoodJobsBrowserPageScraper:
         self._executor: ThreadPoolExecutor | None = None
         self._runtime_started = False
         self._sync_playwright = None
+        self._sync_browser = None
         self._sync_context = None
         self._sync_page = None
+        self._last_page_title: str | None = None
+        self._last_page_url: str | None = None
 
     async def __aenter__(self):
         if self.page_content_fetcher is None and self.sync_page_content_fetcher is None:
@@ -53,7 +67,9 @@ class CTGoodJobsBrowserPageScraper:
             try:
                 await loop.run_in_executor(self._executor, self._start_sync_runtime)
             except Exception as exc:
-                self._raise_if_profile_in_use(exc)
+                await self._cleanup_failed_startup(loop)
+                if self.resume_strategy == RESUME_STRATEGY_FRESH_PROFILE:
+                    self._raise_if_profile_in_use(exc)
                 raise
         return self
 
@@ -90,7 +106,7 @@ class CTGoodJobsBrowserPageScraper:
                             instructions=[
                                 "Open Edge using the listed profile.",
                                 "Visit the blocked URL and complete the verification challenge.",
-                                "Close the manual browser window.",
+                                "Keep the browser open after the challenge is solved.",
                                 "Return to the app and click Resume.",
                             ],
                         )
@@ -127,6 +143,19 @@ class CTGoodJobsBrowserPageScraper:
         from playwright.sync_api import sync_playwright
 
         self._sync_playwright = sync_playwright().start()
+        if self.resume_strategy == RESUME_STRATEGY_REUSE_OPEN_BROWSER:
+            self._attach_to_live_browser()
+            self._runtime_started = True
+            return
+        logger.info(
+            "manual_action_fresh_resume_selected",
+            extra={
+                "crawl_job_id": self.request_payload.get("crawl_job_id"),
+                "strategy": self.resume_strategy,
+                "source_site": "ctgoodjobs",
+            },
+        )
+
         launch_kwargs = {
             "headless": False,
         }
@@ -143,25 +172,133 @@ class CTGoodJobsBrowserPageScraper:
         self._sync_page = self._sync_context.pages[0] if self._sync_context.pages else self._sync_context.new_page()
         self._runtime_started = True
 
+    def _attach_to_live_browser(self) -> None:
+        session = get_live_browser_registry().get(str(self._resolve_user_data_dir()))
+        if session is None or int(session.debug_port or 0) <= 0:
+            raise self._build_reuse_open_browser_unavailable_error(
+                message="No reusable browser session is available for this automation profile. Open the manual browser again or choose Fresh Profile."
+            )
+
+        logger.info(
+            "manual_action_attach_attempt",
+            extra={
+                "crawl_job_id": self.request_payload.get("crawl_job_id"),
+                "strategy": self.resume_strategy,
+                "source_site": "ctgoodjobs",
+                "debug_port": session.debug_port,
+            },
+        )
+        try:
+            self._sync_browser = self._sync_playwright.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{session.debug_port}"
+            )
+        except ManualActionRequiredError:
+            raise
+        except Exception as exc:
+            logger.info(
+                "manual_action_attach_failure",
+                extra={
+                    "crawl_job_id": self.request_payload.get("crawl_job_id"),
+                    "strategy": self.resume_strategy,
+                    "source_site": "ctgoodjobs",
+                    "debug_port": session.debug_port,
+                    "error": str(exc),
+                },
+            )
+            raise self._build_reuse_open_browser_unavailable_error(
+                message="The reusable browser session is unavailable. Reopen the manual browser or choose Fresh Profile."
+            ) from exc
+        self._sync_context = self._sync_browser.contexts[0] if self._sync_browser.contexts else None
+        if self._sync_context is None:
+            logger.info(
+                "manual_action_attach_failure",
+                extra={
+                    "crawl_job_id": self.request_payload.get("crawl_job_id"),
+                    "strategy": self.resume_strategy,
+                    "source_site": "ctgoodjobs",
+                    "debug_port": session.debug_port,
+                    "error": "Attached browser exposes no reusable context",
+                },
+            )
+            raise self._build_reuse_open_browser_unavailable_error(
+                message="The reusable browser session is unavailable. Reopen the manual browser or choose Fresh Profile."
+            )
+
+        self._sync_context.set_default_navigation_timeout(self.navigation_timeout_ms)
+        self._sync_page = self._sync_context.pages[0] if self._sync_context.pages else self._sync_context.new_page()
+        self._sync_page.wait_for_timeout(1500)
+        logger.info(
+            "manual_action_attach_success",
+            extra={
+                "crawl_job_id": self.request_payload.get("crawl_job_id"),
+                "strategy": self.resume_strategy,
+                "source_site": "ctgoodjobs",
+                "debug_port": session.debug_port,
+            },
+        )
+
     def _stop_sync_runtime(self) -> None:
-        if self._sync_context is not None:
+        if self._sync_browser is None and self._sync_context is not None:
             self._sync_context.close()
         if self._sync_playwright is not None:
             self._sync_playwright.stop()
         self._sync_page = None
         self._sync_context = None
+        self._sync_browser = None
         self._sync_playwright = None
         self._runtime_started = False
+        self._last_page_title = None
+        self._last_page_url = None
+
+    async def _cleanup_failed_startup(self, loop) -> None:
+        if self._executor is None:
+            return
+        try:
+            await loop.run_in_executor(self._executor, self._stop_sync_runtime)
+        finally:
+            self._executor.shutdown(wait=True)
+            self._executor = None
+
+    def _build_reuse_open_browser_unavailable_error(self, *, message: str) -> ManualActionRequiredError:
+        return ManualActionRequiredError(
+            source_site="ctgoodjobs",
+            stage="reuse_open_browser_unavailable",
+            blocked_url=f"{CTGOODJOBS_BASE_URL}/jobs",
+            message=message,
+            instructions=[
+                "Reopen the visible browser for this automation profile and try Reuse Open Browser again.",
+                "If no visible browser is available, resume with Fresh Profile instead.",
+            ],
+        )
 
     def _fetch_page_content_sync(self, url: str) -> str:
         if not self._runtime_started:
             self._start_sync_runtime()
         self._sync_page.goto(url, wait_until="domcontentloaded")
         self._sync_page.wait_for_timeout(3000)
+        self._last_page_title = self._sync_page.title()
+        self._last_page_url = str(getattr(self._sync_page, "url", url) or url)
         return self._sync_page.content()
 
     def _looks_like_interstitial(self, html: str) -> bool:
-        return looks_like_interstitial_html(html)
+        return looks_like_interstitial_html(html) or self._response_indicates_cloudflare_challenge(html)
+
+    def _response_indicates_cloudflare_challenge(self, html: str) -> bool:
+        lowered_html = (html or "").lower()
+        lowered_title = str(self._last_page_title or "").lower()
+        lowered_url = str(self._last_page_url or "").lower()
+        challenge_markers = (
+            "just a moment",
+            "cf-challenge",
+            "challenges.cloudflare.com",
+            "/cdn-cgi/challenge-platform",
+            "challenge-platform",
+            "__cf_chl_",
+        )
+        return any(
+            marker in lowered_html or marker in lowered_title or marker in lowered_url
+            for marker in challenge_markers
+        )
 
     def _raise_if_profile_in_use(self, exc: Exception) -> None:
         message = str(exc or "")

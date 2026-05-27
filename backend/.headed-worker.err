@@ -84,3 +84,23 @@ app.scraper.ctgoodjobs.html_fetcher.CTGoodJobsFetchError: CTGoodJobs category_pa
 2026-05-26 23:51:43,948 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.11s
 2026-05-26 23:53:13,748 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.15s
 2026-05-26 23:53:18,087 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.39s
+2026-05-27 10:10:21,187 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 0.81s
+2026-05-27 10:10:25,282 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.23s
+2026-05-27 10:14:09,051 ERROR [asyncio] Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+Traceback (most recent call last):
+  File "C:\Program Files\Python311\Lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Program Files\Python311\Lib\asyncio\proactor_events.py", line 165, in _call_connection_lost
+    self._sock.shutdown(socket.SHUT_RDWR)
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+2026-05-27 10:16:04,212 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 0.89s
+2026-05-27 10:16:08,374 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.33s
+2026-05-27 10:16:53,453 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 0.77s
+2026-05-27 10:16:57,402 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.00s
+2026-05-27 10:17:35,736 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.05s
+2026-05-27 10:17:40,141 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 2.15s
+2026-05-27 10:20:26,642 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.20s
+2026-05-27 10:20:31,015 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 1.80s
+2026-05-27 10:21:18,582 INFO [app.utils.anti_detection] Backoff: attempt 1, waiting 1.22s
+2026-05-27 10:21:23,645 INFO [app.utils.anti_detection] Backoff: attempt 2, waiting 1.71s

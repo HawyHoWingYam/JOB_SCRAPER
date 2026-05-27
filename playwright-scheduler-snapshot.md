@@ -1,0 +1,94 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - img [ref=e7]
+        - heading "JobsDB Ops" [level=1] [ref=e12]
+      - generic [ref=e13]: Crawler operations console
+    - navigation [ref=e14]:
+      - button "Dashboard" [ref=e15] [cursor=pointer]:
+        - img [ref=e16]
+        - generic [ref=e21]: Dashboard
+      - button "Job Browser" [ref=e23] [cursor=pointer]:
+        - img [ref=e24]
+        - generic [ref=e27]: Job Browser
+      - button "Companies" [ref=e28] [cursor=pointer]:
+        - img [ref=e29]
+        - generic [ref=e33]: Companies
+      - button "AI Enrichment" [ref=e34] [cursor=pointer]:
+        - img [ref=e35]
+        - generic [ref=e47]: AI Enrichment
+      - button "Scheduler" [ref=e48] [cursor=pointer]:
+        - img [ref=e49]
+        - generic [ref=e53]: Scheduler
+    - generic [ref=e54]:
+      - button "Settings" [ref=e55] [cursor=pointer]:
+        - img [ref=e56]
+        - generic [ref=e59]: Settings
+      - generic [ref=e62]: System Online
+  - main [ref=e63]:
+    - generic [ref=e67]:
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - heading "Task Control Board" [level=2] [ref=e70]
+          - paragraph [ref=e75]: Automations, direct runs, and crawl progress.
+        - generic [ref=e76]:
+          - button "New Automation" [ref=e77] [cursor=pointer]
+          - button "Cancel" [ref=e79] [cursor=pointer]
+      - generic [ref=e80]:
+        - generic [ref=e81]: Data Source
+        - combobox "Data Source" [ref=e82]:
+          - option "JobsDB" [selected]
+          - option "CTgoodjobs"
+      - generic [ref=e83]:
+        - generic [ref=e84]:
+          - generic [ref=e85]: Scheduled Automation
+          - paragraph [ref=e86]: Keep repeatable source scans on a cron so nightly and recurring workloads stay hands-free.
+        - generic [ref=e87]:
+          - generic [ref=e88]: Immediate Run for Backlog Recovery
+          - paragraph [ref=e89]: Launch an on-demand listing or detail crawl when you need to recover backlog or step through manual verification.
+      - generic [ref=e90]:
+        - strong [ref=e91]: "Scheduler owner: scheduler-worker"
+        - generic [ref=e92]:
+          - generic [ref=e93]: "Heartbeat: fresh"
+          - generic [ref=e94]: "Last heartbeat: 5/27/2026, 5:37:06 PM"
+          - generic [ref=e95]: "Last reconcile: 5/27/2026, 5:36:41 PM"
+      - generic [ref=e96]:
+        - generic [ref=e97]:
+          - generic [ref=e98]
+          - generic [ref=e101]: Live
+        - generic [ref=e103]:
+          - generic [ref=e104]
+          - generic [ref=e142]
+      - generic [ref=e229]:
+        - heading "Direct Override Sequence" [level=3] [ref=e230]
+        - paragraph [ref=e231]: Direct crawl job configuration.
+        - generic [ref=e232]:
+          - generic [ref=e233]: Immediate Run for Backlog Recovery
+          - strong [ref=e234]: This run will recover detail backlog from the selected source and sectors.
+          - generic [ref=e235]
+        - generic [ref=e239]:
+          - generic [ref=e240]: Crawl Phase
+          - combobox "Crawl Phase" [ref=e241]
+        - generic [ref=e242]:
+          - generic [ref=e243]: Crawl Mode
+          - combobox "Crawl Mode" [ref=e244]
+        - generic [ref=e245]:
+          - generic [ref=e246]: Target Sectors
+          - generic [ref=e247]
+        - generic [ref=e323]:
+          - generic [ref=e324]: Eligible Detail Limit
+          - spinbutton [ref=e325]: "100"
+        - generic [ref=e400]:
+          - generic [ref=e401]: Legacy Listing Batch Filter
+          - combobox "Legacy Listing Batch Filter" [ref=e402]
+          - generic [ref=e403]
+        - button "Start Job Detail Crawl" [ref=e408] [cursor=pointer]:
+          - img [ref=e328]
+          - text: Start Job Detail Crawl
+      - generic [ref=e330]:
+        - heading "Scheduled Automation" [level=3] [ref=e331]
+        - generic [ref=e333]:
+          - generic [ref=e334]
+          - generic [ref=e345]
+          - generic [ref=e384]

@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../../api/base';
 import { formatCrawlModeLabel } from './crawlMode';
+import {
+    formatListingBatchIdentity,
+    formatScraperSourceLabel,
+} from './listingBatchLabel';
 
 const API_URL = API_BASE_URL;
 const API_BASE = `${API_URL}/api/v1`;
@@ -17,9 +21,8 @@ function ScrapeProgressPanel({
     onResumeCrawlJob,
     onCancelCrawlJob,
     onOpenManualActionBrowser,
-    onCloseManualActionWindows,
-    onCaptureManualActionAnalysis,
-    onAutoResolveManualAction
+    onGetManualActionReuseStatus,
+    onCloseManualActionWindows
 }) {
     const [progress, setProgress] = useState(initialProgress);
     const [isConnected, setIsConnected] = useState(false);
@@ -136,10 +139,11 @@ function ScrapeProgressPanel({
     }, [isVisible]);
 
     const progressEntries = Object.entries(progress).sort((leftEntry, rightEntry) => {
-        return getProgressTimestamp(rightEntry[1]) - getProgressTimestamp(leftEntry[1]);
+        return getProgressSortTimestamp(rightEntry[1]) - getProgressSortTimestamp(leftEntry[1]);
     });
-    const visibleProgressEntries = progressEntries.slice(0, MAX_VISIBLE_TASKS);
-    const hasProgress = visibleProgressEntries.length > 0;
+    const progressSections = buildProgressSections(progressEntries);
+    const visibleTaskCount = progressSections.reduce((count, section) => count + section.entries.length, 0);
+    const hasProgress = visibleTaskCount > 0;
 
     useEffect(() => {
         clearRecoveryTimeout();
@@ -193,7 +197,7 @@ function ScrapeProgressPanel({
                     <h3>Scraping Progress</h3>
                     {hasProgress && (
                         <div className="progress-count-hint">
-                            Showing latest {visibleProgressEntries.length} of {progressEntries.length} tasks
+                            Showing {visibleTaskCount} of {progressEntries.length} operator-visible tasks
                         </div>
                     )}
                 </div>
@@ -211,19 +215,23 @@ function ScrapeProgressPanel({
                         {isRecovering ? 'Reconnecting to active Direct Override...' : 'No active scraping tasks'}
                     </div>
                 ) : (
-                    visibleProgressEntries.map(([taskKey, data]) => (
-                        <ProgressItem
-                            key={taskKey}
-                            taskKey={taskKey}
-                            data={data}
-                            onNavigateToAI={onNavigateToAI}
-                            onResumeCrawlJob={onResumeCrawlJob}
-                            onCancelCrawlJob={onCancelCrawlJob}
-                            onOpenManualActionBrowser={onOpenManualActionBrowser}
-                            onCloseManualActionWindows={onCloseManualActionWindows}
-                            onCaptureManualActionAnalysis={onCaptureManualActionAnalysis}
-                            onAutoResolveManualAction={onAutoResolveManualAction}
-                        />
+                    progressSections.map((section) => (
+                        <div key={section.key} className="progress-section">
+                            <div className="progress-count-hint">{section.title}</div>
+                            {section.entries.map(([taskKey, data]) => (
+                                <ProgressItem
+                                    key={taskKey}
+                                    taskKey={taskKey}
+                                    data={data}
+                                    onNavigateToAI={onNavigateToAI}
+                                    onResumeCrawlJob={onResumeCrawlJob}
+                                    onCancelCrawlJob={onCancelCrawlJob}
+                                    onOpenManualActionBrowser={onOpenManualActionBrowser}
+                                    onGetManualActionReuseStatus={onGetManualActionReuseStatus}
+                                    onCloseManualActionWindows={onCloseManualActionWindows}
+                                />
+                            ))}
+                        </div>
                     ))
                 )}
             </div>
@@ -232,15 +240,7 @@ function ScrapeProgressPanel({
 }
 
 function formatSourceLabel(sourceSite) {
-    if (sourceSite === 'ctgoodjobs') {
-        return 'CTgoodjobs';
-    }
-
-    if (sourceSite === 'jobsdb') {
-        return 'JobsDB';
-    }
-
-    return sourceSite;
+    return formatScraperSourceLabel(sourceSite);
 }
 
 function formatDuration(seconds) {
@@ -258,6 +258,19 @@ function formatDuration(seconds) {
     return `${mins}m ${secs}s`;
 }
 
+function formatTaskTimestamp(value) {
+    if (!value) {
+        return '-';
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return `${value}`;
+    }
+
+    return parsed.toLocaleString('en-US');
+}
+
 function formatCount(value) {
     return Number(value || 0).toLocaleString();
 }
@@ -271,13 +284,11 @@ function formatCountPair(currentValue, totalValue) {
     return `${formatCount(currentValue)}/?`;
 }
 
-function getProgressTimestamp(data) {
-    const candidateValues = [
-        data?.updated_at,
-        data?.completed_at,
-        data?.started_at,
-        data?.queued_at,
-    ];
+function getProgressSortTimestamp(data) {
+    const classification = classifyProgressEntry(data);
+    const candidateValues = classification === 'live' || classification === 'attention'
+        ? [data?.updated_at, data?.started_at, data?.queued_at]
+        : [data?.completed_at, data?.started_at, data?.queued_at];
 
     for (const value of candidateValues) {
         const timestamp = Date.parse(value);
@@ -289,32 +300,81 @@ function getProgressTimestamp(data) {
     return 0;
 }
 
-function formatPhaseLabel(phase, status) {
-    if (status === 'manual_action_required') {
-        return 'Manual Review';
+function formatMaybeCountPair(currentValue, totalValue) {
+    const normalizedCurrent = Number(currentValue || 0);
+    const normalizedTotal = Number(totalValue);
+
+    if (
+        Number.isFinite(normalizedTotal)
+        && normalizedTotal > 0
+        && normalizedTotal >= normalizedCurrent
+    ) {
+        return formatCountPair(normalizedCurrent, normalizedTotal);
     }
 
-    if (phase === 1) {
-        return 'Listing IDs';
+    return formatCount(normalizedCurrent);
+}
+
+function classifyProgressEntry(data) {
+    if (data?.status === 'manual_action_required') {
+        return 'attention';
     }
 
-    if (phase === 2) {
-        return 'Job Details';
+    if (
+        data?.operator_state === 'completed_with_downstream_backlog'
+        || data?.operator_state === 'stale_downstream_backlog'
+    ) {
+        return 'backlog';
     }
 
-    if (phase === 3) {
-        return 'AI Classification';
+    if (['queued', 'dispatching', 'running', 'ai_running'].includes(data?.status)) {
+        return 'live';
     }
 
-    if (phase === 4) {
-        return 'Database Save';
+    return 'terminal';
+}
+
+function buildProgressSections(progressEntries) {
+    const groupedEntries = {
+        attention: [],
+        live: [],
+        backlog: [],
+        terminal: [],
+    };
+
+    progressEntries.forEach((entry) => {
+        groupedEntries[classifyProgressEntry(entry[1])].push(entry);
+    });
+
+    const linkedBacklogBatchIds = new Set(
+        [...groupedEntries.attention, ...groupedEntries.live]
+            .map(([, data]) => `${data?.request_payload?.source_listing_crawl_job_id || ''}`.trim())
+            .filter(Boolean)
+    );
+    if (linkedBacklogBatchIds.size > 0) {
+        groupedEntries.backlog = groupedEntries.backlog.filter(
+            ([taskKey]) => !linkedBacklogBatchIds.has(`${taskKey}`)
+        );
     }
 
-    if (phase === 5 || status === 'ai_running' || status === 'completed_with_ai_failures') {
-        return 'AI Enrichment';
-    }
+    const visibleKeys = new Set();
+    const prioritizedEntries = [];
+    ['attention', 'live', 'backlog', 'terminal'].forEach((groupKey) => {
+        groupedEntries[groupKey].forEach((entry) => {
+            if (prioritizedEntries.length >= MAX_VISIBLE_TASKS) {
+                return;
+            }
+            prioritizedEntries.push(entry);
+            visibleKeys.add(entry[0]);
+        });
+    });
 
-    return 'Queued';
+    return [
+        { key: 'attention', title: 'Needs Attention', entries: groupedEntries.attention.filter(([key]) => visibleKeys.has(key)) },
+        { key: 'live', title: 'Running or Queued', entries: groupedEntries.live.filter(([key]) => visibleKeys.has(key)) },
+        { key: 'backlog', title: 'Backlog Follow-up', entries: groupedEntries.backlog.filter(([key]) => visibleKeys.has(key)) },
+        { key: 'terminal', title: 'Recent Terminal', entries: groupedEntries.terminal.filter(([key]) => visibleKeys.has(key)) },
+    ].filter((section) => section.entries.length > 0);
 }
 
 function buildContextChips({
@@ -339,6 +399,85 @@ function buildContextChips({
     return values;
 }
 
+function resolveMetricScope(data) {
+    if (data?.metric_scope) {
+        return data.metric_scope;
+    }
+
+    if (data?.status === 'manual_action_required') {
+        return 'manual_action';
+    }
+
+    const backlogCountsVisible = [
+        data?.listings_staged,
+        data?.detail_pending,
+        data?.detail_running,
+        data?.detail_completed,
+        data?.detail_failed,
+        data?.detail_manual_action_required,
+    ].some((value) => Number(value || 0) > 0);
+
+    if (
+        backlogCountsVisible
+        && (
+            data?.operator_state === 'completed_with_downstream_backlog'
+            || data?.operator_state === 'stale_downstream_backlog'
+        )
+    ) {
+        return 'backlog_pool';
+    }
+
+    if (data?.phase === 1) {
+        return 'listing_run';
+    }
+    if (data?.phase === 2) {
+        return 'detail_run';
+    }
+    if (data?.phase === 4) {
+        return 'ingest_run';
+    }
+    if (data?.phase === 5 || data?.status === 'ai_running' || data?.ai_run_id) {
+        return 'ai_run';
+    }
+
+    return 'crawl_job';
+}
+
+function buildDetailRunMetricLines({
+    detailSelectedRows,
+    detailSkippedExistingRows,
+    detailTargetRows,
+    jobsScraped,
+    detailRunFailed,
+    detailRunManualActionRequired,
+}) {
+    const lines = [];
+    const runnableRows = detailTargetRows || Math.max(detailSelectedRows - detailSkippedExistingRows, 0);
+
+    if (detailSelectedRows > 0) {
+        lines.push(`Rows checked: ${formatCount(detailSelectedRows)}`);
+    }
+    if (detailSkippedExistingRows > 0) {
+        lines.push(`Skipped existing: ${formatCount(detailSkippedExistingRows)}`);
+    }
+
+    lines.push(
+        `Detail crawled: ${runnableRows > 0
+            ? formatCountPair(jobsScraped, runnableRows)
+            : formatCount(jobsScraped)
+        }`
+    );
+
+    if (detailRunFailed > 0) {
+        lines.push(`Failed rows: ${formatCount(detailRunFailed)}`);
+    }
+    if (detailRunManualActionRequired > 0) {
+        lines.push(`Manual review: ${formatCount(detailRunManualActionRequired)}`);
+    }
+
+    return lines;
+}
+
 function ProgressItem({
     taskKey,
     data,
@@ -346,15 +485,15 @@ function ProgressItem({
     onResumeCrawlJob,
     onCancelCrawlJob,
     onOpenManualActionBrowser,
-    onCloseManualActionWindows,
-    onCaptureManualActionAnalysis,
-    onAutoResolveManualAction
+    onGetManualActionReuseStatus,
+    onCloseManualActionWindows
 }) {
-    const [manualActionAnalysis, setManualActionAnalysis] = useState(null);
-    const [localManualActionResolution, setLocalManualActionResolution] = useState(null);
-    const [manualActionAnalysisError, setManualActionAnalysisError] = useState(null);
-    const [isManualActionAnalysisLoading, setIsManualActionAnalysisLoading] = useState(false);
-    const [isApplyingSuggestedFix, setIsApplyingSuggestedFix] = useState(false);
+    const [liveSessionMetadata, setLiveSessionMetadata] = useState(null);
+    const [reuseStatusError, setReuseStatusError] = useState(null);
+    const [showReuseRecoveryPrompt, setShowReuseRecoveryPrompt] = useState(false);
+    const [showFreshResumeWarning, setShowFreshResumeWarning] = useState(false);
+    const [isReuseChecking, setIsReuseChecking] = useState(false);
+    const [isResumeSubmitting, setIsResumeSubmitting] = useState(null);
     const {
         crawl_job_id,
         status,
@@ -364,7 +503,7 @@ function ProgressItem({
         crawl_mode,
         phase,
         manual_action,
-        manual_action_resolution,
+        request_payload = {},
         // Phase 1
         job_ids_collected = 0,
         current_page,
@@ -383,8 +522,15 @@ function ProgressItem({
         save_total = 0,
         listings_staged = 0,
         jobs_skipped_existing = 0,
+        detail_selected_rows = 0,
+        detail_skipped_existing_rows = 0,
+        detail_target_rows = 0,
+        detail_run_failed = 0,
+        detail_run_manual_action_required = 0,
         detail_pending = 0,
         detail_running = 0,
+        detail_completed = 0,
+        detail_failed = 0,
         detail_manual_action_required = 0,
         // Phase 5
         ai_run_id,
@@ -392,23 +538,42 @@ function ProgressItem({
         ai_failed_items = 0,
         ai_total_items,
         // Timing
+        queued_at,
+        started_at,
+        completed_at,
         elapsed_seconds = 0,
         error
     } = data;
     const taskId = crawl_job_id || taskKey;
     const elapsedLabel = formatDuration(elapsed_seconds);
-    const effectiveManualActionResolution = localManualActionResolution || manual_action_resolution || null;
     const effectiveDetailTotal = detail_job_total || total_jobs;
     const effectiveDetailIndex = detail_job_index || jobs_scraped;
     const aiProcessedItems = ai_completed_items + ai_failed_items;
     const aiTotalItems = ai_total_items || save_total || jobs_saved || total_jobs || jobs_scraped || aiProcessedItems;
+    const sourceListingBatchId = `${request_payload?.source_listing_crawl_job_id || ''}`.trim();
+    const listingBatchLabel = sourceListingBatchId
+        ? formatListingBatchIdentity({
+            sourceSite: source_site,
+            crawlJobId: sourceListingBatchId,
+        })
+        : null;
     const hasDownstreamBacklog = operator_state === 'completed_with_downstream_backlog'
         || operator_state === 'stale_downstream_backlog';
+    const metricScope = resolveMetricScope(data);
     const contextChips = buildContextChips({
         sourceSite: manual_action?.source_site || source_site,
         categoryName: category_name,
         crawlMode: crawl_mode,
     });
+
+    useEffect(() => {
+        setLiveSessionMetadata(null);
+        setReuseStatusError(null);
+        setShowReuseRecoveryPrompt(false);
+        setShowFreshResumeWarning(false);
+        setIsReuseChecking(false);
+        setIsResumeSubmitting(null);
+    }, [crawl_job_id, manual_action?.stage, status]);
 
     const renderHeader = (statusText, statusClass) => (
         <div className="progress-item-header">
@@ -440,6 +605,14 @@ function ProgressItem({
         ) : null
     );
 
+    const renderTimingBlock = () => (
+        <div className="progress-time-grid">
+            <div className="progress-text">Queued: {formatTaskTimestamp(queued_at)}</div>
+            <div className="progress-text">Started: {formatTaskTimestamp(started_at)}</div>
+            <div className="progress-text">Ended: {formatTaskTimestamp(completed_at)}</div>
+        </div>
+    );
+
     if (status === 'manual_action_required' && manual_action) {
         const instructions = Array.isArray(manual_action.instructions)
             ? manual_action.instructions.filter(Boolean)
@@ -450,12 +623,18 @@ function ProgressItem({
             metricLines.push(`Pages: ${formatCountPair(current_page || 0, total_pages)}`);
             metricLines.push(`IDs found: ${formatCount(job_ids_collected)}`);
         } else if (phase === 2) {
-            metricLines.push(`Details completed: ${formatCountPair(jobs_scraped, effectiveDetailTotal)}`);
+            metricLines.push(
+                ...buildDetailRunMetricLines({
+                    detailSelectedRows: detail_selected_rows,
+                    detailSkippedExistingRows: detail_skipped_existing_rows,
+                    detailTargetRows: detail_target_rows || effectiveDetailTotal,
+                    jobsScraped: jobs_scraped,
+                    detailRunFailed: detail_run_failed,
+                    detailRunManualActionRequired: detail_run_manual_action_required || 1,
+                })
+            );
             if (detail_job_index || effectiveDetailTotal) {
                 metricLines.push(`Current target: ${formatCountPair(effectiveDetailIndex, effectiveDetailTotal)}`);
-            }
-            if (save_total > 0) {
-                metricLines.push(`Saved: ${formatCountPair(jobs_saved, save_total)}`);
             }
         } else if (phase === 5 || ai_run_id) {
             metricLines.push(`Items processed: ${formatCountPair(aiProcessedItems, aiTotalItems)}`);
@@ -469,15 +648,56 @@ function ProgressItem({
             window.navigator.clipboard?.writeText?.(value);
         };
 
-        const handleResume = async () => {
+        const buildInlineErrorMessage = (value, fallback) => {
+            if (typeof value === 'string' && value.trim()) {
+                return value;
+            }
+
+            if (value instanceof Error && value.message) {
+                return value.message;
+            }
+
+            return fallback;
+        };
+
+        const extractLiveSessionMetadata = (payload) => {
+            if (!payload || typeof payload !== 'object') {
+                return null;
+            }
+
+            if (payload.live_session && typeof payload.live_session === 'object') {
+                return payload.live_session;
+            }
+
+            const hasSessionFields = [
+                'session_id',
+                'browser_channel',
+                'attached_at',
+                'last_seen_at',
+                'debugger_url',
+                'ws_endpoint',
+            ].some((key) => payload[key] != null);
+
+            return hasSessionFields ? payload : null;
+        };
+
+        const submitResume = async (strategy, fallbackMessage) => {
             if (!crawl_job_id) {
                 return;
             }
 
             try {
-                await onResumeCrawlJob?.(crawl_job_id);
+                setIsResumeSubmitting(strategy);
+                await onResumeCrawlJob?.(crawl_job_id, strategy);
+                setReuseStatusError(null);
+                setShowReuseRecoveryPrompt(false);
+                setShowFreshResumeWarning(false);
             } catch (resumeError) {
+                const detail = buildInlineErrorMessage(resumeError, fallbackMessage);
                 console.error('Failed to resume crawl job:', resumeError);
+                setReuseStatusError(detail);
+            } finally {
+                setIsResumeSubmitting(null);
             }
         };
 
@@ -486,16 +706,16 @@ function ProgressItem({
                 return;
             }
 
-            try {
-                if (onOpenManualActionBrowser && crawl_job_id) {
-                    await onOpenManualActionBrowser(crawl_job_id);
-                    return;
+            if (onOpenManualActionBrowser && crawl_job_id) {
+                const openResult = await onOpenManualActionBrowser(crawl_job_id);
+                const metadata = extractLiveSessionMetadata(openResult);
+                if (metadata) {
+                    setLiveSessionMetadata(metadata);
                 }
-            } catch (browserError) {
-                console.error('Failed to open manual action browser:', browserError);
+                return;
             }
 
-            if (manual_action.blocked_url) {
+            if (manual_action.blocked_url && !onOpenManualActionBrowser) {
                 window.open(manual_action.blocked_url, '_blank', 'noopener,noreferrer');
             }
         };
@@ -512,106 +732,59 @@ function ProgressItem({
             }
         };
 
-        const handleCaptureAndAnalyze = async () => {
-            if (!crawl_job_id || !onCaptureManualActionAnalysis) {
+        const handleResumeUsingOpenBrowser = async () => {
+            if (!crawl_job_id || !onGetManualActionReuseStatus) {
+                await submitResume('reuse_open_browser', 'Failed to resume using the open browser');
                 return;
             }
 
-            setIsManualActionAnalysisLoading(true);
-            setManualActionAnalysisError(null);
+            setIsReuseChecking(true);
+            setShowFreshResumeWarning(false);
+            setLiveSessionMetadata(null);
+            setReuseStatusError(null);
+            setShowReuseRecoveryPrompt(false);
 
             try {
-                const analysis = await onCaptureManualActionAnalysis(crawl_job_id, manual_action);
-                setManualActionAnalysis(analysis || null);
-                setLocalManualActionResolution(null);
-            } catch (analysisError) {
-                console.error('Failed to capture and analyze manual action:', analysisError);
-                setManualActionAnalysisError(
-                    analysisError instanceof Error
-                        ? analysisError.message
-                        : 'Failed to capture and analyze verification'
-                );
-            } finally {
-                setIsManualActionAnalysisLoading(false);
-            }
-        };
+                const reuseStatus = await onGetManualActionReuseStatus(crawl_job_id);
+                const metadata = extractLiveSessionMetadata(reuseStatus);
 
-        const applySuggestedFix = async (analysis) => {
-            if (!crawl_job_id || !analysis?.auto_apply_supported) {
-                return;
-            }
+                if (metadata) {
+                    setLiveSessionMetadata(metadata);
+                }
 
-            if (analysis.suggested_action === 'close_profile_windows') {
-                await onCloseManualActionWindows?.(crawl_job_id);
-            }
-
-            if (analysis.auto_resume_after_action) {
-                await onResumeCrawlJob?.(crawl_job_id);
-            }
-        };
-
-        const handleApplySuggestedFix = async () => {
-            if (!manualActionAnalysis?.auto_apply_supported) {
-                return;
-            }
-
-            setIsApplyingSuggestedFix(true);
-            setManualActionAnalysisError(null);
-
-            try {
-                await applySuggestedFix(manualActionAnalysis);
-            } catch (applyError) {
-                console.error('Failed to apply suggested manual action fix:', applyError);
-                setManualActionAnalysisError(
-                    applyError instanceof Error
-                        ? applyError.message
-                        : 'Failed to apply suggested fix'
-                );
-            } finally {
-                setIsApplyingSuggestedFix(false);
-            }
-        };
-
-        const handleAutoResolve = async () => {
-            if (!crawl_job_id) {
-                return;
-            }
-
-            setIsManualActionAnalysisLoading(true);
-            setIsApplyingSuggestedFix(true);
-            setManualActionAnalysisError(null);
-
-            try {
-                if (onAutoResolveManualAction) {
-                    const resolution = await onAutoResolveManualAction(crawl_job_id);
-                    if (resolution?.analysis) {
-                        setManualActionAnalysis(resolution.analysis);
-                    }
-                    setLocalManualActionResolution(resolution || null);
+                const reuseSupported = reuseStatus?.reuse_open_browser_supported !== false;
+                if (reuseSupported && reuseStatus?.available) {
+                    await submitResume('reuse_open_browser', 'Failed to resume using the open browser');
                     return;
                 }
 
-                if (!onCaptureManualActionAnalysis) {
-                    return;
-                }
-
-                const analysis = await onCaptureManualActionAnalysis(crawl_job_id, manual_action);
-                setManualActionAnalysis(analysis || null);
-                setLocalManualActionResolution(null);
-                if (analysis?.auto_apply_supported) {
-                    await applySuggestedFix(analysis);
-                }
-            } catch (resolveError) {
-                console.error('Failed to auto resolve manual action:', resolveError);
-                setManualActionAnalysisError(
-                    resolveError instanceof Error
-                        ? resolveError.message
-                        : 'Failed to auto resolve manual action'
+                setReuseStatusError(
+                    buildInlineErrorMessage(
+                        reuseStatus?.reason || reuseStatus?.detail,
+                        'Open-browser reuse is unavailable right now. Retry attach or resume with a fresh profile.'
+                    )
                 );
+                setShowReuseRecoveryPrompt(true);
+            } catch (reuseError) {
+                console.error('Failed to check manual action reuse status:', reuseError);
+                setReuseStatusError(
+                    buildInlineErrorMessage(reuseError, 'Failed to check open-browser reuse status')
+                );
+                setShowReuseRecoveryPrompt(true);
             } finally {
-                setIsManualActionAnalysisLoading(false);
-                setIsApplyingSuggestedFix(false);
+                setIsReuseChecking(false);
             }
+        };
+
+        const handleResumeFresh = () => {
+            setLiveSessionMetadata(null);
+            setReuseStatusError(null);
+            setShowFreshResumeWarning(true);
+            setShowReuseRecoveryPrompt(false);
+        };
+
+        const handleConfirmResumeFresh = async () => {
+            await submitResume('fresh_profile', 'Failed to resume with a fresh browser profile');
         };
 
         const handleCancel = async () => {
@@ -640,9 +813,13 @@ function ProgressItem({
                     <div className="progress-text">
                         Browser Channel: {manual_action.browser_channel || '-'}
                     </div>
+                    {listingBatchLabel && (
+                        <div className="progress-text">Listing batch: {listingBatchLabel}</div>
+                    )}
                     {current_job_title && (
                         <div className="progress-text">Current title: {current_job_title}</div>
                     )}
+                    {renderTimingBlock()}
                     <div className="progress-stats">
                         <span>Elapsed: {elapsedLabel}</span>
                     </div>
@@ -653,41 +830,42 @@ function ProgressItem({
                             ))}
                         </ul>
                     )}
-                    {manualActionAnalysis && (
+                    {liveSessionMetadata && (
+                        <div className="progress-manual-analysis">
+                            {liveSessionMetadata.browser_channel && (
+                                <div className="progress-text">
+                                    Live Session Browser: {liveSessionMetadata.browser_channel}
+                                </div>
+                            )}
+                            {liveSessionMetadata.session_id && (
+                                <div className="progress-text">
+                                    Live Session ID: {liveSessionMetadata.session_id}
+                                </div>
+                            )}
+                            {liveSessionMetadata.attached_at && (
+                                <div className="progress-text">
+                                    Attached At: {liveSessionMetadata.attached_at}
+                                </div>
+                            )}
+                            {liveSessionMetadata.last_seen_at && (
+                                <div className="progress-text">
+                                    Last Seen: {liveSessionMetadata.last_seen_at}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {showFreshResumeWarning && (
                         <div className="progress-manual-analysis">
                             <div className="progress-text">
-                                Challenge Type: {manualActionAnalysis.challenge_type || 'unknown'}
+                                Close any profile windows first before starting a fresh browser session.
                             </div>
-                            {manualActionAnalysis.summary && (
-                                <div className="progress-text">{manualActionAnalysis.summary}</div>
-                            )}
-                            {Array.isArray(manualActionAnalysis.recommended_actions)
-                                && manualActionAnalysis.recommended_actions.length > 0 && (
-                                <ul className="progress-manual-action-list">
-                                    {manualActionAnalysis.recommended_actions.map((instruction, index) => (
-                                        <li key={`${taskId}-analysis-${index}`}>{instruction}</li>
-                                    ))}
-                                </ul>
-                            )}
+                            <div className="progress-text">
+                                The app will not close them for you on this path.
+                            </div>
                         </div>
                     )}
-                    {effectiveManualActionResolution && (
-                        <div className="progress-manual-analysis">
-                            {effectiveManualActionResolution.resolution_status && (
-                                <div className="progress-text">
-                                    Resolution Status: {effectiveManualActionResolution.resolution_status}
-                                </div>
-                            )}
-                            {Array.isArray(effectiveManualActionResolution.applied_actions)
-                                && effectiveManualActionResolution.applied_actions.length > 0 && (
-                                <div className="progress-text">
-                                    Applied Actions: {effectiveManualActionResolution.applied_actions.join(', ')}
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    {manualActionAnalysisError && (
-                        <div className="progress-error">{manualActionAnalysisError}</div>
+                    {reuseStatusError && (
+                        <div className="progress-error">{reuseStatusError}</div>
                     )}
                 </div>
 
@@ -710,36 +888,6 @@ function ProgressItem({
                             Close Profile Windows
                         </button>
                     )}
-                    {onCaptureManualActionAnalysis && crawl_job_id && (
-                        <button
-                            type="button"
-                            className="progress-link-button"
-                            onClick={handleCaptureAndAnalyze}
-                            disabled={isManualActionAnalysisLoading}
-                        >
-                            {isManualActionAnalysisLoading ? 'Analyzing...' : 'Capture and Analyze'}
-                        </button>
-                    )}
-                    {(onCaptureManualActionAnalysis || onAutoResolveManualAction) && crawl_job_id && (
-                        <button
-                            type="button"
-                            className="progress-link-button"
-                            onClick={handleAutoResolve}
-                            disabled={isManualActionAnalysisLoading || isApplyingSuggestedFix}
-                        >
-                            {isManualActionAnalysisLoading || isApplyingSuggestedFix ? 'Auto Resolving...' : 'Auto Resolve'}
-                        </button>
-                    )}
-                    {manualActionAnalysis?.auto_apply_supported && (
-                        <button
-                            type="button"
-                            className="progress-link-button"
-                            onClick={handleApplySuggestedFix}
-                            disabled={isApplyingSuggestedFix}
-                        >
-                            {isApplyingSuggestedFix ? 'Applying...' : 'Apply Suggested Fix'}
-                        </button>
-                    )}
                     <button
                         type="button"
                         className="progress-link-button"
@@ -757,10 +905,41 @@ function ProgressItem({
                     <button
                         type="button"
                         className="progress-link-button"
-                        onClick={handleResume}
+                        onClick={handleResumeUsingOpenBrowser}
+                        disabled={isReuseChecking || isResumeSubmitting === 'reuse_open_browser'}
                     >
-                        Resume
+                        {isReuseChecking || isResumeSubmitting === 'reuse_open_browser'
+                            ? 'Attaching...'
+                            : 'Resume Using Open Browser'}
                     </button>
+                    <button
+                        type="button"
+                        className="progress-link-button"
+                        onClick={handleResumeFresh}
+                        disabled={isResumeSubmitting === 'fresh_profile'}
+                    >
+                        Resume Fresh
+                    </button>
+                    {showReuseRecoveryPrompt && (
+                        <button
+                            type="button"
+                            className="progress-link-button"
+                            onClick={handleResumeUsingOpenBrowser}
+                            disabled={isReuseChecking || isResumeSubmitting === 'reuse_open_browser'}
+                        >
+                            Retry Attach
+                        </button>
+                    )}
+                    {showFreshResumeWarning && (
+                        <button
+                            type="button"
+                            className="progress-link-button"
+                            onClick={handleConfirmResumeFresh}
+                            disabled={isResumeSubmitting === 'fresh_profile'}
+                        >
+                            {isResumeSubmitting === 'fresh_profile' ? 'Resuming Fresh...' : 'Resume Fresh Now'}
+                        </button>
+                    )}
                     <button
                         type="button"
                         className="progress-link-button"
@@ -777,10 +956,34 @@ function ProgressItem({
     let statusClass = 'running';
     const metricLines = [];
     const detailLines = [];
+    const isBacklogPoolScope = metricScope === 'backlog_pool';
+    const isDetailRunScope = metricScope === 'detail_run';
+    const detailTargetTotal = detail_target_rows || effectiveDetailTotal;
 
     if (status === 'queued') {
         statusText = 'Queued';
         detailLines.push('Awaiting crawl worker dispatch');
+    } else if (isBacklogPoolScope) {
+        statusText = 'Downstream Backlog';
+        statusClass = 'warning';
+        if (listings_staged > 0) {
+            metricLines.push(`Staged listings: ${formatCount(listings_staged)}`);
+        }
+        if (detail_pending > 0) {
+            metricLines.push(`Pending details: ${formatCount(detail_pending)}`);
+        }
+        if (detail_running > 0) {
+            metricLines.push(`Running details: ${formatCount(detail_running)}`);
+        }
+        if (detail_completed > 0) {
+            metricLines.push(`Completed details: ${formatCount(detail_completed)}`);
+        }
+        if (detail_failed > 0) {
+            metricLines.push(`Failed details: ${formatCount(detail_failed)}`);
+        }
+        if (detail_manual_action_required > 0) {
+            metricLines.push(`Manual review: ${formatCount(detail_manual_action_required)}`);
+        }
     } else if (phase === 1) {
         statusText = 'Collecting IDs';
         metricLines.push(`Pages: ${formatCountPair(current_page || 0, total_pages)}`);
@@ -788,17 +991,20 @@ function ProgressItem({
         if (jobs_skipped_existing > 0) {
             metricLines.push(`Existing skipped: ${formatCount(jobs_skipped_existing)}`);
         }
-    } else if (phase === 2) {
+    } else if (phase === 2 || isDetailRunScope) {
         statusText = 'Scraping Details';
-        metricLines.push(`Details completed: ${formatCountPair(jobs_scraped, effectiveDetailTotal)}`);
+        metricLines.push(
+            ...buildDetailRunMetricLines({
+                detailSelectedRows: detail_selected_rows,
+                detailSkippedExistingRows: detail_skipped_existing_rows || jobs_skipped_existing,
+                detailTargetRows: detailTargetTotal,
+                jobsScraped: jobs_scraped,
+                detailRunFailed: detail_run_failed,
+                detailRunManualActionRequired: detail_run_manual_action_required,
+            })
+        );
         if (detail_job_index || effectiveDetailTotal) {
             metricLines.push(`Current target: ${formatCountPair(effectiveDetailIndex, effectiveDetailTotal)}`);
-        }
-        if (save_total > 0) {
-            metricLines.push(`Saved: ${formatCountPair(jobs_saved, save_total)}`);
-        }
-        if (jobs_skipped_existing > 0) {
-            metricLines.push(`Existing skipped: ${formatCount(jobs_skipped_existing)}`);
         }
         if (current_job_title) {
             detailLines.push(`Current title: ${current_job_title}`);
@@ -811,7 +1017,7 @@ function ProgressItem({
         }
     } else if (phase === 4) {
         statusText = 'Saving to DB';
-        metricLines.push(`Saved: ${formatCountPair(jobs_saved, save_total)}`);
+        metricLines.push(`Ingested: ${formatMaybeCountPair(jobs_saved, save_total)}`);
     } else if (phase === 5 || status === 'ai_running' || status === 'completed_with_ai_failures') {
         statusText = 'AI Enrichment';
         metricLines.push(`Items processed: ${formatCountPair(aiProcessedItems, aiTotalItems)}`);
@@ -820,22 +1026,7 @@ function ProgressItem({
         }
     }
 
-    if (hasDownstreamBacklog) {
-        statusText = 'Downstream Backlog';
-        statusClass = 'warning';
-        const ingestTotal = save_total || jobs_scraped || listings_staged || total_jobs;
-        metricLines.length = 0;
-        metricLines.push(`Ingested: ${formatCountPair(jobs_saved, ingestTotal)}`);
-        if (detail_pending > 0) {
-            metricLines.push(`Pending details: ${formatCount(detail_pending)}`);
-        }
-        if (detail_running > 0) {
-            metricLines.push(`Running details: ${formatCount(detail_running)}`);
-        }
-        if (detail_manual_action_required > 0) {
-            metricLines.push(`Manual review: ${formatCount(detail_manual_action_required)}`);
-        }
-    } else if (status === 'completed' && (phase === 5 || ai_run_id)) {
+    if (status === 'completed' && (phase === 5 || ai_run_id)) {
         statusText = 'Completed';
         statusClass = 'success';
         metricLines.length = 0;
@@ -845,7 +1036,10 @@ function ProgressItem({
         } else {
             metricLines.push(`Items enriched: ${formatCount(ai_completed_items || aiTotalItems || jobs_scraped)}`);
         }
-    } else if (status === 'completed') {
+    } else if (status === 'completed' && isDetailRunScope) {
+        statusText = 'Completed';
+        statusClass = 'success';
+    } else if (status === 'completed' && !isBacklogPoolScope && !isDetailRunScope) {
         statusText = 'Completed';
         statusClass = 'success';
         metricLines.length = 0;
@@ -868,6 +1062,10 @@ function ProgressItem({
         detailLines.push(error || 'Cancelled');
     }
 
+    if (listingBatchLabel) {
+        detailLines.push(`Listing batch: ${listingBatchLabel}`);
+    }
+
     return (
         <div className={`progress-item ${statusClass}`}>
             {renderHeader(statusText, statusClass)}
@@ -877,6 +1075,7 @@ function ProgressItem({
                 {detailLines.map((line) => (
                     <div key={`${taskId}-${line}`} className="progress-text">{line}</div>
                 ))}
+                {renderTimingBlock()}
                 <div className="progress-stats">
                     <span>Elapsed: {elapsedLabel}</span>
                 </div>

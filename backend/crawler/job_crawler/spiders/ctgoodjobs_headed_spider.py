@@ -53,7 +53,7 @@ class CTGoodJobsHeadedSpider:
         detail_pages_skipped = 0
         listing_rank = int(resume_context.get("listing_rank") or 0) if resume_listing else 0
 
-        async with CTGoodJobsBrowserPageScraper() as page_scraper:
+        async with CTGoodJobsBrowserPageScraper(request_payload=request_payload) as page_scraper:
             requested_category_ids = {
                 str(category_id).strip()
                 for category_id in category_ids

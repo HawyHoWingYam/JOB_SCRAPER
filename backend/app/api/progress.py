@@ -23,6 +23,7 @@ TERMINAL_CRAWL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 ACTIVE_CRAWL_JOB_STATUSES = {"queued", "running", "dispatching"}
 ACTIONABLE_CRAWL_JOB_STATUSES = {"manual_action_required"}
 RECENT_TERMINAL_WINDOW = timedelta(seconds=60)
+BACKLOG_VISIBLE_WINDOW = timedelta(minutes=30)
 ACTIVE_WORK_EVENT_TYPES = {"crawl.started"}
 INACTIVE_WORK_EVENT_TYPES = {
     "crawl.manual_action_required",
@@ -144,11 +145,28 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now, events: list[Any] 
     job_ids_collected = _to_int(event_payload.get("job_ids_collected", metrics.get("job_ids_collected", 0)))
     jobs_scraped = _to_int(event_payload.get("jobs_scraped", metrics.get("items_emitted", 0)))
     jobs_saved = _to_int(event_payload.get("jobs_saved", metrics.get("ingest_items_seen", 0)))
-    save_total = _to_int(event_payload.get("save_total", jobs_scraped))
+    save_total = _to_int(
+        event_payload.get(
+            "save_total",
+            metrics.get("save_total", metrics.get("items_emitted", 0)),
+        )
+    )
     total_jobs = _to_int(event_payload.get("total_jobs", max(job_ids_collected, jobs_scraped)))
     listings_staged = _to_int(event_payload.get("listings_staged", metrics.get("listings_staged", 0)))
     jobs_skipped_existing = _to_int(
         event_payload.get("jobs_skipped_existing", metrics.get("jobs_skipped_existing", 0))
+    )
+    detail_selected_rows = _to_int(
+        event_payload.get("detail_selected_rows", metrics.get("detail_selected_rows", 0))
+    )
+    detail_skipped_existing_rows = _to_int(
+        event_payload.get(
+            "detail_skipped_existing_rows",
+            metrics.get("detail_skipped_existing_rows", 0),
+        )
+    )
+    detail_target_rows = _to_int(
+        event_payload.get("detail_target_rows", metrics.get("detail_target_rows", total_jobs))
     )
     detail_pending = _to_int(event_payload.get("detail_pending", metrics.get("detail_pending", 0)))
     detail_running = _to_int(event_payload.get("detail_running", metrics.get("detail_running", 0)))
@@ -160,6 +178,18 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now, events: list[Any] 
             metrics.get("detail_manual_action_required", 0),
         )
     )
+    detail_run_completed = _to_int(
+        event_payload.get("detail_run_completed", metrics.get("detail_run_completed", 0))
+    )
+    detail_run_failed = _to_int(
+        event_payload.get("detail_run_failed", metrics.get("detail_run_failed", 0))
+    )
+    detail_run_manual_action_required = _to_int(
+        event_payload.get(
+            "detail_run_manual_action_required",
+            metrics.get("detail_run_manual_action_required", 0),
+        )
+    )
     status = _derive_progress_status(crawl_job.status, jobs_scraped=jobs_scraped, jobs_saved=jobs_saved)
     phase = _derive_progress_phase(
         crawl_job.status,
@@ -167,6 +197,7 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now, events: list[Any] 
         jobs_saved=jobs_saved,
         job_ids_collected=job_ids_collected,
         explicit_phase=event_payload.get("phase"),
+        save_total=save_total,
     )
     operator_state = _derive_operator_state(
         status,
@@ -176,11 +207,24 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now, events: list[Any] 
         detail_running=detail_running,
         detail_manual_action_required=detail_manual_action_required,
     )
+    metric_scope = _derive_metric_scope(
+        status=status,
+        operator_state=operator_state,
+        phase=phase,
+        ai_run_id=event_payload.get("ai_run_id"),
+        listings_staged=listings_staged,
+        detail_pending=detail_pending,
+        detail_running=detail_running,
+        detail_completed=detail_completed,
+        detail_failed=detail_failed,
+        detail_manual_action_required=detail_manual_action_required,
+    )
 
     return {
         "crawl_job_id": str(crawl_job.id),
         "status": status,
         "operator_state": operator_state,
+        "metric_scope": metric_scope,
         "phase": phase,
         "category_name": category_label,
         "category_ids": category_ids,
@@ -211,6 +255,12 @@ def _build_progress_snapshot(crawl_job, latest_event, *, now, events: list[Any] 
         "jobs_saved": jobs_saved,
         "save_total": save_total,
         "jobs_ingested": jobs_saved,
+        "detail_selected_rows": detail_selected_rows,
+        "detail_skipped_existing_rows": detail_skipped_existing_rows,
+        "detail_target_rows": detail_target_rows,
+        "detail_run_completed": detail_run_completed,
+        "detail_run_failed": detail_run_failed,
+        "detail_run_manual_action_required": detail_run_manual_action_required,
         "listings_staged": listings_staged,
         "jobs_skipped_existing": jobs_skipped_existing,
         "detail_pending": detail_pending,
@@ -277,10 +327,11 @@ def _derive_progress_phase(
     jobs_saved: int,
     job_ids_collected: int,
     explicit_phase: Any,
+    save_total: int,
 ) -> int:
     if status == "queued":
         return 0
-    if status == "completed" and jobs_saved < jobs_scraped:
+    if status == "completed" and save_total > 0 and jobs_saved < save_total:
         return 4
     if explicit_phase is not None:
         return _to_int(explicit_phase)
@@ -289,7 +340,7 @@ def _derive_progress_phase(
             return 2
         return 1
     if status in {"failed", "cancelled"}:
-        if jobs_saved < jobs_scraped:
+        if save_total > 0 and jobs_saved < save_total:
             return 4
         if jobs_scraped > 0:
             return 2
@@ -300,6 +351,48 @@ def _derive_progress_phase(
     if job_ids_collected > 0:
         return 1
     return 0
+
+
+def _derive_metric_scope(
+    *,
+    status: str,
+    operator_state: str,
+    phase: int,
+    ai_run_id: Any,
+    listings_staged: int,
+    detail_pending: int,
+    detail_running: int,
+    detail_completed: int,
+    detail_failed: int,
+    detail_manual_action_required: int,
+) -> str:
+    if status == "manual_action_required":
+        return "manual_action"
+
+    backlog_counts_visible = any(
+        count > 0
+        for count in (
+            listings_staged,
+            detail_pending,
+            detail_running,
+            detail_completed,
+            detail_failed,
+            detail_manual_action_required,
+        )
+    )
+    if operator_state in {"completed_with_downstream_backlog", "stale_downstream_backlog"} and backlog_counts_visible:
+        return "backlog_pool"
+
+    if phase == 1:
+        return "listing_run"
+    if phase == 2:
+        return "detail_run"
+    if phase == 4:
+        return "ingest_run"
+    if phase == 5 or ai_run_id:
+        return "ai_run"
+
+    return "crawl_job"
 
 
 def _is_snapshot_active(snapshot: dict[str, Any]) -> bool:
@@ -315,6 +408,17 @@ def _is_snapshot_backlog(snapshot: dict[str, Any]) -> bool:
         "completed_with_downstream_backlog",
         "stale_downstream_backlog",
     }
+
+
+def _is_snapshot_backlog_visible(snapshot: dict[str, Any], *, crawl_job, now) -> bool:
+    if not _is_snapshot_backlog(snapshot):
+        return False
+
+    updated_at = getattr(crawl_job, "updated_at", None)
+    if updated_at is None:
+        return False
+
+    return now - updated_at <= BACKLOG_VISIBLE_WINDOW
 
 
 def _collect_progress_payload() -> dict[str, Any]:
@@ -340,7 +444,7 @@ def _collect_progress_payload() -> dict[str, Any]:
             snapshot = _build_progress_snapshot(crawl_job, latest_event, now=now, events=events)
             key = str(crawl_job.id)
             is_active = _is_snapshot_active(snapshot)
-            is_backlog = _is_snapshot_backlog(snapshot)
+            is_backlog = _is_snapshot_backlog_visible(snapshot, crawl_job=crawl_job, now=now)
             is_recent_terminal = (
                 crawl_job.status in TERMINAL_CRAWL_JOB_STATUSES
                 and crawl_job.updated_at is not None

@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -12,6 +13,7 @@ from app.database import get_db
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.schedule_repository import ScheduleRepository
+from app.scraper.manual_action import ResumeStrategy
 from app.schemas.crawl_job import (
     CrawlJobCreateRequest,
     CrawlJobEventsResponse,
@@ -31,6 +33,10 @@ crawl_job_listing_repository = CrawlJobListingRepository()
 schedule_repository = ScheduleRepository()
 dispatch_service = CrawlJobDispatchService()
 SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs"}
+
+
+class ResumeCrawlJobRequest(BaseModel):
+    strategy: ResumeStrategy | None = None
 
 
 async def _validate_ctgoodjobs_category_ids_exist(category_ids: list[str] | None) -> None:
@@ -193,12 +199,17 @@ async def cancel_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.post("/{crawl_job_id}/resume", response_model=CrawlJobSchema)
-async def resume_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
+async def resume_crawl_job(
+    crawl_job_id: UUID,
+    request: ResumeCrawlJobRequest | None = Body(default=None),
+    db: Session = Depends(get_db),
+):
     try:
         crawl_job = dispatch_service.resume_crawl_job(
             db,
             crawl_job_id=crawl_job_id,
             requested_by="api",
+            strategy=request.strategy if request is not None else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

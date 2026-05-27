@@ -126,7 +126,7 @@ class JobsDBHeadedSpider:
             return {"pages_processed": pages_processed, "items_emitted": items_emitted}
 
         detail_targets = list(request_payload.get("detail_targets") or [])
-        async with JobsDBBrowserDetailScraper() as detail_scraper:
+        async with JobsDBBrowserDetailScraper(request_payload=request_payload) as detail_scraper:
             detail_started_at = None
             for index, target in enumerate(detail_targets, start=1):
                 import time

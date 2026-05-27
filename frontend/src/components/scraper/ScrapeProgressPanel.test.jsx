@@ -64,7 +64,7 @@ describe('ScrapeProgressPanel', () => {
     );
 
     expect(screen.getByText('Engineering')).toBeInTheDocument();
-    expect(screen.getByText(/details completed: 3\/10/i)).toBeInTheDocument();
+    expect(screen.getByText(/detail crawled: 3\/10/i)).toBeInTheDocument();
 
     unmount();
   });
@@ -95,7 +95,7 @@ describe('ScrapeProgressPanel', () => {
     );
 
     expect(screen.getByText('Engineering')).toBeInTheDocument();
-    expect(screen.getByText(/details completed: 4\/12/i)).toBeInTheDocument();
+    expect(screen.getByText(/detail crawled: 4\/12/i)).toBeInTheDocument();
 
     unmount();
   });
@@ -140,7 +140,7 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
-  it('shows saved counters during the detail scraping phase', async () => {
+  it('does not mix ingest counters into the detail scraping phase', async () => {
     const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
 
     const stream = latestEventSource();
@@ -163,8 +163,8 @@ describe('ScrapeProgressPanel', () => {
       });
     });
 
-    expect(await screen.findByText(/details completed: 2\/5/i)).toBeInTheDocument();
-    expect(screen.getByText(/saved: 1\/2/i)).toBeInTheDocument();
+    expect(await screen.findByText(/detail crawled: 2\/5/i)).toBeInTheDocument();
+    expect(screen.queryByText(/saved:/i)).not.toBeInTheDocument();
 
     unmount();
   });
@@ -214,12 +214,18 @@ describe('ScrapeProgressPanel', () => {
           engineering: {
             status: 'running',
             category_name: 'Engineering',
+            metric_scope: 'detail_run',
             phase: 2,
+            detail_selected_rows: 12,
+            detail_skipped_existing_rows: 2,
+            detail_target_rows: 10,
             jobs_scraped: 2,
             total_jobs: 12,
             detail_job_index: 3,
             detail_job_total: 12,
             current_job_title: 'Senior Data Analyst',
+            queued_at: '2026-05-27T09:00:00Z',
+            started_at: '2026-05-27T09:01:00Z',
             jobs_saved: 1,
             save_total: 2,
             elapsed_seconds: 18,
@@ -230,10 +236,14 @@ describe('ScrapeProgressPanel', () => {
       });
     });
 
-    expect(await screen.findByText(/details completed: 2\/12/i)).toBeInTheDocument();
+    expect(await screen.findByText(/rows checked: 12/i)).toBeInTheDocument();
+    expect(screen.getByText(/skipped existing: 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/detail crawled: 2\/10/i)).toBeInTheDocument();
     expect(screen.getByText(/current target: 3\/12/i)).toBeInTheDocument();
     expect(screen.getByText(/current title: senior data analyst/i)).toBeInTheDocument();
-    expect(screen.getByText(/saved: 1\/2/i)).toBeInTheDocument();
+    expect(screen.getByText(/queued:/i)).toBeInTheDocument();
+    expect(screen.getByText(/started:/i)).toBeInTheDocument();
+    expect(screen.getByText(/ended: -/i)).toBeInTheDocument();
     expect(screen.getByText(/elapsed: 18s/i)).toBeInTheDocument();
 
     expect(container.querySelector('.progress-bar-fill')).toBeNull();
@@ -285,25 +295,164 @@ describe('ScrapeProgressPanel', () => {
             status: 'completed',
             operator_state: 'completed_with_downstream_backlog',
             category_name: 'Engineering',
-            phase: 4,
-            jobs_scraped: 96,
-            jobs_saved: 12,
-            save_total: 96,
+            metric_scope: 'backlog_pool',
+            phase: 1,
             listings_staged: 96,
             detail_pending: 74,
+            detail_completed: 22,
+            queued_at: '2026-05-27T09:00:00Z',
+            started_at: '2026-05-27T09:01:00Z',
+            completed_at: '2026-05-27T09:05:00Z',
           },
         },
       });
     });
 
     expect(await screen.findByText(/downstream backlog/i)).toBeInTheDocument();
-    expect(screen.getByText(/ingested: 12\/96/i)).toBeInTheDocument();
+    expect(screen.getByText(/staged listings: 96/i)).toBeInTheDocument();
     expect(screen.getByText(/pending details: 74/i)).toBeInTheDocument();
+    expect(screen.getByText(/completed details: 22/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ingested:/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/ended:/i)).toBeInTheDocument();
 
     unmount();
   });
 
-  it('renders manual action guidance with a visible browser-launch action and task identity', async () => {
+  it('hides backlog cards already linked to a live detail task', async () => {
+    render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'detail-run-1': {
+            crawl_job_id: 'detail-run-1',
+            status: 'running',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            phase: 2,
+            jobs_scraped: 10,
+            detail_target_rows: 50,
+            request_payload: {
+              source_listing_crawl_job_id: 'linked-batch-1',
+            },
+          },
+          'linked-batch-1': {
+            crawl_job_id: 'linked-batch-1',
+            status: 'completed',
+            operator_state: 'completed_with_downstream_backlog',
+            metric_scope: 'backlog_pool',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            listings_staged: 300,
+            detail_pending: 120,
+            completed_at: '2026-05-26T10:00:00Z',
+          },
+          'unlinked-batch-2': {
+            crawl_job_id: 'unlinked-batch-2',
+            status: 'completed',
+            operator_state: 'completed_with_downstream_backlog',
+            metric_scope: 'backlog_pool',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            listings_staged: 180,
+            detail_pending: 45,
+            completed_at: '2026-05-26T09:00:00Z',
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/listing batch: ctgoodjobs batch linked-batch-1/i)).toBeInTheDocument();
+    expect(screen.queryByText(/task linked-batch-1/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/task unlinked-batch-2/i)).toBeInTheDocument();
+  });
+
+  it('keeps backlog card order stable when only updated_at changes', async () => {
+    const { container } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'batch-newer': {
+            crawl_job_id: 'batch-newer',
+            status: 'completed',
+            operator_state: 'completed_with_downstream_backlog',
+            metric_scope: 'backlog_pool',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            crawl_mode: 'headed',
+            listings_staged: 96,
+            detail_pending: 74,
+            completed_at: '2026-05-27T10:05:00Z',
+            updated_at: '2026-05-27T10:05:00Z',
+          },
+          'batch-older': {
+            crawl_job_id: 'batch-older',
+            status: 'completed',
+            operator_state: 'completed_with_downstream_backlog',
+            metric_scope: 'backlog_pool',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            crawl_mode: 'headed',
+            listings_staged: 88,
+            detail_pending: 55,
+            completed_at: '2026-05-27T09:05:00Z',
+            updated_at: '2026-05-27T09:05:00Z',
+          },
+        },
+      });
+    });
+
+    act(() => {
+      stream.emitMessage({
+        all: {
+          'batch-newer': {
+            crawl_job_id: 'batch-newer',
+            status: 'completed',
+            operator_state: 'completed_with_downstream_backlog',
+            metric_scope: 'backlog_pool',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            crawl_mode: 'headed',
+            listings_staged: 96,
+            detail_pending: 70,
+            completed_at: '2026-05-27T10:05:00Z',
+            updated_at: '2026-05-27T10:05:00Z',
+          },
+          'batch-older': {
+            crawl_job_id: 'batch-older',
+            status: 'completed',
+            operator_state: 'completed_with_downstream_backlog',
+            metric_scope: 'backlog_pool',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            crawl_mode: 'headed',
+            listings_staged: 88,
+            detail_pending: 40,
+            completed_at: '2026-05-27T09:05:00Z',
+            updated_at: '2026-05-27T10:10:00Z',
+          },
+        },
+      });
+    });
+
+    const backlogSection = Array.from(container.querySelectorAll('.progress-section')).find((section) =>
+      section.textContent?.includes('Backlog Follow-up')
+    );
+    expect(backlogSection).toBeTruthy();
+    const taskIds = Array.from(backlogSection.querySelectorAll('.progress-task-id')).map((node) => node.textContent);
+
+    expect(taskIds).toEqual(['Task batch-newer', 'Task batch-older']);
+  });
+
+  it('renders manual action guidance with split resume actions and task identity', async () => {
     const writeText = vi.fn();
     Object.defineProperty(Object.getPrototypeOf(window.navigator), 'clipboard', {
       configurable: true,
@@ -341,6 +490,8 @@ describe('ScrapeProgressPanel', () => {
             status: 'manual_action_required',
             category_name: 'Information Technology',
             crawl_mode: 'headed',
+            queued_at: '2026-05-27T09:00:00Z',
+            started_at: '2026-05-27T09:02:00Z',
             manual_action: {
               stage: 'category_page',
               blocked_url: 'https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=52',
@@ -364,6 +515,9 @@ describe('ScrapeProgressPanel', () => {
       screen.getByText('https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=52')
     ).toBeInTheDocument();
     expect(screen.getByText(/c:\\profiles\\ctgoodjobs-headed/i)).toBeInTheDocument();
+    expect(screen.getByText(/queued:/i)).toBeInTheDocument();
+    expect(screen.getByText(/started:/i)).toBeInTheDocument();
+    expect(screen.getByText(/ended: -/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /copy url/i }));
     expect(writeText).toHaveBeenCalledWith(
@@ -373,13 +527,164 @@ describe('ScrapeProgressPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /open verification browser/i }));
     expect(onOpenManualActionBrowser).toHaveBeenCalledWith('crawl-job-123');
 
-    fireEvent.click(screen.getByRole('button', { name: /resume/i }));
-    expect(onResumeCrawlJob).toHaveBeenCalledWith('crawl-job-123');
+    expect(screen.getByRole('button', { name: /resume using open browser/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /resume fresh/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /capture and analyze/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /auto resolve/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
     expect(onCancelCrawlJob).toHaveBeenCalledWith('crawl-job-123');
 
     unmount();
+  });
+
+  it('sends the reuse_open_browser strategy when resuming with an open browser', async () => {
+    const onResumeCrawlJob = vi.fn().mockResolvedValue({ status: 'dispatching' });
+    const onGetManualActionReuseStatus = vi.fn().mockResolvedValue({
+      available: true,
+      reuse_open_browser_supported: true,
+      live_session: {
+        browser_channel: 'msedge',
+        attached_at: '2026-05-27T08:30:00Z',
+      },
+    });
+
+    render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        onResumeCrawlJob={onResumeCrawlJob}
+        onGetManualActionReuseStatus={onGetManualActionReuseStatus}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-555': {
+            crawl_job_id: 'crawl-job-555',
+            status: 'manual_action_required',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              source_site: 'ctgoodjobs',
+              stage: 'category_page',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: ['Keep the manual browser open after verification clears.'],
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /resume using open browser/i }));
+
+    await waitFor(() => {
+      expect(onGetManualActionReuseStatus).toHaveBeenCalledWith('crawl-job-555');
+      expect(onResumeCrawlJob).toHaveBeenCalledWith('crawl-job-555', 'reuse_open_browser');
+    });
+    expect(screen.getByText(/live session browser: msedge/i)).toBeInTheDocument();
+  });
+
+  it('renders retry attach and resume fresh when open-browser reuse is unavailable', async () => {
+    const onResumeCrawlJob = vi.fn();
+    const onGetManualActionReuseStatus = vi.fn().mockResolvedValue({
+      available: false,
+      reuse_open_browser_supported: true,
+      reason: 'No attachable browser session found.',
+    });
+
+    render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        onResumeCrawlJob={onResumeCrawlJob}
+        onGetManualActionReuseStatus={onGetManualActionReuseStatus}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-556': {
+            crawl_job_id: 'crawl-job-556',
+            status: 'manual_action_required',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              stage: 'category_page',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: ['Keep the manual browser open after verification clears.'],
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /resume using open browser/i }));
+
+    expect(await screen.findByText(/no attachable browser session found/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry attach/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /resume fresh/i })[0]).toBeInTheDocument();
+    expect(onResumeCrawlJob).not.toHaveBeenCalled();
+  });
+
+  it('shows the fresh warning path and still resumes with the fresh_profile strategy', async () => {
+    const onResumeCrawlJob = vi.fn().mockResolvedValue({ status: 'dispatching' });
+
+    render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        onResumeCrawlJob={onResumeCrawlJob}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-557': {
+            crawl_job_id: 'crawl-job-557',
+            status: 'manual_action_required',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              source_site: 'ctgoodjobs',
+              stage: 'category_page',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: ['Keep the manual browser open after verification clears.'],
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /^resume fresh$/i }));
+
+    expect(
+      await screen.findByText(/close any profile windows first before starting a fresh browser session/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /resume fresh now/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /resume fresh now/i }));
+
+    await waitFor(() => {
+      expect(onResumeCrawlJob).toHaveBeenCalledWith('crawl-job-557', 'fresh_profile');
+    });
   });
 
   it('shows only the latest five tasks based on update time', async () => {
@@ -470,6 +775,82 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
+  it('renders action-required work separately from recent terminal tasks', async () => {
+    render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-manual': {
+            crawl_job_id: 'crawl-job-manual',
+            status: 'manual_action_required',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            updated_at: '2026-05-27T11:00:00.000Z',
+            manual_action: {
+              stage: 'category_page',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: ['Complete the verification challenge.'],
+            },
+          },
+          'crawl-job-cancelled': {
+            crawl_job_id: 'crawl-job-cancelled',
+            status: 'cancelled',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            crawl_mode: 'headed',
+            queued_at: '2026-05-27T10:55:00.000Z',
+            started_at: '2026-05-27T10:56:00.000Z',
+            completed_at: '2026-05-27T10:59:00.000Z',
+            updated_at: '2026-05-27T10:59:00.000Z',
+            error: 'Cancelled by operator',
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/needs attention/i)).toBeInTheDocument();
+    expect(screen.getByText(/recent terminal/i)).toBeInTheDocument();
+    expect(screen.getByText(/task crawl-job-manual/i)).toBeInTheDocument();
+    expect(screen.getByText(/task crawl-job-cancelled/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/ended:/i).length).toBeGreaterThan(0);
+  });
+
+  it('shows listing batch identity on detail task cards', async () => {
+    render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-detail': {
+            crawl_job_id: 'crawl-job-detail',
+            status: 'running',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            crawl_mode: 'headed',
+            phase: 2,
+            jobs_scraped: 8,
+            total_jobs: 24,
+            request_payload: {
+              source_listing_crawl_job_id: '11111111-1111-4111-8111-111111111111',
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      await screen.findByText(/listing batch: jobsdb batch 11111111-1111-4111-8111-111111111111/i)
+    ).toBeInTheDocument();
+  });
+
   it('renders browser_profile_in_use recovery action and closes the profile windows', async () => {
     const onCloseManualActionWindows = vi.fn();
 
@@ -514,295 +895,6 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
-  it('captures a manual-action screenshot and renders the returned analysis guidance', async () => {
-    const onCaptureManualActionAnalysis = vi.fn().mockResolvedValue({
-      challenge_type: 'captcha',
-      confidence: 0.93,
-      summary: 'Visual captcha challenge detected.',
-      recommended_actions: [
-        'Use the browser window to complete the captcha.',
-        'Resume the crawl after the captcha clears.',
-      ],
-      should_resume: false,
-      suggested_action: null,
-      auto_apply_supported: false,
-      auto_resume_after_action: false,
-    });
-
-    const { unmount } = render(
-      <ScrapeProgressPanel
-        isVisible
-        onClose={vi.fn()}
-        onCaptureManualActionAnalysis={onCaptureManualActionAnalysis}
-      />
-    );
-
-    const stream = latestEventSource();
-    act(() => {
-      stream.emitOpen();
-      stream.emitMessage({
-        all: {
-          'crawl-job-789': {
-            crawl_job_id: 'crawl-job-789',
-            status: 'manual_action_required',
-            source_site: 'ctgoodjobs',
-            category_name: 'Information Technology',
-            crawl_mode: 'headed',
-            manual_action: {
-              source_site: 'ctgoodjobs',
-              stage: 'category_page',
-              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=100',
-              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
-              browser_channel: 'msedge',
-              instructions: ['Complete the verification challenge.'],
-            },
-          },
-        },
-      });
-    });
-
-    fireEvent.click(await screen.findByRole('button', { name: /capture and analyze/i }));
-
-    expect(onCaptureManualActionAnalysis).toHaveBeenCalledWith('crawl-job-789', {
-      source_site: 'ctgoodjobs',
-      stage: 'category_page',
-      blocked_url: 'https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=100',
-      browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
-      browser_channel: 'msedge',
-      instructions: ['Complete the verification challenge.'],
-    });
-    expect(await screen.findByText(/challenge type: captcha/i)).toBeInTheDocument();
-    expect(screen.getByText(/visual captcha challenge detected/i)).toBeInTheDocument();
-    expect(screen.getByText(/use the browser window to complete the captcha/i)).toBeInTheDocument();
-
-    unmount();
-  });
-
-  it('applies an auto-supported manual-action fix and resumes the crawl', async () => {
-    const onCaptureManualActionAnalysis = vi.fn().mockResolvedValue({
-      challenge_type: 'browser_profile_in_use',
-      confidence: 0.98,
-      summary: 'The automation browser profile is already open in another Edge window.',
-      recommended_actions: ['Close the matching profile windows before resuming the crawl.'],
-      should_resume: true,
-      suggested_action: 'close_profile_windows',
-      auto_apply_supported: true,
-      auto_resume_after_action: true,
-    });
-    const onCloseManualActionWindows = vi.fn().mockResolvedValue({ closed_processes: 1 });
-    const onResumeCrawlJob = vi.fn().mockResolvedValue({ status: 'dispatching' });
-
-    const { unmount } = render(
-      <ScrapeProgressPanel
-        isVisible
-        onClose={vi.fn()}
-        onCaptureManualActionAnalysis={onCaptureManualActionAnalysis}
-        onCloseManualActionWindows={onCloseManualActionWindows}
-        onResumeCrawlJob={onResumeCrawlJob}
-      />
-    );
-
-    const stream = latestEventSource();
-    act(() => {
-      stream.emitOpen();
-      stream.emitMessage({
-        all: {
-          'crawl-job-790': {
-            crawl_job_id: 'crawl-job-790',
-            status: 'manual_action_required',
-            source_site: 'ctgoodjobs',
-            category_name: 'Information Technology',
-            crawl_mode: 'headed',
-            manual_action: {
-              source_site: 'ctgoodjobs',
-              stage: 'browser_profile_in_use',
-              action_type: 'close_browser_window',
-              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
-              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
-              browser_channel: 'msedge',
-              instructions: ['Close the listed profile windows first.'],
-            },
-          },
-        },
-      });
-    });
-
-    fireEvent.click(await screen.findByRole('button', { name: /capture and analyze/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /apply suggested fix/i }));
-
-    await waitFor(() => {
-      expect(onCloseManualActionWindows).toHaveBeenCalledWith('crawl-job-790');
-      expect(onResumeCrawlJob).toHaveBeenCalledWith('crawl-job-790');
-    });
-
-    unmount();
-  });
-
-  it('auto resolves a browser-profile issue with a single button click', async () => {
-    const onCaptureManualActionAnalysis = vi.fn().mockResolvedValue({
-      challenge_type: 'browser_profile_in_use',
-      confidence: 0.98,
-      summary: 'The automation browser profile is already open in another Edge window.',
-      recommended_actions: ['Close the matching profile windows before resuming the crawl.'],
-      should_resume: true,
-      suggested_action: 'close_profile_windows',
-      auto_apply_supported: true,
-      auto_resume_after_action: true,
-    });
-    const onCloseManualActionWindows = vi.fn().mockResolvedValue({ closed_processes: 1 });
-    const onResumeCrawlJob = vi.fn().mockResolvedValue({ status: 'dispatching' });
-
-    const { unmount } = render(
-      <ScrapeProgressPanel
-        isVisible
-        onClose={vi.fn()}
-        onCaptureManualActionAnalysis={onCaptureManualActionAnalysis}
-        onCloseManualActionWindows={onCloseManualActionWindows}
-        onResumeCrawlJob={onResumeCrawlJob}
-      />
-    );
-
-    const stream = latestEventSource();
-    act(() => {
-      stream.emitOpen();
-      stream.emitMessage({
-        all: {
-          'crawl-job-791': {
-            crawl_job_id: 'crawl-job-791',
-            status: 'manual_action_required',
-            source_site: 'ctgoodjobs',
-            category_name: 'Information Technology',
-            crawl_mode: 'headed',
-            manual_action: {
-              source_site: 'ctgoodjobs',
-              stage: 'browser_profile_in_use',
-              action_type: 'close_browser_window',
-              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
-              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
-              browser_channel: 'msedge',
-              instructions: ['Close the listed profile windows first.'],
-            },
-          },
-        },
-      });
-    });
-
-    fireEvent.click(await screen.findByRole('button', { name: /auto resolve/i }));
-
-    await waitFor(() => {
-      expect(onCaptureManualActionAnalysis).toHaveBeenCalledWith('crawl-job-791', {
-        source_site: 'ctgoodjobs',
-        stage: 'browser_profile_in_use',
-        action_type: 'close_browser_window',
-        blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
-        browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
-        browser_channel: 'msedge',
-        instructions: ['Close the listed profile windows first.'],
-      });
-      expect(onCloseManualActionWindows).toHaveBeenCalledWith('crawl-job-791');
-      expect(onResumeCrawlJob).toHaveBeenCalledWith('crawl-job-791');
-    });
-
-    unmount();
-  });
-
-  it('prefers the dedicated auto-resolve handler when one is provided', async () => {
-    const onAutoResolveManualAction = vi.fn().mockResolvedValue({
-      resolution_status: 'applied_and_resumed',
-      analysis: {
-        challenge_type: 'browser_profile_in_use',
-        suggested_action: 'close_profile_windows',
-      },
-      applied_actions: ['close_profile_windows', 'resume_crawl_job'],
-      crawl_job: { id: 'crawl-job-792', status: 'dispatching' },
-    });
-    const onCaptureManualActionAnalysis = vi.fn();
-    const onCloseManualActionWindows = vi.fn();
-    const onResumeCrawlJob = vi.fn();
-
-    const { unmount } = render(
-      <ScrapeProgressPanel
-        isVisible
-        onClose={vi.fn()}
-        onAutoResolveManualAction={onAutoResolveManualAction}
-        onCaptureManualActionAnalysis={onCaptureManualActionAnalysis}
-        onCloseManualActionWindows={onCloseManualActionWindows}
-        onResumeCrawlJob={onResumeCrawlJob}
-      />
-    );
-
-    const stream = latestEventSource();
-    act(() => {
-      stream.emitOpen();
-      stream.emitMessage({
-        all: {
-          'crawl-job-792': {
-            crawl_job_id: 'crawl-job-792',
-            status: 'manual_action_required',
-            source_site: 'ctgoodjobs',
-            category_name: 'Information Technology',
-            crawl_mode: 'headed',
-            manual_action: {
-              source_site: 'ctgoodjobs',
-              stage: 'browser_profile_in_use',
-              action_type: 'close_browser_window',
-              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
-              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
-              browser_channel: 'msedge',
-              instructions: ['Close the listed profile windows first.'],
-            },
-          },
-        },
-      });
-    });
-
-    fireEvent.click(await screen.findByRole('button', { name: /auto resolve/i }));
-
-    await waitFor(() => {
-      expect(onAutoResolveManualAction).toHaveBeenCalledWith('crawl-job-792');
-    });
-    expect(onCaptureManualActionAnalysis).not.toHaveBeenCalled();
-    expect(onCloseManualActionWindows).not.toHaveBeenCalled();
-    expect(onResumeCrawlJob).not.toHaveBeenCalled();
-    expect(screen.getByText(/resolution status: applied_and_resumed/i)).toBeInTheDocument();
-    expect(screen.getByText(/applied actions: close_profile_windows, resume_crawl_job/i)).toBeInTheDocument();
-
-    unmount();
-  });
-
-  it('renders persisted manual-action resolution details from progress payloads', async () => {
-    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
-
-    const stream = latestEventSource();
-    act(() => {
-      stream.emitOpen();
-      stream.emitMessage({
-        all: {
-          'crawl-job-793': {
-            crawl_job_id: 'crawl-job-793',
-            status: 'manual_action_required',
-            source_site: 'ctgoodjobs',
-            category_name: 'Information Technology',
-            crawl_mode: 'headed',
-            manual_action: {
-              source_site: 'ctgoodjobs',
-              stage: 'category_page',
-              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
-            },
-            manual_action_resolution: {
-              resolution_status: 'opened_browser_for_manual_followup',
-              applied_actions: ['open_browser'],
-            },
-          },
-        },
-      });
-    });
-
-    expect(await screen.findByText(/resolution status: opened_browser_for_manual_followup/i)).toBeInTheDocument();
-    expect(screen.getByText(/applied actions: open_browser/i)).toBeInTheDocument();
-
-    unmount();
-  });
 
   it('does not reconnect after the panel is hidden', () => {
     vi.useFakeTimers();

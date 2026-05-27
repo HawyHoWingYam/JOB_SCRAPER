@@ -28,31 +28,37 @@ class OutboxPublisher:
         self.event_outbox_repository = event_outbox_repository or EventOutboxRepository()
         self.stream_bus = stream_bus or RedisStreamBus()
 
+    def publish_row(self, db: Session, *, row) -> bool:
+        envelope = build_event_envelope(
+            event_type=row.event_type,
+            aggregate_type=row.aggregate_type,
+            aggregate_id=row.aggregate_id,
+            payload=row.payload,
+            source_service=row.source_service,
+            event_id=f"event-outbox:{row.id}",
+            occurred_at=row.created_at,
+        )
+        try:
+            self.stream_bus.publish(row.topic, envelope)
+            self.event_outbox_repository.mark_published(db, row=row)
+            return True
+        except Exception as exc:
+            self.event_outbox_repository.mark_retryable_failure(
+                db,
+                row=row,
+                error_message=str(exc),
+            )
+            return False
+
     def publish_pending_batch(self, db: Session, *, limit: int = 100, now=None) -> PublishBatchResult:
         pending_rows = self.event_outbox_repository.list_pending(db, limit=limit, now=now)
         published_count = 0
         failed_count = 0
 
         for row in pending_rows:
-            envelope = build_event_envelope(
-                event_type=row.event_type,
-                aggregate_type=row.aggregate_type,
-                aggregate_id=row.aggregate_id,
-                payload=row.payload,
-                source_service=row.source_service,
-                event_id=f"event-outbox:{row.id}",
-                occurred_at=row.created_at,
-            )
-            try:
-                self.stream_bus.publish(row.topic, envelope)
-                self.event_outbox_repository.mark_published(db, row=row)
+            if self.publish_row(db, row=row):
                 published_count += 1
-            except Exception as exc:
-                self.event_outbox_repository.mark_retryable_failure(
-                    db,
-                    row=row,
-                    error_message=str(exc),
-                )
+            else:
                 failed_count += 1
 
         return PublishBatchResult(

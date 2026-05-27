@@ -8,6 +8,11 @@ import ScheduleHistory from './ScheduleHistory';
 import ScrapeProgressPanel from './ScrapeProgressPanel';
 import { CRAWL_MODE_OPTIONS, resolveDefaultCrawlMode } from './crawlMode';
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
+import {
+    formatListingBatchIdentity,
+    formatListingBatchOptionLabel,
+    formatScraperSourceLabel,
+} from './listingBatchLabel';
 import './Scheduler.css';
 
 const API_URL = API_BASE_URL;
@@ -184,11 +189,11 @@ function formatBacklogCount(value) {
 }
 
 function formatSourceLabel(sourceSite) {
-    if (sourceSite === 'ctgoodjobs') {
-        return 'CTgoodjobs';
-    }
+    return formatScraperSourceLabel(sourceSite);
+}
 
-    return 'JobsDB';
+function buildManualActionHelperUnavailableMessage(actionLabel) {
+    return `Manual-action helper is unavailable. Start the dedicated helper service and retry ${actionLabel}.`;
 }
 
 function buildSchedulerRuntimeBanner(scheduler) {
@@ -230,7 +235,24 @@ function formatSectorSelectionLabel(selectedCount) {
     return `${selectedCount} sector${selectedCount === 1 ? '' : 's'} selected`;
 }
 
-function buildImmediateRunSummary(form, sourceSite) {
+function buildSelectedSectorSummary(form, categories) {
+    const selectedIds = new Set(
+        Array.isArray(form?.category_ids)
+            ? form.category_ids.map((categoryId) => `${categoryId}`)
+            : []
+    );
+    const selectedNames = categories
+        .filter((category) => selectedIds.has(`${category.id}`))
+        .map((category) => category.name);
+
+    if (selectedNames.length === 0) {
+        return 'Sectors: none selected';
+    }
+
+    return `Sectors: ${selectedNames.join(', ')}`;
+}
+
+function buildImmediateRunSummary(form, sourceSite, categories) {
     const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
     const selectedSectorCount = Array.isArray(form?.category_ids) ? form.category_ids.length : 0;
     const summaryMetrics = [formatSourceLabel(sourceSite)];
@@ -240,17 +262,23 @@ function buildImmediateRunSummary(form, sourceSite) {
         const listingBatchId = `${form?.source_listing_crawl_job_id ?? ''}`.trim();
 
         summaryMetrics.push(
-            `${Number.isInteger(detailLimit) ? detailLimit : 0} listings this run`,
-            listingBatchId ? `Listing batch: ${listingBatchId}` : 'Listing batch: Any pending listing batch'
+            `Up to ${Number.isInteger(detailLimit) ? detailLimit : 0} job details to crawl`,
+            'Eligible backlog: pending, failed, manual review',
+            buildSelectedSectorSummary(form, categories)
         );
 
-        if (selectedSectorCount > 0) {
-            summaryMetrics.push(formatSectorSelectionLabel(selectedSectorCount));
+        if (listingBatchId) {
+            summaryMetrics.push(
+                `Legacy batch filter: ${formatListingBatchIdentity({
+                    sourceSite,
+                    crawlJobId: listingBatchId,
+                })}`
+            );
         }
 
         return {
             title: 'Immediate Run for Backlog Recovery',
-            description: 'This run will start a job detail crawl.',
+            description: 'This run will recover detail backlog from the selected source and sectors.',
             metrics: summaryMetrics,
             actionLabel: 'Start Job Detail Crawl',
         };
@@ -445,9 +473,12 @@ function ScheduleManager({ onNavigateToAI }) {
         }
     }, []);
 
-    const handleResumeCrawlJob = useCallback(async (crawlJobId) => {
+    const handleResumeCrawlJob = useCallback(async (crawlJobId, strategy) => {
+        const requestBody = strategy ? JSON.stringify({ strategy }) : null;
         const response = await fetch(`${API_BASE}/crawl-jobs/${crawlJobId}/resume`, {
             method: 'POST',
+            headers: requestBody ? { 'Content-Type': 'application/json' } : undefined,
+            body: requestBody,
         });
 
         if (!response.ok) {
@@ -495,15 +526,23 @@ function ScheduleManager({ onNavigateToAI }) {
         return capabilities?.manual_actions?.helper_url || DEFAULT_MANUAL_ACTION_HELPER_URL;
     }, [capabilities]);
 
-    const handleOpenManualActionBrowser = useCallback(async (crawlJobId) => {
-        const response = await fetch(`${getManualActionHelperUrl()}/manual-actions/open-browser`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ crawl_job_id: crawlJobId }),
-        });
+    const postManualActionHelper = useCallback(async ({ path, actionLabel, fallbackDetail, crawlJobId }) => {
+        let response;
+
+        try {
+            response = await fetch(`${getManualActionHelperUrl()}${path}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ crawl_job_id: crawlJobId }),
+            });
+        } catch (requestError) {
+            const detail = buildManualActionHelperUnavailableMessage(actionLabel);
+            setError(detail);
+            throw new Error(detail);
+        }
 
         if (!response.ok) {
-            let detail = 'Failed to open verification browser';
+            let detail = fallbackDetail;
 
             try {
                 const payload = await response.json();
@@ -519,115 +558,37 @@ function ScheduleManager({ onNavigateToAI }) {
         setError(null);
         return response.json();
     }, [getManualActionHelperUrl]);
+
+    const handleGetManualActionReuseStatus = useCallback(async (crawlJobId) => {
+        return postManualActionHelper({
+            path: '/manual-actions/reuse-status',
+            actionLabel: 'the attach status check',
+            fallbackDetail: 'Failed to check open-browser reuse status',
+            crawlJobId,
+        });
+    }, [postManualActionHelper]);
+
+    const handleOpenManualActionBrowser = useCallback(async (crawlJobId) => {
+        try {
+            return await postManualActionHelper({
+                path: '/manual-actions/open-browser',
+                actionLabel: 'opening the verification browser',
+                fallbackDetail: 'Failed to open verification browser',
+                crawlJobId,
+            });
+        } catch {
+            return null;
+        }
+    }, [postManualActionHelper]);
 
     const handleCloseManualActionWindows = useCallback(async (crawlJobId) => {
-        const response = await fetch(`${getManualActionHelperUrl()}/manual-actions/close-profile-windows`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ crawl_job_id: crawlJobId }),
+        return postManualActionHelper({
+            path: '/manual-actions/close-profile-windows',
+            actionLabel: 'closing the verification profile windows',
+            fallbackDetail: 'Failed to close profile windows',
+            crawlJobId,
         });
-
-        if (!response.ok) {
-            let detail = 'Failed to close profile windows';
-
-            try {
-                const payload = await response.json();
-                detail = formatApiErrorDetail(payload.detail, detail);
-            } catch {
-                // Fall back to the default message when no JSON error is available.
-            }
-
-            setError(detail);
-            throw new Error(detail);
-        }
-
-        setError(null);
-        return response.json();
-    }, [getManualActionHelperUrl]);
-
-    const handleCaptureManualActionAnalysis = useCallback(async (crawlJobId, manualAction = {}) => {
-        const captureResponse = await fetch(`${getManualActionHelperUrl()}/manual-actions/capture-screenshot`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ crawl_job_id: crawlJobId }),
-        });
-
-        if (!captureResponse.ok) {
-            let detail = 'Failed to capture verification screenshot';
-
-            try {
-                const payload = await captureResponse.json();
-                detail = formatApiErrorDetail(payload.detail, detail);
-            } catch {
-                // Fall back to the default message when no JSON error is available.
-            }
-
-            setError(detail);
-            throw new Error(detail);
-        }
-
-        const screenshotPayload = await captureResponse.json();
-        const analysisResponse = await fetch(`${API_BASE}/ai/manual-action-analyze`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                crawl_job_id: crawlJobId,
-                source_site: manualAction.source_site || currentSourceSite,
-                stage: manualAction.stage || 'unknown',
-                action_type: manualAction.action_type || null,
-                blocked_url: manualAction.blocked_url || '',
-                content_type: screenshotPayload.content_type || 'image/png',
-                image_base64: screenshotPayload.image_base64,
-            }),
-        });
-
-        if (!analysisResponse.ok) {
-            let detail = 'Failed to analyze verification screenshot';
-
-            try {
-                const payload = await analysisResponse.json();
-                detail = formatApiErrorDetail(payload.detail, detail);
-            } catch {
-                // Fall back to the default message when no JSON error is available.
-            }
-
-            setError(detail);
-            throw new Error(detail);
-        }
-
-        setError(null);
-        return analysisResponse.json();
-    }, [currentSourceSite, getManualActionHelperUrl]);
-
-    const handleAutoResolveManualAction = useCallback(async (crawlJobId) => {
-        const response = await fetch(`${API_BASE}/ai/manual-action-auto-resolve`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                crawl_job_id: crawlJobId,
-                wait_for_clearance: true,
-                max_poll_attempts: 6,
-                poll_interval_seconds: 5,
-            }),
-        });
-
-        if (!response.ok) {
-            let detail = 'Failed to auto resolve manual action';
-
-            try {
-                const payload = await response.json();
-                detail = formatApiErrorDetail(payload.detail, detail);
-            } catch {
-                // Fall back to the default message when no JSON error is available.
-            }
-
-            setError(detail);
-            throw new Error(detail);
-        }
-
-        setError(null);
-        return response.json();
-    }, []);
+    }, [postManualActionHelper]);
 
     // Initial load
     useEffect(() => {
@@ -857,7 +818,7 @@ function ScheduleManager({ onNavigateToAI }) {
     const selectedListingBatch = listingBatches.find(
         (batch) => batch.crawl_job_id === immediateForm.source_listing_crawl_job_id
     ) || null;
-    const immediateRunSummary = buildImmediateRunSummary(immediateForm, currentSourceSite);
+    const immediateRunSummary = buildImmediateRunSummary(immediateForm, currentSourceSite, categories);
 
     return (
         <div className="scheduler-container">
@@ -994,9 +955,8 @@ function ScheduleManager({ onNavigateToAI }) {
                     onResumeCrawlJob={handleResumeCrawlJob}
                     onCancelCrawlJob={handleCancelCrawlJob}
                     onOpenManualActionBrowser={handleOpenManualActionBrowser}
+                    onGetManualActionReuseStatus={handleGetManualActionReuseStatus}
                     onCloseManualActionWindows={handleCloseManualActionWindows}
-                    onCaptureManualActionAnalysis={handleCaptureManualActionAnalysis}
-                    onAutoResolveManualAction={handleAutoResolveManualAction}
                 />
             )}
 
@@ -1075,7 +1035,7 @@ function ScheduleManager({ onNavigateToAI }) {
                     </div>
 
                     <div className="cyber-form-group">
-                        <label>{immediateForm.crawl_phase === 'detail' ? 'Detail Batch Size' : 'Max Depth (Pages)'}</label>
+                        <label>{immediateForm.crawl_phase === 'detail' ? 'Detail Crawl Target' : 'Max Depth (Pages)'}</label>
                         <input
                             type="number"
                             min="1"
@@ -1093,7 +1053,7 @@ function ScheduleManager({ onNavigateToAI }) {
 
                     {immediateForm.crawl_phase === 'detail' && (
                         <div className="cyber-form-group">
-                            <label htmlFor="source-listing-crawl-job-id">Listing Batch</label>
+                            <label htmlFor="source-listing-crawl-job-id">Legacy Listing Batch Filter</label>
                             <select
                                 id="source-listing-crawl-job-id"
                                 className="premium-select"
@@ -1103,38 +1063,46 @@ function ScheduleManager({ onNavigateToAI }) {
                                     source_listing_crawl_job_id: e.target.value,
                                 }))}
                             >
-                                <option value="">Any pending listing batch</option>
+                                <option value="">No legacy batch filter</option>
                                 {listingBatches.map((batch) => (
                                     <option key={batch.crawl_job_id} value={batch.crawl_job_id}>
-                                        {`${batch.source_site} ${batch.queued_at || batch.crawl_job_id} - ${batch.detail_pending || 0} pending / ${batch.listings_staged || 0} staged`}
+                                        {formatListingBatchOptionLabel(batch, formatRuntimeTimestamp)}
                                     </option>
                                 ))}
                             </select>
                             <div className="backlog-guidance-panel">
                                 <div>
-                                    <span className="backlog-guidance-label">Detail backlog run</span>
+                                    <span className="backlog-guidance-label">Category-scoped backlog recovery</span>
                                     <p>
-                                        Use this to turn staged listing URLs into full job records with description, salary, company, and location details.
+                                        Recover pending, failed, and manual-review detail backlog for the selected source and sectors. The target counts actual detail pages after existing jobs are filtered out.
                                     </p>
                                 </div>
                                 {selectedListingBatch ? (
-                                    <div className="backlog-metric-grid" aria-label="Selected listing batch backlog">
-                                        <div>
-                                            <strong>{formatBacklogCount(selectedListingBatch.detail_pending)} pending</strong>
-                                            <span>details left</span>
+                                    <div>
+                                        <div className="backlog-guidance-label">
+                                            {formatListingBatchIdentity({
+                                                sourceSite: selectedListingBatch.source_site,
+                                                crawlJobId: selectedListingBatch.crawl_job_id,
+                                            })}
                                         </div>
-                                        <div>
-                                            <strong>{formatBacklogCount(selectedListingBatch.listings_staged)} staged</strong>
-                                            <span>listings found</span>
-                                        </div>
-                                        <div>
-                                            <strong>{formatBacklogCount(selectedListingBatch.detail_completed)} completed</strong>
-                                            <span>details ingested</span>
+                                        <div className="backlog-metric-grid" aria-label="Selected listing batch backlog">
+                                            <div>
+                                                <strong>{formatBacklogCount(selectedListingBatch.detail_pending)} pending</strong>
+                                                <span>details left</span>
+                                            </div>
+                                            <div>
+                                                <strong>{formatBacklogCount(selectedListingBatch.listings_staged)} staged</strong>
+                                                <span>listings found</span>
+                                            </div>
+                                            <div>
+                                                <strong>{formatBacklogCount(selectedListingBatch.detail_completed)} completed</strong>
+                                                <span>details ingested</span>
+                                            </div>
                                         </div>
                                     </div>
                                 ) : (
                                     <p className="backlog-guidance-muted">
-                                        Choose a listing batch to target a known backlog, or leave it open to process any pending listing for the selected source.
+                                        Leave this empty for the default backlog pool. Use it only for targeted recovery or resume flows tied to one historical listing batch.
                                     </p>
                                 )}
                             </div>

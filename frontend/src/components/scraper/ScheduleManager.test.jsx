@@ -56,14 +56,20 @@ vi.mock('./ScrapeProgressPanel', () => ({
         <div data-testid="progress-has-close-windows-handler">
           {String(typeof props.onCloseManualActionWindows === 'function')}
         </div>
-        <div data-testid="progress-has-analyze-handler">
-          {String(typeof props.onCaptureManualActionAnalysis === 'function')}
+        <div data-testid="progress-has-reuse-status-handler">
+          {String(typeof props.onGetManualActionReuseStatus === 'function')}
         </div>
-        <div data-testid="progress-has-auto-resolve-handler">
-          {String(typeof props.onAutoResolveManualAction === 'function')}
-        </div>
-        <button type="button" onClick={() => props.onResumeCrawlJob?.('crawl-job-123')}>
-          Resume Progress Stub
+        <button
+          type="button"
+          onClick={() => props.onResumeCrawlJob?.('crawl-job-123', 'reuse_open_browser')}
+        >
+          Resume Reuse Progress Stub
+        </button>
+        <button
+          type="button"
+          onClick={() => props.onResumeCrawlJob?.('crawl-job-123', 'fresh_profile')}
+        >
+          Resume Fresh Progress Stub
         </button>
         <button type="button" onClick={() => props.onCancelCrawlJob?.('crawl-job-123')}>
           Cancel Progress Stub
@@ -71,24 +77,11 @@ vi.mock('./ScrapeProgressPanel', () => ({
         <button type="button" onClick={() => props.onOpenManualActionBrowser?.('crawl-job-123')}>
           Open Browser Progress Stub
         </button>
+        <button type="button" onClick={() => props.onGetManualActionReuseStatus?.('crawl-job-123')}>
+          Reuse Status Progress Stub
+        </button>
         <button type="button" onClick={() => props.onCloseManualActionWindows?.('crawl-job-123')}>
           Close Windows Progress Stub
-        </button>
-        <button
-          type="button"
-          onClick={() => props.onCaptureManualActionAnalysis?.('crawl-job-123', {
-            source_site: 'ctgoodjobs',
-            stage: 'category_page',
-            action_type: 'close_browser_window',
-            blocked_url: 'https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=52',
-            browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
-            browser_channel: 'msedge',
-          })}
-        >
-          Analyze Progress Stub
-        </button>
-        <button type="button" onClick={() => props.onAutoResolveManualAction?.('crawl-job-123')}>
-          Auto Resolve Progress Stub
         </button>
         <button type="button" onClick={() => props.onClose?.('manual_close')}>
           Close Progress Stub
@@ -219,38 +212,16 @@ function createFetchMock({
       return mockJsonResponse({ browser_channel: 'msedge' });
     }
 
+    if (url === 'http://127.0.0.1:47652/manual-actions/reuse-status' && init?.method === 'POST') {
+      return mockJsonResponse({
+        available: true,
+        reuse_open_browser_supported: true,
+        live_session: { browser_channel: 'msedge' },
+      });
+    }
+
     if (url === 'http://127.0.0.1:47652/manual-actions/close-profile-windows' && init?.method === 'POST') {
       return mockJsonResponse({ closed_processes: 1 });
-    }
-
-    if (url === 'http://127.0.0.1:47652/manual-actions/capture-screenshot' && init?.method === 'POST') {
-      return mockJsonResponse({
-        filename: 'manual-action-crawl-job-123.png',
-        content_type: 'image/png',
-        image_base64: 'ZmFrZS1pbWFnZQ==',
-      });
-    }
-
-    if (url === '/api/v1/ai/manual-action-analyze' && init?.method === 'POST') {
-      return mockJsonResponse({
-        challenge_type: 'captcha',
-        confidence: 0.93,
-        summary: 'Visual captcha challenge detected.',
-        recommended_actions: ['Use the browser window to complete the captcha.'],
-        should_resume: false,
-      });
-    }
-
-    if (url === '/api/v1/ai/manual-action-auto-resolve' && init?.method === 'POST') {
-      return mockJsonResponse({
-        resolution_status: 'applied_and_resumed',
-        analysis: {
-          challenge_type: 'browser_profile_in_use',
-          suggested_action: 'close_profile_windows',
-        },
-        applied_actions: ['close_profile_windows', 'resume_crawl_job'],
-        crawl_job: { id: 'crawl-job-123', status: 'dispatching' },
-      });
     }
 
     if (url === '/api/v1/schedules' && init?.method === 'POST') {
@@ -544,8 +515,7 @@ describe('ScheduleManager', () => {
     expect(screen.getByTestId('progress-has-cancel-handler')).toHaveTextContent('true');
     expect(screen.getByTestId('progress-has-open-browser-handler')).toHaveTextContent('true');
     expect(screen.getByTestId('progress-has-close-windows-handler')).toHaveTextContent('true');
-    expect(screen.getByTestId('progress-has-analyze-handler')).toHaveTextContent('true');
-    expect(screen.getByTestId('progress-has-auto-resolve-handler')).toHaveTextContent('true');
+    expect(screen.getByTestId('progress-has-reuse-status-handler')).toHaveTextContent('true');
   });
 
   it('posts progress action requests when the progress panel invokes its handlers', async () => {
@@ -571,16 +541,23 @@ describe('ScheduleManager', () => {
 
     await screen.findByText('Scrape Progress Stub');
 
-    fireEvent.click(screen.getByRole('button', { name: /resume progress stub/i }));
+    fireEvent.click(screen.getByRole('button', { name: /resume reuse progress stub/i }));
+    fireEvent.click(screen.getByRole('button', { name: /resume fresh progress stub/i }));
     fireEvent.click(screen.getByRole('button', { name: /cancel progress stub/i }));
     fireEvent.click(screen.getByRole('button', { name: /open browser progress stub/i }));
+    fireEvent.click(screen.getByRole('button', { name: /reuse status progress stub/i }));
     fireEvent.click(screen.getByRole('button', { name: /close windows progress stub/i }));
-    fireEvent.click(screen.getByRole('button', { name: /analyze progress stub/i }));
-    fireEvent.click(screen.getByRole('button', { name: /auto resolve progress stub/i }));
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/crawl-jobs/crawl-job-123/resume', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strategy: 'reuse_open_browser' }),
+      });
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/crawl-jobs/crawl-job-123/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strategy: 'fresh_profile' }),
       });
       expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/crawl-jobs/crawl-job-123/cancel', {
         method: 'POST',
@@ -591,7 +568,7 @@ describe('ScheduleManager', () => {
         body: JSON.stringify({ crawl_job_id: 'crawl-job-123' }),
       });
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://127.0.0.1:47652/manual-actions/close-profile-windows',
+        'http://127.0.0.1:47652/manual-actions/reuse-status',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -599,37 +576,50 @@ describe('ScheduleManager', () => {
         },
       );
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://127.0.0.1:47652/manual-actions/capture-screenshot',
+        'http://127.0.0.1:47652/manual-actions/close-profile-windows',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ crawl_job_id: 'crawl-job-123' }),
         },
       );
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/ai/manual-action-analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          crawl_job_id: 'crawl-job-123',
-          source_site: 'ctgoodjobs',
-          stage: 'category_page',
-          action_type: 'close_browser_window',
-          blocked_url: 'https://jobs.ctgoodjobs.hk/jobs/jobs-in-information-technology?page=52',
-          content_type: 'image/png',
-          image_base64: 'ZmFrZS1pbWFnZQ==',
-        }),
-      });
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/ai/manual-action-auto-resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          crawl_job_id: 'crawl-job-123',
-          wait_for_clearance: true,
-          max_poll_attempts: 6,
-          poll_interval_seconds: 5,
-        }),
-      });
     });
+  });
+
+  it('surfaces helper-specific copy when the manual-action helper is unavailable', async () => {
+    const baseFetch = createFetchMock({
+      scrapeProgress: {
+        active: { 'crawl-job-123': { status: 'manual_action_required' } },
+        all: {
+          'crawl-job-123': {
+            crawl_job_id: 'crawl-job-123',
+            status: 'manual_action_required',
+            category_name: 'Engineering',
+            crawl_mode: 'headed',
+          },
+        },
+        has_active: true,
+      },
+    });
+
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input, init) => {
+        const url = String(input);
+        if (url === 'http://127.0.0.1:47652/manual-actions/open-browser' && init?.method === 'POST') {
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        return baseFetch(input, init);
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Scrape Progress Stub');
+    fireEvent.click(screen.getByRole('button', { name: /open browser progress stub/i }));
+
+    expect(await screen.findByText(/manual-action helper is unavailable/i)).toBeInTheDocument();
   });
 
   it('restores recovery mode on mount when progress is empty but the marker is fresh', async () => {
@@ -869,9 +859,15 @@ describe('ScheduleManager', () => {
     fireEvent.change(screen.getByRole('combobox', { name: /listing batch/i }), {
       target: { value: '11111111-1111-4111-8111-111111111111' },
     });
-    expect(screen.getByText(/this run will start a job detail crawl/i)).toBeInTheDocument();
-    expect(screen.getByText(/250 listings this run/i)).toBeInTheDocument();
-    expect(screen.getByText(/listing batch: 11111111-1111-4111-8111-111111111111/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/this run will recover detail backlog from the selected source and sectors/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/up to 250 job details to crawl/i)).toBeInTheDocument();
+    expect(screen.getByText(/eligible backlog: pending, failed, manual review/i)).toBeInTheDocument();
+    expect(screen.getByText(/sectors: none selected/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/legacy batch filter: jobsdb batch 11111111-1111-4111-8111-111111111111/i)
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /start job detail crawl/i }));
 
     await waitFor(() => {
@@ -924,13 +920,19 @@ describe('ScheduleManager', () => {
       target: { value: 'detail' },
     });
 
-    expect(await screen.findByText(/detail backlog run/i)).toBeInTheDocument();
-    expect(screen.getByText(/use this to turn staged listing urls into full job records/i)).toBeInTheDocument();
+    expect(await screen.findByText(/category-scoped backlog recovery/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/recover pending, failed, and manual-review detail backlog/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: /jobsdb batch 11111111-1111-4111-8111-111111111111/i })
+    ).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('combobox', { name: /listing batch/i }), {
       target: { value: '11111111-1111-4111-8111-111111111111' },
     });
 
+    expect(screen.getAllByText(/jobsdb batch 11111111-1111-4111-8111-111111111111/i).length).toBeGreaterThan(0);
     expect(screen.getByText('74 pending')).toBeInTheDocument();
     expect(screen.getByText('96 staged')).toBeInTheDocument();
     expect(screen.getByText('22 completed')).toBeInTheDocument();
