@@ -61,11 +61,14 @@ def get_skill_dashboard_bucket(skill_name: str, category_name: str) -> str | Non
 @router.get("/overview")
 async def get_overview(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """Get dashboard overview statistics."""
-    total_jobs = db.query(Job).filter(Job.is_deleted == False).count()
-    enriched = db.query(Job).filter(
-        Job.ai_enriched_at.isnot(None),
-        Job.is_deleted == False
-    ).count()
+    total_jobs, enriched = (
+        db.query(
+            func.count(Job.id),
+            func.count(Job.ai_enriched_at),
+        )
+        .filter(Job.is_deleted == False)
+        .one()
+    )
 
     return {
         "total_jobs": total_jobs,
