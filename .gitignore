@@ -62,6 +62,7 @@ redis_data/
 # Logs
 *.log
 logs/
+frontend/.vite-*.out
 
 # OS
 .DS_Store
