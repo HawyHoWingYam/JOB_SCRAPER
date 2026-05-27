@@ -25,7 +25,7 @@ class CompanyEnrichmentRunService:
 
     def _pending_company_query(self):
         return (
-            self.db.query(Company)
+            self.db.query(Company.id)
             .filter(
                 Company.is_deleted == False,
                 or_(Company.ai_description.is_(None), Company.ai_description == ""),
@@ -79,42 +79,44 @@ class CompanyEnrichmentRunService:
         force_company_ids: Optional[List[str]] = None,
     ) -> Optional[CompanyEnrichmentRun]:
         if force_company_ids is None:
-            companies = self._pending_company_query().all()
+            company_ids = [company_id for (company_id,) in self._pending_company_query().all()]
         else:
             normalized_company_ids = [uuid.UUID(str(company_id)) for company_id in force_company_ids]
-            company_rows = (
-                self.db.query(Company)
-                .filter(
-                    Company.id.in_(normalized_company_ids),
-                    Company.is_deleted == False,
+            existing_company_ids = {
+                company_id
+                for (company_id,) in (
+                    self.db.query(Company.id)
+                    .filter(
+                        Company.id.in_(normalized_company_ids),
+                        Company.is_deleted == False,
+                    )
+                    .all()
                 )
-                .all()
-            )
-            company_map = {str(company.id): company for company in company_rows}
-            companies = [
-                company_map[str(company_id)]
+            }
+            company_ids = [
+                company_id
                 for company_id in normalized_company_ids
-                if str(company_id) in company_map
+                if company_id in existing_company_ids
             ]
 
-        if not companies:
+        if not company_ids:
             return None
 
         run = CompanyEnrichmentRun(
             status="pending",
-            total_items=len(companies),
-            pending_items=len(companies),
+            total_items=len(company_ids),
+            pending_items=len(company_ids),
             completed_items=0,
             failed_items=0,
         )
         self.db.add(run)
         self.db.flush()
 
-        for position, company in enumerate(companies):
+        for position, company_id in enumerate(company_ids):
             self.db.add(
                 CompanyEnrichmentRunItem(
                     run_id=run.id,
-                    company_id=company.id,
+                    company_id=company_id,
                     position=position,
                     status="pending",
                 )
