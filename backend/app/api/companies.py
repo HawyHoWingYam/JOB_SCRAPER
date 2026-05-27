@@ -192,9 +192,10 @@ async def list_companies(
         .all()
     )
 
-    if page == 1 and len(companies) < page_size:
-        total = len(companies)
-        total_pages = 1 if total else 0
+    current_offset = (page - 1) * page_size
+    if len(companies) < page_size:
+        total = current_offset + len(companies)
+        total_pages = page if total else 0
     else:
         total = query.count()
         total_pages = (total + page_size - 1) // page_size if total else 0

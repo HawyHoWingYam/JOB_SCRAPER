@@ -82,8 +82,8 @@ async def list_schedules(
 ):
     """Get all schedules."""
     schedules = repository.get_all_schedules(db, skip, limit)
-    if skip == 0 and len(schedules) < limit:
-        total = len(schedules)
+    if len(schedules) < limit:
+        total = skip + len(schedules)
     else:
         total = repository.count_schedules(db)
     return ScheduleListResponse(schedules=schedules, total=total)

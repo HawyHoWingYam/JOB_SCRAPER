@@ -75,3 +75,29 @@ def test_list_schedules_skips_total_count_for_short_first_page(monkeypatch):
         "JobsDB Nightly",
         "CTgoodjobs Nightly",
     ]
+
+
+def test_list_schedules_skips_total_count_for_short_later_page(monkeypatch):
+    app = FastAPI()
+    app.include_router(schedules.router, prefix="/api/v1")
+    repository = FakeScheduleRepository(
+        schedules_list=[
+            _build_schedule("Batch 26"),
+            _build_schedule("Batch 27"),
+        ]
+    )
+    db = object()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(schedules, "repository", repository)
+    client = TestClient(app)
+
+    response = client.get("/api/v1/schedules?skip=25&limit=25")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 27
+    assert [schedule["name"] for schedule in payload["schedules"]] == ["Batch 26", "Batch 27"]

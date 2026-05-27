@@ -80,3 +80,26 @@ def test_list_companies_skips_total_count_for_short_first_page(monkeypatch):
     assert payload["page_size"] == 25
     assert payload["total_pages"] == 1
     assert [item["name"] for item in payload["items"]] == ["Acme Health", "Cyan Retail"]
+
+
+def test_list_companies_skips_total_count_for_short_later_page(monkeypatch):
+    app = FastAPI()
+    app.include_router(companies.router, prefix="/api/v1")
+    query = _FakeQuery(rows=[_build_company("Zulu Health"), _build_company("Nova Labs")])
+    db = _FakeDB(query)
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+
+    response = client.get("/api/v1/companies?status=pending&page=2&page_size=25")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 27
+    assert payload["page"] == 2
+    assert payload["page_size"] == 25
+    assert payload["total_pages"] == 2
+    assert [item["name"] for item in payload["items"]] == ["Zulu Health", "Nova Labs"]
