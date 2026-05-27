@@ -5,7 +5,7 @@ from datetime import timedelta
 import re
 from typing import Dict, Iterable, List, Optional
 
-from sqlalchemy import and_, func, or_, text
+from sqlalchemy import and_, case, func, or_, text
 from sqlalchemy.orm import Session
 
 from app.messaging.topics import STREAM_JOB_LIFECYCLE
@@ -628,24 +628,26 @@ class EnrichmentRunService:
 
     def get_overview(self) -> dict:
         """Return AI enrichment overview counters and last completed run."""
-        total_jobs = self.db.query(Job).filter(Job.is_deleted == False).count()
-        enriched_jobs = (
-            self.db.query(Job)
-            .filter(
-                Job.ai_enriched_at.isnot(None),
-                Job.is_deleted == False,
+        total_jobs, enriched_jobs = (
+            self.db.query(
+                func.count(Job.id),
+                func.count(Job.ai_enriched_at),
             )
-            .count()
+            .filter(Job.is_deleted == False)
+            .one()
         )
-        running_runs = (
-            self.db.query(EnrichmentRun)
-            .filter(EnrichmentRun.status == "running")
-            .count()
-        )
-        active_runs = (
-            self.db.query(EnrichmentRun)
-            .filter(EnrichmentRun.status.in_(ACTIVE_RUN_STATUSES))
-            .count()
+        running_runs, active_runs = (
+            self.db.query(
+                func.coalesce(
+                    func.sum(case((EnrichmentRun.status == "running", 1), else_=0)),
+                    0,
+                ),
+                func.coalesce(
+                    func.sum(case((EnrichmentRun.status.in_(ACTIVE_RUN_STATUSES), 1), else_=0)),
+                    0,
+                ),
+            )
+            .one()
         )
         failed_items = (
             self.db.query(EnrichmentRunItem)
