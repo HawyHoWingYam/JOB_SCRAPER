@@ -379,6 +379,7 @@ function ScheduleManager({ onNavigateToAI }) {
         recoveryStartedAt: null,
     });
     const directOverrideRecoveryRef = useRef(null);
+    const scheduleHistoryCacheRef = useRef(new Map());
 
     // Fetch schedules
     const fetchSchedules = useCallback(async () => {
@@ -747,6 +748,7 @@ function ScheduleManager({ onNavigateToAI }) {
                 method: 'DELETE'
             });
             if (!response.ok) throw new Error('Failed to delete schedule');
+            scheduleHistoryCacheRef.current.delete(id);
             setSchedules((prev) => prev.filter((schedule) => schedule.id !== id));
         } catch (err) {
             setError(err.message);
@@ -767,6 +769,7 @@ function ScheduleManager({ onNavigateToAI }) {
                 method: 'POST'
             });
             if (!response.ok) throw new Error('Failed to run schedule');
+            scheduleHistoryCacheRef.current.delete(id);
         } catch (err) {
             setError(err.message);
         } finally {
@@ -777,14 +780,22 @@ function ScheduleManager({ onNavigateToAI }) {
     // View history
     const handleViewHistory = async (id) => {
         try {
+            const cachedHistory = scheduleHistoryCacheRef.current.get(id);
+            if (cachedHistory) {
+                setHistoryData(cachedHistory);
+                return;
+            }
+
             const response = await fetch(`${API_BASE}/schedules/${id}/history`);
             if (!response.ok) throw new Error('Failed to load execution history');
             const data = await response.json();
             const schedule = schedules.find(s => s.id === id);
-            setHistoryData({
+            const historyPayload = {
                 executions: data.executions || [],
                 scheduleName: schedule?.name || 'Unknown schedule'
-            });
+            };
+            scheduleHistoryCacheRef.current.set(id, historyPayload);
+            setHistoryData(historyPayload);
         } catch (err) {
             setError(err.message);
         }

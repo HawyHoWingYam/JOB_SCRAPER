@@ -31,7 +31,16 @@ vi.mock('./ScheduleForm', () => ({
 }));
 
 vi.mock('./ScheduleHistory', () => ({
-  default: () => <div>Schedule History Stub</div>,
+  default: ({ scheduleName, executions = [], onClose }) => (
+    <div>
+      <div>Schedule History Stub</div>
+      <div data-testid="history-schedule-name">{scheduleName}</div>
+      <div data-testid="history-execution-count">{String(executions.length)}</div>
+      <button type="button" onClick={onClose}>
+        Close History Stub
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('./ScrapeProgressPanel', () => ({
@@ -150,6 +159,21 @@ function createFetchMock({
   scrapeProgress = { active: {}, all: {}, has_active: false },
   scrapeProgressError = null,
   crawlJobId = 'crawl-job-123',
+  scheduleHistories = {
+    'jobsdb-nightly': {
+      executions: [
+        {
+          id: 'exec-1',
+          status: 'completed',
+          started_at: '2026-05-21T02:00:00Z',
+          completed_at: '2026-05-21T02:05:00Z',
+          duration_seconds: 300,
+          jobs_scraped: 24,
+          jobs_saved: 20,
+        },
+      ],
+    },
+  },
   createdSchedule = {
     id: 'created-schedule',
     name: 'jobsdb automation',
@@ -211,6 +235,11 @@ function createFetchMock({
 
     if (/^\/api\/v1\/schedules\/[^/]+\/run$/.test(url) && init?.method === 'POST') {
       return mockJsonResponse({ id: crawlJobId, status: 'queued' });
+    }
+
+    if (/^\/api\/v1\/schedules\/[^/]+\/history$/.test(url)) {
+      const scheduleId = url.split('/')[4];
+      return mockJsonResponse(scheduleHistories[scheduleId] || { executions: [] });
     }
 
     if (url === '/api/v1/crawl-jobs/crawl-job-123/resume' && init?.method === 'POST') {
@@ -1033,6 +1062,54 @@ describe('ScheduleManager', () => {
 
     const urls = globalThis.fetch.mock.calls.map(([url]) => url);
     expect(urls.filter((url) => url === '/api/v1/schedules')).toHaveLength(1);
+  });
+
+  it('reuses cached schedule history when reopening the same logs drawer', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('JobsDB Nightly');
+    fireEvent.click(screen.getAllByRole('button', { name: /logs/i })[0]);
+
+    expect(await screen.findByText('Schedule History Stub')).toBeInTheDocument();
+    expect(screen.getByTestId('history-schedule-name')).toHaveTextContent('JobsDB Nightly');
+    expect(screen.getByTestId('history-execution-count')).toHaveTextContent('1');
+
+    fireEvent.click(screen.getByRole('button', { name: /close history stub/i }));
+    await waitFor(() => {
+      expect(screen.queryByText('Schedule History Stub')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /logs/i })[0]);
+    expect(await screen.findByText('Schedule History Stub')).toBeInTheDocument();
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((url) => url === '/api/v1/schedules/jobsdb-nightly/history')).toHaveLength(1);
+  });
+
+  it('invalidates cached schedule history after running the same schedule', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('JobsDB Nightly');
+    fireEvent.click(screen.getAllByRole('button', { name: /logs/i })[0]);
+    expect(await screen.findByText('Schedule History Stub')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /close history stub/i }));
+    await waitFor(() => {
+      expect(screen.queryByText('Schedule History Stub')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /run now/i })[0]);
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/schedules/jobsdb-nightly/run', {
+        method: 'POST',
+      });
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /logs/i })[0]);
+    expect(await screen.findByText('Schedule History Stub')).toBeInTheDocument();
+
+    const urls = globalThis.fetch.mock.calls.map(([url]) => url);
+    expect(urls.filter((url) => url === '/api/v1/schedules/jobsdb-nightly/history')).toHaveLength(2);
   });
 
   it('posts detail crawl payloads with detail_limit and selected listing batch id', async () => {
