@@ -605,6 +605,88 @@ def test_fresh_profile_launches_persistent_context_and_closes_it_on_exit(monkeyp
     assert handle.stopped is True
 
 
+def test_ctgoodjobs_fresh_profile_launches_persistent_context_with_proxy_when_enabled(monkeypatch):
+    persistent_context = FakeContext([FakePage()])
+    chromium = FakeChromium(persistent_context=persistent_context)
+    _install_fake_playwright(monkeypatch, chromium)
+    monkeypatch.setattr(
+        "app.scraper.ctgoodjobs_browser_page_scraper.settings",
+        SimpleNamespace(
+            jobsdb_headed_browser_channel="msedge",
+            jobsdb_headed_browser_user_data_dir=None,
+            jobsdb_headed_browser_executable_path=None,
+            jobsdb_headed_navigation_timeout_ms=60000,
+            ctgoodjobs_proxy_enabled=True,
+            ctgoodjobs_proxy_provider="static",
+            ctgoodjobs_proxy_static_url="http://proxy.example:8080",
+            ctgoodjobs_proxy_pool_api_base_url=None,
+            ctgoodjobs_proxy_pool_get_path="/get",
+            ctgoodjobs_proxy_pool_delete_path="/delete",
+            ctgoodjobs_proxy_request_timeout_s=30.0,
+            ctgoodjobs_proxy_quarantine_minutes_challenge=15,
+            ctgoodjobs_proxy_quarantine_minutes_network=10,
+            ctgoodjobs_proxy_min_seconds_between_reuse=0.0,
+            ctgoodjobs_proxy_require_https_capable=False,
+            ctgoodjobs_proxy_provider_auth_header=None,
+        ),
+    )
+
+    asyncio.run(
+        _open_and_close(
+            CTGoodJobsBrowserPageScraper(
+                request_payload={"resume_strategy": "fresh_profile"},
+                user_data_dir=r"C:\profiles\ctgoodjobs-fresh-proxy",
+                browser_channel="msedge",
+            )
+        )
+    )
+
+    assert chromium.launch_calls[0]["proxy"] == {"server": "http://proxy.example:8080"}
+
+
+def test_ctgoodjobs_fresh_profile_launches_persistent_context_with_proxy_credentials(monkeypatch):
+    persistent_context = FakeContext([FakePage()])
+    chromium = FakeChromium(persistent_context=persistent_context)
+    _install_fake_playwright(monkeypatch, chromium)
+    monkeypatch.setattr(
+        "app.scraper.ctgoodjobs_browser_page_scraper.settings",
+        SimpleNamespace(
+            jobsdb_headed_browser_channel="msedge",
+            jobsdb_headed_browser_user_data_dir=None,
+            jobsdb_headed_browser_executable_path=None,
+            jobsdb_headed_navigation_timeout_ms=60000,
+            ctgoodjobs_proxy_enabled=True,
+            ctgoodjobs_proxy_provider="static",
+            ctgoodjobs_proxy_static_url="http://user-1:pass-2@proxy.example:8080",
+            ctgoodjobs_proxy_pool_api_base_url=None,
+            ctgoodjobs_proxy_pool_get_path="/get",
+            ctgoodjobs_proxy_pool_delete_path="/delete",
+            ctgoodjobs_proxy_request_timeout_s=30.0,
+            ctgoodjobs_proxy_quarantine_minutes_challenge=15,
+            ctgoodjobs_proxy_quarantine_minutes_network=10,
+            ctgoodjobs_proxy_min_seconds_between_reuse=0.0,
+            ctgoodjobs_proxy_require_https_capable=False,
+            ctgoodjobs_proxy_provider_auth_header=None,
+        ),
+    )
+
+    asyncio.run(
+        _open_and_close(
+            CTGoodJobsBrowserPageScraper(
+                request_payload={"resume_strategy": "fresh_profile"},
+                user_data_dir=r"C:\profiles\ctgoodjobs-fresh-proxy-auth",
+                browser_channel="msedge",
+            )
+        )
+    )
+
+    assert chromium.launch_calls[0]["proxy"] == {
+        "server": "http://proxy.example:8080",
+        "username": "user-1",
+        "password": "pass-2",
+    }
+
+
 def test_jobsdb_fresh_profile_converts_profile_in_use_launch_failure_into_manual_action_error(
     monkeypatch,
 ):
