@@ -25,7 +25,8 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
             text(
                 "UPDATE scrape_schedules "
                 "SET crawl_mode = CASE "
-                "WHEN COALESCE(NULLIF(source_site, ''), 'jobsdb') IN ('jobsdb', 'ctgoodjobs') THEN 'headed' "
+                "WHEN COALESCE(NULLIF(source_site, ''), 'jobsdb') = 'jobsdb' THEN 'headed' "
+                "WHEN COALESCE(NULLIF(source_site, ''), 'jobsdb') = 'ctgoodjobs' THEN 'headless' "
                 "ELSE 'headless' END "
                 "WHERE crawl_mode IS NULL"
             )

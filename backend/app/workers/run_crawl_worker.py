@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 import inspect
 import logging
 import sys
@@ -24,6 +25,11 @@ from app.repositories.crawl_job_listing_repository import CrawlJobListingReposit
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.job_repository import JobRepository
 from app.scraper.manual_action import ManualActionRequiredError
+from app.scraper.proxy_rotation import (
+    CTGoodJobsProxyRuntime,
+    activate_ctgoodjobs_proxy_runtime,
+    build_ctgoodjobs_proxy_runtime,
+)
 from app.utils.time import utc_now
 
 configure_logging(settings.log_level)
@@ -119,6 +125,7 @@ class CrawlWorkerService:
         latest_page_payload: dict[str, Any] = {}
         detail_runtime_scope_payload: dict[str, int] = {}
         detail_targets: list[dict[str, Any]] = []
+        proxy_runtime = build_ctgoodjobs_proxy_runtime() if source_site == "ctgoodjobs" else None
 
         if crawl_phase == "detail":
             detail_load_result = self._load_detail_targets(
@@ -141,6 +148,8 @@ class CrawlWorkerService:
                 pages_processed=0,
                 items_emitted=0,
                 job_ids_collected=0,
+                source_site=source_site,
+                proxy_runtime=proxy_runtime,
             ),
         }
 
@@ -169,6 +178,8 @@ class CrawlWorkerService:
                     pages_processed=0,
                     items_emitted=0,
                     job_ids_collected=0,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             )
             self.bus.ack(self.command_topic, self.group_name, message.message_id)
@@ -193,6 +204,8 @@ class CrawlWorkerService:
                 pages_processed=0,
                 items_emitted=0,
                 job_ids_collected=0,
+                source_site=source_site,
+                proxy_runtime=proxy_runtime,
             ),
         )
 
@@ -219,6 +232,8 @@ class CrawlWorkerService:
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             }
             self._publish_progress(
@@ -237,6 +252,8 @@ class CrawlWorkerService:
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             )
 
@@ -264,6 +281,8 @@ class CrawlWorkerService:
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             }
             self._publish_progress(
@@ -282,6 +301,8 @@ class CrawlWorkerService:
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             )
 
@@ -314,6 +335,12 @@ class CrawlWorkerService:
                 error_message=error_message,
             )
 
+        runtime_scope = (
+            activate_ctgoodjobs_proxy_runtime(proxy_runtime)
+            if proxy_runtime is not None
+            else nullcontext(None)
+        )
+
         try:
             runner_request_payload = dict(request_payload)
             runner_request_payload["crawl_phase"] = crawl_phase
@@ -325,19 +352,20 @@ class CrawlWorkerService:
                 )
             if crawl_phase == "detail":
                 runner_request_payload["detail_targets"] = detail_targets
-            result = runner.crawl(
-                crawl_job_id=crawl_job_id,
-                request_payload=runner_request_payload,
-                emit_page_processed=emit_page_processed,
-                emit_detail_progress=emit_detail_progress,
-                emit_item_emitted=emit_item_emitted,
-                emit_listing_emitted=emit_listing_emitted,
-                mark_detail_running=mark_detail_running,
-                mark_detail_completed=mark_detail_completed,
-                mark_detail_failed=mark_detail_failed,
-            )
-            if inspect.isawaitable(result):
-                result = await result
+            with runtime_scope:
+                result = runner.crawl(
+                    crawl_job_id=crawl_job_id,
+                    request_payload=runner_request_payload,
+                    emit_page_processed=emit_page_processed,
+                    emit_detail_progress=emit_detail_progress,
+                    emit_item_emitted=emit_item_emitted,
+                    emit_listing_emitted=emit_listing_emitted,
+                    mark_detail_running=mark_detail_running,
+                    mark_detail_completed=mark_detail_completed,
+                    mark_detail_failed=mark_detail_failed,
+                )
+                if inspect.isawaitable(result):
+                    result = await result
 
             execution_result = self._coerce_execution_result(
                 result,
@@ -361,6 +389,8 @@ class CrawlWorkerService:
                     pages_processed=final_pages_processed,
                     items_emitted=final_items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             }
             self._publish_progress(
@@ -381,6 +411,8 @@ class CrawlWorkerService:
                     pages_processed=final_pages_processed,
                     items_emitted=final_items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             )
         except ManualActionRequiredError as exc:
@@ -403,6 +435,8 @@ class CrawlWorkerService:
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             }
             detail_resume_context = manual_action_payload.get("resume_context") or {}
@@ -431,6 +465,8 @@ class CrawlWorkerService:
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             )
         except Exception as exc:  # pragma: no cover - surfaced in tests when needed
@@ -444,6 +480,8 @@ class CrawlWorkerService:
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             }
             self._publish_progress(
@@ -464,6 +502,8 @@ class CrawlWorkerService:
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
                     job_ids_collected=job_ids_collected,
+                    source_site=source_site,
+                    proxy_runtime=proxy_runtime,
                 ),
             )
         finally:
@@ -1019,12 +1059,18 @@ class CrawlWorkerService:
         pages_processed: int,
         items_emitted: int,
         job_ids_collected: int,
-    ) -> dict[str, int]:
-        return {
+        source_site: str,
+        proxy_runtime: CTGoodJobsProxyRuntime | None = None,
+    ) -> dict[str, Any]:
+        metrics: dict[str, Any] = {
             "pages_processed": int(pages_processed),
             "items_emitted": int(items_emitted),
             "job_ids_collected": int(job_ids_collected),
         }
+        if source_site == "ctgoodjobs" and proxy_runtime is not None:
+            metrics.update(proxy_runtime.metadata())
+            metrics.update(proxy_runtime.metrics_snapshot())
+        return metrics
 
     def _build_runtime_metrics_payload(
         self,
@@ -1032,11 +1078,15 @@ class CrawlWorkerService:
         pages_processed: int,
         items_emitted: int,
         job_ids_collected: int,
-    ) -> dict[str, int]:
+        source_site: str,
+        proxy_runtime: CTGoodJobsProxyRuntime | None = None,
+    ) -> dict[str, Any]:
         return self._build_runtime_metrics(
             pages_processed=pages_processed,
             items_emitted=items_emitted,
             job_ids_collected=job_ids_collected,
+            source_site=source_site,
+            proxy_runtime=proxy_runtime,
         )
 
     def _coerce_execution_result(

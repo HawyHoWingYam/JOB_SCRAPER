@@ -5,6 +5,11 @@ import logging
 import httpx
 
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
+from app.scraper.proxy_rotation import (
+    CTGoodJobsProxyRuntime,
+    build_ctgoodjobs_proxy_runtime,
+    get_active_ctgoodjobs_proxy_runtime,
+)
 from app.utils.anti_detection import ExponentialBackoff, get_random_user_agent
 
 logger = logging.getLogger(__name__)
@@ -35,6 +40,7 @@ class CTGoodJobsFetchError(RuntimeError):
         attempts: int,
         status_code: int | None = None,
         exception_type: str | None = None,
+        challenge_detected: bool = False,
     ) -> None:
         details = (
             f"status_code={status_code}"
@@ -49,6 +55,7 @@ class CTGoodJobsFetchError(RuntimeError):
         self.attempts = attempts
         self.status_code = status_code
         self.exception_type = exception_type
+        self.challenge_detected = bool(challenge_detected)
 
 
 def looks_like_interstitial_html(html: str) -> bool:
@@ -83,25 +90,61 @@ async def fetch_html_document(
     timeout_s: float = 30.0,
     referer: str | None = None,
     max_attempts: int = 3,
+    proxy_runtime: CTGoodJobsProxyRuntime | None = None,
 ) -> str:
-    owned = client is None
-    if client is None:
-        client = httpx.AsyncClient(timeout=timeout_s, follow_redirects=True)
+    active_proxy_runtime = (
+        proxy_runtime
+        or get_active_ctgoodjobs_proxy_runtime()
+        or build_ctgoodjobs_proxy_runtime()
+    )
+    effective_timeout_s = (
+        active_proxy_runtime.request_timeout_s
+        if active_proxy_runtime.enabled
+        else timeout_s
+    )
+    owned_client = client is None and not active_proxy_runtime.enabled
+    if owned_client:
+        client = httpx.AsyncClient(
+            timeout=effective_timeout_s,
+            follow_redirects=True,
+            trust_env=False,
+        )
 
     backoff = ExponentialBackoff(base_delay=1.0, max_delay=8.0, max_retries=max_attempts, jitter=0.25)
 
     try:
         for attempt in range(max_attempts):
+            attempt_client = client
+            attempt_proxy_lease = None
+            owns_attempt_client = False
             try:
-                response = await client.get(url, headers=build_document_headers(referer=referer))
+                if active_proxy_runtime.enabled:
+                    attempt_proxy_lease = await active_proxy_runtime.acquire_lease()
+                    attempt_client = httpx.AsyncClient(
+                        timeout=effective_timeout_s,
+                        follow_redirects=True,
+                        trust_env=False,
+                        **active_proxy_runtime.build_httpx_client_kwargs(attempt_proxy_lease),
+                    )
+                    owns_attempt_client = True
+                request_headers = active_proxy_runtime.merge_request_headers(
+                    build_document_headers(referer=referer)
+                )
+                response = await attempt_client.get(url, headers=request_headers)
                 response.raise_for_status()
                 if looks_like_interstitial_html(response.text):
+                    if active_proxy_runtime.enabled:
+                        await active_proxy_runtime.report_challenge(
+                            stage=stage,
+                            lease=attempt_proxy_lease,
+                        )
                     if attempt == max_attempts - 1:
                         raise CTGoodJobsFetchError(
                             stage=stage,
                             url=url,
                             attempts=attempt + 1,
                             exception_type="InterstitialChallenge",
+                            challenge_detected=True,
                         )
                     logger.warning(
                         "CTGoodJobs %s fetch hit human-verification interstitial: url=%s attempt=%s/%s",
@@ -112,9 +155,20 @@ async def fetch_html_document(
                     )
                     await backoff.wait(attempt)
                     continue
+                if active_proxy_runtime.enabled:
+                    await active_proxy_runtime.report_success(
+                        stage=stage,
+                        lease=attempt_proxy_lease,
+                    )
                 return response.text
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code if exc.response is not None else None
+                if active_proxy_runtime.enabled:
+                    await active_proxy_runtime.report_http_failure(
+                        stage=stage,
+                        lease=attempt_proxy_lease,
+                        status_code=status_code,
+                    )
                 is_retryable = status_code in _TRANSIENT_STATUS_CODES
                 if (not is_retryable) or attempt == max_attempts - 1:
                     raise CTGoodJobsFetchError(
@@ -133,6 +187,11 @@ async def fetch_html_document(
                     max_attempts,
                 )
             except _TRANSIENT_EXCEPTIONS as exc:
+                if active_proxy_runtime.enabled:
+                    await active_proxy_runtime.report_network_failure(
+                        stage=stage,
+                        lease=attempt_proxy_lease,
+                    )
                 if attempt == max_attempts - 1:
                     raise CTGoodJobsFetchError(
                         stage=stage,
@@ -146,12 +205,15 @@ async def fetch_html_document(
                     url,
                     type(exc).__name__,
                     attempt + 1,
-                    max_attempts,
-                )
+                        max_attempts,
+                    )
+            finally:
+                if owns_attempt_client and attempt_client is not None:
+                    await attempt_client.aclose()
 
             await backoff.wait(attempt)
     finally:
-        if owned:
+        if owned_client and client is not None:
             await client.aclose()
 
     raise AssertionError("unreachable")

@@ -52,7 +52,8 @@ The default `backend-api` image only supports the lexical search baseline. Seman
 - Crawl jobs now support explicit `crawl_mode` values: `headless` and `headed`.
 - Recommended operational defaults are source-aware:
   - `JobsDB` defaults to `headed`
-  - `CTGoodJobs` defaults to `headed`
+  - `CTGoodJobs` defaults to `headless`
+- `CTGoodJobs` headless runs can be paired with the explicit `CTGOODJOBS_PROXY_*` settings in `.env` for per-request proxy rotation; global `HTTP_PROXY` / `HTTPS_PROXY` variables are not part of that runtime path.
 - `POST /api/v1/jobs/search` supports `lexical`, `semantic`, and `hybrid`, but the non-lexical modes require `retrieval-api`.
 - `POST /api/v1/jobs/search/export` mirrors the active retrieval mode. `semantic` and `hybrid` export require `retrieval-api`.
 - `GET /api/v1/jobs/{job_id}/similar` and `GET /api/v1/recommendations/jobs` proxy to `recommendation-api`.
@@ -89,7 +90,7 @@ Behavior notes:
 
 - `headed` crawl jobs are published onto a separate Redis stream and consumed by the host-side headed worker
 - `headless` crawl jobs continue to be consumed by the Docker `crawl-worker`
-- `CTGoodJobs` can still run in either mode from the control plane, but the current default is `headed` because its listing/detail pages can also present human-verification interstitials to automated sessions
+- `CTGoodJobs` can still run in either mode from the control plane, but the current default is `headless`; the headed worker remains useful for debug, manual verification, and fallback investigation when anti-bot interstitials persist
 
 ## JobsDB Detail Repair
 

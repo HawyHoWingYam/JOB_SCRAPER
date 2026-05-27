@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     manual_action_registry_state_path: str = str(
         DEFAULT_RUNTIME_DIR / "manual_actions" / "live_browser_sessions.json"
     )
+    ctgoodjobs_proxy_enabled: bool = False
+    ctgoodjobs_proxy_provider: str = "static"
+    ctgoodjobs_proxy_static_url: Optional[str] = None
+    ctgoodjobs_proxy_pool_api_base_url: Optional[str] = None
+    ctgoodjobs_proxy_pool_get_path: str = "/get"
+    ctgoodjobs_proxy_pool_delete_path: Optional[str] = "/delete"
+    ctgoodjobs_proxy_request_timeout_s: float = 30.0
+    ctgoodjobs_proxy_quarantine_minutes_challenge: int = 15
+    ctgoodjobs_proxy_quarantine_minutes_network: int = 10
+    ctgoodjobs_proxy_min_seconds_between_reuse: float = 0.0
+    ctgoodjobs_proxy_require_https_capable: bool = False
+    ctgoodjobs_proxy_provider_auth_header: Optional[str] = None
 
     # Scheduler worker runtime
     scheduler_heartbeat_interval_seconds: int = 15
@@ -76,6 +88,10 @@ class Settings(BaseSettings):
         'recommendation_api_url',
         'jobsdb_headed_browser_user_data_dir',
         'jobsdb_headed_browser_executable_path',
+        'ctgoodjobs_proxy_static_url',
+        'ctgoodjobs_proxy_pool_api_base_url',
+        'ctgoodjobs_proxy_pool_delete_path',
+        'ctgoodjobs_proxy_provider_auth_header',
         mode='before',
     )
     @classmethod
