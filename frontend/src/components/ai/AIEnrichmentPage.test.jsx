@@ -1162,6 +1162,104 @@ describe('AIEnrichmentPage', () => {
     expect(within(currentRunCardAfter).getByText(/failed 0/i)).toBeInTheDocument();
   }, 8000);
 
+  it('keeps the refresh error visible until a later poll succeeds', async () => {
+    let runCalls = 0;
+
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 400,
+          enriched_jobs: 4,
+          pending_jobs: 396,
+          active_runs: 1,
+          failed_items: 0,
+          last_completed_run: null,
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        runCalls += 1;
+
+        if (runCalls === 1) {
+          return mockJsonResponse({
+            runs: [
+              {
+                id: 'run-pending',
+                source_type: 'manual_pending',
+                status: 'pending',
+                total_items: 4,
+                pending_items: 4,
+                completed_items: 0,
+                failed_items: 0,
+                current_job_title: 'Title A',
+                created_at: '2026-04-15T12:00:00Z',
+                started_at: '2026-04-15T12:00:00Z',
+              },
+            ],
+          });
+        }
+
+        if (runCalls === 2) {
+          return Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
+        }
+
+        return mockDelayedJsonResponse(
+          {
+            runs: [
+              {
+                id: 'run-pending',
+                source_type: 'manual_pending',
+                status: 'pending',
+                total_items: 4,
+                pending_items: 2,
+                completed_items: 2,
+                failed_items: 0,
+                current_job_title: 'Title B',
+                created_at: '2026-04-15T12:00:00Z',
+                started_at: '2026-04-15T12:00:00Z',
+              },
+            ],
+          },
+          3000,
+        );
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    vi.useFakeTimers();
+    render(<AIEnrichmentPage />);
+
+    await act(async () => Promise.resolve());
+    expect(screen.getByText(/title a/i)).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(runCalls).toBe(2);
+    expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(runCalls).toBe(3);
+    expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3100);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(screen.queryByText(/refresh failed/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/title b/i)).toBeInTheDocument();
+  }, 10000);
+
   it('renders the latest two terminal runs when no active run exists and shows richer terminal detail', async () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);

@@ -238,7 +238,6 @@ export default function AIEnrichmentPage() {
         if (!hasConsoleDataRef.current) {
           setLoadError(null);
         }
-        setRefreshError(null);
 
         const overviewTask = withRequestTimeout(
           fetch(`${API_URL}/api/v1/ai/overview`).then(async (response) => {
