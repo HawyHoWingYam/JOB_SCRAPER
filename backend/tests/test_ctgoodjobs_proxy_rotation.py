@@ -84,6 +84,25 @@ def test_proxy_health_service_tracks_http_403_429_penalties():
     assert state.score == -3
 
 
+def test_proxy_health_service_quarantines_after_two_http_403_429_failures():
+    health = InMemoryProxyHealthService(quarantine_minutes_challenge=15)
+    lease = ProxyLease(
+        proxy_url="http://proxy-c:8080",
+        provider_name="pool_api",
+        identity="proxy-c",
+    )
+    start = datetime(2026, 5, 27, 12, 0, tzinfo=UTC)
+
+    health.mark_lease_used(lease, now=start)
+    assert health.record_http_failure(lease, status_code=429, now=start) is False
+    assert health.record_http_failure(lease, status_code=403, now=start + timedelta(minutes=1)) is True
+
+    state = health.get_state("proxy-c")
+    assert state is not None
+    assert state.http_403_429_count == 2
+    assert state.quarantine_until == start + timedelta(minutes=16)
+
+
 @pytest.mark.asyncio
 async def test_selection_policy_deprioritizes_proxies_with_poor_recent_success_rate():
     health = InMemoryProxyHealthService()

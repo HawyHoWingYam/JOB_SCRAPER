@@ -233,6 +233,7 @@ class ProxyHealthRecord:
     quarantine_until: datetime | None = None
     consecutive_challenges: int = 0
     consecutive_network_failures: int = 0
+    consecutive_http_403_429_failures: int = 0
     score: int = 0
     recent_outcomes: deque[str] = field(default_factory=lambda: deque(maxlen=10))
 
@@ -290,6 +291,7 @@ class InMemoryProxyHealthService:
         state.success_count += 1
         state.consecutive_challenges = 0
         state.consecutive_network_failures = 0
+        state.consecutive_http_403_429_failures = 0
         state.score += 1
         state.recent_outcomes.append("success")
         state.last_used_at = now or _utc_now()
@@ -303,6 +305,7 @@ class InMemoryProxyHealthService:
         state.challenge_count += 1
         state.consecutive_challenges += 1
         state.consecutive_network_failures = 0
+        state.consecutive_http_403_429_failures = 0
         state.score -= 3
         state.recent_outcomes.append("challenge")
         state.last_used_at = current_time
@@ -319,6 +322,7 @@ class InMemoryProxyHealthService:
         state.network_fail_count += 1
         state.consecutive_network_failures += 1
         state.consecutive_challenges = 0
+        state.consecutive_http_403_429_failures = 0
         state.score -= 2
         state.recent_outcomes.append("network_fail")
         state.last_used_at = current_time
@@ -343,9 +347,14 @@ class InMemoryProxyHealthService:
         state.last_used_at = current_time
         if status_code in {403, 429}:
             state.http_403_429_count += 1
+            state.consecutive_http_403_429_failures += 1
             state.score -= 3
             state.recent_outcomes.append("http_403_429")
+            if state.consecutive_http_403_429_failures >= 2:
+                state.quarantine_until = current_time + timedelta(minutes=self.quarantine_minutes_challenge)
+                return True
             return False
+        state.consecutive_http_403_429_failures = 0
         if status_code is not None and status_code >= 500:
             state.http_5xx_count += 1
             state.score -= 1
