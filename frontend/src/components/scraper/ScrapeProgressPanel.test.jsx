@@ -1039,6 +1039,8 @@ describe('ScrapeProgressPanel', () => {
     });
 
     expect(await screen.findByText(/stage: proxy_unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/proxy configuration or provider availability must be restored before retrying/i)).toBeInTheDocument();
+    expect(screen.getByText(/proxy unavailable/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /resume using open browser/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /open verification browser/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /close profile windows/i })).not.toBeInTheDocument();

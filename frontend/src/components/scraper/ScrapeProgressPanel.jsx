@@ -707,6 +707,12 @@ function ProgressItem({
             ? manual_action.instructions.filter(Boolean)
             : [];
         const isProxyUnavailable = manual_action.stage === 'proxy_unavailable';
+        const manualActionSignals = isProxyUnavailable
+            ? [...statusSignals, 'Proxy unavailable']
+            : statusSignals;
+        const manualActionSubtitle = isProxyUnavailable
+            ? 'Proxy configuration or provider availability must be restored before retrying.'
+            : 'Resume this run after resolving the browser or profile blocker.';
         const metricLines = [];
 
         if (phase === 1) {
@@ -896,11 +902,11 @@ function ProgressItem({
                     <div className="progress-status-summary">
                         <span className="progress-status-title">Next step</span>
                         <span className="progress-status-subtitle">
-                            Resume this run after resolving the browser or profile blocker.
+                            {manualActionSubtitle}
                         </span>
                     </div>
                     <div className="progress-status-signal-row">
-                        {statusSignals.map((signal) => (
+                        {manualActionSignals.map((signal) => (
                             <span key={`${taskId}-${signal}`} className="progress-status-chip">
                                 {signal}
                             </span>
