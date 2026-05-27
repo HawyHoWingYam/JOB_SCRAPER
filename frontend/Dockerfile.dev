@@ -8,6 +8,9 @@ COPY package*.json ./
 # Install dependencies (including platform-specific rollup binary)
 RUN npm install && npm install @rollup/rollup-linux-arm64-musl --save-optional
 
+# Remove any host-generated build artifacts that may persist across cached layers.
+RUN rm -rf dist .vite-*.out .vite-*.err
+
 # Copy application code
 COPY . .
 
