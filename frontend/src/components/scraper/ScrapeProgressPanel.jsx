@@ -27,6 +27,13 @@ function ScrapeProgressPanel({
     const [progress, setProgress] = useState(initialProgress);
     const [isConnected, setIsConnected] = useState(false);
     const [error, setError] = useState(null);
+    const [isPageVisible, setIsPageVisible] = useState(() => {
+        if (typeof document === 'undefined') {
+            return true;
+        }
+
+        return !document.hidden;
+    });
     const eventSourceRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
     const recoveryTimeoutRef = useRef(null);
@@ -57,6 +64,21 @@ function ScrapeProgressPanel({
     };
 
     useEffect(() => {
+        if (typeof document === 'undefined') {
+            return undefined;
+        }
+
+        const handleVisibilityChange = () => {
+            setIsPageVisible(!document.hidden);
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
+
+    useEffect(() => {
         const hasInitialProgress = Object.keys(initialProgress).length > 0;
         const hasCurrentProgress = Object.keys(progress).length > 0;
 
@@ -75,7 +97,7 @@ function ScrapeProgressPanel({
     }, [initialProgress, isVisible, progress]);
 
     useEffect(() => {
-        if (!isVisible) {
+        if (!isVisible || !isPageVisible) {
             clearReconnectTimeout();
             closeEventSource();
             setIsConnected(false);
@@ -136,7 +158,7 @@ function ScrapeProgressPanel({
             clearReconnectTimeout();
             closeEventSource();
         };
-    }, [isVisible]);
+    }, [isPageVisible, isVisible]);
 
     const progressEntries = Object.entries(progress).sort((leftEntry, rightEntry) => {
         return getProgressSortTimestamp(rightEntry[1]) - getProgressSortTimestamp(leftEntry[1]);

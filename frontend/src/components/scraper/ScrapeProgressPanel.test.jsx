@@ -1323,6 +1323,38 @@ describe('ScrapeProgressPanel', () => {
     vi.useRealTimers();
   });
 
+  it('pauses the SSE stream while the page is hidden and reconnects when visible again', () => {
+    let isHidden = false;
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => isHidden);
+
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const firstStream = latestEventSource();
+    act(() => {
+      firstStream.emitOpen();
+    });
+
+    expect(MockEventSource.instances).toHaveLength(1);
+
+    act(() => {
+      isHidden = true;
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(firstStream.close).toHaveBeenCalledTimes(1);
+    expect(MockEventSource.instances).toHaveLength(1);
+
+    act(() => {
+      isHidden = false;
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(MockEventSource.instances).toHaveLength(2);
+    expect(latestEventSource()).not.toBe(firstStream);
+
+    unmount();
+  });
+
   it('renders recovery copy while reconnecting without any recovered progress yet', () => {
     vi.useFakeTimers();
 
