@@ -190,11 +190,19 @@ export default function AIEnrichmentPage() {
   const [refreshError, setRefreshError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [actionMessage, setActionMessage] = useState(null);
+  const [isPageVisible, setIsPageVisible] = useState(() => {
+    if (typeof document === 'undefined') {
+      return true;
+    }
+
+    return !document.hidden;
+  });
   const hasConsoleData = hasLoadedOverview || hasLoadedRuns;
   const hasConsoleDataRef = useRef(false);
   const refreshInFlightRef = useRef(null);
   const refreshQueuedRef = useRef(false);
   const mountedRef = useRef(true);
+  const wasPageVisibleRef = useRef(typeof document === 'undefined' ? true : !document.hidden);
   const sortedRuns = sortRunsNewestFirst(runs);
   const overviewPendingJobs = Number(overview?.pending_jobs || 0);
   const overviewFailedJobs = Number(overview?.failed_jobs ?? overview?.failed_items ?? 0);
@@ -222,6 +230,21 @@ export default function AIEnrichmentPage() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const handleVisibilityChange = () => {
+      setIsPageVisible(!document.hidden);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -357,7 +380,18 @@ export default function AIEnrichmentPage() {
   }, []);
 
   useEffect(() => {
-    if (loading || !hasConsoleData || !shouldPollRuns) {
+    const wasPageVisible = wasPageVisibleRef.current;
+    wasPageVisibleRef.current = isPageVisible;
+
+    if (!isPageVisible || wasPageVisible || loading || !hasConsoleData || !shouldPollRuns) {
+      return;
+    }
+
+    fetchAIConsole({ queueAfterInFlight: true });
+  }, [fetchAIConsole, hasConsoleData, isPageVisible, loading, shouldPollRuns]);
+
+  useEffect(() => {
+    if (loading || !hasConsoleData || !shouldPollRuns || !isPageVisible) {
       return undefined;
     }
 
@@ -380,7 +414,7 @@ export default function AIEnrichmentPage() {
     return () => {
       cancelled = true;
     };
-  }, [hasConsoleData, loading, shouldPollRuns]);
+  }, [hasConsoleData, isPageVisible, loading, shouldPollRuns]);
 
   async function runPendingEnrichment() {
     try {

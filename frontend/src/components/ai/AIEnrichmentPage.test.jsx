@@ -876,6 +876,90 @@ describe('AIEnrichmentPage', () => {
     );
   });
 
+  it('pauses polling while the page is hidden and refreshes immediately when visible again', async () => {
+    let runCalls = 0;
+    let isHidden = false;
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => isHidden);
+
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 400,
+          enriched_jobs: 4,
+          pending_jobs: 396,
+          active_runs: 1,
+          failed_items: 0,
+          last_completed_run: null,
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        runCalls += 1;
+
+        const title = runCalls === 1 ? 'Title A' : runCalls === 2 ? 'Title B' : 'Title C';
+        const completedItems = runCalls === 1 ? 0 : runCalls === 2 ? 2 : 4;
+        return mockJsonResponse({
+          runs: [
+            {
+              id: 'run-pending',
+              source_type: 'manual_pending',
+              status: 'pending',
+              total_items: 4,
+              pending_items: Math.max(0, 4 - completedItems),
+              completed_items: completedItems,
+              failed_items: 0,
+              current_job_title: title,
+              created_at: '2026-04-15T12:00:00Z',
+              started_at: '2026-04-15T12:00:00Z',
+            },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    vi.useFakeTimers();
+    render(<AIEnrichmentPage />);
+
+    await act(async () => Promise.resolve());
+    expect(screen.getByText(/title a/i)).toBeInTheDocument();
+    const baselineCalls = runCalls;
+    expect(baselineCalls).toBeGreaterThanOrEqual(1);
+
+    isHidden = true;
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await act(async () => Promise.resolve());
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(runCalls).toBe(baselineCalls);
+    expect(screen.getByText(/title a/i)).toBeInTheDocument();
+
+    isHidden = false;
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await act(async () => Promise.resolve());
+
+    expect(runCalls).toBe(baselineCalls + 1);
+    expect(screen.getByText(/title b/i)).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(runCalls).toBe(baselineCalls + 2);
+    expect(screen.getByText(/title c/i)).toBeInTheDocument();
+  });
+
   it('selects the newest active run as Current Run and the immediately previous run as Previous Run, even when both are active', async () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
