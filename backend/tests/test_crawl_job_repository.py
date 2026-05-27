@@ -357,3 +357,47 @@ def test_list_events_can_return_latest_tail_while_preserving_sequence_order():
     ]
 
     db.close()
+
+
+def test_list_recent_crawl_jobs_can_filter_by_status_and_updated_since():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    repository = CrawlJobRepository()
+
+    old_terminal = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="manual",
+        status="completed",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        queued_at=datetime(2026, 5, 27, 8, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 5, 27, 8, 30, tzinfo=UTC),
+    )
+    recent_terminal = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="manual",
+        status="failed",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        queued_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 5, 27, 9, 20, tzinfo=UTC),
+    )
+    recent_active = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="manual",
+        status="running",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        queued_at=datetime(2026, 5, 27, 9, 10, tzinfo=UTC),
+        updated_at=datetime(2026, 5, 27, 9, 25, tzinfo=UTC),
+    )
+    db.add_all([old_terminal, recent_terminal, recent_active])
+    db.commit()
+
+    jobs = repository.list_recent_crawl_jobs(
+        db,
+        limit=10,
+        updated_since=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        statuses={"completed", "failed", "cancelled"},
+    )
+
+    assert [job.id for job in jobs] == [recent_terminal.id]
+
+    db.close()

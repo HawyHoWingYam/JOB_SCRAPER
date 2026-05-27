@@ -196,10 +196,11 @@ def test_collect_progress_payload_uses_batched_latest_and_filtered_activity_even
         def list_crawl_jobs_by_statuses(self, db, *, statuses):
             return [crawl_job]
 
-        def list_recent_crawl_jobs(self, db, *, limit, updated_since=None):
-            self.recent_job_calls.append({"limit": limit, "updated_since": updated_since})
+        def list_recent_crawl_jobs(self, db, *, limit, updated_since=None, statuses=None):
+            self.recent_job_calls.append({"limit": limit, "updated_since": updated_since, "statuses": statuses})
             assert limit == 50
             assert updated_since == now - progress.BACKLOG_VISIBLE_WINDOW
+            assert set(statuses or set()) == progress.TERMINAL_CRAWL_JOB_STATUSES
             return []
 
         def list_latest_events_for_jobs(self, db, *, crawl_job_ids):
@@ -237,6 +238,7 @@ def test_collect_progress_payload_uses_batched_latest_and_filtered_activity_even
         {
             "limit": 50,
             "updated_since": now - progress.BACKLOG_VISIBLE_WINDOW,
+            "statuses": progress.TERMINAL_CRAWL_JOB_STATUSES,
         }
     ]
     assert repository_stub.latest_event_batch_calls == [[crawl_job.id]]
@@ -265,10 +267,11 @@ def test_collect_progress_payload_reuses_category_registry_lookup_per_source(mon
         def list_crawl_jobs_by_statuses(self, db, *, statuses):
             return [first_job, second_job]
 
-        def list_recent_crawl_jobs(self, db, *, limit, updated_since=None):
-            self.recent_job_calls.append({"limit": limit, "updated_since": updated_since})
+        def list_recent_crawl_jobs(self, db, *, limit, updated_since=None, statuses=None):
+            self.recent_job_calls.append({"limit": limit, "updated_since": updated_since, "statuses": statuses})
             assert limit == 50
             assert updated_since == now - progress.BACKLOG_VISIBLE_WINDOW
+            assert set(statuses or set()) == progress.TERMINAL_CRAWL_JOB_STATUSES
             return []
 
         def list_latest_events_for_jobs(self, db, *, crawl_job_ids):
@@ -318,6 +321,7 @@ def test_collect_progress_payload_reuses_category_registry_lookup_per_source(mon
         {
             "limit": 50,
             "updated_since": now - progress.BACKLOG_VISIBLE_WINDOW,
+            "statuses": progress.TERMINAL_CRAWL_JOB_STATUSES,
         }
     ]
     assert registry_stub.calls == 1

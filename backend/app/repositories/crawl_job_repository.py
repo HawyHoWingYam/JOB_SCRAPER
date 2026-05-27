@@ -285,10 +285,13 @@ class CrawlJobRepository:
         *,
         limit: int = 100,
         updated_since=None,
+        statuses: set[str] | list[str] | None = None,
     ) -> list[CrawlJob]:
         query = db.query(CrawlJob)
         if updated_since is not None:
             query = query.filter(CrawlJob.updated_at >= updated_since)
+        if statuses:
+            query = query.filter(CrawlJob.status.in_(list(statuses)))
         return query.order_by(desc(CrawlJob.queued_at), desc(CrawlJob.created_at)).limit(limit).all()
 
     def list_crawl_jobs_by_statuses(

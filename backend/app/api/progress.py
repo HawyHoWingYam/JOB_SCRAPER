@@ -475,6 +475,7 @@ def _collect_progress_payload() -> dict[str, Any]:
             db,
             limit=50,
             updated_since=now - BACKLOG_VISIBLE_WINDOW,
+            statuses=TERMINAL_CRAWL_JOB_STATUSES,
         ):
             crawl_jobs_by_id[str(crawl_job.id)] = crawl_job
 
