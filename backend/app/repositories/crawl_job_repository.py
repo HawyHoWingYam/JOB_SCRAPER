@@ -179,11 +179,30 @@ class CrawlJobRepository:
         db: Session,
         crawl_job_id,
         event_types: set[str] | list[str] | None = None,
+        limit: int | None = None,
+        tail: bool = False,
     ) -> list[CrawlJobEvent]:
         query = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
         if event_types:
             query = query.filter(CrawlJobEvent.event_type.in_(list(event_types)))
+        if tail and limit is not None:
+            events = query.order_by(CrawlJobEvent.sequence_no.desc()).limit(limit).all()
+            events.reverse()
+            return events
+        if limit is not None:
+            return query.order_by(CrawlJobEvent.sequence_no.asc()).limit(limit).all()
         return query.order_by(CrawlJobEvent.sequence_no.asc()).all()
+
+    def count_events(
+        self,
+        db: Session,
+        crawl_job_id,
+        event_types: set[str] | list[str] | None = None,
+    ) -> int:
+        query = db.query(func.count(CrawlJobEvent.id)).filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
+        if event_types:
+            query = query.filter(CrawlJobEvent.event_type.in_(list(event_types)))
+        return int(query.scalar() or 0)
 
     def get_latest_event(self, db: Session, crawl_job_id) -> CrawlJobEvent | None:
         return (

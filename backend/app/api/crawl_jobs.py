@@ -170,15 +170,20 @@ async def get_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.get("/{crawl_job_id}/events", response_model=CrawlJobEventsResponse)
-async def list_crawl_job_events(crawl_job_id: UUID, db: Session = Depends(get_db)):
+async def list_crawl_job_events(
+    crawl_job_id: UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
     crawl_job = crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
     if crawl_job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crawl job not found")
 
-    events = crawl_job_repository.list_events(db, crawl_job_id)
+    total = crawl_job_repository.count_events(db, crawl_job_id)
+    events = crawl_job_repository.list_events(db, crawl_job_id, limit=limit, tail=True)
     return CrawlJobEventsResponse(
         events=[CrawlJobEventSchema.model_validate(event) for event in events],
-        total=len(events),
+        total=total,
     )
 
 
