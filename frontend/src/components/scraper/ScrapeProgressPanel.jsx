@@ -377,6 +377,71 @@ function buildProgressSections(progressEntries) {
     ].filter((section) => section.entries.length > 0);
 }
 
+function resolveDisplayState(data) {
+    if (data?.status === 'manual_action_required') {
+        return 'manual_action_required';
+    }
+
+    if (data?.status === 'failed') {
+        return 'failed';
+    }
+
+    const proxyWarningsPresent = [
+        data?.proxy_requests_challenge,
+        data?.proxy_requests_network_fail,
+        data?.proxy_requests_http_fail,
+        data?.proxy_quarantined_total,
+    ].some((value) => Number(value || 0) > 0);
+
+    if (data?.status === 'running' && proxyWarningsPresent) {
+        return 'running_with_warning';
+    }
+
+    if (data?.status === 'running' || data?.status === 'ai_running' || data?.status === 'dispatching') {
+        return 'running';
+    }
+
+    if (data?.status === 'queued') {
+        return 'queued';
+    }
+
+    if (data?.status === 'completed' || data?.status === 'completed_with_ai_failures') {
+        return 'completed';
+    }
+
+    if (data?.status === 'cancelled') {
+        return 'cancelled';
+    }
+
+    return data?.status || 'running';
+}
+
+function shouldExpandDiagnosticsByDefault(displayState) {
+    return displayState === 'manual_action_required' || displayState === 'failed';
+}
+
+function buildStatusSignals({
+    displayState,
+    proxyEnabled,
+    proxyWarningsPresent,
+}) {
+    const chips = [];
+
+    if (displayState === 'manual_action_required') {
+        chips.push('Intervention required');
+    }
+
+    if (displayState === 'failed') {
+        chips.push('Failure');
+    }
+
+    if (displayState === 'running_with_warning' && proxyEnabled && proxyWarningsPresent) {
+        chips.push('Proxy unstable');
+    }
+
+    return chips;
+}
+
 function buildContextChips({
     sourceSite,
     categoryName,
@@ -494,6 +559,10 @@ function ProgressItem({
     const [showFreshResumeWarning, setShowFreshResumeWarning] = useState(false);
     const [isReuseChecking, setIsReuseChecking] = useState(false);
     const [isResumeSubmitting, setIsResumeSubmitting] = useState(null);
+    const displayState = resolveDisplayState(data);
+    const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(
+        shouldExpandDiagnosticsByDefault(displayState)
+    );
     const {
         crawl_job_id,
         status,
@@ -532,6 +601,14 @@ function ProgressItem({
         detail_completed = 0,
         detail_failed = 0,
         detail_manual_action_required = 0,
+        proxy_enabled,
+        proxy_provider,
+        proxy_requests_total = 0,
+        proxy_requests_success = 0,
+        proxy_requests_challenge = 0,
+        proxy_requests_network_fail = 0,
+        proxy_requests_http_fail = 0,
+        proxy_quarantined_total = 0,
         // Phase 5
         ai_run_id,
         ai_completed_items = 0,
@@ -565,6 +642,17 @@ function ProgressItem({
         categoryName: category_name,
         crawlMode: crawl_mode,
     });
+    const proxyWarningsPresent = [
+        proxy_requests_challenge,
+        proxy_requests_network_fail,
+        proxy_requests_http_fail,
+        proxy_quarantined_total,
+    ].some((value) => Number(value || 0) > 0);
+    const statusSignals = buildStatusSignals({
+        displayState,
+        proxyEnabled: proxy_enabled,
+        proxyWarningsPresent,
+    });
 
     useEffect(() => {
         setLiveSessionMetadata(null);
@@ -573,7 +661,8 @@ function ProgressItem({
         setShowFreshResumeWarning(false);
         setIsReuseChecking(false);
         setIsResumeSubmitting(null);
-    }, [crawl_job_id, manual_action?.stage, status]);
+        setIsDiagnosticsOpen(shouldExpandDiagnosticsByDefault(displayState));
+    }, [crawl_job_id, manual_action?.stage, status, displayState]);
 
     const renderHeader = (statusText, statusClass) => (
         <div className="progress-item-header">
@@ -802,109 +891,27 @@ function ProgressItem({
         return (
             <div className="progress-item warning">
                 {renderHeader('Manual Action Required', 'warning')}
+                <div className="progress-status-strip">
+                    <div className="progress-status-summary">
+                        <span className="progress-status-title">Next step</span>
+                        <span className="progress-status-subtitle">
+                            Resume this run after resolving the browser or profile blocker.
+                        </span>
+                    </div>
+                    <div className="progress-status-signal-row">
+                        {statusSignals.map((signal) => (
+                            <span key={`${taskId}-${signal}`} className="progress-status-chip">
+                                {signal}
+                            </span>
+                        ))}
+                    </div>
+                </div>
                 {renderMetricLines(metricLines)}
 
-                <div className="progress-details">
-                    <div className="progress-text">Stage: {manual_action.stage || '-'}</div>
-                    <div className="progress-text">{manual_action.blocked_url || '-'}</div>
-                    <div className="progress-text">
-                        Browser Profile Path: {manual_action.browser_profile_path || '-'}
-                    </div>
-                    <div className="progress-text">
-                        Browser Channel: {manual_action.browser_channel || '-'}
-                    </div>
-                    {listingBatchLabel && (
-                        <div className="progress-text">Listing batch: {listingBatchLabel}</div>
-                    )}
-                    {current_job_title && (
-                        <div className="progress-text">Current title: {current_job_title}</div>
-                    )}
-                    {renderTimingBlock()}
-                    <div className="progress-stats">
-                        <span>Elapsed: {elapsedLabel}</span>
-                    </div>
-                    {instructions.length > 0 && (
-                        <ul className="progress-manual-action-list">
-                            {instructions.map((instruction, index) => (
-                                <li key={`${index}-${instruction}`}>{instruction}</li>
-                            ))}
-                        </ul>
-                    )}
-                    {liveSessionMetadata && (
-                        <div className="progress-manual-analysis">
-                            {liveSessionMetadata.browser_channel && (
-                                <div className="progress-text">
-                                    Live Session Browser: {liveSessionMetadata.browser_channel}
-                                </div>
-                            )}
-                            {liveSessionMetadata.session_id && (
-                                <div className="progress-text">
-                                    Live Session ID: {liveSessionMetadata.session_id}
-                                </div>
-                            )}
-                            {liveSessionMetadata.attached_at && (
-                                <div className="progress-text">
-                                    Attached At: {liveSessionMetadata.attached_at}
-                                </div>
-                            )}
-                            {liveSessionMetadata.last_seen_at && (
-                                <div className="progress-text">
-                                    Last Seen: {liveSessionMetadata.last_seen_at}
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    {showFreshResumeWarning && (
-                        <div className="progress-manual-analysis">
-                            <div className="progress-text">
-                                Close any profile windows first before starting a fresh browser session.
-                            </div>
-                            <div className="progress-text">
-                                The app will not close them for you on this path.
-                            </div>
-                        </div>
-                    )}
-                    {reuseStatusError && (
-                        <div className="progress-error">{reuseStatusError}</div>
-                    )}
-                </div>
-
-                <div className="progress-actions">
-                    {manual_action.blocked_url && (
-                        <button
-                            type="button"
-                            className="progress-link-button"
-                            onClick={handleOpenVerificationBrowser}
-                        >
-                            Open Verification Browser
-                        </button>
-                    )}
-                    {manual_action.browser_profile_path && (
-                        <button
-                            type="button"
-                            className="progress-link-button"
-                            onClick={handleCloseProfileWindows}
-                        >
-                            Close Profile Windows
-                        </button>
-                    )}
+                <div className="progress-decision-panel">
                     <button
                         type="button"
-                        className="progress-link-button"
-                        onClick={() => handleCopyValue(manual_action.blocked_url)}
-                    >
-                        Copy URL
-                    </button>
-                    <button
-                        type="button"
-                        className="progress-link-button"
-                        onClick={() => handleCopyValue(manual_action.browser_profile_path)}
-                    >
-                        Copy Profile Path
-                    </button>
-                    <button
-                        type="button"
-                        className="progress-link-button"
+                        className="progress-link-button progress-primary-action"
                         onClick={handleResumeUsingOpenBrowser}
                         disabled={isReuseChecking || isResumeSubmitting === 'reuse_open_browser'}
                     >
@@ -912,42 +919,160 @@ function ProgressItem({
                             ? 'Attaching...'
                             : 'Resume Using Open Browser'}
                     </button>
-                    <button
-                        type="button"
-                        className="progress-link-button"
-                        onClick={handleResumeFresh}
-                        disabled={isResumeSubmitting === 'fresh_profile'}
-                    >
-                        Resume Fresh
-                    </button>
-                    {showReuseRecoveryPrompt && (
+                    <div className="progress-secondary-actions">
                         <button
                             type="button"
                             className="progress-link-button"
-                            onClick={handleResumeUsingOpenBrowser}
-                            disabled={isReuseChecking || isResumeSubmitting === 'reuse_open_browser'}
-                        >
-                            Retry Attach
-                        </button>
-                    )}
-                    {showFreshResumeWarning && (
-                        <button
-                            type="button"
-                            className="progress-link-button"
-                            onClick={handleConfirmResumeFresh}
+                            onClick={handleResumeFresh}
                             disabled={isResumeSubmitting === 'fresh_profile'}
                         >
-                            {isResumeSubmitting === 'fresh_profile' ? 'Resuming Fresh...' : 'Resume Fresh Now'}
+                            Resume Fresh
                         </button>
-                    )}
-                    <button
-                        type="button"
-                        className="progress-link-button"
-                        onClick={handleCancel}
-                    >
-                        Cancel
-                    </button>
+                        {manual_action.browser_profile_path && (
+                            <button
+                                type="button"
+                                className="progress-link-button"
+                                onClick={handleCloseProfileWindows}
+                            >
+                                Close Profile Windows
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            className="progress-link-button"
+                            onClick={handleCancel}
+                        >
+                            Cancel
+                        </button>
+                    </div>
                 </div>
+
+                <button
+                    type="button"
+                    className="progress-diagnostics-toggle"
+                    aria-expanded={isDiagnosticsOpen ? 'true' : 'false'}
+                    onClick={() => setIsDiagnosticsOpen((current) => !current)}
+                >
+                    Diagnostics
+                </button>
+
+                {isDiagnosticsOpen && (
+                    <div className="progress-diagnostics-drawer">
+                        <div className="progress-diagnostics-section">
+                            <strong>Run timing</strong>
+                            {renderTimingBlock()}
+                            <div className="progress-stats">
+                                <span>Elapsed: {elapsedLabel}</span>
+                            </div>
+                        </div>
+                        <div className="progress-diagnostics-section">
+                            <strong>Technical diagnostics</strong>
+                            <div className="progress-text">Stage: {manual_action.stage || '-'}</div>
+                            <div className="progress-text">{manual_action.blocked_url || '-'}</div>
+                            <div className="progress-text">
+                                Browser Profile Path: {manual_action.browser_profile_path || '-'}
+                            </div>
+                            <div className="progress-text">
+                                Browser Channel: {manual_action.browser_channel || '-'}
+                            </div>
+                            {listingBatchLabel && (
+                                <div className="progress-text">Listing batch: {listingBatchLabel}</div>
+                            )}
+                            {current_job_title && (
+                                <div className="progress-text">Current title: {current_job_title}</div>
+                            )}
+                            {instructions.length > 0 && (
+                                <ul className="progress-manual-action-list">
+                                    {instructions.map((instruction, index) => (
+                                        <li key={`${index}-${instruction}`}>{instruction}</li>
+                                    ))}
+                                </ul>
+                            )}
+                            {liveSessionMetadata && (
+                                <div className="progress-manual-analysis">
+                                    {liveSessionMetadata.browser_channel && (
+                                        <div className="progress-text">
+                                            Live Session Browser: {liveSessionMetadata.browser_channel}
+                                        </div>
+                                    )}
+                                    {liveSessionMetadata.session_id && (
+                                        <div className="progress-text">
+                                            Live Session ID: {liveSessionMetadata.session_id}
+                                        </div>
+                                    )}
+                                    {liveSessionMetadata.attached_at && (
+                                        <div className="progress-text">
+                                            Attached At: {liveSessionMetadata.attached_at}
+                                        </div>
+                                    )}
+                                    {liveSessionMetadata.last_seen_at && (
+                                        <div className="progress-text">
+                                            Last Seen: {liveSessionMetadata.last_seen_at}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            {showFreshResumeWarning && (
+                                <div className="progress-manual-analysis">
+                                    <div className="progress-text">
+                                        Close any profile windows first before starting a fresh browser session.
+                                    </div>
+                                    <div className="progress-text">
+                                        The app will not close them for you on this path.
+                                    </div>
+                                </div>
+                            )}
+                            {reuseStatusError && (
+                                <div className="progress-error">{reuseStatusError}</div>
+                            )}
+                            <div className="progress-secondary-actions">
+                                {manual_action.blocked_url && (
+                                    <button
+                                        type="button"
+                                        className="progress-link-button"
+                                        onClick={handleOpenVerificationBrowser}
+                                    >
+                                        Open Verification Browser
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    className="progress-link-button"
+                                    onClick={() => handleCopyValue(manual_action.blocked_url)}
+                                >
+                                    Copy URL
+                                </button>
+                                <button
+                                    type="button"
+                                    className="progress-link-button"
+                                    onClick={() => handleCopyValue(manual_action.browser_profile_path)}
+                                >
+                                    Copy Profile Path
+                                </button>
+                                {showReuseRecoveryPrompt && (
+                                    <button
+                                        type="button"
+                                        className="progress-link-button"
+                                        onClick={handleResumeUsingOpenBrowser}
+                                        disabled={isReuseChecking || isResumeSubmitting === 'reuse_open_browser'}
+                                    >
+                                        Retry Attach
+                                    </button>
+                                )}
+                                {showFreshResumeWarning && (
+                                    <button
+                                        type="button"
+                                        className="progress-link-button"
+                                        onClick={handleConfirmResumeFresh}
+                                        disabled={isResumeSubmitting === 'fresh_profile'}
+                                    >
+                                        {isResumeSubmitting === 'fresh_profile' ? 'Resuming Fresh...' : 'Resume Fresh Now'}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }
@@ -1066,20 +1191,76 @@ function ProgressItem({
         detailLines.push(`Listing batch: ${listingBatchLabel}`);
     }
 
+    if (typeof proxy_enabled === 'boolean') {
+        detailLines.push(`Proxy: ${proxy_enabled ? (proxy_provider || 'enabled') : 'off'}`);
+        if (proxy_enabled) {
+            detailLines.push(`Proxy requests: ${formatCount(proxy_requests_total)}`);
+            if (proxy_requests_success > 0) {
+                detailLines.push(`Proxy success: ${formatCount(proxy_requests_success)}`);
+            }
+            if (proxy_requests_challenge > 0) {
+                detailLines.push(`Proxy challenges: ${formatCount(proxy_requests_challenge)}`);
+            }
+            if (proxy_requests_network_fail > 0) {
+                detailLines.push(`Proxy network fail: ${formatCount(proxy_requests_network_fail)}`);
+            }
+            if (proxy_requests_http_fail > 0) {
+                detailLines.push(`Proxy HTTP fail: ${formatCount(proxy_requests_http_fail)}`);
+            }
+            if (proxy_quarantined_total > 0) {
+                detailLines.push(`Proxy quarantined: ${formatCount(proxy_quarantined_total)}`);
+            }
+        }
+    }
+
     return (
         <div className={`progress-item ${statusClass}`}>
             {renderHeader(statusText, statusClass)}
+            <div className="progress-status-strip">
+                <div className="progress-status-summary">
+                    <span className="progress-status-title">{statusText}</span>
+                    <span className="progress-status-subtitle">
+                        Last updated: {formatTaskTimestamp(data?.updated_at || completed_at || started_at || queued_at)}
+                    </span>
+                </div>
+                {statusSignals.length > 0 && (
+                    <div className="progress-status-signal-row">
+                        {statusSignals.map((signal) => (
+                            <span key={`${taskId}-${signal}`} className="progress-status-chip">
+                                {signal}
+                            </span>
+                        ))}
+                    </div>
+                )}
+            </div>
             {renderMetricLines(metricLines)}
 
-            <div className="progress-details">
-                {detailLines.map((line) => (
-                    <div key={`${taskId}-${line}`} className="progress-text">{line}</div>
-                ))}
-                {renderTimingBlock()}
-                <div className="progress-stats">
-                    <span>Elapsed: {elapsedLabel}</span>
+            <button
+                type="button"
+                className="progress-diagnostics-toggle"
+                aria-expanded={isDiagnosticsOpen ? 'true' : 'false'}
+                onClick={() => setIsDiagnosticsOpen((current) => !current)}
+            >
+                Diagnostics
+            </button>
+
+            {isDiagnosticsOpen && (
+                <div className="progress-diagnostics-drawer">
+                    <div className="progress-diagnostics-section">
+                        <strong>Run timing</strong>
+                        {renderTimingBlock()}
+                        <div className="progress-stats">
+                            <span>Elapsed: {elapsedLabel}</span>
+                        </div>
+                    </div>
+                    <div className="progress-diagnostics-section">
+                        <strong>Technical diagnostics</strong>
+                        {detailLines.map((line) => (
+                            <div key={`${taskId}-${line}`} className="progress-text">{line}</div>
+                        ))}
+                    </div>
                 </div>
-            </div>
+            )}
 
             {ai_run_id && (
                 <div className="progress-actions">

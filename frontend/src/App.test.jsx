@@ -89,6 +89,30 @@ describe('App lazy views', () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
 
+      if (url === '/api/v1/stats/overview') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            total_jobs: 0,
+            enriched_jobs: 0,
+            pending_enrichment: 0,
+          }),
+        });
+      }
+
+      if (url === '/api/v1/ai/overview') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            failed_jobs: 0,
+            running_runs: 0,
+            last_completed_run: null,
+          }),
+        });
+      }
+
       if (url === '/api/v1/schedules') {
         return Promise.resolve({
           ok: true,

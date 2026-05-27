@@ -196,6 +196,7 @@ describe('ScrapeProgressPanel', () => {
     expect(await screen.findByText(/pages: 2\/8/i)).toBeInTheDocument();
     expect(screen.getByText(/ids found: 49/i)).toBeInTheDocument();
     expect(screen.getByText(/existing skipped: 7/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
     expect(screen.getByText(/elapsed: 11s/i)).toBeInTheDocument();
     expect(screen.queryByText(/rate:/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/eta:/i)).not.toBeInTheDocument();
@@ -240,6 +241,7 @@ describe('ScrapeProgressPanel', () => {
     expect(screen.getByText(/skipped existing: 2/i)).toBeInTheDocument();
     expect(screen.getByText(/detail crawled: 2\/10/i)).toBeInTheDocument();
     expect(screen.getByText(/current target: 3\/12/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
     expect(screen.getByText(/current title: senior data analyst/i)).toBeInTheDocument();
     expect(screen.getByText(/queued:/i)).toBeInTheDocument();
     expect(screen.getByText(/started:/i)).toBeInTheDocument();
@@ -276,7 +278,9 @@ describe('ScrapeProgressPanel', () => {
       });
     });
 
-    expect(await screen.findByText(/completed with ai failures/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/completed with ai failures/i, { selector: '.status-badge' })
+    ).toBeInTheDocument();
     expect(screen.getByText(/succeeded: 3/i)).toBeInTheDocument();
     expect(screen.getByText(/failed: 1/i)).toBeInTheDocument();
 
@@ -308,11 +312,14 @@ describe('ScrapeProgressPanel', () => {
       });
     });
 
-    expect(await screen.findByText(/downstream backlog/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/downstream backlog/i, { selector: '.status-badge' })
+    ).toBeInTheDocument();
     expect(screen.getByText(/staged listings: 96/i)).toBeInTheDocument();
     expect(screen.getByText(/pending details: 74/i)).toBeInTheDocument();
     expect(screen.getByText(/completed details: 22/i)).toBeInTheDocument();
     expect(screen.queryByText(/ingested:/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
     expect(screen.getByText(/ended:/i)).toBeInTheDocument();
 
     unmount();
@@ -367,6 +374,7 @@ describe('ScrapeProgressPanel', () => {
       });
     });
 
+    fireEvent.click(screen.getAllByRole('button', { name: /diagnostics/i })[0]);
     expect(await screen.findByText(/listing batch: ctgoodjobs batch linked-batch-1/i)).toBeInTheDocument();
     expect(screen.queryByText(/task linked-batch-1/i)).not.toBeInTheDocument();
     expect(screen.getByText(/task unlinked-batch-2/i)).toBeInTheDocument();
@@ -821,6 +829,38 @@ describe('ScrapeProgressPanel', () => {
     expect(screen.getAllByText(/ended:/i).length).toBeGreaterThan(0);
   });
 
+  it('auto-expands diagnostics for manual-action runs and exposes a diagnostics toggle', async () => {
+    render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-manual': {
+            crawl_job_id: 'crawl-job-manual',
+            status: 'manual_action_required',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            updated_at: '2026-05-27T11:00:00.000Z',
+            manual_action: {
+              stage: 'category_page',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: ['Complete the verification challenge.'],
+            },
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/manual action required/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /diagnostics/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(/stage: category_page/i)).toBeInTheDocument();
+  });
+
   it('shows listing batch identity on detail task cards', async () => {
     render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
 
@@ -846,9 +886,119 @@ describe('ScrapeProgressPanel', () => {
       });
     });
 
+    fireEvent.click(await screen.findByRole('button', { name: /diagnostics/i }));
+
     expect(
       await screen.findByText(/listing batch: jobsdb batch 11111111-1111-4111-8111-111111111111/i)
     ).toBeInTheDocument();
+  });
+
+  it('keeps running proxy-warning items collapsed by default and surfaces a warning chip', async () => {
+    render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-proxy': {
+            crawl_job_id: 'crawl-job-proxy',
+            status: 'running',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headless',
+            phase: 2,
+            jobs_scraped: 5,
+            detail_target_rows: 24,
+            proxy_enabled: true,
+            proxy_provider: 'static',
+            proxy_requests_total: 8,
+            proxy_requests_success: 6,
+            proxy_requests_challenge: 1,
+            proxy_requests_network_fail: 1,
+            proxy_quarantined_total: 1,
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/proxy unstable/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /diagnostics/i })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/proxy requests: 8/i)).not.toBeInTheDocument();
+  });
+
+  it('shows proxy runtime details when the backend includes proxy metadata', async () => {
+    render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-proxy': {
+            crawl_job_id: 'crawl-job-proxy',
+            status: 'running',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headless',
+            phase: 2,
+            jobs_scraped: 5,
+            detail_target_rows: 24,
+            proxy_enabled: true,
+            proxy_provider: 'static',
+            proxy_requests_total: 8,
+            proxy_requests_success: 6,
+            proxy_requests_challenge: 1,
+            proxy_requests_network_fail: 1,
+            proxy_quarantined_total: 1,
+          },
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /diagnostics/i }));
+
+    expect(await screen.findByText(/proxy: static/i)).toBeInTheDocument();
+    expect(screen.getByText(/proxy requests: 8/i)).toBeInTheDocument();
+    expect(screen.getByText(/proxy success: 6/i)).toBeInTheDocument();
+    expect(screen.getByText(/proxy challenges: 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/proxy network fail: 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/proxy quarantined: 1/i)).toBeInTheDocument();
+  });
+
+  it('renders a recovery decision panel for manual-action jobs with a primary resume action', async () => {
+    render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-456': {
+            crawl_job_id: 'crawl-job-456',
+            status: 'manual_action_required',
+            source_site: 'ctgoodjobs',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              stage: 'browser_profile_in_use',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: [
+                'Close all Edge windows that use the listed automation profile.',
+                'Return to the app and click Resume.',
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/next step/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /resume using open browser/i })).toHaveClass('progress-primary-action');
+    expect(screen.getByRole('button', { name: /close profile windows/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /diagnostics/i })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('renders browser_profile_in_use recovery action and closes the profile windows', async () => {
