@@ -116,6 +116,34 @@ Recommended manual checks:
 - open a job detail modal and confirm related jobs load
 - trigger a direct override crawl and confirm `/api/v1/scrape/progress` reports the queued/running job
 
+## Backend QA
+
+Use these commands when validating backend-only changes or before moving on to deeper runtime work.
+
+### Host path
+
+Install backend development dependencies into your local Python environment first:
+
+```bash
+python -m pip install -r backend/requirements-dev.txt
+```
+
+Then, from the repo root, run:
+
+```bash
+python -m pytest --collect-only -q backend/tests
+python -m pytest -q backend/tests
+```
+
+### Docker path
+
+Use Docker when you want verification closest to the shared containerized runtime:
+
+```bash
+docker compose run --rm backend-api python -m pytest --collect-only -q tests
+docker compose run --rm backend-api python -m pytest -q tests
+```
+
 ## Backend Migrations
 
 ```bash
