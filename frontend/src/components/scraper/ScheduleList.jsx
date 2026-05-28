@@ -14,6 +14,27 @@ function formatSourceLabel(sourceSite) {
     return sourceSite === 'ctgoodjobs' ? 'CTgoodjobs' : 'JobsDB';
 }
 
+function buildCategorySummary(schedule, categories = []) {
+    const categoryIds = Array.isArray(schedule.category_ids) ? schedule.category_ids.map((id) => `${id}`) : [];
+    if (categoryIds.length === 0) {
+        return 'No sectors selected';
+    }
+
+    const categoryLookup = new Map(
+        categories.map((category) => [`${category.id}`, category.name])
+    );
+    const names = categoryIds.map((id) => categoryLookup.get(id)).filter(Boolean);
+    if (names.length === 0) {
+        return `${categoryIds.length} selected`;
+    }
+
+    if (names.length <= 2) {
+        return names.join(', ');
+    }
+
+    return `${names.slice(0, 2).join(', ')}, +${names.length - 2} more`;
+}
+
 function formatCron(cronExpression) {
     return CRON_PRESETS[cronExpression] || cronExpression;
 }
@@ -125,6 +146,7 @@ function sortSchedulesForDisplay(schedules) {
 
 function ScheduleCard({
     schedule,
+    categories,
     onToggle,
     onDelete,
     onRun,
@@ -137,6 +159,7 @@ function ScheduleCard({
     const sourceLabel = formatSourceLabel(schedule.source_site || 'jobsdb');
     const crawlPhaseLabel = formatCrawlPhaseLabel(schedule.crawl_phase);
     const crawlModeLabel = formatCrawlModeLabel(schedule.crawl_mode);
+    const categorySummary = buildCategorySummary(schedule, categories);
     const stateLabel = isActive ? 'Active' : 'Paused';
     const lastRunHint = formatRelativeTimeHint(schedule.last_run_at);
     const nextRunHint = formatRelativeTimeHint(schedule.next_run_at, { future: true });
@@ -181,7 +204,7 @@ function ScheduleCard({
                         <FileText size={16} className="info-icon" />
                         <div className="info-content">
                             <span className="label">Categories</span>
-                            <span className="value">{schedule.category_ids?.length || 0} selected</span>
+                            <span className="value">{categorySummary}</span>
                         </div>
                     </div>
 
@@ -252,6 +275,7 @@ function ScheduleCard({
 
 function ScheduleList({
     schedules,
+    categories = [],
     currentSourceSite,
     onToggle,
     onDelete,
@@ -282,6 +306,7 @@ function ScheduleList({
                     <ScheduleCard
                         key={schedule.id}
                         schedule={schedule}
+                        categories={categories}
                         onToggle={onToggle}
                         onDelete={onDelete}
                         onRun={onRun}

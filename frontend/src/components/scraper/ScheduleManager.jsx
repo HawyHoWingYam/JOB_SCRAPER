@@ -1254,6 +1254,7 @@ function ScheduleManager({ onNavigateToAI }) {
 
             <ScheduleList
                 schedules={filteredSchedules}
+                categories={categories}
                 currentSourceSite={currentSourceSite}
                 onToggle={handleToggle}
                 onDelete={handleDelete}

@@ -172,4 +172,40 @@ describe('ScheduleList', () => {
     expect(within(card).getByText('6h ago')).toBeInTheDocument();
     expect(within(card).getByText('In 12h')).toBeInTheDocument();
   });
+
+  it('shows readable sector summaries instead of only raw category counts', () => {
+    render(
+      <ScheduleList
+        currentSourceSite="jobsdb"
+        categories={[
+          { id: 1200, name: 'Engineering' },
+          { id: 1300, name: 'Marketing' },
+          { id: 1400, name: 'Design' },
+        ]}
+        schedules={[
+          {
+            id: 'summary-target',
+            name: 'Sector Rich',
+            cron_expression: '0 2 * * *',
+            category_ids: [1200, 1300, 1400],
+            source_site: 'jobsdb',
+            crawl_phase: 'listing',
+            crawl_mode: 'headed',
+            is_active: true,
+            last_run_at: null,
+            next_run_at: null,
+          },
+        ]}
+        onToggle={vi.fn()}
+        onDelete={vi.fn()}
+        onRun={vi.fn()}
+        onViewHistory={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    const card = screen.getByRole('heading', { level: 4, name: 'Sector Rich' }).closest('.schedule-card');
+    expect(card).not.toBeNull();
+    expect(within(card).getByText('Engineering, Marketing, +1 more')).toBeInTheDocument();
+  });
 });
