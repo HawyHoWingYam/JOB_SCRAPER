@@ -339,6 +339,7 @@ function formatMaybeCountPair(currentValue, totalValue) {
 
 function classifyProgressEntry(data) {
     const displayState = resolveDisplayState(data);
+    const effectiveStatus = resolveEffectiveStatus(data);
 
     if (displayState === 'manual_action_required' || displayState === 'failed' || displayState === 'running_with_warning') {
         return 'attention';
@@ -351,7 +352,7 @@ function classifyProgressEntry(data) {
         return 'backlog';
     }
 
-    if (['queued', 'dispatching', 'running', 'ai_running'].includes(data?.status)) {
+    if (['queued', 'dispatching', 'running', 'ai_running'].includes(effectiveStatus)) {
         return 'live';
     }
 
@@ -360,6 +361,16 @@ function classifyProgressEntry(data) {
 
 function resolveEffectiveStatus(data) {
     const baseStatus = data?.status || 'running';
+    const aiProcessedItems = Number(data?.ai_completed_items || 0) + Number(data?.ai_failed_items || 0);
+    const aiTotalItems = Number(data?.ai_total_items || 0);
+    if (
+        baseStatus === 'completed'
+        && data?.ai_run_id
+        && aiTotalItems > 0
+        && aiProcessedItems < aiTotalItems
+    ) {
+        return 'ai_running';
+    }
     if (
         baseStatus === 'completed'
         && Number(data?.ai_failed_items || 0) > 0
@@ -570,11 +581,11 @@ function resolveMetricScope(data) {
     if (data?.phase === 2) {
         return 'detail_run';
     }
-    if (data?.phase === 4) {
-        return 'ingest_run';
-    }
     if (data?.phase === 5 || effectiveStatus === 'ai_running' || data?.ai_run_id) {
         return 'ai_run';
+    }
+    if (data?.phase === 4) {
+        return 'ingest_run';
     }
 
     return 'crawl_job';
@@ -1230,15 +1241,15 @@ function ProgressItem({
         if (current_job_title) {
             detailLines.push(`Current title: ${current_job_title}`);
         }
-    } else if (phase === 4) {
-        statusText = 'Saving to DB';
-        metricLines.push(`Ingested: ${formatMaybeCountPair(jobs_saved, save_total)}`);
     } else if (phase === 5 || effectiveStatus === 'ai_running' || effectiveStatus === 'completed_with_ai_failures') {
         statusText = 'AI Enrichment';
         metricLines.push(`Items processed: ${formatCountPair(aiProcessedItems, aiTotalItems)}`);
         if (ai_failed_items > 0) {
             metricLines.push(`Failures: ${formatCount(ai_failed_items)}`);
         }
+    } else if (phase === 4) {
+        statusText = 'Saving to DB';
+        metricLines.push(`Ingested: ${formatMaybeCountPair(jobs_saved, save_total)}`);
     }
 
     if (effectiveStatus === 'completed' && (phase === 5 || ai_run_id)) {

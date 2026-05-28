@@ -166,6 +166,37 @@ def test_build_progress_snapshot_derives_completed_with_ai_failures_when_ai_run_
     assert snapshot["ai_failed_items"] == 1
 
 
+def test_build_progress_snapshot_derives_ai_running_when_linked_ai_run_is_incomplete():
+    crawl_job = _build_crawl_job(
+        status="completed",
+        request_payload={"crawl_phase": "listing", "category_ids": [1200]},
+        metrics={
+            "ai_run_id": "run-456",
+            "ai_completed_items": 1,
+            "ai_failed_items": 0,
+            "ai_total_items": 4,
+        },
+    )
+    latest_event = SimpleNamespace(
+        payload={
+            "request_payload": {"crawl_phase": "listing", "category_ids": [1200]},
+            "phase": 4,
+            "category_name": "Engineering",
+        }
+    )
+
+    snapshot = progress._build_progress_snapshot(
+        crawl_job,
+        latest_event,
+        now=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        events=[],
+    )
+
+    assert snapshot["status"] == "ai_running"
+    assert snapshot["metric_scope"] == "ai_run"
+    assert snapshot["ai_run_id"] == "run-456"
+
+
 def test_backlog_visibility_keeps_recent_backlog_entries_operator_visible():
     now = datetime(2026, 5, 27, 12, 20, tzinfo=UTC)
     crawl_job = _build_crawl_job(

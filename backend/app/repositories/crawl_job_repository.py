@@ -174,6 +174,33 @@ class CrawlJobRepository:
             db.flush()
         return crawl_job
 
+    def merge_metrics(
+        self,
+        db: Session,
+        *,
+        crawl_job_id,
+        metrics_patch: dict[str, Any],
+        auto_commit: bool = True,
+    ) -> CrawlJob:
+        crawl_job = (
+            db.query(CrawlJob)
+            .filter(CrawlJob.id == crawl_job_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if crawl_job is None:
+            raise ValueError(f"Crawl job not found: {crawl_job_id}")
+
+        crawl_job.metrics = self._merge_metrics(crawl_job.metrics, metrics_patch)
+        self._sync_linked_schedule_execution(db, crawl_job=crawl_job)
+
+        if auto_commit:
+            db.commit()
+            db.refresh(crawl_job)
+        else:
+            db.flush()
+        return crawl_job
+
     def list_events(
         self,
         db: Session,
@@ -343,6 +370,9 @@ class CrawlJobRepository:
         items_emitted = self._metric_as_int(metrics.get("items_emitted"))
         ingest_items_seen = self._metric_as_int(metrics.get("ingest_items_seen"))
         ids_collected = self._metric_as_int(metrics.get("job_ids_collected"))
+        ai_completed_items = self._metric_as_int(metrics.get("ai_completed_items"))
+        ai_failed_items = self._metric_as_int(metrics.get("ai_failed_items"))
+        ai_total_items = self._metric_as_int(metrics.get("ai_total_items"))
         pages_processed = self._metric_as_int(metrics.get("pages_processed"))
 
         execution.started_at = crawl_job.started_at or execution.started_at
@@ -362,6 +392,9 @@ class CrawlJobRepository:
 
         save_backlog_remaining = items_emitted > ingest_items_seen
         execution.phase4_completed = items_emitted == 0 or not save_backlog_remaining
+        execution.phase5_completed = (
+            ai_total_items > 0 and (ai_completed_items + ai_failed_items) >= ai_total_items
+        )
 
         if crawl_job.status in {"queued", "dispatching"}:
             execution.status = "pending"

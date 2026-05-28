@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -9,9 +10,11 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.models.crawl_job import CrawlJob
 from app.models.company import Company
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
+from app.models.schedule import ScheduleExecution, ScrapeSchedule
 from app.services.enrichment_run_service import EnrichmentRunService
 
 
@@ -54,13 +57,16 @@ def _create_enrichment_run_service_db():
     Base.metadata.create_all(
         engine,
         tables=[
+            ScrapeSchedule.__table__,
+            CrawlJob.__table__,
             Company.__table__,
             Job.__table__,
+            ScheduleExecution.__table__,
             EnrichmentRun.__table__,
             EnrichmentRunItem.__table__,
         ],
     )
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    session_factory = sessionmaker(bind=engine, autoflush=True, autocommit=False)
     db = session_factory()
 
     company_id = uuid4()
@@ -402,3 +408,109 @@ def test_create_retry_run_from_failed_items_preserves_404_and_400_semantics_with
     assert created_run.id == "retry-run"
     assert created_runs == [("retry_failed", [str(job_ids[2])])]
     assert len(select_statements) == 3
+
+
+def test_execute_run_updates_linked_crawl_job_ai_metrics_and_schedule_phase5():
+    engine, db, job_ids = _create_enrichment_run_service_db()
+    schedule_id = uuid4()
+    crawl_job_id = uuid4()
+    db.add(
+        ScrapeSchedule(
+            id=schedule_id,
+            name="JobsDB Nightly",
+            cron_expression="0 2 * * *",
+            source_site="jobsdb",
+            crawl_phase="listing",
+            crawl_mode="headed",
+            category_ids=[1200],
+            is_active=True,
+        )
+    )
+    db.add(
+        CrawlJob(
+            id=crawl_job_id,
+            source_site="jobsdb",
+            trigger_type="schedule",
+            schedule_id=schedule_id,
+            status="completed",
+            request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+            requested_by="tester",
+            queued_at=datetime(2026, 5, 28, 8, 55, tzinfo=UTC),
+            started_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+            completed_at=datetime(2026, 5, 28, 9, 1, tzinfo=UTC),
+            metrics={},
+        )
+    )
+    db.add(
+        ScheduleExecution(
+            id=uuid4(),
+            schedule_id=schedule_id,
+            crawl_job_id=crawl_job_id,
+            status="running",
+            started_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+        )
+    )
+    db.add(
+        EnrichmentRun(
+            id="run-linked-ai",
+            source_type="crawl_auto",
+            trigger_crawl_job_id=crawl_job_id,
+            status="pending",
+            job_ids=[str(job_ids[0]), str(job_ids[1])],
+            total_items=2,
+            pending_items=2,
+            completed_items=0,
+            failed_items=0,
+            created_at=datetime(2026, 5, 28, 9, 2, tzinfo=UTC),
+            started_at=None,
+            completed_at=None,
+        )
+    )
+    db.add_all(
+        [
+            EnrichmentRunItem(
+                id="linked-item-1",
+                run_id="run-linked-ai",
+                job_id=job_ids[0],
+                position=0,
+                status="pending",
+                created_at=datetime(2026, 5, 28, 9, 2, tzinfo=UTC),
+            ),
+            EnrichmentRunItem(
+                id="linked-item-2",
+                run_id="run-linked-ai",
+                job_id=job_ids[1],
+                position=1,
+                status="pending",
+                created_at=datetime(2026, 5, 28, 9, 3, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.commit()
+
+    class _FakeEnrichmentService:
+        async def enrich_job_id(self, job_id):
+            return {"job_id": str(job_id), "status": "success"}
+
+    service = EnrichmentRunService(db)
+    service._resolve_run_concurrency = lambda: 1
+    service._enqueue_job_enriched_event = lambda **kwargs: None
+
+    run = asyncio.run(
+        service.execute_run(
+            "run-linked-ai",
+            enrichment_service=_FakeEnrichmentService(),
+            claim=False,
+        )
+    )
+
+    refreshed_crawl_job = db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).one()
+    refreshed_execution = db.query(ScheduleExecution).filter(ScheduleExecution.crawl_job_id == crawl_job_id).one()
+
+    assert run.status == "completed"
+    assert refreshed_crawl_job.metrics["ai_run_id"] == "run-linked-ai"
+    assert refreshed_crawl_job.metrics["ai_total_items"] == 2
+    assert refreshed_crawl_job.metrics["ai_completed_items"] == 2
+    assert refreshed_crawl_job.metrics["ai_failed_items"] == 0
+    assert refreshed_execution.phase5_completed is True
+    db.close()

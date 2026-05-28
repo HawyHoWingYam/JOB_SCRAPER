@@ -225,7 +225,7 @@ def _build_progress_snapshot(
             metrics.get("detail_run_manual_action_required", 0),
         )
     )
-    ai_run_id = event_payload.get("ai_run_id")
+    ai_run_id = event_payload.get("ai_run_id") or metrics.get("ai_run_id")
     ai_completed_items = _to_int(
         event_payload.get("ai_completed_items", metrics.get("ai_completed_items", 0))
     )
@@ -264,7 +264,7 @@ def _build_progress_snapshot(
         status=status,
         operator_state=operator_state,
         phase=phase,
-        ai_run_id=event_payload.get("ai_run_id"),
+        ai_run_id=ai_run_id,
         listings_staged=listings_staged,
         detail_pending=detail_pending,
         detail_running=detail_running,
@@ -355,6 +355,13 @@ def _derive_progress_status(
 ) -> str:
     if (
         status == "completed"
+        and ai_run_id
+        and ai_total_items > 0
+        and (ai_completed_items + ai_failed_items) < ai_total_items
+    ):
+        return "ai_running"
+    if (
+        status == "completed"
         and ai_failed_items > 0
         and (ai_run_id or ai_completed_items > 0 or ai_total_items > 0)
     ):
@@ -371,7 +378,7 @@ def _derive_operator_state(
     detail_running: int,
     detail_manual_action_required: int,
 ) -> str:
-    if status in ACTIVE_CRAWL_JOB_STATUSES:
+    if status in ACTIVE_CRAWL_JOB_STATUSES or status == "ai_running":
         return "live"
     if status in ACTIONABLE_CRAWL_JOB_STATUSES:
         return "manual_action_required"
@@ -455,16 +462,16 @@ def _derive_metric_scope(
         return "listing_run"
     if phase == 2:
         return "detail_run"
-    if phase == 4:
-        return "ingest_run"
     if phase == 5 or ai_run_id:
         return "ai_run"
+    if phase == 4:
+        return "ingest_run"
 
     return "crawl_job"
 
 
 def _is_snapshot_active(snapshot: dict[str, Any]) -> bool:
-    if snapshot["status"] in ACTIVE_CRAWL_JOB_STATUSES:
+    if snapshot["status"] in ACTIVE_CRAWL_JOB_STATUSES or snapshot["status"] == "ai_running":
         return True
     if snapshot["status"] in ACTIONABLE_CRAWL_JOB_STATUSES:
         return True

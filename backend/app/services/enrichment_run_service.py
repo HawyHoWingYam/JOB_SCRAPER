@@ -19,6 +19,7 @@ from app.models.skill import Skill
 from app.models.skill_category import SkillCategory
 from app.models.skill_review_candidate import SkillReviewCandidate
 from app.models.skill_technology import SkillTechnology
+from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.utils.time import utc_now
@@ -67,6 +68,7 @@ class EnrichmentRunService:
 
     def __init__(self, db: Session):
         self.db = db
+        self.crawl_job_repository = CrawlJobRepository()
         self.event_outbox_repository = EventOutboxRepository()
 
     def create_post_scrape_run(self, job_ids: List[str]) -> EnrichmentRun:
@@ -739,6 +741,23 @@ class EnrichmentRunService:
         in_progress = run.total_items - run.pending_items - run.completed_items - run.failed_items
         return max(in_progress, 0)
 
+    def _sync_linked_crawl_job_ai_metrics(self, run: EnrichmentRun) -> None:
+        if run.trigger_crawl_job_id is None:
+            return
+
+        metrics_patch = {
+            "ai_run_id": run.id,
+            "ai_total_items": int(run.total_items or 0),
+            "ai_completed_items": int(run.completed_items or 0),
+            "ai_failed_items": int(run.failed_items or 0),
+        }
+        self.crawl_job_repository.merge_metrics(
+            self.db,
+            crawl_job_id=run.trigger_crawl_job_id,
+            metrics_patch=metrics_patch,
+            auto_commit=False,
+        )
+
     def _serialize_run_progress(self, run_id: str) -> Dict[str, object]:
         run = self.db.query(EnrichmentRun).filter(EnrichmentRun.id == run_id).one()
         return {
@@ -831,6 +850,7 @@ class EnrichmentRunService:
         run.failed_items = counts["failed"]
         run.pending_items = counts["pending"]
         run.current_job_title = self._resolve_latest_running_job_title(run_id)
+        self._sync_linked_crawl_job_ai_metrics(run)
         self.db.commit()
         return self._serialize_run_progress(run_id)
 
@@ -884,6 +904,9 @@ class EnrichmentRunService:
             .order_by(EnrichmentRunItem.position.asc())
             .all()
         )
+        if claim:
+            self._sync_linked_crawl_job_ai_metrics(run)
+            self.db.commit()
         if not claim:
             now = utc_now()
             run.status = "running"
@@ -891,6 +914,7 @@ class EnrichmentRunService:
             run.completed_at = None
             run.error_message = None
             run.current_job_title = None
+            self._sync_linked_crawl_job_ai_metrics(run)
             self.db.commit()
 
         concurrency = self._resolve_run_concurrency()
@@ -960,6 +984,7 @@ class EnrichmentRunService:
             run.completed_at = latest_failure_timestamp
             run.current_job_title = None
             run.error_message = error_message
+            self._sync_linked_crawl_job_ai_metrics(run)
 
             self.db.commit()
             raise
@@ -975,6 +1000,7 @@ class EnrichmentRunService:
         run.current_job_title = None
         run.error_message = None if failed_items == 0 else f"{failed_items} item(s) failed"
         run.completed_at = utc_now()
+        self._sync_linked_crawl_job_ai_metrics(run)
         self.db.commit()
         return run
 

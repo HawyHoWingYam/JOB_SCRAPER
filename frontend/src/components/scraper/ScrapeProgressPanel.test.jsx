@@ -319,6 +319,36 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
+  it('derives ai_running from completed payloads while linked ai work is still in progress', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            status: 'completed',
+            category_name: 'Engineering',
+            phase: 4,
+            ai_run_id: 'run-123',
+            ai_completed_items: 1,
+            ai_failed_items: 0,
+            ai_total_items: 4,
+            completed_at: '2026-04-15T12:00:00Z',
+          },
+        },
+      });
+    });
+
+    expect(
+      await screen.findByText(/ai enrichment/i, { selector: '.status-badge' })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/items processed: 1\/4/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
   it('renders completed crawls with downstream backlog as a warning state', async () => {
     const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
 
