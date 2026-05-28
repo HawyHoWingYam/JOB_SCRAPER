@@ -75,4 +75,39 @@ describe('ScheduleHistory', () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it('shows zero-second durations explicitly and formats scraped/saved execution volume', () => {
+    render(
+      <ScheduleHistory
+        scheduleName="JobsDB Nightly"
+        onClose={vi.fn()}
+        executions={[
+          {
+            id: 'execution-2',
+            schedule_id: 'schedule-1',
+            crawl_job_id: 'crawl-job-456',
+            status: 'completed',
+            started_at: '2026-05-22T01:00:00Z',
+            completed_at: '2026-05-22T01:00:00Z',
+            duration_seconds: 0,
+            jobs_scraped: 12345,
+            jobs_saved: 6789,
+            phase1_completed: true,
+            phase2_completed: true,
+            phase3_completed: true,
+            phase4_completed: true,
+            phase5_completed: false,
+            ids_collected: 12345,
+            jobs_classified: 0,
+            error_message: null,
+            created_at: '2026-05-22T01:00:00Z',
+            request_payload_snapshot: {},
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('0s')).toBeInTheDocument();
+    expect(screen.getByText('12,345 / 6,789')).toBeInTheDocument();
+  });
 });

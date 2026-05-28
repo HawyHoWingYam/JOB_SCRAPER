@@ -25,6 +25,25 @@ function formatDate(dateString) {
     });
 }
 
+function sortSchedulesForDisplay(schedules) {
+    return [...schedules].sort((left, right) => {
+        const leftActiveRank = left.is_active ? 0 : 1;
+        const rightActiveRank = right.is_active ? 0 : 1;
+        if (leftActiveRank !== rightActiveRank) {
+            return leftActiveRank - rightActiveRank;
+        }
+
+        const leftName = `${left.name || ''}`.trim();
+        const rightName = `${right.name || ''}`.trim();
+        const nameComparison = leftName.localeCompare(rightName, 'en', { sensitivity: 'base' });
+        if (nameComparison !== 0) {
+            return nameComparison;
+        }
+
+        return `${left.id || ''}`.localeCompare(`${right.id || ''}`, 'en', { sensitivity: 'base' });
+    });
+}
+
 function ScheduleCard({
     schedule,
     onToggle,
@@ -156,8 +175,9 @@ function ScheduleList({
     manualRunDisabled = isLoading,
 }) {
     const sourceLabel = formatSourceLabel(currentSourceSite);
+    const sortedSchedules = sortSchedulesForDisplay(schedules);
 
-    if (schedules.length === 0) {
+    if (sortedSchedules.length === 0) {
         return (
             <div className="schedule-list-empty glass-panel">
                 <Clock size={48} className="empty-icon" />
@@ -171,7 +191,7 @@ function ScheduleList({
         <div className="schedule-list-container">
             <h3 className="section-title">Scheduled Automation</h3>
             <div className="schedule-grid">
-                {schedules.map(schedule => (
+                {sortedSchedules.map(schedule => (
                     <ScheduleCard
                         key={schedule.id}
                         schedule={schedule}

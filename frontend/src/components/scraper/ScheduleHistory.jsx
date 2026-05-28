@@ -7,11 +7,18 @@ function formatDate(dateString) {
 }
 
 function formatDuration(seconds) {
-    if (!seconds) return '-';
+    if (seconds == null || Number.isNaN(Number(seconds))) return '-';
+    if (Number(seconds) === 0) return '0s';
     if (seconds < 60) return `${seconds}s`;
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}m ${secs}s`;
+}
+
+function formatExecutionVolume(exec) {
+    const scraped = Number(exec.jobs_scraped || 0).toLocaleString();
+    const saved = Number(exec.jobs_saved || 0).toLocaleString();
+    return `${scraped} / ${saved}`;
 }
 
 function getStatusClass(status) {
@@ -113,7 +120,7 @@ function ScheduleHistory({ executions, scheduleName, onClose }) {
                                     <th>Started</th>
                                     <th>Completed</th>
                                     <th>Duration</th>
-                                    <th>Rows</th>
+                                    <th>Scraped / Saved</th>
                                     <th>Error</th>
                                 </tr>
                             </thead>
@@ -134,7 +141,7 @@ function ScheduleHistory({ executions, scheduleName, onClose }) {
                                         <td>{formatDate(exec.started_at)}</td>
                                         <td>{formatDate(exec.completed_at)}</td>
                                         <td>{formatDuration(exec.duration_seconds)}</td>
-                                        <td>{exec.jobs_scraped || 0}</td>
+                                        <td>{formatExecutionVolume(exec)}</td>
                                         <td className="error-cell">
                                             {exec.error_message || '-'}
                                         </td>
