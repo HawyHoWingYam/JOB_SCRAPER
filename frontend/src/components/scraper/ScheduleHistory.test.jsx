@@ -76,7 +76,7 @@ describe('ScheduleHistory', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('shows zero-second durations explicitly and formats scraped/saved execution volume', () => {
+  it('shows zero-second durations explicitly and labels authoritative execution counts', () => {
     render(
       <ScheduleHistory
         scheduleName="JobsDB Nightly"
@@ -107,8 +107,14 @@ describe('ScheduleHistory', () => {
       />,
     );
 
-    expect(screen.getByText('0s')).toBeInTheDocument();
-    expect(screen.getByText('12,345 / 12,345 / 0 / 6,789')).toBeInTheDocument();
+    const executionRow = screen.getByText('0s').closest('tr');
+    expect(executionRow).not.toBeNull();
+    expect(within(executionRow).getByText('IDs')).toBeInTheDocument();
+    expect(within(executionRow).getAllByText('12,345').length).toBeGreaterThan(1);
+    expect(within(executionRow).getByText('Scraped')).toBeInTheDocument();
+    expect(within(executionRow).getByText('Ingested')).toBeInTheDocument();
+    expect(within(executionRow).getByText('6,789')).toBeInTheDocument();
+    expect(within(executionRow).queryByText('Classified')).not.toBeInTheDocument();
   });
 
   it('includes phase5 in the execution phase summary and surfaces ids/classified counts', () => {
@@ -143,7 +149,10 @@ describe('ScheduleHistory', () => {
     );
 
     expect(screen.getByText(/collect ids -> fetch details -> ai classify -> persist data -> ai enrich/i)).toBeInTheDocument();
-    expect(screen.getByText('52 / 42 / 39 / 40')).toBeInTheDocument();
+    const executionRow = screen.getByText(/collect ids -> fetch details -> ai classify -> persist data -> ai enrich/i).closest('tr');
+    expect(executionRow).not.toBeNull();
+    expect(within(executionRow).getByText('Classified')).toBeInTheDocument();
+    expect(within(executionRow).getByText('39')).toBeInTheDocument();
   });
 
   it('renders completed_with_ai_failures as a distinct execution status', () => {
