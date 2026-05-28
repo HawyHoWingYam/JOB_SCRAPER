@@ -54,7 +54,7 @@ function getDetailedStatus(exec) {
     const phases = [];
     if (exec.phase1_completed) phases.push('Collect IDs');
     if (exec.phase2_completed) phases.push('Fetch Details');
-    if (exec.phase3_completed) phases.push('AI Classify');
+    if (Number(exec.jobs_classified || 0) > 0) phases.push('AI Classify');
     if (exec.phase4_completed) phases.push('Persist Data');
     if (exec.phase5_completed) phases.push('AI Enrich');
     return phases.join(' -> ');

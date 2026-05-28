@@ -188,4 +188,39 @@ describe('ScheduleHistory', () => {
 
     expect(screen.getByText(/completed with ai failures/i)).toBeInTheDocument();
   });
+
+  it('does not imply ai classify in the phase summary when no classified count is available', () => {
+    render(
+      <ScheduleHistory
+        scheduleName="JobsDB Nightly"
+        onClose={vi.fn()}
+        executions={[
+          {
+            id: 'execution-5',
+            schedule_id: 'schedule-1',
+            crawl_job_id: 'crawl-job-111',
+            status: 'completed',
+            started_at: '2026-05-22T01:00:00Z',
+            completed_at: '2026-05-22T01:05:00Z',
+            duration_seconds: 300,
+            jobs_scraped: 42,
+            jobs_saved: 40,
+            phase1_completed: true,
+            phase2_completed: true,
+            phase3_completed: true,
+            phase4_completed: true,
+            phase5_completed: false,
+            ids_collected: 52,
+            jobs_classified: 0,
+            error_message: null,
+            created_at: '2026-05-22T01:00:00Z',
+            request_payload_snapshot: {},
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(/collect ids -> fetch details -> persist data/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ai classify/i)).not.toBeInTheDocument();
+  });
 });
