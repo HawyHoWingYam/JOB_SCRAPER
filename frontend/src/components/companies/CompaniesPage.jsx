@@ -34,7 +34,13 @@ function getRunProgress(run) {
 }
 
 function getCompanyStatus(company, run) {
-  if (isActiveRun(run) && run.current_company_name === company.name && !hasCompanyAIDescription(company)) {
+  const currentCompanyId = `${run?.current_company_id || ''}`.trim();
+  const companyId = `${company?.id || ''}`.trim();
+  const matchesCurrentCompany = currentCompanyId
+    ? currentCompanyId === companyId
+    : run?.current_company_name === company.name;
+
+  if (isActiveRun(run) && matchesCurrentCompany && !hasCompanyAIDescription(company)) {
     return 'generating';
   }
 

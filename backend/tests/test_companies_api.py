@@ -124,3 +124,76 @@ def test_get_company_enrichment_run_items_returns_404_when_service_reports_missi
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "Run not found"
+
+
+def test_get_current_company_enrichment_run_includes_current_company_id(monkeypatch):
+    active_run = SimpleNamespace(
+        id="run-current",
+        status="running",
+        total_items=3,
+        pending_items=2,
+        completed_items=1,
+        failed_items=0,
+        started_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+        completed_at=None,
+        current_company_name="Acme Health",
+        error_message=None,
+        created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+    )
+    resolved_run_ids = []
+
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def get_current_run(self):
+            return active_run
+
+    def resolve_current_company_id(db, run):
+        resolved_run_ids.append(run.id)
+        return "company-2"
+
+    monkeypatch.setattr(companies, "CompanyEnrichmentRunService", _FakeService)
+    monkeypatch.setattr(companies, "_resolve_current_company_id", resolve_current_company_id)
+
+    payload = asyncio.run(companies.get_current_company_enrichment_run(db=object()))
+
+    assert resolved_run_ids == ["run-current"]
+    assert payload["current_company_id"] == "company-2"
+
+
+def test_get_company_enrichment_run_includes_current_company_id(monkeypatch):
+    active_run = SimpleNamespace(
+        id="run-current",
+        status="running",
+        total_items=3,
+        pending_items=2,
+        completed_items=1,
+        failed_items=0,
+        started_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+        completed_at=None,
+        current_company_name="Acme Health",
+        error_message=None,
+        created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+    )
+    resolved_run_ids = []
+
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def get_run(self, run_id):
+            assert run_id == "run-current"
+            return active_run
+
+    def resolve_current_company_id(db, run):
+        resolved_run_ids.append(run.id)
+        return "company-2"
+
+    monkeypatch.setattr(companies, "CompanyEnrichmentRunService", _FakeService)
+    monkeypatch.setattr(companies, "_resolve_current_company_id", resolve_current_company_id)
+
+    payload = asyncio.run(companies.get_company_enrichment_run("run-current", db=object()))
+
+    assert resolved_run_ids == ["run-current"]
+    assert payload["current_company_id"] == "company-2"

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from uuid import UUID
 from app.database import SessionLocal, get_db
 from app.models import Company
+from app.models.company_enrichment_run import CompanyEnrichmentRunItem
 from app.schemas import CompanySchema, CompanyCreateSchema
 from app.services.company_enrichment_service import CompanyEnrichmentService
 from app.services.company_enrichment_run_service import CompanyEnrichmentRunService
@@ -34,6 +35,7 @@ class CompanyEnrichmentRunSchema(BaseModel):
     failed_items: int
     started_at: str | None = None
     completed_at: str | None = None
+    current_company_id: str | None = None
     current_company_name: str | None = None
     error_message: str | None = None
     created_at: str | None = None
@@ -61,7 +63,31 @@ class CompanyBatchEnrichmentResponse(BaseModel):
     companies: list[CompanyEnrichmentResult]
 
 
-def _serialize_run(run) -> dict:
+def _resolve_current_company_id(db: Session | None, run) -> str | None:
+    if db is None:
+        return None
+    if str(getattr(run, "status", "") or "").lower() not in {"pending", "running"}:
+        return None
+    if not getattr(run, "current_company_name", None):
+        return None
+
+    row = (
+        db.query(CompanyEnrichmentRunItem.company_id)
+        .filter(
+            CompanyEnrichmentRunItem.run_id == run.id,
+            CompanyEnrichmentRunItem.status == "running",
+        )
+        .order_by(
+            CompanyEnrichmentRunItem.started_at.desc(),
+            CompanyEnrichmentRunItem.position.desc(),
+            CompanyEnrichmentRunItem.id.desc(),
+        )
+        .first()
+    )
+    return str(row[0]) if row and row[0] else None
+
+
+def _serialize_run(run, db: Session | None = None) -> dict:
     return {
         "id": run.id,
         "status": run.status,
@@ -71,6 +97,7 @@ def _serialize_run(run) -> dict:
         "failed_items": run.failed_items,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "current_company_id": _resolve_current_company_id(db, run),
         "current_company_name": run.current_company_name,
         "error_message": run.error_message,
         "created_at": run.created_at.isoformat() if run.created_at else None,
@@ -108,7 +135,7 @@ async def create_company_enrichment_run(
     service = CompanyEnrichmentRunService(db)
     active_run = service.get_active_run()
     if active_run is not None:
-        return _serialize_run(active_run)
+        return _serialize_run(active_run, db)
 
     run = service.create_pending_run()
     if run is None:
@@ -118,7 +145,7 @@ async def create_company_enrichment_run(
     db.commit()
     background_tasks.add_task(_run_persisted_company_enrichment, run_id)
     db.refresh(run)
-    return _serialize_run(run)
+    return _serialize_run(run, db)
 
 
 @router.get("/enrichment-runs/current")
@@ -127,7 +154,7 @@ async def get_current_company_enrichment_run(db: Session = Depends(get_db)):
     run = CompanyEnrichmentRunService(db).get_current_run()
     if run is None:
         return None
-    return _serialize_run(run)
+    return _serialize_run(run, db)
 
 
 @router.get("/enrichment-runs/{run_id}")
@@ -136,7 +163,7 @@ async def get_company_enrichment_run(run_id: str, db: Session = Depends(get_db))
     run = CompanyEnrichmentRunService(db).get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    return _serialize_run(run)
+    return _serialize_run(run, db)
 
 
 @router.get("/enrichment-runs/{run_id}/items")

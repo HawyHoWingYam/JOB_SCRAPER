@@ -614,4 +614,53 @@ describe('CompaniesPage', () => {
 
     expect(runPollCalls).toBe(1);
   }, 10000);
+
+  it('marks only the current_company_id match as generating when duplicate company names exist', async () => {
+    companyPages['status=pending&q=&page=1&page_size=25'] = buildCompaniesPayload(
+      [
+        {
+          id: 'company-1',
+          company_id: 'company-1',
+          name: 'Acme Health',
+          industry: 'Healthcare',
+          location: 'Hong Kong',
+          ai_description: null,
+        },
+        {
+          id: 'company-2',
+          company_id: 'company-2',
+          name: 'Acme Health',
+          industry: 'Healthcare',
+          location: 'Kowloon',
+          ai_description: null,
+        },
+      ],
+      1,
+      2,
+    );
+    currentRunResponses = [
+      {
+        id: 'run-current',
+        status: 'running',
+        total_items: 2,
+        pending_items: 1,
+        completed_items: 1,
+        failed_items: 0,
+        current_company_id: 'company-2',
+        current_company_name: 'Acme Health',
+        error_message: null,
+        started_at: '2026-04-19T10:00:00Z',
+        completed_at: null,
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+
+    render(<CompaniesPage />);
+
+    const companyCards = await screen.findAllByRole('button', { name: /open details for acme health/i });
+    expect(companyCards).toHaveLength(2);
+    expect(within(companyCards[0]).queryByText('Generating')).not.toBeInTheDocument();
+    expect(within(companyCards[0]).getByText('Awaiting AI')).toBeInTheDocument();
+    expect(within(companyCards[1]).getByText('Generating')).toBeInTheDocument();
+  });
 });
