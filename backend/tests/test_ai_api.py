@@ -307,3 +307,104 @@ def test_retry_failed_enrichment_run_returns_400_when_run_has_no_failed_items(mo
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Run run-no-failed has no failed items to retry"
+
+
+def test_get_enrichment_status_batches_failed_title_lookup_for_single_run(monkeypatch):
+    failed_run = _build_run(run_id="run-failed", status="completed_with_failures", failed_items=2)
+    batch_calls = []
+
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def get_run(self, run_id):
+            assert run_id == "run-failed"
+            return failed_run
+
+    def resolve_batch_lookup(db, run_ids):
+        batch_calls.append(list(run_ids))
+        return {"run-failed": "Platform Analyst"}
+
+    def fail_single_lookup(db, run_id):
+        raise AssertionError("single-run status endpoint should use the shared batch failed-title lookup")
+
+    monkeypatch.setattr(ai, "EnrichmentRunService", _FakeService)
+    monkeypatch.setattr(ai, "_derive_last_failed_job_titles", resolve_batch_lookup)
+    monkeypatch.setattr(ai, "_derive_last_failed_job_title", fail_single_lookup)
+
+    payload = asyncio.run(ai.get_enrichment_status("run-failed", db=object()))
+
+    assert batch_calls == [["run-failed"]]
+    assert payload["last_failed_job_title"] == "Platform Analyst"
+    assert payload["progress"] == 5
+    assert payload["total"] == 4
+
+
+def test_get_enrichment_run_batches_failed_title_lookup_for_single_run(monkeypatch):
+    failed_run = _build_run(run_id="run-failed", status="completed_with_failures", failed_items=2)
+    batch_calls = []
+
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def get_run(self, run_id):
+            assert run_id == "run-failed"
+            return failed_run
+
+    def resolve_batch_lookup(db, run_ids):
+        batch_calls.append(list(run_ids))
+        return {"run-failed": "Platform Analyst"}
+
+    def fail_single_lookup(db, run_id):
+        raise AssertionError("single-run detail endpoint should use the shared batch failed-title lookup")
+
+    monkeypatch.setattr(ai, "EnrichmentRunService", _FakeService)
+    monkeypatch.setattr(ai, "_derive_last_failed_job_titles", resolve_batch_lookup)
+    monkeypatch.setattr(ai, "_derive_last_failed_job_title", fail_single_lookup)
+
+    payload = asyncio.run(ai.get_enrichment_run("run-failed", db=object()))
+
+    assert batch_calls == [["run-failed"]]
+    assert payload["last_failed_job_title"] == "Platform Analyst"
+
+
+def test_enrich_single_job_returns_failed_title_for_terminal_run(monkeypatch):
+    target_job_id = uuid4()
+    terminal_run = _build_run(run_id="run-failed", status="completed_with_failures", failed_items=2)
+
+    class _FakeJobQuery:
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return SimpleNamespace(id=target_job_id)
+
+    class _FakeDB:
+        def query(self, model):
+            assert model is Job
+            return _FakeJobQuery()
+
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def create_manual_single_job_run(self, job_id):
+            assert job_id == str(target_job_id)
+            return SimpleNamespace(id="run-failed")
+
+    async def _resolve_terminal_run(run_id):
+        assert run_id == "run-failed"
+        return terminal_run
+
+    monkeypatch.setattr(ai, "ensure_profile_runtime_ready", lambda profile: None)
+    monkeypatch.setattr(ai, "EnrichmentRunService", _FakeService)
+    monkeypatch.setattr(ai, "_publish_run_request", lambda db, **kwargs: None)
+    monkeypatch.setattr(ai, "_wait_for_terminal_run", _resolve_terminal_run)
+    monkeypatch.setattr(ai, "_load_job_snapshot", lambda job_id: {"id": str(job_id)})
+    monkeypatch.setattr(ai, "_derive_last_failed_job_titles", lambda db, run_ids: {"run-failed": "Platform Analyst"})
+
+    payload = asyncio.run(ai.enrich_single_job(target_job_id, db=_FakeDB()))
+
+    assert payload["run"]["last_failed_job_title"] == "Platform Analyst"
+    assert payload["job"] == {"id": str(target_job_id)}

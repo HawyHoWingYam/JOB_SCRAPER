@@ -127,6 +127,25 @@ def _serialize_run(
     }
 
 
+def _serialize_runs(runs: list[EnrichmentRun], db: Optional[Session] = None) -> list[dict]:
+    failed_title_map: Optional[dict[str, Optional[str]]] = None
+    if db is not None:
+        failed_run_ids = [run.id for run in runs if int(getattr(run, "failed_items", 0) or 0) > 0]
+        failed_title_map = _derive_last_failed_job_titles(db, failed_run_ids)
+    return [
+        _serialize_run(
+            run,
+            db,
+            last_failed_job_titles=failed_title_map,
+        )
+        for run in runs
+    ]
+
+
+def _serialize_single_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
+    return _serialize_runs([run], db)[0]
+
+
 def _serialize_item(item: EnrichmentRunItem) -> dict:
     return {
         "id": item.id,
@@ -217,7 +236,7 @@ async def get_enrichment_status(task_id: str, db: Session = Depends(get_db)):
     run = EnrichmentRunService(db).get_run(task_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    payload = _serialize_run(run, db)
+    payload = _serialize_single_run(run, db)
     payload["progress"] = run.completed_items + run.failed_items
     payload["total"] = run.total_items
     return payload
@@ -236,7 +255,7 @@ async def get_ai_overview(db: Session = Depends(get_db)):
         "failed_jobs": overview["failed_jobs"],
         "failed_items": overview["failed_items"],
         "last_completed_run": (
-            _serialize_run(overview["last_completed_run"], db)
+            _serialize_single_run(overview["last_completed_run"], db)
             if overview["last_completed_run"] is not None
             else None
         ),
@@ -282,7 +301,7 @@ async def create_enrichment_run(
 
     _publish_run_request(db, service=service, run_id=run.id)
     db.refresh(run)
-    return _serialize_run(run, db)
+    return _serialize_single_run(run, db)
 
 
 @router.get("/runs")
@@ -303,18 +322,7 @@ async def list_enrichment_runs(
             source_type=source_type,
             limit=limit,
         )
-    failed_run_ids = [run.id for run in runs if int(getattr(run, "failed_items", 0) or 0) > 0]
-    last_failed_job_titles = _derive_last_failed_job_titles(db, failed_run_ids)
-    return {
-        "runs": [
-            _serialize_run(
-                run,
-                db,
-                last_failed_job_titles=last_failed_job_titles,
-            )
-            for run in runs
-        ]
-    }
+    return {"runs": _serialize_runs(runs, db)}
 
 
 @router.get("/runs/{run_id}")
@@ -323,7 +331,7 @@ async def get_enrichment_run(run_id: str, db: Session = Depends(get_db)):
     run = EnrichmentRunService(db).get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    return _serialize_run(run, db)
+    return _serialize_single_run(run, db)
 
 
 @router.get("/runs/{run_id}/items")
@@ -355,7 +363,7 @@ async def retry_failed_enrichment_run(
         raise HTTPException(status_code=404, detail="Run not found")
     _publish_run_request(db, service=service, run_id=run.id)
     db.refresh(run)
-    return _serialize_run(run, db)
+    return _serialize_single_run(run, db)
 
 
 @router.post("/enrich-job/{job_id}")
@@ -375,7 +383,7 @@ async def enrich_single_job(job_id: UUID, db: Session = Depends(get_db)):
     _publish_run_request(db, service=service, run_id=run.id)
     terminal_run = await _wait_for_terminal_run(run.id)
     return {
-        "run": _serialize_run(terminal_run),
+        "run": _serialize_single_run(terminal_run, db),
         "job": _load_job_snapshot(job_id),
     }
 
