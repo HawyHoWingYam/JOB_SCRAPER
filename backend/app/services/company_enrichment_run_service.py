@@ -93,6 +93,29 @@ class CompanyEnrichmentRunService:
             .all()
         )
 
+    def list_run_items_or_none(self, run_id: str) -> Optional[List[CompanyEnrichmentRunItem]]:
+        """List items for an existing company run in one query, or return None when the run is missing."""
+        rows = (
+            self.db.query(
+                CompanyEnrichmentRun.id.label("run_id"),
+                CompanyEnrichmentRunItem,
+            )
+            .select_from(CompanyEnrichmentRun)
+            .outerjoin(
+                CompanyEnrichmentRunItem,
+                CompanyEnrichmentRunItem.run_id == CompanyEnrichmentRun.id,
+            )
+            .filter(CompanyEnrichmentRun.id == run_id)
+            .order_by(
+                CompanyEnrichmentRunItem.position.asc(),
+                CompanyEnrichmentRunItem.id.asc(),
+            )
+            .all()
+        )
+        if not rows:
+            return None
+        return [item for _, item in rows if item is not None]
+
     def create_pending_run(
         self,
         force_company_ids: Optional[List[str]] = None,

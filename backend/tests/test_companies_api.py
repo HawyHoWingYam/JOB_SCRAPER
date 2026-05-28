@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from app.api import companies
 from app.database import get_db
 
@@ -103,3 +106,21 @@ def test_list_companies_skips_total_count_for_short_later_page(monkeypatch):
     assert payload["page_size"] == 25
     assert payload["total_pages"] == 2
     assert [item["name"] for item in payload["items"]] == ["Zulu Health", "Nova Labs"]
+
+
+def test_get_company_enrichment_run_items_returns_404_when_service_reports_missing_run(monkeypatch):
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def list_run_items_or_none(self, run_id):
+            assert run_id == "run-missing"
+            return None
+
+    monkeypatch.setattr(companies, "CompanyEnrichmentRunService", _FakeService)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(companies.get_company_enrichment_run_items("run-missing", db=object()))
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Run not found"

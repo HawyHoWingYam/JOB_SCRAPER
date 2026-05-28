@@ -143,8 +143,8 @@ async def get_company_enrichment_run(run_id: str, db: Session = Depends(get_db))
 async def get_company_enrichment_run_items(run_id: str, db: Session = Depends(get_db)):
     """Get item rows for a company enrichment run."""
     service = CompanyEnrichmentRunService(db)
-    run = service.get_run(run_id)
-    if run is None:
+    items = service.list_run_items_or_none(run_id)
+    if items is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return {
         "items": [
@@ -159,7 +159,7 @@ async def get_company_enrichment_run_items(run_id: str, db: Session = Depends(ge
                 "completed_at": item.completed_at.isoformat() if item.completed_at else None,
                 "created_at": item.created_at.isoformat() if item.created_at else None,
             }
-            for item in service.list_run_items(run_id)
+            for item in items
         ]
     }
 

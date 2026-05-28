@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import uuid4
 
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
 from app.models.company import Company
 from app.models.company_enrichment_run import CompanyEnrichmentRun, CompanyEnrichmentRunItem
 from app.services.company_enrichment_run_service import CompanyEnrichmentRunService
@@ -44,6 +49,42 @@ class _FakeDB:
         for obj in self.added:
             if isinstance(obj, CompanyEnrichmentRun) and not getattr(obj, "id", None):
                 obj.id = "run-1"
+
+
+def _create_company_enrichment_service_db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Company.__table__,
+            CompanyEnrichmentRun.__table__,
+            CompanyEnrichmentRunItem.__table__,
+        ],
+    )
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = session_factory()
+
+    company_ids = [uuid4(), uuid4()]
+    db.add_all(
+        [
+            Company(
+                id=company_ids[0],
+                company_id="company-1",
+                source_site="jobsdb",
+                source_company_id="company-1",
+                name="Example Co 1",
+            ),
+            Company(
+                id=company_ids[1],
+                company_id="company-2",
+                source_site="jobsdb",
+                source_company_id="company-2",
+                name="Example Co 2",
+            ),
+        ]
+    )
+    db.commit()
+    return engine, db, company_ids
 
 
 def test_create_pending_run_queries_pending_company_ids_only():
@@ -105,3 +146,71 @@ def test_get_current_run_uses_single_query_when_only_terminal_run_exists():
 
     assert result is terminal_run
     assert len(db.query_calls) == 1
+
+
+def test_list_run_items_or_none_distinguishes_missing_empty_and_present_runs_with_single_select():
+    engine, db, company_ids = _create_company_enrichment_service_db()
+    db.add_all(
+        [
+            CompanyEnrichmentRun(
+                id="run-empty",
+                status="completed",
+                total_items=0,
+                pending_items=0,
+                completed_items=0,
+                failed_items=0,
+                created_at=datetime(2026, 5, 28, 10, 0, tzinfo=UTC),
+            ),
+            CompanyEnrichmentRun(
+                id="run-with-items",
+                status="completed_with_failures",
+                total_items=2,
+                pending_items=0,
+                completed_items=1,
+                failed_items=1,
+                created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            CompanyEnrichmentRunItem(
+                id="item-completed",
+                run_id="run-with-items",
+                company_id=company_ids[0],
+                position=0,
+                status="completed",
+                created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+            ),
+            CompanyEnrichmentRunItem(
+                id="item-failed",
+                run_id="run-with-items",
+                company_id=company_ids[1],
+                position=1,
+                status="failed",
+                created_at=datetime(2026, 5, 28, 9, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.commit()
+
+    select_statements = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _count_selects(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            select_statements.append(statement)
+
+    try:
+        service = CompanyEnrichmentRunService(db)
+        missing_items = service.list_run_items_or_none("run-missing")
+        empty_items = service.list_run_items_or_none("run-empty")
+        present_items = service.list_run_items_or_none("run-with-items")
+    finally:
+        event.remove(engine, "before_cursor_execute", _count_selects)
+        db.close()
+
+    assert missing_items is None
+    assert empty_items == []
+    assert [item.id for item in present_items] == ["item-completed", "item-failed"]
+    assert len(select_statements) == 3
