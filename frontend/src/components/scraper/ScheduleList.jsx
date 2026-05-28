@@ -25,12 +25,45 @@ function formatDate(dateString) {
     });
 }
 
+function parseTimestamp(value) {
+    if (!value) {
+        return null;
+    }
+
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
 function sortSchedulesForDisplay(schedules) {
     return [...schedules].sort((left, right) => {
         const leftActiveRank = left.is_active ? 0 : 1;
         const rightActiveRank = right.is_active ? 0 : 1;
         if (leftActiveRank !== rightActiveRank) {
             return leftActiveRank - rightActiveRank;
+        }
+
+        if (leftActiveRank === 0) {
+            const leftNextRun = parseTimestamp(left.next_run_at);
+            const rightNextRun = parseTimestamp(right.next_run_at);
+
+            if (leftNextRun !== null || rightNextRun !== null) {
+                if (leftNextRun === null) return 1;
+                if (rightNextRun === null) return -1;
+                if (leftNextRun !== rightNextRun) {
+                    return leftNextRun - rightNextRun;
+                }
+            }
+        } else {
+            const leftLastRun = parseTimestamp(left.last_run_at);
+            const rightLastRun = parseTimestamp(right.last_run_at);
+
+            if (leftLastRun !== null || rightLastRun !== null) {
+                if (leftLastRun === null) return 1;
+                if (rightLastRun === null) return -1;
+                if (leftLastRun !== rightLastRun) {
+                    return rightLastRun - leftLastRun;
+                }
+            }
         }
 
         const leftName = `${left.name || ''}`.trim();
