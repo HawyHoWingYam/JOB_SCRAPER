@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from sqlalchemy import and_, case, or_
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import NoResultFound
 
 from app.models import Company
 from app.models.company_enrichment_run import (
@@ -221,16 +222,23 @@ class CompanyEnrichmentRunService:
 
         completed_items = 0
         failed_items = 0
-
-        for item in items:
-            company = (
+        company_ids = [item.company_id for item in items]
+        companies_by_id = {
+            company.id: company
+            for company in (
                 self.db.query(Company)
                 .filter(
-                    Company.id == item.company_id,
+                    Company.id.in_(company_ids),
                     Company.is_deleted == False,
                 )
-                .one()
+                .all()
             )
+        }
+
+        for item in items:
+            company = companies_by_id.get(item.company_id)
+            if company is None:
+                raise NoResultFound(f"Company not found for enrichment run item {item.id}")
             item.status = "running"
             item.started_at = item.started_at or utc_now()
             run.current_company_name = company.name

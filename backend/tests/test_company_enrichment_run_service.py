@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -214,3 +215,69 @@ def test_list_run_items_or_none_distinguishes_missing_empty_and_present_runs_wit
     assert empty_items == []
     assert [item.id for item in present_items] == ["item-completed", "item-failed"]
     assert len(select_statements) == 3
+
+
+def test_execute_run_preloads_companies_with_single_company_select():
+    engine, db, company_ids = _create_company_enrichment_service_db()
+    db.add(
+        CompanyEnrichmentRun(
+            id="run-execute",
+            status="pending",
+            total_items=2,
+            pending_items=2,
+            completed_items=0,
+            failed_items=0,
+            created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+        )
+    )
+    db.add_all(
+        [
+            CompanyEnrichmentRunItem(
+                id="item-1",
+                run_id="run-execute",
+                company_id=company_ids[0],
+                position=0,
+                status="pending",
+                created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+            ),
+            CompanyEnrichmentRunItem(
+                id="item-2",
+                run_id="run-execute",
+                company_id=company_ids[1],
+                position=1,
+                status="pending",
+                created_at=datetime(2026, 5, 28, 9, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.commit()
+
+    company_select_statements = []
+    observed_company_names = []
+
+    class _FakeEnrichmentService:
+        async def enrich_company_description(self, company, db_session):
+            observed_company_names.append(company.name)
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _count_company_selects(conn, cursor, statement, parameters, context, executemany):
+        normalized_statement = statement.lstrip().upper()
+        if normalized_statement.startswith("SELECT") and "FROM COMPANIES" in normalized_statement:
+            company_select_statements.append(statement)
+
+    try:
+        run = asyncio.run(
+            CompanyEnrichmentRunService(db).execute_run(
+                "run-execute",
+                enrichment_service=_FakeEnrichmentService(),
+            )
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", _count_company_selects)
+        db.close()
+
+    assert observed_company_names == ["Example Co 1", "Example Co 2"]
+    assert run.status == "completed"
+    assert run.completed_items == 2
+    assert run.failed_items == 0
+    assert len(company_select_statements) == 1
