@@ -208,4 +208,42 @@ describe('ScheduleList', () => {
     expect(card).not.toBeNull();
     expect(within(card).getByText('Engineering, Marketing, +1 more')).toBeInTheDocument();
   });
+
+  it('shows the latest execution outcome and recent volume on the schedule card', () => {
+    render(
+      <ScheduleList
+        currentSourceSite="jobsdb"
+        schedules={[
+          {
+            id: 'outcome-rich',
+            name: 'Outcome Focus',
+            cron_expression: '0 2 * * *',
+            category_ids: [1200],
+            source_site: 'jobsdb',
+            crawl_phase: 'listing',
+            crawl_mode: 'headed',
+            is_active: true,
+            last_run_at: '2026-05-28T08:00:00Z',
+            next_run_at: '2026-05-29T08:00:00Z',
+            latest_execution_status: 'completed_with_ai_failures',
+            latest_execution_started_at: '2026-05-28T08:00:00Z',
+            latest_execution_completed_at: '2026-05-28T08:05:00Z',
+            latest_execution_jobs_scraped: 12,
+            latest_execution_jobs_saved: 11,
+          },
+        ]}
+        onToggle={vi.fn()}
+        onDelete={vi.fn()}
+        onRun={vi.fn()}
+        onViewHistory={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    const card = screen.getByRole('heading', { level: 4, name: 'Outcome Focus' }).closest('.schedule-card');
+    expect(card).not.toBeNull();
+    expect(within(card).getByText('Last outcome')).toBeInTheDocument();
+    expect(within(card).getByText('Completed With AI Failures')).toBeInTheDocument();
+    expect(within(card).getByText('12 scraped / 11 ingested')).toBeInTheDocument();
+  });
 });

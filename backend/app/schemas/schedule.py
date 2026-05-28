@@ -164,6 +164,11 @@ class ScheduleSchema(BaseModel):
     is_active: bool
     last_run_at: Optional[datetime]
     next_run_at: Optional[datetime]
+    latest_execution_status: Optional[str] = None
+    latest_execution_started_at: Optional[datetime] = None
+    latest_execution_completed_at: Optional[datetime] = None
+    latest_execution_jobs_scraped: Optional[int] = None
+    latest_execution_jobs_saved: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 

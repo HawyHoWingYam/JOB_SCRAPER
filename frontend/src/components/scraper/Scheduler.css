@@ -553,6 +553,27 @@ input:checked + .cyber-slider::before {
     border-top: 1px solid var(--color-border);
 }
 
+.schedule-execution-summary {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-tertiary);
+}
+
+.schedule-execution-summary strong {
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+}
+
+.schedule-execution-summary span:last-child {
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 600;
+}
+
 .schedule-card-actions .cyber-btn {
     flex: 1;
     min-width: 0;

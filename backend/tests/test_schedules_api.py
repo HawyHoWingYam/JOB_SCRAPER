@@ -30,6 +30,11 @@ def _build_schedule(name: str):
         is_active=True,
         last_run_at=None,
         next_run_at=None,
+        latest_execution_status=None,
+        latest_execution_started_at=None,
+        latest_execution_completed_at=None,
+        latest_execution_jobs_scraped=None,
+        latest_execution_jobs_saved=None,
         created_at=now,
         updated_at=now,
     )
@@ -141,6 +146,34 @@ def test_list_schedules_skips_total_count_for_short_later_page(monkeypatch):
     payload = response.json()
     assert payload["total"] == 27
     assert [schedule["name"] for schedule in payload["schedules"]] == ["Batch 26", "Batch 27"]
+
+
+def test_list_schedules_exposes_latest_execution_summary_fields(monkeypatch):
+    app = FastAPI()
+    app.include_router(schedules.router, prefix="/api/v1")
+    schedule = _build_schedule("JobsDB Nightly")
+    schedule.latest_execution_status = "completed_with_ai_failures"
+    schedule.latest_execution_started_at = datetime(2026, 5, 28, 8, 0, tzinfo=UTC)
+    schedule.latest_execution_completed_at = datetime(2026, 5, 28, 8, 5, tzinfo=UTC)
+    schedule.latest_execution_jobs_scraped = 12
+    schedule.latest_execution_jobs_saved = 11
+    repository = FakeScheduleRepository(schedules_list=[schedule])
+    db = object()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(schedules, "repository", repository)
+    client = TestClient(app)
+
+    response = client.get("/api/v1/schedules?skip=0&limit=100")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schedules"][0]["latest_execution_status"] == "completed_with_ai_failures"
+    assert payload["schedules"][0]["latest_execution_jobs_scraped"] == 12
+    assert payload["schedules"][0]["latest_execution_jobs_saved"] == 11
 
 
 def test_schedule_history_skips_total_count_for_short_result_page(monkeypatch):

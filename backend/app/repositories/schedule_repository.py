@@ -7,7 +7,7 @@ Handles schedule and execution CRUD operations.
 import logging
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 from uuid import UUID
 
 from app.crawl_phases import resolve_crawl_phase
@@ -42,13 +42,15 @@ class ScheduleRepository:
         self, db: Session, skip: int = 0, limit: int = 100
     ) -> List[ScrapeSchedule]:
         """Get all schedules with pagination."""
-        return (
+        schedules = (
             db.query(ScrapeSchedule)
             .order_by(desc(ScrapeSchedule.created_at))
             .offset(skip)
             .limit(limit)
             .all()
         )
+        self._attach_latest_execution_summaries(db, schedules)
+        return schedules
 
     def get_active_schedules(self, db: Session) -> List[ScrapeSchedule]:
         """Get all active schedules."""
@@ -163,6 +165,52 @@ class ScheduleRepository:
             .limit(limit)
             .all()
         )
+
+    def _attach_latest_execution_summaries(
+        self,
+        db: Session,
+        schedules: List[ScrapeSchedule],
+    ) -> None:
+        if not schedules:
+            return
+
+        schedule_ids = [schedule.id for schedule in schedules]
+        latest_execution_rows = (
+            db.query(
+                ScheduleExecution.schedule_id.label("schedule_id"),
+                ScheduleExecution.status.label("status"),
+                ScheduleExecution.started_at.label("started_at"),
+                ScheduleExecution.completed_at.label("completed_at"),
+                ScheduleExecution.jobs_scraped.label("jobs_scraped"),
+                ScheduleExecution.jobs_saved.label("jobs_saved"),
+                func.row_number().over(
+                    partition_by=ScheduleExecution.schedule_id,
+                    order_by=(
+                        ScheduleExecution.started_at.desc(),
+                        ScheduleExecution.created_at.desc(),
+                    ),
+                ).label("row_number"),
+            )
+            .filter(ScheduleExecution.schedule_id.in_(schedule_ids))
+            .subquery()
+        )
+
+        latest_execution_by_schedule_id = {
+            row.schedule_id: row
+            for row in (
+                db.query(latest_execution_rows)
+                .filter(latest_execution_rows.c.row_number == 1)
+                .all()
+            )
+        }
+
+        for schedule in schedules:
+            latest_execution = latest_execution_by_schedule_id.get(schedule.id)
+            setattr(schedule, "latest_execution_status", getattr(latest_execution, "status", None))
+            setattr(schedule, "latest_execution_started_at", getattr(latest_execution, "started_at", None))
+            setattr(schedule, "latest_execution_completed_at", getattr(latest_execution, "completed_at", None))
+            setattr(schedule, "latest_execution_jobs_scraped", getattr(latest_execution, "jobs_scraped", None))
+            setattr(schedule, "latest_execution_jobs_saved", getattr(latest_execution, "jobs_saved", None))
 
     def count_executions(self, db: Session, schedule_id: UUID) -> int:
         """Count total execution history rows for a schedule."""

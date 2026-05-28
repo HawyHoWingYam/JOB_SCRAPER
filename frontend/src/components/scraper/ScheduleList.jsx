@@ -14,6 +14,29 @@ function formatSourceLabel(sourceSite) {
     return sourceSite === 'ctgoodjobs' ? 'CTgoodjobs' : 'JobsDB';
 }
 
+function formatExecutionStatus(status) {
+    switch (status) {
+        case 'completed':
+            return 'Completed';
+        case 'completed_with_ai_failures':
+            return 'Completed With AI Failures';
+        case 'failed':
+            return 'Failed';
+        case 'running':
+            return 'Running';
+        case 'pending':
+            return 'Pending';
+        default:
+            return null;
+    }
+}
+
+function formatLatestExecutionVolume(schedule) {
+    const scraped = Number(schedule.latest_execution_jobs_scraped || 0).toLocaleString();
+    const ingested = Number(schedule.latest_execution_jobs_saved || 0).toLocaleString();
+    return `${scraped} scraped / ${ingested} ingested`;
+}
+
 function buildCategorySummary(schedule, categories = []) {
     const categoryIds = Array.isArray(schedule.category_ids) ? schedule.category_ids.map((id) => `${id}`) : [];
     if (categoryIds.length === 0) {
@@ -163,6 +186,7 @@ function ScheduleCard({
     const stateLabel = isActive ? 'Active' : 'Paused';
     const lastRunHint = formatRelativeTimeHint(schedule.last_run_at);
     const nextRunHint = formatRelativeTimeHint(schedule.next_run_at, { future: true });
+    const latestExecutionStatus = formatExecutionStatus(schedule.latest_execution_status);
 
     return (
         <div className={`schedule-card glass-panel ${isActive ? 'active-glow' : ''}`}>
@@ -242,6 +266,14 @@ function ScheduleCard({
                         </div>
                     </div>
                 </div>
+
+                {latestExecutionStatus && (
+                    <div className="schedule-execution-summary">
+                        <span className="label">Last outcome</span>
+                        <strong>{latestExecutionStatus}</strong>
+                        <span>{formatLatestExecutionVolume(schedule)}</span>
+                    </div>
+                )}
             </div>
 
             <div className="schedule-card-actions">
