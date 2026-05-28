@@ -91,6 +91,9 @@ function CompaniesPage() {
   });
   const mountedRef = useRef(true);
   const wasPageVisibleRef = useRef(typeof document === 'undefined' ? true : !document.hidden);
+  const currentRunIdRef = useRef(null);
+  const runRefreshInFlightRef = useRef(null);
+  const runRefreshQueuedRef = useRef(false);
 
   const selectedCompany = companies.find((company) => company.id === selectedCompanyId) || null;
 
@@ -100,6 +103,10 @@ function CompaniesPage() {
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    currentRunIdRef.current = currentRun?.id || null;
+  }, [currentRun]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -122,6 +129,52 @@ function CompaniesPage() {
       throw new Error('Failed to refresh company enrichment run');
     }
     return response.json();
+  };
+
+  const refreshCurrentRun = async ({ runId = null, queueAfterInFlight = false } = {}) => {
+    const targetRunId = runId || currentRunIdRef.current;
+    if (!targetRunId) {
+      return null;
+    }
+
+    if (runRefreshInFlightRef.current) {
+      if (queueAfterInFlight) {
+        runRefreshQueuedRef.current = true;
+      }
+      return runRefreshInFlightRef.current;
+    }
+
+    const refreshPromise = (async () => {
+      const payload = await fetchRunById(targetRunId);
+      if (!mountedRef.current) {
+        return payload;
+      }
+
+      setCurrentRun(payload);
+      setRefreshError(null);
+
+      if (isTerminalRun(payload)) {
+        setActionMessage(formatRunCompletionMessage(payload));
+        await loadCompanies({
+          query: appliedQuery,
+          status: statusFilter,
+          pageNumber: page,
+          preserveMessage: true,
+        });
+      }
+
+      return payload;
+    })();
+
+    runRefreshInFlightRef.current = refreshPromise.finally(() => {
+      runRefreshInFlightRef.current = null;
+      if (runRefreshQueuedRef.current && mountedRef.current) {
+        runRefreshQueuedRef.current = false;
+        refreshCurrentRun({ runId: currentRunIdRef.current });
+      }
+    });
+
+    return runRefreshInFlightRef.current;
   };
 
   const loadCompanies = async ({
@@ -217,23 +270,13 @@ function CompaniesPage() {
       let shouldContinuePolling = true;
 
       try {
-        const payload = await fetchRunById(currentRun.id);
+        const payload = await refreshCurrentRun({ runId: currentRun.id });
         if (cancelled) {
           return;
         }
 
-        setCurrentRun(payload);
-        setRefreshError(null);
-
         if (isTerminalRun(payload)) {
           shouldContinuePolling = false;
-          setActionMessage(formatRunCompletionMessage(payload));
-          await loadCompanies({
-            query: appliedQuery,
-            status: statusFilter,
-            pageNumber: page,
-            preserveMessage: true,
-          });
           return;
         }
       } catch (err) {
@@ -269,22 +312,12 @@ function CompaniesPage() {
 
     const refreshNow = async () => {
       try {
-        const payload = await fetchRunById(currentRun.id);
+        const payload = await refreshCurrentRun({
+          runId: currentRun.id,
+          queueAfterInFlight: true,
+        });
         if (cancelled || !mountedRef.current) {
           return;
-        }
-
-        setCurrentRun(payload);
-        setRefreshError(null);
-
-        if (isTerminalRun(payload)) {
-          setActionMessage(formatRunCompletionMessage(payload));
-          await loadCompanies({
-            query: appliedQuery,
-            status: statusFilter,
-            pageNumber: page,
-            preserveMessage: true,
-          });
         }
       } catch (err) {
         if (!cancelled && mountedRef.current) {
@@ -337,19 +370,9 @@ function CompaniesPage() {
       setActionMessage('Global backlog run started.');
       if (isActiveRun(runPayload)) {
         try {
-          const refreshedRun = await fetchRunById(runPayload.id);
+          const refreshedRun = await refreshCurrentRun({ runId: runPayload.id });
           if (!mountedRef.current) {
             return;
-          }
-          setCurrentRun(refreshedRun);
-          if (isTerminalRun(refreshedRun)) {
-            setActionMessage(formatRunCompletionMessage(refreshedRun));
-            await loadCompanies({
-              query: appliedQuery,
-              status: statusFilter,
-              pageNumber: page,
-              preserveMessage: true,
-            });
           }
         } catch (_err) {
           // The polling loop will retry shortly; keep the optimistic run state.

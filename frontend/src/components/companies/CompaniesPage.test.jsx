@@ -11,6 +11,16 @@ function mockJsonResponse(payload) {
   });
 }
 
+function mockDelayedJsonResponse(payload, delayMs) {
+  return Promise.resolve({
+    ok: true,
+    json: () =>
+      new Promise((resolve) => {
+        setTimeout(() => resolve(payload), delayMs);
+      }),
+  });
+}
+
 function buildCompaniesPayload(items, page = 1, total = items.length, pageSize = 25) {
   const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
   return {
@@ -512,5 +522,96 @@ describe('CompaniesPage', () => {
 
     expect(runPollCalls).toBe(baselineCalls + 2);
     expect(screen.getByText(/current company: cyan retail/i)).toBeInTheDocument();
+  }, 10000);
+
+  it('does not start a second company run refresh while the visibility-resume refresh is still in flight', async () => {
+    let runPollCalls = 0;
+    let isHidden = false;
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => isHidden);
+
+    currentRunResponses = [
+      {
+        id: 'run-current',
+        status: 'running',
+        total_items: 3,
+        pending_items: 2,
+        completed_items: 1,
+        failed_items: 0,
+        current_company_name: 'Acme Health',
+        error_message: null,
+        started_at: '2026-04-19T10:00:00Z',
+        completed_at: null,
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = new URL(String(input), 'http://localhost');
+
+      if (url.pathname === '/api/v1/companies' && (!init.method || init.method === 'GET')) {
+        const key = [
+          `status=${url.searchParams.get('status') || ''}`,
+          `q=${url.searchParams.get('q') || ''}`,
+          `page=${url.searchParams.get('page') || ''}`,
+          `page_size=${url.searchParams.get('page_size') || ''}`,
+        ].join('&');
+        return mockJsonResponse(companyPages[key]);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
+        return mockJsonResponse(currentRunResponses[0]);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/run-current' && (!init.method || init.method === 'GET')) {
+        runPollCalls += 1;
+        return mockDelayedJsonResponse({
+          id: 'run-current',
+          status: 'running',
+          total_items: 3,
+          pending_items: 1,
+          completed_items: 2,
+          failed_items: 0,
+          current_company_name: 'Beta Logistics',
+          error_message: null,
+          started_at: '2026-04-19T10:00:00Z',
+          completed_at: null,
+          created_at: '2026-04-19T10:00:00Z',
+        }, 3000);
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
+    });
+
+    vi.useFakeTimers();
+    render(<CompaniesPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    isHidden = true;
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    isHidden = false;
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(runPollCalls).toBe(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(runPollCalls).toBe(1);
   }, 10000);
 });
