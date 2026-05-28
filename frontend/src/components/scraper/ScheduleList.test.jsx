@@ -138,4 +138,38 @@ describe('ScheduleList', () => {
     expect(within(cards[1]).getAllByText('Paused').length).toBeGreaterThanOrEqual(2);
     expect(within(cards[1]).getByText('Never')).toBeInTheDocument();
   });
+
+  it('shows relative run timing hints for schedules with real timestamps', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-28T00:00:00Z').getTime());
+
+    render(
+      <ScheduleList
+        currentSourceSite="jobsdb"
+        schedules={[
+          {
+            id: 'active-timing',
+            name: 'Timing Focus',
+            cron_expression: '0 2 * * *',
+            category_ids: [1200],
+            source_site: 'jobsdb',
+            crawl_phase: 'listing',
+            crawl_mode: 'headed',
+            is_active: true,
+            last_run_at: '2026-05-27T18:00:00Z',
+            next_run_at: '2026-05-28T12:00:00Z',
+          },
+        ]}
+        onToggle={vi.fn()}
+        onDelete={vi.fn()}
+        onRun={vi.fn()}
+        onViewHistory={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    const card = screen.getByRole('heading', { level: 4, name: 'Timing Focus' }).closest('.schedule-card');
+    expect(card).not.toBeNull();
+    expect(within(card).getByText('6h ago')).toBeInTheDocument();
+    expect(within(card).getByText('In 12h')).toBeInTheDocument();
+  });
 });

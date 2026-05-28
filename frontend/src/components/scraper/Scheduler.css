@@ -539,6 +539,12 @@ input:checked + .cyber-slider::before {
     color: var(--color-primary-hover);
 }
 
+.info-content .subvalue {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    font-weight: 600;
+}
+
 .schedule-card-actions {
     display: flex;
     gap: var(--space-2);

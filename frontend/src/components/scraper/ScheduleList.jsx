@@ -46,6 +46,40 @@ function parseTimestamp(value) {
     return Number.isNaN(parsed) ? null : parsed;
 }
 
+function formatRelativeTimeHint(value, { future = false } = {}) {
+    const timestamp = parseTimestamp(value);
+    if (timestamp === null) {
+        return null;
+    }
+
+    const deltaMs = timestamp - Date.now();
+    const absMs = Math.abs(deltaMs);
+
+    if (future) {
+        if (deltaMs <= 0) {
+            return 'Overdue';
+        }
+        if (absMs < 60_000) {
+            return 'Due soon';
+        }
+    } else if (absMs < 60_000) {
+        return 'Just now';
+    }
+
+    const minutes = Math.round(absMs / 60_000);
+    if (minutes < 60) {
+        return future ? `In ${minutes}m` : `${minutes}m ago`;
+    }
+
+    const hours = Math.round(absMs / 3_600_000);
+    if (hours < 24) {
+        return future ? `In ${hours}h` : `${hours}h ago`;
+    }
+
+    const days = Math.round(absMs / 86_400_000);
+    return future ? `In ${days}d` : `${days}d ago`;
+}
+
 function sortSchedulesForDisplay(schedules) {
     return [...schedules].sort((left, right) => {
         const leftActiveRank = left.is_active ? 0 : 1;
@@ -104,6 +138,8 @@ function ScheduleCard({
     const crawlPhaseLabel = formatCrawlPhaseLabel(schedule.crawl_phase);
     const crawlModeLabel = formatCrawlModeLabel(schedule.crawl_mode);
     const stateLabel = isActive ? 'Active' : 'Paused';
+    const lastRunHint = formatRelativeTimeHint(schedule.last_run_at);
+    const nextRunHint = formatRelativeTimeHint(schedule.next_run_at, { future: true });
 
     return (
         <div className={`schedule-card glass-panel ${isActive ? 'active-glow' : ''}`}>
@@ -170,6 +206,7 @@ function ScheduleCard({
                         <div className="info-content">
                             <span className="label">Last Run</span>
                             <span className="value">{formatLastRunValue(schedule.last_run_at)}</span>
+                            {lastRunHint && <span className="subvalue">{lastRunHint}</span>}
                         </div>
                     </div>
 
@@ -178,6 +215,7 @@ function ScheduleCard({
                         <div className="info-content">
                             <span className="label">Next Run</span>
                             <span className="value">{formatNextRunValue(schedule)}</span>
+                            {nextRunHint && <span className="subvalue">{nextRunHint}</span>}
                         </div>
                     </div>
                 </div>
