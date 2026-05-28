@@ -462,59 +462,56 @@ class EnrichmentRunService:
 
     def list_runs_for_monitor(self) -> List[EnrichmentRun]:
         """Return the compact run slice needed by the two-card monitor."""
-        ordered_runs = self.db.query(EnrichmentRun).order_by(
-            EnrichmentRun.created_at.desc(),
-            EnrichmentRun.id.desc(),
-        )
-        newest_active_run = (
-            ordered_runs
-            .filter(EnrichmentRun.status.in_(ACTIVE_RUN_STATUSES))
-            .first()
-        )
-        if newest_active_run is not None:
-            previous_run = (
-                self.db.query(EnrichmentRun)
-                .filter(
-                    or_(
-                        EnrichmentRun.created_at > newest_active_run.created_at,
-                        and_(
-                            EnrichmentRun.created_at == newest_active_run.created_at,
-                            EnrichmentRun.id > newest_active_run.id,
-                        ),
+        ordered_runs = (
+            self.db.query(
+                EnrichmentRun.id.label("run_id"),
+                func.row_number().over(
+                    order_by=(
+                        EnrichmentRun.created_at.desc(),
+                        EnrichmentRun.id.desc(),
                     )
-                )
-                .order_by(
-                    EnrichmentRun.created_at.asc(),
-                    EnrichmentRun.id.asc(),
-                )
-                .first()
+                ).label("overall_pos"),
+                case(
+                    (EnrichmentRun.status.in_(ACTIVE_RUN_STATUSES), 1),
+                    else_=0,
+                ).label("is_active"),
             )
-            if previous_run is not None:
-                return [previous_run, newest_active_run]
+            .subquery()
+        )
+        ranked_runs = (
+            self.db.query(
+                ordered_runs.c.run_id,
+                ordered_runs.c.overall_pos,
+                func.min(
+                    case(
+                        (ordered_runs.c.is_active == 1, ordered_runs.c.overall_pos),
+                        else_=None,
+                    )
+                ).over().label("active_pos"),
+            )
+            .subquery()
+        )
 
-            next_run = (
-                self.db.query(EnrichmentRun)
-                .filter(
-                    or_(
-                        EnrichmentRun.created_at < newest_active_run.created_at,
-                        and_(
-                            EnrichmentRun.created_at == newest_active_run.created_at,
-                            EnrichmentRun.id < newest_active_run.id,
-                        ),
-                    )
-                )
-                .order_by(
-                    EnrichmentRun.created_at.desc(),
-                    EnrichmentRun.id.desc(),
-                )
-                .first()
-            )
-            return [newest_active_run] + ([next_run] if next_run is not None else [])
+        active_pos = ranked_runs.c.active_pos
+        overall_pos = ranked_runs.c.overall_pos
 
         return (
-            ordered_runs
-            .filter(EnrichmentRun.status.notin_(ACTIVE_RUN_STATUSES))
-            .limit(2)
+            self.db.query(EnrichmentRun)
+            .join(ranked_runs, ranked_runs.c.run_id == EnrichmentRun.id)
+            .filter(
+                or_(
+                    and_(active_pos.is_(None), overall_pos <= 2),
+                    and_(active_pos == 1, overall_pos <= 2),
+                    and_(
+                        active_pos > 1,
+                        or_(
+                            overall_pos == active_pos - 1,
+                            overall_pos == active_pos,
+                        ),
+                    ),
+                )
+            )
+            .order_by(overall_pos.asc())
             .all()
         )
 
