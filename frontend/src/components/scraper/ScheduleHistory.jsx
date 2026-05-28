@@ -24,6 +24,7 @@ function formatExecutionVolume(exec) {
 function getStatusClass(status) {
     switch (status) {
         case 'completed': return 'status-success';
+        case 'completed_with_ai_failures': return 'status-warning';
         case 'failed': return 'status-error';
         case 'running': return 'status-running';
         default: return 'status-pending';
@@ -33,6 +34,7 @@ function getStatusClass(status) {
 function getStatusText(status) {
     switch (status) {
         case 'completed': return 'Completed';
+        case 'completed_with_ai_failures': return 'Completed With AI Failures';
         case 'failed': return 'Failed';
         case 'running': return 'Running';
         default: return 'Pending';

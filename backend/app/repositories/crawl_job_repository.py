@@ -370,15 +370,18 @@ class CrawlJobRepository:
         items_emitted = self._metric_as_int(metrics.get("items_emitted"))
         ingest_items_seen = self._metric_as_int(metrics.get("ingest_items_seen"))
         ids_collected = self._metric_as_int(metrics.get("job_ids_collected"))
+        jobs_classified = self._metric_as_int(metrics.get("jobs_classified"))
         ai_completed_items = self._metric_as_int(metrics.get("ai_completed_items"))
         ai_failed_items = self._metric_as_int(metrics.get("ai_failed_items"))
         ai_total_items = self._metric_as_int(metrics.get("ai_total_items"))
+        ai_run_id = metrics.get("ai_run_id")
         pages_processed = self._metric_as_int(metrics.get("pages_processed"))
 
         execution.started_at = crawl_job.started_at or execution.started_at
         execution.ids_collected = ids_collected
         execution.jobs_scraped = items_emitted
         execution.jobs_saved = ingest_items_seen
+        execution.jobs_classified = jobs_classified
 
         current_page = self._metric_as_int(payload.get("current_page"))
         total_pages = self._metric_as_int(payload.get("total_pages"))
@@ -417,7 +420,26 @@ class CrawlJobRepository:
             execution.error_message = None
             return
 
+        if (
+            crawl_job.status == "completed"
+            and ai_run_id
+            and ai_total_items > 0
+            and (ai_completed_items + ai_failed_items) < ai_total_items
+        ):
+            execution.status = "running"
+            execution.completed_at = None
+            execution.duration_seconds = None
+            execution.error_message = None
+            return
+
         terminal_status = "failed" if crawl_job.status == "cancelled" else crawl_job.status
+        if (
+            terminal_status == "completed"
+            and ai_failed_items > 0
+            and ai_total_items > 0
+            and (ai_completed_items + ai_failed_items) >= ai_total_items
+        ):
+            terminal_status = "completed_with_ai_failures"
         execution.status = terminal_status
         execution.error_message = crawl_job.error_message if terminal_status == "failed" else None
         execution.completed_at = crawl_job.completed_at or execution.completed_at or utc_now()

@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
+from app.models.schedule import ScheduleExecution, ScrapeSchedule
 from app.repositories.crawl_job_repository import CrawlJobRepository
 
 
@@ -15,6 +16,8 @@ def _build_session_factory():
     Base.metadata.create_all(
         engine,
         tables=[
+            ScrapeSchedule.__table__,
+            ScheduleExecution.__table__,
             CrawlJob.__table__,
             CrawlJobEvent.__table__,
         ],
@@ -440,4 +443,132 @@ def test_list_crawl_jobs_by_statuses_can_apply_limit_in_recency_order():
 
     assert [job.id for job in jobs] == [newest.id, middle.id]
 
+    db.close()
+
+
+def test_merge_metrics_keeps_linked_schedule_execution_running_while_ai_run_is_incomplete():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    repository = CrawlJobRepository()
+
+    schedule = ScrapeSchedule(
+        name="JobsDB Nightly",
+        cron_expression="0 2 * * *",
+        source_site="jobsdb",
+        crawl_phase="listing",
+        crawl_mode="headed",
+        category_ids=[1200],
+        is_active=True,
+    )
+    db.add(schedule)
+    db.commit()
+    db.refresh(schedule)
+
+    crawl_job = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="schedule",
+        schedule_id=schedule.id,
+        status="completed",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        requested_by="tester",
+        queued_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        started_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 5, 27, 9, 1, tzinfo=UTC),
+        metrics={"items_emitted": 4, "ingest_items_seen": 4},
+    )
+    db.add(crawl_job)
+    db.commit()
+    db.refresh(crawl_job)
+
+    execution = ScheduleExecution(
+        schedule_id=schedule.id,
+        crawl_job_id=crawl_job.id,
+        status="completed",
+        started_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 5, 27, 9, 1, tzinfo=UTC),
+    )
+    db.add(execution)
+    db.commit()
+
+    repository.merge_metrics(
+        db,
+        crawl_job_id=crawl_job.id,
+        metrics_patch={
+            "ai_run_id": "run-456",
+            "ai_total_items": 4,
+            "ai_completed_items": 1,
+            "ai_failed_items": 0,
+        },
+    )
+
+    refreshed_execution = db.query(ScheduleExecution).filter(ScheduleExecution.id == execution.id).one()
+
+    assert refreshed_execution.status == "running"
+    assert refreshed_execution.completed_at is None
+    assert refreshed_execution.duration_seconds is None
+    assert refreshed_execution.phase5_completed is False
+    db.close()
+
+
+def test_merge_metrics_marks_linked_schedule_execution_completed_with_ai_failures_when_ai_finishes_with_failures():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    repository = CrawlJobRepository()
+
+    schedule = ScrapeSchedule(
+        name="JobsDB Nightly",
+        cron_expression="0 2 * * *",
+        source_site="jobsdb",
+        crawl_phase="listing",
+        crawl_mode="headed",
+        category_ids=[1200],
+        is_active=True,
+    )
+    db.add(schedule)
+    db.commit()
+    db.refresh(schedule)
+
+    crawl_job = CrawlJob(
+        source_site="jobsdb",
+        trigger_type="schedule",
+        schedule_id=schedule.id,
+        status="completed",
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+        requested_by="tester",
+        queued_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        started_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 5, 27, 9, 1, tzinfo=UTC),
+        metrics={"items_emitted": 4, "ingest_items_seen": 4},
+    )
+    db.add(crawl_job)
+    db.commit()
+    db.refresh(crawl_job)
+
+    execution = ScheduleExecution(
+        schedule_id=schedule.id,
+        crawl_job_id=crawl_job.id,
+        status="running",
+        started_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        completed_at=None,
+    )
+    db.add(execution)
+    db.commit()
+
+    repository.merge_metrics(
+        db,
+        crawl_job_id=crawl_job.id,
+        metrics_patch={
+            "ai_run_id": "run-456",
+            "ai_total_items": 4,
+            "ai_completed_items": 3,
+            "ai_failed_items": 1,
+        },
+    )
+
+    refreshed_execution = db.query(ScheduleExecution).filter(ScheduleExecution.id == execution.id).one()
+
+    assert refreshed_execution.status == "completed_with_ai_failures"
+    assert refreshed_execution.completed_at is not None
+    assert refreshed_execution.duration_seconds is not None
+    assert refreshed_execution.phase5_completed is True
     db.close()

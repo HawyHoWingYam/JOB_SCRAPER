@@ -145,4 +145,38 @@ describe('ScheduleHistory', () => {
     expect(screen.getByText(/collect ids -> fetch details -> ai classify -> persist data -> ai enrich/i)).toBeInTheDocument();
     expect(screen.getByText('52 / 42 / 39 / 40')).toBeInTheDocument();
   });
+
+  it('renders completed_with_ai_failures as a distinct execution status', () => {
+    render(
+      <ScheduleHistory
+        scheduleName="JobsDB Nightly"
+        onClose={vi.fn()}
+        executions={[
+          {
+            id: 'execution-4',
+            schedule_id: 'schedule-1',
+            crawl_job_id: 'crawl-job-999',
+            status: 'completed_with_ai_failures',
+            started_at: '2026-05-22T01:00:00Z',
+            completed_at: '2026-05-22T01:05:00Z',
+            duration_seconds: 300,
+            jobs_scraped: 42,
+            jobs_saved: 40,
+            phase1_completed: true,
+            phase2_completed: true,
+            phase3_completed: false,
+            phase4_completed: true,
+            phase5_completed: true,
+            ids_collected: 52,
+            jobs_classified: 0,
+            error_message: null,
+            created_at: '2026-05-22T01:00:00Z',
+            request_payload_snapshot: {},
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(/completed with ai failures/i)).toBeInTheDocument();
+  });
 });
