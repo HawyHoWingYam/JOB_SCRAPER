@@ -530,6 +530,34 @@ class EnrichmentRunService:
             query = query.filter(EnrichmentRunItem.status == status)
         return query.all()
 
+    def list_run_items_or_none(
+        self,
+        run_id: str,
+        status: Optional[str] = None,
+    ) -> Optional[List[EnrichmentRunItem]]:
+        """List items for an existing run in one query, or return None when the run is missing."""
+        join_conditions = [EnrichmentRunItem.run_id == EnrichmentRun.id]
+        if status:
+            join_conditions.append(EnrichmentRunItem.status == status)
+
+        rows = (
+            self.db.query(
+                EnrichmentRun.id.label("run_id"),
+                EnrichmentRunItem,
+            )
+            .select_from(EnrichmentRun)
+            .outerjoin(EnrichmentRunItem, and_(*join_conditions))
+            .filter(EnrichmentRun.id == run_id)
+            .order_by(
+                EnrichmentRunItem.position.asc(),
+                EnrichmentRunItem.id.asc(),
+            )
+            .all()
+        )
+        if not rows:
+            return None
+        return [item for _, item in rows if item is not None]
+
     def mark_run_failed(self, run_id: str, error_message: str) -> Optional[EnrichmentRun]:
         """Persist a terminal failure state for a run when orchestration aborts."""
         run = self.get_run(run_id)
@@ -950,17 +978,32 @@ class EnrichmentRunService:
         self.db.commit()
         return run
 
-    def create_retry_run_from_failed_items(self, run_id: str) -> EnrichmentRun:
+    def create_retry_run_from_failed_items(self, run_id: str) -> Optional[EnrichmentRun]:
         """Create a new retry run from failed items in an earlier run."""
-        failed_items = (
-            self.db.query(EnrichmentRunItem)
-            .filter(
-                EnrichmentRunItem.run_id == run_id,
-                EnrichmentRunItem.status == "failed",
+        failed_item_rows = (
+            self.db.query(
+                EnrichmentRun.id.label("run_id"),
+                EnrichmentRunItem,
             )
-            .order_by(EnrichmentRunItem.position.asc())
+            .select_from(EnrichmentRun)
+            .outerjoin(
+                EnrichmentRunItem,
+                and_(
+                    EnrichmentRunItem.run_id == EnrichmentRun.id,
+                    EnrichmentRunItem.status == "failed",
+                ),
+            )
+            .filter(EnrichmentRun.id == run_id)
+            .order_by(
+                EnrichmentRunItem.position.asc(),
+                EnrichmentRunItem.id.asc(),
+            )
             .all()
         )
+        if not failed_item_rows:
+            return None
+
+        failed_items = [item for _, item in failed_item_rows if item is not None]
         if not failed_items:
             raise ValueError(f"Run {run_id} has no failed items to retry")
         return self._create_run(

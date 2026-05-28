@@ -334,9 +334,9 @@ async def get_enrichment_run_items(
 ):
     """Get items for a persisted enrichment run."""
     service = EnrichmentRunService(db)
-    if service.get_run(run_id) is None:
+    items = service.list_run_items_or_none(run_id, status=status)
+    if items is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    items = service.list_run_items(run_id, status=status)
     return {"items": [_serialize_item(item) for item in items]}
 
 
@@ -347,12 +347,12 @@ async def retry_failed_enrichment_run(
 ):
     """Create a retry run from the failed items of a previous run."""
     service = EnrichmentRunService(db)
-    if service.get_run(run_id) is None:
-        raise HTTPException(status_code=404, detail="Run not found")
     try:
         run = service.create_retry_run_from_failed_items(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
     _publish_run_request(db, service=service, run_id=run.id)
     db.refresh(run)
     return _serialize_run(run, db)

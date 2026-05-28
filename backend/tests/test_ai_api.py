@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
@@ -251,3 +253,57 @@ def test_list_enrichment_runs_batches_failed_title_lookup_for_failed_runs(monkey
     assert batch_calls == [["run-failed"]]
     assert payload["runs"][0]["last_failed_job_title"] == "Platform Analyst"
     assert payload["runs"][1]["last_failed_job_title"] is None
+
+
+def test_get_enrichment_run_items_returns_404_when_run_helper_reports_missing_run(monkeypatch):
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def list_run_items_or_none(self, run_id, status=None):
+            assert run_id == "run-missing"
+            assert status is None
+            return None
+
+    monkeypatch.setattr(ai, "EnrichmentRunService", _FakeService)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(ai.get_enrichment_run_items("run-missing", db=object()))
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Run not found"
+
+
+def test_retry_failed_enrichment_run_returns_404_when_service_reports_missing_run(monkeypatch):
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def create_retry_run_from_failed_items(self, run_id):
+            assert run_id == "run-missing"
+            return None
+
+    monkeypatch.setattr(ai, "EnrichmentRunService", _FakeService)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(ai.retry_failed_enrichment_run("run-missing", db=object()))
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Run not found"
+
+
+def test_retry_failed_enrichment_run_returns_400_when_run_has_no_failed_items(monkeypatch):
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def create_retry_run_from_failed_items(self, run_id):
+            raise ValueError(f"Run {run_id} has no failed items to retry")
+
+    monkeypatch.setattr(ai, "EnrichmentRunService", _FakeService)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(ai.retry_failed_enrichment_run("run-no-failed", db=object()))
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Run run-no-failed has no failed items to retry"

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from uuid import uuid4
 
+import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
-from app.models.enrichment_run import EnrichmentRun
+from app.models.company import Company
+from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
+from app.models.job import Job
 from app.services.enrichment_run_service import EnrichmentRunService
 
 
@@ -42,6 +47,63 @@ class _FakeDB:
         if not self._queries:
             raise AssertionError("Unexpected query call")
         return self._queries.pop(0)
+
+
+def _create_enrichment_run_service_db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Company.__table__,
+            Job.__table__,
+            EnrichmentRun.__table__,
+            EnrichmentRunItem.__table__,
+        ],
+    )
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = session_factory()
+
+    company_id = uuid4()
+    db.add(
+        Company(
+            id=company_id,
+            company_id="company-1",
+            source_site="jobsdb",
+            source_company_id="company-1",
+            name="Example Co",
+        )
+    )
+    job_ids = [uuid4(), uuid4(), uuid4()]
+    db.add_all(
+        [
+            Job(
+                id=job_ids[0],
+                job_id="job-1",
+                source_site="jobsdb",
+                source_job_id="job-1",
+                company_id=company_id,
+                title="Job 1",
+            ),
+            Job(
+                id=job_ids[1],
+                job_id="job-2",
+                source_site="jobsdb",
+                source_job_id="job-2",
+                company_id=company_id,
+                title="Job 2",
+            ),
+            Job(
+                id=job_ids[2],
+                job_id="job-3",
+                source_site="jobsdb",
+                source_job_id="job-3",
+                company_id=company_id,
+                title="Job 3",
+            ),
+        ]
+    )
+    db.commit()
+    return engine, db, job_ids
 
 
 def test_get_overview_skips_failed_job_scan_when_failed_item_count_is_zero(monkeypatch):
@@ -179,3 +241,164 @@ def test_list_runs_for_monitor_selects_active_pair_with_single_select():
 
     assert [run.id for run in runs] == ["run-failed-visible", "run-active-newest"]
     assert len(select_statements) == 1
+
+
+def test_list_run_items_or_none_distinguishes_missing_empty_and_filtered_runs_with_single_select():
+    engine, db, job_ids = _create_enrichment_run_service_db()
+    db.add_all(
+        [
+            EnrichmentRun(
+                id="run-empty",
+                source_type="manual_pending",
+                status="completed",
+                job_ids=[],
+                total_items=0,
+                pending_items=0,
+                completed_items=0,
+                failed_items=0,
+                created_at=datetime(2026, 5, 28, 10, 0, tzinfo=UTC),
+            ),
+            EnrichmentRun(
+                id="run-with-items",
+                source_type="manual_pending",
+                status="completed_with_failures",
+                job_ids=[],
+                total_items=2,
+                pending_items=0,
+                completed_items=1,
+                failed_items=1,
+                created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            EnrichmentRunItem(
+                id="item-completed",
+                run_id="run-with-items",
+                job_id=job_ids[0],
+                position=0,
+                status="completed",
+                created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+            ),
+            EnrichmentRunItem(
+                id="item-failed",
+                run_id="run-with-items",
+                job_id=job_ids[1],
+                position=1,
+                status="failed",
+                created_at=datetime(2026, 5, 28, 9, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.commit()
+
+    select_statements = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _count_selects(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            select_statements.append(statement)
+
+    try:
+        service = EnrichmentRunService(db)
+        missing_items = service.list_run_items_or_none("run-missing")
+        empty_items = service.list_run_items_or_none("run-empty")
+        failed_items = service.list_run_items_or_none("run-with-items", status="failed")
+    finally:
+        event.remove(engine, "before_cursor_execute", _count_selects)
+        db.close()
+
+    assert missing_items is None
+    assert empty_items == []
+    assert [item.id for item in failed_items] == ["item-failed"]
+    assert len(select_statements) == 3
+
+
+def test_create_retry_run_from_failed_items_preserves_404_and_400_semantics_with_single_select():
+    engine, db, job_ids = _create_enrichment_run_service_db()
+    db.add_all(
+        [
+            EnrichmentRun(
+                id="run-no-failed",
+                source_type="manual_pending",
+                status="completed",
+                job_ids=[],
+                total_items=1,
+                pending_items=0,
+                completed_items=1,
+                failed_items=0,
+                created_at=datetime(2026, 5, 28, 10, 0, tzinfo=UTC),
+            ),
+            EnrichmentRun(
+                id="run-with-failed",
+                source_type="manual_pending",
+                status="completed_with_failures",
+                job_ids=[],
+                total_items=2,
+                pending_items=0,
+                completed_items=1,
+                failed_items=1,
+                created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            EnrichmentRunItem(
+                id="item-success",
+                run_id="run-no-failed",
+                job_id=job_ids[0],
+                position=0,
+                status="completed",
+                created_at=datetime(2026, 5, 28, 10, 0, tzinfo=UTC),
+            ),
+            EnrichmentRunItem(
+                id="item-run-with-failed-success",
+                run_id="run-with-failed",
+                job_id=job_ids[1],
+                position=0,
+                status="completed",
+                created_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+            ),
+            EnrichmentRunItem(
+                id="item-run-with-failed-failed",
+                run_id="run-with-failed",
+                job_id=job_ids[2],
+                position=1,
+                status="failed",
+                created_at=datetime(2026, 5, 28, 9, 1, tzinfo=UTC),
+            ),
+        ]
+    )
+    db.commit()
+
+    created_runs = []
+    select_statements = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _count_selects(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            select_statements.append(statement)
+
+    try:
+        service = EnrichmentRunService(db)
+
+        def _capture_create_run(*, source_type, job_ids):
+            created_runs.append((source_type, list(job_ids)))
+            return SimpleNamespace(id="retry-run")
+
+        service._create_run = _capture_create_run
+
+        missing_run = service.create_retry_run_from_failed_items("run-missing")
+        with pytest.raises(ValueError, match="Run run-no-failed has no failed items to retry"):
+            service.create_retry_run_from_failed_items("run-no-failed")
+        created_run = service.create_retry_run_from_failed_items("run-with-failed")
+    finally:
+        event.remove(engine, "before_cursor_execute", _count_selects)
+        db.close()
+
+    assert missing_run is None
+    assert created_run.id == "retry-run"
+    assert created_runs == [("retry_failed", [str(job_ids[2])])]
+    assert len(select_statements) == 3
