@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import ScheduleList from './ScheduleList';
@@ -87,5 +87,55 @@ describe('ScheduleList', () => {
       'Gamma Paused',
       'Delta Paused',
     ]);
+  });
+
+  it('shows explicit run-state labels and timing placeholders instead of ambiguous dashes', () => {
+    render(
+      <ScheduleList
+        currentSourceSite="jobsdb"
+        schedules={[
+          {
+            id: 'active-never-run',
+            name: 'Fresh Active',
+            cron_expression: '0 2 * * *',
+            category_ids: [1200],
+            source_site: 'jobsdb',
+            crawl_phase: 'listing',
+            crawl_mode: 'headed',
+            is_active: true,
+            last_run_at: null,
+            next_run_at: null,
+          },
+          {
+            id: 'inactive-never-run',
+            name: 'Fresh Paused',
+            cron_expression: '0 2 * * *',
+            category_ids: [1200],
+            source_site: 'jobsdb',
+            crawl_phase: 'listing',
+            crawl_mode: 'headed',
+            is_active: false,
+            last_run_at: null,
+            next_run_at: null,
+          },
+        ]}
+        onToggle={vi.fn()}
+        onDelete={vi.fn()}
+        onRun={vi.fn()}
+        onViewHistory={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    const cards = screen.getAllByText(/fresh /i).map((node) => node.closest('.schedule-card'));
+    expect(cards[0]).not.toBeNull();
+    expect(cards[1]).not.toBeNull();
+
+    expect(within(cards[0]).getByText('Active')).toBeInTheDocument();
+    expect(within(cards[0]).getByText('Never')).toBeInTheDocument();
+    expect(within(cards[0]).getByText('Pending scheduler')).toBeInTheDocument();
+
+    expect(within(cards[1]).getAllByText('Paused').length).toBeGreaterThanOrEqual(2);
+    expect(within(cards[1]).getByText('Never')).toBeInTheDocument();
   });
 });

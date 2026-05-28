@@ -25,6 +25,18 @@ function formatDate(dateString) {
     });
 }
 
+function formatLastRunValue(dateString) {
+    return dateString ? formatDate(dateString) : 'Never';
+}
+
+function formatNextRunValue(schedule) {
+    if (schedule.next_run_at) {
+        return formatDate(schedule.next_run_at);
+    }
+
+    return schedule.is_active ? 'Pending scheduler' : 'Paused';
+}
+
 function parseTimestamp(value) {
     if (!value) {
         return null;
@@ -91,6 +103,7 @@ function ScheduleCard({
     const sourceLabel = formatSourceLabel(schedule.source_site || 'jobsdb');
     const crawlPhaseLabel = formatCrawlPhaseLabel(schedule.crawl_phase);
     const crawlModeLabel = formatCrawlModeLabel(schedule.crawl_mode);
+    const stateLabel = isActive ? 'Active' : 'Paused';
 
     return (
         <div className={`schedule-card glass-panel ${isActive ? 'active-glow' : ''}`}>
@@ -103,6 +116,9 @@ function ScheduleCard({
                     )}
                     <h4>{schedule.name}</h4>
                     <span className="schedule-source-badge">{sourceLabel}</span>
+                    <span className={`schedule-state-badge ${isActive ? 'schedule-state-active' : 'schedule-state-paused'}`}>
+                        {stateLabel}
+                    </span>
                 </div>
                 <label className="cyber-switch">
                     <input
@@ -153,7 +169,7 @@ function ScheduleCard({
                         <Calendar size={16} className="info-icon" />
                         <div className="info-content">
                             <span className="label">Last Run</span>
-                            <span className="value">{formatDate(schedule.last_run_at)}</span>
+                            <span className="value">{formatLastRunValue(schedule.last_run_at)}</span>
                         </div>
                     </div>
 
@@ -161,7 +177,7 @@ function ScheduleCard({
                         <Play size={16} className="info-icon" />
                         <div className="info-content">
                             <span className="label">Next Run</span>
-                            <span className="value">{formatDate(schedule.next_run_at)}</span>
+                            <span className="value">{formatNextRunValue(schedule)}</span>
                         </div>
                     </div>
                 </div>
