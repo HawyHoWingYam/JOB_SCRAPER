@@ -287,6 +287,38 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
+  it('derives completed_with_ai_failures from completed ai payloads with failed items', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          design: {
+            status: 'completed',
+            category_name: 'Design',
+            phase: 5,
+            jobs_scraped: 4,
+            ai_run_id: 'run-456',
+            ai_completed_items: 3,
+            ai_failed_items: 1,
+            ai_total_items: 4,
+            completed_at: '2026-04-15T12:00:00Z',
+          },
+        },
+      });
+    });
+
+    expect(
+      await screen.findByText(/completed with ai failures/i, { selector: '.status-badge' })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/succeeded: 3/i)).toBeInTheDocument();
+    expect(screen.getByText(/failed: 1/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
   it('renders completed crawls with downstream backlog as a warning state', async () => {
     const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
 

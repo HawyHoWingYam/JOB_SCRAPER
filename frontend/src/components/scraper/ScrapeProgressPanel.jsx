@@ -358,6 +358,24 @@ function classifyProgressEntry(data) {
     return 'terminal';
 }
 
+function resolveEffectiveStatus(data) {
+    const baseStatus = data?.status || 'running';
+    if (
+        baseStatus === 'completed'
+        && Number(data?.ai_failed_items || 0) > 0
+        && (
+            data?.phase === 5
+            || data?.ai_run_id
+            || Number(data?.ai_completed_items || 0) > 0
+            || Number(data?.ai_total_items || 0) > 0
+        )
+    ) {
+        return 'completed_with_ai_failures';
+    }
+
+    return baseStatus;
+}
+
 function buildProgressSections(progressEntries) {
     const groupedEntries = {
         attention: [],
@@ -420,11 +438,13 @@ function buildProgressSections(progressEntries) {
 }
 
 function resolveDisplayState(data) {
-    if (data?.status === 'manual_action_required') {
+    const effectiveStatus = resolveEffectiveStatus(data);
+
+    if (effectiveStatus === 'manual_action_required') {
         return 'manual_action_required';
     }
 
-    if (data?.status === 'failed') {
+    if (effectiveStatus === 'failed') {
         return 'failed';
     }
 
@@ -435,27 +455,27 @@ function resolveDisplayState(data) {
         data?.proxy_quarantined_total,
     ].some((value) => Number(value || 0) > 0);
 
-    if (data?.status === 'running' && proxyWarningsPresent) {
+    if (effectiveStatus === 'running' && proxyWarningsPresent) {
         return 'running_with_warning';
     }
 
-    if (data?.status === 'running' || data?.status === 'ai_running' || data?.status === 'dispatching') {
+    if (effectiveStatus === 'running' || effectiveStatus === 'ai_running' || effectiveStatus === 'dispatching') {
         return 'running';
     }
 
-    if (data?.status === 'queued') {
+    if (effectiveStatus === 'queued') {
         return 'queued';
     }
 
-    if (data?.status === 'completed' || data?.status === 'completed_with_ai_failures') {
+    if (effectiveStatus === 'completed' || effectiveStatus === 'completed_with_ai_failures') {
         return 'completed';
     }
 
-    if (data?.status === 'cancelled') {
+    if (effectiveStatus === 'cancelled') {
         return 'cancelled';
     }
 
-    return data?.status || 'running';
+    return effectiveStatus;
 }
 
 function shouldExpandDiagnosticsByDefault(displayState) {
@@ -519,7 +539,9 @@ function resolveMetricScope(data) {
         return data.metric_scope;
     }
 
-    if (data?.status === 'manual_action_required') {
+    const effectiveStatus = resolveEffectiveStatus(data);
+
+    if (effectiveStatus === 'manual_action_required') {
         return 'manual_action';
     }
 
@@ -551,7 +573,7 @@ function resolveMetricScope(data) {
     if (data?.phase === 4) {
         return 'ingest_run';
     }
-    if (data?.phase === 5 || data?.status === 'ai_running' || data?.ai_run_id) {
+    if (data?.phase === 5 || effectiveStatus === 'ai_running' || data?.ai_run_id) {
         return 'ai_run';
     }
 
@@ -609,6 +631,7 @@ function ProgressItem({
     const [showFreshResumeWarning, setShowFreshResumeWarning] = useState(false);
     const [isReuseChecking, setIsReuseChecking] = useState(false);
     const [isResumeSubmitting, setIsResumeSubmitting] = useState(null);
+    const effectiveStatus = resolveEffectiveStatus(data);
     const displayState = resolveDisplayState(data);
     const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(
         shouldExpandDiagnosticsByDefault(displayState)
@@ -754,7 +777,7 @@ function ProgressItem({
         </div>
     );
 
-    if (status === 'manual_action_required' && manual_action) {
+    if (effectiveStatus === 'manual_action_required' && manual_action) {
         const instructions = Array.isArray(manual_action.instructions)
             ? manual_action.instructions.filter(Boolean)
             : [];
@@ -1152,7 +1175,7 @@ function ProgressItem({
     const isDetailRunScope = metricScope === 'detail_run';
     const detailTargetTotal = detail_target_rows || effectiveDetailTotal;
 
-    if (status === 'queued') {
+    if (effectiveStatus === 'queued') {
         statusText = 'Queued';
         detailLines.push('Awaiting crawl worker dispatch');
     } else if (isBacklogPoolScope) {
@@ -1210,7 +1233,7 @@ function ProgressItem({
     } else if (phase === 4) {
         statusText = 'Saving to DB';
         metricLines.push(`Ingested: ${formatMaybeCountPair(jobs_saved, save_total)}`);
-    } else if (phase === 5 || status === 'ai_running' || status === 'completed_with_ai_failures') {
+    } else if (phase === 5 || effectiveStatus === 'ai_running' || effectiveStatus === 'completed_with_ai_failures') {
         statusText = 'AI Enrichment';
         metricLines.push(`Items processed: ${formatCountPair(aiProcessedItems, aiTotalItems)}`);
         if (ai_failed_items > 0) {
@@ -1218,7 +1241,7 @@ function ProgressItem({
         }
     }
 
-    if (status === 'completed' && (phase === 5 || ai_run_id)) {
+    if (effectiveStatus === 'completed' && (phase === 5 || ai_run_id)) {
         statusText = 'Completed';
         statusClass = 'success';
         metricLines.length = 0;
@@ -1228,27 +1251,27 @@ function ProgressItem({
         } else {
             metricLines.push(`Items enriched: ${formatCount(ai_completed_items || aiTotalItems || jobs_scraped)}`);
         }
-    } else if (status === 'completed' && isDetailRunScope) {
+    } else if (effectiveStatus === 'completed' && isDetailRunScope) {
         statusText = 'Completed';
         statusClass = 'success';
-    } else if (status === 'completed' && !isBacklogPoolScope && !isDetailRunScope) {
+    } else if (effectiveStatus === 'completed' && !isBacklogPoolScope && !isDetailRunScope) {
         statusText = 'Completed';
         statusClass = 'success';
         metricLines.length = 0;
         metricLines.push(`Jobs scraped: ${formatCount(jobs_scraped)}`);
-    } else if (status === 'completed_with_ai_failures') {
+    } else if (effectiveStatus === 'completed_with_ai_failures') {
         statusText = 'Completed With AI Failures';
         statusClass = 'warning';
         metricLines.length = 0;
         metricLines.push(`Succeeded: ${formatCount(ai_completed_items)}`);
         metricLines.push(`Failed: ${formatCount(ai_failed_items)}`);
-    } else if (status === 'ai_running') {
+    } else if (effectiveStatus === 'ai_running') {
         statusText = 'AI Enrichment';
-    } else if (status === 'failed') {
+    } else if (effectiveStatus === 'failed') {
         statusText = 'Failed';
         statusClass = 'error';
         detailLines.push(error || 'Unknown error');
-    } else if (status === 'cancelled') {
+    } else if (effectiveStatus === 'cancelled') {
         statusText = 'Cancelled';
         statusClass = 'warning';
         detailLines.push(error || 'Cancelled');

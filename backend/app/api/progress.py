@@ -225,7 +225,25 @@ def _build_progress_snapshot(
             metrics.get("detail_run_manual_action_required", 0),
         )
     )
-    status = _derive_progress_status(crawl_job.status, jobs_scraped=jobs_scraped, jobs_saved=jobs_saved)
+    ai_run_id = event_payload.get("ai_run_id")
+    ai_completed_items = _to_int(
+        event_payload.get("ai_completed_items", metrics.get("ai_completed_items", 0))
+    )
+    ai_failed_items = _to_int(
+        event_payload.get("ai_failed_items", metrics.get("ai_failed_items", 0))
+    )
+    ai_total_items = _to_int(
+        event_payload.get("ai_total_items", metrics.get("ai_total_items", 0))
+    )
+    status = _derive_progress_status(
+        crawl_job.status,
+        jobs_scraped=jobs_scraped,
+        jobs_saved=jobs_saved,
+        ai_run_id=ai_run_id,
+        ai_completed_items=ai_completed_items,
+        ai_failed_items=ai_failed_items,
+        ai_total_items=ai_total_items,
+    )
     phase = _derive_progress_phase(
         crawl_job.status,
         jobs_scraped=jobs_scraped,
@@ -308,10 +326,10 @@ def _build_progress_snapshot(
             "classification_total",
             metrics.get("classification_total", 0),
         ),
-        "ai_run_id": event_payload.get("ai_run_id"),
-        "ai_completed_items": event_payload.get("ai_completed_items", metrics.get("ai_completed_items", 0)),
-        "ai_failed_items": event_payload.get("ai_failed_items", metrics.get("ai_failed_items", 0)),
-        "ai_total_items": event_payload.get("ai_total_items", metrics.get("ai_total_items", 0)),
+        "ai_run_id": ai_run_id,
+        "ai_completed_items": ai_completed_items,
+        "ai_failed_items": ai_failed_items,
+        "ai_total_items": ai_total_items,
         "manual_action": event_payload.get("manual_action"),
         "manual_action_resolution": event_payload.get("manual_action_resolution"),
         "error": crawl_job.error_message or event_payload.get("error"),
@@ -325,7 +343,22 @@ def _to_int(value: Any) -> int:
         return 0
 
 
-def _derive_progress_status(status: str, *, jobs_scraped: int, jobs_saved: int) -> str:
+def _derive_progress_status(
+    status: str,
+    *,
+    jobs_scraped: int,
+    jobs_saved: int,
+    ai_run_id: Any | None = None,
+    ai_completed_items: int = 0,
+    ai_failed_items: int = 0,
+    ai_total_items: int = 0,
+) -> str:
+    if (
+        status == "completed"
+        and ai_failed_items > 0
+        and (ai_run_id or ai_completed_items > 0 or ai_total_items > 0)
+    ):
+        return "completed_with_ai_failures"
     return status
 
 

@@ -132,6 +132,40 @@ def test_build_progress_snapshot_only_exposes_detail_run_manual_review_counts_wh
     assert snapshot["detail_manual_action_required"] == 0
 
 
+def test_build_progress_snapshot_derives_completed_with_ai_failures_when_ai_run_has_failed_items():
+    crawl_job = _build_crawl_job(
+        status="completed",
+        request_payload={"crawl_phase": "listing", "category_ids": [1200]},
+        metrics={
+            "ai_completed_items": 3,
+            "ai_failed_items": 1,
+            "ai_total_items": 4,
+        },
+    )
+    latest_event = SimpleNamespace(
+        payload={
+            "request_payload": {"crawl_phase": "listing", "category_ids": [1200]},
+            "phase": 5,
+            "category_name": "Engineering",
+            "ai_run_id": "run-456",
+            "ai_completed_items": 3,
+            "ai_failed_items": 1,
+            "ai_total_items": 4,
+        }
+    )
+
+    snapshot = progress._build_progress_snapshot(
+        crawl_job,
+        latest_event,
+        now=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        events=[],
+    )
+
+    assert snapshot["status"] == "completed_with_ai_failures"
+    assert snapshot["metric_scope"] == "ai_run"
+    assert snapshot["ai_failed_items"] == 1
+
+
 def test_backlog_visibility_keeps_recent_backlog_entries_operator_visible():
     now = datetime(2026, 5, 27, 12, 20, tzinfo=UTC)
     crawl_job = _build_crawl_job(
