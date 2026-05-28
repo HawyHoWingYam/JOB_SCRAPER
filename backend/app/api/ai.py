@@ -8,7 +8,7 @@ from typing import Any, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 from app.database import SessionLocal, get_db
@@ -47,41 +47,51 @@ class CreateRunRequest(BaseModel):
     query: Optional[QueryRunRequest] = None
 
 
-def _job_id_param(db: Session, job_id: UUID):
-    dialect = db.get_bind().dialect.name
-    if dialect == "sqlite":
-        return job_id.hex
-    return job_id
+def _derive_last_failed_job_titles(db: Session, run_ids: list[str]) -> dict[str, Optional[str]]:
+    if not run_ids:
+        return {}
 
-
-def _fetch_job_title(db: Session, job_id: UUID) -> Optional[str]:
-    row = db.execute(
-        text("SELECT title FROM jobs WHERE id = :job_id"),
-        {"job_id": _job_id_param(db, job_id)},
-    ).first()
-    return row[0] if row else None
+    latest_failed_items = (
+        db.query(
+            EnrichmentRunItem.run_id.label("run_id"),
+            Job.title.label("job_title"),
+            func.row_number().over(
+                partition_by=EnrichmentRunItem.run_id,
+                order_by=(
+                    EnrichmentRunItem.completed_at.desc(),
+                    EnrichmentRunItem.position.desc(),
+                    EnrichmentRunItem.id.desc(),
+                ),
+            ).label("row_number"),
+        )
+        .join(Job, Job.id == EnrichmentRunItem.job_id)
+        .filter(
+            EnrichmentRunItem.run_id.in_(run_ids),
+            EnrichmentRunItem.status == "failed",
+        )
+        .subquery()
+    )
+    rows = (
+        db.query(
+            latest_failed_items.c.run_id,
+            latest_failed_items.c.job_title,
+        )
+        .filter(latest_failed_items.c.row_number == 1)
+        .all()
+    )
+    return {str(run_id): job_title for run_id, job_title in rows}
 
 
 def _derive_last_failed_job_title(db: Session, run_id: str) -> Optional[str]:
-    failed_item = (
-        db.query(EnrichmentRunItem)
-        .filter(
-            EnrichmentRunItem.run_id == run_id,
-            EnrichmentRunItem.status == "failed",
-        )
-        .order_by(
-            EnrichmentRunItem.completed_at.desc(),
-            EnrichmentRunItem.position.desc(),
-            EnrichmentRunItem.id.desc(),
-        )
-        .first()
-    )
-    if failed_item is None:
-        return None
-    return _fetch_job_title(db, failed_item.job_id)
+    return _derive_last_failed_job_titles(db, [run_id]).get(run_id)
 
 
-def _serialize_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
+def _serialize_run(
+    run: EnrichmentRun,
+    db: Optional[Session] = None,
+    *,
+    last_failed_job_titles: Optional[dict[str, Optional[str]]] = None,
+) -> dict:
     in_progress_items = max(
         int(run.total_items or 0)
         - int(run.pending_items or 0)
@@ -90,6 +100,12 @@ def _serialize_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
         0,
     ) if str(run.status or "").lower() in {"pending", "running"} else 0
     failed_items = int(run.failed_items or 0)
+    resolved_failed_title = None
+    if failed_items > 0:
+        if last_failed_job_titles is not None:
+            resolved_failed_title = last_failed_job_titles.get(run.id)
+        elif db is not None:
+            resolved_failed_title = _derive_last_failed_job_title(db, run.id)
     return {
         "id": run.id,
         "source_type": run.source_type,
@@ -106,11 +122,7 @@ def _serialize_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
         "current_job_title": getattr(run, "current_job_title", None),
         "latest_started_job_title": getattr(run, "current_job_title", None),
         "in_progress_items": in_progress_items,
-        "last_failed_job_title": (
-            _derive_last_failed_job_title(db, run.id)
-            if db is not None and failed_items > 0
-            else None
-        ),
+        "last_failed_job_title": resolved_failed_title,
         "error_message": run.error_message,
     }
 
@@ -291,7 +303,18 @@ async def list_enrichment_runs(
             source_type=source_type,
             limit=limit,
         )
-    return {"runs": [_serialize_run(run, db) for run in runs]}
+    failed_run_ids = [run.id for run in runs if int(getattr(run, "failed_items", 0) or 0) > 0]
+    last_failed_job_titles = _derive_last_failed_job_titles(db, failed_run_ids)
+    return {
+        "runs": [
+            _serialize_run(
+                run,
+                db,
+                last_failed_job_titles=last_failed_job_titles,
+            )
+            for run in runs
+        ]
+    }
 
 
 @router.get("/runs/{run_id}")
