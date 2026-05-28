@@ -108,6 +108,41 @@ describe('ScheduleHistory', () => {
     );
 
     expect(screen.getByText('0s')).toBeInTheDocument();
-    expect(screen.getByText('12,345 / 6,789')).toBeInTheDocument();
+    expect(screen.getByText('12,345 / 12,345 / 0 / 6,789')).toBeInTheDocument();
+  });
+
+  it('includes phase5 in the execution phase summary and surfaces ids/classified counts', () => {
+    render(
+      <ScheduleHistory
+        scheduleName="JobsDB Nightly"
+        onClose={vi.fn()}
+        executions={[
+          {
+            id: 'execution-3',
+            schedule_id: 'schedule-1',
+            crawl_job_id: 'crawl-job-789',
+            status: 'completed',
+            started_at: '2026-05-22T01:00:00Z',
+            completed_at: '2026-05-22T01:05:00Z',
+            duration_seconds: 300,
+            jobs_scraped: 42,
+            jobs_saved: 40,
+            phase1_completed: true,
+            phase2_completed: true,
+            phase3_completed: true,
+            phase4_completed: true,
+            phase5_completed: true,
+            ids_collected: 52,
+            jobs_classified: 39,
+            error_message: null,
+            created_at: '2026-05-22T01:00:00Z',
+            request_payload_snapshot: {},
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText(/collect ids -> fetch details -> ai classify -> persist data -> ai enrich/i)).toBeInTheDocument();
+    expect(screen.getByText('52 / 42 / 39 / 40')).toBeInTheDocument();
   });
 });

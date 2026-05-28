@@ -40,7 +40,13 @@ function getStatusText(status) {
 }
 
 function getDetailedStatus(exec) {
-    if (!exec.phase1_completed && !exec.phase2_completed && !exec.phase3_completed && !exec.phase4_completed) {
+    if (
+        !exec.phase1_completed
+        && !exec.phase2_completed
+        && !exec.phase3_completed
+        && !exec.phase4_completed
+        && !exec.phase5_completed
+    ) {
         return '-';
     }
     const phases = [];
@@ -48,7 +54,16 @@ function getDetailedStatus(exec) {
     if (exec.phase2_completed) phases.push('Fetch Details');
     if (exec.phase3_completed) phases.push('AI Classify');
     if (exec.phase4_completed) phases.push('Persist Data');
+    if (exec.phase5_completed) phases.push('AI Enrich');
     return phases.join(' -> ');
+}
+
+function formatExecutionPipelineCounts(exec) {
+    const idsCollected = Number(exec.ids_collected || 0).toLocaleString();
+    const jobsScraped = Number(exec.jobs_scraped || 0).toLocaleString();
+    const jobsClassified = Number(exec.jobs_classified || 0).toLocaleString();
+    const jobsSaved = Number(exec.jobs_saved || 0).toLocaleString();
+    return `${idsCollected} / ${jobsScraped} / ${jobsClassified} / ${jobsSaved}`;
 }
 
 function renderSnapshotItem(label, value) {
@@ -120,7 +135,7 @@ function ScheduleHistory({ executions, scheduleName, onClose }) {
                                     <th>Started</th>
                                     <th>Completed</th>
                                     <th>Duration</th>
-                                    <th>Scraped / Saved</th>
+                                    <th>IDs / Scraped / Classified / Saved</th>
                                     <th>Error</th>
                                 </tr>
                             </thead>
@@ -141,7 +156,7 @@ function ScheduleHistory({ executions, scheduleName, onClose }) {
                                         <td>{formatDate(exec.started_at)}</td>
                                         <td>{formatDate(exec.completed_at)}</td>
                                         <td>{formatDuration(exec.duration_seconds)}</td>
-                                        <td>{formatExecutionVolume(exec)}</td>
+                                        <td>{formatExecutionPipelineCounts(exec)}</td>
                                         <td className="error-cell">
                                             {exec.error_message || '-'}
                                         </td>
