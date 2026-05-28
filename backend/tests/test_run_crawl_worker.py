@@ -117,7 +117,7 @@ def test_build_manual_request_payload_defaults_detail_runs_to_retry_pool():
     assert payload["source_listing_crawl_job_id"] is None
 
 
-def test_build_manual_request_payload_defaults_ctgoodjobs_to_headless():
+def test_build_manual_request_payload_defaults_ctgoodjobs_to_headed():
     service = CrawlJobDispatchService()
 
     payload = service.build_manual_request_payload(
@@ -127,7 +127,21 @@ def test_build_manual_request_payload_defaults_ctgoodjobs_to_headless():
         max_pages=2,
     )
 
-    assert payload["crawl_mode"] == "headless"
+    assert payload["crawl_mode"] == "headed"
+
+
+def test_build_manual_request_payload_upgrades_ctgoodjobs_headless_requests_to_headed():
+    service = CrawlJobDispatchService()
+
+    payload = service.build_manual_request_payload(
+        source_site="ctgoodjobs",
+        crawl_phase="listing",
+        crawl_mode="headless",
+        category_ids=["ctgoodjobs:021"],
+        max_pages=2,
+    )
+
+    assert payload["crawl_mode"] == "headed"
 
 
 def test_load_detail_targets_uses_retry_pool_defaults_and_tracks_skip_existing_metrics():

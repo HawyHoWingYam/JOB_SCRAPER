@@ -220,12 +220,11 @@ async def list_companies(
     )
 
     current_offset = (page - 1) * page_size
-    if len(companies) < page_size:
+    if len(companies) < page_size and not (page > 1 and len(companies) == 0):
         total = current_offset + len(companies)
-        total_pages = page if total else 0
     else:
         total = query.count()
-        total_pages = (total + page_size - 1) // page_size if total else 0
+    total_pages = (total + page_size - 1) // page_size if total else 0
 
     return {
         "items": companies,

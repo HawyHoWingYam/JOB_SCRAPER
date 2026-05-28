@@ -34,6 +34,40 @@ class RedisStreamBus:
             if "BUSYGROUP" not in str(exc):
                 raise
 
+    def _decode_stream_entries(self, stream_entries) -> list[StreamMessage]:
+        messages: list[StreamMessage] = []
+        for message_id, values in stream_entries or []:
+            payload = json.loads(values["data"])
+            messages.append(
+                StreamMessage(
+                    message_id=message_id,
+                    event=EventEnvelope(**payload),
+                )
+            )
+        return messages
+
+    def _autoclaim_group(
+        self,
+        topic: str,
+        group_name: str,
+        consumer_name: str,
+        *,
+        min_idle_time_ms: int,
+        count: int,
+        start_id: str = "0-0",
+    ) -> list[StreamMessage]:
+        response = self.redis.xautoclaim(
+            topic,
+            group_name,
+            consumer_name,
+            min_idle_time=min_idle_time_ms,
+            start_id=start_id,
+            count=count,
+        )
+        if not isinstance(response, (list, tuple)) or len(response) < 2:
+            return []
+        return self._decode_stream_entries(response[1])
+
     def consume_group(
         self,
         topic: str,
@@ -42,7 +76,19 @@ class RedisStreamBus:
         *,
         count: int = 10,
         block_ms: int = 1000,
+        reclaim_idle_ms: int | None = None,
     ) -> list[StreamMessage]:
+        if reclaim_idle_ms is not None:
+            reclaimed = self._autoclaim_group(
+                topic,
+                group_name,
+                consumer_name,
+                min_idle_time_ms=reclaim_idle_ms,
+                count=count,
+            )
+            if reclaimed:
+                return reclaimed
+
         response = self.redis.xreadgroup(
             group_name,
             consumer_name,
@@ -50,17 +96,9 @@ class RedisStreamBus:
             count=count,
             block=block_ms,
         )
-        messages: list[StreamMessage] = []
         for _, stream_entries in response:
-            for message_id, values in stream_entries:
-                payload = json.loads(values["data"])
-                messages.append(
-                    StreamMessage(
-                        message_id=message_id,
-                        event=EventEnvelope(**payload),
-                    )
-                )
-        return messages
+            return self._decode_stream_entries(stream_entries)
+        return []
 
     def ack(self, topic: str, group_name: str, message_id: str) -> int:
         return int(self.redis.xack(topic, group_name, message_id))

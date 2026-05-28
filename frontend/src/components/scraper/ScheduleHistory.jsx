@@ -15,12 +15,6 @@ function formatDuration(seconds) {
     return `${mins}m ${secs}s`;
 }
 
-function formatExecutionVolume(exec) {
-    const scraped = Number(exec.jobs_scraped || 0).toLocaleString();
-    const saved = Number(exec.jobs_saved || 0).toLocaleString();
-    return `${scraped} / ${saved}`;
-}
-
 function getStatusClass(status) {
     switch (status) {
         case 'completed': return 'status-success';
@@ -42,6 +36,7 @@ function getStatusText(status) {
 }
 
 function getDetailedStatus(exec) {
+    const crawlPhase = `${exec.request_payload_snapshot?.crawl_phase || ''}`.trim().toLowerCase();
     if (
         !exec.phase1_completed
         && !exec.phase2_completed
@@ -53,6 +48,13 @@ function getDetailedStatus(exec) {
     }
     const phases = [];
     if (exec.phase1_completed) phases.push('Collect IDs');
+    if (crawlPhase === 'listing') {
+        if (exec.phase2_completed || Number(exec.listings_staged || 0) > 0) {
+            phases.push('Stage Listings');
+        }
+        if (exec.phase5_completed) phases.push('AI Enrich');
+        return phases.join(' -> ');
+    }
     if (exec.phase2_completed) phases.push('Fetch Details');
     if (Number(exec.jobs_classified || 0) > 0) phases.push('AI Classify');
     if (exec.phase4_completed) phases.push('Persist Data');
@@ -61,22 +63,101 @@ function getDetailedStatus(exec) {
 }
 
 function formatExecutionPipelineCounts(exec) {
+    const normalizedStatus = `${exec.status || ''}`.trim().toLowerCase();
+    const stagedListings = Number(exec.listings_staged || 0);
+    const pendingDetails = Number(exec.detail_pending || 0);
+    const runningDetails = Number(exec.detail_running || 0);
+    const completedDetails = Number(exec.detail_completed || 0);
+    const failedDetails = Number(exec.detail_failed || 0);
+    const manualReview = Number(exec.detail_manual_action_required || 0);
+    const hasBacklogBreakdown =
+        stagedListings > 0 || pendingDetails > 0 || runningDetails > 0 || completedDetails > 0 || failedDetails > 0 || manualReview > 0;
+    const idsCollected = Number(exec.ids_collected || 0);
+    const jobsScraped = Number(exec.jobs_scraped || 0);
+    const jobsSaved = Number(exec.jobs_saved || 0);
+    const jobsClassified = Number(exec.jobs_classified || 0);
+    const jobsDeadLettered = Number(exec.jobs_dead_lettered || 0);
+
+    if (
+        (normalizedStatus === 'pending' || normalizedStatus === 'running')
+        && !hasBacklogBreakdown
+        && idsCollected === 0
+        && jobsScraped === 0
+        && jobsSaved === 0
+        && jobsClassified === 0
+        && jobsDeadLettered === 0
+    ) {
+        return [{ label: 'Counts', value: 'Awaiting first counts' }];
+    }
+
     const metrics = [
-        { label: 'IDs', value: Number(exec.ids_collected || 0).toLocaleString() },
-        { label: 'Scraped', value: Number(exec.jobs_scraped || 0).toLocaleString() },
+        { label: 'IDs', value: idsCollected.toLocaleString() },
     ];
 
-    if (Number(exec.jobs_classified || 0) > 0) {
+    if (!(hasBacklogBreakdown && jobsScraped === 0)) {
+        metrics.push({ label: 'Scraped', value: jobsScraped.toLocaleString() });
+    }
+
+    if (stagedListings > 0 || pendingDetails > 0 || runningDetails > 0 || completedDetails > 0 || failedDetails > 0 || manualReview > 0) {
+        metrics.push({
+            label: 'Staged',
+            value: stagedListings.toLocaleString(),
+        });
+        if (pendingDetails > 0) {
+            metrics.push({
+                label: 'Pending details',
+                value: pendingDetails.toLocaleString(),
+            });
+        }
+        if (runningDetails > 0) {
+            metrics.push({
+                label: 'Running details',
+                value: runningDetails.toLocaleString(),
+            });
+        }
+        if (completedDetails > 0) {
+            metrics.push({
+                label: 'Completed details',
+                value: completedDetails.toLocaleString(),
+            });
+        }
+        if (failedDetails > 0) {
+            metrics.push({
+                label: 'Failed details',
+                value: failedDetails.toLocaleString(),
+            });
+        }
+        if (manualReview > 0) {
+            metrics.push({
+                label: 'Manual review',
+                value: manualReview.toLocaleString(),
+            });
+        }
+    }
+
+    if (jobsClassified > 0) {
         metrics.push({
             label: 'Classified',
-            value: Number(exec.jobs_classified || 0).toLocaleString(),
+            value: jobsClassified.toLocaleString(),
         });
     }
 
-    metrics.push({
-        label: 'Ingested',
-        value: Number(exec.jobs_saved || 0).toLocaleString(),
-    });
+    const shouldSuppressZeroIngested =
+        (stagedListings > 0 || pendingDetails > 0 || runningDetails > 0 || completedDetails > 0 || failedDetails > 0 || manualReview > 0)
+        && Number(exec.jobs_saved || 0) === 0;
+
+    if (!shouldSuppressZeroIngested) {
+        metrics.push({
+            label: 'Ingested',
+            value: Number(exec.jobs_saved || 0).toLocaleString(),
+        });
+    }
+    if (Number(exec.jobs_dead_lettered || 0) > 0) {
+        metrics.push({
+            label: 'Dead-lettered',
+            value: Number(exec.jobs_dead_lettered || 0).toLocaleString(),
+        });
+    }
 
     return metrics;
 }
@@ -105,7 +186,6 @@ function renderRequestSnapshot(exec) {
         return null;
     }
 
-    const categoryCount = Array.isArray(snapshot?.category_ids) ? snapshot.category_ids.length : 0;
     const items = [];
 
     if (snapshot?.source_site) {
@@ -117,7 +197,9 @@ function renderRequestSnapshot(exec) {
     if (snapshot?.crawl_mode) {
         items.push(renderSnapshotItem('Mode', snapshot.crawl_mode));
     }
-    items.push(renderSnapshotItem('Categories', `${categoryCount} selected`));
+    if (Array.isArray(snapshot?.category_ids)) {
+        items.push(renderSnapshotItem('Categories', `${snapshot.category_ids.length} selected`));
+    }
     if (snapshot?.source_listing_crawl_job_id) {
         items.push(renderSnapshotItem('Detail Batch', snapshot.source_listing_crawl_job_id));
     }

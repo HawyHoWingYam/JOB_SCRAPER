@@ -23,6 +23,7 @@ from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.utils.time import utc_now
+from app.workers.run_ingest_worker import INGEST_ITEM_SETTLED_EVENT_TYPE
 
 ACTIVE_RUN_STATUSES = ("pending", "running")
 _REVIEW_KEY_PATTERN = re.compile(r"[^a-z0-9+#./\-\s]+")
@@ -70,6 +71,68 @@ class EnrichmentRunService:
         self.db = db
         self.crawl_job_repository = CrawlJobRepository()
         self.event_outbox_repository = EventOutboxRepository()
+
+    def _query_ai_actionable_jobs(self, *entities):
+        return (
+            self.db.query(*entities)
+            .filter(
+                Job.is_deleted == False,
+                Job.source_classification_id.isnot(None),
+                Job.source_classification_id != "",
+            )
+        )
+
+    def get_job_queue_counts(self) -> dict[str, int]:
+        total_jobs, enriched_jobs, eligible_enriched_jobs, pending_jobs = (
+            self.db.query(
+                func.count(Job.id),
+                func.count(Job.ai_enriched_at),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                and_(
+                                    Job.ai_enriched_at.isnot(None),
+                                    Job.source_classification_id.isnot(None),
+                                    Job.source_classification_id != "",
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                and_(
+                                    Job.ai_enriched_at.is_(None),
+                                    Job.source_classification_id.isnot(None),
+                                    Job.source_classification_id != "",
+                                ),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            )
+            .filter(Job.is_deleted == False)
+            .one()
+        )
+        ai_eligible_jobs = int((eligible_enriched_jobs or 0) + (pending_jobs or 0))
+        total_jobs = int(total_jobs or 0)
+        return {
+            "total_jobs": total_jobs,
+            "enriched_jobs": int(enriched_jobs or 0),
+            "eligible_enriched_jobs": int(eligible_enriched_jobs or 0),
+            "ai_eligible_jobs": ai_eligible_jobs,
+            "ineligible_jobs": max(total_jobs - ai_eligible_jobs, 0),
+            "pending_jobs": int(pending_jobs or 0),
+        }
 
     def create_post_scrape_run(self, job_ids: List[str]) -> EnrichmentRun:
         """Persist a post-scrape run for internal `jobs.id` UUID values."""
@@ -150,13 +213,8 @@ class EnrichmentRunService:
     def create_manual_pending_run(self, limit: Optional[int] = None) -> Optional[EnrichmentRun]:
         """Create a manual run from globally pending unenriched jobs."""
         query = (
-            self.db.query(Job.id)
-            .filter(
-                Job.ai_enriched_at.is_(None),
-                Job.is_deleted == False,
-                Job.source_classification_id.isnot(None),
-                Job.source_classification_id != "",
-            )
+            self._query_ai_actionable_jobs(Job.id)
+            .filter(Job.ai_enriched_at.is_(None))
             .order_by(Job.created_at.asc(), Job.id.asc())
         )
         if limit is not None:
@@ -267,6 +325,22 @@ class EnrichmentRunService:
         self.db.flush()
         return True
 
+    def request_ready_pending_runs(self, *, source_service: str = "enrichment-worker") -> int:
+        pending_runs = (
+            self.db.query(EnrichmentRun)
+            .filter(EnrichmentRun.status == "pending")
+            .order_by(EnrichmentRun.created_at.asc(), EnrichmentRun.id.asc())
+            .all()
+        )
+        requested_count = 0
+        for run in pending_runs:
+            gate = self.describe_pending_gate(run)
+            if gate is None or gate.get("reason") != "queued_for_execution":
+                continue
+            if self.request_run_execution(run.id, source_service=source_service):
+                requested_count += 1
+        return requested_count
+
     def request_crawl_auto_run_if_ready(self, crawl_job_id: str) -> bool:
         crawl_job_uuid = uuid.UUID(str(crawl_job_id))
         crawl_job = (
@@ -277,23 +351,83 @@ class EnrichmentRunService:
         run = self.get_crawl_auto_run(str(crawl_job_uuid))
         if crawl_job is None or run is None:
             return False
-        if run.status != "pending" or not run.total_items:
+        gate = self.describe_pending_gate(run, crawl_job=crawl_job)
+        if gate is None:
             return False
-        if not AIRuntimeSettingsService(self.db).get_profile_runtime_metadata("jobs").is_ready:
-            return False
-        if crawl_job.status not in {"completed", "failed"}:
+        if gate["reason"] != "queued_for_execution":
             return False
 
-        metrics = dict(crawl_job.metrics or {})
+        return self.request_run_execution(run.id, source_service="enrichment-worker")
+
+    def describe_pending_gate(
+        self,
+        run: EnrichmentRun,
+        *,
+        crawl_job: CrawlJob | None = None,
+    ) -> Dict[str, object] | None:
+        if str(run.status or "").lower() != "pending" or run.started_at is not None:
+            return None
+
+        if not run.total_items:
+            return {
+                "reason": "queued_for_execution",
+            }
+
+        if run.source_type != "crawl_auto" or run.trigger_crawl_job_id is None:
+            return {
+                "reason": "queued_for_execution",
+            }
+
+        if not AIRuntimeSettingsService(self.db).get_profile_runtime_metadata("jobs").is_ready:
+            return {
+                "reason": "waiting_for_ai_runtime",
+            }
+
+        resolved_crawl_job = crawl_job
+        if resolved_crawl_job is None:
+            resolved_crawl_job = (
+                self.db.query(CrawlJob)
+                .filter(CrawlJob.id == run.trigger_crawl_job_id)
+                .first()
+            )
+
+        if resolved_crawl_job is None:
+            return {
+                "reason": "waiting_for_crawl_completion",
+                "crawl_job_status": "missing",
+            }
+
+        if resolved_crawl_job.status not in {"completed", "failed"}:
+            return {
+                "reason": "waiting_for_crawl_completion",
+                "crawl_job_status": str(resolved_crawl_job.status or "unknown"),
+            }
+
+        metrics = dict(resolved_crawl_job.metrics or {})
         items_emitted = int(metrics.get("items_emitted") or 0)
         ingest_items_seen = int(metrics.get("ingest_items_seen") or 0)
         ingest_items_failed = int(metrics.get("ingest_items_failed") or 0)
         ingest_dead_lettered = int(metrics.get("ingest_dead_lettered") or 0)
-        ingest_items_settled = ingest_items_seen + max(ingest_items_failed, ingest_dead_lettered)
+        effective_ingest_items_seen = max(ingest_items_seen, int(run.total_items or 0))
+        ingest_items_settled = effective_ingest_items_seen + max(ingest_items_failed, ingest_dead_lettered)
+        settled_event_count = self.crawl_job_repository.count_events(
+            self.db,
+            resolved_crawl_job.id,
+            event_types={INGEST_ITEM_SETTLED_EVENT_TYPE},
+        )
+        if settled_event_count > 0:
+            ingest_items_settled = max(ingest_items_settled, int(settled_event_count))
         if items_emitted > 0 and ingest_items_settled < items_emitted:
-            return False
+            return {
+                "reason": "waiting_for_ingest_settle",
+                "emitted_items": items_emitted,
+                "settled_items": ingest_items_settled,
+                "crawl_job_status": str(resolved_crawl_job.status or "unknown"),
+            }
 
-        return self.request_run_execution(run.id, source_service="enrichment-worker")
+        return {
+            "reason": "queued_for_execution",
+        }
 
     def _select_manual_query_job_ids(
         self,
@@ -655,14 +789,7 @@ class EnrichmentRunService:
 
     def get_overview(self) -> dict:
         """Return AI enrichment overview counters and last completed run."""
-        total_jobs, enriched_jobs = (
-            self.db.query(
-                func.count(Job.id),
-                func.count(Job.ai_enriched_at),
-            )
-            .filter(Job.is_deleted == False)
-            .one()
-        )
+        queue_counts = self.get_job_queue_counts()
         running_runs, active_runs = (
             self.db.query(
                 func.coalesce(
@@ -695,9 +822,12 @@ class EnrichmentRunService:
         )
 
         return {
-            "total_jobs": total_jobs,
-            "enriched_jobs": enriched_jobs,
-            "pending_jobs": total_jobs - enriched_jobs,
+            "total_jobs": queue_counts["total_jobs"],
+            "enriched_jobs": queue_counts["enriched_jobs"],
+            "eligible_enriched_jobs": queue_counts["eligible_enriched_jobs"],
+            "ai_eligible_jobs": queue_counts["ai_eligible_jobs"],
+            "ineligible_jobs": queue_counts["ineligible_jobs"],
+            "pending_jobs": queue_counts["pending_jobs"],
             "running_runs": running_runs,
             "active_runs": active_runs,
             "failed_jobs": failed_jobs,

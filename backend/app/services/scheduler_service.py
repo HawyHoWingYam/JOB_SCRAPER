@@ -382,7 +382,6 @@ class SchedulerService:
                 logger.error("Unsupported source_site '%s' for schedule %s", source_site, schedule_id)
                 return None
 
-            schedule.last_run_at = utc_now()
             dispatch_result = self.dispatch_service.dispatch_schedule_crawl_job(
                 db,
                 schedule=schedule,

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Save, X } from 'lucide-react';
-import { CRAWL_MODE_OPTIONS, resolveDefaultCrawlMode } from './crawlMode';
+import { getCrawlModeOptionsForSource, resolveDefaultCrawlMode } from './crawlMode';
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
 
 // Cron presets
@@ -87,6 +87,7 @@ function ScheduleForm({
     const volumeGuidance = isDetailPhase
         ? 'How many staged listings this automation should expand per run.'
         : 'Pages per run for each selected sector.';
+    const crawlModeOptions = getCrawlModeOptionsForSource(sourceSite);
 
     return (
         <form onSubmit={handleSubmit} className="schedule-form">
@@ -179,7 +180,7 @@ function ScheduleForm({
                     disabled={isLoading}
                     aria-label="Crawl Mode"
                 >
-                    {CRAWL_MODE_OPTIONS.map((option) => (
+                    {crawlModeOptions.map((option) => (
                         <option key={option.value} value={option.value}>
                             {option.label}
                         </option>

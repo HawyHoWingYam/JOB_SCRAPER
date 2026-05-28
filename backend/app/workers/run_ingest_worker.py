@@ -30,6 +30,8 @@ from app.utils.source_identity import (
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
+_STALE_PENDING_RECLAIM_IDLE_MS = 60_000
+INGEST_ITEM_SETTLED_EVENT_TYPE = "crawl.ingest_item_settled"
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,7 @@ class IngestWorkerService:
             self.consumer_name,
             count=10,
             block_ms=100,
+            reclaim_idle_ms=_STALE_PENDING_RECLAIM_IDLE_MS,
         )
         for message in messages:
             await self._handle_message(message)
@@ -153,7 +156,10 @@ class IngestWorkerService:
             )
 
         if crawl_job_id is not None:
-            metrics_delta = {"ingest_items_seen": 1}
+            metrics_delta = {
+                "ingest_items_seen": 1,
+                "ingest_items_settled": 1,
+            }
             metrics_key = {
                 "created": "ingest_jobs_created",
                 "updated": "ingest_jobs_updated",
@@ -164,6 +170,19 @@ class IngestWorkerService:
                 db,
                 crawl_job_id=uuid.UUID(crawl_job_id),
                 metrics_delta=metrics_delta,
+                auto_commit=False,
+            )
+            self.crawl_job_repository.append_event(
+                db,
+                crawl_job_id=uuid.UUID(crawl_job_id),
+                event_type=INGEST_ITEM_SETTLED_EVENT_TYPE,
+                payload={
+                    "source_site": source_site,
+                    "source_job_id": source_job_id,
+                    "job_id": str(job.id),
+                    "action": job_action,
+                },
+                emitted_by="ingest-worker",
                 auto_commit=False,
             )
 
@@ -301,9 +320,25 @@ class IngestWorkerService:
                 crawl_job_id=uuid.UUID(str(crawl_job_id)),
                 metrics_delta={
                     "ingest_items_failed": 1,
+                    "ingest_items_settled": 1,
                     "ingest_dead_lettered": 1,
                     f"ingest_failure_{safe_reason}": 1,
                 },
+                auto_commit=False,
+            )
+            self.crawl_job_repository.append_event(
+                db,
+                crawl_job_id=uuid.UUID(str(crawl_job_id)),
+                event_type=INGEST_ITEM_SETTLED_EVENT_TYPE,
+                payload={
+                    "source_site": payload.get("source_site"),
+                    "source_job_id": (payload.get("job") or {}).get("source_job_id")
+                    if isinstance(payload.get("job"), dict)
+                    else payload.get("source_job_id"),
+                    "action": "dead_lettered",
+                    "reason": exc.reason,
+                },
+                emitted_by="ingest-worker",
                 auto_commit=False,
             )
         except ValueError:

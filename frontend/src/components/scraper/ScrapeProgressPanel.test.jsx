@@ -387,6 +387,72 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
+  it('renders completed ingest runs with dead-letter counts without treating them as backlog', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            status: 'completed',
+            category_name: 'Engineering',
+            metric_scope: 'ingest_run',
+            phase: 4,
+            jobs_scraped: 100,
+            jobs_saved: 30,
+            save_total: 100,
+            ingest_items_settled: 100,
+            ingest_dead_lettered: 70,
+            completed_at: '2026-05-27T09:05:00Z',
+          },
+        },
+      });
+    });
+
+    expect(
+      await screen.findByText(/completed/i, { selector: '.status-badge' })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/downstream backlog/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/ingested: 30\/100/i)).toBeInTheDocument();
+    expect(screen.getByText(/dead-lettered: 70/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('renders cleanly completed ingest runs with ingested totals instead of falling back to scraped labels', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            status: 'completed',
+            category_name: 'Engineering',
+            metric_scope: 'ingest_run',
+            phase: 4,
+            jobs_scraped: 100,
+            jobs_saved: 100,
+            save_total: 100,
+            ingest_items_settled: 100,
+            completed_at: '2026-05-27T09:05:00Z',
+          },
+        },
+      });
+    });
+
+    expect(
+      await screen.findByText(/completed/i, { selector: '.status-badge' })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/ingested: 100\/100/i)).toBeInTheDocument();
+    expect(screen.queryByText(/jobs scraped:/i)).not.toBeInTheDocument();
+
+    unmount();
+  });
+
   it('hides backlog cards already linked to a live detail task', async () => {
     render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
 

@@ -12,6 +12,7 @@ from uuid import UUID
 
 from app.crawl_phases import resolve_crawl_phase
 from app.crawl_modes import resolve_crawl_mode
+from app.models.crawl_job import CrawlJob
 from app.models.schedule import ScrapeSchedule, ScheduleExecution
 from app.schemas.schedule import normalize_source_site
 from app.utils.time import utc_now
@@ -158,13 +159,73 @@ class ScheduleRepository:
         self, db: Session, schedule_id: UUID, limit: int = 20
     ) -> List[ScheduleExecution]:
         """Get execution history for a schedule."""
-        return (
+        executions = (
             db.query(ScheduleExecution)
             .filter(ScheduleExecution.schedule_id == schedule_id)
             .order_by(desc(ScheduleExecution.started_at))
             .limit(limit)
             .all()
         )
+        self._attach_execution_ingest_summaries(db, executions)
+        return executions
+
+    def _resolve_execution_summary(self, metrics: dict | None) -> dict[str, int | None]:
+        if not isinstance(metrics, dict):
+            return {
+                "jobs_settled": None,
+                "jobs_dead_lettered": None,
+                "listings_staged": None,
+                "detail_pending": None,
+                "detail_running": None,
+                "detail_completed": None,
+                "detail_failed": None,
+                "detail_manual_action_required": None,
+            }
+
+        jobs_saved = int(metrics.get("ingest_items_seen") or 0)
+        jobs_dead_lettered = int(metrics.get("ingest_dead_lettered") or 0)
+        ingest_items_failed = int(metrics.get("ingest_items_failed") or 0)
+        jobs_settled = int(metrics.get("ingest_items_settled") or 0)
+        if jobs_settled <= 0 and (jobs_saved > 0 or jobs_dead_lettered > 0 or ingest_items_failed > 0):
+            jobs_settled = jobs_saved + max(jobs_dead_lettered, ingest_items_failed)
+
+        return {
+            "jobs_settled": jobs_settled,
+            "jobs_dead_lettered": jobs_dead_lettered,
+            "listings_staged": int(metrics.get("listings_staged") or 0),
+            "detail_pending": int(metrics.get("detail_pending") or 0),
+            "detail_running": int(metrics.get("detail_running") or 0),
+            "detail_completed": int(metrics.get("detail_completed") or 0),
+            "detail_failed": int(metrics.get("detail_failed") or 0),
+            "detail_manual_action_required": int(metrics.get("detail_manual_action_required") or 0),
+        }
+
+    def _attach_execution_ingest_summaries(
+        self,
+        db: Session,
+        executions: List[ScheduleExecution],
+    ) -> None:
+        if not executions:
+            return
+
+        crawl_job_ids = [execution.crawl_job_id for execution in executions if execution.crawl_job_id]
+        metrics_by_crawl_job_id = {}
+        if crawl_job_ids:
+            metrics_by_crawl_job_id = {
+                crawl_job.id: crawl_job.metrics if isinstance(crawl_job.metrics, dict) else {}
+                for crawl_job in (
+                    db.query(CrawlJob)
+                    .filter(CrawlJob.id.in_(crawl_job_ids))
+                    .all()
+                )
+            }
+
+        for execution in executions:
+            summary = self._resolve_execution_summary(
+                metrics_by_crawl_job_id.get(execution.crawl_job_id)
+            )
+            for key, value in summary.items():
+                setattr(execution, key, value)
 
     def _attach_latest_execution_summaries(
         self,
@@ -183,6 +244,7 @@ class ScheduleRepository:
                 ScheduleExecution.completed_at.label("completed_at"),
                 ScheduleExecution.jobs_scraped.label("jobs_scraped"),
                 ScheduleExecution.jobs_saved.label("jobs_saved"),
+                ScheduleExecution.crawl_job_id.label("crawl_job_id"),
                 func.row_number().over(
                     partition_by=ScheduleExecution.schedule_id,
                     order_by=(
@@ -203,6 +265,22 @@ class ScheduleRepository:
                 .all()
             )
         }
+        crawl_job_ids = [
+            row.crawl_job_id
+            for row in latest_execution_by_schedule_id.values()
+            if getattr(row, "crawl_job_id", None) is not None
+        ]
+        metrics_by_crawl_job_id = {}
+        if crawl_job_ids:
+            metrics_by_crawl_job_id = {
+                crawl_job.id: crawl_job.metrics if isinstance(crawl_job.metrics, dict) else {}
+                for crawl_job in (
+                    db.query(CrawlJob)
+                    .filter(CrawlJob.id.in_(crawl_job_ids))
+                    .all()
+                )
+            }
+        
 
         for schedule in schedules:
             latest_execution = latest_execution_by_schedule_id.get(schedule.id)
@@ -211,6 +289,13 @@ class ScheduleRepository:
             setattr(schedule, "latest_execution_completed_at", getattr(latest_execution, "completed_at", None))
             setattr(schedule, "latest_execution_jobs_scraped", getattr(latest_execution, "jobs_scraped", None))
             setattr(schedule, "latest_execution_jobs_saved", getattr(latest_execution, "jobs_saved", None))
+            summary = self._resolve_execution_summary(
+                metrics_by_crawl_job_id.get(getattr(latest_execution, "crawl_job_id", None))
+            )
+            for key, value in summary.items():
+                setattr(schedule, f"latest_execution_{key}", value)
+            if getattr(schedule, "last_run_at", None) is None and getattr(latest_execution, "started_at", None) is not None:
+                setattr(schedule, "last_run_at", getattr(latest_execution, "started_at"))
 
     def count_executions(self, db: Session, schedule_id: UUID) -> int:
         """Count total execution history rows for a schedule."""

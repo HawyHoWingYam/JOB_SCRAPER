@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from app.services import runtime_capabilities_service
 
 
-def test_ctgoodjobs_runtime_capabilities_default_to_headless(monkeypatch):
+def test_ctgoodjobs_runtime_capabilities_default_to_headed(monkeypatch):
     monkeypatch.setattr(
         runtime_capabilities_service,
         "get_profile_runtime_metadata",
@@ -30,6 +30,7 @@ def test_ctgoodjobs_runtime_capabilities_default_to_headless(monkeypatch):
 
     capabilities = runtime_capabilities_service.build_runtime_capabilities()
 
-    assert capabilities["sources"]["ctgoodjobs"]["default_crawl_mode"] == "headless"
-    assert capabilities["sources"]["ctgoodjobs"]["headless_supported"] is True
+    assert capabilities["sources"]["ctgoodjobs"]["default_crawl_mode"] == "headed"
+    assert capabilities["sources"]["ctgoodjobs"]["headless_supported"] is False
     assert capabilities["sources"]["ctgoodjobs"]["headed_supported"] is True
+    assert capabilities["sources"]["ctgoodjobs"]["proxy_modes_supported"] == ["headed"]

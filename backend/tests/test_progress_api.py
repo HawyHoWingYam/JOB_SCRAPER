@@ -102,6 +102,40 @@ def test_build_progress_snapshot_uses_backlog_pool_scope_without_ingest_fallback
     assert snapshot["detail_completed"] == 22
 
 
+def test_build_progress_snapshot_does_not_treat_settled_ingest_failures_as_downstream_backlog():
+    crawl_job = _build_crawl_job(
+        status="completed",
+        request_payload={"crawl_phase": "listing", "category_ids": [1200]},
+        metrics={
+            "items_emitted": 100,
+            "ingest_items_seen": 30,
+            "ingest_items_settled": 100,
+            "ingest_dead_lettered": 70,
+        },
+    )
+    latest_event = SimpleNamespace(
+        payload={
+            "request_payload": {"crawl_phase": "listing", "category_ids": [1200]},
+            "phase": 4,
+            "category_name": "Engineering",
+        }
+    )
+
+    snapshot = progress._build_progress_snapshot(
+        crawl_job,
+        latest_event,
+        now=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        events=[],
+    )
+
+    assert snapshot["status"] == "completed"
+    assert snapshot["operator_state"] == "completed"
+    assert snapshot["metric_scope"] == "ingest_run"
+    assert snapshot["jobs_saved"] == 30
+    assert snapshot["ingest_items_settled"] == 100
+    assert snapshot["ingest_dead_lettered"] == 70
+
+
 def test_build_progress_snapshot_only_exposes_detail_run_manual_review_counts_when_present():
     crawl_job = _build_crawl_job(
         status="running",

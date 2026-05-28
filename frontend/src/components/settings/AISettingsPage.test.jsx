@@ -438,6 +438,60 @@ describe('AISettingsPage', () => {
     expect(screen.getAllByText(/^Needs test$/i).length).toBeGreaterThan(0);
   }, 10000);
 
+  it('shows unconfigured runtime summary cards as not configured instead of leaking the mock picker default', async () => {
+    currentSettingsPayload = {
+      ...currentSettingsPayload,
+      persisted_config: {
+        ...currentSettingsPayload.persisted_config,
+        llm_provider: null,
+        company_llm_provider: null,
+      },
+      effective_config: {
+        ...currentSettingsPayload.effective_config,
+        llm_provider: null,
+        company_llm_provider: null,
+      },
+      runtime_status: {
+        configured_provider: null,
+        active_provider: null,
+        provider: null,
+        model: null,
+        is_degraded: true,
+        degradation_reason: 'Profile is not configured',
+        requires_test: false,
+        is_ready: false,
+        last_test_status: 'untested',
+      },
+      company_runtime_status: {
+        configured_provider: null,
+        active_provider: null,
+        provider: null,
+        model: null,
+        is_degraded: true,
+        degradation_reason: 'Profile is not configured',
+        requires_test: false,
+        is_ready: false,
+        last_test_status: 'untested',
+      },
+    };
+
+    render(<AISettingsPage />);
+
+    await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
+
+    const enrichmentCard = screen.getByText('AI Enrichment').closest('article');
+    const companiesCard = screen.getByText('Companies').closest('article');
+
+    expect(enrichmentCard).not.toBeNull();
+    expect(companiesCard).not.toBeNull();
+    expect(within(enrichmentCard).getByText('Not configured')).toBeInTheDocument();
+    expect(within(companiesCard).getByText('Not configured')).toBeInTheDocument();
+    expect(within(enrichmentCard).queryByText(/^Mock$/i)).not.toBeInTheDocument();
+    expect(within(companiesCard).queryByText(/^Mock$/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/^Blocked$/i).length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText(/^Needs test$/i)).not.toBeInTheDocument();
+  });
+
   it('tests the current draft profile before save and shows probe feedback', async () => {
     const user = userEvent.setup();
     const fetchSpy = globalThis.fetch;

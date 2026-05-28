@@ -92,6 +92,9 @@ class AIEnrichmentService:
                 cross_domain_min_confidence=(
                     self.settings.job_classification_cross_domain_min_confidence
                 ),
+                job_title=job.title,
+                job_description=job.description or "",
+                extracted_skills=extracted_skills,
             )
             job.subcategory_id = subcategory_id
             job.ai_enriched_at = utc_now()

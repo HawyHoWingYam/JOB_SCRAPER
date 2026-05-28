@@ -673,6 +673,9 @@ function ProgressItem({
         // Phase 4
         jobs_saved = 0,
         save_total = 0,
+        ingest_items_settled = 0,
+        ingest_items_failed = 0,
+        ingest_dead_lettered = 0,
         listings_staged = 0,
         jobs_skipped_existing = 0,
         detail_selected_rows = 0,
@@ -1269,7 +1272,14 @@ function ProgressItem({
         statusText = 'Completed';
         statusClass = 'success';
         metricLines.length = 0;
-        metricLines.push(`Jobs scraped: ${formatCount(jobs_scraped)}`);
+        if (phase === 4 || metricScope === 'ingest_run') {
+            metricLines.push(`Ingested: ${formatMaybeCountPair(jobs_saved, save_total)}`);
+            if (ingest_dead_lettered > 0 || ingest_items_failed > 0) {
+                metricLines.push(`Dead-lettered: ${formatCount(Math.max(ingest_dead_lettered, ingest_items_failed))}`);
+            }
+        } else {
+            metricLines.push(`Jobs scraped: ${formatCount(jobs_scraped)}`);
+        }
     } else if (effectiveStatus === 'completed_with_ai_failures') {
         statusText = 'Completed With AI Failures';
         statusClass = 'warning';

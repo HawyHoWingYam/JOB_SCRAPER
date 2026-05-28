@@ -406,6 +406,20 @@
   font-weight: 700;
 }
 
+.skill-tag-more {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  cursor: pointer;
+}
+
 @media (max-width: 900px) {
   .app-layout {
     flex-direction: column;

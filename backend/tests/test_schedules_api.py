@@ -176,6 +176,38 @@ def test_list_schedules_exposes_latest_execution_summary_fields(monkeypatch):
     assert payload["schedules"][0]["latest_execution_jobs_saved"] == 11
 
 
+def test_list_schedules_exposes_latest_execution_running_detail_counts(monkeypatch):
+    app = FastAPI()
+    app.include_router(schedules.router, prefix="/api/v1")
+    schedule = _build_schedule("JobsDB Recovery In Flight")
+    schedule.latest_execution_status = "running"
+    schedule.latest_execution_started_at = datetime(2026, 5, 28, 8, 0, tzinfo=UTC)
+    schedule.latest_execution_jobs_scraped = 0
+    schedule.latest_execution_jobs_saved = 0
+    schedule.latest_execution_listings_staged = 96
+    schedule.latest_execution_detail_pending = 51
+    schedule.latest_execution_detail_running = 12
+    schedule.latest_execution_detail_completed = 22
+    repository = FakeScheduleRepository(schedules_list=[schedule])
+    db = object()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(schedules, "repository", repository)
+    client = TestClient(app)
+
+    response = client.get("/api/v1/schedules?skip=0&limit=100")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schedules"][0]["latest_execution_listings_staged"] == 96
+    assert payload["schedules"][0]["latest_execution_detail_pending"] == 51
+    assert payload["schedules"][0]["latest_execution_detail_running"] == 12
+    assert payload["schedules"][0]["latest_execution_detail_completed"] == 22
+
+
 def test_schedule_history_skips_total_count_for_short_result_page(monkeypatch):
     app = FastAPI()
     app.include_router(schedules.router, prefix="/api/v1")

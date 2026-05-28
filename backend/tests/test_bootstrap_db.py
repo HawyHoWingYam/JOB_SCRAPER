@@ -41,7 +41,7 @@ class _FakeMetadata:
         self.bind = bind
 
 
-def test_bootstrap_database_backfills_ctgoodjobs_schedule_defaults_to_headless():
+def test_bootstrap_database_backfills_ctgoodjobs_schedule_defaults_to_headed():
     connection = _FakeConnection()
     engine = _FakeEngine(connection)
     metadata = _FakeMetadata()
@@ -55,7 +55,7 @@ def test_bootstrap_database_backfills_ctgoodjobs_schedule_defaults_to_headless()
     ]
     assert len(crawl_mode_updates) == 1
     assert " = 'jobsdb' THEN 'headed' " in crawl_mode_updates[0]
-    assert " = 'ctgoodjobs' THEN 'headless' " in crawl_mode_updates[0]
+    assert " = 'ctgoodjobs' THEN 'headed' " in crawl_mode_updates[0]
     assert metadata.bind is engine
 
 

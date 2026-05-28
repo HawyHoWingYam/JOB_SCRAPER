@@ -36,6 +36,7 @@ describe('CompaniesPage', () => {
   let companyPages;
   let currentRunResponses;
   let runResponsesById;
+  let runItemsById;
   let createdRunResponse;
   let companyRequests;
   let createdRunCalls;
@@ -109,6 +110,7 @@ describe('CompaniesPage', () => {
     };
     currentRunResponses = [null];
     runResponsesById = {};
+    runItemsById = {};
     createdRunResponse = {
       id: 'run-1',
       status: 'pending',
@@ -156,6 +158,12 @@ describe('CompaniesPage', () => {
       }
 
       if (url.pathname.startsWith('/api/v1/companies/enrichment-runs/') && (!init.method || init.method === 'GET')) {
+        if (url.pathname.endsWith('/items')) {
+          const runId = url.pathname.split('/')[5];
+          return mockJsonResponse({
+            items: runItemsById[runId] || [],
+          });
+        }
         const runId = url.pathname.split('/')[5];
         const responses = runResponsesById[runId];
         if (!responses || responses.length === 0) {
@@ -179,9 +187,13 @@ describe('CompaniesPage', () => {
 
     expect(await screen.findByRole('heading', { name: /companies/i })).toBeInTheDocument();
     expect(companyRequests[0]).toBe('status=pending&q=&page=1&page_size=25');
+    expect(screen.getByRole('option', { name: /needs ai/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /ai ready/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /generate missing descriptions/i })).toBeInTheDocument();
     expect(screen.getByText('Acme Health')).toBeInTheDocument();
     expect(screen.getByText('Cyan Retail')).toBeInTheDocument();
     expect(screen.getByText(/page 1 of 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/descriptions ready on page/i)).toBeInTheDocument();
   });
 
   it('resets to page 1 when search or status filters change', async () => {
@@ -215,6 +227,55 @@ describe('CompaniesPage', () => {
     expect(screen.getByText(/page 2 of 2/i)).toBeInTheDocument();
   });
 
+  it('returns to the latest available page when a refreshed result set makes the current page invalid', async () => {
+    const user = userEvent.setup();
+    render(<CompaniesPage />);
+
+    await screen.findByText('Acme Health');
+    await user.click(screen.getByRole('button', { name: /next page/i }));
+    expect(await screen.findByText('Zulu Health')).toBeInTheDocument();
+
+    createdRunResponse = {
+      id: 'run-1',
+      status: 'running',
+      total_items: 2,
+      pending_items: 1,
+      completed_items: 1,
+      failed_items: 0,
+      current_company_name: 'Zulu Health',
+      error_message: null,
+      started_at: '2026-04-19T10:00:00Z',
+      completed_at: null,
+      created_at: '2026-04-19T10:00:00Z',
+    };
+    runResponsesById['run-1'] = [
+      {
+        id: 'run-1',
+        status: 'completed',
+        total_items: 2,
+        pending_items: 0,
+        completed_items: 2,
+        failed_items: 0,
+        current_company_name: null,
+        error_message: null,
+        started_at: '2026-04-19T10:00:00Z',
+        completed_at: '2026-04-19T10:01:00Z',
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+    companyPages['status=pending&q=&page=2&page_size=25'] = buildCompaniesPayload([], 2, 1);
+    companyPages['status=pending&q=&page=1&page_size=25'] = companyPages['status=pending&q=&page=1&page_size=25#after-run'];
+
+    await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
+
+    await waitFor(() => {
+      expect(companyRequests).toContain('status=pending&q=&page=2&page_size=25');
+      expect(companyRequests.at(-1)).toBe('status=pending&q=&page=1&page_size=25');
+    });
+    expect(await screen.findByText('Acme Health')).toBeInTheDocument();
+    expect(screen.getByText(/page 1 of 1/i)).toBeInTheDocument();
+  });
+
   it('creates a persisted global run and refreshes the current page after completion', async () => {
     const user = userEvent.setup();
     render(<CompaniesPage />);
@@ -238,11 +299,9 @@ describe('CompaniesPage', () => {
     ];
     companyPages['status=pending&q=&page=1&page_size=25'] = companyPages['status=pending&q=&page=1&page_size=25#after-run'];
 
-    await user.click(screen.getByRole('button', { name: /generate all pending descriptions/i }));
+    await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
 
     expect(createdRunCalls).toBe(1);
-    expect(screen.getByText(/global backlog run/i)).toBeInTheDocument();
-    expect(screen.getByText(/generating descriptions: 2 \/ 2/i)).toBeInTheDocument();
 
     await waitFor(() => {
       expect(companyRequests.at(-1)).toBe('status=pending&q=&page=1&page_size=25');
@@ -278,6 +337,102 @@ describe('CompaniesPage', () => {
     expect(createdRunCalls).toBe(0);
   });
 
+  it('describes pending company runs as queued before the first company starts', async () => {
+    currentRunResponses = [
+      {
+        id: 'run-current',
+        status: 'pending',
+        total_items: 3,
+        pending_items: 3,
+        completed_items: 0,
+        failed_items: 0,
+        current_company_name: null,
+        error_message: null,
+        started_at: null,
+        completed_at: null,
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+
+    render(<CompaniesPage />);
+
+    expect(await screen.findByText(/queued for execution/i)).toBeInTheDocument();
+    expect(screen.queryByText(/generating descriptions: 0 \/ 3/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/success: 0/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/failed: 0/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/remaining: 3/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /generation queued/i })).toBeDisabled();
+  });
+
+  it('marks targeted companies as queued when the current run has pending run items', async () => {
+    currentRunResponses = [
+      {
+        id: 'run-current',
+        status: 'pending',
+        total_items: 2,
+        pending_items: 2,
+        completed_items: 0,
+        failed_items: 0,
+        current_company_name: null,
+        error_message: null,
+        started_at: null,
+        completed_at: null,
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+    runItemsById['run-current'] = [
+      {
+        id: 'item-queued-1',
+        run_id: 'run-current',
+        company_id: 'company-1',
+        status: 'pending',
+        error_message: null,
+      },
+      {
+        id: 'item-queued-2',
+        run_id: 'run-current',
+        company_id: 'company-3',
+        status: 'pending',
+        error_message: null,
+      },
+    ];
+
+    render(<CompaniesPage />);
+
+    const acmeCard = await screen.findByRole('button', { name: /open details for acme health/i });
+    const cyanCard = screen.getByRole('button', { name: /open details for cyan retail/i });
+
+    expect(await within(acmeCard).findByText('Queued')).toBeInTheDocument();
+    expect(await within(cyanCard).findByText('Queued')).toBeInTheDocument();
+  });
+
+  it('renders the latest terminal run as a completed summary instead of an active generation panel', async () => {
+    currentRunResponses = [
+      {
+        id: 'run-terminal',
+        status: 'completed_with_failures',
+        total_items: 3,
+        pending_items: 0,
+        completed_items: 2,
+        failed_items: 1,
+        current_company_name: null,
+        error_message: '1 item(s) failed. First error: provider timeout',
+        started_at: '2026-04-19T10:00:00Z',
+        completed_at: '2026-04-19T10:02:00Z',
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+
+    render(<CompaniesPage />);
+
+    expect(await screen.findByText(/latest run/i)).toBeInTheDocument();
+    expect(screen.getByText(/completed with failures/i)).toBeInTheDocument();
+    expect(screen.getByText(/finished generating descriptions for 3 companies\. 2 succeeded, 1 failed\./i)).toBeInTheDocument();
+    expect(screen.getByText(/provider timeout/i)).toBeInTheDocument();
+    expect(screen.queryByText(/generating descriptions:/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /generate missing descriptions/i })).not.toBeDisabled();
+  });
+
   it('opens the detail modal and shows the current AI description text', async () => {
     const user = userEvent.setup();
     render(<CompaniesPage />);
@@ -311,10 +466,52 @@ describe('CompaniesPage', () => {
       },
     ];
 
-    await user.click(screen.getByRole('button', { name: /generate all pending descriptions/i }));
+    await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
 
     expect(await screen.findByText(/finished generating descriptions for 2 companies\. 0 succeeded, 2 failed\./i)).toBeInTheDocument();
     expect(screen.getByText(/anthropic client does not support web_search requests/i)).toBeInTheDocument();
+  });
+
+  it('marks companies with failed run items as failed when the latest terminal run includes item failures', async () => {
+    currentRunResponses = [
+      {
+        id: 'run-terminal',
+        status: 'completed_with_failures',
+        total_items: 2,
+        pending_items: 0,
+        completed_items: 1,
+        failed_items: 1,
+        current_company_name: null,
+        error_message: '1 item(s) failed. First error: provider timeout',
+        started_at: '2026-04-19T10:00:00Z',
+        completed_at: '2026-04-19T10:02:00Z',
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+    runItemsById['run-terminal'] = [
+      {
+        id: 'item-failed',
+        run_id: 'run-terminal',
+        company_id: 'company-1',
+        status: 'failed',
+        error_message: 'provider timeout',
+      },
+      {
+        id: 'item-completed',
+        run_id: 'run-terminal',
+        company_id: 'company-3',
+        status: 'completed',
+        error_message: null,
+      },
+    ];
+
+    render(<CompaniesPage />);
+
+    const acmeCard = await screen.findByRole('button', { name: /open details for acme health/i });
+    const cyanCard = screen.getByRole('button', { name: /open details for cyan retail/i });
+
+    expect(await within(acmeCard).findByText('Failed')).toBeInTheDocument();
+    expect(within(cyanCard).getByText('Awaiting AI')).toBeInTheDocument();
   });
 
   it('keeps polling after a refresh failure and recovers on a later poll', async () => {
@@ -399,7 +596,7 @@ describe('CompaniesPage', () => {
     render(<CompaniesPage />);
 
     await screen.findByText('Acme Health');
-    fireEvent.click(screen.getByRole('button', { name: /generate all pending descriptions/i }));
+    fireEvent.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
 
     expect(await screen.findByText(/current company: acme health/i)).toBeInTheDocument();
     expect(await screen.findByText(/refresh failed: network down/i)).toBeInTheDocument();

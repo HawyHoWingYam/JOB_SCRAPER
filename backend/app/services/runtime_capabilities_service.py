@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.config import settings
+from app.crawl_modes import DEFAULT_CRAWL_MODE_BY_SOURCE, get_supported_crawl_modes
 from app.database import SessionLocal
 from app.models.app_runtime_settings import AppRuntimeSettings
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
@@ -90,27 +91,29 @@ def _host_manual_action_helper_capability() -> dict[str, Any]:
 
 
 def _source_capabilities() -> dict[str, dict[str, Any]]:
+    jobsdb_modes = get_supported_crawl_modes("jobsdb")
+    ctgoodjobs_modes = get_supported_crawl_modes("ctgoodjobs")
     return {
         "jobsdb": {
             "available": True,
             "listing_supported": True,
             "detail_supported": True,
-            "headless_supported": True,
-            "headed_supported": True,
+            "headless_supported": "headless" in jobsdb_modes,
+            "headed_supported": "headed" in jobsdb_modes,
             "manual_action_supported": True,
-            "default_crawl_mode": "headed",
+            "default_crawl_mode": DEFAULT_CRAWL_MODE_BY_SOURCE["jobsdb"],
             "category_id_type": "integer",
         },
         "ctgoodjobs": {
             "available": True,
             "listing_supported": True,
             "detail_supported": True,
-            "headless_supported": True,
-            "headed_supported": True,
+            "headless_supported": "headless" in ctgoodjobs_modes,
+            "headed_supported": "headed" in ctgoodjobs_modes,
             "manual_action_supported": True,
-            "default_crawl_mode": "headless",
+            "default_crawl_mode": DEFAULT_CRAWL_MODE_BY_SOURCE["ctgoodjobs"],
             "proxy_supported": True,
-            "proxy_modes_supported": ["headless", "headed"],
+            "proxy_modes_supported": list(ctgoodjobs_modes),
             "proxy_enabled": bool(settings.ctgoodjobs_proxy_enabled),
             "category_id_type": "string",
         },

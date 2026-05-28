@@ -21,6 +21,10 @@ function isTerminalRun(run) {
   return Boolean(run && ['completed', 'completed_with_failures', 'failed'].includes(String(run.status || '').toLowerCase()));
 }
 
+function isQueuedRun(run) {
+  return Boolean(run && String(run.status || '').toLowerCase() === 'pending');
+}
+
 function getRunProgress(run) {
   if (!run) {
     return { processed: 0, total: 0 };
@@ -33,7 +37,18 @@ function getRunProgress(run) {
   };
 }
 
-function getCompanyStatus(company, run) {
+function getCompanyStatus(company, run, runItem) {
+  const itemStatus = String(runItem?.status || '').toLowerCase();
+  if (itemStatus === 'pending' && !hasCompanyAIDescription(company)) {
+    return 'queued';
+  }
+  if (itemStatus === 'running' && !hasCompanyAIDescription(company)) {
+    return 'generating';
+  }
+  if (itemStatus === 'failed' && !hasCompanyAIDescription(company)) {
+    return 'failed';
+  }
+
   const currentCompanyId = `${run?.current_company_id || ''}`.trim();
   const companyId = `${company?.id || ''}`.trim();
   const matchesCurrentCompany = currentCompanyId
@@ -55,20 +70,36 @@ function formatRunCompletionMessage(run) {
   return summary;
 }
 
+function getRunStatusLabel(status) {
+  const normalizedStatus = String(status || '').toLowerCase();
+
+  if (normalizedStatus === 'completed') return 'Completed';
+  if (normalizedStatus === 'completed_with_failures') return 'Completed With Failures';
+  if (normalizedStatus === 'failed') return 'Failed';
+  if (normalizedStatus === 'running') return 'Running';
+  if (normalizedStatus === 'pending') return 'Pending';
+  return 'Unknown';
+}
+
 function getCompanyStatusLabel(status) {
+  if (status === 'queued') return 'Queued';
   if (status === 'generating') return 'Generating';
   if (status === 'failed') return 'Failed';
   if (status === 'ready') return 'AI Ready';
   return 'Awaiting AI';
 }
 
-function getCompanyDescriptionText(company, status) {
+function getCompanyDescriptionText(company, status, runItem) {
+  if (status === 'queued') {
+    return 'Queued for AI description generation.';
+  }
+
   if (status === 'generating') {
     return 'Generating company description...';
   }
 
   if (status === 'failed') {
-    return company.ai_description || 'Description generation failed for this company.';
+    return runItem?.error_message || company.ai_description || 'Description generation failed for this company.';
   }
 
   return company.ai_description || 'No AI description yet. Generate one for this company.';
@@ -86,6 +117,7 @@ function CompaniesPage() {
   const [refreshError, setRefreshError] = useState(null);
   const [actionMessage, setActionMessage] = useState(null);
   const [currentRun, setCurrentRun] = useState(null);
+  const [runItemsByCompanyId, setRunItemsByCompanyId] = useState({});
   const [isCreatingRun, setIsCreatingRun] = useState(false);
   const [selectedCompanyId, setSelectedCompanyId] = useState(null);
   const [isPageVisible, setIsPageVisible] = useState(() => {
@@ -103,6 +135,24 @@ function CompaniesPage() {
 
   const selectedCompany = companies.find((company) => company.id === selectedCompanyId) || null;
 
+  const loadRunItems = async (runId) => {
+    const response = await fetch(`${API_URL}/api/v1/companies/enrichment-runs/${runId}/items`);
+    if (!response.ok) {
+      throw new Error('Failed to load company enrichment run items');
+    }
+
+    const payload = await response.json();
+    const nextRunItemsByCompanyId = {};
+    for (const item of payload.items || []) {
+      const companyId = `${item.company_id || ''}`.trim();
+      if (!companyId) {
+        continue;
+      }
+      nextRunItemsByCompanyId[companyId] = item;
+    }
+    return nextRunItemsByCompanyId;
+  };
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -112,6 +162,34 @@ function CompaniesPage() {
 
   useEffect(() => {
     currentRunIdRef.current = currentRun?.id || null;
+  }, [currentRun]);
+
+  useEffect(() => {
+    if (!currentRun?.id) {
+      setRunItemsByCompanyId({});
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const refreshRunItems = async () => {
+      try {
+        const nextRunItemsByCompanyId = await loadRunItems(currentRun.id);
+        if (!cancelled && mountedRef.current) {
+          setRunItemsByCompanyId(nextRunItemsByCompanyId);
+        }
+      } catch {
+        if (!cancelled && mountedRef.current) {
+          setRunItemsByCompanyId({});
+        }
+      }
+    };
+
+    refreshRunItems();
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentRun]);
 
   useEffect(() => {
@@ -213,8 +291,17 @@ function CompaniesPage() {
       if (!mountedRef.current) {
         return;
       }
+      const nextTotalPages = Number(payload.total_pages || 0);
+      const resolvedPage = nextTotalPages > 0 ? nextTotalPages : 1;
+
+      if (pageNumber > resolvedPage) {
+        setTotalPages(nextTotalPages);
+        setPage(resolvedPage);
+        return;
+      }
+
       setCompanies(payload.items || []);
-      setTotalPages(Number(payload.total_pages || 0));
+      setTotalPages(nextTotalPages);
       setError(null);
     } catch (err) {
       if (!mountedRef.current) {
@@ -397,16 +484,18 @@ function CompaniesPage() {
     ? Math.max(Number(currentRun.pending_items || 0), 0)
     : 0;
   const pageReadyCount = companies.filter((company) => hasCompanyAIDescription(company)).length;
-  const selectedCompanyStatus = selectedCompany ? getCompanyStatus(selectedCompany, currentRun) : null;
+  const selectedCompanyRunItem = selectedCompany ? runItemsByCompanyId[selectedCompany.id] : null;
+  const selectedCompanyStatus = selectedCompany ? getCompanyStatus(selectedCompany, currentRun, selectedCompanyRunItem) : null;
   const selectedCompanyDescription = selectedCompany && selectedCompanyStatus
-    ? getCompanyDescriptionText(selectedCompany, selectedCompanyStatus)
+    ? getCompanyDescriptionText(selectedCompany, selectedCompanyStatus, selectedCompanyRunItem)
     : null;
   const hasActiveRun = isActiveRun(currentRun);
+  const hasQueuedRun = isQueuedRun(currentRun);
   const batchButtonLabel = hasActiveRun
-    ? 'Generation in progress'
+    ? (hasQueuedRun ? 'Generation queued' : 'Generation in progress')
     : isCreatingRun
       ? 'Starting generation...'
-      : 'Generate All Pending Descriptions';
+      : 'Generate Missing Descriptions';
 
   return (
     <div className="companies-page">
@@ -424,19 +513,21 @@ function CompaniesPage() {
               <strong>{companies.length}</strong>
             </div>
             <div>
-              <span>Descriptions ready</span>
+              <span>Descriptions ready on page</span>
               <strong>{pageReadyCount}</strong>
             </div>
           </div>
 
-          {currentRun && (
+          {currentRun && hasActiveRun && (
             <div className="companies-progress">
               <div className="companies-progress-header">
                 <span>Global backlog run</span>
-                <strong>{progressValue}%</strong>
+                <strong>{hasQueuedRun ? 'Queued' : `${progressValue}%`}</strong>
               </div>
               <p className="companies-progress-summary">
-                {`Generating descriptions: ${progress.processed} / ${progress.total}`}
+                {hasQueuedRun
+                  ? 'Queued for execution'
+                  : `Generating descriptions: ${progress.processed} / ${progress.total}`}
               </p>
               <div
                 className="companies-progress-track"
@@ -451,16 +542,29 @@ function CompaniesPage() {
                   style={{ width: `${progressValue}%` }}
                 />
               </div>
-              <div className="companies-progress-meta">
-                <span>{`Success: ${currentRun.completed_items}`}</span>
-                <span>{`Failed: ${currentRun.failed_items}`}</span>
-                <span>{`Remaining: ${remainingCount}`}</span>
-              </div>
+              {!hasQueuedRun && (
+                <div className="companies-progress-meta">
+                  <span>{`Success: ${currentRun.completed_items}`}</span>
+                  <span>{`Failed: ${currentRun.failed_items}`}</span>
+                  <span>{`Remaining: ${remainingCount}`}</span>
+                </div>
+              )}
               {currentRun.current_company_name && (
                 <p className="companies-progress-current">
                   {`Current company: ${currentRun.current_company_name}`}
                 </p>
               )}
+            </div>
+          )}
+          {currentRun && !hasActiveRun && isTerminalRun(currentRun) && !actionMessage && (
+            <div className="companies-progress">
+              <div className="companies-progress-header">
+                <span>Latest run</span>
+                <strong>{getRunStatusLabel(currentRun.status)}</strong>
+              </div>
+              <p className="companies-progress-summary">
+                {formatRunCompletionMessage(currentRun)}
+              </p>
             </div>
           )}
         </div>
@@ -490,8 +594,8 @@ function CompaniesPage() {
                   onChange={handleStatusChange}
                   disabled={isLoading || hasActiveRun || isCreatingRun}
                 >
-                  <option value="pending">Pending</option>
-                  <option value="ready">Ready</option>
+                  <option value="pending">Needs AI</option>
+                  <option value="ready">AI Ready</option>
                   <option value="all">All</option>
                 </select>
               </div>
@@ -534,7 +638,8 @@ function CompaniesPage() {
         <>
           <div className="companies-grid">
             {companies.map((company) => {
-              const companyStatus = getCompanyStatus(company, currentRun);
+              const runItem = runItemsByCompanyId[company.id];
+              const companyStatus = getCompanyStatus(company, currentRun, runItem);
 
               return (
                 <CompanySummaryCard

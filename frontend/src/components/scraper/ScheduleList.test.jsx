@@ -210,6 +210,8 @@ describe('ScheduleList', () => {
   });
 
   it('shows the latest execution outcome and recent volume on the schedule card', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-28T12:00:00Z').getTime());
+
     render(
       <ScheduleList
         currentSourceSite="jobsdb"
@@ -243,7 +245,180 @@ describe('ScheduleList', () => {
     const card = screen.getByRole('heading', { level: 4, name: 'Outcome Focus' }).closest('.schedule-card');
     expect(card).not.toBeNull();
     expect(within(card).getByText('Last outcome')).toBeInTheDocument();
-    expect(within(card).getByText('Completed With AI Failures')).toBeInTheDocument();
-    expect(within(card).getByText('12 scraped / 11 ingested')).toBeInTheDocument();
+    const outcomeSummary = within(card).getByText('Last outcome').closest('.schedule-execution-summary');
+    expect(outcomeSummary).not.toBeNull();
+    expect(within(outcomeSummary).getByText('Completed With AI Failures')).toBeInTheDocument();
+    expect(within(outcomeSummary).getByText('12 scraped / 11 ingested')).toBeInTheDocument();
+    expect(within(outcomeSummary).getByText('4h ago')).toBeInTheDocument();
+  });
+
+  it('shows dead-lettered totals in the latest execution summary when ingest settled with failures', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-28T12:00:00Z').getTime());
+
+    render(
+      <ScheduleList
+        currentSourceSite="ctgoodjobs"
+        schedules={[
+          {
+            id: 'outcome-dead-letter',
+            name: 'CTGoodJobs Recovery',
+            cron_expression: '0 2 * * *',
+            category_ids: ['ctgoodjobs:021'],
+            source_site: 'ctgoodjobs',
+            crawl_phase: 'detail',
+            crawl_mode: 'headed',
+            is_active: true,
+            last_run_at: '2026-05-28T08:00:00Z',
+            next_run_at: '2026-05-29T08:00:00Z',
+            latest_execution_status: 'completed',
+            latest_execution_started_at: '2026-05-28T08:00:00Z',
+            latest_execution_completed_at: '2026-05-28T08:05:00Z',
+            latest_execution_jobs_scraped: 100,
+            latest_execution_jobs_saved: 30,
+            latest_execution_jobs_dead_lettered: 70,
+          },
+        ]}
+        onToggle={vi.fn()}
+        onDelete={vi.fn()}
+        onRun={vi.fn()}
+        onViewHistory={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    const card = screen.getByRole('heading', { level: 4, name: 'CTGoodJobs Recovery' }).closest('.schedule-card');
+    expect(card).not.toBeNull();
+    const outcomeSummary = within(card).getByText('Last outcome').closest('.schedule-execution-summary');
+    expect(outcomeSummary).not.toBeNull();
+    expect(within(outcomeSummary).getByText('100 scraped / 30 ingested / 70 dead-lettered')).toBeInTheDocument();
+  });
+
+  it('shows staged backlog totals for listing runs instead of empty scraped/ingested counts', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-28T12:00:00Z').getTime());
+
+    render(
+      <ScheduleList
+        currentSourceSite="jobsdb"
+        schedules={[
+          {
+            id: 'outcome-backlog',
+            name: 'JobsDB ICT E2E',
+            cron_expression: '0 2 * * *',
+            category_ids: [6281],
+            source_site: 'jobsdb',
+            crawl_phase: 'listing',
+            crawl_mode: 'headed',
+            is_active: false,
+            last_run_at: '2026-05-28T08:00:00Z',
+            next_run_at: null,
+            latest_execution_status: 'completed',
+            latest_execution_started_at: '2026-05-28T08:00:00Z',
+            latest_execution_completed_at: '2026-05-28T08:05:00Z',
+            latest_execution_jobs_scraped: 0,
+            latest_execution_jobs_saved: 0,
+            latest_execution_listings_staged: 96,
+            latest_execution_detail_pending: 89,
+            latest_execution_detail_completed: 7,
+          },
+        ]}
+        onToggle={vi.fn()}
+        onDelete={vi.fn()}
+        onRun={vi.fn()}
+        onViewHistory={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    const card = screen.getByRole('heading', { level: 4, name: 'JobsDB ICT E2E' }).closest('.schedule-card');
+    expect(card).not.toBeNull();
+    const outcomeSummary = within(card).getByText('Last outcome').closest('.schedule-execution-summary');
+    expect(outcomeSummary).not.toBeNull();
+    expect(within(outcomeSummary).getByText('96 staged / 89 pending details / 7 completed details')).toBeInTheDocument();
+  });
+
+  it('shows running detail totals in the latest execution summary when backlog is actively being consumed', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-28T12:00:00Z').getTime());
+
+    render(
+      <ScheduleList
+        currentSourceSite="jobsdb"
+        schedules={[
+          {
+            id: 'outcome-running-backlog',
+            name: 'JobsDB Recovery In Flight',
+            cron_expression: '0 2 * * *',
+            category_ids: [6281],
+            source_site: 'jobsdb',
+            crawl_phase: 'listing',
+            crawl_mode: 'headed',
+            is_active: true,
+            last_run_at: '2026-05-28T08:00:00Z',
+            next_run_at: '2026-05-29T08:00:00Z',
+            latest_execution_status: 'running',
+            latest_execution_started_at: '2026-05-28T08:00:00Z',
+            latest_execution_jobs_scraped: 0,
+            latest_execution_jobs_saved: 0,
+            latest_execution_listings_staged: 96,
+            latest_execution_detail_pending: 51,
+            latest_execution_detail_running: 12,
+            latest_execution_detail_completed: 22,
+          },
+        ]}
+        onToggle={vi.fn()}
+        onDelete={vi.fn()}
+        onRun={vi.fn()}
+        onViewHistory={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    const card = screen.getByRole('heading', { level: 4, name: 'JobsDB Recovery In Flight' }).closest('.schedule-card');
+    expect(card).not.toBeNull();
+    const outcomeSummary = within(card).getByText('Last outcome').closest('.schedule-execution-summary');
+    expect(outcomeSummary).not.toBeNull();
+    expect(
+      within(outcomeSummary).getByText('96 staged / 51 pending details / 12 running details / 22 completed details')
+    ).toBeInTheDocument();
+  });
+
+  it('shows an awaiting-counts summary for active executions before the first counters arrive', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-05-28T12:00:00Z').getTime());
+
+    render(
+      <ScheduleList
+        currentSourceSite="jobsdb"
+        schedules={[
+          {
+            id: 'outcome-awaiting-counts',
+            name: 'JobsDB Warm Start',
+            cron_expression: '0 2 * * *',
+            category_ids: [6281],
+            source_site: 'jobsdb',
+            crawl_phase: 'listing',
+            crawl_mode: 'headed',
+            is_active: true,
+            last_run_at: '2026-05-28T08:00:00Z',
+            next_run_at: '2026-05-29T08:00:00Z',
+            latest_execution_status: 'running',
+            latest_execution_started_at: '2026-05-28T11:59:30Z',
+            latest_execution_jobs_scraped: 0,
+            latest_execution_jobs_saved: 0,
+          },
+        ]}
+        onToggle={vi.fn()}
+        onDelete={vi.fn()}
+        onRun={vi.fn()}
+        onViewHistory={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    const card = screen.getByRole('heading', { level: 4, name: 'JobsDB Warm Start' }).closest('.schedule-card');
+    expect(card).not.toBeNull();
+    const outcomeSummary = within(card).getByText('Last outcome').closest('.schedule-execution-summary');
+    expect(outcomeSummary).not.toBeNull();
+    expect(within(outcomeSummary).getByText('Running')).toBeInTheDocument();
+    expect(within(outcomeSummary).getByText('Awaiting first counts')).toBeInTheDocument();
+    expect(within(outcomeSummary).queryByText('0 scraped / 0 ingested')).not.toBeInTheDocument();
   });
 });

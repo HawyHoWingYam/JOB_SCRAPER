@@ -274,6 +274,7 @@
       "Engineering - Software": {
         "allowed_categories": [
           "Software Development",
+          "Infrastructure & Support",
           "General"
         ],
         "default_path": [

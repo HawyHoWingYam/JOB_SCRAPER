@@ -561,7 +561,7 @@ describe('ScheduleManager', () => {
       expect(JSON.parse(crawlJobCall[1].body)).toEqual({
         source_site: 'ctgoodjobs',
         crawl_phase: 'listing',
-        crawl_mode: 'headless',
+        crawl_mode: 'headed',
         category_ids: ['ctgoodjobs:021'],
         max_pages: 3,
         detail_limit: 100,
@@ -1287,6 +1287,32 @@ describe('ScheduleManager', () => {
     });
   });
 
+  it('does not present cleared numeric override fields as zero-valued run summaries', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+
+    const numericInput = screen.getByRole('spinbutton');
+    fireEvent.change(numericInput, { target: { value: '' } });
+
+    expect(screen.queryByText(/0 pages per sector/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/page limit not set/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20',
+      );
+    });
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '' } });
+
+    expect(screen.queryByText(/up to 0 job details to crawl/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/detail limit not set/i)).toBeInTheDocument();
+  });
+
   it('shows detail backlog guidance with selected listing batch counts', async () => {
     vi.stubGlobal(
       'fetch',
@@ -1334,6 +1360,150 @@ describe('ScheduleManager', () => {
     expect(screen.getByText('74 pending')).toBeInTheDocument();
     expect(screen.getByText('96 staged')).toBeInTheDocument();
     expect(screen.getByText('22 completed')).toBeInTheDocument();
+    expect(screen.getByText('details completed')).toBeInTheDocument();
+    expect(screen.queryByText('details ingested')).not.toBeInTheDocument();
+  });
+
+  it('shows failed and manual-review detail counts when the selected listing batch includes them', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        listingBatches: [
+          {
+            crawl_job_id: '11111111-1111-4111-8111-111111111111',
+            source_site: 'jobsdb',
+            status: 'completed',
+            category_ids: [1200],
+            queued_at: '2026-05-21T08:17:57Z',
+            completed_at: '2026-05-21T08:18:57Z',
+            listings_staged: 96,
+            detail_pending: 51,
+            detail_running: 0,
+            detail_completed: 22,
+            detail_failed: 11,
+            detail_manual_action_required: 6,
+          },
+        ],
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    expect(
+      await screen.findByRole('option', { name: /jobsdb batch 11111111-1111-4111-8111-111111111111/i })
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /listing batch/i }), {
+      target: { value: '11111111-1111-4111-8111-111111111111' },
+    });
+
+    expect(
+      await screen.findByText('11 failed')
+    ).toBeInTheDocument();
+    expect(screen.getByText('details failed')).toBeInTheDocument();
+    expect(screen.getByText('6 manual review')).toBeInTheDocument();
+    expect(screen.getByText('details blocked')).toBeInTheDocument();
+  });
+
+  it('shows running detail counts when the selected listing batch has in-flight detail work', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        listingBatches: [
+          {
+            crawl_job_id: '11111111-1111-4111-8111-111111111111',
+            source_site: 'jobsdb',
+            status: 'completed',
+            category_ids: [1200],
+            queued_at: '2026-05-21T08:17:57Z',
+            completed_at: '2026-05-21T08:18:57Z',
+            listings_staged: 96,
+            detail_pending: 51,
+            detail_running: 12,
+            detail_completed: 22,
+            detail_failed: 0,
+            detail_manual_action_required: 0,
+          },
+        ],
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    expect(
+      await screen.findByRole('option', { name: /jobsdb batch 11111111-1111-4111-8111-111111111111/i })
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /listing batch/i }), {
+      target: { value: '11111111-1111-4111-8111-111111111111' },
+    });
+
+    expect(await screen.findByText('12 running')).toBeInTheDocument();
+    expect(screen.getByText('details in flight')).toBeInTheDocument();
+  });
+
+  it('orders selected listing batch backlog metrics in the same stage-to-terminal sequence used elsewhere', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        listingBatches: [
+          {
+            crawl_job_id: '11111111-1111-4111-8111-111111111111',
+            source_site: 'jobsdb',
+            status: 'completed',
+            category_ids: [1200],
+            queued_at: '2026-05-21T08:17:57Z',
+            completed_at: '2026-05-21T08:18:57Z',
+            listings_staged: 96,
+            detail_pending: 51,
+            detail_running: 12,
+            detail_completed: 22,
+            detail_failed: 11,
+            detail_manual_action_required: 6,
+          },
+        ],
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    expect(
+      await screen.findByRole('option', { name: /jobsdb batch 11111111-1111-4111-8111-111111111111/i })
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /listing batch/i }), {
+      target: { value: '11111111-1111-4111-8111-111111111111' },
+    });
+
+    const metricGrid = screen.getByLabelText(/selected listing batch backlog/i);
+    const metricLabels = Array.from(metricGrid.querySelectorAll('strong')).map((node) => node.textContent);
+
+    expect(metricLabels).toEqual([
+      '96 staged',
+      '51 pending',
+      '12 running',
+      '22 completed',
+      '11 failed',
+      '6 manual review',
+    ]);
   });
 
   it('renders source-specific empty copy when the current source has no schedules', async () => {

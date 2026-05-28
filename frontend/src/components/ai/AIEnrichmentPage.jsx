@@ -52,6 +52,27 @@ function formatDurationShort(totalSeconds) {
   return `${minutes}m ${seconds}s`;
 }
 
+function formatPendingGateProgress(pendingGateProgress, { compact = false } = {}) {
+  const emittedItems = Number(pendingGateProgress?.emitted_items);
+  const settledItems = Number(pendingGateProgress?.settled_items);
+  const hasEmittedItems = Number.isFinite(emittedItems) && emittedItems > 0;
+  const hasSettledItems = Number.isFinite(settledItems) && settledItems >= 0;
+
+  if (hasEmittedItems && hasSettledItems) {
+    return compact
+      ? `Ingest settled ${settledItems.toLocaleString()}/${emittedItems.toLocaleString()}`
+      : `Ingest settled ${settledItems.toLocaleString()} of ${emittedItems.toLocaleString()} emitted items.`;
+  }
+
+  if (hasSettledItems && settledItems > 0) {
+    return compact
+      ? `Ingest settled ${settledItems.toLocaleString()}`
+      : `Ingest settled ${settledItems.toLocaleString()} items so far.`;
+  }
+
+  return 'Ingest settle progress unavailable';
+}
+
 function formatTimestampIso(value) {
   const parsed = parseDateMs(value);
   if (parsed === null) {
@@ -124,6 +145,65 @@ function getRunStatusTone(status) {
     return 'danger';
   }
   return 'muted';
+}
+
+function describeActiveRunFocus({
+  status,
+  inProgressItems,
+  latestStartedJobTitle,
+  startedMs,
+  pendingGateReason,
+  pendingGateProgress,
+}) {
+  const normalizedStatus = normalizeRunStatus(status);
+
+  if (inProgressItems > 0) {
+    return {
+      label: 'Jobs in progress',
+      value: `${inProgressItems} jobs in progress`,
+      detail: `Latest title: ${latestStartedJobTitle}`,
+    };
+  }
+
+  if (normalizedStatus === 'pending') {
+    if (pendingGateReason === 'waiting_for_ingest_settle') {
+      return {
+        label: 'Queue status',
+        value: 'Waiting for ingest settle',
+        detail: formatPendingGateProgress(pendingGateProgress),
+      };
+    }
+
+    if (pendingGateReason === 'waiting_for_crawl_completion') {
+      return {
+        label: 'Queue status',
+        value: 'Waiting for crawl completion',
+        detail: 'This run will queue after the linked crawl reaches a terminal state.',
+      };
+    }
+
+    if (pendingGateReason === 'waiting_for_ai_runtime') {
+      return {
+        label: 'Queue status',
+        value: 'Waiting for AI runtime',
+        detail: 'The jobs AI profile must become ready before execution can start.',
+      };
+    }
+
+    return {
+      label: 'Queue status',
+      value: 'Queued for execution',
+      detail: startedMs === null
+        ? 'Latest title will appear after the first item starts.'
+        : `Latest title: ${latestStartedJobTitle}`,
+    };
+  }
+
+  return {
+    label: 'Jobs in progress',
+    value: 'Waiting for next item to start',
+    detail: `Latest title: ${latestStartedJobTitle}`,
+  };
 }
 
 function isRetryableTerminalRun(run) {
@@ -205,9 +285,20 @@ export default function AIEnrichmentPage() {
   const wasPageVisibleRef = useRef(typeof document === 'undefined' ? true : !document.hidden);
   const sortedRuns = sortRunsNewestFirst(runs);
   const overviewPendingJobs = Number(overview?.pending_jobs || 0);
+  const overviewEnrichedJobs = Number(overview?.enriched_jobs || 0);
+  const overviewEligibleEnrichedJobs = Number(
+    overview?.eligible_enriched_jobs ?? overview?.enriched_jobs ?? 0,
+  );
+  const overviewTotalJobs = Number(overview?.total_jobs || 0);
+  const overviewAiEligibleJobs = Number(
+    overview?.ai_eligible_jobs || (overviewPendingJobs + overviewEligibleEnrichedJobs),
+  );
+  const overviewIneligibleJobs = Number(
+    overview?.ineligible_jobs || Math.max(overviewTotalJobs - overviewAiEligibleJobs, 0),
+  );
   const overviewFailedJobs = Number(overview?.failed_jobs ?? overview?.failed_items ?? 0);
   const visibleActiveRunsCount = sortedRuns.filter((run) => isActiveRun(run)).length;
-  const overviewActiveRunsCount = Number(overview?.active_runs || 0);
+  const overviewActiveRunsCount = Number(overview?.active_runs ?? overview?.running_runs ?? 0);
   const isBootstrapPolling = hasConsoleData && (!hasLoadedOverview || !hasLoadedRuns);
   const shouldPollRuns = isBootstrapPolling || overviewActiveRunsCount > 0 || (!hasLoadedOverview && visibleActiveRunsCount > 0);
   const pendingJobsDisplay = hasLoadedOverview ? overviewPendingJobs : DEGRADED_PLACEHOLDER;
@@ -216,9 +307,16 @@ export default function AIEnrichmentPage() {
   const lastCompletedDisplay = hasLoadedOverview
     ? overview?.last_completed_run?.id || 'No completed run yet'
     : DEGRADED_PLACEHOLDER;
-  const backlogWindowDisplay = hasLoadedOverview ? `${overviewPendingJobs.toLocaleString()} jobs` : DEGRADED_PLACEHOLDER;
+  const backlogWindowDisplay = hasLoadedOverview
+    ? (overviewAiEligibleJobs > 0
+      ? `${overviewPendingJobs.toLocaleString()} of ${overviewAiEligibleJobs.toLocaleString()} AI-eligible jobs`
+      : 'No AI-eligible jobs currently available for enrichment')
+    : DEGRADED_PLACEHOLDER;
   const failureCountDisplay = hasLoadedOverview ? `${overviewFailedJobs.toLocaleString()} jobs` : DEGRADED_PLACEHOLDER;
   const activeRunsRibbonDisplay = hasLoadedOverview ? `${overviewActiveRunsCount.toLocaleString()} runs` : DEGRADED_PLACEHOLDER;
+  const ineligibleQueueDisplay = hasLoadedOverview && overviewIneligibleJobs > 0
+    ? `${overviewIneligibleJobs.toLocaleString()} acquired jobs are outside the AI queue.`
+    : null;
   const { hasActive: monitorHasActive, slots: monitorSlots } = resolveMonitorSlots(sortedRuns);
   const retryTargetRun = monitorSlots.find((run) => isRetryableTerminalRun(run)) || null;
 
@@ -439,7 +537,7 @@ export default function AIEnrichmentPage() {
         throw new Error(`Run request failed with ${response.status}`);
       }
 
-      setActionMessage(`AI backlog run submitted for up to ${normalizedLimit.toLocaleString()} pending jobs.`);
+      setActionMessage(`AI backlog run submitted for up to ${normalizedLimit.toLocaleString()} AI-eligible pending jobs.`);
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (err) {
       setActionError(err.message);
@@ -541,7 +639,7 @@ export default function AIEnrichmentPage() {
           {refreshError && <div className="ai-status-banner ai-status-error">{refreshError}</div>}
           <div className="stats-grid">
             <SummaryCard
-              label="Pending Jobs"
+              label="Pending AI-Eligible Jobs"
               value={pendingJobsDisplay}
               icon={BrainCircuit}
               tone="purple"
@@ -578,9 +676,10 @@ export default function AIEnrichmentPage() {
               <div className="ai-backlog-guidance">
                 <span className="ai-ribbon-label">AI backlog run</span>
                 <p>
-                  Processes up to the pending limit from jobs without AI insights, then writes summaries, skills, taxonomy, and experience fields back to Job Browser.
+                  Processes up to the pending limit from AI-eligible jobs without AI insights, then writes summaries, skills, taxonomy, and experience fields back to Job Browser.
                 </p>
                 <strong>{backlogWindowDisplay} waiting for AI enrichment</strong>
+                {ineligibleQueueDisplay && <p>{ineligibleQueueDisplay}</p>}
               </div>
 
               <div className="ai-actions-row">
@@ -706,14 +805,24 @@ export default function AIEnrichmentPage() {
                   const inProgressItems = Number.isFinite(Number(run.in_progress_items))
                     ? Number(run.in_progress_items)
                     : (active ? Math.max(0, totalItems - remainingItems - processedItems) : 0);
-                  const latestStartedJobTitle = run.latest_started_job_title || run.current_job_title || 'Waiting for persisted title';
+                  const latestStartedJobTitle = run.latest_started_job_title || run.current_job_title || 'Latest title unavailable yet';
                   const progressValue = totalItems ? Math.round((processedItems / totalItems) * 100) : 0;
 
                   const startedMs = parseDateMs(run.started_at);
                   const completedMs = parseDateMs(run.completed_at);
                   const completedIso = formatTimestampIso(run.completed_at);
+                  const createdIso = formatTimestampIso(run.created_at);
                   const durationSeconds =
                     startedMs !== null && completedMs !== null ? Math.max(0, (completedMs - startedMs) / 1000) : null;
+                  const activeRunFocus = describeActiveRunFocus({
+                    status: run.status,
+                    inProgressItems,
+                    latestStartedJobTitle,
+                    startedMs,
+                    pendingGateReason: run.pending_gate_reason,
+                    pendingGateProgress: run.pending_gate_progress,
+                  });
+                  const isQueuedPendingRun = normalizedStatus === 'pending' && startedMs === null;
 
                   return (
                     <article
@@ -753,22 +862,24 @@ export default function AIEnrichmentPage() {
 
                       {active && (
                         <div className="ai-run-focus">
-                          <span className="ai-run-focus-label">Jobs in progress</span>
-                          <strong className="ai-run-focus-value">
-                            {inProgressItems > 0 ? `${inProgressItems} jobs in progress` : 'Waiting for workers to claim jobs'}
-                          </strong>
-                          <span className="ai-run-focus-detail">Latest title: {latestStartedJobTitle}</span>
+                          <span className="ai-run-focus-label">{activeRunFocus.label}</span>
+                          <strong className="ai-run-focus-value">{activeRunFocus.value}</strong>
+                          <span className="ai-run-focus-detail">{activeRunFocus.detail}</span>
                         </div>
                       )}
 
                       {active ? (
                         <div className="ai-run-summary ai-run-summary-live">
-                          <div className="ai-run-summary-title">Live summary</div>
+                          <div className="ai-run-summary-title">
+                            {isQueuedPendingRun ? 'Queued summary' : 'Live summary'}
+                          </div>
                           <div className="ai-run-summary-body">
-                            <span>
-                              Elapsed{' '}
-                              {startedMs === null ? '-' : formatDurationShort((Date.now() - startedMs) / 1000)}
-                            </span>
+                            <span>{isQueuedPendingRun
+                              ? run.pending_gate_reason === 'waiting_for_ingest_settle'
+                                ? formatPendingGateProgress(run.pending_gate_progress, { compact: true })
+                                : `Queued at ${createdIso || '-'}`
+                              : `Elapsed ${startedMs === null ? '-' : formatDurationShort((Date.now() - startedMs) / 1000)}`
+                            }</span>
                             <span>Remaining {remainingItems}</span>
                           </div>
                         </div>

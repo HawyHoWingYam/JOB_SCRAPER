@@ -152,6 +152,15 @@ function getExpiryLabel(job) {
   return `Application closes ${formatted}`;
 }
 
+function formatRelatedJobScore(score) {
+  const numericScore = Number(score);
+  if (!Number.isFinite(numericScore)) {
+    return 'Score unavailable';
+  }
+
+  return `${Math.round(numericScore * 100)}%`;
+}
+
 function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilitiesLoading = false }) {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -380,7 +389,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                       <div className="related-job-card-header">
                         <h4>{relatedJob.title}</h4>
                         <span className="related-job-score">
-                          {Math.round((relatedJob.combined_score || 0) * 100)}%
+                          {formatRelatedJobScore(relatedJob.combined_score)}
                         </span>
                       </div>
                       <p className="related-job-company">{relatedJob.company_name || 'Unknown company'}</p>

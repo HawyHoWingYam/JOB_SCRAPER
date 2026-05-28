@@ -89,12 +89,15 @@ class StartupRecoveryService:
         if not active_runs:
             return 0
 
+        recovered_runs = 0
         for run in active_runs:
             items = (
                 self.db.query(EnrichmentRunItem)
                 .filter(EnrichmentRunItem.run_id == run.id)
                 .all()
             )
+            if not self._enrichment_run_was_started(run, items=items):
+                continue
             completed_items = 0
             failed_items = 0
 
@@ -118,7 +121,21 @@ class StartupRecoveryService:
             run.current_job_title = None
             run.error_message = AI_RESTART_MESSAGE
 
-        return len(active_runs)
+            recovered_runs += 1
+
+        return recovered_runs
+
+    def _enrichment_run_was_started(self, run: EnrichmentRun, *, items: list[EnrichmentRunItem]) -> bool:
+        if str(run.status or "").lower() == "running":
+            return True
+        if run.started_at is not None:
+            return True
+        return any(
+            item.status != "pending"
+            or item.started_at is not None
+            or item.completed_at is not None
+            for item in items
+        )
 
     def _recover_company_runs(self) -> int:
         active_runs = (

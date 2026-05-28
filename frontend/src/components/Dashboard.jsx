@@ -77,9 +77,14 @@ export default function Dashboard({ onNavigateToAI }) {
     : Number(aiOverview.failed_jobs || 0);
   const totalJobs = Number(stats?.total_jobs || 0);
   const enrichedJobs = Number(stats?.enriched_jobs || 0);
+  const eligibleEnrichedJobs = Number(stats?.eligible_enriched_jobs ?? stats?.enriched_jobs ?? 0);
   const pendingEnrichment = Number(stats?.pending_enrichment || 0);
-  const enrichmentCoverage = totalJobs > 0 ? Math.round((enrichedJobs / totalJobs) * 100) : 0;
-  const queuePressure = totalJobs > 0 ? Math.round((pendingEnrichment / totalJobs) * 100) : 0;
+  const aiEligibleJobs = Number(stats?.ai_eligible_jobs || (eligibleEnrichedJobs + pendingEnrichment));
+  const ineligibleJobs = Number(stats?.ineligible_jobs || Math.max(totalJobs - aiEligibleJobs, 0));
+  const activeRunsCount = Number(aiOverview?.active_runs ?? aiOverview?.running_runs ?? 0);
+  const hasAiEligibleCohort = aiEligibleJobs > 0;
+  const enrichmentCoverage = hasAiEligibleCohort ? Math.round((eligibleEnrichedJobs / aiEligibleJobs) * 100) : null;
+  const queuePressure = hasAiEligibleCohort ? Math.round((pendingEnrichment / aiEligibleJobs) * 100) : null;
 
   return (
     <div className="dashboard-container">
@@ -108,13 +113,21 @@ export default function Dashboard({ onNavigateToAI }) {
               <div className="dashboard-signal-grid">
                 <div className="dashboard-signal-item">
                   <span>AI coverage</span>
-                  <strong>{enrichmentCoverage}%</strong>
-                  <small>{enrichedJobs.toLocaleString()} of {totalJobs.toLocaleString()} profiles enriched</small>
+                  <strong>{enrichmentCoverage == null ? 'N/A' : `${enrichmentCoverage}%`}</strong>
+                  <small>
+                    {hasAiEligibleCohort
+                      ? `${eligibleEnrichedJobs.toLocaleString()} of ${aiEligibleJobs.toLocaleString()} AI-eligible jobs enriched`
+                      : 'No AI-eligible jobs are in the current dataset.'}
+                  </small>
                 </div>
                 <div className="dashboard-signal-item">
                   <span>Queue pressure</span>
-                  <strong>{queuePressure}%</strong>
-                  <small>{pendingEnrichment.toLocaleString()} profiles still waiting for AI</small>
+                  <strong>{queuePressure == null ? 'N/A' : `${queuePressure}%`}</strong>
+                  <small>
+                    {hasAiEligibleCohort
+                      ? `${pendingEnrichment.toLocaleString()} AI-eligible jobs still waiting for AI`
+                      : 'Queue pressure is unavailable until AI-eligible jobs appear.'}
+                  </small>
                 </div>
                 <div className="dashboard-signal-item">
                   <span>Failure watch</span>
@@ -141,9 +154,14 @@ export default function Dashboard({ onNavigateToAI }) {
               <h3>Enrichment queue</h3>
               <p className="dashboard-action-copy">
                 {pendingEnrichment > 0
-                  ? `${pendingEnrichment.toLocaleString()} profiles are staged for AI processing. Use the enrichment console for batch runs and retry launches.`
-                  : 'The enrichment backlog is clear. Use the console to verify recent runs and keep the queue healthy.'}
+                  ? `${pendingEnrichment.toLocaleString()} AI-eligible jobs are staged for AI processing. Use the enrichment console for batch runs and retry launches.`
+                  : 'The AI-eligible enrichment backlog is clear. Use the console to verify recent runs and keep the queue healthy.'}
               </p>
+              {ineligibleJobs > 0 && (
+                <p className="dashboard-action-copy">
+                  {ineligibleJobs.toLocaleString()} acquired jobs are not in the AI queue yet.
+                </p>
+              )}
 
               <div className="dashboard-action-meta">
                 <div>
@@ -151,8 +169,8 @@ export default function Dashboard({ onNavigateToAI }) {
                   <strong>{aiOverview.last_completed_run?.id || 'No completed run yet'}</strong>
                 </div>
                 <div>
-                  <span>Running runs</span>
-                  <strong>{Number(aiOverview.running_runs || 0).toLocaleString()}</strong>
+                  <span>Active runs</span>
+                  <strong>{activeRunsCount.toLocaleString()}</strong>
                 </div>
               </div>
             </article>
@@ -174,8 +192,8 @@ export default function Dashboard({ onNavigateToAI }) {
                 <BrainCircuit size={24} className="stat-icon" />
               </div>
               <div className="stat-info">
-                <div className="stat-value">{stats.enriched_jobs.toLocaleString()}</div>
-                <div className="stat-label">AI Enriched Profiles</div>
+                <div className="stat-value">{eligibleEnrichedJobs.toLocaleString()}</div>
+                <div className="stat-label">AI-Eligible Jobs Enriched</div>
               </div>
             </div>
 
@@ -185,7 +203,7 @@ export default function Dashboard({ onNavigateToAI }) {
               </div>
               <div className="stat-info">
                 <div className="stat-value">{stats.pending_enrichment.toLocaleString()}</div>
-                <div className="stat-label">Pending Enrichment</div>
+                <div className="stat-label">Pending AI-Eligible Jobs</div>
               </div>
             </div>
 

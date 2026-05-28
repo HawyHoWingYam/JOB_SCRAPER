@@ -79,7 +79,7 @@ function FilterPanel({
 
                 <div className="filter-chip-row" aria-label="Active filters">
                     {activeFilters.length === 0 ? (
-                        <span className="filter-chip filter-chip-empty">All jobs currently in scope</span>
+                        <span className="filter-chip filter-chip-empty">No structured filters applied</span>
                     ) : (
                         activeFilters.map((filter) => (
                             <span key={filter} className="filter-chip">
@@ -89,7 +89,7 @@ function FilterPanel({
                     )}
                     {pendingChangeCount > 0 && (
                         <span className="filter-chip filter-chip-pending">
-                            {pendingChangeCount} pending changes
+                            {pendingChangeCount} pending change{pendingChangeCount === 1 ? '' : 's'}
                         </span>
                     )}
                 </div>

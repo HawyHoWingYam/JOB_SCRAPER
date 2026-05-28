@@ -6,7 +6,14 @@ from typing import Optional
 SUPPORTED_CRAWL_MODES = {"headless", "headed"}
 DEFAULT_CRAWL_MODE_BY_SOURCE = {
     "jobsdb": "headed",
-    "ctgoodjobs": "headless",
+    "ctgoodjobs": "headed",
+}
+SUPPORTED_CRAWL_MODES_BY_SOURCE = {
+    "jobsdb": ("headless", "headed"),
+    "ctgoodjobs": ("headed",),
+}
+LEGACY_CRAWL_MODE_UPGRADES = {
+    ("ctgoodjobs", "headless"): "headed",
 }
 
 
@@ -25,9 +32,22 @@ def normalize_crawl_mode(crawl_mode: Optional[str]) -> Optional[str]:
     return normalized
 
 
+def get_supported_crawl_modes(source_site: Optional[str]) -> tuple[str, ...]:
+    normalized_source = normalize_source_site(source_site)
+    return SUPPORTED_CRAWL_MODES_BY_SOURCE.get(
+        normalized_source,
+        tuple(sorted(SUPPORTED_CRAWL_MODES)),
+    )
+
+
 def resolve_crawl_mode(source_site: Optional[str], crawl_mode: Optional[str] = None) -> str:
     normalized_source = normalize_source_site(source_site)
     normalized_mode = normalize_crawl_mode(crawl_mode)
     if normalized_mode is not None:
+        legacy_upgrade = LEGACY_CRAWL_MODE_UPGRADES.get((normalized_source, normalized_mode))
+        if legacy_upgrade is not None:
+            return legacy_upgrade
+        if normalized_mode not in get_supported_crawl_modes(normalized_source):
+            return DEFAULT_CRAWL_MODE_BY_SOURCE.get(normalized_source, normalized_mode)
         return normalized_mode
     return DEFAULT_CRAWL_MODE_BY_SOURCE.get(normalized_source, "headless")

@@ -15,12 +15,22 @@ from app.services.startup_recovery_service import StartupRecoveryService
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
+_STALE_PENDING_RECLAIM_IDLE_MS = 60_000
 
 
-def run_worker_startup_recovery() -> int:
+def run_worker_startup_recovery() -> dict[str, int]:
     db = SessionLocal()
     try:
-        return StartupRecoveryService(db).recover_ai_runs_only()
+        recovered_ai_runs = StartupRecoveryService(db).recover_ai_runs_only()
+        queued_pending_runs = EnrichmentRunService(db).request_ready_pending_runs(
+            source_service="enrichment-worker-startup",
+        )
+        db.commit()
+        OutboxPublisher().publish_pending_batch(db, limit=100)
+        return {
+            "recovered_ai_runs": recovered_ai_runs,
+            "queued_pending_runs": queued_pending_runs,
+        }
     finally:
         db.close()
 
@@ -54,6 +64,7 @@ class EnrichmentWorkerService:
             self.consumer_name,
             count=10,
             block_ms=100,
+            reclaim_idle_ms=_STALE_PENDING_RECLAIM_IDLE_MS,
         )
         for message in lifecycle_messages:
             await self._handle_lifecycle_message(message)
@@ -65,6 +76,7 @@ class EnrichmentWorkerService:
             self.consumer_name,
             count=10,
             block_ms=100,
+            reclaim_idle_ms=_STALE_PENDING_RECLAIM_IDLE_MS,
         )
         for message in progress_messages:
             await self._handle_progress_message(message)
@@ -161,8 +173,12 @@ class EnrichmentWorkerService:
 
 
 async def main() -> None:
-    recovered = run_worker_startup_recovery()
-    logger.info("Starting enrichment worker (recovered_ai_runs=%s)", recovered)
+    recovery_summary = run_worker_startup_recovery()
+    logger.info(
+        "Starting enrichment worker (recovered_ai_runs=%s queued_pending_runs=%s)",
+        recovery_summary["recovered_ai_runs"],
+        recovery_summary["queued_pending_runs"],
+    )
     service = EnrichmentWorkerService()
     while True:
         processed = await service.run_once()

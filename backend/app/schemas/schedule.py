@@ -169,6 +169,14 @@ class ScheduleSchema(BaseModel):
     latest_execution_completed_at: Optional[datetime] = None
     latest_execution_jobs_scraped: Optional[int] = None
     latest_execution_jobs_saved: Optional[int] = None
+    latest_execution_jobs_settled: Optional[int] = None
+    latest_execution_jobs_dead_lettered: Optional[int] = None
+    latest_execution_listings_staged: Optional[int] = None
+    latest_execution_detail_pending: Optional[int] = None
+    latest_execution_detail_running: Optional[int] = None
+    latest_execution_detail_completed: Optional[int] = None
+    latest_execution_detail_failed: Optional[int] = None
+    latest_execution_detail_manual_action_required: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
@@ -195,6 +203,14 @@ class ExecutionSchema(BaseModel):
     duration_seconds: Optional[int]
     jobs_scraped: int
     jobs_saved: int
+    jobs_settled: Optional[int] = None
+    jobs_dead_lettered: Optional[int] = None
+    listings_staged: Optional[int] = None
+    detail_pending: Optional[int] = None
+    detail_running: Optional[int] = None
+    detail_completed: Optional[int] = None
+    detail_failed: Optional[int] = None
+    detail_manual_action_required: Optional[int] = None
     phase1_completed: bool
     phase2_completed: bool
     phase3_completed: bool

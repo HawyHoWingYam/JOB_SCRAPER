@@ -18,7 +18,7 @@ function SearchBar({ value, onChange, onSubmit, isLoading, placeholder }) {
             <Search className="search-icon" size={20} />
             <input
                 type="text"
-                placeholder={placeholder || 'Search profiles by title, company, or deep scan description...'}
+                placeholder={placeholder || 'Search jobs by title, company, or deep scan description...'}
                 value={value || ''}
                 onChange={(e) => onChange(e.target.value)}
                 onKeyDown={handleKeyDown}

@@ -20,6 +20,19 @@ function formatShare(value, total) {
   return `${Math.round((value / total) * 100)}%`;
 }
 
+function resolveSharePercentage(explicitShare, value, total) {
+  const numericShare = Number(explicitShare);
+  if (Number.isFinite(numericShare) && numericShare >= 0) {
+    return numericShare;
+  }
+
+  if (!total) {
+    return 0;
+  }
+
+  return Math.round((Number(value || 0) / total) * 100);
+}
+
 function formatFallbackInsight(bucket) {
   if (!bucket?.source_breakdown?.length) {
     return 'Fallback bucket includes jobs that could not be classified into a more specific governed path.';
@@ -145,7 +158,7 @@ export default function CategoryChart({ totalJobs = 0 }) {
             <div className="category-chart-list">
               {topSpecificCategories.map((item, index) => {
                 const color = CATEGORY_COLORS[index % CATEGORY_COLORS.length];
-                const share = Number(item.share_of_specific || 0);
+                const share = resolveSharePercentage(item.share_of_specific, item.count, specificTotal);
 
                 return (
                   <div key={item.path} className="category-chart-row">
@@ -170,25 +183,37 @@ export default function CategoryChart({ totalJobs = 0 }) {
 
               {Number(otherSpecificCategories.count || 0) > 0 && (
                 <div className="category-chart-row category-chart-row-muted">
+                  {(() => {
+                    const otherSpecificShare = resolveSharePercentage(
+                      otherSpecificCategories.share_of_specific,
+                      otherSpecificCategories.count,
+                      specificTotal,
+                    );
+
+                    return (
+                      <>
                   <span className="category-chart-swatch category-chart-swatch-muted" aria-hidden="true" />
                   <div className="category-chart-copy">
                     <strong>Other specific categories</strong>
                     <div className="category-chart-bar">
                       <span
                         style={{
-                          width: `${Number(otherSpecificCategories.share_of_specific || 0)}%`,
+                          width: `${otherSpecificShare}%`,
                           backgroundColor: 'rgba(148, 163, 184, 0.9)',
                         }}
                       />
                     </div>
                     <small>
-                      {Number(otherSpecificCategories.share_of_specific || 0)}% across{' '}
+                      {otherSpecificShare}% across{' '}
                       {Number(otherSpecificCategories.bucket_count || 0)} categories
                     </small>
                   </div>
                   <span className="category-chart-value">
                     {Number(otherSpecificCategories.count || 0).toLocaleString()}
                   </span>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -196,6 +221,15 @@ export default function CategoryChart({ totalJobs = 0 }) {
 
           {primaryFallbackBucket && (
             <div className="category-fallback-panel">
+              {(() => {
+                const fallbackShare = resolveSharePercentage(
+                  primaryFallbackBucket.share_of_categorized,
+                  primaryFallbackBucket.count,
+                  categorizedTotal,
+                );
+
+                return (
+                  <>
               <div className="category-chart-section-header">
                 <h4>Fallback diagnostic</h4>
                 <p>Fallback buckets are real taxonomy outputs, but they are tracked separately from the specific category ranking.</p>
@@ -205,7 +239,7 @@ export default function CategoryChart({ totalJobs = 0 }) {
                 <div>
                   <span className="category-fallback-label">{primaryFallbackBucket.label}</span>
                   <strong>{Number(primaryFallbackBucket.count || 0).toLocaleString()}</strong>
-                  <small>{Number(primaryFallbackBucket.share_of_categorized || 0)}% of categorized jobs</small>
+                  <small>{fallbackShare}% of categorized jobs</small>
                 </div>
                 <p>{formatFallbackInsight(primaryFallbackBucket)}</p>
               </div>
@@ -220,6 +254,9 @@ export default function CategoryChart({ totalJobs = 0 }) {
                   </div>
                 ))}
               </div>
+                  </>
+                );
+              })()}
             </div>
           )}
 

@@ -56,6 +56,9 @@ class JobCategoryNormalizer:
         source_subclassification_name: Optional[str] = None,
         conservative_mode: bool = False,
         cross_domain_min_confidence: float = 0.9,
+        job_title: Optional[str] = None,
+        job_description: str = "",
+        extracted_skills: Optional[list[dict | str]] = None,
     ) -> uuid.UUID:
         """Resolve an AI taxonomy decision into a concrete subcategory id."""
         source_slice = self.registry.get_allowed_slice(
@@ -101,6 +104,28 @@ class JobCategoryNormalizer:
             source_slice,
             governance_override=bool(classification.get("governance_override")),
         )
+        domain_name, category_name, subcategory_name, allow_create = (
+            self._prefer_infrastructure_support_for_devops_like_signals(
+                (domain_name, category_name, subcategory_name, allow_create),
+                source_slice,
+                source_subclassification_name=source_subclassification_name,
+                job_title=job_title,
+                job_description=job_description,
+                extracted_skills=extracted_skills,
+                governance_override=bool(classification.get("governance_override")),
+            )
+        )
+        domain_name, category_name, subcategory_name, allow_create = (
+            self._prefer_backend_development_for_explicit_software_signals(
+                (domain_name, category_name, subcategory_name, allow_create),
+                source_slice,
+                source_subclassification_name=source_subclassification_name,
+                job_title=job_title,
+                job_description=job_description,
+                extracted_skills=extracted_skills,
+                governance_override=bool(classification.get("governance_override")),
+            )
+        )
         resolved_path = (domain_name, category_name, subcategory_name)
         return self._get_or_create_path(
             domain_name,
@@ -133,6 +158,211 @@ class JobCategoryNormalizer:
             return resolved_path
 
         return (default_domain, default_category, default_subcategory, False)
+
+    def _prefer_infrastructure_support_for_devops_like_signals(
+        self,
+        resolved_path: tuple[str, str, str, bool],
+        source_slice: SourceBoundTaxonomySlice,
+        *,
+        source_subclassification_name: Optional[str],
+        job_title: Optional[str],
+        job_description: str,
+        extracted_skills: Optional[list[dict | str]],
+        governance_override: bool,
+    ) -> tuple[str, str, str, bool]:
+        """Shift obvious DevOps/infra software roles out of backend development."""
+        if governance_override:
+            return resolved_path
+        if source_subclassification_name != "Engineering - Software":
+            return resolved_path
+
+        domain_name, category_name, subcategory_name, allow_create = resolved_path
+        if category_name != "Software Development" or subcategory_name != "Backend Development":
+            return resolved_path
+        if "Infrastructure & Support" not in source_slice.allowed_categories:
+            return resolved_path
+        if "Systems Administration" not in source_slice.allowed_subcategories:
+            return resolved_path
+
+        normalized_text = " ".join(
+            str(value or "").strip().lower()
+            for value in (job_title, job_description)
+        )
+        normalized_skill_names = {
+            self._normalize_skill_signal_name(skill)
+            for skill in (extracted_skills or [])
+        }
+
+        title_has_strong_signal = any(
+            token in str(job_title or "").lower()
+            for token in (
+                "devops",
+                "site reliability",
+                "sre",
+                "platform engineer",
+                "platform engineering",
+                "mlops",
+            )
+        )
+        title_has_explicit_backend_marker = any(
+            token in str(job_title or "").lower()
+            for token in (
+                "backend",
+                "microservice",
+                "node.js",
+                "java developer",
+                "golang",
+                "go developer",
+            )
+        )
+        infra_signal_hits = {
+            signal
+            for signal in (
+                "ci/cd",
+                "continuous integration",
+                "continuous delivery",
+                "terraform",
+                "kubernetes",
+                "docker",
+                "openshift",
+                "ansible",
+                "puppet",
+                "chef",
+                "bash",
+                "linux",
+                "jenkins",
+                "cloud architecture",
+                "cloud infrastructure",
+                "virtualization",
+                "devsecops",
+                "gitops",
+            )
+            if signal in normalized_text or signal in normalized_skill_names
+        }
+        cloud_platform_hits = {
+            signal
+            for signal in ("aws", "azure", "alicloud", "gcp")
+            if signal in normalized_text or signal in normalized_skill_names
+        }
+        devtestops_signal_hits = {
+            signal
+            for signal in (
+                "test environment",
+                "test environments",
+                "environment provisioning",
+                "automated test framework",
+                "automated test frameworks",
+                "ci/cd pipeline",
+                "ci/cd pipelines",
+                "performance testing",
+                "load testing",
+                "reliability testing",
+            )
+            if signal in normalized_text
+        }
+
+        if not title_has_strong_signal and len(infra_signal_hits | cloud_platform_hits) < 4:
+            if title_has_explicit_backend_marker:
+                return resolved_path
+            infra_tool_hits = {
+                signal
+                for signal in ("terraform", "kubernetes", "docker", "ansible", "linux")
+                if signal in normalized_text or signal in normalized_skill_names
+            }
+            if len(devtestops_signal_hits) < 3 or len(infra_tool_hits) < 2:
+                return resolved_path
+
+        return (
+            domain_name,
+            "Infrastructure & Support",
+            "Systems Administration",
+            allow_create,
+        )
+
+    def _normalize_skill_signal_name(self, skill: dict | str) -> str:
+        if isinstance(skill, dict):
+            return str(
+                skill.get("name")
+                or skill.get("skill")
+                or skill.get("raw_name")
+                or skill.get("normalized_name")
+                or ""
+            ).strip().lower()
+        if isinstance(skill, str):
+            return skill.strip().lower()
+        return ""
+
+    def _prefer_backend_development_for_explicit_software_signals(
+        self,
+        resolved_path: tuple[str, str, str, bool],
+        source_slice: SourceBoundTaxonomySlice,
+        *,
+        source_subclassification_name: Optional[str],
+        job_title: Optional[str],
+        job_description: str,
+        extracted_skills: Optional[list[dict | str]],
+        governance_override: bool,
+    ) -> tuple[str, str, str, bool]:
+        """Protect explicit backend/microservices software roles from drifting into infra."""
+        if governance_override:
+            return resolved_path
+        if source_subclassification_name != "Engineering - Software":
+            return resolved_path
+
+        domain_name, category_name, subcategory_name, allow_create = resolved_path
+        if category_name != "Infrastructure & Support" or subcategory_name != "Systems Administration":
+            return resolved_path
+        if "Software Development" not in source_slice.allowed_categories:
+            return resolved_path
+        if "Backend Development" not in source_slice.allowed_subcategories:
+            return resolved_path
+
+        normalized_title = str(job_title or "").lower()
+        normalized_text = " ".join(
+            str(value or "").strip().lower()
+            for value in (job_title, job_description)
+        )
+        normalized_skill_names = {
+            self._normalize_skill_signal_name(skill)
+            for skill in (extracted_skills or [])
+        }
+        explicit_backend_title = any(
+            token in normalized_title
+            for token in (
+                "backend engineer",
+                "back end",
+                "microservice",
+                "api developer",
+                "java developer",
+            )
+        )
+        backend_signal_hits = {
+            signal
+            for signal in (
+                "api",
+                "apis",
+                "restful api",
+                "integration layer",
+                "backend service",
+                "backend services",
+                "microservices",
+                "node.js",
+                "java",
+                "golang",
+                "go code",
+            )
+            if signal in normalized_text or signal in normalized_skill_names
+        }
+
+        if not explicit_backend_title and len(backend_signal_hits) < 3:
+            return resolved_path
+
+        return (
+            domain_name,
+            "Software Development",
+            "Backend Development",
+            allow_create,
+        )
 
     def get_taxonomy_candidate_slice(
         self,

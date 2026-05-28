@@ -245,6 +245,8 @@ describe('JobBrowser', () => {
     expect(await screen.findByText('Healthcare ERP Lead')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /search all jobs/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /search within results/i })).not.toBeInTheDocument();
+    expect(screen.getByText('Matched jobs')).toBeInTheDocument();
+    expect(screen.getByText('3 jobs on this page')).toBeInTheDocument();
 
     expect(getSearchCalls(globalThis.fetch)).toHaveLength(1);
     expect(getLatestSearchBody(globalThis.fetch)).toEqual({
@@ -328,6 +330,22 @@ describe('JobBrowser', () => {
     expect(screen.getByText(/broad: erp/i)).toBeInTheDocument();
     expect(screen.getByText(/industry: healthcare/i)).toBeInTheDocument();
     expect(screen.queryByText('Tech ERP Lead')).not.toBeInTheDocument();
+  });
+
+  it('does not claim all jobs are in scope when only a text query is applied without structured filters', async () => {
+    render(<JobBrowser />);
+
+    await screen.findByText('Healthcare ERP Lead');
+
+    fireEvent.change(screen.getByPlaceholderText(/query titles, companies/i), {
+      target: { value: 'erp' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /search all jobs/i }));
+
+    await screen.findByRole('button', { name: /search within results/i });
+
+    expect(screen.getByText(/no structured filters applied/i)).toBeInTheDocument();
+    expect(screen.queryByText(/all jobs currently in scope/i)).not.toBeInTheDocument();
   });
 
   it('appends a refine layer when search within results is pressed', async () => {
@@ -453,9 +471,38 @@ describe('JobBrowser', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /search within results/i }));
 
-    expect(await screen.findByText(/no profiles found/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no jobs found/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/active scope trail/i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /remove layer/i }).length).toBeGreaterThan(0);
+  });
+
+  it('shows the real pending change count instead of collapsing every draft edit into a single change', async () => {
+    render(<JobBrowser />);
+
+    await screen.findByText('Healthcare ERP Lead');
+
+    fireEvent.change(screen.getByPlaceholderText(/query titles, companies/i), {
+      target: { value: 'erp' },
+    });
+    fireEvent.change(screen.getByLabelText(/industry/i), {
+      target: { value: 'Healthcare' },
+    });
+    fireEvent.change(screen.getByLabelText(/job taxonomy/i), {
+      target: { value: 'subcat-backend' },
+    });
+    fireEvent.change(screen.getByLabelText(/date from/i), {
+      target: { value: '2026-04-10' },
+    });
+    fireEvent.change(screen.getByLabelText(/date to/i), {
+      target: { value: '2026-04-16' },
+    });
+    fireEvent.change(screen.getByLabelText(/job type/i), {
+      target: { value: 'Full-time' },
+    });
+
+    expect(screen.getAllByText(/5 pending changes/i).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/5 pending changes armed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/1 pending changes/i)).not.toBeInTheDocument();
   });
 
   it('exports the active scope instead of pending draft edits', async () => {

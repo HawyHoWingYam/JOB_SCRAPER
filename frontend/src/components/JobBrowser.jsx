@@ -16,6 +16,8 @@ import {
     replaceScopeWithLayer,
 } from './jobBrowserScopeUtils';
 import {
+    countPendingQueryChanges,
+    createEmptyJobBrowserQuery,
     getDatePresetForQuery,
     getDatePresetRange,
     getDateValidationError,
@@ -145,6 +147,14 @@ function formatApiErrorDetail(detail, fallback) {
     return fallback;
 }
 
+function formatPendingChangesLabel(count) {
+    if (!count) {
+        return 'No refinements armed';
+    }
+
+    return `${count} pending change${count === 1 ? '' : 's'} armed`;
+}
+
 function JobBrowser() {
     const [jobs, setJobs] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -172,6 +182,10 @@ function JobBrowser() {
     const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
 
     const hasPendingChanges = hasPendingLayerChanges(createEmptyJobBrowserLayer(), draftLayer);
+    const pendingChangeCount = countPendingQueryChanges(createEmptyJobBrowserQuery(), {
+        search_query: draftLayer.text_expression,
+        ...draftLayer.structured_filters,
+    });
     const draftDatePreset = getDatePresetForQuery(draftLayer.structured_filters);
     const dateValidationError = getDateValidationError(draftLayer.structured_filters);
     const semanticAvailable = capabilities?.search?.semantic?.available !== false;
@@ -456,7 +470,7 @@ function JobBrowser() {
                             </span>
                             <span className="console-pill console-pill-muted">
                                 {hasPendingChanges
-                                    ? 'Draft refinement armed'
+                                    ? formatPendingChangesLabel(pendingChangeCount)
                                     : activeScope.layers.length === 0
                                         ? 'No refinements armed'
                                         : `${activeScope.layers.length} applied layers`}
@@ -520,7 +534,7 @@ function JobBrowser() {
 
                         <div className="query-console-results">
                             <div>
-                                <span className="query-console-results-label">Matched profiles</span>
+                                <span className="query-console-results-label">Matched jobs</span>
                                 <strong>{pagination.total.toLocaleString()}</strong>
                             </div>
                             <div>
@@ -558,7 +572,7 @@ function JobBrowser() {
                     isLoading={isLoading}
                     datePreset={draftDatePreset}
                     validationError={dateValidationError}
-                    pendingChangeCount={hasPendingChanges ? 1 : 0}
+                    pendingChangeCount={pendingChangeCount}
                 />
             </div>
 
@@ -590,7 +604,7 @@ function JobBrowser() {
                 ) : jobs.length === 0 ? (
                     <div className="no-results glass-panel">
                         <BrainCircuit size={48} className="empty-icon" />
-                        <h3>No Profiles Found</h3>
+                        <h3>No Jobs Found</h3>
                         <p>Adjust your parameters to broaden the search.</p>
                     </div>
                 ) : (
@@ -598,7 +612,7 @@ function JobBrowser() {
                         <div className="results-summary-bar glass-panel">
                             <div>
                                 <span className="results-summary-label">Live slice</span>
-                                <strong>{jobs.length} records on this page</strong>
+                                <strong>{jobs.length} jobs on this page</strong>
                             </div>
                             <div>
                                 <span className="results-summary-label">Scope</span>

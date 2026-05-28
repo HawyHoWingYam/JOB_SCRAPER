@@ -51,8 +51,8 @@ const Sidebar = ({ activeView, setActiveView }) => {
                     {activeView === 'settings' && <div className="active-indicator" />}
                 </button>
                 <div className="system-status">
-                    <div className="status-dot online"></div>
-                    <span>System Online</span>
+                    <div className="status-dot" aria-hidden="true"></div>
+                    <span>Console Ready</span>
                 </div>
             </div>
         </aside>

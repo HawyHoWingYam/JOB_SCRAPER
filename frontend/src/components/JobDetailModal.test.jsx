@@ -231,6 +231,31 @@ describe('JobDetailModal', () => {
     expect(screen.getByText('Atlas Systems')).toBeInTheDocument();
   });
 
+  it('does not invent a 0 percent related-job score when the recommendation score is missing', async () => {
+    renderModalWithDetailAndRecommendations(
+      createJobPayload(),
+      [
+        {
+          id: 'job-2',
+          job_id: 'platform-engineer-456',
+          title: 'Platform Backend Engineer',
+          company_name: 'Atlas Systems',
+          location: 'Hong Kong',
+          employment_type: 'Full-time',
+          posted_date: '2026-04-15T00:00:00Z',
+          job_taxonomy: {
+            path: 'Information & Communication Technology / Software Development / Backend Development',
+          },
+        },
+      ],
+    );
+
+    expect(await screen.findByRole('heading', { name: /related jobs/i })).toBeInTheDocument();
+    expect(screen.getByText('Platform Backend Engineer')).toBeInTheDocument();
+    expect(screen.getByText(/score unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+
   it('skips related jobs requests when similar jobs are unavailable in the runtime profile', async () => {
     globalThis.fetch = vi.fn((input) => {
       const url = new URL(String(input), 'http://localhost');

@@ -44,6 +44,17 @@ class _FakeDB:
         return self.query_obj
 
 
+class _CountedFakeQuery(_FakeQuery):
+    def __init__(self, *, rows, total):
+        super().__init__(rows=rows)
+        self.total = total
+        self.count_calls = 0
+
+    def count(self):
+        self.count_calls += 1
+        return self.total
+
+
 def _build_company(name: str):
     now = datetime(2026, 5, 28, 9, 0, tzinfo=UTC)
     return SimpleNamespace(
@@ -106,6 +117,30 @@ def test_list_companies_skips_total_count_for_short_later_page(monkeypatch):
     assert payload["page_size"] == 25
     assert payload["total_pages"] == 2
     assert [item["name"] for item in payload["items"]] == ["Zulu Health", "Nova Labs"]
+
+
+def test_list_companies_counts_when_requested_page_is_beyond_latest_total(monkeypatch):
+    app = FastAPI()
+    app.include_router(companies.router, prefix="/api/v1")
+    query = _CountedFakeQuery(rows=[], total=12)
+    db = _FakeDB(query)
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+
+    response = client.get("/api/v1/companies?status=pending&page=2&page_size=25")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert query.count_calls == 1
+    assert payload["items"] == []
+    assert payload["total"] == 12
+    assert payload["page"] == 2
+    assert payload["page_size"] == 25
+    assert payload["total_pages"] == 1
 
 
 def test_get_company_enrichment_run_items_returns_404_when_service_reports_missing_run(monkeypatch):

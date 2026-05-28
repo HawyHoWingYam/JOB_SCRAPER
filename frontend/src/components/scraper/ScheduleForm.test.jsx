@@ -69,7 +69,7 @@ describe('ScheduleForm', () => {
       name: 'Nightly scrape',
       cron_expression: '0 2 * * *',
       crawl_phase: 'listing',
-      crawl_mode: 'headless',
+      crawl_mode: 'headed',
       category_ids: [],
       max_pages: 5,
       detail_limit: 100,
@@ -146,7 +146,9 @@ describe('ScheduleForm', () => {
       />,
     );
 
-    expect(screen.getByRole('combobox', { name: /crawl mode/i })).toHaveValue('headless');
+    expect(screen.getByRole('combobox', { name: /crawl mode/i })).toHaveValue('headed');
+    expect(screen.queryByRole('option', { name: /headless/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /headed/i })).toBeInTheDocument();
   });
 
   it('submits detail schedules with detail_limit and phase metadata', () => {

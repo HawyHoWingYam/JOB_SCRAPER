@@ -180,6 +180,21 @@ def _build_progress_snapshot(
     job_ids_collected = _to_int(event_payload.get("job_ids_collected", metrics.get("job_ids_collected", 0)))
     jobs_scraped = _to_int(event_payload.get("jobs_scraped", metrics.get("items_emitted", 0)))
     jobs_saved = _to_int(event_payload.get("jobs_saved", metrics.get("ingest_items_seen", 0)))
+    ingest_items_failed = _to_int(
+        event_payload.get("ingest_items_failed", metrics.get("ingest_items_failed", 0))
+    )
+    ingest_dead_lettered = _to_int(
+        event_payload.get("ingest_dead_lettered", metrics.get("ingest_dead_lettered", 0))
+    )
+    jobs_settled = _to_int(
+        event_payload.get(
+            "ingest_items_settled",
+            metrics.get(
+                "ingest_items_settled",
+                jobs_saved + max(ingest_items_failed, ingest_dead_lettered),
+            ),
+        )
+    )
     save_total = _to_int(
         event_payload.get(
             "save_total",
@@ -248,6 +263,7 @@ def _build_progress_snapshot(
         crawl_job.status,
         jobs_scraped=jobs_scraped,
         jobs_saved=jobs_saved,
+        jobs_settled=jobs_settled,
         job_ids_collected=job_ids_collected,
         explicit_phase=event_payload.get("phase"),
         save_total=save_total,
@@ -255,6 +271,7 @@ def _build_progress_snapshot(
     operator_state = _derive_operator_state(
         status,
         jobs_saved=jobs_saved,
+        jobs_settled=jobs_settled,
         save_total=save_total,
         detail_pending=detail_pending,
         detail_running=detail_running,
@@ -308,6 +325,9 @@ def _build_progress_snapshot(
         "jobs_saved": jobs_saved,
         "save_total": save_total,
         "jobs_ingested": jobs_saved,
+        "ingest_items_settled": jobs_settled,
+        "ingest_items_failed": ingest_items_failed,
+        "ingest_dead_lettered": ingest_dead_lettered,
         "detail_selected_rows": detail_selected_rows,
         "detail_skipped_existing_rows": detail_skipped_existing_rows,
         "detail_target_rows": detail_target_rows,
@@ -373,6 +393,7 @@ def _derive_operator_state(
     status: str,
     *,
     jobs_saved: int,
+    jobs_settled: int,
     save_total: int,
     detail_pending: int,
     detail_running: int,
@@ -383,7 +404,7 @@ def _derive_operator_state(
     if status in ACTIONABLE_CRAWL_JOB_STATUSES:
         return "manual_action_required"
     has_downstream_backlog = (
-        (save_total > 0 and jobs_saved < save_total)
+        (save_total > 0 and jobs_settled < save_total)
         or detail_pending > 0
         or detail_running > 0
         or detail_manual_action_required > 0
@@ -400,13 +421,14 @@ def _derive_progress_phase(
     *,
     jobs_scraped: int,
     jobs_saved: int,
+    jobs_settled: int,
     job_ids_collected: int,
     explicit_phase: Any,
     save_total: int,
 ) -> int:
     if status == "queued":
         return 0
-    if status == "completed" and save_total > 0 and jobs_saved < save_total:
+    if status == "completed" and save_total > 0 and jobs_settled < save_total:
         return 4
     if explicit_phase is not None:
         return _to_int(explicit_phase)
@@ -415,7 +437,7 @@ def _derive_progress_phase(
             return 2
         return 1
     if status in {"failed", "cancelled"}:
-        if save_total > 0 and jobs_saved < save_total:
+        if save_total > 0 and jobs_settled < save_total:
             return 4
         if jobs_scraped > 0:
             return 2

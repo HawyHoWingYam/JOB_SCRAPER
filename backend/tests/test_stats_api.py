@@ -36,7 +36,7 @@ class _FakeDB:
 def test_stats_overview_uses_single_aggregate_query():
     app = FastAPI()
     app.include_router(stats.router)
-    db = _FakeDB([_FakeQuery(one_result=(400, 4))])
+    db = _FakeDB([_FakeQuery(one_result=(400, 4, 4, 111))])
 
     def override_get_db():
         yield db
@@ -50,5 +50,8 @@ def test_stats_overview_uses_single_aggregate_query():
     assert response.json() == {
         "total_jobs": 400,
         "enriched_jobs": 4,
-        "pending_enrichment": 396,
+        "eligible_enriched_jobs": 4,
+        "ai_eligible_jobs": 115,
+        "ineligible_jobs": 285,
+        "pending_enrichment": 111,
     }

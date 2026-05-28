@@ -6,7 +6,7 @@ import ScheduleForm from './ScheduleForm';
 import ScheduleList from './ScheduleList';
 import ScheduleHistory from './ScheduleHistory';
 import ScrapeProgressPanel from './ScrapeProgressPanel';
-import { CRAWL_MODE_OPTIONS, resolveDefaultCrawlMode } from './crawlMode';
+import { getCrawlModeOptionsForSource, resolveDefaultCrawlMode } from './crawlMode';
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
 import {
     formatListingBatchIdentity,
@@ -163,7 +163,7 @@ function buildImmediateScrapePayload(form, sourceSite) {
             crawl_phase: crawlPhase,
             crawl_mode: form?.crawl_mode || resolveDefaultCrawlMode(sourceSite),
             category_ids: categoryIds,
-            max_pages: maxPages,
+            max_pages: Number.isInteger(maxPages) ? maxPages : 3,
             detail_limit: crawlPhase === 'detail' ? detailLimit : 100,
             skip_existing: true,
             ...(sourceListingCrawlJobId ? { source_listing_crawl_job_id: sourceListingCrawlJobId } : {}),
@@ -252,6 +252,26 @@ function buildSelectedSectorSummary(form, categories) {
     return `Sectors: ${selectedNames.join(', ')}`;
 }
 
+function formatImmediateListingDepthMetric(maxPages) {
+    if (!Number.isInteger(maxPages)) {
+        return 'Page limit not set';
+    }
+    if (maxPages < 1 || maxPages > 1000) {
+        return 'Page limit invalid';
+    }
+    return `${maxPages} pages per sector`;
+}
+
+function formatImmediateDetailLimitMetric(detailLimit) {
+    if (!Number.isInteger(detailLimit)) {
+        return 'Detail limit not set';
+    }
+    if (detailLimit < 1 || detailLimit > 5000) {
+        return 'Detail limit invalid';
+    }
+    return `Up to ${detailLimit} job details to crawl`;
+}
+
 function buildImmediateRunSummary(form, sourceSite, categories) {
     const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
     const selectedSectorCount = Array.isArray(form?.category_ids) ? form.category_ids.length : 0;
@@ -262,7 +282,7 @@ function buildImmediateRunSummary(form, sourceSite, categories) {
         const listingBatchId = `${form?.source_listing_crawl_job_id ?? ''}`.trim();
 
         summaryMetrics.push(
-            `Up to ${Number.isInteger(detailLimit) ? detailLimit : 0} job details to crawl`,
+            formatImmediateDetailLimitMetric(detailLimit),
             'Eligible backlog: pending, failed, manual review',
             buildSelectedSectorSummary(form, categories)
         );
@@ -288,7 +308,7 @@ function buildImmediateRunSummary(form, sourceSite, categories) {
 
     summaryMetrics.push(
         formatSectorSelectionLabel(selectedSectorCount),
-        `${Number.isInteger(maxPages) ? maxPages : 0} pages per sector`
+        formatImmediateListingDepthMetric(maxPages)
     );
 
     return {
@@ -915,6 +935,7 @@ function ScheduleManager({ onNavigateToAI }) {
     const selectedListingBatch = listingBatches.find(
         (batch) => batch.crawl_job_id === immediateForm.source_listing_crawl_job_id
     ) || null;
+    const immediateCrawlModeOptions = getCrawlModeOptionsForSource(currentSourceSite);
     const immediateRunSummary = buildImmediateRunSummary(immediateForm, currentSourceSite, categories);
     const immediateRunReadiness = buildImmediateRunReadiness(immediateForm, currentSourceSite);
     const immediateRunModeCopy = buildImmediateRunModeCopy(immediateForm);
@@ -1120,7 +1141,7 @@ function ScheduleManager({ onNavigateToAI }) {
                                 crawl_mode: e.target.value,
                             }))}
                         >
-                            {CRAWL_MODE_OPTIONS.map((option) => (
+                            {immediateCrawlModeOptions.map((option) => (
                                 <option key={option.value} value={option.value}>
                                     {option.label}
                                 </option>
@@ -1155,8 +1176,8 @@ function ScheduleManager({ onNavigateToAI }) {
                             onChange={(e) => setImmediateForm(prev => ({
                                 ...prev,
                                 ...(immediateForm.crawl_phase === 'detail'
-                                    ? { detail_limit: parseInt(e.target.value) || 100 }
-                                    : { max_pages: parseInt(e.target.value) || 3 })
+                                    ? { detail_limit: e.target.value }
+                                    : { max_pages: e.target.value })
                             }))}
                         />
                         <p className="form-hint">
@@ -1205,17 +1226,35 @@ function ScheduleManager({ onNavigateToAI }) {
                                         </div>
                                         <div className="backlog-metric-grid" aria-label="Selected listing batch backlog">
                                             <div>
-                                                <strong>{formatBacklogCount(selectedListingBatch.detail_pending)} pending</strong>
-                                                <span>details left</span>
-                                            </div>
-                                            <div>
                                                 <strong>{formatBacklogCount(selectedListingBatch.listings_staged)} staged</strong>
                                                 <span>listings found</span>
                                             </div>
                                             <div>
-                                                <strong>{formatBacklogCount(selectedListingBatch.detail_completed)} completed</strong>
-                                                <span>details ingested</span>
+                                                <strong>{formatBacklogCount(selectedListingBatch.detail_pending)} pending</strong>
+                                                <span>details left</span>
                                             </div>
+                                            {Number(selectedListingBatch.detail_running || 0) > 0 && (
+                                                <div>
+                                                    <strong>{formatBacklogCount(selectedListingBatch.detail_running)} running</strong>
+                                                    <span>details in flight</span>
+                                                </div>
+                                            )}
+                                            <div>
+                                                <strong>{formatBacklogCount(selectedListingBatch.detail_completed)} completed</strong>
+                                                <span>details completed</span>
+                                            </div>
+                                            {Number(selectedListingBatch.detail_failed || 0) > 0 && (
+                                                <div>
+                                                    <strong>{formatBacklogCount(selectedListingBatch.detail_failed)} failed</strong>
+                                                    <span>details failed</span>
+                                                </div>
+                                            )}
+                                            {Number(selectedListingBatch.detail_manual_action_required || 0) > 0 && (
+                                                <div>
+                                                    <strong>{formatBacklogCount(selectedListingBatch.detail_manual_action_required)} manual review</strong>
+                                                    <span>details blocked</span>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 ) : (

@@ -31,4 +31,12 @@ describe('Sidebar', () => {
 
     expect(setActiveView).toHaveBeenCalledWith('settings');
   });
+
+  it('shows a neutral console-ready footer status instead of claiming the whole system is online', () => {
+    render(<Sidebar activeView="dashboard" setActiveView={vi.fn()} />);
+
+    expect(screen.getByText(/console ready/i)).toBeInTheDocument();
+    expect(screen.queryByText(/system online/i)).not.toBeInTheDocument();
+    expect(document.querySelector('.status-dot.online')).toBeNull();
+  });
 });

@@ -139,6 +139,7 @@ class CrawlJobDispatchService:
         requested_by: str = "scheduler-worker",
         trigger_type: str = "schedule",
     ) -> CrawlJobDispatchResult:
+        schedule.last_run_at = utc_now()
         return self.dispatch_crawl_job(
             db,
             source_site=schedule.source_site,

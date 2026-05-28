@@ -91,6 +91,7 @@ def _serialize_run(
     db: Optional[Session] = None,
     *,
     last_failed_job_titles: Optional[dict[str, Optional[str]]] = None,
+    pending_gate: Optional[dict[str, object]] = None,
 ) -> dict:
     in_progress_items = max(
         int(run.total_items or 0)
@@ -123,20 +124,38 @@ def _serialize_run(
         "latest_started_job_title": getattr(run, "current_job_title", None),
         "in_progress_items": in_progress_items,
         "last_failed_job_title": resolved_failed_title,
+        "pending_gate_reason": (pending_gate or {}).get("reason"),
+        "pending_gate_progress": (
+            {
+                "emitted_items": pending_gate["emitted_items"],
+                "settled_items": pending_gate["settled_items"],
+            }
+            if pending_gate and "emitted_items" in pending_gate and "settled_items" in pending_gate
+            else None
+        ),
+        "pending_gate_crawl_job_status": (pending_gate or {}).get("crawl_job_status"),
         "error_message": run.error_message,
     }
 
 
 def _serialize_runs(runs: list[EnrichmentRun], db: Optional[Session] = None) -> list[dict]:
     failed_title_map: Optional[dict[str, Optional[str]]] = None
+    pending_gate_map: dict[str, dict[str, object] | None] = {}
     if db is not None:
         failed_run_ids = [run.id for run in runs if int(getattr(run, "failed_items", 0) or 0) > 0]
         failed_title_map = _derive_last_failed_job_titles(db, failed_run_ids)
+        service = EnrichmentRunService(db)
+        pending_gate_map = {
+            run.id: service.describe_pending_gate(run)
+            for run in runs
+            if str(getattr(run, "status", "") or "").lower() == "pending"
+        }
     return [
         _serialize_run(
             run,
             db,
             last_failed_job_titles=failed_title_map,
+            pending_gate=pending_gate_map.get(run.id),
         )
         for run in runs
     ]
@@ -249,6 +268,9 @@ async def get_ai_overview(db: Session = Depends(get_db)):
     return {
         "total_jobs": overview["total_jobs"],
         "enriched_jobs": overview["enriched_jobs"],
+        "eligible_enriched_jobs": overview["eligible_enriched_jobs"],
+        "ai_eligible_jobs": overview["ai_eligible_jobs"],
+        "ineligible_jobs": overview["ineligible_jobs"],
         "pending_jobs": overview["pending_jobs"],
         "running_runs": overview["running_runs"],
         "active_runs": overview["active_runs"],
@@ -391,12 +413,16 @@ async def enrich_single_job(job_id: UUID, db: Session = Depends(get_db)):
 @router.get("/stats")
 async def get_ai_stats(db: Session = Depends(get_db)):
     """Get AI enrichment statistics in the legacy shape."""
-    overview = EnrichmentRunService(db).get_overview()
-    total = overview["total_jobs"]
-    enriched = overview["enriched_jobs"]
+    queue_counts = EnrichmentRunService(db).get_job_queue_counts()
+    total = queue_counts["total_jobs"]
+    enriched = queue_counts["enriched_jobs"]
+    ai_eligible_jobs = queue_counts["ai_eligible_jobs"]
     return {
         "total_jobs": total,
         "enriched_jobs": enriched,
-        "pending_jobs": total - enriched,
-        "enrichment_rate": round(enriched / total * 100, 1) if total > 0 else 0
+        "eligible_enriched_jobs": queue_counts["eligible_enriched_jobs"],
+        "ai_eligible_jobs": ai_eligible_jobs,
+        "ineligible_jobs": queue_counts["ineligible_jobs"],
+        "pending_jobs": queue_counts["pending_jobs"],
+        "enrichment_rate": round(queue_counts["eligible_enriched_jobs"] / ai_eligible_jobs * 100, 1) if ai_eligible_jobs > 0 else 0
     }

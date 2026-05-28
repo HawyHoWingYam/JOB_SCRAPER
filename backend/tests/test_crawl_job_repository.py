@@ -572,3 +572,67 @@ def test_merge_metrics_marks_linked_schedule_execution_completed_with_ai_failure
     assert refreshed_execution.duration_seconds is not None
     assert refreshed_execution.phase5_completed is True
     db.close()
+
+
+def test_merge_metrics_treats_settled_ingest_as_phase4_complete_even_when_saved_count_lags():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    repository = CrawlJobRepository()
+
+    schedule = ScrapeSchedule(
+        name="CTGoodJobs Detail Recovery",
+        cron_expression="0 2 * * *",
+        source_site="ctgoodjobs",
+        crawl_phase="detail",
+        crawl_mode="headed",
+        category_ids=["ctgoodjobs:021"],
+        is_active=True,
+    )
+    db.add(schedule)
+    db.commit()
+    db.refresh(schedule)
+
+    crawl_job = CrawlJob(
+        source_site="ctgoodjobs",
+        trigger_type="schedule",
+        schedule_id=schedule.id,
+        status="completed",
+        request_payload={"crawl_phase": "detail", "source_site": "ctgoodjobs"},
+        requested_by="tester",
+        queued_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        started_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 5, 27, 9, 1, tzinfo=UTC),
+        metrics={
+            "items_emitted": 100,
+            "ingest_items_seen": 30,
+            "ingest_items_settled": 100,
+            "ingest_items_failed": 68,
+            "ingest_dead_lettered": 68,
+        },
+    )
+    db.add(crawl_job)
+    db.commit()
+    db.refresh(crawl_job)
+
+    execution = ScheduleExecution(
+        schedule_id=schedule.id,
+        crawl_job_id=crawl_job.id,
+        status="running",
+        started_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        completed_at=None,
+    )
+    db.add(execution)
+    db.commit()
+
+    repository.merge_metrics(
+        db,
+        crawl_job_id=crawl_job.id,
+        metrics_patch={},
+    )
+
+    refreshed_execution = db.query(ScheduleExecution).filter(ScheduleExecution.id == execution.id).one()
+
+    assert refreshed_execution.jobs_saved == 30
+    assert refreshed_execution.phase4_completed is True
+    assert refreshed_execution.status == "completed"
+    db.close()

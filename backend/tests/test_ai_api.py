@@ -225,6 +225,7 @@ def test_derive_last_failed_job_titles_resolves_latest_title_per_run_with_single
 def test_list_enrichment_runs_batches_failed_title_lookup_for_failed_runs(monkeypatch):
     failed_run = _build_run(run_id="run-failed", status="completed_with_failures", failed_items=2)
     completed_run = _build_run(run_id="run-completed", status="completed", failed_items=0)
+    pending_run = _build_run(run_id="run-pending", status="pending", failed_items=0)
     batch_calls = []
 
     class _FakeService:
@@ -232,10 +233,20 @@ def test_list_enrichment_runs_batches_failed_title_lookup_for_failed_runs(monkey
             self.db = db
 
         def list_runs_for_monitor(self):
-            return [failed_run, completed_run]
+            return [failed_run, completed_run, pending_run]
 
         def list_runs(self, status=None, source_type=None, limit=None):
-            return [failed_run, completed_run]
+            return [failed_run, completed_run, pending_run]
+
+        def describe_pending_gate(self, run):
+            if run.id == "run-pending":
+                return {
+                    "reason": "waiting_for_ingest_settle",
+                    "emitted_items": 10,
+                    "settled_items": 8,
+                    "crawl_job_status": "completed",
+                }
+            return None
 
     def resolve_batch_lookup(db, run_ids):
         batch_calls.append(list(run_ids))
@@ -253,6 +264,77 @@ def test_list_enrichment_runs_batches_failed_title_lookup_for_failed_runs(monkey
     assert batch_calls == [["run-failed"]]
     assert payload["runs"][0]["last_failed_job_title"] == "Platform Analyst"
     assert payload["runs"][1]["last_failed_job_title"] is None
+    assert payload["runs"][2]["pending_gate_reason"] == "waiting_for_ingest_settle"
+    assert payload["runs"][2]["pending_gate_progress"] == {"emitted_items": 10, "settled_items": 8}
+
+
+def test_get_ai_overview_includes_ai_eligible_and_ineligible_job_counts(monkeypatch):
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def get_overview(self):
+            return {
+                "total_jobs": 400,
+                "enriched_jobs": 4,
+                "eligible_enriched_jobs": 4,
+                "ai_eligible_jobs": 115,
+                "ineligible_jobs": 285,
+                "pending_jobs": 111,
+                "running_runs": 0,
+                "active_runs": 2,
+                "failed_jobs": 7,
+                "failed_items": 12,
+                "last_completed_run": None,
+            }
+
+    monkeypatch.setattr(ai, "EnrichmentRunService", _FakeService)
+
+    payload = asyncio.run(ai.get_ai_overview(db=object()))
+
+    assert payload == {
+        "total_jobs": 400,
+        "enriched_jobs": 4,
+        "eligible_enriched_jobs": 4,
+        "ai_eligible_jobs": 115,
+        "ineligible_jobs": 285,
+        "pending_jobs": 111,
+        "running_runs": 0,
+        "active_runs": 2,
+        "failed_jobs": 7,
+        "failed_items": 12,
+        "last_completed_run": None,
+    }
+
+
+def test_get_ai_stats_uses_ai_eligible_jobs_for_enrichment_rate(monkeypatch):
+    class _FakeService:
+        def __init__(self, db):
+            self.db = db
+
+        def get_job_queue_counts(self):
+            return {
+                "total_jobs": 400,
+                "enriched_jobs": 4,
+                "eligible_enriched_jobs": 4,
+                "ai_eligible_jobs": 115,
+                "ineligible_jobs": 285,
+                "pending_jobs": 111,
+            }
+
+    monkeypatch.setattr(ai, "EnrichmentRunService", _FakeService)
+
+    payload = asyncio.run(ai.get_ai_stats(db=object()))
+
+    assert payload == {
+        "total_jobs": 400,
+        "enriched_jobs": 4,
+        "eligible_enriched_jobs": 4,
+        "ai_eligible_jobs": 115,
+        "ineligible_jobs": 285,
+        "pending_jobs": 111,
+        "enrichment_rate": 3.5,
+    }
 
 
 def test_get_enrichment_run_items_returns_404_when_run_helper_reports_missing_run(monkeypatch):

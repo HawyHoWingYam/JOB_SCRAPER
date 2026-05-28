@@ -63,6 +63,8 @@ describe('AIEnrichmentPage', () => {
         return mockJsonResponse({
           total_jobs: 400,
           enriched_jobs: 4,
+          ai_eligible_jobs: 400,
+          ineligible_jobs: 0,
           pending_jobs: 396,
           active_runs: 2,
           failed_jobs: 7,
@@ -191,7 +193,7 @@ describe('AIEnrichmentPage', () => {
 
     expect(await screen.findByRole('heading', { name: /ai enrichment/i })).toBeInTheDocument();
     expect(await screen.findByText('396')).toBeInTheDocument();
-    expect(screen.getByText(/pending jobs/i)).toBeInTheDocument();
+    expect(screen.getByText(/pending ai-eligible jobs/i)).toBeInTheDocument();
     expect(screen.getByText(/active runs/i, { selector: '.stat-label' })).toBeInTheDocument();
     expect(screen.getAllByText(/failed jobs/i).length).toBeGreaterThan(0);
     expect(screen.queryByText('11,820')).not.toBeInTheDocument();
@@ -273,6 +275,58 @@ describe('AIEnrichmentPage', () => {
     const ribbonBlock = activeRunsRibbonLabel.closest('div');
     expect(ribbonBlock).not.toBeNull();
     expect(within(ribbonBlock).getByText(/7\s*runs/i)).toBeInTheDocument();
+  });
+
+  it('falls back to overview.running_runs when active_runs is absent', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 400,
+          enriched_jobs: 4,
+          pending_jobs: 396,
+          running_runs: 2,
+          failed_items: 0,
+          last_completed_run: null,
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        return mockJsonResponse({
+          runs: [
+            {
+              id: 'run-active-running-fallback',
+              source_type: 'post_scrape',
+              status: 'running',
+              created_at: '2026-04-15T12:10:00Z',
+              started_at: '2026-04-15T12:10:00Z',
+              total_items: 4,
+              pending_items: 3,
+              completed_items: 1,
+              failed_items: 0,
+              current_job_title: 'Fallback Title',
+            },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<AIEnrichmentPage />);
+
+    expect(await screen.findByText(/run-active-running-fallback/i)).toBeInTheDocument();
+
+    const activeRunsSummaryLabel = screen.getByText(/active runs/i, { selector: '.stat-label' });
+    const activeRunsSummaryCard = activeRunsSummaryLabel.closest('article');
+    expect(activeRunsSummaryCard).not.toBeNull();
+    expect(within(activeRunsSummaryCard).getByText('2')).toBeInTheDocument();
+
+    const activeRunsRibbonLabel = screen.getByText(/active runs/i, { selector: '.ai-ribbon-label' });
+    const ribbonBlock = activeRunsRibbonLabel.closest('div');
+    expect(ribbonBlock).not.toBeNull();
+    expect(within(ribbonBlock).getByText(/2\s*runs/i)).toBeInTheDocument();
   });
 
   it('renders the 2-slot run monitor from mocked API data', async () => {
@@ -410,14 +464,14 @@ describe('AIEnrichmentPage', () => {
     render(<AIEnrichmentPage />);
 
     expect(await screen.findByText(/ai backlog run/i)).toBeInTheDocument();
-    expect(screen.getByText(/processes up to the pending limit from jobs without ai insights/i)).toBeInTheDocument();
+    expect(screen.getByText(/processes up to the pending limit from ai-eligible jobs without ai insights/i)).toBeInTheDocument();
 
     const limitInput = screen.getByLabelText(/pending limit/i);
     await user.clear(limitInput);
     await user.type(limitInput, '3');
     await user.click(screen.getByRole('button', { name: /run pending/i }));
 
-    expect(await screen.findByText(/ai backlog run submitted for up to 3 pending jobs/i)).toBeInTheDocument();
+    expect(await screen.findByText(/ai backlog run submitted for up to 3 ai-eligible pending jobs/i)).toBeInTheDocument();
     expect(globalThis.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/v1/ai/runs'),
       expect.objectContaining({
@@ -425,6 +479,135 @@ describe('AIEnrichmentPage', () => {
         body: JSON.stringify({ mode: 'pending', limit: 3 }),
       }),
     );
+  });
+
+  it('explains when acquired jobs are outside the AI-eligible queue cohort', async () => {
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 400,
+          enriched_jobs: 4,
+          ai_eligible_jobs: 115,
+          ineligible_jobs: 285,
+          pending_jobs: 111,
+          active_runs: 2,
+          failed_jobs: 7,
+          failed_items: 12,
+          last_completed_run: { id: 'run-complete-7' },
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        return mockJsonResponse({
+          runs: [
+            {
+              id: 'run-active-4',
+              source_type: 'post_scrape',
+              status: 'running',
+              created_at: '2026-04-15T12:10:00Z',
+              started_at: '2026-04-15T12:10:00Z',
+              total_items: 7,
+              pending_items: 2,
+              completed_items: 4,
+              failed_items: 1,
+              current_job_title: 'Security Engineer',
+              in_progress_items: 2,
+              latest_started_job_title: 'Security Engineer',
+            },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<AIEnrichmentPage />);
+
+    expect(await screen.findByText(/111 of 115 ai-eligible jobs waiting for ai enrichment/i)).toBeInTheDocument();
+    expect(screen.getByText(/285 acquired jobs are outside the ai queue/i)).toBeInTheDocument();
+  });
+
+  it('falls back to eligible_enriched_jobs when ai_eligible_jobs is absent from overview payloads', async () => {
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 400,
+          enriched_jobs: 5,
+          eligible_enriched_jobs: 4,
+          ineligible_jobs: 285,
+          pending_jobs: 111,
+          active_runs: 2,
+          failed_jobs: 7,
+          failed_items: 12,
+          last_completed_run: { id: 'run-complete-7' },
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        return mockJsonResponse({
+          runs: [
+            {
+              id: 'run-active-4',
+              source_type: 'post_scrape',
+              status: 'running',
+              created_at: '2026-04-15T12:10:00Z',
+              started_at: '2026-04-15T12:10:00Z',
+              total_items: 7,
+              pending_items: 2,
+              completed_items: 4,
+              failed_items: 1,
+              current_job_title: 'Security Engineer',
+              in_progress_items: 2,
+              latest_started_job_title: 'Security Engineer',
+            },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<AIEnrichmentPage />);
+
+    expect(await screen.findByText(/111 of 115 ai-eligible jobs waiting for ai enrichment/i)).toBeInTheDocument();
+  });
+
+  it('does not present a 0 of 0 backlog window when the dataset has no AI-eligible jobs', async () => {
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 285,
+          enriched_jobs: 0,
+          eligible_enriched_jobs: 0,
+          ai_eligible_jobs: 0,
+          ineligible_jobs: 285,
+          pending_jobs: 0,
+          active_runs: 0,
+          failed_jobs: 0,
+          failed_items: 0,
+          last_completed_run: null,
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        return mockJsonResponse({ runs: [] });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<AIEnrichmentPage />);
+
+    expect(await screen.findByText(/pending ai-eligible jobs/i)).toBeInTheDocument();
+    expect(screen.getByText(/no ai-eligible jobs currently available for enrichment/i)).toBeInTheDocument();
+    expect(screen.queryByText(/0 of 0 ai-eligible jobs/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/285 acquired jobs are outside the ai queue/i)).toBeInTheDocument();
   });
 
   it('hides the retry target when no visible monitor slot is retryable', async () => {
@@ -554,6 +737,109 @@ describe('AIEnrichmentPage', () => {
     expect(screen.getByText(/^2 jobs in progress$/i)).toBeInTheDocument();
     expect(screen.getByText(/latest title:/i)).toBeInTheDocument();
     expect(screen.getByText(/security engineer/i)).toBeInTheDocument();
+  });
+
+  it('describes gated crawl-auto pending runs as waiting for ingest settle instead of worker claim', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 400,
+          enriched_jobs: 4,
+          pending_jobs: 396,
+          active_runs: 1,
+          failed_items: 0,
+          last_completed_run: null,
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        return mockJsonResponse({
+          runs: [
+            {
+              id: 'run-queued-1',
+              source_type: 'crawl_auto',
+              status: 'pending',
+              created_at: '2026-04-15T12:12:00Z',
+              started_at: null,
+              total_items: 10,
+              pending_items: 10,
+              completed_items: 0,
+              failed_items: 0,
+              pending_gate_reason: 'waiting_for_ingest_settle',
+              pending_gate_progress: {
+                emitted_items: 100,
+                settled_items: 98,
+              },
+              current_job_title: null,
+              latest_started_job_title: null,
+            },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<AIEnrichmentPage />);
+
+    expect(await screen.findByText(/run-queued-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/^queue status$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^waiting for ingest settle$/i)).toBeInTheDocument();
+    expect(screen.getByText(/ingest settled 98 of 100 emitted items/i)).toBeInTheDocument();
+    expect(screen.getByText(/^queued summary$/i)).toBeInTheDocument();
+    expect(screen.getByText(/ingest settled 98\/100/i)).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for workers to claim jobs/i)).not.toBeInTheDocument();
+  });
+
+  it('does not invent 0 of 0 ingest-settle counts when persisted save progress is not available yet', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/ai/overview')) {
+        return mockJsonResponse({
+          total_jobs: 400,
+          enriched_jobs: 4,
+          pending_jobs: 396,
+          active_runs: 1,
+          failed_items: 0,
+          last_completed_run: null,
+        });
+      }
+
+      if (url.includes('/api/v1/ai/runs') && !url.includes('/items')) {
+        return mockJsonResponse({
+          runs: [
+            {
+              id: 'run-queued-missing-progress',
+              source_type: 'crawl_auto',
+              status: 'pending',
+              created_at: '2026-04-15T12:12:00Z',
+              started_at: null,
+              total_items: 10,
+              pending_items: 10,
+              completed_items: 0,
+              failed_items: 0,
+              pending_gate_reason: 'waiting_for_ingest_settle',
+              pending_gate_progress: null,
+              current_job_title: null,
+              latest_started_job_title: null,
+            },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<AIEnrichmentPage />);
+
+    expect(await screen.findByText(/run-queued-missing-progress/i)).toBeInTheDocument();
+    expect(screen.getByText(/^waiting for ingest settle$/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/ingest settle progress unavailable/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/ingest settled 0 of 0 emitted items/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ingest settled 0\/0/i)).not.toBeInTheDocument();
   });
 
   it('queues a guaranteed post-action reload even when a poll refresh is already in flight', async () => {
@@ -1567,7 +1853,7 @@ describe('AIEnrichmentPage', () => {
     expect(lastCompletedBlock).not.toBeNull();
     expect(within(lastCompletedBlock).getByText(/^unavailable$/i)).toBeInTheDocument();
 
-    const pendingJobsLabel = screen.getByText(/pending jobs/i, { selector: '.stat-label' });
+    const pendingJobsLabel = screen.getByText(/pending ai-eligible jobs/i, { selector: '.stat-label' });
     const pendingJobsCard = pendingJobsLabel.closest('article');
     expect(pendingJobsCard).not.toBeNull();
     expect(within(pendingJobsCard).getByText(/^unavailable$/i)).toBeInTheDocument();
@@ -1642,7 +1928,7 @@ describe('AIEnrichmentPage', () => {
     expect(screen.getByText(/run-terminal-immediate/i)).toBeInTheDocument();
     expect(screen.queryByText(/loading enrichment queue/i)).not.toBeInTheDocument();
 
-    const pendingJobsLabel = screen.getByText(/pending jobs/i, { selector: '.stat-label' });
+    const pendingJobsLabel = screen.getByText(/pending ai-eligible jobs/i, { selector: '.stat-label' });
     const pendingJobsCard = pendingJobsLabel.closest('article');
     expect(pendingJobsCard).not.toBeNull();
     expect(within(pendingJobsCard).getByText(/^unavailable$/i)).toBeInTheDocument();
@@ -1776,7 +2062,7 @@ describe('AIEnrichmentPage', () => {
     expect(screen.getByText(/run-terminal-bootstrap/i)).toBeInTheDocument();
     expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
 
-    const pendingJobsLabel = screen.getByText(/pending jobs/i, { selector: '.stat-label' });
+    const pendingJobsLabel = screen.getByText(/pending ai-eligible jobs/i, { selector: '.stat-label' });
     const pendingJobsCard = pendingJobsLabel.closest('article');
     expect(pendingJobsCard).not.toBeNull();
     expect(within(pendingJobsCard).getByText(/^unavailable$/i)).toBeInTheDocument();
@@ -1796,7 +2082,7 @@ describe('AIEnrichmentPage', () => {
     expect(screen.queryByText(/refresh failed/i)).not.toBeInTheDocument();
     expect(screen.getByText(/run-terminal-bootstrap/i)).toBeInTheDocument();
 
-    const refreshedPendingJobsCard = screen.getByText(/pending jobs/i, { selector: '.stat-label' }).closest('article');
+    const refreshedPendingJobsCard = screen.getByText(/pending ai-eligible jobs/i, { selector: '.stat-label' }).closest('article');
     expect(refreshedPendingJobsCard).not.toBeNull();
     expect(within(refreshedPendingJobsCard).getByText('396')).toBeInTheDocument();
 

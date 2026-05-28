@@ -1,22 +1,28 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 
 function SkillTags({ skills, onSkillClick, maxDisplay = 5 }) {
   if (!skills || skills.length === 0) {
     return null;
   }
 
+  const [isExpanded, setIsExpanded] = useState(false);
   const colors = ['--primary', '--accent', '--success'];
-  const displaySkills = skills.slice(0, maxDisplay);
+  const shouldCollapse = skills.length > maxDisplay;
+  const displaySkills = (shouldCollapse && !isExpanded ? skills.slice(0, maxDisplay) : skills);
   const skillCounts = new Map();
-  const keyedSkills = displaySkills.map((skill) => {
-    const occurrence = skillCounts.get(skill) ?? 0;
-    skillCounts.set(skill, occurrence + 1);
+  const keyedSkills = useMemo(
+    () =>
+      displaySkills.map((skill) => {
+        const occurrence = skillCounts.get(skill) ?? 0;
+        skillCounts.set(skill, occurrence + 1);
 
-    return {
-      key: occurrence === 0 ? skill : `${skill}-${occurrence}`,
-      skill,
-    };
-  });
+        return {
+          key: occurrence === 0 ? skill : `${skill}-${occurrence}`,
+          skill,
+        };
+      }),
+    [displaySkills],
+  );
 
   return (
     <div className="skill-tags-container">
@@ -33,8 +39,15 @@ function SkillTags({ skills, onSkillClick, maxDisplay = 5 }) {
           {skill}
         </span>
       ))}
-      {skills.length > maxDisplay && (
-        <span className="skill-tag-more">+{skills.length - maxDisplay} more</span>
+      {shouldCollapse && (
+        <button
+          type="button"
+          className="skill-tag-more"
+          aria-expanded={isExpanded}
+          onClick={() => setIsExpanded((currentValue) => !currentValue)}
+        >
+          {isExpanded ? 'Show less' : `+${skills.length - maxDisplay} more`}
+        </button>
       )}
     </div>
   );

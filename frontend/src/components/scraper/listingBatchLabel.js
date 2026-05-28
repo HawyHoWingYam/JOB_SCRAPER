@@ -28,7 +28,23 @@ export function formatListingBatchOptionLabel(batch, formatTimestamp) {
         crawlJobId: batch?.crawl_job_id,
     });
     const queuedLabel = batch?.queued_at ? `Queued ${formatTimestamp(batch.queued_at)}` : null;
-    const backlogLabel = `${formatCount(batch?.detail_pending)} pending / ${formatCount(batch?.listings_staged)} staged`;
+    const backlogParts = [
+        `${formatCount(batch?.listings_staged)} staged`,
+        `${formatCount(batch?.detail_pending)} pending`,
+    ];
+    if (Number(batch?.detail_running || 0) > 0) {
+        backlogParts.push(`${formatCount(batch?.detail_running)} running`);
+    }
+    if (Number(batch?.detail_completed || 0) > 0) {
+        backlogParts.push(`${formatCount(batch?.detail_completed)} completed`);
+    }
+    if (Number(batch?.detail_failed || 0) > 0) {
+        backlogParts.push(`${formatCount(batch?.detail_failed)} failed`);
+    }
+    if (Number(batch?.detail_manual_action_required || 0) > 0) {
+        backlogParts.push(`${formatCount(batch?.detail_manual_action_required)} manual review`);
+    }
+    const backlogLabel = backlogParts.join(' / ');
 
     return [identity, queuedLabel, backlogLabel].filter(Boolean).join(' - ');
 }

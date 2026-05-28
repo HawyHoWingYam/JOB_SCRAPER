@@ -130,6 +130,7 @@ export default function SkillChart() {
   }
 
   const groups = groupSkills(data);
+  const visibleGroupedSkillCount = groups.reduce((count, entry) => count + entry.skills.length, 0);
 
   return (
     <div className="chart-container dashboard-skill-chart">
@@ -139,7 +140,7 @@ export default function SkillChart() {
           <p>Skills are grouped into narrower operating buckets so you can scan more demand without losing context.</p>
         </div>
         <div className="dashboard-chart-badge">
-          {Number(data.length || 0)} ranked skills
+          {visibleGroupedSkillCount} skills shown
         </div>
       </div>
 

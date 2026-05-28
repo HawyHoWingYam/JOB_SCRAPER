@@ -14,6 +14,90 @@ vi.mock('./components/charts/CategoryChart', () => ({
 import App from './App';
 
 describe('App lazy views', () => {
+  it('initializes the active view from the URL hash and keeps it in sync after navigation', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url === '/api/v1/schedules') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ schedules: [] }),
+        });
+      }
+
+      if (url === '/api/categories?source_site=jobsdb') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ categories: [] }),
+        });
+      }
+
+      if (url === '/api/v1/capabilities') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            scheduler: {
+              available: true,
+              manual_run_available: true,
+              owner: 'scheduler-worker',
+              worker_name: 'scheduler-worker',
+              heartbeat_status: 'fresh',
+              last_heartbeat_at: null,
+              last_reconcile_at: null,
+              reason: null,
+            },
+          }),
+        });
+      }
+
+      if (url === '/api/v1/scrape/progress') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ active: {}, all: {}, has_active: false }),
+        });
+      }
+
+      if (url === '/api/v1/stats/overview') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            total_jobs: 0,
+            enriched_jobs: 0,
+            pending_enrichment: 0,
+          }),
+        });
+      }
+
+      if (url === '/api/v1/ai/overview') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            failed_jobs: 0,
+            running_runs: 0,
+            last_completed_run: null,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    window.location.hash = '#scheduler';
+    render(<App />);
+
+    expect(await screen.findByText(/task control board/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /dashboard/i }));
+
+    expect(window.location.hash).toBe('#dashboard');
+  });
+
   it('loads the settings view when navigated from the sidebar', async () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);

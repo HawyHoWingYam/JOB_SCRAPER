@@ -116,6 +116,22 @@ class FakeOutboxPublisher:
         self.calls.append({"db": db, "limit": limit})
 
 
+class FakeScheduleRepository:
+    def __init__(self) -> None:
+        self.created_executions: list[object] = []
+
+    def create_execution(self, db, *, schedule_id, status="pending", auto_commit=True):
+        execution = SimpleNamespace(
+            id=uuid4(),
+            schedule_id=schedule_id,
+            crawl_job_id=None,
+            status=status,
+            request_payload_snapshot=None,
+        )
+        self.created_executions.append(execution)
+        return execution
+
+
 class FakeDispatchService:
     def __init__(self, crawl_job) -> None:
         self.crawl_job = crawl_job
@@ -545,6 +561,74 @@ def test_dispatch_manual_crawl_job_publishes_its_command_row_immediately():
 
     assert result.crawl_job is repository.created_jobs[0]
     assert outbox_repository.enqueued[0].topic == "stream.crawl.commands.headed"
+    assert outbox_repository.enqueued[0].event_type == "crawl.requested"
+    assert outbox_publisher.row_calls == [{"db": db, "row": outbox_repository.enqueued[0]}]
+    assert outbox_publisher.calls == [{"db": db, "limit": 100}]
+
+
+def test_dispatch_manual_crawl_job_upgrades_legacy_ctgoodjobs_headless_requests():
+    repository = FakeDispatchCrawlJobRepository()
+    outbox_repository = FakeEventOutboxRepository()
+    outbox_publisher = FakeOutboxPublisher()
+    service = CrawlJobDispatchService(
+        crawl_job_repository=repository,
+        event_outbox_repository=outbox_repository,
+        outbox_publisher=outbox_publisher,
+    )
+    db = FakeDB()
+
+    result = service.dispatch_manual_crawl_job(
+        db,
+        source_site="ctgoodjobs",
+        crawl_phase="listing",
+        crawl_mode="headless",
+        category_ids=["ctgoodjobs:021"],
+        max_pages=3,
+        requested_by="api",
+    )
+
+    assert result.crawl_job is repository.created_jobs[0]
+    assert result.crawl_job.request_payload["crawl_mode"] == "headed"
+    assert outbox_repository.enqueued[0].topic == "stream.crawl.commands.headed"
+    assert outbox_publisher.row_calls == [{"db": db, "row": outbox_repository.enqueued[0]}]
+    assert outbox_publisher.calls == [{"db": db, "limit": 100}]
+
+
+def test_dispatch_schedule_crawl_job_sets_last_run_at_before_queueing():
+    repository = FakeDispatchCrawlJobRepository()
+    outbox_repository = FakeEventOutboxRepository()
+    outbox_publisher = FakeOutboxPublisher()
+    schedule_repository = FakeScheduleRepository()
+    service = CrawlJobDispatchService(
+        crawl_job_repository=repository,
+        event_outbox_repository=outbox_repository,
+        outbox_publisher=outbox_publisher,
+        schedule_repository=schedule_repository,
+    )
+    db = FakeDB()
+    schedule = SimpleNamespace(
+        id=uuid4(),
+        source_site="jobsdb",
+        crawl_phase="listing",
+        crawl_mode="headed",
+        category_ids=[1200],
+        keywords=None,
+        location="Hong Kong",
+        max_pages=3,
+        detail_limit=100,
+        last_run_at=None,
+    )
+
+    result = service.dispatch_schedule_crawl_job(
+        db,
+        schedule=schedule,
+        requested_by="api",
+        trigger_type="manual",
+    )
+
+    assert result.crawl_job is repository.created_jobs[0]
+    assert schedule.last_run_at is not None
+    assert schedule_repository.created_executions[0].schedule_id == schedule.id
     assert outbox_repository.enqueued[0].event_type == "crawl.requested"
     assert outbox_publisher.row_calls == [{"db": db, "row": outbox_repository.enqueued[0]}]
     assert outbox_publisher.calls == [{"db": db, "limit": 100}]

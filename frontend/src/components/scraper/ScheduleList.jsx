@@ -32,9 +32,61 @@ function formatExecutionStatus(status) {
 }
 
 function formatLatestExecutionVolume(schedule) {
-    const scraped = Number(schedule.latest_execution_jobs_scraped || 0).toLocaleString();
-    const ingested = Number(schedule.latest_execution_jobs_saved || 0).toLocaleString();
+    const executionStatus = `${schedule.latest_execution_status || ''}`.trim().toLowerCase();
+    const staged = Number(schedule.latest_execution_listings_staged || 0);
+    const pendingDetails = Number(schedule.latest_execution_detail_pending || 0);
+    const runningDetails = Number(schedule.latest_execution_detail_running || 0);
+    const completedDetails = Number(schedule.latest_execution_detail_completed || 0);
+    const failedDetails = Number(schedule.latest_execution_detail_failed || 0);
+    const manualReview = Number(schedule.latest_execution_detail_manual_action_required || 0);
+    if (staged > 0 || pendingDetails > 0 || runningDetails > 0 || completedDetails > 0 || failedDetails > 0 || manualReview > 0) {
+        const parts = [`${staged.toLocaleString()} staged`];
+        if (pendingDetails > 0) {
+            parts.push(`${pendingDetails.toLocaleString()} pending details`);
+        }
+        if (runningDetails > 0) {
+            parts.push(`${runningDetails.toLocaleString()} running details`);
+        }
+        if (completedDetails > 0) {
+            parts.push(`${completedDetails.toLocaleString()} completed details`);
+        }
+        if (failedDetails > 0) {
+            parts.push(`${failedDetails.toLocaleString()} failed details`);
+        }
+        if (manualReview > 0) {
+            parts.push(`${manualReview.toLocaleString()} manual review`);
+        }
+        return parts.join(' / ');
+    }
+
+    const scrapedCount = Number(schedule.latest_execution_jobs_scraped || 0);
+    const ingestedCount = Number(schedule.latest_execution_jobs_saved || 0);
+    const deadLettered = Number(schedule.latest_execution_jobs_dead_lettered || 0);
+    if ((executionStatus === 'pending' || executionStatus === 'running') && scrapedCount === 0 && ingestedCount === 0 && deadLettered === 0) {
+        return 'Awaiting first counts';
+    }
+    const scraped = scrapedCount.toLocaleString();
+    const ingested = ingestedCount.toLocaleString();
+    if (deadLettered > 0) {
+        return `${scraped} scraped / ${ingested} ingested / ${deadLettered.toLocaleString()} dead-lettered`;
+    }
     return `${scraped} scraped / ${ingested} ingested`;
+}
+
+function formatLatestExecutionRecency(schedule) {
+    const timestamp = schedule.latest_execution_completed_at || schedule.latest_execution_started_at;
+    const effectiveStatus = `${schedule.latest_execution_status || ''}`.trim();
+    if (!timestamp) {
+        return null;
+    }
+
+    if (effectiveStatus === 'running') {
+        return formatRelativeTimeHint(timestamp) === 'Just now'
+            ? 'Running now'
+            : formatRelativeTimeHint(timestamp);
+    }
+
+    return formatRelativeTimeHint(timestamp);
 }
 
 function buildCategorySummary(schedule, categories = []) {
@@ -187,6 +239,7 @@ function ScheduleCard({
     const lastRunHint = formatRelativeTimeHint(schedule.last_run_at);
     const nextRunHint = formatRelativeTimeHint(schedule.next_run_at, { future: true });
     const latestExecutionStatus = formatExecutionStatus(schedule.latest_execution_status);
+    const latestExecutionRecency = formatLatestExecutionRecency(schedule);
 
     return (
         <div className={`schedule-card glass-panel ${isActive ? 'active-glow' : ''}`}>
@@ -272,6 +325,7 @@ function ScheduleCard({
                         <span className="label">Last outcome</span>
                         <strong>{latestExecutionStatus}</strong>
                         <span>{formatLatestExecutionVolume(schedule)}</span>
+                        {latestExecutionRecency && <span className="subvalue">{latestExecutionRecency}</span>}
                     </div>
                 )}
             </div>

@@ -71,7 +71,36 @@ describe('SkillChart', () => {
     expect(screen.getByText(/backend/i)).toBeInTheDocument();
     expect(screen.getByText(/database/i)).toBeInTheDocument();
     expect(screen.getByText(/platform & cloud/i)).toBeInTheDocument();
+    expect(screen.getByText(/22 skills shown/i)).toBeInTheDocument();
     expect(screen.getAllByText(/\+1 more/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/top 15/i)).not.toBeInTheDocument();
+  });
+
+  it('counts only actually rendered grouped skills in the summary badge', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/stats/skills')) {
+        return mockJsonResponse({
+          skills: [
+            { name: 'Python', category: 'Backend', count: 1015, dashboard_bucket: 'Backend' },
+            { name: 'SQL', category: 'Database', count: 794, dashboard_bucket: 'Database' },
+            { name: 'Legacy Skill', category: 'Unmapped', count: 200, dashboard_bucket: null },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<SkillChart />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Top Requested Skills')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/2 skills shown/i)).toBeInTheDocument();
+    expect(screen.queryByText(/3 skills shown/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Legacy Skill')).not.toBeInTheDocument();
   });
 });

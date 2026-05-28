@@ -369,6 +369,9 @@ class CrawlJobRepository:
         payload = dict(payload or {})
         items_emitted = self._metric_as_int(metrics.get("items_emitted"))
         ingest_items_seen = self._metric_as_int(metrics.get("ingest_items_seen"))
+        ingest_items_settled = self._metric_as_int(metrics.get("ingest_items_settled"))
+        ingest_items_failed = self._metric_as_int(metrics.get("ingest_items_failed"))
+        ingest_dead_lettered = self._metric_as_int(metrics.get("ingest_dead_lettered"))
         ids_collected = self._metric_as_int(metrics.get("job_ids_collected"))
         jobs_classified = self._metric_as_int(metrics.get("jobs_classified"))
         ai_completed_items = self._metric_as_int(metrics.get("ai_completed_items"))
@@ -383,6 +386,13 @@ class CrawlJobRepository:
         execution.jobs_saved = ingest_items_seen
         execution.jobs_classified = jobs_classified
 
+        effective_ingest_items_settled = ingest_items_settled
+        if effective_ingest_items_settled <= 0:
+            effective_ingest_items_settled = ingest_items_seen + max(
+                ingest_items_failed,
+                ingest_dead_lettered,
+            )
+
         current_page = self._metric_as_int(payload.get("current_page"))
         total_pages = self._metric_as_int(payload.get("total_pages"))
         if (total_pages > 0 and current_page >= total_pages) or (
@@ -393,7 +403,7 @@ class CrawlJobRepository:
         if event_type in {"crawl.completed", "crawl.failed", "crawl.cancelled"}:
             execution.phase2_completed = True
 
-        save_backlog_remaining = items_emitted > ingest_items_seen
+        save_backlog_remaining = items_emitted > effective_ingest_items_settled
         execution.phase4_completed = items_emitted == 0 or not save_backlog_remaining
         execution.phase5_completed = (
             ai_total_items > 0 and (ai_completed_items + ai_failed_items) >= ai_total_items

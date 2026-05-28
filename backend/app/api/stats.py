@@ -19,6 +19,7 @@ from app.models.skill import Skill
 from app.models.job_skill_mention import JobSkillMention
 from app.models.skill_technology import SkillTechnology
 from app.models.skill_category import SkillCategory
+from app.services.enrichment_run_service import EnrichmentRunService
 from app.utils.skill_taxonomy_policy import apply_governed_skill_filters
 from app.schemas.stats import (
     DashboardCategoryStatsSchema,
@@ -61,19 +62,15 @@ def get_skill_dashboard_bucket(skill_name: str, category_name: str) -> str | Non
 @router.get("/overview")
 async def get_overview(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """Get dashboard overview statistics."""
-    total_jobs, enriched = (
-        db.query(
-            func.count(Job.id),
-            func.count(Job.ai_enriched_at),
-        )
-        .filter(Job.is_deleted == False)
-        .one()
-    )
+    queue_counts = EnrichmentRunService(db).get_job_queue_counts()
 
     return {
-        "total_jobs": total_jobs,
-        "enriched_jobs": enriched,
-        "pending_enrichment": total_jobs - enriched,
+        "total_jobs": queue_counts["total_jobs"],
+        "enriched_jobs": queue_counts["enriched_jobs"],
+        "eligible_enriched_jobs": queue_counts["eligible_enriched_jobs"],
+        "ai_eligible_jobs": queue_counts["ai_eligible_jobs"],
+        "ineligible_jobs": queue_counts["ineligible_jobs"],
+        "pending_enrichment": queue_counts["pending_jobs"],
     }
 
 

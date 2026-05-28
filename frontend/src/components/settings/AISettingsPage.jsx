@@ -272,6 +272,41 @@ function getRuntimeStateLabel(runtimeStatus) {
   return 'Blocked';
 }
 
+function getAggregateRuntimeState(jobRuntimeStatus, companyRuntimeStatus) {
+  const states = [
+    getRuntimeStateLabel(jobRuntimeStatus),
+    getRuntimeStateLabel(companyRuntimeStatus),
+  ];
+
+  if (states.every((state) => state === 'Ready')) {
+    return 'Ready';
+  }
+  if (states.includes('Needs test')) {
+    return 'Needs test';
+  }
+  return 'Blocked';
+}
+
+function getProfileSummaryProviderValue(profileKey, runtimeStatus, formProfile, settingsPayload) {
+  const providerKey = getProfileProviderKey(profileKey);
+  const configuredProvider =
+    runtimeStatus?.configured_provider ||
+    settingsPayload?.persisted_config?.[providerKey] ||
+    settingsPayload?.effective_config?.[providerKey] ||
+    null;
+
+  if (configuredProvider) {
+    return toProviderLabel(configuredProvider);
+  }
+
+  const draftProvider = formProfile?.llm_provider;
+  if (draftProvider && draftProvider !== 'mock') {
+    return toProviderLabel(draftProvider);
+  }
+
+  return 'Not configured';
+}
+
 function FeedbackBanner({ feedback }) {
   if (!feedback) {
     return null;
@@ -679,6 +714,7 @@ export default function AISettingsPage() {
   const jobRuntimeStatus = settingsPayload?.runtime_status || {};
   const companyRuntimeStatus = settingsPayload?.company_runtime_status || {};
   const isAnyDegraded = Boolean(jobRuntimeStatus.is_degraded || companyRuntimeStatus.is_degraded);
+  const aggregateRuntimeState = getAggregateRuntimeState(jobRuntimeStatus, companyRuntimeStatus);
 
   return (
     <section className="ai-settings-page">
@@ -693,7 +729,7 @@ export default function AISettingsPage() {
         <div className="ai-settings-hero-badges">
           <span className="ai-settings-chip">{saving ? 'Saving...' : 'Editable'}</span>
           <span className={`ai-settings-chip ${isAnyDegraded ? 'warning' : 'success'}`}>
-            {isAnyDegraded ? 'Needs test' : 'Runtime ready'}
+            {aggregateRuntimeState === 'Ready' ? 'Runtime ready' : aggregateRuntimeState}
           </span>
         </div>
       </header>
@@ -704,14 +740,14 @@ export default function AISettingsPage() {
         <SummaryCard
           icon={BrainCircuit}
           label="AI Enrichment"
-          value={toProviderLabel(jobRuntimeStatus.configured_provider || formState?.jobs?.llm_provider)}
+          value={getProfileSummaryProviderValue('jobs', jobRuntimeStatus, formState?.jobs, settingsPayload)}
           hint={jobRuntimeStatus.model || 'No model reported'}
           tone={jobRuntimeStatus.requires_test ? 'warning' : 'default'}
         />
         <SummaryCard
           icon={Layers3}
           label="Companies"
-          value={toProviderLabel(companyRuntimeStatus.configured_provider || formState?.companies?.llm_provider)}
+          value={getProfileSummaryProviderValue('companies', companyRuntimeStatus, formState?.companies, settingsPayload)}
           hint={companyRuntimeStatus.model || 'No model reported'}
           tone={companyRuntimeStatus.requires_test ? 'warning' : 'default'}
         />
@@ -728,7 +764,7 @@ export default function AISettingsPage() {
         <SummaryCard
           icon={isAnyDegraded ? AlertTriangle : ShieldCheck}
           label="Runtime state"
-          value={isAnyDegraded ? 'Needs test' : 'Ready'}
+          value={aggregateRuntimeState}
           hint={
             jobRuntimeStatus.degradation_reason ||
             companyRuntimeStatus.degradation_reason ||
