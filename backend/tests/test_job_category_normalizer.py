@@ -103,6 +103,70 @@ def test_resolve_taxonomy_decision_keeps_backend_for_regular_software_roles_with
     db.close()
 
 
+def test_resolve_taxonomy_decision_promotes_general_fallback_to_backend_when_api_signals_are_strong():
+    db, normalizer = _build_normalizer()
+
+    subcategory_id = normalizer.resolve_taxonomy_decision(
+        classification={
+            "taxonomy_decision": {
+                "domain": "Information & Communication Technology",
+                "category": "General",
+                "subcategory": "General",
+                "resolution": "fallback_default_path",
+            },
+            "final_taxonomy_decision": {
+                "domain": "Information & Communication Technology",
+                "category": "General",
+                "subcategory": "General",
+                "resolution": "fallback_default_path",
+            },
+        },
+        source_classification_id="6281",
+        source_classification_name="Information & Communication Technology",
+        source_subclassification_name="Engineering - Software",
+        job_title="Backend Engineer",
+        job_description="Build REST APIs, backend services, and microservices for enterprise platforms.",
+        extracted_skills=["Java", "Spring Boot", "RESTful API", "Microservices"],
+    )
+
+    resolved = db.query(JobSubcategory).filter(JobSubcategory.id == subcategory_id).one()
+
+    assert resolved.name == "Backend Development"
+    db.close()
+
+
+def test_resolve_taxonomy_decision_keeps_general_fallback_when_backend_signals_are_weak():
+    db, normalizer = _build_normalizer()
+
+    subcategory_id = normalizer.resolve_taxonomy_decision(
+        classification={
+            "taxonomy_decision": {
+                "domain": "Information & Communication Technology",
+                "category": "General",
+                "subcategory": "General",
+                "resolution": "fallback_default_path",
+            },
+            "final_taxonomy_decision": {
+                "domain": "Information & Communication Technology",
+                "category": "General",
+                "subcategory": "General",
+                "resolution": "fallback_default_path",
+            },
+        },
+        source_classification_id="6281",
+        source_classification_name="Information & Communication Technology",
+        source_subclassification_name="Engineering - Software",
+        job_title="Software Engineer",
+        job_description="Work with internal teams on software projects.",
+        extracted_skills=["Communication", "Documentation"],
+    )
+
+    resolved = db.query(JobSubcategory).filter(JobSubcategory.id == subcategory_id).one()
+
+    assert resolved.name == "General"
+    db.close()
+
+
 def test_resolve_taxonomy_decision_prefers_infrastructure_support_for_mlops_roles():
     db, normalizer = _build_normalizer()
 
