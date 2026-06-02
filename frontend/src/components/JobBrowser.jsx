@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Building2, MapPin, CalendarDays, BrainCircuit, ExternalLink, Activity } from 'lucide-react';
 import SearchBar from './SearchBar';
 import FilterPanel from './FilterPanel';
-import Pagination from './Pagination';
+import PaginationControl from './PaginationControl';
 import JobDetailModal from './JobDetailModal';
 import { API_BASE_URL } from '../api/base';
 import { fetchCapabilities } from '../api/capabilities';
@@ -664,12 +664,14 @@ function JobBrowser() {
                             ))}
                         </div>
 
-                        <Pagination
+                        <PaginationControl
                             page={pagination.page}
                             totalPages={pagination.totalPages}
-                            total={pagination.total}
-                            onPageChange={handlePageChange}
+                            totalItems={pagination.total}
                             isLoading={isLoading}
+                            onPageChange={handlePageChange}
+                            summaryText={`Page ${pagination.page} of ${Math.max(pagination.totalPages || 1, 1)} (${pagination.total} jobs)`}
+                            hideWhenSinglePage
                         />
                     </>
                 )}

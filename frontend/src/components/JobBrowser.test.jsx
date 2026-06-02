@@ -36,6 +36,8 @@ const ALL_JOBS = [
   },
 ];
 
+let forceMultiPageResults = false;
+
 function getSearchCalls(fetchMock) {
   return fetchMock.mock.calls.filter(([input, init]) => {
     const url = new URL(String(input), 'http://localhost');
@@ -139,7 +141,9 @@ function mockSearchResponse(body) {
       total: filteredJobs.length,
       page,
       page_size: pageSize,
-      total_pages: Math.max(1, Math.ceil(filteredJobs.length / pageSize)),
+      total_pages: forceMultiPageResults && filteredJobs.length > 0
+        ? Math.max(2, Math.ceil(filteredJobs.length / pageSize))
+        : Math.max(1, Math.ceil(filteredJobs.length / pageSize)),
       applied_scope: body.scope || { layers: [] },
       layer_summaries: layers.map(summarizeLayer),
     }),
@@ -154,6 +158,7 @@ describe('JobBrowser', () => {
   beforeEach(() => {
     exportShouldFail = false;
     forcedSearchErrorDetail = null;
+    forceMultiPageResults = false;
     capabilitiesPayload = {
       search: {
         lexical: { available: true },
@@ -503,6 +508,23 @@ describe('JobBrowser', () => {
     expect(screen.getAllByText(/5 pending changes/i).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/5 pending changes armed/i)).toBeInTheDocument();
     expect(screen.queryByText(/1 pending changes/i)).not.toBeInTheDocument();
+  });
+
+  it('jumps directly to a requested page from the shared pagination control', async () => {
+    forceMultiPageResults = true;
+
+    render(<JobBrowser />);
+
+    await screen.findByText('Healthcare ERP Lead');
+
+    fireEvent.change(screen.getByLabelText(/jump to page/i), {
+      target: { value: '2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /go/i }));
+
+    await waitFor(() => {
+      expect(getLatestSearchBody(globalThis.fetch).page).toBe(2);
+    });
   });
 
   it('exports the active scope instead of pending draft edits', async () => {
