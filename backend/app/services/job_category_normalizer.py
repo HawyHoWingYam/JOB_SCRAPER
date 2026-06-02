@@ -102,6 +102,10 @@ class JobCategoryNormalizer:
         domain_name, category_name, subcategory_name, allow_create = self._prefer_specific_default_over_generic(
             (domain_name, category_name, subcategory_name, allow_create),
             source_slice,
+            source_subclassification_name=source_subclassification_name,
+            job_title=job_title,
+            job_description=job_description,
+            extracted_skills=extracted_skills,
             governance_override=bool(classification.get("governance_override")),
         )
         domain_name, category_name, subcategory_name, allow_create = (
@@ -143,6 +147,10 @@ class JobCategoryNormalizer:
         resolved_path: tuple[str, str, str, bool],
         source_slice: SourceBoundTaxonomySlice,
         *,
+        source_subclassification_name: Optional[str],
+        job_title: Optional[str],
+        job_description: str,
+        extracted_skills: Optional[list[dict | str]],
         governance_override: bool,
     ) -> tuple[str, str, str, bool]:
         """Prefer a more specific source default when the resolved leaf is generic."""
@@ -155,6 +163,18 @@ class JobCategoryNormalizer:
 
         _, category_name, subcategory_name, _ = resolved_path
         if category_name != "General" and subcategory_name != "General":
+            return resolved_path
+
+        if (
+            source_subclassification_name == "Engineering - Software"
+            and default_category == "Software Development"
+            and default_subcategory == "Backend Development"
+            and not self._has_strong_backend_development_signals(
+                job_title=job_title,
+                job_description=job_description,
+                extracted_skills=extracted_skills,
+            )
+        ):
             return resolved_path
 
         return (default_domain, default_category, default_subcategory, False)
@@ -292,31 +312,13 @@ class JobCategoryNormalizer:
             return skill.strip().lower()
         return ""
 
-    def _prefer_backend_development_for_explicit_software_signals(
+    def _has_strong_backend_development_signals(
         self,
-        resolved_path: tuple[str, str, str, bool],
-        source_slice: SourceBoundTaxonomySlice,
         *,
-        source_subclassification_name: Optional[str],
         job_title: Optional[str],
         job_description: str,
         extracted_skills: Optional[list[dict | str]],
-        governance_override: bool,
-    ) -> tuple[str, str, str, bool]:
-        """Protect explicit backend/microservices software roles from drifting into infra."""
-        if governance_override:
-            return resolved_path
-        if source_subclassification_name != "Engineering - Software":
-            return resolved_path
-
-        domain_name, category_name, subcategory_name, allow_create = resolved_path
-        if category_name != "Infrastructure & Support" or subcategory_name != "Systems Administration":
-            return resolved_path
-        if "Software Development" not in source_slice.allowed_categories:
-            return resolved_path
-        if "Backend Development" not in source_slice.allowed_subcategories:
-            return resolved_path
-
+    ) -> bool:
         normalized_title = str(job_title or "").lower()
         normalized_text = " ".join(
             str(value or "").strip().lower()
@@ -353,8 +355,38 @@ class JobCategoryNormalizer:
             )
             if signal in normalized_text or signal in normalized_skill_names
         }
+        return explicit_backend_title or len(backend_signal_hits) >= 3
 
-        if not explicit_backend_title and len(backend_signal_hits) < 3:
+    def _prefer_backend_development_for_explicit_software_signals(
+        self,
+        resolved_path: tuple[str, str, str, bool],
+        source_slice: SourceBoundTaxonomySlice,
+        *,
+        source_subclassification_name: Optional[str],
+        job_title: Optional[str],
+        job_description: str,
+        extracted_skills: Optional[list[dict | str]],
+        governance_override: bool,
+    ) -> tuple[str, str, str, bool]:
+        """Protect explicit backend/microservices software roles from drifting into infra."""
+        if governance_override:
+            return resolved_path
+        if source_subclassification_name != "Engineering - Software":
+            return resolved_path
+
+        domain_name, category_name, subcategory_name, allow_create = resolved_path
+        if category_name != "Infrastructure & Support" or subcategory_name != "Systems Administration":
+            return resolved_path
+        if "Software Development" not in source_slice.allowed_categories:
+            return resolved_path
+        if "Backend Development" not in source_slice.allowed_subcategories:
+            return resolved_path
+
+        if not self._has_strong_backend_development_signals(
+            job_title=job_title,
+            job_description=job_description,
+            extracted_skills=extracted_skills,
+        ):
             return resolved_path
 
         return (
