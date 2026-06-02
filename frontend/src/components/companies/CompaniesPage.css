@@ -322,6 +322,30 @@
     min-width: 118px;
 }
 
+.pagination-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.pagination-jump-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.pagination-jump input {
+    width: 84px;
+    min-height: 40px;
+    padding: 0 var(--space-2);
+}
+
 @media (max-width: 1040px) {
     .companies-hero {
         grid-template-columns: 1fr;
