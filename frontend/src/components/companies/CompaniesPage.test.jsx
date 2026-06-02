@@ -352,6 +352,185 @@ describe('CompaniesPage', () => {
     expect(createdRunCalls).toBe(0);
   });
 
+  it('clears stale active item state after a run reaches a terminal status', async () => {
+    let runPollCalls = 0;
+    let runItemsCalls = 0;
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => false);
+    currentRunResponses = [
+      {
+        id: 'run-current',
+        status: 'running',
+        total_items: 2,
+        pending_items: 1,
+        completed_items: 0,
+        failed_items: 0,
+        current_company_id: 'company-1',
+        current_company_name: 'Acme Health',
+        error_message: null,
+        started_at: '2026-04-19T10:00:00Z',
+        completed_at: null,
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+    runResponsesById['run-current'] = [
+      {
+        id: 'run-current',
+        status: 'completed_with_failures',
+        total_items: 2,
+        pending_items: 0,
+        completed_items: 1,
+        failed_items: 1,
+        current_company_id: null,
+        current_company_name: null,
+        error_message: '1 item(s) failed. First error: provider timeout',
+        started_at: '2026-04-19T10:00:00Z',
+        completed_at: '2026-04-19T10:01:00Z',
+        created_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+    const initialCompaniesPayload = buildCompaniesPayload(
+      [
+        {
+          id: 'company-1',
+          company_id: 'company-1',
+          name: 'Acme Health',
+          industry: 'Healthcare',
+          location: 'Hong Kong',
+          ai_description: null,
+        },
+        {
+          id: 'company-2',
+          company_id: 'company-2',
+          name: 'Beta Logistics',
+          industry: 'Logistics',
+          location: 'Tsuen Wan',
+          ai_description: null,
+        },
+      ],
+      1,
+      2,
+    );
+    const refreshedCompaniesPayload = buildCompaniesPayload(
+      [
+        {
+          id: 'company-1',
+          company_id: 'company-1',
+          name: 'Acme Health',
+          industry: 'Healthcare',
+          location: 'Hong Kong',
+          ai_description: 'Acme Health AI summary',
+        },
+        {
+          id: 'company-2',
+          company_id: 'company-2',
+          name: 'Beta Logistics',
+          industry: 'Logistics',
+          location: 'Tsuen Wan',
+          ai_description: null,
+        },
+      ],
+      1,
+      2,
+    );
+    companyPages['status=pending&q=&page=1&page_size=25'] = initialCompaniesPayload;
+
+    const baseFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = new URL(String(input), 'http://localhost');
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/run-current' && (!init.method || init.method === 'GET')) {
+        runPollCalls += 1;
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/run-current/items' && (!init.method || init.method === 'GET')) {
+        runItemsCalls += 1;
+        return mockJsonResponse(
+          runItemsCalls === 1
+            ? {
+                items: [
+                  {
+                    id: 'item-1',
+                    run_id: 'run-current',
+                    company_id: 'company-1',
+                    status: 'running',
+                    error_message: null,
+                  },
+                  {
+                    id: 'item-2',
+                    run_id: 'run-current',
+                    company_id: 'company-2',
+                    status: 'pending',
+                    error_message: null,
+                  },
+                ],
+              }
+            : {
+                items: [
+                  {
+                    id: 'item-1',
+                    run_id: 'run-current',
+                    company_id: 'company-1',
+                    status: 'running',
+                    error_message: null,
+                  },
+                  {
+                    id: 'item-2',
+                    run_id: 'run-current',
+                    company_id: 'company-2',
+                    status: 'pending',
+                    error_message: null,
+                  },
+                ],
+              },
+        );
+      }
+
+      return baseFetch(input, init);
+    });
+
+    vi.useFakeTimers();
+    render(<CompaniesPage />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    companyPages['status=pending&q=&page=1&page_size=25'] = refreshedCompaniesPayload;
+
+    expect(screen.getByText(/current company: acme health/i)).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /open details for acme health/i })).getByText('Generating')).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /open details for beta logistics/i })).getByText('Queued')).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2100);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(runPollCalls).toBe(1);
+    expect(companyRequests).toHaveLength(2);
+    vi.useRealTimers();
+    await waitFor(() => {
+      expect(screen.queryByText(/current company: acme health/i)).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(runItemsCalls).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.getByText(/finished generating descriptions for 2 companies\. 1 succeeded, 1 failed\./i)).toBeInTheDocument();
+    expect(screen.queryByText(/generating descriptions:/i)).not.toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /open details for acme health/i })).getByText('AI Ready')).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /open details for beta logistics/i })).queryByText('Queued')).not.toBeInTheDocument();
+  });
+
   it('describes pending company runs as queued before the first company starts', async () => {
     currentRunResponses = [
       {
