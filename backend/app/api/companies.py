@@ -68,8 +68,6 @@ def _resolve_current_company_id(db: Session | None, run) -> str | None:
         return None
     if str(getattr(run, "status", "") or "").lower() not in {"pending", "running"}:
         return None
-    if not getattr(run, "current_company_name", None):
-        return None
 
     row = (
         db.query(CompanyEnrichmentRunItem.company_id)
@@ -88,6 +86,13 @@ def _resolve_current_company_id(db: Session | None, run) -> str | None:
 
 
 def _serialize_run(run, db: Session | None = None) -> dict:
+    current_company_id = _resolve_current_company_id(db, run)
+    current_company_name = run.current_company_name
+    if str(getattr(run, "status", "") or "").lower() not in {"pending", "running"}:
+        current_company_name = None
+    elif db is not None and current_company_id is None:
+        current_company_name = None
+
     return {
         "id": run.id,
         "status": run.status,
@@ -97,8 +102,8 @@ def _serialize_run(run, db: Session | None = None) -> dict:
         "failed_items": run.failed_items,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-        "current_company_id": _resolve_current_company_id(db, run),
-        "current_company_name": run.current_company_name,
+        "current_company_id": current_company_id,
+        "current_company_name": current_company_name,
         "error_message": run.error_message,
         "created_at": run.created_at.isoformat() if run.created_at else None,
     }

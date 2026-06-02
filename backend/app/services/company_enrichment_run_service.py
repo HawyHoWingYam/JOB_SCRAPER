@@ -222,6 +222,7 @@ class CompanyEnrichmentRunService:
 
         completed_items = 0
         failed_items = 0
+        first_error_message = None
         company_ids = [item.company_id for item in items]
         companies_by_id = {
             company.id: company
@@ -241,12 +242,15 @@ class CompanyEnrichmentRunService:
                 raise NoResultFound(f"Company not found for enrichment run item {item.id}")
             item.status = "running"
             item.started_at = item.started_at or utc_now()
+            item.completed_at = None
+            item.error_message = None
             run.current_company_name = company.name
             self.db.flush()
 
             try:
                 await service.enrich_company_description(company, self.db)
                 item.status = "completed"
+                item.error_message = None
                 item.completed_at = utc_now()
                 completed_items += 1
             except Exception as exc:
@@ -257,25 +261,29 @@ class CompanyEnrichmentRunService:
                 if first_error_message is None:
                     first_error_message = str(exc)
 
+            run.current_company_name = None
             run.pending_items = max(run.total_items - completed_items - failed_items, 0)
             run.completed_items = completed_items
             run.failed_items = failed_items
+            if run.pending_items == 0:
+                run.completed_at = item.completed_at or utc_now()
+                if failed_items == 0:
+                    run.status = "completed"
+                    run.error_message = None
+                elif completed_items == 0:
+                    run.status = "failed"
+                    run.error_message = first_error_message
+                else:
+                    run.status = "completed_with_failures"
+                    run.error_message = (
+                        f"{failed_items} item(s) failed. First error: {first_error_message}"
+                        if first_error_message
+                        else f"{failed_items} item(s) failed"
+                    )
+            else:
+                run.status = "running"
+                run.completed_at = None
+                run.error_message = None
             self.db.flush()
 
-        run.current_company_name = None
-        run.completed_at = utc_now()
-        if failed_items == 0:
-            run.status = "completed"
-            run.error_message = None
-        elif completed_items == 0:
-            run.status = "failed"
-            run.error_message = first_error_message
-        else:
-            run.status = "completed_with_failures"
-            run.error_message = (
-                f"{failed_items} item(s) failed. First error: {first_error_message}"
-                if first_error_message
-                else f"{failed_items} item(s) failed"
-            )
-        self.db.flush()
         return run

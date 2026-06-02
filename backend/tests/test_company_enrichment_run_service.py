@@ -281,3 +281,70 @@ def test_execute_run_preloads_companies_with_single_company_select():
     assert run.completed_items == 2
     assert run.failed_items == 0
     assert len(company_select_statements) == 1
+
+
+def test_execute_run_clears_current_company_identity_and_updates_counters():
+    engine, db, company_ids = _create_company_enrichment_service_db()
+    service = CompanyEnrichmentRunService(db)
+    run = service.create_pending_run(force_company_ids=[company_ids[0]])
+    db.commit()
+
+    flush_snapshots = []
+
+    @event.listens_for(db, "after_flush")
+    def _capture_run_state(session, flush_context):
+        tracked_run = next(
+            (
+                obj
+                for obj in session.identity_map.values()
+                if isinstance(obj, CompanyEnrichmentRun) and obj.id == run.id
+            ),
+            None,
+        )
+        if tracked_run is None:
+            return
+
+        tracked_items = [
+            obj
+            for obj in session.identity_map.values()
+            if isinstance(obj, CompanyEnrichmentRunItem) and obj.run_id == run.id
+        ]
+        flush_snapshots.append(
+            {
+                "status": tracked_run.status,
+                "pending_items": tracked_run.pending_items,
+                "completed_items": tracked_run.completed_items,
+                "failed_items": tracked_run.failed_items,
+                "current_company_name": tracked_run.current_company_name,
+                "running_item_count": sum(
+                    1 for item in tracked_items if item.status == "running"
+                ),
+            }
+        )
+
+    class StubEnrichmentService:
+        async def enrich_company_description(self, company, db_session, force=False):
+            company.ai_description = "AI summary"
+            return {
+                "company_id": str(company.id),
+                "ai_description": company.ai_description,
+            }
+
+    try:
+        completed_run = asyncio.run(
+            service.execute_run(run.id, enrichment_service=StubEnrichmentService())
+        )
+    finally:
+        event.remove(db, "after_flush", _capture_run_state)
+        db.close()
+
+    assert completed_run.status == "completed"
+    assert completed_run.current_company_name is None
+    assert completed_run.pending_items == 0
+    assert completed_run.completed_items == 1
+    assert completed_run.failed_items == 0
+    assert not any(
+        snapshot["current_company_name"] is not None
+        and snapshot["running_item_count"] == 0
+        for snapshot in flush_snapshots
+    )
