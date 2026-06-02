@@ -304,6 +304,27 @@
     color: #b8f0d4;
 }
 
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+    padding: var(--space-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-secondary);
+}
+
+.pagination-controls {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.pagination-controls button {
+    min-width: 86px;
+}
+
 .companies-pagination {
     display: flex;
     align-items: center;
@@ -356,6 +377,7 @@
     .companies-hero,
     .company-card-header,
     .companies-filter-row,
+    .pagination,
     .companies-pagination,
     .companies-progress-header,
     .companies-progress-meta {

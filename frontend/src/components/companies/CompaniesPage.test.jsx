@@ -218,7 +218,7 @@ describe('CompaniesPage', () => {
     render(<CompaniesPage />);
 
     await screen.findByText('Acme Health');
-    await user.click(screen.getByRole('button', { name: /next page/i }));
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
 
     await waitFor(() => {
       expect(companyRequests.at(-1)).toBe('status=pending&q=&page=2&page_size=25');
@@ -227,12 +227,27 @@ describe('CompaniesPage', () => {
     expect(screen.getByText(/page 2 of 2/i)).toBeInTheDocument();
   });
 
+  it('jumps directly to a requested companies page', async () => {
+    const user = userEvent.setup();
+    render(<CompaniesPage />);
+
+    await screen.findByText('Acme Health');
+
+    await user.clear(screen.getByLabelText(/jump to page/i));
+    await user.type(screen.getByLabelText(/jump to page/i), '2');
+    await user.click(screen.getByRole('button', { name: /go/i }));
+
+    await waitFor(() => {
+      expect(companyRequests.at(-1)).toBe('status=pending&q=&page=2&page_size=25');
+    });
+  });
+
   it('returns to the latest available page when a refreshed result set makes the current page invalid', async () => {
     const user = userEvent.setup();
     render(<CompaniesPage />);
 
     await screen.findByText('Acme Health');
-    await user.click(screen.getByRole('button', { name: /next page/i }));
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
     expect(await screen.findByText('Zulu Health')).toBeInTheDocument();
 
     createdRunResponse = {
@@ -273,7 +288,7 @@ describe('CompaniesPage', () => {
       expect(companyRequests.at(-1)).toBe('status=pending&q=&page=1&page_size=25');
     });
     expect(await screen.findByText('Acme Health')).toBeInTheDocument();
-    expect(screen.getByText(/page 1 of 1/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/jump to page/i)).not.toBeInTheDocument();
   });
 
   it('creates a persisted global run and refreshes the current page after completion', async () => {

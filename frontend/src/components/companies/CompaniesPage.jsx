@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Sparkles } from 'lucide-react';
+import PaginationControl from '../PaginationControl';
 import CompanyDetailModal from './CompanyDetailModal';
 import CompanySummaryCard from './CompanySummaryCard';
 import { API_BASE_URL } from '../../api/base';
@@ -653,27 +654,15 @@ function CompaniesPage() {
             })}
           </div>
 
-          <div className="companies-pagination glass-panel">
-            <button
-              type="button"
-              className="companies-pagination-button"
-              onClick={() => setPage((currentPage) => Math.max(currentPage - 1, 1))}
-              disabled={page <= 1 || isLoading}
-              aria-label="Previous page"
-            >
-              Previous
-            </button>
-            <p>{`Page ${page} of ${Math.max(totalPages, 1)}`}</p>
-            <button
-              type="button"
-              className="companies-pagination-button"
-              onClick={() => setPage((currentPage) => Math.min(currentPage + 1, Math.max(totalPages, 1)))}
-              disabled={page >= Math.max(totalPages, 1) || isLoading}
-              aria-label="Next page"
-            >
-              Next
-            </button>
-          </div>
+          <PaginationControl
+            page={page}
+            totalPages={Math.max(totalPages, 1)}
+            totalItems={companies.length}
+            isLoading={isLoading}
+            onPageChange={setPage}
+            summaryText={`Page ${page} of ${Math.max(totalPages, 1)}`}
+            hideWhenSinglePage
+          />
         </>
       )}
 
