@@ -327,6 +327,66 @@ describe('CompaniesPage', () => {
     expect(await within(screen.getByRole('dialog')).findByText('Acme Health AI summary')).toBeInTheDocument();
   });
 
+  it('clears a stale list error after a run starts successfully', async () => {
+    const user = userEvent.setup();
+    let companiesRequestCount = 0;
+
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = new URL(String(input), 'http://localhost');
+
+      if (url.pathname === '/api/v1/companies' && (!init.method || init.method === 'GET')) {
+        companiesRequestCount += 1;
+        if (companiesRequestCount === 1) {
+          return Promise.resolve({
+            ok: false,
+            json: async () => ({}),
+          });
+        }
+
+        return mockJsonResponse(companyPages['status=pending&q=&page=1&page_size=25']);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
+        return mockJsonResponse(null);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs' && init.method === 'POST') {
+        createdRunCalls += 1;
+        return mockJsonResponse(createdRunResponse);
+      }
+
+      if (url.pathname === '/api/v1/companies/enrichment-runs/run-1' && (!init.method || init.method === 'GET')) {
+        return mockJsonResponse({
+          id: 'run-1',
+          status: 'running',
+          total_items: 2,
+          pending_items: 2,
+          completed_items: 0,
+          failed_items: 0,
+          current_company_name: null,
+          error_message: null,
+          started_at: '2026-04-19T10:00:00Z',
+          completed_at: null,
+          created_at: '2026-04-19T10:00:00Z',
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
+    });
+
+    render(<CompaniesPage />);
+
+    expect(await screen.findByText('Failed to load companies')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
+
+    await waitFor(() => {
+      expect(createdRunCalls).toBe(1);
+    });
+    expect(screen.queryByText('Failed to load companies')).not.toBeInTheDocument();
+    expect(screen.getByText(/global backlog run started\./i)).toBeInTheDocument();
+  });
+
   it('adopts an existing active run and disables duplicate creation', async () => {
     currentRunResponses = [
       {
