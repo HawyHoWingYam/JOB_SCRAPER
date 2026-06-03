@@ -7,6 +7,7 @@ from app.config import settings
 from app.crawl_modes import DEFAULT_CRAWL_MODE_BY_SOURCE, get_supported_crawl_modes
 from app.database import SessionLocal
 from app.models.app_runtime_settings import AppRuntimeSettings
+from app.services.headed_crawl_runtime import get_headed_crawl_worker_status
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 
 
@@ -158,6 +159,9 @@ def build_runtime_capabilities() -> dict[str, Any]:
         "scheduler": {
             "available": bool(scheduler.get("enabled", True)),
             **scheduler,
+        },
+        "crawl_workers": {
+            "headed": get_headed_crawl_worker_status(),
         },
         "manual_actions": _host_manual_action_helper_capability(),
         "sources": _source_capabilities(),

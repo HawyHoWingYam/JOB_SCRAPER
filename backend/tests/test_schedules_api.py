@@ -279,3 +279,45 @@ def test_schedule_history_uses_true_total_when_result_page_is_full(monkeypatch):
     payload = response.json()
     assert payload["total"] == 7
     assert repository.execution_count_calls == 1
+
+
+def test_run_schedule_now_returns_service_unavailable_when_headed_worker_is_offline(monkeypatch):
+    class HeadedWorkerUnavailableError(RuntimeError):
+        pass
+
+    class FakeDispatchService:
+        def dispatch_schedule_crawl_job(self, *args, **kwargs):
+            raise HeadedWorkerUnavailableError(
+                "Headed crawl worker is unavailable. Start backend\\scripts\\run_headed_crawl_worker_host.cmd and retry."
+            )
+
+    async def fake_validate_effective_category_ids(source_site, category_ids):
+        return None
+
+    app = FastAPI()
+    app.include_router(schedules.router, prefix="/api/v1")
+    schedule = _build_schedule("JobsDB Nightly")
+    repository = FakeScheduleRepository(schedules_list=[schedule])
+    db = object()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(schedules, "repository", repository)
+    monkeypatch.setattr(schedules, "crawl_job_dispatch_service", FakeDispatchService())
+    monkeypatch.setattr(schedules, "_validate_effective_category_ids", fake_validate_effective_category_ids)
+    monkeypatch.setattr(
+        schedules,
+        "HeadedCrawlWorkerUnavailableError",
+        HeadedWorkerUnavailableError,
+        raising=False,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(f"/api/v1/schedules/{schedule.id}/run")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Headed crawl worker is unavailable. Start backend\\scripts\\run_headed_crawl_worker_host.cmd and retry."
+    )

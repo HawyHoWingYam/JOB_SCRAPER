@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import Base
 from app.messaging.event_envelope import build_event_envelope
 from app.messaging.topics import STREAM_CRAWL_PROGRESS
-from app.models.crawl_job import CrawlJob
+from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.schedule import ScrapeSchedule
 from app.repositories.crawl_job_repository import CrawlJobRepository
@@ -24,9 +24,23 @@ class FakeBus:
     def __init__(self) -> None:
         self.published: list[tuple[str, object]] = []
         self.acked: list[tuple[object, ...]] = []
+        self.consume_group_calls: list[dict[str, object]] = []
 
     def ensure_group(self, *_args, **_kwargs) -> None:
         return None
+
+    def consume_group(self, topic, group_name, consumer_name, *, count=10, block_ms=100, reclaim_idle_ms=None):
+        self.consume_group_calls.append(
+            {
+                "topic": topic,
+                "group_name": group_name,
+                "consumer_name": consumer_name,
+                "count": count,
+                "block_ms": block_ms,
+                "reclaim_idle_ms": reclaim_idle_ms,
+            }
+        )
+        return []
 
     def publish(self, topic, envelope) -> None:
         self.published.append((topic, envelope))
@@ -54,10 +68,30 @@ def _build_session_factory():
         tables=[
             ScrapeSchedule.__table__,
             CrawlJob.__table__,
+            CrawlJobEvent.__table__,
             CrawlJobListing.__table__,
         ],
     )
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+def test_crawl_worker_attempts_to_reclaim_stale_pending_messages_before_waiting_for_new_work():
+    bus = FakeBus()
+    worker = CrawlWorkerService(bus=bus)
+
+    processed = asyncio.run(worker.run_once())
+
+    assert processed == 0
+    assert bus.consume_group_calls == [
+        {
+            "topic": "stream.crawl.commands",
+            "group_name": "crawl-workers",
+            "consumer_name": "crawl-worker",
+            "count": 10,
+            "block_ms": 100,
+            "reclaim_idle_ms": 60_000,
+        }
+    ]
 
 
 def _create_crawl_job(db, *, source_site: str = "jobsdb", request_payload: dict | None = None) -> CrawlJob:
@@ -78,6 +112,7 @@ def _create_listing(
     db,
     *,
     crawl_job_id,
+    source_site: str = "jobsdb",
     source_job_id: str,
     detail_status: str,
     category_id: str = "1200",
@@ -85,7 +120,7 @@ def _create_listing(
 ) -> CrawlJobListing:
     listing = CrawlJobListing(
         crawl_job_id=crawl_job_id,
-        source_site="jobsdb",
+        source_site=source_site,
         source_job_id=source_job_id,
         source_url=f"https://example.test/jobs/{source_job_id}",
         source_classification_id=category_id,
@@ -347,6 +382,333 @@ def test_load_detail_targets_keeps_filling_until_detail_limit_after_skip_existin
     assert refreshed_detail_job.metrics["detail_target_rows"] == 2
     assert [row.detail_status for row in refreshed_skipped_rows] == ["completed", "completed"]
     assert refreshed_untouched_row.detail_status == "pending"
+    verification_db.close()
+
+
+def test_persist_listing_batch_skips_jobs_already_published_or_staged_in_other_batches():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    existing_listing_batch = _create_crawl_job(
+        db,
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb"},
+    )
+    current_listing_batch = _create_crawl_job(
+        db,
+        request_payload={"crawl_phase": "listing", "source_site": "jobsdb", "skip_existing": True},
+    )
+
+    _create_listing(
+        db,
+        crawl_job_id=existing_listing_batch.id,
+        source_job_id="already-staged",
+        detail_status="pending",
+        listing_rank=1,
+    )
+
+    current_listing_batch_id = current_listing_batch.id
+    db.close()
+
+    worker = CrawlWorkerService(
+        bus=FakeBus(),
+        runner_registry={},
+        job_repository=FakeJobRepository(
+            existing_by_source_job_id={
+                "already-published": SimpleNamespace(id=uuid4()),
+            }
+        ),
+        session_factory=session_factory,
+    )
+
+    worker._persist_listing_batch(
+        crawl_job_id=str(current_listing_batch_id),
+        payloads=[
+            {
+                "source_site": "jobsdb",
+                "source_job_id": "brand-new",
+                "source_url": "https://example.test/jobs/brand-new",
+                "source_classification_id": "1200",
+                "source_classification_name": "Engineering",
+                "listing_page": 1,
+                "listing_rank": 1,
+                "listing_payload": {"source_job_id": "brand-new"},
+            },
+            {
+                "source_site": "jobsdb",
+                "source_job_id": "already-staged",
+                "source_url": "https://example.test/jobs/already-staged",
+                "source_classification_id": "1200",
+                "source_classification_name": "Engineering",
+                "listing_page": 1,
+                "listing_rank": 2,
+                "listing_payload": {"source_job_id": "already-staged"},
+            },
+            {
+                "source_site": "jobsdb",
+                "source_job_id": "already-published",
+                "source_url": "https://example.test/jobs/already-published",
+                "source_classification_id": "1200",
+                "source_classification_name": "Engineering",
+                "listing_page": 1,
+                "listing_rank": 3,
+                "listing_payload": {"source_job_id": "already-published"},
+            },
+        ],
+        skip_existing=True,
+    )
+
+    verification_db = session_factory()
+    crawl_job_repository = CrawlJobRepository()
+    refreshed_listing_job = crawl_job_repository.get_crawl_job_by_id(
+        verification_db,
+        current_listing_batch_id,
+    )
+    current_batch_rows = (
+        verification_db.query(CrawlJobListing)
+        .filter(CrawlJobListing.crawl_job_id == current_listing_batch_id)
+        .order_by(CrawlJobListing.listing_rank.asc())
+        .all()
+    )
+    staged_rows = (
+        verification_db.query(CrawlJobListing)
+        .filter(CrawlJobListing.source_job_id == "already-staged")
+        .order_by(CrawlJobListing.created_at.asc())
+        .all()
+    )
+
+    assert [row.source_job_id for row in current_batch_rows] == ["brand-new"]
+    assert refreshed_listing_job.metrics["jobs_skipped_existing"] == 2
+    assert refreshed_listing_job.metrics["listings_staged"] == 1
+    assert refreshed_listing_job.metrics["detail_pending"] == 1
+    assert len(staged_rows) == 1
+    verification_db.close()
+
+
+def test_persist_listing_batch_applies_cross_batch_skip_existing_to_ctgoodjobs_too():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    existing_listing_batch = _create_crawl_job(
+        db,
+        source_site="ctgoodjobs",
+        request_payload={"crawl_phase": "listing", "source_site": "ctgoodjobs"},
+    )
+    current_listing_batch = _create_crawl_job(
+        db,
+        source_site="ctgoodjobs",
+        request_payload={"crawl_phase": "listing", "source_site": "ctgoodjobs", "skip_existing": True},
+    )
+
+    _create_listing(
+        db,
+        crawl_job_id=existing_listing_batch.id,
+        source_site="ctgoodjobs",
+        source_job_id="ctgoodjobs-staged",
+        detail_status="pending",
+        category_id="ctgoodjobs:021",
+        listing_rank=1,
+    )
+
+    current_listing_batch_id = current_listing_batch.id
+    db.close()
+
+    worker = CrawlWorkerService(
+        bus=FakeBus(),
+        runner_registry={},
+        job_repository=FakeJobRepository(
+            existing_by_source_job_id={
+                "ctgoodjobs-published": SimpleNamespace(id=uuid4()),
+            }
+        ),
+        session_factory=session_factory,
+    )
+
+    worker._persist_listing_batch(
+        crawl_job_id=str(current_listing_batch_id),
+        payloads=[
+            {
+                "source_site": "ctgoodjobs",
+                "source_job_id": "ctgoodjobs-new",
+                "source_url": "https://example.test/jobs/ctgoodjobs-new",
+                "source_classification_id": "ctgoodjobs:021",
+                "source_classification_name": "Information Technology",
+                "listing_page": 1,
+                "listing_rank": 1,
+                "listing_payload": {"source_job_id": "ctgoodjobs-new"},
+            },
+            {
+                "source_site": "ctgoodjobs",
+                "source_job_id": "ctgoodjobs-staged",
+                "source_url": "https://example.test/jobs/ctgoodjobs-staged",
+                "source_classification_id": "ctgoodjobs:021",
+                "source_classification_name": "Information Technology",
+                "listing_page": 1,
+                "listing_rank": 2,
+                "listing_payload": {"source_job_id": "ctgoodjobs-staged"},
+            },
+            {
+                "source_site": "ctgoodjobs",
+                "source_job_id": "ctgoodjobs-published",
+                "source_url": "https://example.test/jobs/ctgoodjobs-published",
+                "source_classification_id": "ctgoodjobs:021",
+                "source_classification_name": "Information Technology",
+                "listing_page": 1,
+                "listing_rank": 3,
+                "listing_payload": {"source_job_id": "ctgoodjobs-published"},
+            },
+        ],
+        skip_existing=True,
+    )
+
+    verification_db = session_factory()
+    crawl_job_repository = CrawlJobRepository()
+    refreshed_listing_job = crawl_job_repository.get_crawl_job_by_id(
+        verification_db,
+        current_listing_batch_id,
+    )
+    current_batch_rows = (
+        verification_db.query(CrawlJobListing)
+        .filter(CrawlJobListing.crawl_job_id == current_listing_batch_id)
+        .order_by(CrawlJobListing.listing_rank.asc())
+        .all()
+    )
+
+    assert [row.source_job_id for row in current_batch_rows] == ["ctgoodjobs-new"]
+    assert refreshed_listing_job.metrics["jobs_skipped_existing"] == 2
+    assert refreshed_listing_job.metrics["listings_staged"] == 1
+    verification_db.close()
+
+
+def test_listing_resume_keeps_existing_progress_counters_in_started_and_page_events():
+    session_factory = _build_session_factory()
+    db = session_factory()
+    crawl_job = _create_crawl_job(
+        db,
+        request_payload={
+            "crawl_phase": "listing",
+            "source_site": "jobsdb",
+            "skip_existing": True,
+        },
+    )
+    _create_listing(
+        db,
+        crawl_job_id=crawl_job.id,
+        source_job_id="seen-1",
+        detail_status="pending",
+        listing_rank=1,
+    )
+    _create_listing(
+        db,
+        crawl_job_id=crawl_job.id,
+        source_job_id="seen-2",
+        detail_status="pending",
+        listing_rank=2,
+    )
+    crawl_job.metrics = {
+        "pages_processed": 4,
+        "job_ids_collected": 2,
+        "jobs_skipped_existing": 3,
+        "listings_staged": 2,
+    }
+    db.commit()
+    crawl_job_id = crawl_job.id
+    db.close()
+
+    class ResumeRunner:
+        async def crawl(self, **kwargs):
+            kwargs["emit_listing_emitted"](
+                {
+                    "source_site": "jobsdb",
+                    "source_job_id": "brand-new-after-resume",
+                    "source_url": "https://example.test/jobs/brand-new-after-resume",
+                    "source_classification_id": "1200",
+                    "source_classification_name": "Engineering",
+                    "listing_page": 5,
+                    "listing_rank": 3,
+                    "listing_payload": {"source_job_id": "brand-new-after-resume"},
+                }
+            )
+            kwargs["emit_listing_emitted"](
+                {
+                    "source_site": "jobsdb",
+                    "source_job_id": "existing-after-resume",
+                    "source_url": "https://example.test/jobs/existing-after-resume",
+                    "source_classification_id": "1200",
+                    "source_classification_name": "Engineering",
+                    "listing_page": 5,
+                    "listing_rank": 4,
+                    "listing_payload": {"source_job_id": "existing-after-resume"},
+                }
+            )
+            kwargs["emit_page_processed"]({"current_page": 5, "total_pages": 10})
+            return {
+                "pages_processed": 5,
+                "items_emitted": 0,
+            }
+
+    bus = FakeBus()
+    worker = CrawlWorkerService(
+        bus=bus,
+        runner_registry={"jobsdb": ResumeRunner()},
+        job_repository=FakeJobRepository(
+            existing_by_source_job_id={
+                "existing-after-resume": SimpleNamespace(id=uuid4()),
+            }
+        ),
+        session_factory=session_factory,
+    )
+    event = build_event_envelope(
+        event_type="crawl.requested",
+        aggregate_type="crawl_job",
+        aggregate_id=str(crawl_job_id),
+        source_service="test",
+        payload={
+            "crawl_job_id": str(crawl_job_id),
+            "source_site": "jobsdb",
+            "request_payload": {
+                "source_site": "jobsdb",
+                "crawl_phase": "listing",
+                "category_ids": [1200],
+                "max_pages": 10,
+                "skip_existing": True,
+                "is_resume": True,
+                "resume_context": {
+                    "listing_rank": 2,
+                    "seen_job_ids": ["seen-1", "seen-2"],
+                },
+            },
+        },
+    )
+
+    asyncio.run(worker._handle_message(SimpleNamespace(event=event, message_id="message-resume")))
+
+    started_payload = next(
+        envelope.payload
+        for topic, envelope in bus.published
+        if topic == STREAM_CRAWL_PROGRESS and envelope.event_type == "crawl.started"
+    )
+    page_payload = next(
+        envelope.payload
+        for topic, envelope in bus.published
+        if topic == STREAM_CRAWL_PROGRESS and envelope.event_type == "crawl.page_processed"
+    )
+
+    assert started_payload.get("job_ids_collected") == 2
+    assert started_payload.get("jobs_skipped_existing") == 3
+    assert started_payload.get("listings_staged") == 2
+    assert page_payload["pages_processed"] == 5
+    assert page_payload["job_ids_collected"] == 3
+    assert page_payload["jobs_skipped_existing"] == 4
+    assert page_payload["listings_staged"] == 3
+
+    verification_db = session_factory()
+    refreshed_listing_job = CrawlJobRepository().get_crawl_job_by_id(
+        verification_db,
+        crawl_job_id,
+    )
+
+    assert refreshed_listing_job.metrics["pages_processed"] == 5
+    assert refreshed_listing_job.metrics["job_ids_collected"] == 3
+    assert refreshed_listing_job.metrics["jobs_skipped_existing"] == 4
+    assert refreshed_listing_job.metrics["listings_staged"] == 3
     verification_db.close()
 
 

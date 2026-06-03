@@ -35,6 +35,7 @@ from app.utils.time import utc_now
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 _UNSET = object()
+_STALE_PENDING_RECLAIM_IDLE_MS = 60_000
 DETAIL_STATUS_METRIC_KEYS = {
     "pending": "detail_pending",
     "running": "detail_running",
@@ -61,6 +62,22 @@ class DetailTargetLoadResult:
     selected_rows: int = 0
     skipped_existing_rows: int = 0
     target_rows: int = 0
+
+
+@dataclass(frozen=True)
+class ListingBatchPersistResult:
+    job_ids_seen: int = 0
+    rows_staged: int = 0
+    skipped_existing: int = 0
+
+
+@dataclass(frozen=True)
+class ResumeRuntimeBaseline:
+    pages_processed: int = 0
+    items_emitted: int = 0
+    job_ids_collected: int = 0
+    jobs_skipped_existing: int = 0
+    listings_staged: int = 0
 
 
 def _default_runner_registry() -> dict[str, Any]:
@@ -105,6 +122,7 @@ class CrawlWorkerService:
             self.consumer_name,
             count=10,
             block_ms=100,
+            reclaim_idle_ms=_STALE_PENDING_RECLAIM_IDLE_MS,
         )
         for message in messages:
             await self._handle_message(message)
@@ -120,12 +138,27 @@ class CrawlWorkerService:
         crawl_job_id = str(payload.get("crawl_job_id") or event.aggregate_id)
         source_site = str(payload.get("source_site") or "").strip().lower()
         request_payload = dict(payload.get("request_payload") or {})
+        is_resume = bool(request_payload.get("is_resume"))
         crawl_phase = resolve_crawl_phase(request_payload.get("crawl_phase"))
         job_ids_collected = 0
         latest_page_payload: dict[str, Any] = {}
         detail_runtime_scope_payload: dict[str, int] = {}
         detail_targets: list[dict[str, Any]] = []
         proxy_runtime = build_ctgoodjobs_proxy_runtime() if source_site == "ctgoodjobs" else None
+        resume_runtime_baseline = (
+            self._load_resume_runtime_baseline(crawl_job_id=crawl_job_id)
+            if is_resume
+            else ResumeRuntimeBaseline()
+        )
+        resume_seen_job_ids = {
+            str(job_id).strip()
+            for job_id in ((request_payload.get("resume_context") or {}).get("seen_job_ids") or [])
+            if str(job_id).strip()
+        }
+        listing_resume_seen_count = max(
+            len(resume_seen_job_ids),
+            resume_runtime_baseline.listings_staged + resume_runtime_baseline.jobs_skipped_existing,
+        )
 
         if crawl_phase == "detail":
             detail_load_result = self._load_detail_targets(
@@ -145,13 +178,25 @@ class CrawlWorkerService:
             "request_payload": request_payload,
             **detail_runtime_scope_payload,
             **self._build_runtime_metrics_payload(
-                pages_processed=0,
-                items_emitted=0,
-                job_ids_collected=0,
+                pages_processed=resume_runtime_baseline.pages_processed if is_resume else 0,
+                items_emitted=resume_runtime_baseline.items_emitted if is_resume else 0,
+                job_ids_collected=resume_runtime_baseline.job_ids_collected
+                if is_resume and crawl_phase == "listing"
+                else 0,
                 source_site=source_site,
                 proxy_runtime=proxy_runtime,
             ),
         }
+        if is_resume and crawl_phase == "listing":
+            started_payload.update(
+                {
+                    "phase": 1,
+                    "job_ids_seen": listing_resume_seen_count,
+                    "job_ids_collected": resume_runtime_baseline.listings_staged,
+                    "jobs_skipped_existing": resume_runtime_baseline.jobs_skipped_existing,
+                    "listings_staged": resume_runtime_baseline.listings_staged,
+                }
+            )
 
         runner = self.runner_registry.get(source_site)
         if runner is None:
@@ -201,33 +246,62 @@ class CrawlWorkerService:
             completed_at=None,
             error_message=None,
             metrics=self._build_runtime_metrics(
-                pages_processed=0,
-                items_emitted=0,
-                job_ids_collected=0,
+                pages_processed=resume_runtime_baseline.pages_processed if is_resume else 0,
+                items_emitted=resume_runtime_baseline.items_emitted if is_resume else 0,
+                job_ids_collected=resume_runtime_baseline.job_ids_collected
+                if is_resume and crawl_phase == "listing"
+                else 0,
                 source_site=source_site,
                 proxy_runtime=proxy_runtime,
             ),
         )
 
-        pages_processed = 0
-        items_emitted = 0
+        pages_processed = resume_runtime_baseline.pages_processed if is_resume else 0
+        items_emitted = resume_runtime_baseline.items_emitted if is_resume else 0
         pending_listing_payloads: list[dict[str, Any]] = []
+        listing_job_ids_seen = listing_resume_seen_count if is_resume and crawl_phase == "listing" else 0
+        listing_job_ids_staged = (
+            resume_runtime_baseline.listings_staged
+            if is_resume and crawl_phase == "listing"
+            else 0
+        )
+        listing_job_ids_skipped = (
+            resume_runtime_baseline.jobs_skipped_existing
+            if is_resume and crawl_phase == "listing"
+            else 0
+        )
+        if is_resume and crawl_phase == "listing":
+            job_ids_collected = resume_runtime_baseline.listings_staged
 
         def emit_page_processed(progress_payload: dict[str, Any]) -> None:
-            nonlocal pages_processed, job_ids_collected, latest_page_payload
+            nonlocal pages_processed
+            nonlocal job_ids_collected
+            nonlocal latest_page_payload
+            nonlocal listing_job_ids_seen
+            nonlocal listing_job_ids_staged
+            nonlocal listing_job_ids_skipped
             if pending_listing_payloads:
-                self._persist_listing_batch(
+                persisted_listing_batch = self._persist_listing_batch(
                     crawl_job_id=crawl_job_id,
                     payloads=list(pending_listing_payloads),
                     skip_existing=bool(request_payload.get("skip_existing")),
                 )
+                listing_job_ids_seen += persisted_listing_batch.job_ids_seen
+                listing_job_ids_staged += persisted_listing_batch.rows_staged
+                listing_job_ids_skipped += persisted_listing_batch.skipped_existing
                 pending_listing_payloads.clear()
             pages_processed += 1
-            if progress_payload.get("job_ids_collected") is not None:
-                job_ids_collected = int(progress_payload["job_ids_collected"])
-            latest_page_payload = dict(progress_payload)
-            event_payload = {
+            job_ids_collected = listing_job_ids_staged
+            latest_page_payload = {
                 **progress_payload,
+                "phase": 1,
+                "job_ids_seen": listing_job_ids_seen,
+                "job_ids_collected": listing_job_ids_staged,
+                "jobs_skipped_existing": listing_job_ids_skipped,
+                "listings_staged": listing_job_ids_staged,
+            }
+            event_payload = {
+                **latest_page_payload,
                 **self._build_runtime_metrics_payload(
                     pages_processed=pages_processed,
                     items_emitted=items_emitted,
@@ -373,11 +447,23 @@ class CrawlWorkerService:
                 items_emitted=items_emitted,
             )
             if pending_listing_payloads:
-                self._persist_listing_batch(
+                persisted_listing_batch = self._persist_listing_batch(
                     crawl_job_id=crawl_job_id,
                     payloads=list(pending_listing_payloads),
                     skip_existing=bool(request_payload.get("skip_existing")),
                 )
+                listing_job_ids_seen += persisted_listing_batch.job_ids_seen
+                listing_job_ids_staged += persisted_listing_batch.rows_staged
+                listing_job_ids_skipped += persisted_listing_batch.skipped_existing
+                job_ids_collected = listing_job_ids_staged
+                latest_page_payload = {
+                    **latest_page_payload,
+                    "phase": 1,
+                    "job_ids_seen": listing_job_ids_seen,
+                    "job_ids_collected": listing_job_ids_staged,
+                    "jobs_skipped_existing": listing_job_ids_skipped,
+                    "listings_staged": listing_job_ids_staged,
+                }
                 pending_listing_payloads.clear()
             final_pages_processed = execution_result.pages_processed or pages_processed
             final_items_emitted = execution_result.items_emitted or items_emitted
@@ -597,6 +683,27 @@ class CrawlWorkerService:
         finally:
             db.close()
 
+    def _load_resume_runtime_baseline(self, *, crawl_job_id: str) -> ResumeRuntimeBaseline:
+        normalized_crawl_job_id = self._normalize_crawl_job_id(crawl_job_id)
+        db = self.session_factory()
+        try:
+            crawl_job = self.crawl_job_repository.get_crawl_job_by_id(db, normalized_crawl_job_id)
+            metrics = dict(crawl_job.metrics or {}) if crawl_job is not None else {}
+            listings_staged = self._coerce_metric_int(metrics.get("listings_staged"))
+            job_ids_collected = max(
+                self._coerce_metric_int(metrics.get("job_ids_collected")),
+                listings_staged,
+            )
+            return ResumeRuntimeBaseline(
+                pages_processed=self._coerce_metric_int(metrics.get("pages_processed")),
+                items_emitted=self._coerce_metric_int(metrics.get("items_emitted")),
+                job_ids_collected=job_ids_collected,
+                jobs_skipped_existing=self._coerce_metric_int(metrics.get("jobs_skipped_existing")),
+                listings_staged=max(listings_staged, job_ids_collected),
+            )
+        finally:
+            db.close()
+
     def _increment_runtime_metrics(
         self,
         *,
@@ -620,16 +727,56 @@ class CrawlWorkerService:
         crawl_job_id: str,
         payloads: list[dict[str, Any]],
         skip_existing: bool = False,
-    ) -> None:
+    ) -> ListingBatchPersistResult:
         if not payloads:
-            return
+            return ListingBatchPersistResult()
 
         normalized_crawl_job_id = self._normalize_crawl_job_id(crawl_job_id)
         db = self.session_factory()
         try:
             normalized_source_site = str(payloads[0].get("source_site") or "")
-            listings = []
+            unique_payloads: list[dict[str, Any]] = []
+            unique_source_job_ids: list[str] = []
+            seen_source_job_ids: set[str] = set()
             for payload in payloads:
+                source_job_id = str(payload.get("source_job_id") or "").strip()
+                if not source_job_id or source_job_id in seen_source_job_ids:
+                    continue
+                seen_source_job_ids.add(source_job_id)
+                unique_source_job_ids.append(source_job_id)
+                unique_payloads.append(payload)
+
+            existing_jobs_by_source_id: dict[str, Any] = {}
+            existing_listing_source_job_ids: set[str] = set()
+            if skip_existing:
+                existing_jobs_by_source_id = self.job_repository.list_existing_jobs_by_source_ids(
+                    db,
+                    source_site=normalized_source_site,
+                    source_job_ids=unique_source_job_ids,
+                )
+                existing_listing_source_job_ids = (
+                    self.crawl_job_listing_repository.list_existing_source_job_ids(
+                        db,
+                        source_site=normalized_source_site,
+                        source_job_ids=unique_source_job_ids,
+                        exclude_crawl_job_id=normalized_crawl_job_id,
+                    )
+                )
+
+            filtered_payloads: list[dict[str, Any]] = []
+            skipped_existing_count = 0
+            for payload in unique_payloads:
+                source_job_id = str(payload.get("source_job_id") or "").strip()
+                if skip_existing and (
+                    source_job_id in existing_jobs_by_source_id
+                    or source_job_id in existing_listing_source_job_ids
+                ):
+                    skipped_existing_count += 1
+                    continue
+                filtered_payloads.append(payload)
+
+            rows_staged = 0
+            for payload in filtered_payloads:
                 listing, _action = self.crawl_job_listing_repository.upsert_listing(
                     db,
                     crawl_job_id=normalized_crawl_job_id,
@@ -643,46 +790,26 @@ class CrawlWorkerService:
                     listing_payload=dict(payload.get("listing_payload") or {}),
                     auto_commit=False,
                 )
-                listings.append((listing, payload))
-
-            if skip_existing:
-                existing_jobs_by_source_id = self.job_repository.list_existing_jobs_by_source_ids(
+                if _action == "created":
+                    rows_staged += 1
+            if skipped_existing_count > 0:
+                self.crawl_job_repository.increment_metrics(
                     db,
-                    source_site=normalized_source_site,
-                    source_job_ids=[str(payload.get("source_job_id") or "") for payload in payloads],
+                    crawl_job_id=normalized_crawl_job_id,
+                    metrics_delta={"jobs_skipped_existing": skipped_existing_count},
+                    auto_commit=False,
                 )
-                skipped_existing_count = 0
-                for listing, payload in listings:
-                    existing_job = existing_jobs_by_source_id.get(str(payload.get("source_job_id") or "").strip())
-                    if existing_job is None:
-                        continue
-                    skipped_existing_count += 1
-                    self.crawl_job_listing_repository.mark_detail_completed(
-                        db,
-                        listing_id=listing.id,
-                        detail_crawl_job_id=normalized_crawl_job_id,
-                        detail_payload={
-                            "source_site": str(payload.get("source_site") or ""),
-                            "source_job_id": str(payload.get("source_job_id") or ""),
-                            "skip_existing": True,
-                            "skip_reason": "existing_job",
-                        },
-                        published_job_id=existing_job.id,
-                        auto_commit=False,
-                    )
-                if skipped_existing_count > 0:
-                    self.crawl_job_repository.increment_metrics(
-                        db,
-                        crawl_job_id=normalized_crawl_job_id,
-                        metrics_delta={"jobs_skipped_existing": skipped_existing_count},
-                        auto_commit=False,
-                    )
             self._sync_listing_detail_status_metrics(
                 db,
                 source_listing_crawl_job_id=normalized_crawl_job_id,
                 source_site=normalized_source_site,
             )
             db.commit()
+            return ListingBatchPersistResult(
+                job_ids_seen=len(unique_payloads),
+                rows_staged=rows_staged,
+                skipped_existing=skipped_existing_count,
+            )
         finally:
             db.close()
 
@@ -1113,6 +1240,12 @@ class CrawlWorkerService:
             return uuid.UUID(str(crawl_job_id))
         except (ValueError, TypeError, AttributeError):
             return crawl_job_id
+
+    def _coerce_metric_int(self, value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
 
 
 async def main() -> None:

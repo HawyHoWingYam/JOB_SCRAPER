@@ -194,7 +194,7 @@ describe('ScrapeProgressPanel', () => {
     });
 
     expect(await screen.findByText(/pages: 2\/8/i)).toBeInTheDocument();
-    expect(screen.getByText(/ids found: 49/i)).toBeInTheDocument();
+    expect(screen.getByText(/new ids: 49/i)).toBeInTheDocument();
     expect(screen.getByText(/existing skipped: 7/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
     expect(screen.getByText(/elapsed: 11s/i)).toBeInTheDocument();
@@ -251,6 +251,49 @@ describe('ScrapeProgressPanel', () => {
     expect(container.querySelector('.progress-bar-fill')).toBeNull();
     expect(screen.queryByText(/rate:/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/eta:/i)).not.toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('explains when a queued headed crawl is waiting on the offline headed worker', async () => {
+    const { unmount } = render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        headedWorkerStatus={{
+          available: false,
+          heartbeat_status: 'missing',
+          reason: 'headed_worker_missing',
+        }}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-headed-1': {
+            crawl_job_id: 'crawl-job-headed-1',
+            status: 'queued',
+            source_site: 'jobsdb',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            request_payload: {
+              crawl_mode: 'headed',
+              crawl_phase: 'listing',
+            },
+            queued_at: '2026-05-27T09:00:00Z',
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/queued/i, { selector: '.status-badge' })).toBeInTheDocument();
+    expect(screen.getByText(/headed worker offline/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
+    expect(screen.getByText(/run_headed_crawl_worker_host\.cmd/i)).toBeInTheDocument();
 
     unmount();
   });
@@ -363,8 +406,12 @@ describe('ScrapeProgressPanel', () => {
             category_name: 'Engineering',
             metric_scope: 'backlog_pool',
             phase: 1,
+            request_payload: {
+              crawl_phase: 'listing',
+            },
             listings_staged: 96,
             detail_pending: 74,
+            detail_running: 0,
             detail_completed: 22,
             queued_at: '2026-05-27T09:00:00Z',
             started_at: '2026-05-27T09:01:00Z',
@@ -377,8 +424,10 @@ describe('ScrapeProgressPanel', () => {
     expect(
       await screen.findByText(/downstream backlog/i, { selector: '.status-badge' })
     ).toBeInTheDocument();
+    expect(screen.getByText(/job id crawl/i)).toBeInTheDocument();
     expect(screen.getByText(/staged listings: 96/i)).toBeInTheDocument();
     expect(screen.getByText(/pending details: 74/i)).toBeInTheDocument();
+    expect(screen.getByText(/running details: 0/i)).toBeInTheDocument();
     expect(screen.getByText(/completed details: 22/i)).toBeInTheDocument();
     expect(screen.queryByText(/ingested:/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
@@ -449,6 +498,37 @@ describe('ScrapeProgressPanel', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/ingested: 100\/100/i)).toBeInTheDocument();
     expect(screen.queryByText(/jobs scraped:/i)).not.toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('shows the crawl phase on active detail tasks', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            status: 'running',
+            source_site: 'ctgoodjobs',
+            category_name: 'Engineering',
+            crawl_mode: 'headed',
+            phase: 2,
+            request_payload: {
+              crawl_phase: 'detail',
+            },
+            jobs_scraped: 10,
+            detail_target_rows: 50,
+            queued_at: '2026-05-27T09:00:00Z',
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/job detail crawl/i)).toBeInTheDocument();
+    expect(screen.getByText(/detail crawled: 10\/50/i)).toBeInTheDocument();
 
     unmount();
   });

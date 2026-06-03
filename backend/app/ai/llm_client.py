@@ -52,6 +52,8 @@ TRANSIENT_ERROR_TERMS = (
     "unavailable",
 )
 RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0)
+DEFAULT_CUSTOM_RESPONSE_TIMEOUT_SECONDS = 60.0
+WEB_SEARCH_CUSTOM_RESPONSE_TIMEOUT_SECONDS = 120.0
 
 
 class LLMUpstreamError(RuntimeError):
@@ -161,6 +163,8 @@ def _raise_upstream_error(provider_name: str, exc: Exception) -> None:
     status_code = _extract_status_code(exc)
     retryable = _is_transient_upstream_exception(exc)
     detail = str(exc).strip()
+    if not detail:
+        detail = type(exc).__name__.strip()
     message = f"{provider_name} upstream request failed"
     if status_code is not None:
         message += f" with status {status_code}"
@@ -560,7 +564,12 @@ class OpenAIResponsesClient(LLMClient):
             payload["tools"] = [{"type": "web_search"}]
 
         async def do_request():
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            timeout_seconds = (
+                WEB_SEARCH_CUSTOM_RESPONSE_TIMEOUT_SECONDS
+                if web_search
+                else DEFAULT_CUSTOM_RESPONSE_TIMEOUT_SECONDS
+            )
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
                 response = await client.post(
                     f"{self.base_url}/responses",
                     headers=headers,
@@ -640,12 +649,19 @@ class OpenAIResponsesClient(LLMClient):
         output = response.get("output") or []
         if not output:
             output = data.get("output") or []
+        last_message_text = None
         for item in output:
             if item.get("type") != "message":
                 continue
+            message_parts = []
             for part in item.get("content") or []:
                 if part.get("type") == "output_text" and part.get("text"):
-                    return part["text"].strip()
+                    message_parts.append(part["text"].strip())
+            if message_parts:
+                last_message_text = " ".join(part for part in message_parts if part).strip()
+
+        if last_message_text:
+            return last_message_text
 
         return None
 

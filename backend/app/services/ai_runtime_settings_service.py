@@ -48,6 +48,7 @@ PERSISTED_FIELD_NAMES = (
     "llm_provider",
     "company_llm_provider",
     "ai_enrichment_run_concurrency",
+    "company_ai_enrichment_run_concurrency",
     "anthropic_api_key",
     "anthropic_model",
     "anthropic_base_url",
@@ -360,6 +361,7 @@ class AIRuntimeSettingsService:
             "llm_provider": values["llm_provider"],
             "company_llm_provider": values["company_llm_provider"],
             "ai_enrichment_run_concurrency": values["ai_enrichment_run_concurrency"],
+            "company_ai_enrichment_run_concurrency": values["company_ai_enrichment_run_concurrency"],
             "anthropic": {
                 "model": values["anthropic_model"],
                 "base_url": values["anthropic_base_url"],
@@ -412,7 +414,8 @@ class AIRuntimeSettingsService:
         return {
             "llm_provider": job_effective.llm_provider,
             "company_llm_provider": company_effective.llm_provider,
-            "ai_enrichment_run_concurrency": self.get_effective_concurrency(),
+            "ai_enrichment_run_concurrency": self.get_effective_concurrency("jobs"),
+            "company_ai_enrichment_run_concurrency": self.get_effective_concurrency("companies"),
             "anthropic": {
                 "model": job_effective.anthropic_model,
                 "base_url": job_effective.anthropic_base_url,
@@ -455,11 +458,21 @@ class AIRuntimeSettingsService:
             },
         }
 
-    def get_effective_concurrency(self) -> int:
+    def get_effective_concurrency(self, scope: str = "jobs") -> int:
+        self._ensure_valid_scope(scope)
         row = self.get_or_create()
-        candidate = getattr(row, "ai_enrichment_run_concurrency", None)
-        if candidate is None:
-            candidate = getattr(settings, "ai_enrichment_run_concurrency", None)
+        if scope == "companies":
+            candidate = getattr(row, "company_ai_enrichment_run_concurrency", None)
+            if candidate is None:
+                candidate = getattr(settings, "company_ai_enrichment_run_concurrency", None)
+            if candidate is None:
+                candidate = getattr(row, "ai_enrichment_run_concurrency", None)
+            if candidate is None:
+                candidate = getattr(settings, "ai_enrichment_run_concurrency", None)
+        else:
+            candidate = getattr(row, "ai_enrichment_run_concurrency", None)
+            if candidate is None:
+                candidate = getattr(settings, "ai_enrichment_run_concurrency", None)
         try:
             value = int(candidate)
         except (TypeError, ValueError):
@@ -531,7 +544,7 @@ class AIRuntimeSettingsService:
                     candidate[field_name] = normalized_secret
                 continue
 
-            if field_name == "ai_enrichment_run_concurrency":
+            if field_name in {"ai_enrichment_run_concurrency", "company_ai_enrichment_run_concurrency"}:
                 candidate[field_name] = value
                 continue
 
@@ -542,30 +555,43 @@ class AIRuntimeSettingsService:
     def _validate_candidate(self, candidate: dict[str, Any]) -> None:
         errors: list[dict[str, Any]] = []
 
-        concurrency_value = candidate.get("ai_enrichment_run_concurrency")
-        effective_concurrency = concurrency_value
-        if effective_concurrency is None:
-            effective_concurrency = getattr(settings, "ai_enrichment_run_concurrency", None)
-        try:
-            effective_concurrency = int(effective_concurrency)
-        except (TypeError, ValueError):
-            effective_concurrency = None
+        concurrency_specs = (
+            ("ai_enrichment_run_concurrency", getattr(settings, "ai_enrichment_run_concurrency", None)),
+            (
+                "company_ai_enrichment_run_concurrency",
+                (
+                    candidate.get("ai_enrichment_run_concurrency")
+                    if candidate.get("ai_enrichment_run_concurrency") is not None
+                    else getattr(settings, "company_ai_enrichment_run_concurrency", None)
+                    if getattr(settings, "company_ai_enrichment_run_concurrency", None) is not None
+                    else getattr(settings, "ai_enrichment_run_concurrency", None)
+                ),
+            ),
+        )
+        for field_name, fallback_value in concurrency_specs:
+            effective_concurrency = candidate.get(field_name)
+            if effective_concurrency is None:
+                effective_concurrency = fallback_value
+            try:
+                effective_concurrency = int(effective_concurrency)
+            except (TypeError, ValueError):
+                effective_concurrency = None
 
-        if (
-            effective_concurrency is None
-            or effective_concurrency < AI_ENRICHMENT_RUN_CONCURRENCY_MIN
-            or effective_concurrency > AI_ENRICHMENT_RUN_CONCURRENCY_MAX
-        ):
-            errors.append(
-                {
-                    "loc": ["ai_enrichment_run_concurrency"],
-                    "msg": (
-                        f"Concurrency must be between "
-                        f"{AI_ENRICHMENT_RUN_CONCURRENCY_MIN} and {AI_ENRICHMENT_RUN_CONCURRENCY_MAX}"
-                    ),
-                    "type": "value_error.concurrency",
-                }
-            )
+            if (
+                effective_concurrency is None
+                or effective_concurrency < AI_ENRICHMENT_RUN_CONCURRENCY_MIN
+                or effective_concurrency > AI_ENRICHMENT_RUN_CONCURRENCY_MAX
+            ):
+                errors.append(
+                    {
+                        "loc": [field_name],
+                        "msg": (
+                            f"Concurrency must be between "
+                            f"{AI_ENRICHMENT_RUN_CONCURRENCY_MIN} and {AI_ENRICHMENT_RUN_CONCURRENCY_MAX}"
+                        ),
+                        "type": "value_error.concurrency",
+                    }
+                )
 
         for field_name in URL_FIELD_NAMES:
             if candidate.get(field_name) and not self._is_valid_url(candidate[field_name]):
@@ -626,7 +652,7 @@ class AIRuntimeSettingsService:
 
         return EffectiveAIRuntimeSettings(
             llm_provider=(provider.lower() if provider else None),
-            ai_enrichment_run_concurrency=self.get_effective_concurrency(),
+            ai_enrichment_run_concurrency=self.get_effective_concurrency(scope),
             anthropic_api_key=self._normalize_optional_string(persisted_values.get(field_map["anthropic_api_key"])),
             anthropic_model=self._normalize_optional_string(persisted_values.get(field_map["anthropic_model"])),
             anthropic_base_url=self._normalize_optional_string(persisted_values.get(field_map["anthropic_base_url"])),

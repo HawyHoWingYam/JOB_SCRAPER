@@ -196,6 +196,17 @@ function buildManualActionHelperUnavailableMessage(actionLabel) {
     return `Manual-action helper is unavailable. Start the dedicated helper service and retry ${actionLabel}.`;
 }
 
+function buildHeadedWorkerUnavailableMessage(headedWorkerStatus) {
+    const heartbeatStatus = `${headedWorkerStatus?.heartbeat_status || ''}`.trim().toLowerCase();
+    const startCommand = headedWorkerStatus?.start_command || 'backend\\scripts\\run_headed_crawl_worker_host.cmd';
+
+    if (heartbeatStatus === 'stale') {
+        return `Headed crawl worker is offline. Restart ${startCommand} before launching a headed run.`;
+    }
+
+    return `Headed crawl worker is offline. Start ${startCommand} before launching a headed run.`;
+}
+
 function buildSchedulerRuntimeBanner(scheduler) {
     if (!scheduler || scheduler.available !== false) {
         return null;
@@ -319,11 +330,20 @@ function buildImmediateRunSummary(form, sourceSite, categories) {
     };
 }
 
-function buildImmediateRunReadiness(form, sourceSite) {
+function buildImmediateRunReadiness(form, sourceSite, headedWorkerStatus = null) {
     const request = buildImmediateScrapePayload(form, sourceSite);
     const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
+    const crawlMode = form?.crawl_mode || resolveDefaultCrawlMode(sourceSite);
     const selectedSectorCount = Array.isArray(form?.category_ids) ? form.category_ids.length : 0;
     const hasBatchFilter = Boolean(`${form?.source_listing_crawl_job_id ?? ''}`.trim());
+
+    if (crawlMode === 'headed' && headedWorkerStatus?.available === false) {
+        return {
+            isReady: false,
+            statusLabel: 'Headed worker offline',
+            detail: buildHeadedWorkerUnavailableMessage(headedWorkerStatus),
+        };
+    }
 
     if (request.error) {
         let detail = request.error;
@@ -706,6 +726,7 @@ function ScheduleManager({ onNavigateToAI }) {
     }, [currentSourceSite, fetchListingBatches, immediateForm.crawl_phase, showImmediateScrape]);
 
     const schedulerStatus = capabilities?.scheduler || null;
+    const headedWorkerStatus = capabilities?.crawl_workers?.headed || null;
     const schedulerAutomationAvailable = schedulerStatus?.available !== false;
     const schedulerManualRunAvailable = schedulerStatus?.manual_run_available !== false;
     const scheduleAutomationDisabled = isLoading || !schedulerAutomationAvailable;
@@ -807,7 +828,16 @@ function ScheduleManager({ onNavigateToAI }) {
             const response = await fetch(`${API_BASE}/schedules/${id}/run`, {
                 method: 'POST'
             });
-            if (!response.ok) throw new Error('Failed to run schedule');
+            if (!response.ok) {
+                let detail = 'Failed to run schedule';
+                try {
+                    const payload = await response.json();
+                    detail = formatApiErrorDetail(payload.detail, detail);
+                } catch {
+                    // Fall back to the default message when no JSON error is available.
+                }
+                throw new Error(detail);
+            }
             scheduleHistoryCacheRef.current.delete(id);
         } catch (err) {
             setError(err.message);
@@ -937,7 +967,11 @@ function ScheduleManager({ onNavigateToAI }) {
     ) || null;
     const immediateCrawlModeOptions = getCrawlModeOptionsForSource(currentSourceSite);
     const immediateRunSummary = buildImmediateRunSummary(immediateForm, currentSourceSite, categories);
-    const immediateRunReadiness = buildImmediateRunReadiness(immediateForm, currentSourceSite);
+    const immediateRunReadiness = buildImmediateRunReadiness(
+        immediateForm,
+        currentSourceSite,
+        headedWorkerStatus,
+    );
     const immediateRunModeCopy = buildImmediateRunModeCopy(immediateForm);
 
     return (
@@ -1070,6 +1104,7 @@ function ScheduleManager({ onNavigateToAI }) {
                     initialProgress={progressPanelState.initialProgress}
                     recoveryStartedAt={progressPanelState.recoveryStartedAt}
                     recoveryWindowMs={DIRECT_OVERRIDE_RECOVERY_WINDOW_MS}
+                    headedWorkerStatus={headedWorkerStatus}
                     onClose={handleProgressClose}
                     onNavigateToAI={onNavigateToAI}
                     onResumeCrawlJob={handleResumeCrawlJob}
@@ -1270,7 +1305,7 @@ function ScheduleManager({ onNavigateToAI }) {
                         <button
                             className="cyber-btn run-btn w-full"
                             onClick={handleImmediateScrape}
-                            disabled={isLoading}
+                            disabled={isLoading || !immediateRunReadiness.isReady}
                         >
                             <Zap size={18} /> {isLoading ? 'Initializing...' : immediateRunSummary.actionLabel}
                         </button>

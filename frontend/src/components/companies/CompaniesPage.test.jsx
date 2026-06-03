@@ -412,6 +412,30 @@ describe('CompaniesPage', () => {
     expect(createdRunCalls).toBe(0);
   });
 
+  it('shows at least one percent once a large run has started making progress', async () => {
+    currentRunResponses = [
+      {
+        id: 'run-current',
+        status: 'running',
+        total_items: 2748,
+        pending_items: 2744,
+        completed_items: 1,
+        failed_items: 3,
+        current_company_name: 'CL Technical Services Limited',
+        error_message: null,
+        started_at: '2026-06-02T07:51:06Z',
+        completed_at: null,
+        created_at: '2026-06-02T07:51:05Z',
+      },
+    ];
+
+    render(<CompaniesPage />);
+
+    expect(await screen.findByText(/generating descriptions: 4 \/ 2748/i)).toBeInTheDocument();
+    expect(screen.getByText(/^1%$/i)).toBeInTheDocument();
+    expect(screen.getByText(/current company: cl technical services limited/i)).toBeInTheDocument();
+  });
+
   it('clears stale active item state after a run reaches a terminal status', async () => {
     let runPollCalls = 0;
     let runItemsCalls = 0;
@@ -611,10 +635,8 @@ describe('CompaniesPage', () => {
     render(<CompaniesPage />);
 
     expect(await screen.findByText(/queued for execution/i)).toBeInTheDocument();
-    expect(screen.queryByText(/generating descriptions: 0 \/ 3/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/success: 0/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/failed: 0/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/remaining: 3/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/waiting for worker pickup/i)).toBeInTheDocument();
+    expect(screen.getByText(/remaining: 3/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /generation queued/i })).toBeDisabled();
   });
 

@@ -14,6 +14,7 @@ class AppRuntimeSettings(Base):
     llm_provider = Column(String(32), nullable=True)
     company_llm_provider = Column(String(32), nullable=True)
     ai_enrichment_run_concurrency = Column(Integer, nullable=True)
+    company_ai_enrichment_run_concurrency = Column(Integer, nullable=True)
 
     anthropic_api_key = Column(Text, nullable=True)
     anthropic_model = Column(String(255), nullable=True)

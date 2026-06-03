@@ -177,7 +177,11 @@ def _build_progress_snapshot(
             category_label = f"{crawl_job.source_site} crawl"
 
     metrics = crawl_job.metrics if isinstance(crawl_job.metrics, dict) else {}
-    job_ids_collected = _to_int(event_payload.get("job_ids_collected", metrics.get("job_ids_collected", 0)))
+    job_ids_collected = _max_count(
+        event_payload.get("job_ids_collected"),
+        metrics.get("job_ids_collected", 0),
+        metrics.get("listings_staged", 0),
+    )
     jobs_scraped = _to_int(event_payload.get("jobs_scraped", metrics.get("items_emitted", 0)))
     jobs_saved = _to_int(event_payload.get("jobs_saved", metrics.get("ingest_items_seen", 0)))
     ingest_items_failed = _to_int(
@@ -202,9 +206,14 @@ def _build_progress_snapshot(
         )
     )
     total_jobs = _to_int(event_payload.get("total_jobs", max(job_ids_collected, jobs_scraped)))
-    listings_staged = _to_int(event_payload.get("listings_staged", metrics.get("listings_staged", 0)))
-    jobs_skipped_existing = _to_int(
-        event_payload.get("jobs_skipped_existing", metrics.get("jobs_skipped_existing", 0))
+    listings_staged = _max_count(
+        event_payload.get("listings_staged"),
+        metrics.get("listings_staged", 0),
+        job_ids_collected,
+    )
+    jobs_skipped_existing = _max_count(
+        event_payload.get("jobs_skipped_existing"),
+        metrics.get("jobs_skipped_existing", 0),
     )
     detail_selected_rows = _to_int(
         event_payload.get("detail_selected_rows", metrics.get("detail_selected_rows", 0))
@@ -361,6 +370,10 @@ def _to_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _max_count(*values: Any) -> int:
+    return max((_to_int(value) for value in values), default=0)
 
 
 def _derive_progress_status(

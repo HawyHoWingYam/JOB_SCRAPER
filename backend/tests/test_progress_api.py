@@ -166,6 +166,41 @@ def test_build_progress_snapshot_only_exposes_detail_run_manual_review_counts_wh
     assert snapshot["detail_manual_action_required"] == 0
 
 
+def test_build_progress_snapshot_keeps_listing_counters_monotonic_during_resume():
+    crawl_job = _build_crawl_job(
+        status="running",
+        request_payload={"crawl_phase": "listing", "category_ids": [1200], "is_resume": True},
+        metrics={
+            "pages_processed": 5,
+            "job_ids_collected": 3,
+            "jobs_skipped_existing": 4,
+            "listings_staged": 3,
+        },
+    )
+    latest_event = SimpleNamespace(
+        payload={
+            "request_payload": {"crawl_phase": "listing", "category_ids": [1200], "is_resume": True},
+            "phase": 1,
+            "current_page": 5,
+            "total_pages": 10,
+            "job_ids_collected": 1,
+            "jobs_skipped_existing": 1,
+            "listings_staged": 1,
+        }
+    )
+
+    snapshot = progress._build_progress_snapshot(
+        crawl_job,
+        latest_event,
+        now=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        events=[],
+    )
+
+    assert snapshot["job_ids_collected"] == 3
+    assert snapshot["jobs_skipped_existing"] == 4
+    assert snapshot["listings_staged"] == 3
+
+
 def test_build_progress_snapshot_derives_completed_with_ai_failures_when_ai_run_has_failed_items():
     crawl_job = _build_crawl_job(
         status="completed",

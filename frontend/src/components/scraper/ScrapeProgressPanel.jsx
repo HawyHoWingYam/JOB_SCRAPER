@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../../api/base';
 import { formatCrawlModeLabel } from './crawlMode';
+import { formatCrawlPhaseLabel } from './crawlPhase';
 import {
     formatListingBatchIdentity,
     formatScraperSourceLabel,
@@ -16,6 +17,7 @@ function ScrapeProgressPanel({
     initialProgress = EMPTY_PROGRESS,
     recoveryStartedAt,
     recoveryWindowMs,
+    headedWorkerStatus = null,
     onClose,
     onNavigateToAI,
     onResumeCrawlJob,
@@ -245,6 +247,7 @@ function ScrapeProgressPanel({
                                     key={taskKey}
                                     taskKey={taskKey}
                                     data={data}
+                                    headedWorkerStatus={headedWorkerStatus}
                                     onNavigateToAI={onNavigateToAI}
                                     onResumeCrawlJob={onResumeCrawlJob}
                                     onCancelCrawlJob={onCancelCrawlJob}
@@ -526,6 +529,7 @@ function buildStatusSignals({
 function buildContextChips({
     sourceSite,
     categoryName,
+    crawlPhase,
     crawlMode,
 }) {
     const values = [];
@@ -538,11 +542,32 @@ function buildContextChips({
         values.push(categoryName);
     }
 
+    if (crawlPhase) {
+        values.push(formatCrawlPhaseLabel(crawlPhase));
+    }
+
     if (crawlMode) {
         values.push(formatCrawlModeLabel(crawlMode));
     }
 
     return values;
+}
+
+function resolveTaskCrawlPhase(data, metricScope) {
+    const explicitPhase = `${data?.request_payload?.crawl_phase || ''}`.trim().toLowerCase();
+    if (explicitPhase === 'listing' || explicitPhase === 'detail') {
+        return explicitPhase;
+    }
+
+    if (metricScope === 'detail_run') {
+        return 'detail';
+    }
+
+    if (data?.phase === 2) {
+        return 'detail';
+    }
+
+    return 'listing';
 }
 
 function resolveMetricScope(data) {
@@ -626,9 +651,15 @@ function buildDetailRunMetricLines({
     return lines;
 }
 
+function buildQueuedHeadedWorkerMessage(headedWorkerStatus) {
+    const startCommand = headedWorkerStatus?.start_command || 'backend\\scripts\\run_headed_crawl_worker_host.cmd';
+    return `Headed worker is offline. Start ${startCommand}.`;
+}
+
 function ProgressItem({
     taskKey,
     data,
+    headedWorkerStatus,
     onNavigateToAI,
     onResumeCrawlJob,
     onCancelCrawlJob,
@@ -724,9 +755,11 @@ function ProgressItem({
     const hasDownstreamBacklog = operator_state === 'completed_with_downstream_backlog'
         || operator_state === 'stale_downstream_backlog';
     const metricScope = resolveMetricScope(data);
+    const crawlPhase = resolveTaskCrawlPhase(data, metricScope);
     const contextChips = buildContextChips({
         sourceSite: manual_action?.source_site || source_site,
         categoryName: category_name,
+        crawlPhase,
         crawlMode: crawl_mode,
     });
     const proxyWarningsPresent = [
@@ -742,6 +775,14 @@ function ProgressItem({
         proxyChallengeCount: proxy_requests_challenge,
         proxyQuarantinedTotal: proxy_quarantined_total,
     });
+    const taskStatusSignals = [...statusSignals];
+    const isQueuedHeadedRun =
+        effectiveStatus === 'queued'
+        && `${request_payload?.crawl_mode || crawl_mode || ''}`.trim().toLowerCase() === 'headed';
+    const headedWorkerUnavailable = isQueuedHeadedRun && headedWorkerStatus?.available === false;
+    if (headedWorkerUnavailable) {
+        taskStatusSignals.push('Headed worker offline');
+    }
 
     useEffect(() => {
         setLiveSessionMetadata(null);
@@ -1191,22 +1232,20 @@ function ProgressItem({
 
     if (effectiveStatus === 'queued') {
         statusText = 'Queued';
-        detailLines.push('Awaiting crawl worker dispatch');
+        if (headedWorkerUnavailable) {
+            detailLines.push(buildQueuedHeadedWorkerMessage(headedWorkerStatus));
+        } else {
+            detailLines.push('Awaiting crawl worker dispatch');
+        }
     } else if (isBacklogPoolScope) {
         statusText = 'Downstream Backlog';
         statusClass = 'warning';
         if (listings_staged > 0) {
             metricLines.push(`Staged listings: ${formatCount(listings_staged)}`);
         }
-        if (detail_pending > 0) {
-            metricLines.push(`Pending details: ${formatCount(detail_pending)}`);
-        }
-        if (detail_running > 0) {
-            metricLines.push(`Running details: ${formatCount(detail_running)}`);
-        }
-        if (detail_completed > 0) {
-            metricLines.push(`Completed details: ${formatCount(detail_completed)}`);
-        }
+        metricLines.push(`Pending details: ${formatCount(detail_pending)}`);
+        metricLines.push(`Running details: ${formatCount(detail_running)}`);
+        metricLines.push(`Completed details: ${formatCount(detail_completed)}`);
         if (detail_failed > 0) {
             metricLines.push(`Failed details: ${formatCount(detail_failed)}`);
         }
@@ -1216,7 +1255,7 @@ function ProgressItem({
     } else if (phase === 1) {
         statusText = 'Collecting IDs';
         metricLines.push(`Pages: ${formatCountPair(current_page || 0, total_pages)}`);
-        metricLines.push(`IDs found: ${formatCount(job_ids_collected)}`);
+        metricLines.push(`New IDs: ${formatCount(job_ids_collected)}`);
         if (jobs_skipped_existing > 0) {
             metricLines.push(`Existing skipped: ${formatCount(jobs_skipped_existing)}`);
         }
@@ -1334,9 +1373,9 @@ function ProgressItem({
                         Last updated: {formatTaskTimestamp(data?.updated_at || completed_at || started_at || queued_at)}
                     </span>
                 </div>
-                {statusSignals.length > 0 && (
+                {taskStatusSignals.length > 0 && (
                     <div className="progress-status-signal-row">
-                        {statusSignals.map((signal) => (
+                        {taskStatusSignals.map((signal) => (
                             <span key={`${taskId}-${signal}`} className="progress-status-chip">
                                 {signal}
                             </span>

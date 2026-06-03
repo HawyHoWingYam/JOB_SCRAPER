@@ -102,6 +102,30 @@ describe('App lazy views', () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
 
+      if (url === '/api/v1/stats/overview') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            total_jobs: 0,
+            enriched_jobs: 0,
+            pending_enrichment: 0,
+          }),
+        });
+      }
+
+      if (url === '/api/v1/ai/overview') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            failed_jobs: 0,
+            running_runs: 0,
+            last_completed_run: null,
+          }),
+        });
+      }
+
       if (url.includes('/api/v1/settings/ai')) {
         return Promise.resolve({
           ok: true,
@@ -111,6 +135,7 @@ describe('App lazy views', () => {
               llm_provider: null,
               company_llm_provider: null,
               ai_enrichment_run_concurrency: 8,
+              company_ai_enrichment_run_concurrency: 3,
               anthropic: { model: null, base_url: null, has_api_key: false, api_key_preview: null },
               gemini: { model: null, has_api_key: false, api_key_preview: null },
               custom: { model: null, base_url: null, api_format: null, has_api_key: false, api_key_preview: null },
@@ -124,6 +149,7 @@ describe('App lazy views', () => {
               llm_provider: null,
               company_llm_provider: null,
               ai_enrichment_run_concurrency: 8,
+              company_ai_enrichment_run_concurrency: 3,
               anthropic: { model: null, base_url: null, has_api_key: false },
               gemini: { model: null, has_api_key: false },
               custom: { model: null, base_url: null, api_format: null, has_api_key: false },

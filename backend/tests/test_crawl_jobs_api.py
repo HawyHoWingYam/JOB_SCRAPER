@@ -129,3 +129,53 @@ def test_list_crawl_job_events_returns_bounded_tail_with_total(monkeypatch):
     ]
     assert response.json()["total"] == 250
     assert [event["sequence_no"] for event in response.json()["events"]] == [249, 250]
+
+
+def test_create_crawl_job_returns_service_unavailable_when_headed_worker_is_offline(monkeypatch):
+    class HeadedWorkerUnavailableError(RuntimeError):
+        pass
+
+    class FakeDispatchService:
+        def dispatch_manual_crawl_job(self, *args, **kwargs):
+            raise HeadedWorkerUnavailableError(
+                "Headed crawl worker is unavailable. Start backend\\scripts\\run_headed_crawl_worker_host.cmd and retry."
+            )
+
+    async def fake_validate_effective_category_ids(source_site, category_ids):
+        return None
+
+    app = FastAPI()
+    app.include_router(crawl_jobs.router, prefix="/api/v1")
+    db = object()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(crawl_jobs, "dispatch_service", FakeDispatchService())
+    monkeypatch.setattr(crawl_jobs, "_validate_effective_category_ids", fake_validate_effective_category_ids)
+    monkeypatch.setattr(
+        crawl_jobs,
+        "HeadedCrawlWorkerUnavailableError",
+        HeadedWorkerUnavailableError,
+        raising=False,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/v1/crawl-jobs",
+        json={
+            "source_site": "jobsdb",
+            "crawl_phase": "listing",
+            "crawl_mode": "headed",
+            "category_ids": [1200],
+            "max_pages": 3,
+            "detail_limit": 100,
+            "skip_existing": True,
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Headed crawl worker is unavailable. Start backend\\scripts\\run_headed_crawl_worker_host.cmd and retry."
+    )

@@ -106,6 +106,38 @@ class CrawlJobListingRepository:
         rows = query.all()
         return {str(source_job_id).strip() for (source_job_id,) in rows if str(source_job_id).strip()}
 
+    def list_existing_source_job_ids(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+        source_job_ids: Iterable[str],
+        exclude_crawl_job_id=None,
+    ) -> set[str]:
+        normalized_source_site = str(source_site).strip().lower()
+        normalized_source_job_ids = [
+            str(source_job_id).strip()
+            for source_job_id in source_job_ids
+            if str(source_job_id).strip()
+        ]
+        if not normalized_source_job_ids:
+            return set()
+
+        query = (
+            db.query(CrawlJobListing.source_job_id)
+            .filter(CrawlJobListing.source_site == normalized_source_site)
+            .filter(CrawlJobListing.source_job_id.in_(normalized_source_job_ids))
+        )
+        if exclude_crawl_job_id is not None:
+            query = query.filter(CrawlJobListing.crawl_job_id != exclude_crawl_job_id)
+
+        rows = query.distinct().all()
+        return {
+            str(source_job_id).strip()
+            for (source_job_id,) in rows
+            if str(source_job_id).strip()
+        }
+
     def get_max_listing_rank_for_crawl_job(
         self,
         db: Session,

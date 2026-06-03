@@ -188,14 +188,17 @@ function CompaniesPage() {
                   style={{ width: `${progressValue}%` }}
                 />
               </div>
-              {!hasQueuedRun && (
-                <div className="companies-progress-meta">
-                  <span>{`Success: ${currentRun.completed_items}`}</span>
-                  <span>{`Failed: ${currentRun.failed_items}`}</span>
-                  <span>{`Remaining: ${remainingCount}`}</span>
-                </div>
+              <div className="companies-progress-meta">
+                {!hasQueuedRun && <span>{`Success: ${currentRun.completed_items}`}</span>}
+                {!hasQueuedRun && <span>{`Failed: ${currentRun.failed_items}`}</span>}
+                <span>{`Remaining: ${remainingCount}`}</span>
+              </div>
+              {hasQueuedRun && !currentRun.current_company_name && (
+                <p className="companies-progress-current">
+                  Waiting for worker pickup...
+                </p>
               )}
-              {currentRun.current_company_name && (
+              {!hasQueuedRun && currentRun.current_company_name && (
                 <p className="companies-progress-current">
                   {`Current company: ${currentRun.current_company_name}`}
                 </p>

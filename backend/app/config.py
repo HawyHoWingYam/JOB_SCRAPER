@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     jobsdb_headed_browser_executable_path: Optional[str] = None
     jobsdb_headed_navigation_timeout_ms: int = 60000
     jobsdb_headed_worker_lock_port: int = 47651
+    jobsdb_headed_worker_stale_seconds: int = 60
     manual_action_helper_host: str = "127.0.0.1"
     jobsdb_headed_manual_action_helper_port: int = 47652
     manual_action_registry_state_path: str = str(
@@ -112,6 +113,7 @@ class Settings(BaseSettings):
     job_classification_conservative_mode: bool = False
     job_classification_cross_domain_min_confidence: float = 0.9
     ai_enrichment_run_concurrency: int = 10
+    company_ai_enrichment_run_concurrency: Optional[int] = None
 
     # Application
     debug: bool = False

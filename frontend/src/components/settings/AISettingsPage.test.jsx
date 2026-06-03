@@ -64,6 +64,7 @@ const aiSettingsPayload = {
     llm_provider: 'gemini',
     company_llm_provider: 'anthropic',
     ai_enrichment_run_concurrency: 8,
+    company_ai_enrichment_run_concurrency: 3,
     anthropic: {
       model: null,
       base_url: null,
@@ -113,6 +114,7 @@ const aiSettingsPayload = {
     llm_provider: 'gemini',
     company_llm_provider: 'anthropic',
     ai_enrichment_run_concurrency: 8,
+    company_ai_enrichment_run_concurrency: 3,
     anthropic: {
       model: 'claude-sonnet-4-5',
       base_url: 'https://api.anthropic.com',
@@ -177,6 +179,7 @@ const aiSettingsPayload = {
 describe('AISettingsPage', () => {
   let currentSettingsPayload;
   let putSettingsResponse;
+  let testProfileResponse;
 
   beforeEach(() => {
     currentSettingsPayload = clonePayload(aiSettingsPayload);
@@ -187,9 +190,13 @@ describe('AISettingsPage', () => {
       nextPayload.persisted_config.llm_provider = body.llm_provider ?? nextPayload.persisted_config.llm_provider;
       nextPayload.persisted_config.ai_enrichment_run_concurrency =
         body.ai_enrichment_run_concurrency ?? nextPayload.persisted_config.ai_enrichment_run_concurrency;
+      nextPayload.persisted_config.company_ai_enrichment_run_concurrency =
+        body.company_ai_enrichment_run_concurrency ?? nextPayload.persisted_config.company_ai_enrichment_run_concurrency;
       nextPayload.effective_config.llm_provider = body.llm_provider ?? nextPayload.effective_config.llm_provider;
       nextPayload.effective_config.ai_enrichment_run_concurrency =
         body.ai_enrichment_run_concurrency ?? nextPayload.effective_config.ai_enrichment_run_concurrency;
+      nextPayload.effective_config.company_ai_enrichment_run_concurrency =
+        body.company_ai_enrichment_run_concurrency ?? nextPayload.effective_config.company_ai_enrichment_run_concurrency;
       nextPayload.runtime_status.configured_provider =
         body.llm_provider ?? nextPayload.runtime_status.configured_provider;
       nextPayload.runtime_status.active_provider = body.llm_provider ?? nextPayload.runtime_status.active_provider;
@@ -204,6 +211,17 @@ describe('AISettingsPage', () => {
       currentSettingsPayload = nextPayload;
       return mockJsonResponse(nextPayload);
     });
+    testProfileResponse = vi.fn(async () =>
+      mockJsonResponse({
+        ok: true,
+        scope: 'jobs',
+        configured_provider: 'gemini',
+        active_provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        latency_ms: 111,
+        config_fingerprint: 'jobs:test-fingerprint',
+      }),
+    );
 
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = String(input);
@@ -227,15 +245,7 @@ describe('AISettingsPage', () => {
 
       if (url.includes('/api/v1/settings/ai')) {
         if (url.includes('/api/v1/settings/ai/test')) {
-          return mockJsonResponse({
-            ok: true,
-            scope: 'jobs',
-            configured_provider: 'gemini',
-            active_provider: 'gemini',
-            model: 'gemini-2.5-flash',
-            latency_ms: 111,
-            config_fingerprint: 'jobs:test-fingerprint',
-          });
+          return testProfileResponse(url, init);
         }
 
         if (method === 'PUT') {
@@ -264,7 +274,8 @@ describe('AISettingsPage', () => {
     expect(screen.getByRole('heading', { level: 2, name: /ai enrichment throughput/i })).toBeInTheDocument();
     expect(getProviderCard('AI Enrichment', 'Gemini')).toHaveAttribute('aria-pressed', 'true');
     expect(getProviderCard('Companies', 'Anthropic')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByLabelText(/concurrency/i)).toHaveValue(8);
+    expect(screen.getByLabelText(/ai enrichment concurrency/i)).toHaveValue(8);
+    expect(screen.getByLabelText(/companies concurrency/i)).toHaveValue(3);
     expect(screen.getByText(/gem-\.{3}3456/i)).toBeInTheDocument();
     expect(screen.queryByText(/gem-secret-123456/i)).not.toBeInTheDocument();
     expect(getSecretInput('AI Enrichment', 'Gemini')).toHaveValue('');
@@ -303,6 +314,7 @@ describe('AISettingsPage', () => {
         llm_provider: 'gemini',
         company_llm_provider: 'anthropic',
         ai_enrichment_run_concurrency: 12,
+        company_ai_enrichment_run_concurrency: 4,
         gemini_api_key: '',
         gemini_model: 'gemini-2.5-pro',
         company_anthropic_api_key: '',
@@ -315,6 +327,7 @@ describe('AISettingsPage', () => {
           ...currentSettingsPayload.persisted_config,
           llm_provider: 'gemini',
           ai_enrichment_run_concurrency: 12,
+          company_ai_enrichment_run_concurrency: 4,
           gemini: {
             model: 'gemini-2.5-pro',
             has_api_key: true,
@@ -325,6 +338,7 @@ describe('AISettingsPage', () => {
           ...currentSettingsPayload.effective_config,
           llm_provider: 'gemini',
           ai_enrichment_run_concurrency: 12,
+          company_ai_enrichment_run_concurrency: 4,
           gemini: {
             model: 'gemini-2.5-pro',
             has_api_key: true,
@@ -348,14 +362,17 @@ describe('AISettingsPage', () => {
 
     await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
 
-    await user.clear(screen.getByLabelText(/concurrency/i));
-    await user.type(screen.getByLabelText(/concurrency/i), '12');
+    await user.clear(screen.getByLabelText(/ai enrichment concurrency/i));
+    await user.type(screen.getByLabelText(/ai enrichment concurrency/i), '12');
+    await user.clear(screen.getByLabelText(/companies concurrency/i));
+    await user.type(screen.getByLabelText(/companies concurrency/i), '4');
     await user.clear(screen.getByLabelText(/ai enrichment model/i));
     await user.type(screen.getByLabelText(/ai enrichment model/i), 'gemini-2.5-pro');
     await user.click(screen.getByRole('button', { name: /save settings/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/ai runtime settings saved/i);
-    expect(screen.getByLabelText(/concurrency/i)).toHaveValue(12);
+    expect(screen.getByLabelText(/ai enrichment concurrency/i)).toHaveValue(12);
+    expect(screen.getByLabelText(/companies concurrency/i)).toHaveValue(4);
     expect(screen.getByLabelText(/ai enrichment model/i)).toHaveValue('gemini-2.5-pro');
     expect(screen.getAllByText(/^Needs test$/i).length).toBeGreaterThan(0);
   });
@@ -369,6 +386,7 @@ describe('AISettingsPage', () => {
         llm_provider: 'anthropic',
         company_llm_provider: 'anthropic',
         ai_enrichment_run_concurrency: 9,
+        company_ai_enrichment_run_concurrency: 3,
         anthropic_api_key: 'anthropic-secret-987654',
         anthropic_model: 'claude-sonnet-4-5',
         anthropic_base_url: 'https://api.anthropic.com/v1',
@@ -382,6 +400,7 @@ describe('AISettingsPage', () => {
           ...currentSettingsPayload.persisted_config,
           llm_provider: 'anthropic',
           ai_enrichment_run_concurrency: 9,
+          company_ai_enrichment_run_concurrency: 3,
           anthropic: {
             model: 'claude-sonnet-4-5',
             base_url: 'https://api.anthropic.com/v1',
@@ -393,6 +412,7 @@ describe('AISettingsPage', () => {
           ...currentSettingsPayload.effective_config,
           llm_provider: 'anthropic',
           ai_enrichment_run_concurrency: 9,
+          company_ai_enrichment_run_concurrency: 3,
           anthropic: {
             model: 'claude-sonnet-4-5',
             base_url: 'https://api.anthropic.com/v1',
@@ -421,8 +441,8 @@ describe('AISettingsPage', () => {
     expect(getProviderSettingsGroup('AI Enrichment', 'Anthropic')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: /ai enrichment gemini settings/i })).not.toBeInTheDocument();
 
-    await user.clear(screen.getByLabelText(/concurrency/i));
-    await user.type(screen.getByLabelText(/concurrency/i), '9');
+    await user.clear(screen.getByLabelText(/ai enrichment concurrency/i));
+    await user.type(screen.getByLabelText(/ai enrichment concurrency/i), '9');
     await user.clear(screen.getByLabelText(/ai enrichment model/i));
     await user.type(screen.getByLabelText(/ai enrichment model/i), 'claude-sonnet-4-5');
     await user.clear(screen.getByLabelText(/ai enrichment base url/i));
@@ -523,6 +543,104 @@ describe('AISettingsPage', () => {
     expect(screen.getByText(/111 ms/i)).toBeInTheDocument();
   });
 
+  it('shows a companies web search warning when the model passes but web search is unsupported', async () => {
+    const user = userEvent.setup();
+    testProfileResponse.mockImplementation(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.scope === 'companies') {
+        return mockJsonResponse({
+          ok: true,
+          scope: 'companies',
+          configured_provider: 'anthropic',
+          active_provider: 'anthropic',
+          model: 'claude-sonnet-4-5',
+          latency_ms: 97,
+          config_fingerprint: 'companies:test-fingerprint',
+          model_check: {
+            ok: true,
+            latency_ms: 97,
+          },
+          web_search_check: {
+            attempted: false,
+            supported: false,
+            ok: false,
+            latency_ms: null,
+            error_message: 'This provider does not support web search.',
+          },
+        });
+      }
+
+      return mockJsonResponse({
+        ok: true,
+        scope: 'jobs',
+        configured_provider: 'gemini',
+        active_provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        latency_ms: 111,
+        config_fingerprint: 'jobs:test-fingerprint',
+      });
+    });
+
+    render(<AISettingsPage />);
+
+    await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
+
+    await user.click(screen.getByRole('button', { name: /test companies configuration/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/configuration test passed/i);
+    expect(screen.getByText(/model check passed/i)).toBeInTheDocument();
+    expect(screen.getByText(/web search unavailable: this provider does not support web search\./i)).toBeInTheDocument();
+  });
+
+  it('shows a companies web search success detail when the probe passes', async () => {
+    const user = userEvent.setup();
+    testProfileResponse.mockImplementation(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.scope === 'companies') {
+        return mockJsonResponse({
+          ok: true,
+          scope: 'companies',
+          configured_provider: 'custom',
+          active_provider: 'custom',
+          model: 'gpt-5.2',
+          latency_ms: 88,
+          config_fingerprint: 'companies:test-fingerprint',
+          model_check: {
+            ok: true,
+            latency_ms: 88,
+          },
+          web_search_check: {
+            attempted: true,
+            supported: true,
+            ok: true,
+            latency_ms: 54,
+            error_message: null,
+          },
+        });
+      }
+
+      return mockJsonResponse({
+        ok: true,
+        scope: 'jobs',
+        configured_provider: 'gemini',
+        active_provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        latency_ms: 111,
+        config_fingerprint: 'jobs:test-fingerprint',
+      });
+    });
+
+    render(<AISettingsPage />);
+
+    await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
+
+    await user.click(screen.getByRole('button', { name: /test companies configuration/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/configuration test passed/i);
+    expect(screen.getByText(/model check passed/i)).toBeInTheDocument();
+    expect(screen.getByText(/web search check passed \(\s*54 ms\s*\)/i)).toBeInTheDocument();
+  });
+
   it('toggles api key visibility without exposing saved secrets by default', async () => {
     const user = userEvent.setup();
 
@@ -620,6 +738,10 @@ describe('AISettingsPage', () => {
               msg: 'Input should be greater than or equal to 1',
             },
             {
+              loc: ['body', 'company_ai_enrichment_run_concurrency'],
+              msg: 'Input should be greater than or equal to 1',
+            },
+            {
               loc: ['body', 'gemini_model'],
               msg: 'Input should be a valid string',
             },
@@ -633,12 +755,13 @@ describe('AISettingsPage', () => {
 
     await screen.findByRole('heading', { level: 1, name: /ai runtime/i });
 
-    await user.clear(screen.getByLabelText(/concurrency/i));
-    await user.type(screen.getByLabelText(/concurrency/i), '0');
+    await user.clear(screen.getByLabelText(/ai enrichment concurrency/i));
+    await user.type(screen.getByLabelText(/ai enrichment concurrency/i), '0');
     await user.click(screen.getByRole('button', { name: /save settings/i }));
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/ai_enrichment_run_concurrency: input should be greater than or equal to 1/i);
+    expect(alert).toHaveTextContent(/company_ai_enrichment_run_concurrency: input should be greater than or equal to 1/i);
     expect(alert).toHaveTextContent(/gemini_model: input should be a valid string/i);
   });
 
@@ -683,6 +806,7 @@ describe('AISettingsPage', () => {
         llm_provider: 'custom',
         company_llm_provider: 'anthropic',
         ai_enrichment_run_concurrency: 8,
+        company_ai_enrichment_run_concurrency: 2,
         custom_api_key: 'deepseek-secret',
         custom_model: 'deepseek-v4-flash',
         custom_base_url: 'https://api.deepseek.com',
@@ -766,6 +890,8 @@ describe('AISettingsPage', () => {
     await user.type(getSecretInput('AI Enrichment', 'Custom'), 'deepseek-secret');
 
     await user.click(getProviderCard('Companies', 'Anthropic'));
+    await user.clear(screen.getByLabelText(/companies concurrency/i));
+    await user.type(screen.getByLabelText(/companies concurrency/i), '2');
     await user.clear(screen.getByLabelText(/companies model/i));
     await user.type(screen.getByLabelText(/companies model/i), 'claude-sonnet-4-5');
     await user.clear(screen.getByLabelText(/companies base url/i));

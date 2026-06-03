@@ -348,3 +348,44 @@ def test_execute_run_clears_current_company_identity_and_updates_counters():
         and snapshot["running_item_count"] == 0
         for snapshot in flush_snapshots
     )
+
+
+def test_execute_run_processes_multiple_company_items_concurrently():
+    engine, db, company_ids = _create_company_enrichment_service_db()
+    service = CompanyEnrichmentRunService(db)
+    run = service.create_pending_run(force_company_ids=company_ids)
+    db.commit()
+
+    max_inflight = 0
+    inflight = 0
+
+    async def _sleep_briefly():
+        await asyncio.sleep(0.05)
+
+    class StubEnrichmentService:
+        async def enrich_company_description(self, company, db_session, force=False):
+            nonlocal inflight, max_inflight
+            inflight += 1
+            max_inflight = max(max_inflight, inflight)
+            try:
+                await _sleep_briefly()
+                company.ai_description = f"{company.name} summary"
+                return {
+                    "company_id": str(company.id),
+                    "ai_description": company.ai_description,
+                }
+            finally:
+                inflight -= 1
+
+    service._resolve_run_concurrency = lambda: 2
+
+    try:
+        completed_run = asyncio.run(
+            service.execute_run(run.id, enrichment_service=StubEnrichmentService())
+        )
+    finally:
+        db.close()
+
+    assert completed_run.status == "completed"
+    assert completed_run.completed_items == 2
+    assert max_inflight == 2

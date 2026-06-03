@@ -1,56 +1,217 @@
-# JobsDB Scraper - Design System Rules
+# JobsDB Scraper — Project Memory
 
-> **Purpose**: Guide for integrating Figma designs using Model Context Protocol
+> Production-grade job scraping application with AI enrichment for JobsDB Hong Kong and CTGoodJobs.
 > **Last Updated**: 2026-02-04
 
 ---
 
-## 1. Project Overview
+## Project
 
 | Aspect | Details |
 |--------|---------|
-| **Framework** | React 19 + Vite 7 |
-| **Styling** | Plain CSS (no preprocessor) |
-| **Build Tool** | Vite |
-| **Package Manager** | npm |
+| **Backend** | Python 3.11, FastAPI 0.135, SQLAlchemy 2.0, PostgreSQL 15, Redis 7 |
+| **Frontend** | React 19, Vite 5, Recharts, Lucide React |
+| **Infra** | Docker Compose, Playwright (browser automation) |
+| **AI** | Multi-provider LLM (Gemini, Anthropic, Zhipu, custom) |
+
+**Entry points:**
+- Backend API: `backend/app/main.py` → FastAPI app served via uvicorn
+- Backend retrieval: `backend/app/retrieval_main.py`
+- Backend recommendations: `backend/app/recommendation_main.py`
+- Frontend: `frontend/src/main.jsx` → React root
 
 ---
 
-## 2. Token Definitions
+## Commands
 
-### Color Palette
+### Backend (Python)
 
-Design tokens are defined in CSS custom properties in `frontend/src/index.css`:
+```bash
+# Run API server (host)
+python -m app.main
+
+# Run tests
+python -m pytest -q backend/tests
+python -m pytest --collect-only -q backend/tests
+
+# Install deps
+python -m pip install -r backend/requirements-dev.txt
+
+# Run migrations
+alembic -c backend/alembic.ini history
+alembic -c backend/alembic.ini upgrade head
+
+# Format & lint
+black backend/
+ruff check backend/
+isort backend/
+mypy backend/
+```
+
+### Backend (Docker)
+
+```bash
+# Run tests in container
+docker compose run --rm backend-api python -m pytest -q tests
+
+# Start all services
+docker compose up -d
+
+# Start with live-reload dev overrides
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+# Start worker profiles
+docker compose --profile workers up -d crawl-worker ingest-worker enrichment-worker
+
+# Start ML services (semantic search, embeddings, recommendations)
+docker compose --profile workers up -d retrieval-api embedding-worker recommendation-api
+```
+
+### Frontend
+
+```bash
+cd frontend
+
+npm run dev        # Vite dev server (hot reload)
+npm run build      # Production build
+npm test           # Vitest runner
+npm run lint       # ESLint
+npm run format     # Prettier formatting
+```
+
+---
+
+## Architecture
+
+### Services (Docker Compose)
+
+| Service | Image / Role |
+|---------|-------------|
+| `postgres-db` | PostgreSQL 15 + pgvector |
+| `redis-mq` | Redis 7 message queue (streams) |
+| `db-bootstrap` | One-shot schema bootstrapper |
+| `backend-api` | FastAPI app (port 8000) |
+| `frontend-ui` | Vite dev server (port 5173) |
+| `crawl-worker` | Consumes crawl jobs from Redis |
+| `ingest-worker` | Processes raw scrape data into DB |
+| `enrichment-worker` | LLM enrichment of job descriptions |
+| `embedding-worker` | Generates vector embeddings |
+| `retrieval-api` | Semantic/hybrid search service |
+| `recommendation-api` | Related-job recommendation service |
+
+### Backend Layout (`backend/app/`)
+
+| Module | Role |
+|--------|------|
+| `api/` | FastAPI route handlers (jobs, companies, stats, schedules, progress, ai, settings, filters) |
+| `models/` | SQLAlchemy ORM models (Job, Company, Schedule, Skill, etc.) |
+| `schemas/` | Pydantic request/response schemas |
+| `repositories/` | Data access layer (JobRepository, CrawlJobRepository, etc.) |
+| `services/` | Business logic (AI enrichment, scheduling, crawl dispatch, retrieval, taxonomy) |
+| `workers/` | Long-running worker processes (crawl, ingest, enrichment, embedding, scheduler) |
+| `scraper/` | Web scraping engines (Playwright-based) |
+| `sources/` | Source-specific adapters (jobsdb, ctgoodjobs) |
+| `utils/` | Helpers (normalizers, taxonomy policy, source identity) |
+| `config.py` | Pydantic-settings configuration (from `.env`) |
+| `database.py` | SQLAlchemy engine + session factory |
+| `main.py` | FastAPI app assembly + lifespan |
+
+### Data Flow (Scrape → Enrich → Search)
+
+```
+User triggers crawl → Redis stream → crawl-worker (Playwright) → raw HTML
+  → ingest-worker parses & stores to PostgreSQL
+  → enrichment-worker calls LLM for classification + skill extraction
+  → embedding-worker generates vector embeddings (optional ML path)
+Search: lexical (PostgreSQL full-text) or semantic (retrieval-api via pgvector)
+```
+
+---
+
+## Conventions
+
+### Backend
+
+| Rule | Standard |
+|------|----------|
+| **Formatting** | `black` (default config) + `isort` + `ruff` |
+| **Imports** | Standard library → third-party → local (`app.*`) |
+| **API routes** | FastAPI with `APIRouter`, prefix `/api/v1` |
+| **DB access** | Repository pattern via `repositories/`; never raw SQL in routes |
+| **Schemas** | Pydantic v2 `BaseModel` for request/response |
+| **Tests** | `pytest` + `pytest-asyncio` in `backend/tests/` |
+| **DB sessions** | FastAPI dependency `get_db()` yields `SessionLocal` |
+| **Config** | `app.config.Settings` via `pydantic-settings`, values from `.env` |
+| **Error handling** | `HTTPException` in routes, domain-specific exceptions in services |
+
+### Frontend
+
+| Rule | Standard |
+|------|----------|
+| **Components** | PascalCase, functional with Hooks |
+| **CSS classes** | kebab-case, BEM-inspired (e.g. `glass-panel`, `search-input`) |
+| **Event handlers** | `handle` prefix + camelCase (`handleSubmit`, `handleCrawl`) |
+| **Styling** | Plain CSS (no preprocessor), CSS custom properties |
+| **State** | `useState` / `useEffect` / custom hooks |
+| **API calls** | `src/api/client.js` (custom fetch wrapper) |
+| **Tests** | Vitest + jsdom + Testing Library in `frontend/src/` |
+| **Lazy loading** | `React.lazy` + `Suspense` for page-level components |
+| **Routing** | Hash-based (`window.location.hash`), no React Router |
+
+### Project-wide
+
+| Rule | Standard |
+|------|----------|
+| **Docker** | `docker compose` (v2); profiles for optional services |
+| **Python path** | `backend/` is the source root; imports are `app.*` not `backend.*` |
+| **Env vars** | Defined in `.env` file at project root; `pydantic-settings` loads it |
+| **Crawl modes** | `headless` (Docker) and `headed` (host-side browser, Cloudflare bypass) |
+| **LLM providers** | `gemini`, `anthropic`, `zhipu`, `custom`, `mock` — set via `LLM_PROVIDER` env |
+
+---
+
+## Design System
+
+> Guide for integrating Figma designs using Model Context Protocol.
+
+### Color Palette (Dark Theme)
 
 ```css
 :root {
-  /* Background Colors */
-  --bg-dark: #242424;
-  --bg-light: #ffffff;
+  --color-bg-primary: #101114;
+  --color-bg-secondary: #17191d;
+  --color-bg-tertiary: #20242a;
+  --color-bg-elevated: #242932;
+  --color-bg-glass: #17191d;
+  --color-bg-glass-hover: #20242a;
 
-  /* Text Colors */
-  --text-dark: rgba(255, 255, 255, 0.87);
-  --text-light: #213547;
+  --color-text-primary: #f4f6f8;
+  --color-text-secondary: #a7afbc;
+  --color-text-muted: #7d8795;
 
-  /* Brand Colors */
-  --primary: #007bff;
-  --primary-hover: #0056b3;
-  --accent: #646cff;
-  --accent-hover: #535bf2;
+  --color-primary: #6aa5ff;
+  --color-primary-hover: #8ab8ff;
+  --color-primary-glow: rgba(106, 165, 255, 0.22);
+  --color-primary-light: rgba(106, 165, 255, 0.12);
 
-  /* Semantic Colors */
-  --error: #d8000c;
-  --error-bg: #ffdddd;
-  --error-border: #ffcccc;
-  --success: #28a745;
+  --color-accent: #d8a657;
+  --color-accent-hover: #efc06a;
+  --color-accent-glow: rgba(216, 166, 87, 0.18);
 
-  /* Neutral Colors */
-  --gray-100: #f9f9f9;
-  --gray-200: #f5f5f5;
-  --gray-300: #eee;
-  --gray-400: #ddd;
-  --gray-500: #ccc;
-  --gray-600: #333;
+  --color-success: #4fbf8b;
+  --color-success-hover: #70d5a5;
+  --color-success-glow: rgba(79, 191, 139, 0.18);
+
+  --color-error: #f16f6f;
+  --color-error-hover: #ff8c8c;
+  --color-error-glow: rgba(241, 111, 111, 0.18);
+
+  --color-warning: #e9b949;
+  --color-warning-bg: rgba(233, 185, 73, 0.1);
+
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-hover: rgba(255, 255, 255, 0.18);
+  --color-border-strong: rgba(255, 255, 255, 0.24);
 }
 ```
 
@@ -58,27 +219,17 @@ Design tokens are defined in CSS custom properties in `frontend/src/index.css`:
 
 ```css
 :root {
-  /* Font Family */
-  --font-primary: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  --font-fallback: Arial, sans-serif;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: var(--font-sans);
 
-  /* Font Sizes */
-  --text-xs: 12px;
-  --text-sm: 14px;
-  --text-base: 16px;
-  --text-lg: 18px;
-  --text-xl: 24px;
-  --text-2xl: 32px;
-  --text-3xl: 3.2em;
-
-  /* Font Weights */
-  --font-normal: 400;
-  --font-medium: 500;
-  --font-bold: 700;
-
-  /* Line Heights */
-  --leading-tight: 1.1;
-  --leading-normal: 1.5;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.875rem;
+  --text-4xl: 2.25rem;
 }
 ```
 
@@ -86,380 +237,158 @@ Design tokens are defined in CSS custom properties in `frontend/src/index.css`:
 
 ```css
 :root {
-  /* Spacing Scale */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
 
-  /* Component Spacing */
-  --padding-input: 10px;
-  --padding-button: 0.6em 1.2em;
-  --padding-card: 1.5rem;
-  --gap-form: 10px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 12px 28px rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 20px 45px rgba(0, 0, 0, 0.38);
+  --shadow-glow: 0 0 0 1px rgba(106, 165, 255, 0.08);
 
-  /* Border Radius */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.5rem;
+  --radius-full: 9999px;
 }
 ```
 
----
-
-## 3. Component Library
-
-### File Structure
+### Component Library
 
 ```
-frontend/src/
-├── components/
-│   ├── ResultsList.jsx    # List display component
-│   └── scraper/
-│       └── ScheduleManager.jsx  # Scheduler UI entry component
-├── App.jsx                # Main application
-├── App.css                # Component styles
-└── index.css              # Global styles & tokens
-```
-
-### Component Architecture
-
-**Pattern**: Functional components with React Hooks
-
-```jsx
-// Standard component structure
-import React, { useState } from 'react';
-
-function ComponentName({ prop1, prop2 }) {
-    const [state, setState] = useState(initialValue);
-
-    const handleEvent = (e) => {
-        // Event handler logic
-    };
-
-    return (
-        <div className="component-container">
-            {/* JSX content */}
-        </div>
-    );
-}
-
-export default ComponentName;
+frontend/src/components/
+├── Dashboard.jsx              # Stats overview + charts
+├── FilterPanel.jsx            # Advanced job filters
+├── JobBrowser.jsx             # Main job listing view
+├── JobDetailModal.jsx         # Job detail modal
+├── Pagination.jsx             # Simple pagination
+├── PaginationControl.jsx      # Pagination with controls
+├── ResultsList.jsx            # List display component
+├── SearchBar.jsx              # Search input
+├── Sidebar.jsx                # Navigation sidebar
+├── SkillTags.jsx              # Skill tag display
+├── ai/
+│   └── AIEnrichmentPage.jsx  # AI enrichment controls + progress
+├── charts/
+│   ├── CategoryChart.jsx     # Category distribution
+│   └── SkillChart.jsx        # Skill statistics
+├── companies/
+│   ├── CompaniesPage.jsx     # Company list + search
+│   ├── CompanyDetailModal.jsx
+│   ├── CompanySummaryCard.jsx
+│   └── useCompanyEnrichmentRun.js  # Custom hook
+├── scraper/
+│   ├── ScheduleManager.jsx   # Scheduler UI (root)
+│   ├── ScheduleForm.jsx      # Create/edit schedules
+│   ├── ScheduleList.jsx      # List schedules
+│   ├── ScheduleHistory.jsx   # Schedule run history
+│   ├── ScrapeProgressPanel.jsx  # Scrape job progress
+│   ├── crawlMode.js          # Crawl mode constants
+│   ├── crawlPhase.js         # Crawl phase constants
+│   └── listingBatchLabel.js  # Batch label helpers
+├── settings/
+│   └── AISettingsPage.jsx    # LLM provider settings
+├── jobBrowserQueryUtils.js   # Job search query helpers
+├── jobBrowserScopeUtils.js   # Search scope helpers
+├── locationFilterUtils.js    # Location filter helpers
+└── api/
+    ├── base.js               # API base URL config
+    ├── capabilities.js       # Runtime capabilities
+    ├── client.js             # Shared fetch wrapper
+    └── client.test.js
 ```
 
 ### Naming Conventions
 
 | Type | Convention | Example |
 |------|------------|---------|
-| Components | PascalCase | `ScheduleManager`, `ResultsList` |
-| CSS Classes | kebab-case | `crawler-input-container` |
-| Event Handlers | camelCase with `handle` prefix | `handleSubmit`, `handleCrawl` |
-| State Variables | camelCase | `isLoading`, `results` |
+| Components | PascalCase | `ScheduleManager`, `JobBrowser`, `FilterPanel` |
+| CSS Classes | kebab-case | `glass-panel`, `search-input`, `premium-select` |
+| Event Handlers | camelCase with `handle` prefix | `handleSubmit`, `handleCrawl`, `handleFilterChange` |
+| State Variables | camelCase | `isLoading`, `results`, `activeView` |
+| Custom hooks | camelCase with `use` prefix | `useCompanyEnrichmentRun` |
 
----
+### Styling Approach
 
-## 4. Styling Approach
+Plain CSS with CSS custom properties. Theme is `dark` by default (`color-scheme: dark` on `<html>`). No preprocessor, no CSS-in-JS. Component styles are co-located as `.css` files imported into the corresponding `.jsx` component (e.g., `Dashboard.css` imported by `Dashboard.jsx`). Shared utility classes (`glass-panel`, `filter-label`, `premium-select`) live in `index.css`.
 
-### CSS Methodology
-
-**Approach**: Plain CSS with BEM-inspired naming
-
-```css
-/* Block */
-.crawler-input-container { }
-
-/* Element */
-.crawler-input-container form { }
-
-/* Modifier */
-.results-container.error { }
-```
-
-### Component Style Pattern
-
-Each component uses class-based styling defined in `App.css`:
+### Button Styles
 
 ```css
-/* Container pattern */
-.component-container {
-  background: var(--gray-200);
-  padding: var(--padding-card);
+/* Default button (defined in index.css) */
+button {
+  min-height: 40px;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-/* Interactive elements */
-.interactive-element {
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
   cursor: pointer;
-  transition: border-color 0.25s;
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
-.interactive-element:hover {
-  border-color: var(--accent);
-}
-
-.interactive-element:disabled {
-  background-color: var(--gray-500);
-  cursor: not-allowed;
+button:hover {
+  border-color: var(--color-border-hover);
+  background: var(--color-bg-elevated);
 }
 ```
 
-### Responsive Design
+### Form Elements
 
 ```css
-/* Dark/Light mode support */
-@media (prefers-color-scheme: light) {
-  :root {
-    color: var(--text-light);
-    background-color: var(--bg-light);
-  }
-}
-
-/* Minimum width constraint */
-body {
-  min-width: 320px;
-}
-
-/* Container max-width */
-.app-container {
-  max-width: 800px;
-  margin: 0 auto;
-}
-```
-
----
-
-## 5. Asset Management
-
-### Directory Structure
-
-```
-frontend/
-├── src/assets/       # Source assets (imported in JS)
-│   └── react.svg
-├── public/           # Static assets (served directly)
-│   └── vite.svg
-```
-
-### Asset Import Pattern
-
-```jsx
-// SVG as React component (recommended)
-import Logo from './assets/logo.svg';
-
-// In component
-<img src={Logo} alt="Logo" />
-```
-
-### Image Guidelines
-
-| Type | Location | Usage |
-|------|----------|-------|
-| Icons/Logos | `src/assets/` | Import in components |
-| Static Images | `public/` | Reference by URL path |
-| Dynamic Images | External URL | Fetch from API |
-
----
-
-## 6. Icon System
-
-### Current State
-
-No dedicated icon library installed. Options for implementation:
-
-**Recommended**: Install `lucide-react` or `react-icons`
-
-```bash
-npm install lucide-react
-```
-
-```jsx
-// Usage pattern
-import { Search, Loader, AlertCircle } from 'lucide-react';
-
-<Search size={20} color="var(--primary)" />
-```
-
-### Icon Naming Convention
-
-| Category | Prefix | Example |
-|----------|--------|---------|
-| Action | `icon-` | `icon-search`, `icon-submit` |
-| Status | `status-` | `status-loading`, `status-error` |
-| Navigation | `nav-` | `nav-home`, `nav-back` |
-
----
-
-## 7. Button Styles
-
-### Primary Button
-
-```css
-.btn-primary {
-  padding: 10px 20px;
-  background-color: var(--primary);
-  color: white;
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: var(--text-base);
-  font-weight: var(--font-bold);
-}
-
-.btn-primary:hover {
-  background-color: var(--primary-hover);
-}
-
-.btn-primary:disabled {
-  background-color: var(--gray-500);
-  cursor: not-allowed;
-}
-```
-
-### Button Variants
-
-| Variant | Class | Use Case |
-|---------|-------|----------|
-| Primary | `.start-btn` | Main actions |
-| Secondary | `.btn-secondary` | Secondary actions |
-| Danger | `.btn-danger` | Destructive actions |
-
----
-
-## 8. Form Elements
-
-### Input Fields
-
-```css
-.input-field {
-  flex: 1;
-  padding: var(--padding-input);
-  border: 1px solid var(--gray-400);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-base);
-}
-
-.input-field:focus {
-  outline: 2px solid var(--primary);
-  border-color: var(--primary);
-}
-
-.input-field:disabled {
-  background-color: var(--gray-200);
-  cursor: not-allowed;
-}
-```
-
-### Form Layout
-
-```css
-.form-container {
-  display: flex;
-  gap: var(--gap-form);
-}
-```
-
----
-
-## 9. Card Components
-
-### Standard Card
-
-```css
-.card {
-  background: white;
-  border: 1px solid var(--gray-300);
-  padding: var(--padding-card);
+.premium-select,
+.premium-input,
+.search-input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-}
-
-.card-header {
-  margin-bottom: var(--space-4);
-}
-
-.card-body {
-  /* Content area */
-}
-
-.card-footer {
-  margin-top: var(--space-4);
-  border-top: 1px solid var(--gray-300);
-  padding-top: var(--space-4);
+  background: #111317;
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
 }
 ```
 
-### Card Variants
+### Card Components
 
 ```css
-.card.error {
-  border-color: var(--error-border);
-  background-color: #fff5f5;
+.glass-panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+  box-shadow: var(--shadow-sm);
 }
 
-.card.success {
-  border-color: var(--success);
-  background-color: #f0fff4;
+.glass-panel:hover {
+  border-color: var(--color-border-hover);
 }
 ```
 
----
+### Figma Integration Guidelines
 
-## 10. Figma Integration Guidelines
-
-### When Implementing Figma Designs
-
-1. **Extract tokens first**: Map Figma colors/spacing to CSS variables
-2. **Use existing patterns**: Match to established component patterns
-3. **Maintain consistency**: Follow naming conventions
-
-### Color Mapping
+1. **Extract tokens first**: Map Figma colors/spacing to CSS custom properties (see color/typography/spacing tables above).
+2. **Use existing patterns**: Match to established component patterns (glass-panel, premium-select, etc.).
+3. **Maintain consistency**: Follow naming conventions.
 
 | Figma Token | CSS Variable |
 |-------------|--------------|
-| Primary/Blue | `--primary` |
-| Error/Red | `--error` |
-| Background/Dark | `--bg-dark` |
-| Text/Primary | `--text-dark` |
-
-### Spacing Mapping
-
-| Figma Spacing | CSS Variable |
-|---------------|--------------|
-| 4px | `--space-1` |
-| 8px | `--space-2` |
-| 16px | `--space-4` |
-| 24px | `--space-6` |
+| Primary/Blue | `--color-primary` |
+| Error/Red | `--color-error` |
+| Background/Dark | `--color-bg-primary` |
+| Text/Primary | `--color-text-primary` |
+| Border | `--color-border` |
 
 ---
 
-## 11. Future Enhancements (Planned)
+## Notes
 
-Based on the project plan, the following will be added:
-
-- **Recharts**: For data visualization
-- **React Router**: For navigation
-- **TanStack Query**: For data fetching
-- **WebSocket**: For real-time updates
-
-### Planned Component Structure
-
-```
-frontend/src/
-├── components/
-│   ├── layout/        # Header, Footer, Sidebar
-│   ├── dashboard/     # Stats, Charts, SkillCloud
-│   ├── jobs/          # JobList, JobCard, JobDetail
-│   ├── scraper/       # ScrapeForm, ProgressBar
-│   └── ui/            # Button, Input, Card (shared)
-├── pages/             # Route pages
-├── hooks/             # Custom hooks
-├── api/               # API client
-└── utils/             # Helpers
-```
-
----
-
-*Document generated for Figma MCP integration*
+<!-- Quick-add section for ephemeral observations or references. -->

@@ -162,6 +162,13 @@ function createFormState(payload) {
         payload?.effective_config?.ai_enrichment_run_concurrency ??
         '',
     ),
+    company_ai_enrichment_run_concurrency: String(
+      payload?.persisted_config?.company_ai_enrichment_run_concurrency ??
+        payload?.effective_config?.company_ai_enrichment_run_concurrency ??
+        payload?.persisted_config?.ai_enrichment_run_concurrency ??
+        payload?.effective_config?.ai_enrichment_run_concurrency ??
+        '',
+    ),
   };
 }
 
@@ -196,6 +203,7 @@ function buildRequestBody(formState) {
     llm_provider: formState.jobs.llm_provider,
     company_llm_provider: formState.companies.llm_provider,
     ai_enrichment_run_concurrency: Number(formState.ai_enrichment_run_concurrency),
+    company_ai_enrichment_run_concurrency: Number(formState.company_ai_enrichment_run_concurrency),
   };
 
   for (const [profileKey, prefix] of [['jobs', ''], ['companies', 'company_']]) {
@@ -244,6 +252,45 @@ function buildProfileTestPayload(profileKey, formState) {
         zhipu_api_key: values.api_key || '',
       } : {}),
     },
+  };
+}
+
+function formatProbeLatency(latencyMs) {
+  return latencyMs === null || latencyMs === undefined ? 'Latency unavailable' : `${latencyMs} ms`;
+}
+
+function buildProfileTestFeedback(profileKey, payload) {
+  const modelCheck = payload?.model_check;
+  const webSearchCheck = payload?.web_search_check;
+
+  if (profileKey !== 'companies' || !modelCheck) {
+    return {
+      tone: 'success',
+      title: 'Configuration test passed',
+      lines: [
+        `${PROFILE_LABELS[profileKey]} provider responded successfully.`,
+        formatProbeLatency(payload?.latency_ms),
+      ],
+    };
+  }
+
+  const lines = [`Model check passed (${formatProbeLatency(modelCheck.latency_ms)})`];
+  const hasWebSearchWarning = Boolean(webSearchCheck) && !webSearchCheck.ok;
+
+  if (webSearchCheck) {
+    if (webSearchCheck.ok) {
+      lines.push(`Web search check passed (${formatProbeLatency(webSearchCheck.latency_ms)})`);
+    } else if (webSearchCheck.supported === false) {
+      lines.push(`Web search unavailable: ${webSearchCheck.error_message || 'This provider does not support web search.'}`);
+    } else {
+      lines.push(`Web search warning: ${webSearchCheck.error_message || 'Web search probe failed.'}`);
+    }
+  }
+
+  return {
+    tone: hasWebSearchWarning ? 'warning' : 'success',
+    title: hasWebSearchWarning ? 'Configuration test passed with warnings' : 'Configuration test passed',
+    lines,
   };
 }
 
@@ -664,14 +711,7 @@ export default function AISettingsPage() {
         return;
       }
 
-      setFeedback({
-        tone: 'success',
-        title: 'Configuration test passed',
-        lines: [
-          `${PROFILE_LABELS[profileKey]} provider responded successfully.`,
-          payload.latency_ms ? `${payload.latency_ms} ms` : 'Latency unavailable',
-        ],
-      });
+      setFeedback(buildProfileTestFeedback(profileKey, payload));
     } catch (err) {
       setFeedback({
         tone: 'error',
@@ -753,13 +793,25 @@ export default function AISettingsPage() {
         />
         <SummaryCard
           icon={Gauge}
-          label="Concurrency"
+          label="AI Enrichment Concurrency"
           value={String(
             effectiveConfig.ai_enrichment_run_concurrency ??
               persistedConfig.ai_enrichment_run_concurrency ??
               'Unavailable',
           )}
           hint="AI enrichment workers"
+        />
+        <SummaryCard
+          icon={Gauge}
+          label="Companies Concurrency"
+          value={String(
+            effectiveConfig.company_ai_enrichment_run_concurrency ??
+              persistedConfig.company_ai_enrichment_run_concurrency ??
+              effectiveConfig.ai_enrichment_run_concurrency ??
+              persistedConfig.ai_enrichment_run_concurrency ??
+              'Unavailable',
+          )}
+          hint="Company description workers"
         />
         <SummaryCard
           icon={isAnyDegraded ? AlertTriangle : ShieldCheck}
@@ -822,15 +874,15 @@ export default function AISettingsPage() {
           <div className="ai-settings-section-heading">
             <div>
               <h2>AI Enrichment Throughput</h2>
-              <p>Concurrency is still global for job enrichment workers.</p>
+              <p>AI Enrichment and Companies can now use different concurrency limits.</p>
             </div>
           </div>
 
           <div className="ai-settings-form-grid">
             <label className="ai-settings-field">
-              <span>Concurrency</span>
+              <span>AI Enrichment concurrency</span>
               <input
-                aria-label="Concurrency"
+                aria-label="AI Enrichment concurrency"
                 type="number"
                 min="1"
                 value={formState.ai_enrichment_run_concurrency}
@@ -838,13 +890,34 @@ export default function AISettingsPage() {
                 disabled={saving}
               />
             </label>
+            <label className="ai-settings-field">
+              <span>Companies concurrency</span>
+              <input
+                aria-label="Companies concurrency"
+                type="number"
+                min="1"
+                value={formState.company_ai_enrichment_run_concurrency}
+                onChange={(event) => updateTopLevelField('company_ai_enrichment_run_concurrency', event.target.value)}
+                disabled={saving}
+              />
+            </label>
           </div>
 
           <div className={`ai-settings-throughput-note ${isAnyDegraded ? 'warning' : ''}`}>
-            <span>Effective value</span>
+            <span>AI Enrichment effective value</span>
             <strong>
               {String(
                 effectiveConfig.ai_enrichment_run_concurrency ??
+                  persistedConfig.ai_enrichment_run_concurrency ??
+                  'Unavailable',
+              )}
+            </strong>
+            <span>Companies effective value</span>
+            <strong>
+              {String(
+                effectiveConfig.company_ai_enrichment_run_concurrency ??
+                  persistedConfig.company_ai_enrichment_run_concurrency ??
+                  effectiveConfig.ai_enrichment_run_concurrency ??
                   persistedConfig.ai_enrichment_run_concurrency ??
                   'Unavailable',
               )}

@@ -27,9 +27,22 @@ def test_ctgoodjobs_runtime_capabilities_default_to_headed(monkeypatch):
         "get_scheduler_runtime_status",
         lambda: {"enabled": True},
     )
+    monkeypatch.setattr(
+        runtime_capabilities_service,
+        "get_headed_crawl_worker_status",
+        lambda: {
+            "available": False,
+            "status": "missing",
+            "heartbeat_status": "missing",
+            "reason": "headed_worker_missing",
+        },
+        raising=False,
+    )
 
     capabilities = runtime_capabilities_service.build_runtime_capabilities()
 
+    assert capabilities["crawl_workers"]["headed"]["available"] is False
+    assert capabilities["crawl_workers"]["headed"]["reason"] == "headed_worker_missing"
     assert capabilities["sources"]["ctgoodjobs"]["default_crawl_mode"] == "headed"
     assert capabilities["sources"]["ctgoodjobs"]["headless_supported"] is False
     assert capabilities["sources"]["ctgoodjobs"]["headed_supported"] is True

@@ -23,6 +23,7 @@ class AISettingsUpdateRequest(BaseModel):
     llm_provider: Optional[str] = None
     company_llm_provider: Optional[str] = None
     ai_enrichment_run_concurrency: Optional[int] = None
+    company_ai_enrichment_run_concurrency: Optional[int] = None
     anthropic_api_key: Optional[str] = None
     anthropic_model: Optional[str] = None
     anthropic_base_url: Optional[str] = None
@@ -90,6 +91,52 @@ def _build_ai_settings_response(service: AIRuntimeSettingsService) -> dict:
     }
 
 
+async def _run_model_probe(client) -> dict:
+    started_at = time.perf_counter()
+    text = await client.generate("Reply with OK only.")
+    latency_ms = int((time.perf_counter() - started_at) * 1000)
+    return {
+        "ok": True,
+        "latency_ms": latency_ms,
+        "response_preview": (text or "").strip()[:80],
+    }
+
+
+async def _run_web_search_probe(client) -> dict:
+    if not bool(getattr(client, "supports_web_search", lambda: False)()):
+        return {
+            "attempted": False,
+            "supported": False,
+            "ok": False,
+            "latency_ms": None,
+            "error_message": "This provider does not support web search.",
+        }
+
+    started_at = time.perf_counter()
+    try:
+        await client.generate(
+            "Search the web for recent public information about OpenAI and reply with OK only.",
+            web_search=True,
+        )
+    except Exception as exc:
+        return {
+            "attempted": True,
+            "supported": True,
+            "ok": False,
+            "latency_ms": None,
+            "error_message": str(exc),
+        }
+
+    latency_ms = int((time.perf_counter() - started_at) * 1000)
+    return {
+        "attempted": True,
+        "supported": True,
+        "ok": True,
+        "latency_ms": latency_ms,
+        "error_message": None,
+    }
+
+
 async def probe_profile_configuration(
     scope: str,
     profile_payload: dict,
@@ -100,21 +147,23 @@ async def probe_profile_configuration(
     effective = service._build_effective_settings(draft_values, scope)
     service._validate_effective_settings(scope, effective)
     fingerprint = service.build_config_fingerprint(scope, draft_values)
-    started_at = time.perf_counter()
     try:
         client = service.build_draft_client(scope, draft_values)
-        text = await client.generate("Reply with OK only.")
-        latency_ms = int((time.perf_counter() - started_at) * 1000)
-        return {
+        model_check = await _run_model_probe(client)
+        result = {
             "ok": True,
             "scope": scope,
             "configured_provider": effective.llm_provider,
             "active_provider": effective.llm_provider,
             "model": getattr(client, "model", None),
-            "latency_ms": latency_ms,
+            "latency_ms": model_check["latency_ms"],
             "config_fingerprint": fingerprint,
-            "response_preview": (text or "").strip()[:80],
+            "response_preview": model_check["response_preview"],
+            "model_check": model_check,
         }
+        if scope == "companies":
+            result["web_search_check"] = await _run_web_search_probe(client)
+        return result
     finally:
         reset_client(scope)
 

@@ -30,6 +30,19 @@ export function getRunProgress(run) {
   };
 }
 
+function getProgressValue(progress) {
+  if (!progress.total) {
+    return 0;
+  }
+
+  const roundedValue = Math.round((progress.processed / progress.total) * 100);
+  if (progress.processed > 0) {
+    return Math.min(Math.max(roundedValue, 1), 100);
+  }
+
+  return roundedValue;
+}
+
 function reconcileRunItemsByCompanyId(run, runItemsByCompanyId) {
   if (!run) {
     return {};
@@ -450,7 +463,7 @@ export default function useCompanyEnrichmentRun({
   };
 
   const progress = getRunProgress(currentRun);
-  const progressValue = progress.total ? Math.round((progress.processed / progress.total) * 100) : 0;
+  const progressValue = getProgressValue(progress);
   const remainingCount = currentRun
     ? Math.max(Number(currentRun.pending_items || 0), 0)
     : 0;

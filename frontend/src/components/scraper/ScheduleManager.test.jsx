@@ -519,6 +519,45 @@ describe('ScheduleManager', () => {
     });
   });
 
+  it('blocks headed direct override launches when runtime capabilities report the headed worker offline', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        capabilities: {
+          scheduler: {
+            available: true,
+            manual_run_available: true,
+            owner: 'scheduler-worker',
+            worker_name: 'scheduler-worker',
+            heartbeat_status: 'fresh',
+            reason: null,
+          },
+          crawl_workers: {
+            headed: {
+              available: false,
+              status: 'missing',
+              heartbeat_status: 'missing',
+              reason: 'headed_worker_missing',
+            },
+          },
+        },
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+
+    expect(await screen.findByText(/headed crawl worker is offline/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /start job id crawl/i })).toBeDisabled();
+
+    const crawlJobCalls = globalThis.fetch.mock.calls.filter(
+      ([url, request]) => url === '/api/v1/crawl-jobs' && request?.method === 'POST',
+    );
+    expect(crawlJobCalls).toHaveLength(0);
+  });
+
   it('stores a direct override session marker and opens progress with recovery props after launch', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 

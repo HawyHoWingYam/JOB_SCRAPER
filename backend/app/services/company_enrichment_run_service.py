@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
+from types import SimpleNamespace
 from typing import List, Optional
 
-from sqlalchemy import and_, case, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import NoResultFound
 
@@ -12,6 +14,7 @@ from app.models.company_enrichment_run import (
     CompanyEnrichmentRun,
     CompanyEnrichmentRunItem,
 )
+from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.utils.time import utc_now
 
 ACTIVE_RUN_STATUSES = ("pending", "running")
@@ -117,6 +120,94 @@ class CompanyEnrichmentRunService:
             return None
         return [item for _, item in rows if item is not None]
 
+    def _count_items_by_status(self, run_id: str) -> dict[str, int]:
+        counts = {"pending": 0, "running": 0, "completed": 0, "failed": 0}
+        rows = (
+            self.db.query(
+                CompanyEnrichmentRunItem.status,
+                func.count(CompanyEnrichmentRunItem.id),
+            )
+            .filter(CompanyEnrichmentRunItem.run_id == run_id)
+            .group_by(CompanyEnrichmentRunItem.status)
+            .all()
+        )
+        for status, count in rows:
+            counts[str(status)] = int(count)
+        return counts
+
+    def _resolve_latest_running_company_id(self, run_id: str):
+        row = (
+            self.db.query(CompanyEnrichmentRunItem.company_id)
+            .filter(
+                CompanyEnrichmentRunItem.run_id == run_id,
+                CompanyEnrichmentRunItem.status == "running",
+            )
+            .order_by(
+                CompanyEnrichmentRunItem.started_at.desc(),
+                CompanyEnrichmentRunItem.position.desc(),
+                CompanyEnrichmentRunItem.id.desc(),
+            )
+            .first()
+        )
+        return row[0] if row else None
+
+    def _resolve_run_concurrency(self) -> int:
+        try:
+            return max(1, int(AIRuntimeSettingsService(self.db).get_effective_concurrency("companies") or 1))
+        except Exception:
+            return 1
+
+    def _update_item_started(self, run_id: str, item_id: str, company_name: str) -> None:
+        timestamp = utc_now()
+        run = self.db.query(CompanyEnrichmentRun).filter(CompanyEnrichmentRun.id == run_id).one()
+        item = self.db.query(CompanyEnrichmentRunItem).filter(CompanyEnrichmentRunItem.id == item_id).one()
+
+        item.status = "running"
+        item.started_at = item.started_at or timestamp
+        item.completed_at = None
+        item.error_message = None
+        run.current_company_name = company_name
+        run.error_message = None
+
+        self.db.flush()
+        counts = self._count_items_by_status(run_id)
+        run.pending_items = counts["pending"]
+        run.completed_items = counts["completed"]
+        run.failed_items = counts["failed"]
+        self.db.commit()
+
+    def _update_item_finished(
+        self,
+        run_id: str,
+        item_id: str,
+        *,
+        error_message: Optional[str],
+        company_names_by_id: dict[uuid.UUID, str],
+    ) -> None:
+        timestamp = utc_now()
+        run = self.db.query(CompanyEnrichmentRun).filter(CompanyEnrichmentRun.id == run_id).one()
+        item = self.db.query(CompanyEnrichmentRunItem).filter(CompanyEnrichmentRunItem.id == item_id).one()
+
+        if error_message is None:
+            item.status = "completed"
+            item.error_message = None
+        else:
+            item.status = "failed"
+            item.error_message = error_message
+        item.completed_at = timestamp
+
+        # Clear the current label before any autoflush-triggering query so the run never
+        # exposes a stale company name after the last running item has finished.
+        run.current_company_name = None
+        self.db.flush()
+        counts = self._count_items_by_status(run_id)
+        run.pending_items = counts["pending"]
+        run.completed_items = counts["completed"]
+        run.failed_items = counts["failed"]
+        current_company_id = self._resolve_latest_running_company_id(run_id)
+        run.current_company_name = company_names_by_id.get(current_company_id)
+        self.db.commit()
+
     def create_pending_run(
         self,
         force_company_ids: Optional[List[str]] = None,
@@ -218,11 +309,9 @@ class CompanyEnrichmentRunService:
         run.started_at = run.started_at or now
         run.completed_at = None
         run.error_message = None
-        self.db.flush()
+        run.current_company_name = None
+        self.db.commit()
 
-        completed_items = 0
-        failed_items = 0
-        first_error_message = None
         company_ids = [item.company_id for item in items]
         companies_by_id = {
             company.id: company
@@ -235,55 +324,102 @@ class CompanyEnrichmentRunService:
                 .all()
             )
         }
+        company_names_by_id = {
+            company_id: company.name
+            for company_id, company in companies_by_id.items()
+        }
+        company_snapshots_by_id = {
+            company_id: SimpleNamespace(
+                id=company.id,
+                name=company.name,
+                industry=company.industry,
+                location=company.location,
+                ai_description=company.ai_description,
+            )
+            for company_id, company in companies_by_id.items()
+        }
 
+        concurrency = min(self._resolve_run_concurrency(), len(items) or 1)
+        item_queue: asyncio.Queue[CompanyEnrichmentRunItem] = asyncio.Queue()
         for item in items:
-            company = companies_by_id.get(item.company_id)
-            if company is None:
-                raise NoResultFound(f"Company not found for enrichment run item {item.id}")
-            item.status = "running"
-            item.started_at = item.started_at or utc_now()
-            item.completed_at = None
-            item.error_message = None
-            run.current_company_name = company.name
-            self.db.flush()
+            item_queue.put_nowait(item)
 
-            try:
-                await service.enrich_company_description(company, self.db)
-                item.status = "completed"
-                item.error_message = None
-                item.completed_at = utc_now()
-                completed_items += 1
-            except Exception as exc:
-                item.status = "failed"
-                item.error_message = str(exc)
-                item.completed_at = utc_now()
-                failed_items += 1
-                if first_error_message is None:
-                    first_error_message = str(exc)
+        try:
+            async def worker() -> None:
+                while True:
+                    try:
+                        item = item_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        return
 
-            run.current_company_name = None
-            run.pending_items = max(run.total_items - completed_items - failed_items, 0)
-            run.completed_items = completed_items
-            run.failed_items = failed_items
-            if run.pending_items == 0:
-                run.completed_at = item.completed_at or utc_now()
-                if failed_items == 0:
-                    run.status = "completed"
-                    run.error_message = None
-                elif completed_items == 0:
-                    run.status = "failed"
-                    run.error_message = first_error_message
-                else:
-                    run.status = "completed_with_failures"
-                    run.error_message = (
-                        f"{failed_items} item(s) failed. First error: {first_error_message}"
-                        if first_error_message
-                        else f"{failed_items} item(s) failed"
-                    )
-            else:
-                run.status = "running"
-                run.completed_at = None
-                run.error_message = None
-            self.db.flush()
+                    error_message = None
+                    company = companies_by_id.get(item.company_id)
+                    try:
+                        if company is None:
+                            raise NoResultFound(f"Company not found for enrichment run item {item.id}")
+                        self._update_item_started(
+                            run_id,
+                            item.id,
+                            company_names_by_id[item.company_id],
+                        )
+                        if hasattr(service, "enrich_company_id"):
+                            await service.enrich_company_id(item.company_id)
+                        else:
+                            await service.enrich_company_description(
+                                company_snapshots_by_id[item.company_id],
+                                self.db,
+                            )
+                    except Exception as exc:
+                        error_message = str(exc)
+                    finally:
+                        self._update_item_finished(
+                            run_id,
+                            item.id,
+                            error_message=error_message,
+                            company_names_by_id=company_names_by_id,
+                        )
+                        item_queue.task_done()
 
+            workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
+            await asyncio.gather(*workers)
+        except Exception as exc:
+            return self.mark_run_failed(run_id, str(exc))
+
+        self.db.expire_all()
+        run = self.db.query(CompanyEnrichmentRun).filter(CompanyEnrichmentRun.id == run_id).one()
+        counts = self._count_items_by_status(run_id)
+        first_failed_item = (
+            self.db.query(CompanyEnrichmentRunItem)
+            .filter(
+                CompanyEnrichmentRunItem.run_id == run_id,
+                CompanyEnrichmentRunItem.status == "failed",
+            )
+            .order_by(
+                CompanyEnrichmentRunItem.position.asc(),
+                CompanyEnrichmentRunItem.id.asc(),
+            )
+            .first()
+        )
+        first_error_message = first_failed_item.error_message if first_failed_item is not None else None
+
+        run.pending_items = counts["pending"]
+        run.completed_items = counts["completed"]
+        run.failed_items = counts["failed"]
+        run.current_company_name = None
+        run.completed_at = utc_now()
+        if run.failed_items == 0:
+            run.status = "completed"
+            run.error_message = None
+        elif run.completed_items == 0:
+            run.status = "failed"
+            run.error_message = first_error_message
+        else:
+            run.status = "completed_with_failures"
+            run.error_message = (
+                f"{run.failed_items} item(s) failed. First error: {first_error_message}"
+                if first_error_message
+                else f"{run.failed_items} item(s) failed"
+            )
+        self.db.commit()
+        self.db.refresh(run)
         return run

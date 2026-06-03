@@ -14,6 +14,7 @@ from app.models.schedule import ScrapeSchedule, ScheduleExecution
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.schedule_repository import ScheduleRepository
+from app.services.headed_crawl_runtime import ensure_headed_crawl_worker_available
 from app.scraper.manual_action import (
     LEGACY_RESUME_STRATEGY_DEFAULT,
     ResumeStrategy,
@@ -163,6 +164,7 @@ class CrawlJobDispatchService:
         payload = dict(request_payload)
         payload["crawl_phase"] = resolve_crawl_phase(payload.get("crawl_phase"))
         payload["crawl_mode"] = resolve_crawl_mode(source_site, payload.get("crawl_mode"))
+        ensure_headed_crawl_worker_available(crawl_mode=payload.get("crawl_mode"))
         if schedule_id is not None:
             payload.setdefault("schedule_id", str(schedule_id))
 
@@ -315,6 +317,7 @@ class CrawlJobDispatchService:
             if source_listing_crawl_job_id and not request_payload.get("source_listing_crawl_job_id"):
                 request_payload["source_listing_crawl_job_id"] = source_listing_crawl_job_id
             request_payload["detail_statuses"] = ["manual_action_required", "pending"]
+        ensure_headed_crawl_worker_available(crawl_mode=request_payload.get("crawl_mode"))
 
         crawl_job.status = "dispatching"
         crawl_job.completed_at = None
