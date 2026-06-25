@@ -11,6 +11,7 @@ const CRON_PRESETS = {
 };
 
 function formatSourceLabel(sourceSite) {
+    if (sourceSite === 'offertoday') return 'OfferToday';
     return sourceSite === 'ctgoodjobs' ? 'CTgoodjobs' : 'JobsDB';
 }
 

@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.config import settings
 from app.schemas.recommendations import JobRecommendationsResponse
-from app.services.job_recommendation_service import JobRecommendationService
 from app.services.recommendation_client import (
     RecommendationClient,
     RecommendationClientResponseError,
@@ -26,14 +25,11 @@ async def _proxy_recommendations_response(
         response_payload = await client.get_job_recommendations(source_job_id, limit=limit)
     except RecommendationClientResponseError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except RecommendationClientUnavailableError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "recommendation_api_unavailable",
-                "message": str(exc),
-            },
-        ) from exc
+    except RecommendationClientUnavailableError:
+        return JobRecommendationsResponse(
+            source_job_id=source_job_id,
+            recommendations=[],
+        )
 
     return JobRecommendationsResponse.model_validate(response_payload)
 

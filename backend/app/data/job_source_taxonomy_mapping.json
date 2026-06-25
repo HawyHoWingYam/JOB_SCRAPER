@@ -500,5 +500,53 @@
     "allowed_domains": ["Community Services & Development"],
     "default_path": ["Community Services & Development", "General", "General"],
     "subcategory_hints": {}
+  },
+  "offertoday:101000": {
+    "source_name": "Accounting",
+    "allowed_domains": ["Accounting"],
+    "default_path": ["Accounting", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:102000": {
+    "source_name": "Administration & Office Support",
+    "allowed_domains": ["Administration & Office Support"],
+    "default_path": ["Administration & Office Support", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:104000": {
+    "source_name": "Banking & Financial Services",
+    "allowed_domains": ["Banking & Financial Services"],
+    "default_path": ["Banking & Financial Services", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:112000": {
+    "source_name": "Engineering",
+    "allowed_domains": ["Engineering"],
+    "default_path": ["Engineering", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:115000": {
+    "source_name": "Healthcare & Medical",
+    "allowed_domains": ["Healthcare & Medical"],
+    "default_path": ["Healthcare & Medical", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:118000": {
+    "source_name": "Information & Communication Technology",
+    "allowed_domains": ["Information & Communication Technology"],
+    "default_path": ["Information & Communication Technology", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:122000": {
+    "source_name": "Marketing & Communications",
+    "allowed_domains": ["Marketing & Communications"],
+    "default_path": ["Marketing & Communications", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:126000": {
+    "source_name": "Sales",
+    "allowed_domains": ["Sales"],
+    "default_path": ["Sales", "General", "General"],
+    "subcategory_hints": {}
   }
 }

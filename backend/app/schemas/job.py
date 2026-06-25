@@ -23,6 +23,23 @@ class JobCreateSchema(BaseModel):
     posted_date: Optional[datetime] = None
 
 
+class ManualJobCreateSchema(BaseModel):
+    """Schema for manually creating a job through the UI."""
+
+    company_id: UUID
+    title: str
+    description: Optional[str] = None
+    salary_range: Optional[str] = None
+    salary_min: Optional[int] = None
+    salary_max: Optional[int] = None
+    salary_currency: Optional[str] = "HKD"
+    location: Optional[str] = None
+    employment_type: Optional[str] = None
+    posted_date: Optional[datetime] = None
+    experience_min_years: Optional[int] = None
+    experience_max_years: Optional[int] = None
+
+
 class JobTaxonomySchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

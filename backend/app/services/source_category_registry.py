@@ -21,8 +21,9 @@ from app.scraper.ctgoodjobs.category_registry import (
     parse_category_registry,
 )
 from app.scraper.ctgoodjobs.list_scraper import fetch_category_page_html
+from app.scraper.offertoday.category_registry import get_all_offertoday_categories
 
-SourceSite = Literal["jobsdb", "ctgoodjobs"]
+SourceSite = Literal["jobsdb", "ctgoodjobs", "offertoday"]
 
 
 def _normalize_source_site(value: str | None) -> str:
@@ -61,6 +62,7 @@ class SourceCategoryRegistry:
         self._jobsdb_categories: list[dict[str, Any]] | None = None
         self._ctgoodjobs_cache = _TtlCache(ttl_s=ctgoodjobs_ttl_s)
         self._ctgoodjobs_last_value: list[dict[str, Any]] | None = None
+        self._offertoday_categories: list[dict[str, Any]] | None = None
 
     def list_categories(self, *, source_site: str | None = None) -> list[dict[str, Any]]:
         normalized = _normalize_source_site(source_site)
@@ -78,6 +80,13 @@ class SourceCategoryRegistry:
                 for cat in get_all_categories()
             ]
             self._jobsdb_categories = payload
+            return payload
+
+        if normalized == "offertoday":
+            if isinstance(self._offertoday_categories, list):
+                return self._offertoday_categories
+            payload = get_all_offertoday_categories()
+            self._offertoday_categories = payload
             return payload
 
         if normalized == "ctgoodjobs":

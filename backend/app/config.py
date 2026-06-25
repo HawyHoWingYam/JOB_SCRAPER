@@ -121,6 +121,13 @@ class Settings(BaseSettings):
     uvicorn_reload_force_polling: bool = False
     sqlalchemy_echo: bool = False
     log_level: str = "INFO"
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
+    cors_origins: str = (
+        "http://localhost:3000,"
+        "http://127.0.0.1:3000,"
+        "http://localhost:5173,"
+        "http://127.0.0.1:5173,"
+        "http://localhost:5174,"
+        "http://127.0.0.1:5174"
+    )
 
 settings = Settings()

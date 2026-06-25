@@ -2,6 +2,7 @@ import re
 import csv
 import html
 import json
+import uuid as uuid_lib
 from datetime import date
 from io import StringIO
 from uuid import UUID
@@ -13,13 +14,15 @@ from pydantic import BaseModel, ConfigDict
 from app.database import get_db
 from app.api.job_search_parser import parse_search_expression, SearchExpressionError
 from app.api.job_search_query import apply_parsed_clauses
+from app.api.ai import _publish_run_request, _wait_for_terminal_run, _load_job_snapshot
 from app.config import settings
-from app.models import Job, Company
-from app.models.skill import Skill
+from app.models import Job, Company, Skill
 from app.models.job_skill import JobSkill
 from app.models.job_skill_mention import JobSkillMention
 from app.models import SkillTechnology, SkillCategory, JobSubcategory, JobCategory, JobDomain
-from app.schemas import JobSchema, JobCreateSchema, JobDetailSchema, JobTaxonomySchema
+from app.schemas import JobSchema, JobCreateSchema, ManualJobCreateSchema, JobDetailSchema, JobTaxonomySchema
+from app.services.enrichment_run_service import EnrichmentRunService
+from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
 from app.schemas.job_search import (
     JobSearchRequestSchema,
     JobSearchFiltersSchema,
@@ -935,3 +938,52 @@ async def create_job(job: JobCreateSchema, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_job)
     return db_job
+
+
+@router.post("/manual", response_model=JobDetailSchema)
+async def create_manual_job(
+    job_data: ManualJobCreateSchema,
+    db: Session = Depends(get_db),
+):
+    """Create a manually entered job and trigger AI enrichment."""
+    # Generate a unique job_id for manual jobs
+    manual_job_id = f"manual:{uuid_lib.uuid4()}"
+
+    # Build the job object
+    db_job = Job(
+        job_id=manual_job_id,
+        source_site="manual",
+        source_job_id=manual_job_id,
+        company_id=job_data.company_id,
+        title=job_data.title,
+        description=job_data.description,
+        salary_range=job_data.salary_range,
+        salary_min=job_data.salary_min,
+        salary_max=job_data.salary_max,
+        salary_currency=job_data.salary_currency or "HKD",
+        location=job_data.location,
+        employment_type=job_data.employment_type,
+        posted_date=job_data.posted_date,
+        experience_min_years=job_data.experience_min_years,
+        experience_max_years=job_data.experience_max_years,
+    )
+    db.add(db_job)
+    db.commit()
+    db.refresh(db_job)
+
+    # Trigger AI enrichment through the worker pipeline
+    try:
+        ensure_profile_runtime_ready("jobs")
+    except ProfileRuntimeNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    service = EnrichmentRunService(db)
+    run = service.create_manual_single_job_run(str(db_job.id))
+    _publish_run_request(db, service=service, run_id=run.id)
+
+    # Wait for enrichment to complete
+    terminal_run = await _wait_for_terminal_run(run.id)
+
+    # Return enriched job snapshot with company + skills
+    snapshot = _load_job_snapshot(db_job.id)
+    return snapshot

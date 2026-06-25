@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.crawl_phases import resolve_crawl_phase, resolve_detail_statuses
-from app.crawl_modes import resolve_crawl_mode
+from app.crawl_modes import normalize_source_site, resolve_crawl_mode
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.topics import STREAM_CRAWL_COMMANDS, STREAM_CRAWL_COMMANDS_HEADED
 from app.models.crawl_job import CrawlJob
@@ -164,7 +164,7 @@ class CrawlJobDispatchService:
         payload = dict(request_payload)
         payload["crawl_phase"] = resolve_crawl_phase(payload.get("crawl_phase"))
         payload["crawl_mode"] = resolve_crawl_mode(source_site, payload.get("crawl_mode"))
-        ensure_headed_crawl_worker_available(crawl_mode=payload.get("crawl_mode"))
+        ensure_headed_crawl_worker_available(crawl_mode=payload.get("crawl_mode"), source_site=source_site)
         if schedule_id is not None:
             payload.setdefault("schedule_id", str(schedule_id))
 
@@ -317,7 +317,7 @@ class CrawlJobDispatchService:
             if source_listing_crawl_job_id and not request_payload.get("source_listing_crawl_job_id"):
                 request_payload["source_listing_crawl_job_id"] = source_listing_crawl_job_id
             request_payload["detail_statuses"] = ["manual_action_required", "pending"]
-        ensure_headed_crawl_worker_available(crawl_mode=request_payload.get("crawl_mode"))
+        ensure_headed_crawl_worker_available(crawl_mode=request_payload.get("crawl_mode"), source_site=source_site)
 
         crawl_job.status = "dispatching"
         crawl_job.completed_at = None
@@ -387,11 +387,14 @@ class CrawlJobDispatchService:
         }
 
     def _resolve_command_topic(self, *, source_site: str, crawl_mode: str | None) -> str:
-        return (
-            STREAM_CRAWL_COMMANDS_HEADED
-            if resolve_crawl_mode(source_site, crawl_mode) == "headed"
-            else STREAM_CRAWL_COMMANDS
-        )
+        effective_mode = resolve_crawl_mode(source_site, crawl_mode)
+        if effective_mode == "headed":
+            # OfferToday runs headed mode inside the same Docker container —
+            # no separate host-side worker needed.
+            if normalize_source_site(source_site) == "offertoday":
+                return STREAM_CRAWL_COMMANDS
+            return STREAM_CRAWL_COMMANDS_HEADED
+        return STREAM_CRAWL_COMMANDS
 
     def _recover_previous_resume_context(self, db: Session, *, crawl_job_id) -> dict[str, Any]:
         for event in reversed(

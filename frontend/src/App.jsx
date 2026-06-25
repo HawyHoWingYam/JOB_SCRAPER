@@ -8,7 +8,8 @@ const AIEnrichmentPage = lazy(() => import('./components/ai/AIEnrichmentPage'));
 const CompaniesPage = lazy(() => import('./components/companies/CompaniesPage'));
 const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage'));
 const ScheduleManager = lazy(() => import('./components/scraper/ScheduleManager'));
-const VALID_VIEWS = new Set(['dashboard', 'jobs', 'companies', 'ai', 'settings', 'scheduler']);
+const AddJobPage = lazy(() => import('./components/jobs/AddJobPage'));
+const VALID_VIEWS = new Set(['dashboard', 'jobs', 'add-job', 'companies', 'ai', 'settings', 'scheduler']);
 
 function resolveInitialView() {
   if (typeof window === 'undefined') {
@@ -59,6 +60,7 @@ function App() {
           <Suspense fallback={<div className="app-view-loading">Loading view...</div>}>
             {activeView === 'dashboard' && <Dashboard onNavigateToAI={navigateToAI} />}
             {activeView === 'jobs' && <JobBrowser />}
+            {activeView === 'add-job' && <AddJobPage />}
             {activeView === 'companies' && <CompaniesPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
             {activeView === 'settings' && <AISettingsPage />}

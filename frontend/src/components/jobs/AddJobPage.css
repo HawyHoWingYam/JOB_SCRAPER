@@ -1,0 +1,496 @@
+.add-job-page {
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ── Hero ── */
+.add-job-hero {
+  padding: var(--space-6);
+}
+
+.add-job-hero-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.add-job-eyebrow {
+  color: var(--color-primary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.add-job-hero h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: 800;
+}
+
+.add-job-subtitle {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+/* ── Result banner ── */
+.add-job-result {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.add-job-result.success {
+  border-color: var(--color-success-glow);
+  color: var(--color-success);
+}
+
+.add-job-result.error {
+  border-color: var(--color-error-glow);
+  color: var(--color-error);
+}
+
+.add-job-reset-button {
+  margin-left: auto;
+  min-height: 32px;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+}
+
+/* ── Job Summary ── */
+.add-job-summary {
+  padding: var(--space-6);
+}
+
+.add-job-summary h3 {
+  margin: 0 0 var(--space-4) 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+}
+
+.add-job-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+
+.add-job-summary-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.add-job-summary-full {
+  grid-column: 1 / -1;
+}
+
+.add-job-summary-label {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.add-job-summary-value {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.add-job-summary-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.add-job-skill-tag {
+  display: inline-block;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+/* ── Form ── */
+.add-job-form {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.add-job-form-section h3 {
+  margin: 0 0 var(--space-4) 0;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.add-job-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.add-job-label {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.add-job-required {
+  color: var(--color-error);
+}
+
+.add-job-input,
+.add-job-select,
+.add-job-textarea {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #111317;
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  transition: border-color 0.2s;
+}
+
+.add-job-input:focus,
+.add-job-select:focus,
+.add-job-textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+
+.add-job-input:disabled,
+.add-job-select:disabled,
+.add-job-textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.add-job-textarea {
+  padding: var(--space-3);
+  resize: vertical;
+  min-height: 120px;
+  line-height: 1.5;
+}
+
+.add-job-select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a7afbc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 36px;
+}
+
+/* ── Row layout ── */
+.add-job-row {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+
+.add-job-field-sm {
+  flex: 1;
+}
+
+.add-job-field-md {
+  flex: 1.5;
+}
+
+.add-job-field-lg {
+  flex: 2;
+}
+
+.add-job-field-xs {
+  flex: 0 0 100px;
+}
+
+/* ── Company autocomplete ── */
+.add-job-company-search {
+  position: relative;
+}
+
+.add-job-company-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.add-job-company-search-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.add-job-company-input {
+  padding-left: 36px;
+  padding-right: 36px;
+}
+
+.add-job-company-clear {
+  position: absolute;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.add-job-company-clear:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.add-job-spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.add-job-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: var(--space-2);
+  list-style: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.add-job-suggestion-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.add-job-suggestion-item:hover,
+.add-job-suggestion-item[aria-selected="true"] {
+  background: var(--color-bg-glass-hover);
+}
+
+.add-job-suggestion-name {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.add-job-suggestion-industry {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.add-job-selected-company {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-primary-glow);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary-light);
+}
+
+.add-job-selected-company-name {
+  color: var(--color-primary);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.add-job-selected-company-industry {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+/* ── Add company option in suggestions ── */
+.add-job-add-company-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--color-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  transition: background 0.15s;
+}
+
+.add-job-add-company-option:hover {
+  background: var(--color-bg-glass-hover);
+}
+
+/* ── Add company inline form ── */
+.add-job-add-company-form {
+  padding: var(--space-4);
+  margin-top: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+}
+
+.add-job-add-company-title {
+  margin: 0 0 var(--space-3) 0;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.add-job-add-company-error {
+  color: var(--color-error);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  margin: var(--space-2) 0;
+}
+
+.add-job-add-company-actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.add-job-add-company-submit {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--color-primary-glow);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.add-job-add-company-submit:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  background: var(--color-primary-glow);
+  color: var(--color-primary-hover);
+}
+
+.add-job-add-company-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.add-job-add-company-cancel {
+  min-height: 36px;
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.add-job-add-company-cancel:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+  color: var(--color-text-primary);
+}
+
+.add-job-add-company-cancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Submit button ── */
+.add-job-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.add-job-submit-button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-6);
+  border: 1px solid var(--color-primary-glow);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.add-job-submit-button:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  background: var(--color-primary-glow);
+  color: var(--color-primary-hover);
+}
+
+.add-job-submit-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Responsive ── */
+@media (max-width: 640px) {
+  .add-job-page {
+    padding: 0 var(--space-4);
+  }
+
+  .add-job-row {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .add-job-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import re
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from app.models.company import Company
@@ -101,7 +102,8 @@ class JobRecommendationService:
         source_vector = list(source_embedding.embedding)
 
         ranked: list[tuple[float, float, float, Job, Company | None]] = []
-        for job, company, embedding_row in self._load_candidate_rows(job_id):
+        top_n = max(limit * 10, 50)
+        for job, company, embedding_row in self._load_top_candidates(job_id, source_vector, top_n):
             candidate_skills = {
                 skill.strip().lower()
                 for skill in getattr(job, "skills", []) or []
@@ -138,8 +140,19 @@ class JobRecommendationService:
             reverse=True,
         )
 
+        # Deduplicate by title (case-insensitive), keeping the highest-scored entry
+        seen_titles: set[str] = set()
+        deduped: list[tuple[float, float, float, Job, Company | None]] = []
+        for entry in ranked:
+            title_normalized = (getattr(entry[3], "title", "") or "").strip().lower()
+            if title_normalized and title_normalized in seen_titles:
+                continue
+            if title_normalized:
+                seen_titles.add(title_normalized)
+            deduped.append(entry)
+
         recommendations = []
-        for combined_score, semantic_score, freshness_score, job, company in ranked[:limit]:
+        for combined_score, semantic_score, freshness_score, job, company in deduped[:limit]:
             candidate_skills = {
                 skill.strip().lower()
                 for skill in getattr(job, "skills", []) or []
@@ -164,6 +177,42 @@ class JobRecommendationService:
             )
 
         return recommendations
+
+    def _load_job(self, job_id: UUID) -> Job | None:
+        return (
+            self.db.query(Job)
+            .options(
+                joinedload(Job.company),
+                joinedload(Job.job_skill_mentions).joinedload(JobSkillMention.skill),
+                joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
+            )
+            .filter(Job.id == job_id, Job.is_deleted.is_(False))
+            .one_or_none()
+        )
+
+    def _load_embedding(self, job_id: UUID) -> JobEmbedding | None:
+        return (
+            self.db.query(JobEmbedding)
+            .filter(JobEmbedding.job_id == job_id)
+            .one_or_none()
+        )
+
+    def _load_top_candidates(self, excluded_job_id: UUID, source_vector: list[float], top_n: int):
+        """Return top-N candidates ordered by cosine similarity using pgvector."""
+        stmt = (
+            select(Job, Company, JobEmbedding)
+            .join(Company, Company.id == Job.company_id)
+            .join(JobEmbedding, JobEmbedding.job_id == Job.id)
+            .options(
+                joinedload(Job.company),
+                joinedload(Job.job_skill_mentions).joinedload(JobSkillMention.skill),
+                joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
+            )
+            .filter(Job.id != excluded_job_id, Job.is_deleted.is_(False))
+            .order_by(JobEmbedding.embedding.cosine_distance(source_vector))
+            .limit(top_n)
+        )
+        return self.db.execute(stmt).unique().all()
 
     def _load_job(self, job_id: UUID) -> Job | None:
         return (

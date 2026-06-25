@@ -202,6 +202,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
 
   useEffect(() => {
     let isActive = true;
+
     setRelatedJobs([]);
     setRelatedJobsError('');
 
@@ -222,7 +223,11 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
 
     setRelatedJobsLoading(true);
 
-    fetch(`${apiUrl}/api/v1/jobs/${jobId}/similar`)
+    const controller = new AbortController();
+    const TIMEOUT_MS = 10000;
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    fetch(`${apiUrl}/api/v1/jobs/${jobId}/similar`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) {
           throw new Error('Related jobs are unavailable right now');
@@ -240,12 +245,21 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
         if (!isActive) {
           return;
         }
-        setRelatedJobsError(err.message);
+        if (err.name === 'AbortError') {
+          setRelatedJobsError('Related jobs timed out. Try again later.');
+        } else {
+          setRelatedJobsError(err.message);
+        }
         setRelatedJobsLoading(false);
+      })
+      .finally(() => {
+        clearTimeout(timeoutId);
       });
 
     return () => {
       isActive = false;
+      controller.abort();
+      clearTimeout(timeoutId);
     };
   }, [jobId, apiUrl, capabilitiesLoading, recommendationsAvailable]);
 

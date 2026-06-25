@@ -46,7 +46,7 @@ class SchedulerService:
     """Service for managing scheduled scraping tasks."""
 
     _instance: Optional["SchedulerService"] = None
-    SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs"}
+    SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs", "offertoday"}
 
     def __init__(self, *, owner: str = "scheduler-worker", worker_name: str | None = None):
         self.scheduler: Optional[AsyncIOScheduler] = None

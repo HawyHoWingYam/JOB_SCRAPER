@@ -11,6 +11,10 @@ export function formatScraperSourceLabel(sourceSite) {
         return 'JobsDB';
     }
 
+    if (sourceSite === 'offertoday') {
+        return 'OfferToday';
+    }
+
     return sourceSite || 'Unknown source';
 }
 

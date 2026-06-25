@@ -7,10 +7,12 @@ SUPPORTED_CRAWL_MODES = {"headless", "headed"}
 DEFAULT_CRAWL_MODE_BY_SOURCE = {
     "jobsdb": "headed",
     "ctgoodjobs": "headed",
+    "offertoday": "headless",
 }
 SUPPORTED_CRAWL_MODES_BY_SOURCE = {
     "jobsdb": ("headless", "headed"),
     "ctgoodjobs": ("headed",),
+    "offertoday": ("headless", "headed"),
 }
 LEGACY_CRAWL_MODE_UPGRADES = {
     ("ctgoodjobs", "headless"): "headed",

@@ -1,13 +1,18 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
 from uuid import UUID
 
 
 class CompanyCreateSchema(BaseModel):
-    """Schema for creating a new company."""
+    """Schema for creating a new company.
 
-    company_id: str
+    When creating via the UI, ``company_id`` can be omitted; the server
+    auto-generates one (``manual:<uuid>``).  The ``name`` field is always
+    required.
+    """
+
+    company_id: Optional[str] = None
     name: str
     industry: Optional[str] = None
     location: Optional[str] = None

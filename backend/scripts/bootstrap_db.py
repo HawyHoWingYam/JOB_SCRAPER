@@ -12,9 +12,15 @@ import app.models  # noqa: F401  # Ensure all ORM models are registered on Base.
 
 
 def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
-    """Ensure required extensions exist before creating ORM tables."""
+    """Ensure required extensions exist, then create tables, then run migrations."""
     with db_engine.begin() as connection:
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+
+    # Create all ORM tables first (fresh DB needs the base tables)
+    metadata.create_all(bind=db_engine)
+
+    # Then run migration ALTER TABLE / UPDATE statements for existing DBs
+    with db_engine.begin() as connection:
         connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_mode VARCHAR(32)"))
         connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_phase VARCHAR(32)"))
         connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS detail_limit INTEGER"))
@@ -91,8 +97,6 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
                 "AND crawl_jobs.request_payload IS NOT NULL"
             )
         )
-
-    metadata.create_all(bind=db_engine)
 
 
 def main() -> None:

@@ -84,6 +84,38 @@ def _venv_uses_system_site_packages(venv_dir: Path) -> bool:
     return "include-system-site-packages = true" in content
 
 
+def _read_pyvenv_cfg(venv_dir: Path) -> dict[str, str]:
+    config_path = venv_dir / "pyvenv.cfg"
+    if not config_path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+        if "=" not in raw_line:
+            continue
+        key, value = raw_line.split("=", 1)
+        values[key.strip().lower()] = value.strip()
+    return values
+
+
+def _venv_base_interpreter_exists(venv_dir: Path) -> bool:
+    config = _read_pyvenv_cfg(venv_dir)
+
+    executable = config.get("executable")
+    if executable:
+        return Path(executable).exists()
+
+    home = config.get("home")
+    if not home:
+        return False
+
+    home_path = Path(home)
+    return any(
+        (home_path / candidate).exists()
+        for candidate in ("python.exe", "python3", "python")
+    )
+
+
 def ensure_headed_host_runtime(
     paths: HostRuntimePaths,
     *,
@@ -95,7 +127,10 @@ def ensure_headed_host_runtime(
 
     paths.profile_dir.mkdir(parents=True, exist_ok=True)
 
-    if paths.venv_dir.exists() and not _venv_uses_system_site_packages(paths.venv_dir):
+    if paths.venv_dir.exists() and (
+        not _venv_uses_system_site_packages(paths.venv_dir)
+        or not _venv_base_interpreter_exists(paths.venv_dir)
+    ):
         shutil.rmtree(paths.venv_dir)
 
     if not paths.venv_python.exists():

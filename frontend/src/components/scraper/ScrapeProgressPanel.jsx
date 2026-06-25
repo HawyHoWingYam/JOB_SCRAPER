@@ -652,7 +652,7 @@ function buildDetailRunMetricLines({
 }
 
 function buildQueuedHeadedWorkerMessage(headedWorkerStatus) {
-    const startCommand = headedWorkerStatus?.start_command || 'backend\\scripts\\run_headed_crawl_worker_host.cmd';
+    const startCommand = headedWorkerStatus?.start_command || 'python backend\\scripts\\prepare_headed_crawl_worker_host.py';
     return `Headed worker is offline. Start ${startCommand}.`;
 }
 

@@ -22,6 +22,7 @@ import uuid
 
 JOBSDB_BASE_URL = "https://hk.jobsdb.com/job"
 CTGOODJOBS_BASE_URL = "https://jobs.ctgoodjobs.hk/job"
+OFFERTODAY_BASE_URL = "https://www.offertoday.com/hk/job"
 
 
 def _default_source_site(context) -> str:
@@ -313,6 +314,8 @@ class Job(Base):
                 return value
 
         source_site = (self.source_site or "jobsdb").strip().lower()
+        if source_site == "offertoday":
+            return f"{OFFERTODAY_BASE_URL}/{self._strip_source_prefix(job_id, source_site)}"
         if source_site == "ctgoodjobs":
             raw_job_id = self._strip_source_prefix(job_id, source_site)
             return f"{CTGOODJOBS_BASE_URL}/{raw_job_id}"

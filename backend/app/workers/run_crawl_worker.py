@@ -83,10 +83,12 @@ class ResumeRuntimeBaseline:
 def _default_runner_registry() -> dict[str, Any]:
     from crawler.job_crawler.spiders.ctgoodjobs_spider import CTGoodJobsSpider
     from crawler.job_crawler.spiders.jobsdb_spider import JobsDBSpider
+    from crawler.job_crawler.spiders.offertoday_spider import OfferTodaySpider
 
     return {
         "jobsdb": JobsDBSpider(),
         "ctgoodjobs": CTGoodJobsSpider(),
+        "offertoday": OfferTodaySpider(),
     }
 
 

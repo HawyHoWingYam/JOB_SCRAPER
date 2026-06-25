@@ -94,6 +94,7 @@ def _host_manual_action_helper_capability() -> dict[str, Any]:
 def _source_capabilities() -> dict[str, dict[str, Any]]:
     jobsdb_modes = get_supported_crawl_modes("jobsdb")
     ctgoodjobs_modes = get_supported_crawl_modes("ctgoodjobs")
+    offertoday_modes = get_supported_crawl_modes("offertoday")
     return {
         "jobsdb": {
             "available": True,
@@ -117,6 +118,16 @@ def _source_capabilities() -> dict[str, dict[str, Any]]:
             "proxy_modes_supported": list(ctgoodjobs_modes),
             "proxy_enabled": bool(settings.ctgoodjobs_proxy_enabled),
             "category_id_type": "string",
+        },
+        "offertoday": {
+            "available": True,
+            "listing_supported": True,
+            "detail_supported": True,
+            "headless_supported": "headless" in offertoday_modes,
+            "headed_supported": "headed" in offertoday_modes,
+            "manual_action_supported": True,
+            "default_crawl_mode": DEFAULT_CRAWL_MODE_BY_SOURCE["offertoday"],
+            "category_id_type": "integer",
         },
     }
 

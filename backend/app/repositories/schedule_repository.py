@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class ScheduleRepository:
     """Repository for Schedule database operations."""
 
-    SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs"}
+    SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs", "offertoday"}
 
     def _normalize_source_site_and_activation(self, schedule_data: dict) -> dict:
         """Force unsupported source sites inactive during the transitional phase."""

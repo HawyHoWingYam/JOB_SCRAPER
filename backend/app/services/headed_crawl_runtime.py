@@ -10,7 +10,7 @@ from app.utils.time import utc_now
 
 HEADED_CRAWL_GROUP_NAME = "crawl-headed-workers"
 HEADED_CRAWL_DEFAULT_CONSUMER = "crawl-headed-worker"
-HEADED_CRAWL_START_COMMAND = r"backend\scripts\run_headed_crawl_worker_host.cmd"
+HEADED_CRAWL_START_COMMAND = r"python backend\scripts\prepare_headed_crawl_worker_host.py"
 
 
 class HeadedCrawlWorkerUnavailableError(RuntimeError):
@@ -129,8 +129,12 @@ def get_headed_crawl_worker_status() -> dict[str, object]:
     }
 
 
-def ensure_headed_crawl_worker_available(*, crawl_mode: str | None) -> None:
+def ensure_headed_crawl_worker_available(*, crawl_mode: str | None, source_site: str | None = None) -> None:
     if str(crawl_mode or "").strip().lower() != "headed":
+        return
+
+    # OfferToday runs headed mode inside the same Docker container — no host-side worker needed
+    if str(source_site or "").strip().lower() == "offertoday":
         return
 
     status = get_headed_crawl_worker_status()

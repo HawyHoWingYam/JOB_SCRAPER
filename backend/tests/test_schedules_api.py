@@ -288,7 +288,7 @@ def test_run_schedule_now_returns_service_unavailable_when_headed_worker_is_offl
     class FakeDispatchService:
         def dispatch_schedule_crawl_job(self, *args, **kwargs):
             raise HeadedWorkerUnavailableError(
-                "Headed crawl worker is unavailable. Start backend\\scripts\\run_headed_crawl_worker_host.cmd and retry."
+                "Headed crawl worker is unavailable. Start python backend\\scripts\\prepare_headed_crawl_worker_host.py and retry."
             )
 
     async def fake_validate_effective_category_ids(source_site, category_ids):
@@ -319,5 +319,5 @@ def test_run_schedule_now_returns_service_unavailable_when_headed_worker_is_offl
 
     assert response.status_code == 503
     assert response.json()["detail"] == (
-        "Headed crawl worker is unavailable. Start backend\\scripts\\run_headed_crawl_worker_host.cmd and retry."
+        "Headed crawl worker is unavailable. Start python backend\\scripts\\prepare_headed_crawl_worker_host.py and retry."
     )

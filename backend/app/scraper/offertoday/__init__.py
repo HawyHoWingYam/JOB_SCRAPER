@@ -1,0 +1,1 @@
+"""OfferToday scraper package."""

@@ -87,3 +87,4 @@ backend/.host_worker_venv/
 .claude/
 *.bak
 *.tmp
+.reasonix/*

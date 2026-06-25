@@ -34,7 +34,7 @@ from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 repository = ScheduleRepository()
 crawl_job_dispatch_service = CrawlJobDispatchService()
-SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs"}
+SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs", "offertoday"}
 
 
 async def _validate_ctgoodjobs_category_ids_exist(category_ids: list[str] | None) -> None:
@@ -71,7 +71,9 @@ async def _validate_effective_category_ids(source_site: str | None, category_ids
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if normalize_source_site(source_site) == "ctgoodjobs":
+    if normalize_source_site(source_site) == "offertoday":
+        pass
+    elif normalize_source_site(source_site) == "ctgoodjobs":
         await _validate_ctgoodjobs_category_ids_exist(category_ids)
 
 

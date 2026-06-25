@@ -15,6 +15,17 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   # ============================================
+  # Development Overrides for Workers
+  # ============================================
+  crawl-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+
+  # ============================================
   # Development Overrides for Frontend
   # ============================================
   frontend-ui:
@@ -25,5 +36,8 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      VITE_API_URL: http://backend-api:8000
+      # Browser-side absolute API URLs must stay host-reachable.
+      VITE_API_URL: http://localhost:8000
+      # Vite's server-side proxy runs inside the container, so it should use the service name.
+      VITE_PROXY_TARGET: http://backend-api:8000
     command: npm run dev -- --host 0.0.0.0

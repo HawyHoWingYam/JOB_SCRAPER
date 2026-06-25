@@ -35,10 +35,14 @@ def validate_crawl_request(
     resolved_mode = resolve_crawl_mode(normalized_source, crawl_mode)
     normalized_categories = list(category_ids) if category_ids else None
 
+    is_offertoday = normalized_source == "offertoday"
+
     if resolved_phase == "listing":
         if require_listing_categories and not normalized_categories:
-            raise ValueError("listing runs require category_ids")
-        validate_category_ids_for_source_site(normalized_source, normalized_categories)
+            if not is_offertoday:
+                raise ValueError("listing runs require category_ids")
+        if not is_offertoday:
+            validate_category_ids_for_source_site(normalized_source, normalized_categories)
     else:
         if source_listing_crawl_job_id is None and not normalized_categories:
             raise ValueError("detail runs require source_listing_crawl_job_id or category_ids")
@@ -63,6 +67,11 @@ def validate_category_ids_for_source_site(
     category_ids: Sequence[CategoryId] | None,
 ) -> None:
     normalized_source_site = normalize_source_site(source_site)
+    if normalized_source_site == "offertoday":
+        if category_ids:
+            if any(type(category_id) is not int for category_id in category_ids):
+                raise ValueError("OfferToday category_ids must be integers (job function codes)")
+        return
     if normalized_source_site == "ctgoodjobs" and not category_ids:
         raise ValueError("CTGoodJobs category_ids must be provided")
     if not category_ids:

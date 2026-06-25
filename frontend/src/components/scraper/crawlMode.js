@@ -1,6 +1,7 @@
 const DEFAULT_CRAWL_MODE_BY_SOURCE = {
   jobsdb: 'headed',
   ctgoodjobs: 'headed',
+  offertoday: 'headless',
 };
 
 export const CRAWL_MODE_OPTIONS = [
@@ -10,6 +11,7 @@ export const CRAWL_MODE_OPTIONS = [
 const CRAWL_MODE_OPTIONS_BY_SOURCE = {
   jobsdb: CRAWL_MODE_OPTIONS,
   ctgoodjobs: CRAWL_MODE_OPTIONS.filter((option) => option.value === 'headed'),
+  offertoday: CRAWL_MODE_OPTIONS,
 };
 
 export function resolveDefaultCrawlMode(sourceSite) {

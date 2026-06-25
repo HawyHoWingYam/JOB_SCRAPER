@@ -1,11 +1,12 @@
 import React from 'react';
-import { LayoutDashboard, Briefcase, CalendarClock, Settings, DatabaseZap, BrainCircuit, Building2 } from 'lucide-react';
+import { LayoutDashboard, Briefcase, PlusCircle, CalendarClock, Settings, DatabaseZap, BrainCircuit, Building2 } from 'lucide-react';
 import './Sidebar.css';
 
 const Sidebar = ({ activeView, setActiveView }) => {
     const navItems = [
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { id: 'jobs', label: 'Job Browser', icon: Briefcase },
+        { id: 'add-job', label: 'Add Job', icon: PlusCircle },
         { id: 'companies', label: 'Companies', icon: Building2 },
         { id: 'ai', label: 'AI Enrichment', icon: BrainCircuit },
         { id: 'scheduler', label: 'Scheduler', icon: CalendarClock },

@@ -13,6 +13,7 @@ const CRON_PRESETS = [
 ];
 
 function formatSourceLabel(sourceSite) {
+    if (sourceSite === 'offertoday') return 'OfferToday';
     return sourceSite === 'ctgoodjobs' ? 'CTgoodjobs' : 'JobsDB';
 }
 
@@ -202,22 +203,24 @@ function ScheduleForm({
                 />
             </div>
 
-            <div className="cyber-form-group schedule-form-wide">
-                <label>Target Sectors</label>
-                <div className="category-checkbox-grid">
-                    {categories.map(cat => (
-                        <label key={cat.id} className="cyber-checkbox-label">
-                            <input
-                                type="checkbox"
-                                checked={formData.categoryIds.includes(cat.id)}
-                                onChange={() => handleCategoryChange(cat.id)}
-                                disabled={isLoading}
-                            />
-                            <span className="checkbox-text">{cat.name}</span>
-                        </label>
-                    ))}
+            {categories.length > 0 && (
+                <div className="cyber-form-group schedule-form-wide">
+                    <label>Target Sectors</label>
+                    <div className="category-checkbox-grid">
+                        {categories.map(cat => (
+                            <label key={cat.id} className="cyber-checkbox-label">
+                                <input
+                                    type="checkbox"
+                                    checked={formData.categoryIds.includes(cat.id)}
+                                    onChange={() => handleCategoryChange(cat.id)}
+                                    disabled={isLoading}
+                                />
+                                <span className="checkbox-text">{cat.name}</span>
+                            </label>
+                        ))}
+                    </div>
                 </div>
-            </div>
+            )}
 
             <div className="form-actions mt-6">
                 <button type="submit" disabled={isLoading} className="cyber-btn primary-glow">

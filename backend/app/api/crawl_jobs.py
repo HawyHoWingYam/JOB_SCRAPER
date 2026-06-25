@@ -33,7 +33,7 @@ crawl_job_repository = CrawlJobRepository()
 crawl_job_listing_repository = CrawlJobListingRepository()
 schedule_repository = ScheduleRepository()
 dispatch_service = CrawlJobDispatchService()
-SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs"}
+SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs", "offertoday"}
 
 
 class ResumeCrawlJobRequest(BaseModel):
@@ -75,7 +75,9 @@ async def _validate_effective_category_ids(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    if normalize_source_site(source_site) == "ctgoodjobs":
+    if normalize_source_site(source_site) == "offertoday":
+        pass
+    elif normalize_source_site(source_site) == "ctgoodjobs":
         await _validate_ctgoodjobs_category_ids_exist(category_ids)
 
 

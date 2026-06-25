@@ -112,6 +112,56 @@ def build_jobsdb_listing_canonical_job(
     )
 
 
+def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrapedJob:
+    """Build a CanonicalScrapedJob from an OfferToday parsed job dict.
+
+    Supports both listing and detail response formats.
+    Takes the union of all fields and uses whichever is available.
+    """
+    from app.sources.offertoday.parsers import build_offertoday_job_url
+
+    encrypted_id = str(parsed_job.get("encrypted_job_id") or "").strip()
+
+    # Extract classification from job_functions (available in listing + detail)
+    job_functions = parsed_job.get("job_functions") or []
+    source_classification_id = None
+    source_classification_name = None
+    source_subclassification_id = None
+    source_subclassification_name = None
+    if job_functions and isinstance(job_functions, list) and len(job_functions) > 0:
+        jf = job_functions[0]
+        raw_code = str(jf.get("code") or "")
+        source_classification_id = f"offertoday:{raw_code}" if raw_code else None
+        source_classification_name = str(jf.get("name") or "")
+        children = jf.get("children") or []
+        if children and isinstance(children, list) and len(children) > 0:
+            child = children[0]
+            source_subclassification_id = str(child.get("code") or "")
+            source_subclassification_name = str(child.get("name") or "")
+
+    return CanonicalScrapedJob(
+        source_site="offertoday",
+        source_job_id=encrypted_id,
+        source_url=build_offertoday_job_url(encrypted_id),
+        title=parsed_job.get("title") or "",
+        description=(
+            parsed_job.get("description_html")
+            or parsed_job.get("description_text")
+            or parsed_job.get("abstract")
+        ),
+        company_name=parsed_job.get("company_name"),
+        location=parsed_job.get("location") or parsed_job.get("level3_location"),
+        salary_range=parsed_job.get("salary_range"),
+        employment_type=parsed_job.get("employment_type") or parsed_job.get("employ_type"),
+        source_classification_id=source_classification_id or None,
+        source_classification_name=source_classification_name or None,
+        source_subclassification_id=source_subclassification_id or None,
+        source_subclassification_name=source_subclassification_name or None,
+        posted_date=parsed_job.get("posted_desc") or parsed_job.get("posted_at"),
+        raw_data=dict(parsed_job),
+    )
+
+
 def build_ctgoodjobs_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrapedJob:
     raw_job_id = str(parsed_job.get("job_id") or "").strip()
     source_job_id = raw_job_id.removeprefix("ctgoodjobs:")

@@ -1,8 +1,6 @@
 """CTgoodjobs production scraper modules.
 
 This package exports production parsing/scraping entry points.
-Research-only orchestration remains in `research_probe.py` and must not be
-required by production imports.
 """
 
 from app.scraper.ctgoodjobs.category_registry import (

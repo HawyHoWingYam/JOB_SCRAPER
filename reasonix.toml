@@ -1,0 +1,203 @@
+# Reasonix configuration.
+# Resolution order: flag > ./reasonix.toml > ~/AppData/Roaming/reasonix/config.toml > built-in defaults.
+# Fields marked user/global only are not overridden by ./reasonix.toml.
+# Secrets come from the environment via api_key_env; never put keys here.
+
+config_version = 3   # schema marker for diagnostics; old versions may ignore it
+default_model = "krill-flash"
+language      = "zh"   # ui/model language; empty = auto-detect from $LANG / $REASONIX_LANG
+
+[network]
+proxy_mode = "auto"   # auto|env|custom|off; auto currently uses env proxy
+# proxy_url  = "socks5://127.0.0.1:7890"   # optional custom override
+# no_proxy   = "localhost,127.0.0.1,.local"   # honored for proxy_mode = "custom"
+
+[network.proxy]
+type = "socks5"   # http|https|socks5|socks5h
+# server = "127.0.0.1"
+# port = 7890
+# username = ""
+# password = "${REASONIX_PROXY_PASSWORD}"   # optional; supports ${VAR} expansion
+
+[agent]
+system_prompt = """
+ECC skills auto-index — read this block fully, it tells you what ECC skills are available and when to use them:
+
+## ECC Skills Registry (271 playbooks)
+### Backend / API (for your FastAPI project)
+- `fastapi-patterns` — FastAPI best practices, Pydantic v2, DI, async, auth, testing
+- `python-patterns` — Pythonic idioms, PEP 8, type hints
+- `api-design` — REST API resource naming, pagination, errors, versioning
+- `backend-patterns` — General backend architecture
+- `database-migrations` — Alembic/ORM schema migrations, rollbacks, zero-downtime
+- `postgres-patterns` — PostgreSQL optimization, indexing, queries
+- `docker-patterns` — Docker Compose, multi-service, networking, security
+- `deployment-patterns` — CI/CD, deployment strategies
+
+### Frontend (React 19)
+- `react-patterns` — React 18/19 hooks, boundaries, data fetching, state
+- `react-testing` — React testing with Vitest, Testing Library
+- `react-performance` — React performance optimization
+- `frontend-patterns` — General frontend architecture
+- `frontend-design-direction` — Design system, UI patterns
+
+### Scraping / Data
+- `data-scraper-agent` — Build automated data collection agents (Playwright, scheduling, LLM enrichment)
+- `e2e-testing` — Playwright E2E tests
+
+### Testing / Quality
+- `test-driven-development` — RED-GREEN-REFACTOR TDD workflow
+- `python-testing` — pytest, fixtures, mocking
+- `systematic-debugging` — Root cause → fix workflow
+- `code-review` — Code review workflow
+- `verification-loop` — Checkpoint-based verification
+
+### Security
+- `security-review` — Security-focused code review
+- `python-security` — Python security best practices
+- `security-scan` — Scan config for security issues
+
+### AI / LLM (this project uses multi-provider)
+- `cost-aware-llm-pipeline` — Model routing by complexity
+- `ai-first-engineering` — Eval-first, model routing patterns
+- `prompt-optimizer` — Prompt optimization techniques
+
+### Workflow / Orchestration
+- `architecture-decision-records` — Capture architecture decisions as ADRs
+- `strategic-compact` — Know when to /compact
+- `error-handling` — Error handling patterns
+- `configure-ecc` — Interactive ECC installer
+- `project-flow-ops` — Project flow tracking
+- `codebase-onboarding` — Onboard to new codebase
+
+### How to use: When the user asks something matching any skill above, call `run_skill({ name: "<skill-name>", arguments: "<task>" })` or `read_skill({ name: "<skill-name>", arguments: "<task>" })` to load the playbook before answering. Do this WITHOUT being asked — proactively invoke the skill when you detect a match.
+
+### Image Analysis (Vision): When the user pastes an image screenshot/png/jpg, follow these steps:
+1. The main model (deepseek-v4-flash) is pure text — no visual capability.
+2. When you detect an image attachment path under `.reasonix/attachments/` (like `clipboard-YYYYMMDD-*.png`), or any image reference in the user's message:
+   - Run `bash` to execute the vision analysis script:
+     ```
+     python .reasonix/scripts/reasonix_image_vision.py <图片路径> "请详细描述这张图片的全部内容，包括所有可见的文字、UI元素、颜色、图标、布局等"
+     ```
+   - If a custom analysis question is specified, pass it as the second argument instead.
+3. The script uses curl to send the image to `qwen3.7-plus` (multi-modal model) via Krill API and returns a detailed description.
+4. Present the analysis result to the user. This avoids wasting the main model's context window on image processing."""
+# system_prompt_file = "prompts/system.md"   # overrides system_prompt when set
+temperature       = 0.0
+# reasoning_language = "zh"   # visible reasoning language: auto|zh|en
+# auto_plan_classifier = "deepseek-flash"   # optional; only used for borderline tasks
+soft_compact_ratio  = 0.5   # notice only; keeps cache-first prefix intact
+compact_ratio       = 0.8   # try compacting when prompt reaches this fraction
+compact_force_ratio = 0.9   # force compacting at this high-water mark
+# keep                = ["errors"]   # compaction keep policy: errors, user_marked
+# recent_keep         = 2   # minimum recent messages kept verbatim
+cold_resume_prune   = true   # elide stale tool results when reopening a session past the provider cache window
+# planner_model = "deepseek-pro"   # optional: enable two-model collaboration
+# subagent_model = "deepseek-pro"   # optional default for runAs=subagent skills
+# subagent_models = { review = "deepseek-pro", security_review = "deepseek-pro" }   # per-skill overrides
+# subagent_effort = "high"   # optional default effort for subagents
+# subagent_efforts = { review = "max", task = "high" }   # per-tool/skill effort overrides
+# output_style = "explanatory"   # explanatory | learning | concise | custom; empty = default
+
+[[providers]]
+name        = "krill-flash"
+kind        = "anthropic"
+base_url    = "https://api.cdn-krill-ai.com/coding"
+models      = ["deepseek-v4-flash", "deepseek-v4-pro", "qwen3.7-plus", "GLM-5.2", "kimi-k2.7-code", "minimax-m3"]
+default     = "deepseek-v4-flash"
+api_key_env = "KRILL_API_KEY"
+balance_url = "https://api.cdn-krill-ai.com/coding/v1/user/balance"   # optional; wallet-balance endpoint shown in the status bar
+context_window = 1000000   # tokens; compaction triggers near this limit
+price       = { cache_hit = 0.02, input = 1, output = 2, currency = "¥" }   # provider-wide fallback, per 1M tokens
+thinking    = "adaptive"
+effort      = "max"
+supported_efforts = ["low", "medium", "high", "max"]   # custom /effort levels exposed by this provider; overrides the built-in Kind/BaseURL default
+default_effort    = "max"   # used when /effort is auto or unset; must be one of supported_efforts
+
+[tools]
+enabled = []   # empty = all built-in tools
+bash_timeout_seconds = 120   # foreground safety cap; set 0 for no tool-local cap
+
+[tools.background_jobs]
+stalled_warning_seconds = 900   # warn once per background job after this many quiet seconds; 0 disables
+
+[lsp]
+enabled = true   # language server tools; servers launch lazily when used
+# [lsp.servers.go]
+# command = "gopls"
+# args = []
+# extensions = [".go"]
+
+[skills]
+paths = ["C:\\Work\\JOB_SCRAPER\\.reasonix\\skills"]   # ECC skills (271 playbooks)
+# excluded_paths = ["~/.agents/skills"]   # hide convention roots without deleting folders
+# max_depth = 3   # nested scan depth; set 1 for legacy root-only discovery
+# disabled_skills = ["review"]   # hide noisy or unwanted skills
+
+[permissions]
+# Per-call gating. mode = writer fallback when no rule matches: ask|allow|deny.
+# Readers always default to allow. Precedence: deny > ask > allow > fallback.
+# Rules are "Tool" or "Tool(specifier)"; e.g. Bash(go test:*), Edit(src/**).
+mode  = "ask"
+# deny = ["Bash(rm -rf*)", "Bash(git push*)"]   # hard-blocked in every mode
+# allow = ["Bash(go test:*)", "Bash(git status:*)"]   # never prompted
+# ask = ["Edit(src/**)"]   # force a prompt even if otherwise allowed
+
+[sandbox]
+# Confine tool blast radius. File-writers (write_file/edit_file/multi_edit/move_file)
+# may only write under workspace_root (empty = current dir) and allow_write extras.
+# bash = "enforce" (default) jails each command in an OS sandbox (macOS now;
+# graceful fallback elsewhere); "off" disables it. network allows egress.
+# workspace_root = ""            # default: current working directory
+# allow_write = ["/tmp"]          # extra dirs writers may also modify
+bash    = "enforce"
+network = true
+
+[statusline]
+# A custom status line: a command whose first stdout line replaces the built-in
+# data row. It receives {"model","contextUsed","contextWindow","cwd"} as JSON on stdin.
+# command = "my-statusline.sh"
+
+# External MCP servers. type: "stdio" (default, a subprocess) | "http" | "sse".
+# ${VAR} / ${VAR:-default} are expanded from the environment in command/args/env/url/headers.
+
+[[plugins]]
+name    = "serena"
+command = "python"
+args    = ["C:\\Work\\JOB_SCRAPER\\.reasonix\\scripts\\reasonix_mcp_launcher.py", "serena"]
+
+[[plugins]]
+name    = "postgres"
+command = "python"
+args    = ["C:\\Work\\JOB_SCRAPER\\.reasonix\\scripts\\reasonix_mcp_launcher.py", "postgres"]
+
+[[plugins]]
+name    = "semgrep"
+command = "python"
+args    = ["C:\\Work\\JOB_SCRAPER\\.reasonix\\scripts\\reasonix_mcp_launcher.py", "semgrep"]
+
+[[plugins]]
+name    = "chrome-devtools"
+command = "cmd"
+args    = ["/c", "npx", "-y", "chrome-devtools-mcp@latest"]
+
+[[plugins]]
+name    = "firecrawl"
+command = "cmd"
+args    = ["/c", "npx", "-y", "firecrawl-mcp"]
+env     = { FIRECRAWL_API_KEY = "fc-d203b9a163e74a56a2995559e8396fbd" }
+
+[[plugins]]
+name    = "playwright"
+command = "cmd"
+args    = ["/c", "npx", "-y", "@playwright/mcp@latest"]
+
+[[plugins]]
+name    = "redis"
+command = "python"
+args    = ["C:\\Work\\JOB_SCRAPER\\.reasonix\\scripts\\reasonix_mcp_launcher.py", "redis"]
+
+[[plugins]]
+name    = "sequential-thinking"
+command = "cmd"
+args    = ["/c", "npx", "-y", "@modelcontextprotocol/server-sequential-thinking"]

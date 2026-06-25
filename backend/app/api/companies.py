@@ -3,6 +3,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 from uuid import UUID
+import uuid
 from app.database import SessionLocal, get_db
 from app.models import Company
 from app.models.company_enrichment_run import CompanyEnrichmentRunItem
@@ -253,15 +254,20 @@ async def get_company(company_id: UUID, db: Session = Depends(get_db)):
 
 @router.post("", response_model=CompanySchema)
 async def create_company(company: CompanyCreateSchema, db: Session = Depends(get_db)):
-    """Create a new company."""
+    """Create a new company.
+
+    The company_id field is optional; when omitted the server
+    auto-generates one (manual:<uuid>).
+    """
+    company_id = company.company_id or f"manual:{uuid.uuid4()}"
     # Check if company already exists
     existing = db.query(Company).filter(
-        Company.company_id == company.company_id
+        Company.company_id == company_id
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Company already exists")
 
-    db_company = Company(**company.dict())
+    db_company = Company(company_id=company_id, **company.model_dump(exclude={"company_id"}))
     db.add(db_company)
     db.commit()
     db.refresh(db_company)

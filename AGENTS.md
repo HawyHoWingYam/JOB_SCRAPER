@@ -388,7 +388,31 @@ button:hover {
 | Border | `--color-border` |
 
 ---
+## Superpowers
 
+> Installed 2026-06-10 from [obra/superpowers](https://github.com/obra/superpowers) v5.1.0
+> Callable via `run_skill({ name: "<skill-name>" })` or `/<skill-name>`.
+
+| Skill | When to use |
+|-------|------------|
+| `using-superpowers` | Always — establishes skill discovery protocol at session start |
+| `brainstorming` | Before any creative/feature work — design before coding |
+| `writing-plans` | After design approval — break spec into bite-sized implementation tasks |
+| `executing-plans` | When executing a written plan with review checkpoints |
+| `subagent-driven-development` | When executing plans with independent tasks |
+| `dispatching-parallel-agents` | When 2+ unrelated tasks can run concurrently |
+| `test-driven-development` | When implementing features or bugfixes — RED-GREEN-REFACTOR |
+| `systematic-debugging` | When encountering bugs/test failures — root cause before fix |
+| `verification-before-completion` | Before claiming work is done — evidence before claims |
+| `using-git-worktrees` | Before starting feature work needing isolation |
+| `requesting-code-review` | After completing tasks, before merging |
+| `receiving-code-review` | When receiving review feedback |
+| `finishing-a-development-branch` | When implementation is complete |
+| `writing-skills` | When creating or editing skills |
+
+**Local copies** of original skill files: `.superpowers/skills/<name>/SKILL.md`
+
+---
 ## Notes
 
 <!-- Quick-add section for ephemeral observations or references. -->

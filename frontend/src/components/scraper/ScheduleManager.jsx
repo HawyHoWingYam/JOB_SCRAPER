@@ -25,6 +25,7 @@ const EMPTY_PROGRESS = {};
 const SOURCE_OPTIONS = [
     { value: 'jobsdb', label: 'JobsDB' },
     { value: 'ctgoodjobs', label: 'CTgoodjobs' },
+    { value: 'offertoday', label: 'OfferToday' },
 ];
 
 function readDirectOverrideRunMarker() {
@@ -115,6 +116,12 @@ function normalizeCategoryIdsForSource(sourceSite, categoryIds) {
         return [];
     }
 
+    if (sourceSite === 'offertoday') {
+        return categoryIds
+            .map((value) => Number.parseInt(`${value}`, 10))
+            .filter((value) => Number.isInteger(value));
+    }
+
     if (sourceSite === 'ctgoodjobs') {
         return categoryIds.filter(
             (value) => typeof value === 'string' && value.startsWith('ctgoodjobs:')
@@ -198,7 +205,7 @@ function buildManualActionHelperUnavailableMessage(actionLabel) {
 
 function buildHeadedWorkerUnavailableMessage(headedWorkerStatus) {
     const heartbeatStatus = `${headedWorkerStatus?.heartbeat_status || ''}`.trim().toLowerCase();
-    const startCommand = headedWorkerStatus?.start_command || 'backend\\scripts\\run_headed_crawl_worker_host.cmd';
+    const startCommand = headedWorkerStatus?.start_command || 'python backend\\scripts\\prepare_headed_crawl_worker_host.py';
 
     if (heartbeatStatus === 'stale') {
         return `Headed crawl worker is offline. Restart ${startCommand} before launching a headed run.`;
@@ -337,12 +344,15 @@ function buildImmediateRunReadiness(form, sourceSite, headedWorkerStatus = null)
     const selectedSectorCount = Array.isArray(form?.category_ids) ? form.category_ids.length : 0;
     const hasBatchFilter = Boolean(`${form?.source_listing_crawl_job_id ?? ''}`.trim());
 
+    // OfferToday runs headed mode inside the same Docker container — no host-side worker needed
     if (crawlMode === 'headed' && headedWorkerStatus?.available === false) {
-        return {
-            isReady: false,
-            statusLabel: 'Headed worker offline',
-            detail: buildHeadedWorkerUnavailableMessage(headedWorkerStatus),
-        };
+        if (sourceSite !== 'offertoday') {
+            return {
+                isReady: false,
+                statusLabel: 'Headed worker offline',
+                detail: buildHeadedWorkerUnavailableMessage(headedWorkerStatus),
+            };
+        }
     }
 
     if (request.error) {

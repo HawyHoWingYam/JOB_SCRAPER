@@ -7,7 +7,7 @@ Handles data transformation, validation, and field mapping.
 import logging
 import re
 from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -27,16 +27,49 @@ def parse_listing_date(date_string: Optional[str]) -> Optional[datetime]:
     """
     Parse listing date string to datetime object.
 
-    Handles ISO format dates from JobsDB API.
+    Handles ISO format dates from JobsDB API and Chinese relative dates from OfferToday.
+
+    OfferToday formats:
+    - "\u767c\u5e03\u65bc3\u500b\u6708\u524d" (published 3 months ago)
+    - "\u66f4\u65b0\u65bc3\u500b\u6708\u524d" (updated 3 months ago)
+    - "\u767c\u5e03\u65bc06-15" (published on Jun 15)
+    - "\u66f4\u65b0\u65bc06-24" (updated on Jun 24)
 
     Args:
-        date_string: ISO format date string (e.g., "2026-02-04T10:30:00Z")
+        date_string: Date string to parse
 
     Returns:
         datetime object or None if parsing fails
     """
     if not date_string:
         return None
+
+    # Try OfferToday Chinese relative date formats first
+    if "\u6708" in date_string:  # contains "月"
+        # e.g., "發布於3個月前", "更新於近3個月"
+        m = re.search(r"(\d+)\u500b\u6708", date_string)  # "X個月"
+        if m:
+            months = int(m.group(1))
+            now = datetime.now(timezone.utc)
+            is_nearly = "\u8fd1" in date_string  # "近" — nearly
+            days = int(months * 30 * 0.85) if is_nearly else months * 30
+            return datetime(now.year, now.month, now.day) - timedelta(days=days)
+        return None
+
+    # Try OfferToday short date formats: "發布於06-15", "更新於06-24"
+    short_m = re.search(r"(\d{2})-(\d{2})$", date_string)
+    if short_m:
+        month = int(short_m.group(1))
+        day = int(short_m.group(2))
+        now = datetime.now(timezone.utc)
+        year = now.year
+        # If the parsed date is in the future relative to current month, use previous year
+        if month > now.month:
+            year = now.year - 1
+        try:
+            return datetime(year, month, day)
+        except ValueError:
+            return None
 
     try:
         # Handle ISO format with Z suffix

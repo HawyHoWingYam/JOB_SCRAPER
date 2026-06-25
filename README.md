@@ -37,7 +37,8 @@ docker compose --profile workers up -d crawl-worker ingest-worker enrichment-wor
 docker compose --profile workers up -d retrieval-api embedding-worker recommendation-api
 
 # Access
-# Frontend: http://localhost:5173
+# Frontend (Docker): http://localhost:3000
+# Frontend (host `cd frontend && npm run dev`): http://localhost:5173
 # Backend: http://localhost:8000
 # API Docs: http://localhost:8000/docs
 ```
@@ -71,10 +72,10 @@ docker compose up -d postgres-db redis-mq backend-api frontend-ui
 docker compose --profile workers up -d crawl-worker ingest-worker enrichment-worker
 
 # Then run the headed crawl worker on the Windows host.
-backend\scripts\run_headed_crawl_worker_host.cmd
+python backend\scripts\prepare_headed_crawl_worker_host.py
 
 # Or launch it in a dedicated visible cmd window.
-backend\scripts\launch_headed_crawl_worker_window.cmd
+python backend\scripts\prepare_headed_crawl_worker_host.py
 ```
 
 Recommended profile setup:
@@ -82,8 +83,8 @@ Recommended profile setup:
 - use a dedicated browser profile directory via `JOBSDB_HEADED_BROWSER_USER_DATA_DIR`
 - pick `JOBSDB_HEADED_BROWSER_CHANNEL=msedge` or `chrome`
 - open a JobsDB or CTGoodJobs page once in that automation profile and complete any anti-bot challenge before relying on automated headed runs
-- keep the `.cmd` window open while you want headed JobsDB jobs to keep progressing
-- if you want a separate persistent window without blocking your current shell, use `launch_headed_crawl_worker_window.cmd`
+- keep the script running while you want headed JobsDB jobs to keep progressing
+- if you want a separate persistent window without blocking your current shell, run `prepare_headed_crawl_worker_host.py` in a new terminal
 - only run one headed worker at a time; the host worker now holds a localhost lock port (default `47651`) and exits early if another instance is already running
 
 Behavior notes:
@@ -161,10 +162,10 @@ This repository does not have a full Alembic baseline yet. The current first rev
 docker compose up db-bootstrap
 ```
 
-For a fresh local database, bootstrap the existing application schema first:
+For a fresh local database, use db-bootstrap via Docker:
 
 ```bash
-python backend/scripts/init_db.py
+docker compose run --rm db-bootstrap
 alembic -c backend/alembic.ini stamp 20260415_103800
 ```
 
