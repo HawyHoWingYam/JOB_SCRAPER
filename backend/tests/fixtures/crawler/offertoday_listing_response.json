@@ -1,0 +1,55 @@
+{
+  "code": 0,
+  "data": {
+    "resultList": [
+      {
+        "jobId": "abc123==",
+        "jobName": "Software Engineer",
+        "companyName": "Tech Corp",
+        "locationDesc": "Hong Kong",
+        "level3LocDesc": "Central",
+        "salaryDesc": "$30K-50K/月",
+        "jobTypeDesc": "全職",
+        "jobType": 1,
+        "experience": "3-5年",
+        "educationDesc": "學士",
+        "skills": ["Python", "Java"],
+        "skillList": [
+          {"code": "1", "name": "Python", "isCustom": false},
+          {"code": "2", "name": "Java", "isCustom": false}
+        ],
+        "keywords": ["Python", "Django"],
+        "benefits": ["生日假"],
+        "workingDays": "5天/週",
+        "jobPostTime": "發布於06-15",
+        "jobFunctions": [{"code": "112000", "name": "工程師"}],
+        "locations": {"code": "HK101", "name": "香港"},
+        "activeStatus": "近3日活躍",
+        "bossName": "John",
+        "bossTitle": "HR Manager",
+        "brandLogo": "https://example.com/logo.png"
+      },
+      {
+        "jobId": "xyz789==",
+        "jobName": "Data Analyst",
+        "companyName": "Data Co",
+        "locationDesc": "Kowloon",
+        "level3LocDesc": "Kwun Tong",
+        "salaryDesc": "HK $25K-40K/月",
+        "jobTypeDesc": "全職",
+        "jobType": 1,
+        "experience": "1-3年",
+        "educationDesc": "學士",
+        "skills": ["Python", "SQL"],
+        "benefits": ["醫療"],
+        "workingDays": "5天/週",
+        "jobPostTime": "發布於06-14",
+        "jobFunctions": [{"code": "112001", "name": "數據分析"}],
+        "locations": {"code": "HK102", "name": "九龍"},
+        "activeStatus": "近1週活躍",
+        "bossName": "Jane",
+        "bossTitle": "Team Lead"
+      }
+    ]
+  }
+}

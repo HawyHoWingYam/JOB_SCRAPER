@@ -1,0 +1,36 @@
+{
+  "code": 0,
+  "data": {
+    "jobId": "abc123==",
+    "jobName": "Senior Developer",
+    "jobDesc": "<p>Job description here</p>",
+    "companyName": "Big Corp",
+    "brandName": "Big Corp Brand",
+    "brandLogo": "https://example.com/logo.png",
+    "industry": {"code": 1024, "name": "IT"},
+    "sizeDesc": "1000+名員工",
+    "typeDesc": "上市公司",
+    "locationDesc": "Hong Kong",
+    "salaryDesc": "$50K-80K/月",
+    "jobTypeDesc": "全職",
+    "workExperienceDesc": "5-10年",
+    "educationDesc": "碩士",
+    "skills": ["Python", "AWS"],
+    "benefits": ["雙糧", "醫療"],
+    "workingDays": "5天/週",
+    "workingModels": "混合辦公",
+    "postDateDesc": "更新於06-17",
+    "postDaysAgo": 6,
+    "jobFunctions": [{"code": "112000", "name": "工程師"}],
+    "locations": {"code": "HK101", "name": "香港"},
+    "employType": {"code": 1, "name": "全職"},
+    "addressVO": {
+      "latitude": 22.3089,
+      "longitude": 114.2635
+    },
+    "bossName": "Jane",
+    "bossTitle": "CTO",
+    "workPermitList": ["香港永久居民"],
+    "workPermitDesc": "僅香港永久居民"
+  }
+}

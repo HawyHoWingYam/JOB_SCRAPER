@@ -146,7 +146,7 @@ function buildImmediateScrapePayload(form, sourceSite) {
         };
     }
 
-    if (crawlPhase === 'listing' && (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 1000)) {
+    if (crawlPhase === 'listing' && (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 9999)) {
         return {
             error: 'Max pages must be a whole number between 1 and 1000.',
         };
@@ -274,7 +274,7 @@ function formatImmediateListingDepthMetric(maxPages) {
     if (!Number.isInteger(maxPages)) {
         return 'Page limit not set';
     }
-    if (maxPages < 1 || maxPages > 1000) {
+    if (maxPages < 1 || maxPages > 9999) {
         return 'Page limit invalid';
     }
     return `${maxPages} pages per sector`;
@@ -1215,7 +1215,7 @@ function ScheduleManager({ onNavigateToAI }) {
                         <input
                             type="number"
                             min="1"
-                            max={immediateForm.crawl_phase === 'detail' ? '5000' : '1000'}
+                            max={immediateForm.crawl_phase === 'detail' ? '5000' : '9999'}
                             className="premium-input w-24"
                             value={immediateForm.crawl_phase === 'detail' ? immediateForm.detail_limit : immediateForm.max_pages}
                             onChange={(e) => setImmediateForm(prev => ({

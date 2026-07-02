@@ -179,3 +179,70 @@ def test_create_crawl_job_returns_service_unavailable_when_headed_worker_is_offl
     assert response.json()["detail"] == (
         "Headed crawl worker is unavailable. Start python backend\\scripts\\prepare_headed_crawl_worker_host.py and retry."
     )
+
+
+def test_create_crawl_job_threads_offertoday_keywords_into_dispatch_and_subprocess(monkeypatch):
+    import subprocess
+
+    dispatched_kwargs = {}
+    popen_calls = []
+    crawl_job = _build_crawl_job()
+    crawl_job.source_site = "offertoday"
+    crawl_job.crawl_phase = None
+    crawl_job.crawl_mode = None
+    crawl_job.request_payload = {
+        "crawl_phase": "listing",
+        "crawl_mode": "headed",
+        "category_ids": [],
+        "keywords": "ERP",
+        "max_pages": 3,
+        "detail_limit": 100,
+        "skip_existing": True,
+    }
+
+    class FakeDispatchService:
+        def dispatch_manual_crawl_job(self, db, **kwargs):
+            dispatched_kwargs.update(kwargs)
+            return SimpleNamespace(crawl_job=crawl_job)
+
+    async def fake_validate_effective_category_ids(source_site, category_ids):
+        return None
+
+    def fake_popen(args, stdout=None, stderr=None):
+        popen_calls.append(args)
+        return SimpleNamespace()
+
+    app = FastAPI()
+    app.include_router(crawl_jobs.router, prefix="/api/v1")
+    db = object()
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(crawl_jobs, "dispatch_service", FakeDispatchService())
+    monkeypatch.setattr(crawl_jobs, "_validate_effective_category_ids", fake_validate_effective_category_ids)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/crawl-jobs",
+        json={
+            "source_site": "offertoday",
+            "crawl_phase": "listing",
+            "crawl_mode": "headed",
+            "category_ids": [],
+            "keywords": "ERP",
+            "max_pages": 3,
+            "detail_limit": 100,
+            "skip_existing": True,
+        },
+    )
+
+    assert response.status_code == 202
+    assert dispatched_kwargs["keywords"] == "ERP"
+    assert dispatched_kwargs["category_ids"] == []
+    assert popen_calls
+    assert "--keywords" in popen_calls[0]
+    keyword_index = popen_calls[0].index("--keywords")
+    assert popen_calls[0][keyword_index + 1] == "ERP"

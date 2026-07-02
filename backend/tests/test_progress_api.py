@@ -201,6 +201,37 @@ def test_build_progress_snapshot_keeps_listing_counters_monotonic_during_resume(
     assert snapshot["listings_staged"] == 3
 
 
+def test_build_progress_snapshot_exposes_search_family_metadata():
+    crawl_job = _build_crawl_job(
+        status="running",
+        request_payload={"crawl_phase": "listing", "category_ids": [118000]},
+        metrics={
+            "job_ids_collected": 52,
+            "search_families": ["it_category", "it_keyword"],
+        },
+    )
+    latest_event = SimpleNamespace(
+        payload={
+            "request_payload": {"crawl_phase": "listing", "category_ids": [118000]},
+            "phase": 1,
+            "search_family": "it_keyword",
+            "search_families": ["it_category", "it_keyword"],
+            "job_ids_collected": 52,
+        }
+    )
+
+    snapshot = progress._build_progress_snapshot(
+        crawl_job,
+        latest_event,
+        now=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        events=[],
+    )
+
+    assert snapshot["search_family"] == "it_keyword"
+    assert snapshot["search_families"] == ["it_category", "it_keyword"]
+    assert snapshot["job_ids_collected"] == 52
+
+
 def test_build_progress_snapshot_derives_completed_with_ai_failures_when_ai_run_has_failed_items():
     crawl_job = _build_crawl_job(
         status="completed",

@@ -23,7 +23,7 @@ from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.utils.time import utc_now
-from app.workers.run_ingest_worker import INGEST_ITEM_SETTLED_EVENT_TYPE
+from app.workers.event_types import INGEST_ITEM_SETTLED_EVENT_TYPE
 
 ACTIVE_RUN_STATUSES = ("pending", "running")
 _REVIEW_KEY_PATTERN = re.compile(r"[^a-z0-9+#./\-\s]+")

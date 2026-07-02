@@ -11,6 +11,7 @@ import logging
 from app.config import settings
 from app.api import router
 from app.api.category_routes import router as category_router
+from app.api.crawl_admin import router as crawl_admin_router
 from app.api.schedules import router as schedules_router
 from app.api.progress import router as progress_router
 from app.api.ai import router as ai_router
@@ -86,6 +87,7 @@ app.include_router(progress_router, prefix="/api/v1")
 app.include_router(ai_router)
 app.include_router(stats_router)
 app.include_router(skills_router, prefix="/api/v1")
+app.include_router(crawl_admin_router, prefix="/api/v1")
 
 
 @app.get("/")

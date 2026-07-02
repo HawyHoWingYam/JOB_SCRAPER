@@ -57,6 +57,7 @@ class CrawlJobDispatchService:
         crawl_phase: str | None = None,
         crawl_mode: str | None = None,
         category_ids: list[int | str],
+        keywords: str | None = None,
         max_pages: int,
         source_listing_crawl_job_id=None,
         detail_limit: int = 100,
@@ -69,6 +70,7 @@ class CrawlJobDispatchService:
             "crawl_phase": resolved_phase,
             "crawl_mode": resolve_crawl_mode(source_site, crawl_mode),
             "category_ids": list(category_ids),
+            "keywords": keywords,
             "max_pages": max_pages,
             "source_listing_crawl_job_id": str(source_listing_crawl_job_id)
             if source_listing_crawl_job_id is not None
@@ -107,6 +109,7 @@ class CrawlJobDispatchService:
         crawl_phase: str | None = None,
         crawl_mode: str | None = None,
         category_ids: list[int | str],
+        keywords: str | None = None,
         max_pages: int,
         source_listing_crawl_job_id=None,
         detail_limit: int = 100,
@@ -123,6 +126,7 @@ class CrawlJobDispatchService:
                 crawl_phase=crawl_phase,
                 crawl_mode=crawl_mode,
                 category_ids=category_ids,
+                keywords=keywords,
                 max_pages=max_pages,
                 source_listing_crawl_job_id=source_listing_crawl_job_id,
                 detail_limit=detail_limit,

@@ -135,6 +135,7 @@ async def create_crawl_job(
             crawl_phase=resolve_crawl_phase(request.crawl_phase),
             crawl_mode=request.crawl_mode,
             category_ids=list(request.category_ids or []),
+            keywords=request.keywords,
             max_pages=request.max_pages,
             source_listing_crawl_job_id=request.source_listing_crawl_job_id,
             detail_limit=request.detail_limit,
@@ -148,6 +149,21 @@ async def create_crawl_job(
             detail=str(exc),
         ) from exc
     response.headers["X-Crawl-Job-Id"] = str(dispatch_result.crawl_job.id)
+
+    # Queue OfferToday crawl via subprocess (reliable, no asyncio GC issues)
+    if effective_source_site == "offertoday" and request.crawl_phase in (None, "listing"):
+        _cat_ids = ",".join(str(c) for c in (request.category_ids or []))
+        _max_p = str(request.max_pages or 100)
+        _keywords = str(request.keywords or "").strip()
+        _cj_id = str(dispatch_result.crawl_job.id)
+        _script = "/app/scripts/offertoday_standalone_crawl.py"
+        import subprocess as _sp
+        _args = ["python", _script, "--category-ids", _cat_ids]
+        if _keywords:
+            _args.extend(["--keywords", _keywords])
+        _args.extend(["--max-pages", _max_p, "--crawl-job-id", _cj_id])
+        _sp.Popen(_args, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+
     return dispatch_result.crawl_job
 
 
@@ -187,7 +203,7 @@ async def get_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
 @router.get("/{crawl_job_id}/events", response_model=CrawlJobEventsResponse)
 async def list_crawl_job_events(
     crawl_job_id: UUID,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
     crawl_job = crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
@@ -196,49 +212,4 @@ async def list_crawl_job_events(
 
     total = crawl_job_repository.count_events(db, crawl_job_id)
     events = crawl_job_repository.list_events(db, crawl_job_id, limit=limit, tail=True)
-    return CrawlJobEventsResponse(
-        events=[CrawlJobEventSchema.model_validate(event) for event in events],
-        total=total,
-    )
-
-
-@router.post("/{crawl_job_id}/cancel", response_model=CrawlJobSchema)
-async def cancel_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
-    try:
-        crawl_job = dispatch_service.cancel_crawl_job(
-            db,
-            crawl_job_id=crawl_job_id,
-            requested_by="api",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-    return crawl_job
-
-
-@router.post("/{crawl_job_id}/resume", response_model=CrawlJobSchema)
-async def resume_crawl_job(
-    crawl_job_id: UUID,
-    request: ResumeCrawlJobRequest | None = Body(default=None),
-    db: Session = Depends(get_db),
-):
-    try:
-        crawl_job = dispatch_service.resume_crawl_job(
-            db,
-            crawl_job_id=crawl_job_id,
-            requested_by="api",
-            strategy=request.strategy if request is not None else None,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except HeadedCrawlWorkerUnavailableError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-    return crawl_job
+    return CrawlJobEventsResponse(events=events, total=total)

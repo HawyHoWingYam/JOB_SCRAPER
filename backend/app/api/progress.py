@@ -182,7 +182,13 @@ def _build_progress_snapshot(
         metrics.get("job_ids_collected", 0),
         metrics.get("listings_staged", 0),
     )
-    jobs_scraped = _to_int(event_payload.get("jobs_scraped", metrics.get("items_emitted", 0)))
+    search_family = event_payload.get("search_family") or metrics.get("search_family")
+    search_families = event_payload.get("search_families") or metrics.get("search_families") or []
+    if isinstance(search_families, str):
+        search_families = [search_families]
+    elif not isinstance(search_families, list):
+        search_families = list(search_families)
+    jobs_scraped = _to_int(event_payload.get("jobs_scraped", metrics.get("items_emitted", metrics.get("jobs_saved", 0))))
     jobs_saved = _to_int(event_payload.get("jobs_saved", metrics.get("ingest_items_seen", 0)))
     ingest_items_failed = _to_int(
         event_payload.get("ingest_items_failed", metrics.get("ingest_items_failed", 0))
@@ -321,13 +327,15 @@ def _build_progress_snapshot(
             events=list(events or []),
             now=now,
         ),
+        "search_family": search_family,
+        "search_families": search_families,
         "phase_rate": float(event_payload.get("phase_rate") or 0),
         "eta_seconds": event_payload.get("eta_seconds"),
         "current_job_title": event_payload.get("current_job_title"),
         "detail_job_index": event_payload.get("detail_job_index"),
         "detail_job_total": event_payload.get("detail_job_total"),
-        "current_page": event_payload.get("current_page"),
-        "total_pages": event_payload.get("total_pages"),
+        "current_page": event_payload.get("current_page") or metrics.get("current_page"),
+        "total_pages": event_payload.get("total_pages") or metrics.get("total_pages"),
         "job_ids_collected": job_ids_collected,
         "jobs_scraped": jobs_scraped,
         "total_jobs": total_jobs,
@@ -351,6 +359,7 @@ def _build_progress_snapshot(
         "detail_failed": detail_failed,
         "detail_manual_action_required": detail_manual_action_required,
         "jobs_classified": event_payload.get("jobs_classified", metrics.get("jobs_classified", 0)),
+        "new_jobs_added": event_payload.get("new_jobs_added") or metrics.get("new_jobs_added") or metrics.get("new_jobs_count", 0),
         "classification_total": event_payload.get(
             "classification_total",
             metrics.get("classification_total", 0),

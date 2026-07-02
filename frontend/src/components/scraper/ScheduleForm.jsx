@@ -198,7 +198,7 @@ function ScheduleForm({
                     value={formData.crawlPhase === 'detail' ? formData.detailLimit : formData.maxPages}
                     onChange={handleChange}
                     min="1"
-                    max={formData.crawlPhase === 'detail' ? '5000' : '1000'}
+                    max={formData.crawlPhase === 'detail' ? '5000' : '9999'}
                     disabled={isLoading}
                 />
             </div>

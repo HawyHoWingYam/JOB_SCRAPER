@@ -204,6 +204,42 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
+  it('shows OfferToday search families alongside listing progress', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          offertoday: {
+            crawl_job_id: 'offertoday-listing-1',
+            status: 'running',
+            source_site: 'offertoday',
+            category_name: 'Information Technology',
+            crawl_mode: 'headless',
+            phase: 1,
+            current_page: 1,
+            total_pages: 6,
+            job_ids_collected: 128,
+            search_family: 'it_keyword',
+            search_families: ['it_category', 'it_keyword', 'it_hybrid'],
+            request_payload: {
+              crawl_phase: 'listing',
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      await screen.findByText(/search families: it category, it keyword, it hybrid/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/new ids: 128/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
   it('shows accurate detail counters with elapsed time only and no progress bar', async () => {
     const { container, unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
 
@@ -293,7 +329,7 @@ describe('ScrapeProgressPanel', () => {
     expect(screen.getByText(/headed worker offline/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
-    expect(screen.getByText(/run_headed_crawl_worker_host\.cmd/i)).toBeInTheDocument();
+    expect(screen.getByText(/prepare_headed_crawl_worker_host\.py/i)).toBeInTheDocument();
 
     unmount();
   });

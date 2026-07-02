@@ -11,6 +11,13 @@ const API_URL = API_BASE_URL;
 const API_BASE = `${API_URL}/api/v1`;
 const EMPTY_PROGRESS = {};
 const MAX_VISIBLE_TASKS = 5;
+const SEARCH_FAMILY_LABELS = {
+    it_category: 'IT category',
+    it_keyword: 'IT keyword',
+    explicit_keyword: 'Keyword probe',
+    category_search: 'Category search',
+    it_hybrid: 'IT hybrid',
+};
 
 function ScrapeProgressPanel({
     isVisible,
@@ -309,6 +316,25 @@ function formatCountPair(currentValue, totalValue) {
     return `${formatCount(currentValue)}/?`;
 }
 
+function formatSearchFamilies(searchFamilies) {
+    const families = Array.isArray(searchFamilies) ? searchFamilies : [searchFamilies];
+    const normalizedFamilies = [
+        ...new Set(
+            families
+                .map((value) => `${value || ''}`.trim())
+                .filter(Boolean)
+        ),
+    ];
+
+    if (normalizedFamilies.length === 0) {
+        return '';
+    }
+
+    return normalizedFamilies
+        .map((family) => SEARCH_FAMILY_LABELS[family] || family)
+        .join(', ');
+}
+
 function getProgressSortTimestamp(data) {
     const classification = classifyProgressEntry(data);
     const candidateValues = classification === 'live' || classification === 'attention'
@@ -531,6 +557,7 @@ function buildContextChips({
     categoryName,
     crawlPhase,
     crawlMode,
+    searchFamilies,
 }) {
     const values = [];
 
@@ -548,6 +575,11 @@ function buildContextChips({
 
     if (crawlMode) {
         values.push(formatCrawlModeLabel(crawlMode));
+    }
+
+    const searchFamilyLabel = formatSearchFamilies(searchFamilies);
+    if (searchFamilyLabel) {
+        values.push(`Search families: ${searchFamilyLabel}`);
     }
 
     return values;
@@ -688,6 +720,8 @@ function ProgressItem({
         phase,
         manual_action,
         request_payload = {},
+        search_family,
+        search_families = [],
         // Phase 1
         job_ids_collected = 0,
         current_page,
@@ -761,6 +795,7 @@ function ProgressItem({
         categoryName: category_name,
         crawlPhase,
         crawlMode: crawl_mode,
+        searchFamilies: search_families.length > 0 ? search_families : (search_family ? [search_family] : []),
     });
     const proxyWarningsPresent = [
         proxy_requests_challenge,
@@ -1335,6 +1370,11 @@ function ProgressItem({
         statusText = 'Cancelled';
         statusClass = 'warning';
         detailLines.push(error || 'Cancelled');
+    }
+
+    // Show error/warning message regardless of status (e.g. "no new data" warning)
+    if (error && !['failed','cancelled'].includes(effectiveStatus)) {
+        detailLines.push(error);
     }
 
     if (listingBatchLabel) {

@@ -56,6 +56,7 @@ class CrawlJob(Base):
         order_by="asc(CrawlJobEvent.sequence_no)",
     )
     schedule_executions = relationship("ScheduleExecution", back_populates="crawl_job")
+    crawl_runs = relationship("CrawlRun", back_populates="crawl_job", lazy="selectin")
 
 
 class CrawlJobEvent(Base):

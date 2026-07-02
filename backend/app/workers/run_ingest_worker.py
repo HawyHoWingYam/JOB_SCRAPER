@@ -28,10 +28,11 @@ from app.utils.source_identity import (
     normalize_source_site,
 )
 
+from app.workers.event_types import INGEST_ITEM_SETTLED_EVENT_TYPE
+
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 _STALE_PENDING_RECLAIM_IDLE_MS = 60_000
-INGEST_ITEM_SETTLED_EVENT_TYPE = "crawl.ingest_item_settled"
 
 
 @dataclass(frozen=True)
