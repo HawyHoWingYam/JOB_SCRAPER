@@ -136,7 +136,7 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
         children = jf.get("children") or []
         if children and isinstance(children, list) and len(children) > 0:
             child = children[0]
-            source_subclassification_id = str(child.get("code") or "")
+            source_subclassification_id = f"offertoday:{str(child.get('code') or '')}" if child.get("code") else None
             source_subclassification_name = str(child.get("name") or "")
 
     return CanonicalScrapedJob(

@@ -21,7 +21,7 @@ class CrawlJobCreateRequest(BaseModel):
     crawl_mode: str | None = Field(default=None, max_length=32)
     category_ids: list[CategoryId] | None = None
     keywords: str | None = Field(default=None, max_length=500)
-    max_pages: int = Field(default=3, ge=1, le=1000)
+    max_pages: int = Field(default=50, ge=1, le=1000)
     source_listing_crawl_job_id: UUID | None = None
     detail_limit: int = Field(default=100, ge=1, le=5000)
     detail_statuses: list[str] | None = None

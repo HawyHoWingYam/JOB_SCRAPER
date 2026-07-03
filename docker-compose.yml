@@ -239,7 +239,9 @@ services:
       - jobsdb-network
 
   scrapyd:
-    image: minosss/scrapyd:latest
+    build:
+      context: ./backend/scrapy_project
+      dockerfile: Dockerfile.scrapyd
     container_name: scrapyd
     ports:
       - "6800:6800"

@@ -17,20 +17,16 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
+from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS
+
 logger = logging.getLogger(__name__)
 
-OFFERTODAY_BASE_URL = "https://www.offertoday.com"
 OFFERTODAY_LISTING_URL = f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/search/list"
 OFFERTODAY_DETAIL_URL_TEMPLATE = (
     f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/jobDetail?id={{encrypted_id}}&encryptJobId={{encrypted_id}}"
 )
 
-_COMMON_HEADERS = {
-    "api-language": "zh_HK",
-    "x-requested-with": "XMLHttpRequest",
-    "accept": "application/json, text/plain, */*",
-    "content-type": "application/json;charset=UTF-8",
-}
+_COMMON_HEADERS = OFFERTODAY_COMMON_HEADERS
 
 
 # ── Transport interface ────────────────────────────────────────────
@@ -134,6 +130,21 @@ class ScraplingTransport(OfferTodayTransport):
         except ImportError:
             raise RuntimeError("Scrapling not installed. Install with: pip install scrapling")
 
+    async def close(self) -> None:
+        """Close and clean up the underlying browser session."""
+        if self._session is not None:
+            try:
+                await self._session.close()
+            except Exception:
+                logger.warning("ScraplingTransport: error closing session", exc_info=True)
+            self._session = None
+
+    async def __aenter__(self) -> ScraplingTransport:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        await self.close()
+
     async def fetch_listing(self, payload: dict[str, Any]) -> dict[str, Any]:
         session = await self._ensure_session()
         text = await session.post(
@@ -141,10 +152,24 @@ class ScraplingTransport(OfferTodayTransport):
             headers=_COMMON_HEADERS,
             data=json.dumps(payload, ensure_ascii=False),
         )
-        return json.loads(text) if isinstance(text, str) else {}
+        if isinstance(text, str):
+            try:
+                return json.loads(text)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("ScraplingTransport: JSON parse failed for listing: %s", exc)
+                return {}
+        logger.warning("ScraplingTransport: listing returned non-string response (type=%s)", type(text).__name__)
+        return {}
 
     async def fetch_detail(self, encrypted_id: str) -> dict[str, Any]:
         session = await self._ensure_session()
         detail_url = OFFERTODAY_DETAIL_URL_TEMPLATE.format(encrypted_id=encrypted_id)
         text = await session.get(detail_url, headers=_COMMON_HEADERS)
-        return json.loads(text) if isinstance(text, str) else {}
+        if isinstance(text, str):
+            try:
+                return json.loads(text)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("ScraplingTransport: JSON parse failed for detail: %s", exc)
+                return {}
+        logger.warning("ScraplingTransport: detail returned non-string response (type=%s)", type(text).__name__)
+        return {}

@@ -145,17 +145,6 @@ def _should_include_default_it_keyword_pack(
     return any(category_id in _OFFERTODAY_IT_CATEGORY_SET for category_id in normalized_category_ids)
 
 
-def _should_include_default_it_hybrid_pack(
-    *,
-    category_ids: Sequence[int] | None,
-    default_to_it: bool,
-) -> bool:
-    return _should_include_default_it_keyword_pack(
-        category_ids=category_ids,
-        default_to_it=default_to_it,
-    )
-
-
 def build_offertoday_listing_queries(
     category_ids: Sequence[int] | None,
     *,
@@ -222,7 +211,7 @@ def build_offertoday_listing_queries(
                     }
                 )
 
-    if _should_include_default_it_hybrid_pack(
+    if _should_include_default_it_keyword_pack(
         category_ids=normalized_category_ids,
         default_to_it=default_to_it,
     ):

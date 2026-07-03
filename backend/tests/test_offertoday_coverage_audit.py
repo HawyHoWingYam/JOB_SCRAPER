@@ -13,7 +13,7 @@ def test_render_coverage_audit_report_marks_successful_audit() -> None:
         planned_tasks=4,
         processed_tasks=3,
         global_reported_total=3300,
-        global_sample_unique_job_ids=26,
+        global_sample_unique_job_ids=598,
         stopped_early=True,
         last_family_with_new_ids="it_keyword",
         family_order=["it_category", "it_keyword"],
@@ -22,7 +22,7 @@ def test_render_coverage_audit_report_marks_successful_audit() -> None:
                 search_family="it_category",
                 pages_fetched=2,
                 listing_rows=20,
-                sample_unique_job_ids=14,
+                sample_unique_job_ids=400,
                 duplicate_job_ids=6,
                 failed_pages=0,
                 reported_total=2066,
@@ -31,7 +31,7 @@ def test_render_coverage_audit_report_marks_successful_audit() -> None:
                 search_family="it_keyword",
                 pages_fetched=1,
                 listing_rows=18,
-                sample_unique_job_ids=12,
+                sample_unique_job_ids=198,
                 duplicate_job_ids=6,
                 failed_pages=1,
                 reported_total=1234,
@@ -46,7 +46,7 @@ def test_render_coverage_audit_report_marks_successful_audit() -> None:
     assert "Processed tasks: 3" in report
     assert "Target unique job IDs: 598" in report
     assert "Global reported total: 3300" in report
-    assert "Global sample unique rows: 26" in report
+    assert "Global sample unique rows: 598" in report
     assert "Target reached: yes" in report
     assert "Shortfall: 0" in report
     assert "Last family with new IDs: it_keyword" in report
@@ -83,4 +83,4 @@ def test_render_coverage_audit_report_shows_shortfall() -> None:
     report = render_coverage_audit_report(result)
 
     assert "Target reached: no" in report
-    assert "Shortfall: 86" in report
+    assert "Shortfall: 580" in report

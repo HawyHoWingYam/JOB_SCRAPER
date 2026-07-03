@@ -34,23 +34,18 @@ if BACKEND not in sys.path:
 if SCRAPY_PROJECT not in sys.path:
     sys.path.insert(0, SCRAPY_PROJECT)
 
+from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, build_offertoday_listing_payload
 from app.sources.offertoday.parsers import parse_offertoday_listing_response  # noqa: E402
 from app.sources.offertoday.search_space import build_offertoday_listing_queries, normalize_offertoday_keywords  # noqa: E402
 from job_scraper_spiders.downloaders.offertoday_transport import PlaywrightPageTransport  # noqa: E402
 
-OFFERTODAY_BASE_URL = "https://www.offertoday.com"
 OFFERTODAY_SEARCH_URL = f"{OFFERTODAY_BASE_URL}/hk/search"
 
 MAX_PAGES_GLOBAL = 9999
 DEFAULT_MAX_PAGES = 6
 DEFAULT_WARMUP_DELAY_SECONDS = 2.0
 
-_COMMON_HEADERS = {
-    "api-language": "zh_HK",
-    "x-requested-with": "XMLHttpRequest",
-    "accept": "application/json, text/plain, */*",
-    "content-type": "application/json;charset=UTF-8",
-}
+_COMMON_HEADERS = OFFERTODAY_COMMON_HEADERS
 
 
 @dataclass
@@ -65,6 +60,14 @@ class CoverageFamilyStats:
 
 
 @dataclass
+class CoverageConditionStats:
+    family: str
+    category_id: int | None
+    keyword: str
+    reported_total: int = 0
+
+
+@dataclass
 class CoverageAuditResult:
     target_unique_job_ids: int
     planned_tasks: int
@@ -75,6 +78,7 @@ class CoverageAuditResult:
     last_family_with_new_ids: str | None = None
     family_order: list[str] = field(default_factory=list)
     families: dict[str, CoverageFamilyStats] = field(default_factory=dict)
+    conditions: list[CoverageConditionStats] = field(default_factory=list)
 
 
 def _parse_category_ids(raw_category_ids: str) -> list[int]:
@@ -84,28 +88,6 @@ def _parse_category_ids(raw_category_ids: str) -> list[int]:
         if cleaned.isdigit():
             category_ids.append(int(cleaned))
     return category_ids
-
-
-def _build_listing_payload(*, category_id: int | None, keyword: str, page: int) -> dict[str, Any]:
-    payload = {
-        "keyword": keyword,
-        "rcdType": 7,
-        "pageSize": 10,
-        "page": page,
-        "salaryType": 0,
-        "employmentTypes": [],
-        "publishTime": "",
-        "experiences": [],
-        "educationLevels": [],
-        "benefits": [],
-        "industries": [],
-        "subDistrictCodes": [],
-        "needShowDistance": False,
-        "searchSource": None,
-    }
-    if category_id is not None:
-        payload["jobFunctionCodes"] = [category_id]
-    return payload
 
 
 def _get_family_stats(result: CoverageAuditResult, family: str) -> CoverageFamilyStats:
@@ -126,8 +108,8 @@ def render_coverage_audit_report(result: CoverageAuditResult) -> str:
         f"Target unique job IDs: {result.target_unique_job_ids}",
         f"Global reported total: {result.global_reported_total}",
         f"Global sample unique rows: {result.global_sample_unique_job_ids}",
-        f"Target reached: {'yes' if result.global_reported_total >= result.target_unique_job_ids else 'no'}",
-        f"Shortfall: {max(result.target_unique_job_ids - result.global_reported_total, 0)}",
+        f"Target reached: {'yes' if result.global_sample_unique_job_ids >= result.target_unique_job_ids else 'no'}",
+        f"Shortfall: {max(result.target_unique_job_ids - result.global_sample_unique_job_ids, 0)}",
     ]
 
     if result.last_family_with_new_ids:
@@ -155,6 +137,18 @@ def render_coverage_audit_report(result: CoverageAuditResult) -> str:
 
     if not result.family_order:
         lines.append("(no families planned)")
+
+    if result.conditions:
+        lines.append("")
+        lines.append(
+            f"{'Family':<20} {'Cat ID':>7} {'Keyword':<25} {'API Total':>10}"
+        )
+        lines.append("-" * 70)
+        for cond in result.conditions:
+            cat = str(cond.category_id) if cond.category_id is not None else "-"
+            lines.append(
+                f"{cond.family:<20} {cat:>7} {cond.keyword:<25} {cond.reported_total:>10}"
+            )
 
     return "\n".join(lines)
 
@@ -194,6 +188,7 @@ async def run_offertoday_coverage_audit(
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
+        context = None
         try:
             context = await browser.new_context(
                 user_agent=(
@@ -222,7 +217,7 @@ async def run_offertoday_coverage_audit(
 
                 try:
                     response = await transport.fetch_listing(
-                        _build_listing_payload(
+                        build_offertoday_listing_payload(
                             category_id=category_id,
                             keyword=keyword,
                             page=page_number,
@@ -257,6 +252,14 @@ async def run_offertoday_coverage_audit(
                     stats.reported_total += condition_total
                     result.global_reported_total += condition_total
                     seen_reported_conditions.add(condition_key)
+                    result.conditions.append(
+                        CoverageConditionStats(
+                            family=family,
+                            category_id=category_id,
+                            keyword=keyword,
+                            reported_total=condition_total,
+                        )
+                    )
 
                 parsed_jobs = parse_offertoday_listing_response(response)
                 stats.listing_rows += len(parsed_jobs)
@@ -274,12 +277,12 @@ async def run_offertoday_coverage_audit(
                     result.global_sample_unique_job_ids += 1
                     result.last_family_with_new_ids = family
 
-                if result.global_reported_total >= target_unique_job_ids:
+                if result.global_sample_unique_job_ids >= target_unique_job_ids:
                     result.stopped_early = True
                     break
-
-            await context.close()
         finally:
+            if context is not None:
+                await context.close()
             await browser.close()
 
     return result
@@ -329,7 +332,7 @@ async def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(render_coverage_audit_report(result))
-    return 0 if result.global_reported_total >= result.target_unique_job_ids else 1
+    return 0 if result.global_sample_unique_job_ids >= result.target_unique_job_ids else 1
 
 
 if __name__ == "__main__":

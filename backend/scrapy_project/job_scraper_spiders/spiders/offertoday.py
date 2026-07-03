@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import scrapy
 from scrapy.http import Response
 
+from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, build_offertoday_listing_payload
 from app.sources.offertoday.search_space import build_offertoday_listing_queries
 from job_scraper_spiders.items import CrawlProgressItem, JobDetailItem, ListingItem
 from job_scraper_spiders.parsers.offertoday_parser import (
@@ -28,19 +29,13 @@ from job_scraper_spiders.parsers.offertoday_parser import (
 
 logger = logging.getLogger(__name__)
 
-OFFERTODAY_BASE_URL = "https://www.offertoday.com"
 OFFERTODAY_LISTING_URL = f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/search/list"
 OFFERTODAY_DETAIL_URL_TPL = (
     f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/jobDetail?id=%s&encryptJobId=%s"
 )
 MAX_PAGES = 9999
 
-_COMMON_HEADERS = {
-    "api-language": "zh_HK",
-    "x-requested-with": "XMLHttpRequest",
-    "accept": "application/json, text/plain, */*",
-    "content-type": "application/json;charset=UTF-8",
-}
+_COMMON_HEADERS = OFFERTODAY_COMMON_HEADERS
 
 _WARMUP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36",
@@ -54,7 +49,6 @@ class OfferTodaySpider(scrapy.Spider):
     allowed_domains = ["offertoday.com"]
     custom_settings = {
         "OFFSITE_ENABLED": False,
-        "COOKIES_ENABLED": False,
     }
 
     category_ids: str = ""
@@ -159,25 +153,7 @@ class OfferTodaySpider(scrapy.Spider):
         )
 
     def _build_listing_payload(self, *, category_id: int, keyword: str, page: int) -> dict[str, Any]:
-        payload = {
-            "keyword": keyword,
-            "rcdType": 7,
-            "pageSize": 10,
-            "page": page,
-            "salaryType": 0,
-            "employmentTypes": [],
-            "publishTime": "",
-            "experiences": [],
-            "educationLevels": [],
-            "benefits": [],
-            "industries": [],
-            "subDistrictCodes": [],
-            "needShowDistance": False,
-            "searchSource": None,
-        }
-        if category_id is not None:
-            payload["jobFunctionCodes"] = [category_id]
-        return payload
+        return build_offertoday_listing_payload(category_id=category_id, keyword=keyword, page=page)
 
     def _parse_listing_response(
         self,
@@ -213,6 +189,19 @@ class OfferTodaySpider(scrapy.Spider):
             return
 
         jobs = parse_listing(data)
+        if not jobs:
+            logger.debug(
+                "OfferToday listing returned empty for cat=%s keyword=%s page=%s; "
+                "dropping remaining pages for this condition",
+                category_id, keyword, page,
+            )
+            self._listing_tasks = deque(
+                t for t in self._listing_tasks
+                if t["category_id"] != category_id or t["keyword"] != keyword
+            )
+            yield from self._next_listing_or_detail()
+            return
+
         probe_new = 0
 
         for job in jobs:
@@ -355,6 +344,18 @@ class OfferTodaySpider(scrapy.Spider):
         cid = str(target.get("cid") or "")
         logger.warning("OfferToday detail request failed for %s: %s", eid, failure)
         yield self._build_detail_fallback(eid, url, listing_data, cid)
+
+        self._detail_count += 1
+        yield CrawlProgressItem(
+            event_type="detail_page",
+            crawl_run_id=self.crawl_run_id,
+            source_site="offertoday",
+            payload={
+                "detail_index": self._detail_count,
+                "detail_total": len(self._detail_targets),
+                "detail_success": False,
+            },
+        )
 
     def _build_detail_fallback(
         self,

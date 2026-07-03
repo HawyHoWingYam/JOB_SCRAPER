@@ -373,7 +373,7 @@ async def main() -> None:
 
                 await asyncio.sleep(0.5)
 
-                if default_it_crawl and len(seen_ids) >= DEFAULT_IT_UNIQUE_JOB_TARGET:
+                if is_default_it_crawl and len(seen_ids) >= DEFAULT_IT_UNIQUE_JOB_TARGET:
                     logger.info(
                         "Default IT crawl reached unique target (%d); stopping listing phase.",
                         DEFAULT_IT_UNIQUE_JOB_TARGET,
@@ -382,7 +382,7 @@ async def main() -> None:
 
                 if not data.get("data", {}).get("hasMore"):
                     exhausted_conditions.add(condition_key)
-            if default_it_crawl and len(seen_ids) >= DEFAULT_IT_UNIQUE_JOB_TARGET:
+            if is_default_it_crawl and len(seen_ids) >= DEFAULT_IT_UNIQUE_JOB_TARGET:
                 logger.info("Default IT crawl target reached; skipping remaining listing tasks.")
 
             db.commit()
