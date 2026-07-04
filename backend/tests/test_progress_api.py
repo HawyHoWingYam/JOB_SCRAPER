@@ -232,6 +232,127 @@ def test_build_progress_snapshot_exposes_search_family_metadata():
     assert snapshot["job_ids_collected"] == 52
 
 
+def test_build_progress_snapshot_marks_listing_checkpoint_and_waf_challenge_events():
+    crawl_job = _build_crawl_job(
+        status="failed",
+        request_payload={"crawl_phase": "listing", "category_ids": [118000]},
+        metrics={
+            "listings_staged": 3001,
+            "detail_pending": 74,
+            "detail_failed": 8,
+        },
+    )
+    latest_failure_event = SimpleNamespace(
+        event_type="crawl.failed",
+        payload={
+            "phase": 2,
+            "error": "Service restarted before crawl job could finish.",
+        },
+    )
+    history_events = [
+        SimpleNamespace(
+            event_type="listing_completed",
+            payload={
+                "phase": 1,
+                "pages_processed": 1676,
+                "job_ids_collected": 3001,
+                "listings_staged": 3001,
+                "detail_pending": 74,
+                "search_families": ["it_category", "it_keyword", "it_hybrid"],
+            },
+        ),
+        SimpleNamespace(
+            event_type="waf.challenge",
+            payload={
+                "message": "WAF security challenge detected. Complete the verification in the browser window to continue.",
+                "challenge_url": "https://www.offertoday.com/web/passport/cm/verify.html",
+            },
+        ),
+    ]
+
+    snapshot = progress._build_progress_snapshot(
+        crawl_job,
+        latest_failure_event,
+        now=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        events=history_events,
+    )
+
+    assert snapshot["listing_completed"] is True
+    assert snapshot["waf_challenge"] is True
+    assert snapshot["operator_state"] == "stale_downstream_backlog"
+    assert snapshot["metric_scope"] == "backlog_pool"
+    assert snapshot["waf_challenge_url"] == "https://www.offertoday.com/web/passport/cm/verify.html"
+    assert snapshot["waf_challenge_message"].startswith("WAF security challenge detected.")
+
+
+def test_build_progress_snapshot_uses_latest_waf_event_payload_when_it_is_current():
+    crawl_job = _build_crawl_job(
+        status="running",
+        request_payload={"crawl_phase": "listing", "category_ids": [118000]},
+        metrics={
+            "detail_pending": 74,
+            "detail_failed": 8,
+        },
+    )
+    latest_waf_event = SimpleNamespace(
+        event_type="waf.challenge",
+        payload={
+            "message": "WAF security challenge detected. Complete the verification in the browser window to continue.",
+            "challenge_url": "https://www.offertoday.com/web/passport/cm/verify.html",
+        },
+    )
+
+    waf_snapshot = progress._build_progress_snapshot(
+        crawl_job,
+        latest_waf_event,
+        now=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        events=[],
+    )
+
+    assert waf_snapshot["waf_challenge"] is True
+    assert waf_snapshot["waf_challenge_url"] == "https://www.offertoday.com/web/passport/cm/verify.html"
+    assert waf_snapshot["waf_challenge_message"].startswith("WAF security challenge detected.")
+
+
+def test_build_progress_snapshot_clears_waf_challenge_after_verification_is_completed():
+    crawl_job = _build_crawl_job(
+        status="running",
+        request_payload={"crawl_phase": "listing", "category_ids": [118000]},
+        metrics={
+            "detail_pending": 74,
+            "detail_failed": 8,
+        },
+    )
+    history_events = [
+        SimpleNamespace(
+            event_type="waf.challenge",
+            payload={
+                "message": "WAF security challenge detected. Complete the verification in the browser window to continue.",
+                "challenge_url": "https://www.offertoday.com/web/passport/cm/verify.html",
+            },
+        ),
+        SimpleNamespace(
+            event_type="waf.challenge_cleared",
+            payload={
+                "message": "WAF verification completed in the browser window.",
+                "challenge_url": "https://www.offertoday.com/web/passport/cm/verify.html",
+                "cleared_url": "https://www.offertoday.com/hk/search",
+            },
+        ),
+    ]
+
+    snapshot = progress._build_progress_snapshot(
+        crawl_job,
+        history_events[-1],
+        now=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        events=history_events,
+    )
+
+    assert snapshot["waf_challenge"] is False
+    assert snapshot["waf_challenge_url"] is None
+    assert snapshot["waf_challenge_message"] is None
+
+
 def test_build_progress_snapshot_derives_completed_with_ai_failures_when_ai_run_has_failed_items():
     crawl_job = _build_crawl_job(
         status="completed",
@@ -335,7 +456,7 @@ def test_collect_progress_payload_uses_batched_latest_and_filtered_activity_even
         metrics={"items_emitted": 2},
     )
     crawl_job.updated_at = now
-    expected_event_types = progress.ACTIVE_WORK_EVENT_TYPES | progress.INACTIVE_WORK_EVENT_TYPES
+    expected_event_types = progress.PROGRESS_CONTEXT_EVENT_TYPES
     latest_event = SimpleNamespace(
         payload={
             "request_payload": {"crawl_phase": "detail", "category_ids": [1200]},

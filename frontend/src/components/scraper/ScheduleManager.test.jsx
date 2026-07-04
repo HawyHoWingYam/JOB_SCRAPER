@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+﻿import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { scrapeProgressPanelSpy } = vi.hoisted(() => ({
@@ -126,6 +126,7 @@ function createDeferred() {
 
 const JOBSDB_CATEGORIES = [{ id: 1200, name: 'Engineering' }];
 const CTGOODJOBS_CATEGORIES = [{ id: 'ctgoodjobs:021', name: 'Information Technology' }];
+const OFFERTODAY_CATEGORIES = [{ id: 118000, name: 'Information Technology' }];
 const MIXED_SCHEDULES = [
   {
     id: 'jobsdb-nightly',
@@ -153,6 +154,7 @@ function createFetchMock({
   schedules = MIXED_SCHEDULES,
   jobsdbCategories = JOBSDB_CATEGORIES,
   ctgoodjobsCategories = CTGOODJOBS_CATEGORIES,
+  offertodayCategories = OFFERTODAY_CATEGORIES,
   ctgoodjobsCategoryErrorDetail = null,
   capabilities = { scheduler: { available: true, manual_run_available: true, owner: 'scheduler-worker', worker_name: 'scheduler-worker', heartbeat_status: 'fresh', reason: null } },
   listingBatches = [],
@@ -211,6 +213,10 @@ function createFetchMock({
         });
       }
       return mockJsonResponse({ categories: ctgoodjobsCategories });
+    }
+
+    if (url === '/api/categories?source_site=offertoday') {
+      return mockJsonResponse({ categories: offertodayCategories });
     }
 
     if (url === '/api/v1/scrape/progress') {
@@ -603,6 +609,55 @@ describe('ScheduleManager', () => {
         crawl_mode: 'headed',
         category_ids: ['ctgoodjobs:021'],
         max_pages: 3,
+        detail_limit: 100,
+        skip_existing: true,
+      });
+    });
+  });
+
+  it('defaults OfferToday direct override runs to the all-IT listing scope and submits an empty category payload', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        offertodayCategories: OFFERTODAY_CATEGORIES,
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+
+    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
+      target: { value: 'offertoday' },
+    });
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/categories?source_site=offertoday');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+
+    expect(screen.getByRole('spinbutton')).toHaveValue(50);
+    expect(screen.getByText('全 IT 分類（預設）')).toBeInTheDocument();
+    expect(screen.getByText('50 pages across 全 IT 分類（預設）')).toBeInTheDocument();
+    expect(
+      screen.getByText('Leave sectors blank to use 全 IT 分類（預設）.')
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /start job id crawl/i }));
+
+    await waitFor(() => {
+      const crawlJobCall = globalThis.fetch.mock.calls.find(
+        ([url, request]) => url === '/api/v1/crawl-jobs' && request?.method === 'POST',
+      );
+
+      expect(crawlJobCall).toBeTruthy();
+      expect(JSON.parse(crawlJobCall[1].body)).toEqual({
+        source_site: 'offertoday',
+        crawl_phase: 'listing',
+        crawl_mode: 'headless',
+        category_ids: [],
+        max_pages: 50,
         detail_limit: 100,
         skip_existing: true,
       });
@@ -1590,3 +1645,4 @@ describe('ScheduleManager', () => {
     expect(within(scheduleCard).getByText('JobsDB')).toBeInTheDocument();
   });
 });
+

@@ -243,6 +243,10 @@ def test_create_crawl_job_threads_offertoday_keywords_into_dispatch_and_subproce
     assert dispatched_kwargs["keywords"] == "ERP"
     assert dispatched_kwargs["category_ids"] == []
     assert popen_calls
+    assert "--auth-state" in popen_calls[0]
+    auth_index = popen_calls[0].index("--auth-state")
+    assert popen_calls[0][auth_index + 1] == "/app/scripts/offertoday_auth_state.json"
+    assert "--headed" in popen_calls[0]
     assert "--keywords" in popen_calls[0]
     keyword_index = popen_calls[0].index("--keywords")
     assert popen_calls[0][keyword_index + 1] == "ERP"

@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Save, X } from 'lucide-react';
 import { getCrawlModeOptionsForSource, resolveDefaultCrawlMode } from './crawlMode';
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
+import { resolveDefaultMaxPages } from './maxPages';
 
 // Cron presets
 const CRON_PRESETS = [
@@ -32,9 +33,10 @@ function ScheduleForm({
         crawlPhase: resolveDefaultCrawlPhase(),
         crawlMode: resolveDefaultCrawlMode(sourceSite),
         categoryIds: [],
-        maxPages: 3,
+        maxPages: resolveDefaultMaxPages(sourceSite),
         detailLimit: 100,
     });
+    const previousSourceSiteRef = useRef(sourceSite);
 
     useEffect(() => {
         onSourceScopedDirtyChange?.(formData.categoryIds.length > 0);
@@ -45,7 +47,17 @@ function ScheduleForm({
             ...prev,
             crawlMode: resolveDefaultCrawlMode(sourceSite),
             categoryIds: [],
+            maxPages: (() => {
+                const previousSourceSite = previousSourceSiteRef.current;
+                const previousDefaultMaxPages = resolveDefaultMaxPages(previousSourceSite);
+                const currentMaxPages = Number.parseInt(`${prev.maxPages ?? ''}`, 10);
+                const shouldAdoptSourceDefault =
+                    !Number.isInteger(currentMaxPages) || currentMaxPages === previousDefaultMaxPages;
+
+                return shouldAdoptSourceDefault ? resolveDefaultMaxPages(sourceSite) : prev.maxPages;
+            })(),
         }));
+        previousSourceSiteRef.current = sourceSite;
     }, [sourceSite]);
 
     const handleChange = (e) => {
@@ -67,6 +79,8 @@ function ScheduleForm({
         const cronExpression = formData.cronPreset === 'custom'
             ? formData.customCron
             : formData.cronPreset;
+        const maxPages = Number.parseInt(`${formData.maxPages}`, 10);
+        const detailLimit = Number.parseInt(`${formData.detailLimit}`, 10);
 
         onSubmit({
             name: formData.name,
@@ -74,8 +88,8 @@ function ScheduleForm({
             crawl_phase: formData.crawlPhase,
             crawl_mode: formData.crawlMode,
             category_ids: formData.categoryIds,
-            max_pages: parseInt(formData.maxPages),
-            detail_limit: parseInt(formData.detailLimit),
+            max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite),
+            detail_limit: Number.isInteger(detailLimit) ? detailLimit : 100,
         });
     };
 

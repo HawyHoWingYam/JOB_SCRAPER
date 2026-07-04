@@ -370,6 +370,10 @@ function classifyProgressEntry(data) {
     const displayState = resolveDisplayState(data);
     const effectiveStatus = resolveEffectiveStatus(data);
 
+    if (data?.listing_completed && effectiveStatus === 'failed') {
+        return 'backlog';
+    }
+
     if (displayState === 'manual_action_required' || displayState === 'failed' || displayState === 'running_with_warning') {
         return 'attention';
     }
@@ -411,6 +415,15 @@ function resolveEffectiveStatus(data) {
         )
     ) {
         return 'completed_with_ai_failures';
+    }
+    if (baseStatus === 'running' && data?.waf_challenge) {
+        return 'running_with_warning';
+    }
+    if (baseStatus === 'running' && data?.ip_blocked) {
+        return 'running_with_warning';
+    }
+    if (baseStatus === 'completed' && data?.ip_blocked) {
+        return 'completed_with_ip_blocked';
     }
 
     return baseStatus;
@@ -770,6 +783,12 @@ function ProgressItem({
         queued_at,
         started_at,
         completed_at,
+        listing_completed = false,
+        waf_challenge = false,
+        waf_challenge_message,
+        waf_challenge_url,
+        ip_blocked = false,
+        ip_blocked_message,
         elapsed_seconds = 0,
         error
     } = data;
@@ -811,12 +830,21 @@ function ProgressItem({
         proxyQuarantinedTotal: proxy_quarantined_total,
     });
     const taskStatusSignals = [...statusSignals];
+    const hasWafChallenge = Boolean(waf_challenge);
+    const hasIpBlocked = Boolean(ip_blocked);
+    const isPartialComplete = Boolean(listing_completed && effectiveStatus === 'failed');
     const isQueuedHeadedRun =
         effectiveStatus === 'queued'
         && `${request_payload?.crawl_mode || crawl_mode || ''}`.trim().toLowerCase() === 'headed';
     const headedWorkerUnavailable = isQueuedHeadedRun && headedWorkerStatus?.available === false;
     if (headedWorkerUnavailable) {
         taskStatusSignals.push('Headed worker offline');
+    }
+    if (hasWafChallenge) {
+        taskStatusSignals.push('WAF challenge');
+    }
+    if (hasIpBlocked) {
+        taskStatusSignals.push('IP Blocked');
     }
 
     useEffect(() => {
@@ -1272,6 +1300,22 @@ function ProgressItem({
         } else {
             detailLines.push('Awaiting crawl worker dispatch');
         }
+    } else if (isPartialComplete) {
+        statusText = 'Partial Complete';
+        statusClass = 'warning';
+        if (listings_staged > 0) {
+            metricLines.push(`Staged listings: ${formatCount(listings_staged)}`);
+        }
+        metricLines.push(`Pending details: ${formatCount(detail_pending)}`);
+        metricLines.push(`Running details: ${formatCount(detail_running)}`);
+        metricLines.push(`Completed details: ${formatCount(detail_completed)}`);
+        if (detail_failed > 0) {
+            metricLines.push(`Failed details: ${formatCount(detail_failed)}`);
+        }
+        if (detail_manual_action_required > 0) {
+            metricLines.push(`Manual review: ${formatCount(detail_manual_action_required)}`);
+        }
+        detailLines.push(error || 'Service restarted before crawl job could finish.');
     } else if (isBacklogPoolScope) {
         statusText = 'Downstream Backlog';
         statusClass = 'warning';
@@ -1362,7 +1406,7 @@ function ProgressItem({
         metricLines.push(`Failed: ${formatCount(ai_failed_items)}`);
     } else if (effectiveStatus === 'ai_running') {
         statusText = 'AI Enrichment';
-    } else if (effectiveStatus === 'failed') {
+    } else if (effectiveStatus === 'failed' && !isPartialComplete) {
         statusText = 'Failed';
         statusClass = 'error';
         detailLines.push(error || 'Unknown error');
@@ -1413,7 +1457,7 @@ function ProgressItem({
                         Last updated: {formatTaskTimestamp(data?.updated_at || completed_at || started_at || queued_at)}
                     </span>
                 </div>
-                {taskStatusSignals.length > 0 && (
+            {taskStatusSignals.length > 0 && (
                     <div className="progress-status-signal-row">
                         {taskStatusSignals.map((signal) => (
                             <span key={`${taskId}-${signal}`} className="progress-status-chip">
@@ -1423,6 +1467,25 @@ function ProgressItem({
                     </div>
                 )}
             </div>
+            {hasWafChallenge && (
+                <div className="progress-warning-banner">
+                    <strong>OfferToday security challenge detected.</strong>
+                    <span>
+                        {waf_challenge_message || 'Complete the verification in the browser window to continue.'}
+                    </span>
+                    {waf_challenge_url && (
+                        <span className="progress-warning-url">{waf_challenge_url}</span>
+                    )}
+                </div>
+            )}
+            {hasIpBlocked && (
+                <div className="progress-warning-banner ip-blocked">
+                    <strong>OfferToday IP has been blocked.</strong>
+                    <span>
+                        {ip_blocked_message || 'The server rejected further requests due to IP behavior flags. Detail phase has been stopped.'}
+                    </span>
+                </div>
+            )}
             {renderMetricLines(metricLines)}
 
             <button

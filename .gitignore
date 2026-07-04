@@ -88,3 +88,6 @@ backend/.host_worker_venv/
 *.bak
 *.tmp
 .reasonix/*
+
+# OfferToday auth session (contains login token — never commit)
+**/offertoday_auth_state*.json

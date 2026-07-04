@@ -28,64 +28,129 @@ if BACKEND not in sys.path:
 if SCRAPY_PROJECT not in sys.path:
     sys.path.insert(0, SCRAPY_PROJECT)
 
+from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, OFFERTODAY_LISTING_BROWSE_URL, OFFERTODAY_LISTING_SEARCH_URL, build_offertoday_listing_payload
 from app.sources.offertoday.search_space import (  # noqa: E402
     build_offertoday_listing_queries,
     normalize_offertoday_keywords,
 )
+from app.sources.offertoday.parsers import parse_offertoday_listing_response  # noqa: E402
 from job_scraper_spiders.downloaders.scrapling_adapter import scrapling_fetch  # noqa: E402
 
-OFFERTODAY_BASE_URL = "https://www.offertoday.com"
-OFFERTODAY_LISTING_URL = "https://www.offertoday.com/wapi/geek/recommend/search/list"
-OFFERTODAY_DETAIL_URL_TPL = "https://www.offertoday.com/wapi/geek/recommend/jobDetail?id=%s&encryptJobId=%s"
+OFFERTODAY_DETAIL_URL_TPL = f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/jobDetail?id={{}}&encryptJobId={{}}"
 
 MAX_PAGES_GLOBAL = 9999
 DEFAULT_IT_UNIQUE_JOB_TARGET = 3000
 
-_COMMON_HEADERS = {
-    "api-language": "zh_HK",
-    "x-requested-with": "XMLHttpRequest",
-    "accept": "application/json, text/plain, */*",
-    "content-type": "application/json;charset=UTF-8",
-}
+# WAF challenge URL fragment — OfferToday redirects here when it detects unusual traffic.
+_WAF_CHALLENGE_PATH = "/web/passport/cm/verify"
+# How long to wait (seconds) for the user to complete manual WAF verification before giving up.
+_WAF_MANUAL_TIMEOUT_SECONDS = 180
+
+_COMMON_HEADERS = OFFERTODAY_COMMON_HEADERS
 
 
-def _build_listing_payload(*, category_id: int | None, keyword: str, page: int) -> dict[str, Any]:
-    payload = {
-        "keyword": keyword,
-        "rcdType": 7,
-        "pageSize": 10,
-        "page": page,
-        "salaryType": 0,
-        "employmentTypes": [],
-        "publishTime": "",
-        "experiences": [],
-        "educationLevels": [],
-        "benefits": [],
-        "industries": [],
-        "subDistrictCodes": [],
-        "needShowDistance": False,
-        "searchSource": None,
-    }
-    if category_id is not None:
-        payload["jobFunctionCodes"] = [category_id]
-    return payload
+async def _check_and_handle_waf_challenge(page, *, headed: bool, crawl_job_id: str, db: Any) -> bool:
+    """Return True if a WAF challenge was detected (and handled or timed out)."""
+    try:
+        current_url = page.url
+    except Exception:
+        return False
+
+    if _WAF_CHALLENGE_PATH not in current_url:
+        return False
+
+    logger.warning(
+        "OfferToday WAF challenge detected at %s. "
+        "%s",
+        current_url,
+        "Waiting for manual verification in browser window." if headed
+        else "Headless mode — cannot complete challenge automatically. Retrying warmup.",
+    )
+
+    if crawl_job_id and db:
+        try:
+            from app.models.crawl_job import CrawlJobEvent
+            seq = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id == crawl_job_id).count()
+            _write_progress_event(
+                db,
+                crawl_job_id=crawl_job_id,
+                sequence_no=seq + 1,
+                event_type="waf.challenge",
+                payload={
+                    "message": "WAF security challenge detected. Complete the verification in the browser window to continue.",
+                    "challenge_url": current_url,
+                    "headed": headed,
+                },
+            )
+            db.commit()
+        except Exception as exc:
+            logger.warning("Failed to emit waf.challenge event: %s", exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    if not headed:
+        return True  # caller will decide whether to abort or retry
+
+    try:
+        logger.info("Waiting up to %ds for user to complete WAF verification…", _WAF_MANUAL_TIMEOUT_SECONDS)
+        challenge_url = current_url
+        await page.wait_for_url(
+            lambda current_url: _WAF_CHALLENGE_PATH not in current_url,
+            timeout=_WAF_MANUAL_TIMEOUT_SECONDS * 1000,
+        )
+        logger.info("WAF challenge cleared. Current URL: %s", page.url)
+        if crawl_job_id and db:
+            try:
+                from app.models.crawl_job import CrawlJobEvent
+
+                seq = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id == crawl_job_id).count()
+                _write_progress_event(
+                    db,
+                    crawl_job_id=crawl_job_id,
+                    sequence_no=seq + 1,
+                    event_type="waf.challenge_cleared",
+                    payload={
+                        "message": "WAF verification completed in the browser window.",
+                        "challenge_url": challenge_url,
+                        "cleared_url": page.url,
+                        "headed": headed,
+                    },
+                )
+                db.commit()
+            except Exception as exc:
+                logger.warning("Failed to emit waf.challenge_cleared event: %s", exc)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+        await asyncio.sleep(1.5)
+        return True
+    except Exception as exc:
+        logger.warning("WAF wait timed out or failed: %s", exc)
+
+    return True
 
 
-async def _fetch_listing_json(page, payload: dict[str, Any]) -> dict[str, Any]:
+async def _fetch_listing_json(
+    page, payload: dict[str, Any], *, listing_url: str | None = None
+) -> dict[str, Any]:
+    url = listing_url or OFFERTODAY_LISTING_SEARCH_URL
     js = (
-        f"()=>fetch('{OFFERTODAY_LISTING_URL}',{{method:'POST',"
+        f"()=>fetch('{url}',{{method:'POST',"
         f"headers:{json.dumps(_COMMON_HEADERS, ensure_ascii=False)},"
         f"body:JSON.stringify({json.dumps(payload, ensure_ascii=False)})"
         f"}}).then(r=>r.json())"
     )
     try:
-        return await page.evaluate(js)
+        return await asyncio.wait_for(page.evaluate(js), timeout=30)
     except Exception as exc:
         logger.warning("Playwright listing fetch failed; trying Scrapling fallback: %s", exc)
 
     try:
         text = await scrapling_fetch(
-            OFFERTODAY_LISTING_URL,
+            url,
             method="POST",
             headers=_COMMON_HEADERS,
             data=json.dumps(payload, ensure_ascii=False),
@@ -99,13 +164,13 @@ async def _fetch_listing_json(page, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _fetch_detail_json(page, jid: str) -> dict[str, Any]:
-    detail_url = OFFERTODAY_DETAIL_URL_TPL % (jid, jid)
+    detail_url = OFFERTODAY_DETAIL_URL_TPL.format(jid, jid)
     js = (
         f"()=>fetch('{detail_url}',{{headers:{{"
         f"'api-language':'zh_HK','x-requested-with':'XMLHttpRequest'}}}}).then(r=>r.json())"
     )
     try:
-        return await page.evaluate(js)
+        return await asyncio.wait_for(page.evaluate(js), timeout=30)
     except Exception as exc:
         logger.warning("Playwright detail fetch failed; trying Scrapling fallback: %s", exc)
 
@@ -141,12 +206,45 @@ def _write_progress_event(db, *, crawl_job_id: str, sequence_no: int, event_type
     db.add(evt)
 
 
+def _emit_listing_completed_checkpoint(
+    db,
+    *,
+    crawl_job_id: str,
+    sequence_no: int,
+    payload: dict[str, Any],
+) -> None:
+    """Write the checkpoint that marks the listing phase as finished."""
+    _write_progress_event(
+        db,
+        crawl_job_id=crawl_job_id,
+        sequence_no=sequence_no,
+        event_type="listing_completed",
+        payload=payload,
+    )
+    db.commit()
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Standalone OfferToday crawler")
     parser.add_argument("--category-ids", type=str, default="")
     parser.add_argument("--keywords", type=str, default="")
     parser.add_argument("--max-pages", type=int, default=100)
     parser.add_argument("--crawl-job-id", type=str, default="")
+    parser.add_argument(
+        "--headed",
+        action="store_true",
+        default=False,
+        help="Run with a visible browser window so WAF challenges can be completed manually.",
+    )
+    parser.add_argument(
+        "--auth-state",
+        default="",
+        help=(
+            "Path to a Playwright storage_state JSON file produced by offertoday_auth_setup.py. "
+            "Loads cookies and localStorage so the crawl starts pre-authenticated, "
+            "which reduces WAF challenge frequency."
+        ),
+    )
     args = parser.parse_args()
 
     category_ids = [int(c.strip()) for c in args.category_ids.split(",") if c.strip().isdigit()]
@@ -241,22 +339,38 @@ async def main() -> None:
 
     try:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            context = await browser.new_context(
-                user_agent=(
+            launch_args = [] if args.headed else ["--no-sandbox", "--disable-dev-shm-usage"]
+            browser = await pw.chromium.launch(headless=not args.headed, args=launch_args)
+            auth_state_path = Path(args.auth_state).resolve() if args.auth_state else None
+            context_kwargs: dict = {
+                "user_agent": (
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36"
                 ),
-                locale="zh-HK",
-            )
+                "locale": "zh-HK",
+            }
+            if auth_state_path and auth_state_path.exists():
+                context_kwargs["storage_state"] = str(auth_state_path)
+                logger.info("Loading auth state from %s", auth_state_path)
+            elif args.auth_state:
+                logger.warning(
+                    "Auth state file not found: %s — starting without pre-loaded session",
+                    auth_state_path,
+                )
+            context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
 
             await page.goto(f"{OFFERTODAY_BASE_URL}/hk/search", wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(2.0)
-            logger.info("Warmup complete")
+            # Check immediately whether WAF fired on the warmup page.
+            await _check_and_handle_waf_challenge(
+                page, headed=args.headed, crawl_job_id=cj_id, db=db
+            )
+            logger.info("Warmup complete (url=%s)", page.url)
 
             exhausted_conditions: set[tuple[str, Any, Any]] = set()
-            for task in listing_tasks:
+            consecutive_failures = 0
+            for task_index, task in enumerate(listing_tasks):
                 search_family = str(task.get("search_family") or "").strip() or "category_search"
                 category_id = task.get("category_id")
                 keyword = str(task.get("keyword") or "")
@@ -265,11 +379,31 @@ async def main() -> None:
                 if condition_key in exhausted_conditions:
                     continue
 
-                payload = _build_listing_payload(category_id=category_id, keyword=keyword, page=page_number)
-                data: dict[str, Any] = await _fetch_listing_json(page, payload)
+                payload = build_offertoday_listing_payload(category_id=category_id, keyword=keyword, page=page_number)
+                task_listing_url = (
+                    OFFERTODAY_LISTING_BROWSE_URL
+                    if task.get("endpoint") == "browse"
+                    else None
+                )
+                data: dict[str, Any] = await _fetch_listing_json(page, payload, listing_url=task_listing_url)
 
                 if not data or data.get("code") != 0:
+                    consecutive_failures += 1
+                    # After 3 consecutive bad responses, check for WAF challenge.
+                    if consecutive_failures >= 3:
+                        await _check_and_handle_waf_challenge(
+                            page, headed=args.headed, crawl_job_id=cj_id, db=db
+                        )
+                        consecutive_failures = 0
                     continue
+
+                consecutive_failures = 0
+
+                # Periodic WAF check every 50 processed tasks.
+                if task_index > 0 and task_index % 50 == 0:
+                    await _check_and_handle_waf_challenge(
+                        page, headed=args.headed, crawl_job_id=cj_id, db=db
+                    )
 
                 result_list = data.get("data", {}).get("resultList", [])
                 if not result_list:
@@ -385,6 +519,23 @@ async def main() -> None:
             if is_default_it_crawl and len(seen_ids) >= DEFAULT_IT_UNIQUE_JOB_TARGET:
                 logger.info("Default IT crawl target reached; skipping remaining listing tasks.")
 
+            if args.crawl_job_id:
+                event_seq += 1
+                _emit_listing_completed_checkpoint(
+                    db,
+                    crawl_job_id=cj_id,
+                    sequence_no=event_seq,
+                    payload={
+                        "phase": 1,
+                        "search_families": search_families,
+                        "pages_processed": page_count,
+                        "job_ids_collected": len(seen_ids),
+                        "listings_staged": listing_count,
+                        "detail_pending": listing_count,
+                        "message": "Listing phase completed; detail phase will continue.",
+                    },
+                )
+
             db.commit()
             logger.info("Listing done: %d pages, %d unique IDs", page_count, listing_count)
 
@@ -397,8 +548,15 @@ async def main() -> None:
                 .all()
             )
             total_details = len(listings)
+            ip_blocked = False
 
             for idx, listing in enumerate(listings):
+                # periodic WAF check — mirrors the listing-loop pattern
+                if idx > 0 and idx % 20 == 0:
+                    await _check_and_handle_waf_challenge(
+                        page, headed=args.headed, crawl_job_id=cj_id, db=db
+                    )
+
                 jid = listing.source_job_id or ""
                 if not jid:
                     continue
@@ -412,8 +570,43 @@ async def main() -> None:
                         detail_success = True
                         break
 
+                    # IP block detection: code -1000035 = IP 行为异常, an environment-level block
+                    if data and data.get("code") == -1000035:
+                        logger.warning("IP block detected (code=-1000035) at detail index %d", idx + 1)
+                        ip_blocked = True
+                        break
+
                     if attempt < 3:
                         await asyncio.sleep(2.0 ** attempt)
+
+                if ip_blocked:
+                    # Environment-level block — write event, bulk-fail remaining, break
+                    if args.crawl_job_id:
+                        event_seq += 1
+                        _write_progress_event(
+                            db,
+                            crawl_job_id=cj_id,
+                            sequence_no=event_seq,
+                            event_type="crawl.ip_blocked",
+                            payload={
+                                "error_code": -1000035,
+                                "message": "IP has been blocked by OfferToday. Detail phase cannot continue.",
+                                "detail_index": idx + 1,
+                                "detail_total": total_details,
+                                "detail_completed": detail_ok,
+                                "detail_failed": detail_fail,
+                            },
+                        )
+                        # bulk mark remaining pending as failed
+                        remaining = total_details - detail_ok - detail_fail
+                        if remaining > 0:
+                            db.query(CrawlJobListing).filter(
+                                CrawlJobListing.crawl_job_id == cj_id,
+                                CrawlJobListing.detail_status == "pending",
+                            ).update({"detail_status": "failed"}, synchronize_session=False)
+                            detail_fail += remaining
+                        db.commit()
+                    break
 
                 if detail_success:
                     detail_ok += 1
@@ -498,6 +691,7 @@ async def main() -> None:
                     "listings": listing_count,
                     "detail_ok": detail_ok,
                     "detail_fail": detail_fail,
+                    "ip_blocked": ip_blocked,
                 },
             )
             cj = db.query(CrawlJob).filter(CrawlJob.id == cj_id).first()

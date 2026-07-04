@@ -34,7 +34,13 @@ if BACKEND not in sys.path:
 if SCRAPY_PROJECT not in sys.path:
     sys.path.insert(0, SCRAPY_PROJECT)
 
-from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, build_offertoday_listing_payload
+from app.sources.offertoday.constants import (
+    OFFERTODAY_BASE_URL,
+    OFFERTODAY_COMMON_HEADERS,
+    OFFERTODAY_LISTING_BROWSE_URL,
+    OFFERTODAY_LISTING_SEARCH_URL,
+    build_offertoday_listing_payload,
+)
 from app.sources.offertoday.parsers import parse_offertoday_listing_response  # noqa: E402
 from app.sources.offertoday.search_space import build_offertoday_listing_queries, normalize_offertoday_keywords  # noqa: E402
 from job_scraper_spiders.downloaders.offertoday_transport import PlaywrightPageTransport  # noqa: E402
@@ -42,7 +48,7 @@ from job_scraper_spiders.downloaders.offertoday_transport import PlaywrightPageT
 OFFERTODAY_SEARCH_URL = f"{OFFERTODAY_BASE_URL}/hk/search"
 
 MAX_PAGES_GLOBAL = 9999
-DEFAULT_MAX_PAGES = 6
+DEFAULT_MAX_PAGES = 100
 DEFAULT_WARMUP_DELAY_SECONDS = 2.0
 
 _COMMON_HEADERS = OFFERTODAY_COMMON_HEADERS
@@ -159,8 +165,14 @@ async def run_offertoday_coverage_audit(
     keywords: str,
     max_pages_per_query: int,
     target_unique_job_ids: int,
+    listing_url: str | None = None,
 ) -> CoverageAuditResult:
-    """Fetch OfferToday listing pages and count unique IDs by search family."""
+    """Fetch OfferToday listing pages and count unique IDs by search family.
+
+    ``listing_url`` selects the API endpoint:
+    - None / OFFERTODAY_LISTING_SEARCH_URL (default): recommendation-filtered search
+    - OFFERTODAY_LISTING_BROWSE_URL: plain category browse (use to test hypothesis B)
+    """
     if max_pages_per_query < 1:
         raise ValueError("max_pages_per_query must be >= 1")
     if max_pages_per_query > MAX_PAGES_GLOBAL:
@@ -180,6 +192,7 @@ async def run_offertoday_coverage_audit(
     )
     global_seen_ids: set[str] = set()
     seen_reported_conditions: set[tuple[str, Any, str]] = set()
+    exhausted_conditions: set[tuple[Any, str]] = set()  # (category_id, keyword) → empty page seen
 
     from playwright.async_api import async_playwright
 
@@ -202,7 +215,7 @@ async def run_offertoday_coverage_audit(
             await page.goto(OFFERTODAY_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(DEFAULT_WARMUP_DELAY_SECONDS)
 
-            transport = PlaywrightPageTransport(page)
+            transport = PlaywrightPageTransport(page, listing_url=listing_url or OFFERTODAY_LISTING_SEARCH_URL)
 
             for task in listing_tasks:
                 family = str(task.get("search_family") or "").strip() or "category_search"
@@ -212,16 +225,31 @@ async def run_offertoday_coverage_audit(
                 page_number = int(task.get("page") or 1)
                 condition_key = (family, category_id, keyword)
 
+                # Skip remaining pages for conditions that already returned empty results.
+                exhaustion_key = (category_id, keyword)
+                if exhaustion_key in exhausted_conditions:
+                    logger.debug(
+                        "Skipping exhausted condition family=%s cat=%s keyword=%s page=%s",
+                        family, category_id, keyword, page_number,
+                    )
+                    continue
+
                 result.processed_tasks += 1
                 stats.pages_fetched += 1
 
                 try:
+                    task_listing_url = (
+                        OFFERTODAY_LISTING_BROWSE_URL
+                        if task.get("endpoint") == "browse"
+                        else listing_url or OFFERTODAY_LISTING_SEARCH_URL
+                    )
                     response = await transport.fetch_listing(
                         build_offertoday_listing_payload(
                             category_id=category_id,
                             keyword=keyword,
                             page=page_number,
-                        )
+                        ),
+                        listing_url=task_listing_url,
                     )
                 except Exception as exc:  # pragma: no cover - live transport failure path
                     stats.failed_pages += 1
@@ -263,6 +291,16 @@ async def run_offertoday_coverage_audit(
 
                 parsed_jobs = parse_offertoday_listing_response(response)
                 stats.listing_rows += len(parsed_jobs)
+
+                if not parsed_jobs:
+                    # Mark this (category_id, keyword) pair exhausted so subsequent
+                    # pages for the same condition are skipped without fetching.
+                    exhausted_conditions.add((category_id, keyword))
+                    logger.debug(
+                        "Condition exhausted family=%s cat=%s keyword=%s page=%s",
+                        family, category_id, keyword, page_number,
+                    )
+                    continue
 
                 for job in parsed_jobs:
                     job_id = str(job.get("encrypted_job_id") or "").strip()
@@ -308,6 +346,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES, help="Max pages per query condition")
     parser.add_argument(
+        "--use-browse-endpoint",
+        action="store_true",
+        default=False,
+        help=(
+            "Use the plain category-browse endpoint (/recommend/list) instead of the default "
+            "recommendation-search endpoint (/recommend/search/list). "
+            "Use this to test whether the search endpoint is under-counting results."
+        ),
+    )
+    parser.add_argument(
         "--target-unique-job-ids",
         type=int,
         required=True,
@@ -321,11 +369,13 @@ async def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        listing_url = OFFERTODAY_LISTING_BROWSE_URL if args.use_browse_endpoint else OFFERTODAY_LISTING_SEARCH_URL
         result = await run_offertoday_coverage_audit(
             category_ids=_parse_category_ids(args.category_ids),
             keywords=args.keywords,
             max_pages_per_query=int(args.max_pages),
             target_unique_job_ids=int(args.target_unique_job_ids),
+            listing_url=listing_url,
         )
     except ValueError as exc:
         parser.error(str(exc))

@@ -38,12 +38,14 @@ class TestOffertodaySearchSpace:
                 "category_id": 118000,
                 "keyword": "",
                 "page": 1,
+                "endpoint": "browse",
             },
             {
                 "search_family": "it_category",
                 "category_id": 118000,
                 "keyword": "",
                 "page": 2,
+                "endpoint": "browse",
             },
         ]
         category_query_count = len(OFFERTODAY_IT_CATEGORY_CODES) * 2

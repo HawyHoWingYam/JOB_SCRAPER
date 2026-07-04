@@ -551,7 +551,9 @@ def _build_search_response(
     total = query.order_by(None).count()
     results_query = query
     if not preserve_query_order:
-        results_query = results_query.order_by(Job.posted_date.desc().nullslast())
+        results_query = results_query.order_by(
+            func.coalesce(Job.posted_date, Job.created_at).desc()
+        )
     results = results_query.offset(offset).limit(page_size).all()
     return _build_search_response_from_results(
         results,

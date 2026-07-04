@@ -17,7 +17,7 @@ from typing import Any, Iterable
 import scrapy
 from scrapy.http import Response
 
-from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, build_offertoday_listing_payload
+from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, OFFERTODAY_LISTING_BROWSE_URL, build_offertoday_listing_payload
 from app.sources.offertoday.search_space import build_offertoday_listing_queries
 from job_scraper_spiders.items import CrawlProgressItem, JobDetailItem, ListingItem
 from job_scraper_spiders.parsers.offertoday_parser import (
@@ -141,8 +141,14 @@ class OfferTodaySpider(scrapy.Spider):
             keyword=task["keyword"],
             page=task["page"],
         )
+        # Use browse endpoint for category-only queries (no keyword) per task hint
+        listing_url = (
+            OFFERTODAY_LISTING_BROWSE_URL
+            if task.get("endpoint") == "browse"
+            else OFFERTODAY_LISTING_URL
+        )
         return scrapy.Request(
-            url=OFFERTODAY_LISTING_URL,
+            url=listing_url,
             method="POST",
             headers=_COMMON_HEADERS,
             body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),

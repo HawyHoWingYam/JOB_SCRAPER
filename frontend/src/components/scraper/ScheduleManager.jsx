@@ -8,6 +8,7 @@ import ScheduleHistory from './ScheduleHistory';
 import ScrapeProgressPanel from './ScrapeProgressPanel';
 import { getCrawlModeOptionsForSource, resolveDefaultCrawlMode } from './crawlMode';
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
+import { resolveDefaultMaxPages } from './maxPages';
 import {
     formatListingBatchIdentity,
     formatListingBatchOptionLabel,
@@ -140,7 +141,7 @@ function buildImmediateScrapePayload(form, sourceSite) {
     const detailLimit = Number.parseInt(`${form?.detail_limit ?? ''}`, 10);
     const sourceListingCrawlJobId = `${form?.source_listing_crawl_job_id ?? ''}`.trim();
 
-    if (crawlPhase === 'listing' && categoryIds.length === 0) {
+    if (crawlPhase === 'listing' && categoryIds.length === 0 && sourceSite !== 'offertoday') {
         return {
             error: 'Please select at least one category.',
         };
@@ -170,7 +171,7 @@ function buildImmediateScrapePayload(form, sourceSite) {
             crawl_phase: crawlPhase,
             crawl_mode: form?.crawl_mode || resolveDefaultCrawlMode(sourceSite),
             category_ids: categoryIds,
-            max_pages: Number.isInteger(maxPages) ? maxPages : 3,
+            max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite),
             detail_limit: crawlPhase === 'detail' ? detailLimit : 100,
             skip_existing: true,
             ...(sourceListingCrawlJobId ? { source_listing_crawl_job_id: sourceListingCrawlJobId } : {}),
@@ -253,6 +254,10 @@ function formatSectorSelectionLabel(selectedCount) {
     return `${selectedCount} sector${selectedCount === 1 ? '' : 's'} selected`;
 }
 
+function formatOfferTodayListingScopeLabel(selectedCount) {
+    return selectedCount === 0 ? '全 IT 分類（預設）' : formatSectorSelectionLabel(selectedCount);
+}
+
 function buildSelectedSectorSummary(form, categories) {
     const selectedIds = new Set(
         Array.isArray(form?.category_ids)
@@ -270,12 +275,15 @@ function buildSelectedSectorSummary(form, categories) {
     return `Sectors: ${selectedNames.join(', ')}`;
 }
 
-function formatImmediateListingDepthMetric(maxPages) {
+function formatImmediateListingDepthMetric(maxPages, sourceSite, selectedSectorCount) {
     if (!Number.isInteger(maxPages)) {
         return 'Page limit not set';
     }
     if (maxPages < 1 || maxPages > 9999) {
         return 'Page limit invalid';
+    }
+    if (sourceSite === 'offertoday' && selectedSectorCount === 0) {
+        return `${maxPages} pages across 全 IT 分類（預設）`;
     }
     return `${maxPages} pages per sector`;
 }
@@ -325,8 +333,10 @@ function buildImmediateRunSummary(form, sourceSite, categories) {
     const maxPages = Number.parseInt(`${form?.max_pages ?? ''}`, 10);
 
     summaryMetrics.push(
-        formatSectorSelectionLabel(selectedSectorCount),
-        formatImmediateListingDepthMetric(maxPages)
+        sourceSite === 'offertoday'
+            ? formatOfferTodayListingScopeLabel(selectedSectorCount)
+            : formatSectorSelectionLabel(selectedSectorCount),
+        formatImmediateListingDepthMetric(maxPages, sourceSite, selectedSectorCount)
     );
 
     return {
@@ -358,7 +368,7 @@ function buildImmediateRunReadiness(form, sourceSite, headedWorkerStatus = null)
     if (request.error) {
         let detail = request.error;
 
-        if (crawlPhase === 'listing' && selectedSectorCount === 0) {
+        if (crawlPhase === 'listing' && selectedSectorCount === 0 && sourceSite !== 'offertoday') {
             detail = 'Select at least one sector to launch this listing crawl.';
         } else if (crawlPhase === 'detail' && selectedSectorCount === 0 && !hasBatchFilter) {
             detail = 'Select sectors or a legacy listing batch before launching this detail recovery run.';
@@ -375,7 +385,9 @@ function buildImmediateRunReadiness(form, sourceSite, headedWorkerStatus = null)
         isReady: true,
         statusLabel: 'Ready to launch',
         detail: crawlPhase === 'listing'
-            ? `Listing crawl will scan ${selectedSectorCount} selected sector${selectedSectorCount === 1 ? '' : 's'}.`
+            ? (sourceSite === 'offertoday' && selectedSectorCount === 0
+                ? 'Listing crawl will use 全 IT 分類（預設）.'
+                : `Listing crawl will scan ${selectedSectorCount} selected sector${selectedSectorCount === 1 ? '' : 's'}.`)
             : hasBatchFilter
                 ? 'Detail crawl will narrow recovery to the selected legacy listing batch.'
                 : 'Detail crawl will recover eligible backlog from the selected sector scope.',
@@ -417,7 +429,7 @@ function ScheduleManager({ onNavigateToAI }) {
         crawl_phase: resolveDefaultCrawlPhase(),
         crawl_mode: resolveDefaultCrawlMode('jobsdb'),
         category_ids: [],
-        max_pages: 3,
+        max_pages: resolveDefaultMaxPages('jobsdb'),
         detail_limit: 100,
         source_listing_crawl_job_id: '',
     });
@@ -966,6 +978,16 @@ function ScheduleManager({ onNavigateToAI }) {
             crawl_mode: resolveDefaultCrawlMode(nextSourceSite),
             category_ids: [],
             source_listing_crawl_job_id: '',
+            max_pages: (() => {
+                const previousDefaultMaxPages = resolveDefaultMaxPages(currentSourceSite);
+                const currentMaxPages = Number.parseInt(`${prev.max_pages ?? ''}`, 10);
+                const shouldAdoptSourceDefault =
+                    !Number.isInteger(currentMaxPages) || currentMaxPages === previousDefaultMaxPages;
+
+                return shouldAdoptSourceDefault
+                    ? resolveDefaultMaxPages(nextSourceSite)
+                    : prev.max_pages;
+            })(),
         }));
     };
 
@@ -1208,6 +1230,11 @@ function ScheduleManager({ onNavigateToAI }) {
                                 </label>
                             ))}
                         </div>
+                        {currentSourceSite === 'offertoday' && immediateForm.crawl_phase === 'listing' && (
+                            <p className="form-hint">
+                                Leave sectors blank to use 全 IT 分類（預設）.
+                            </p>
+                        )}
                     </div>
 
                     <div className="cyber-form-group">
@@ -1228,7 +1255,9 @@ function ScheduleManager({ onNavigateToAI }) {
                         <p className="form-hint">
                             {immediateForm.crawl_phase === 'detail'
                                 ? 'Set the maximum number of eligible detail rows to recover in this run.'
-                                : 'Set how many listing pages to scan per selected sector.'}
+                                : (currentSourceSite === 'offertoday' && immediateForm.category_ids.length === 0
+                                    ? 'Set how many listing pages to scan across the default IT scope.'
+                                    : 'Set how many listing pages to scan per selected sector.')}
                         </p>
                     </div>
 

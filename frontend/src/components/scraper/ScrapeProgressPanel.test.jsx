@@ -472,6 +472,48 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
+  it('renders restarted OfferToday listing runs as partial complete after the listing checkpoint', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          offertoday: {
+            crawl_job_id: 'offertoday-listing-1',
+            status: 'failed',
+            operator_state: 'stale_downstream_backlog',
+            metric_scope: 'backlog_pool',
+            source_site: 'offertoday',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            phase: 2,
+            listing_completed: true,
+            error: 'Service restarted before crawl job could finish.',
+            listings_staged: 3001,
+            detail_pending: 74,
+            detail_running: 0,
+            detail_completed: 2927,
+            detail_failed: 0,
+            queued_at: '2026-05-27T09:00:00Z',
+            started_at: '2026-05-27T09:01:00Z',
+            completed_at: '2026-05-27T09:05:00Z',
+          },
+        },
+      });
+    });
+
+    expect(
+      await screen.findByText('Partial Complete', { selector: '.status-badge' })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/staged listings: 3,001/i)).toBeInTheDocument();
+    expect(screen.getByText(/pending details: 74/i)).toBeInTheDocument();
+    expect(screen.getByText(/completed details: 2,927/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
   it('renders completed ingest runs with dead-letter counts without treating them as backlog', async () => {
     const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
 
@@ -534,6 +576,44 @@ describe('ScrapeProgressPanel', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/ingested: 100\/100/i)).toBeInTheDocument();
     expect(screen.queryByText(/jobs scraped:/i)).not.toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('shows an orange warning banner when OfferToday triggers WAF verification', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          offertoday: {
+            crawl_job_id: 'offertoday-waf-1',
+            status: 'running',
+            source_site: 'offertoday',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            phase: 1,
+            listing_completed: false,
+            waf_challenge: true,
+            waf_challenge_message:
+              'OfferToday security challenge detected. Complete the verification in the browser window to continue.',
+            waf_challenge_url: 'https://www.offertoday.com/web/passport/cm/verify.html?callbackUrl=test',
+            current_page: 1,
+            total_pages: 8,
+            job_ids_collected: 128,
+            queued_at: '2026-05-27T09:00:00Z',
+          },
+        },
+      });
+    });
+
+    expect(
+      await screen.findByText('OfferToday security challenge detected.', { selector: 'strong' })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/complete the verification in the browser window to continue/i)).toBeInTheDocument();
+    expect(screen.getByText(/waf challenge/i)).toBeInTheDocument();
 
     unmount();
   });

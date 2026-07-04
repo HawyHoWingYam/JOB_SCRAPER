@@ -32,6 +32,12 @@ INACTIVE_WORK_EVENT_TYPES = {
     "crawl.cancelled",
 }
 ACTIVITY_INTERVAL_EVENT_TYPES = ACTIVE_WORK_EVENT_TYPES | INACTIVE_WORK_EVENT_TYPES
+PROGRESS_CONTEXT_EVENT_TYPES = ACTIVITY_INTERVAL_EVENT_TYPES | {
+    "listing_completed",
+    "waf.challenge",
+    "waf.challenge_cleared",
+    "crawl.ip_blocked",
+}
 
 
 def _elapsed_seconds(reference_time, timestamp) -> int:
@@ -49,6 +55,20 @@ def _elapsed_seconds(reference_time, timestamp) -> int:
         return int((effective_reference - effective_timestamp).total_seconds())
     except TypeError:
         return 0
+
+
+def _latest_event_of_type(events: list[Any] | None, event_type: str) -> Any | None:
+    for event in reversed(list(events or [])):
+        if getattr(event, "event_type", None) == event_type:
+            return event
+    return None
+
+
+def _latest_event_of_types(events: list[Any] | None, event_types: set[str]) -> Any | None:
+    for event in reversed(list(events or [])):
+        if getattr(event, "event_type", None) in event_types:
+            return event
+    return None
 
 
 def _resolve_category_lookup(
@@ -159,6 +179,32 @@ def _build_progress_snapshot(
     category_lookup_cache: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
+    latest_event_type = getattr(latest_event, "event_type", None)
+    listing_completed_event = latest_event if latest_event_type == "listing_completed" else _latest_event_of_type(
+        events,
+        "listing_completed",
+    )
+    waf_state_event = latest_event if latest_event_type in {"waf.challenge", "waf.challenge_cleared"} else _latest_event_of_types(
+        events,
+        {"waf.challenge", "waf.challenge_cleared"},
+    )
+    listing_completed = listing_completed_event is not None
+    waf_challenge = getattr(waf_state_event, "event_type", None) == "waf.challenge"
+    waf_event_payload = (
+        waf_state_event.payload
+        if waf_challenge and waf_state_event and isinstance(waf_state_event.payload, dict)
+        else {}
+    )
+    ip_blocked_state_event = latest_event if latest_event_type == "crawl.ip_blocked" else _latest_event_of_type(
+        events,
+        "crawl.ip_blocked",
+    )
+    ip_blocked = ip_blocked_state_event is not None
+    ip_blocked_event_payload = (
+        ip_blocked_state_event.payload
+        if ip_blocked and ip_blocked_state_event and isinstance(ip_blocked_state_event.payload, dict)
+        else {}
+    )
     request_payload = event_payload.get("request_payload") or crawl_job.request_payload or {}
     category_ids = list(event_payload.get("category_ids") or request_payload.get("category_ids") or [])
     category_label = event_payload.get("category_name")
@@ -370,6 +416,12 @@ def _build_progress_snapshot(
         "ai_total_items": ai_total_items,
         "manual_action": event_payload.get("manual_action"),
         "manual_action_resolution": event_payload.get("manual_action_resolution"),
+        "listing_completed": listing_completed,
+        "waf_challenge": waf_challenge,
+        "waf_challenge_message": waf_event_payload.get("message") if waf_challenge else None,
+        "waf_challenge_url": waf_event_payload.get("challenge_url") if waf_challenge else None,
+        "ip_blocked": ip_blocked,
+        "ip_blocked_message": ip_blocked_event_payload.get("message") if ip_blocked else None,
         "error": crawl_job.error_message or event_payload.get("error"),
     }
 
@@ -573,7 +625,7 @@ def _collect_progress_payload() -> dict[str, Any]:
         activity_events_by_job = repository.list_events_by_job_ids(
             db,
             crawl_job_ids=crawl_job_ids,
-            event_types=ACTIVITY_INTERVAL_EVENT_TYPES,
+            event_types=PROGRESS_CONTEXT_EVENT_TYPES,
         )
 
         for crawl_job in crawl_jobs:

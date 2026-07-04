@@ -35,10 +35,10 @@ def test_ensure_headed_host_runtime_recreates_venv_when_base_python_is_missing(t
     (venv_dir / "pyvenv.cfg").write_text(
         "\n".join(
             [
-                "home = C:\\Program Files\\Python311",
+                "home = C:\\__missing__\\Python311",
                 "include-system-site-packages = true",
                 "version = 3.11.5",
-                "executable = C:\\Program Files\\Python311\\python.exe",
+                "executable = C:\\__missing__\\Python311\\python.exe",
             ]
         ),
         encoding="utf-8",
@@ -64,10 +64,10 @@ def test_ensure_headed_host_runtime_recreates_venv_when_base_python_is_missing(t
             (venv_dir / "pyvenv.cfg").write_text(
                 "\n".join(
                     [
-                        "home = C:\\Python312",
+                        "home = C:\\__missing__\\Python312",
                         "include-system-site-packages = true",
                         "version = 3.12.3",
-                        "executable = C:\\Python312\\python.exe",
+                        "executable = C:\\__missing__\\Python312\\python.exe",
                     ]
                 ),
                 encoding="utf-8",

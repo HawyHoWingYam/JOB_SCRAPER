@@ -17,11 +17,17 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
-from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS
+from app.sources.offertoday.constants import (
+    OFFERTODAY_BASE_URL,
+    OFFERTODAY_COMMON_HEADERS,
+    OFFERTODAY_LISTING_SEARCH_URL,
+    OFFERTODAY_LISTING_BROWSE_URL,
+)
 
 logger = logging.getLogger(__name__)
 
-OFFERTODAY_LISTING_URL = f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/search/list"
+# Keep a module-level alias for backwards compatibility with spider/standalone code.
+OFFERTODAY_LISTING_URL = OFFERTODAY_LISTING_SEARCH_URL
 OFFERTODAY_DETAIL_URL_TEMPLATE = (
     f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/jobDetail?id={{encrypted_id}}&encryptJobId={{encrypted_id}}"
 )
@@ -52,15 +58,21 @@ class PlaywrightPageTransport(OfferTodayTransport):
 
     Uses page.evaluate() to run fetch() inside the browser context,
     where the TLS fingerprint is trusted by the Alibaba Cloud WAF.
+
+    ``listing_url`` selects which listing endpoint to use:
+    - OFFERTODAY_LISTING_SEARCH_URL (default) — recommendation-filtered search
+    - OFFERTODAY_LISTING_BROWSE_URL           — plain category browse (untested)
     """
 
-    def __init__(self, page: Any) -> None:
+    def __init__(self, page: Any, *, listing_url: str | None = None) -> None:
         """page is a playwright.async_api.Page instance."""
         self._page = page
+        self._listing_url = listing_url or OFFERTODAY_LISTING_SEARCH_URL
 
-    async def fetch_listing(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def fetch_listing(self, payload: dict[str, Any], *, listing_url: str | None = None) -> dict[str, Any]:
+        url = listing_url or self._listing_url
         js = f"""() => {{
-            return fetch('{OFFERTODAY_LISTING_URL}', {{
+            return fetch('{url}', {{
                 method: 'POST',
                 headers: {json.dumps(_COMMON_HEADERS, ensure_ascii=False)},
                 body: JSON.stringify({json.dumps(payload, ensure_ascii=False)})

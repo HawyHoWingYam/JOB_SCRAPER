@@ -802,6 +802,28 @@ input:checked + .cyber-slider::before {
     font-weight: 700;
 }
 
+.progress-warning-banner {
+    display: grid;
+    gap: var(--space-1);
+    margin-top: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid rgba(233, 185, 73, 0.36);
+    border-radius: var(--radius-sm);
+    background: rgba(233, 185, 73, 0.12);
+    color: var(--color-warning);
+}
+
+.progress-warning-banner strong {
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+}
+
+.progress-warning-url {
+    overflow-wrap: anywhere;
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+}
+
 .progress-time-grid {
     display: grid;
     gap: var(--space-1);

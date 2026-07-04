@@ -34,6 +34,24 @@ DEFAULT_OFFERTODAY_IT_KEYWORDS: tuple[str, ...] = (
     "consultant",
     "architect",
     "programmer",
+    "Python",
+    "iOS",
+    "Android",
+    "AWS",
+    "Azure",
+    "AI",
+    "machine learning",
+    "database",
+    "frontend",
+    "backend",
+    "full stack",
+    "system",
+    "infrastructure",
+    "QA",
+    "UX",
+    "UI",
+    "blockchain",
+    "cybersecurity",
 )
 
 DEFAULT_OFFERTODAY_IT_HYBRID_KEYWORDS: tuple[str, ...] = (
@@ -149,7 +167,7 @@ def build_offertoday_listing_queries(
     category_ids: Sequence[int] | None,
     *,
     keywords: str | Sequence[str] | None = None,
-    max_pages_per_query: int = 50,
+    max_pages_per_query: int = 100,
     default_to_it: bool = True,
 ) -> list[dict[str, Any]]:
     """Build the cartesian listing query plan.
@@ -193,6 +211,7 @@ def build_offertoday_listing_queries(
                     "category_id": category_id,
                     "keyword": "",
                     "page": page,
+                    "endpoint": "browse",
                 }
             )
 

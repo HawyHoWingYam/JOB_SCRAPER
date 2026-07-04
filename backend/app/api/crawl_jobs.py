@@ -34,6 +34,7 @@ crawl_job_listing_repository = CrawlJobListingRepository()
 schedule_repository = ScheduleRepository()
 dispatch_service = CrawlJobDispatchService()
 SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs", "offertoday"}
+OFFERTODAY_AUTH_STATE_PATH = "/app/scripts/offertoday_auth_state.json"
 
 
 class ResumeCrawlJobRequest(BaseModel):
@@ -158,10 +159,12 @@ async def create_crawl_job(
         _cj_id = str(dispatch_result.crawl_job.id)
         _script = "/app/scripts/offertoday_standalone_crawl.py"
         import subprocess as _sp
-        _args = ["python", _script, "--category-ids", _cat_ids]
+        _args = ["python", _script, "--category-ids", _cat_ids, "--auth-state", OFFERTODAY_AUTH_STATE_PATH]
         if _keywords:
             _args.extend(["--keywords", _keywords])
         _args.extend(["--max-pages", _max_p, "--crawl-job-id", _cj_id])
+        if str(request.crawl_mode or "").lower() == "headed":
+            _args.append("--headed")
         _sp.Popen(_args, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
 
     return dispatch_result.crawl_job

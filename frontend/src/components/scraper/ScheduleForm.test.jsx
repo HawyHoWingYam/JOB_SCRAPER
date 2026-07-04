@@ -7,6 +7,38 @@ const JOBSDB_CATEGORIES = [{ id: 1200, name: 'Engineering' }];
 const CTGOODJOBS_CATEGORIES = [{ id: 'ctgoodjobs:021', name: 'Information Technology' }];
 
 describe('ScheduleForm', () => {
+  it('defaults OfferToday to 50 max pages and submits that value', () => {
+    const onSubmit = vi.fn();
+
+    render(
+      <ScheduleForm
+        categories={JOBSDB_CATEGORIES}
+        sourceSite="offertoday"
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        onSourceScopedDirtyChange={vi.fn()}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByRole('spinbutton')).toHaveValue(50);
+
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'OfferToday scan' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create automation/i }));
+
+    expect(onSubmit).toHaveBeenLastCalledWith({
+      name: 'OfferToday scan',
+      cron_expression: '0 2 * * *',
+      crawl_phase: 'listing',
+      crawl_mode: 'headless',
+      category_ids: [],
+      max_pages: 50,
+      detail_limit: 100,
+    });
+  });
+
   it('renders recurring automation guidance and phase-specific helper copy', () => {
     render(
       <ScheduleForm
