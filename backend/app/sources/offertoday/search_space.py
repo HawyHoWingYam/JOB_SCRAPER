@@ -52,15 +52,19 @@ DEFAULT_OFFERTODAY_IT_KEYWORDS: tuple[str, ...] = (
     "UI",
     "blockchain",
     "cybersecurity",
+    "java",
+    "javascript",
+    "typescript"
 )
 
 DEFAULT_OFFERTODAY_IT_HYBRID_KEYWORDS: tuple[str, ...] = (
-    "network engineer",
     "engineer",
     "devops",
-    "software engineer",
     "cloud",
     "analyst",
+    "developer",
+    "specialist",
+    "consultant"
 )
 
 OFFERTODAY_IT_CATEGORY_CODES: tuple[int, ...] = (
