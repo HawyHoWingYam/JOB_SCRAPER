@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func, literal
 from collections import defaultdict
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 from app.database import get_db
 from app.models.job import Job
@@ -33,30 +33,44 @@ router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
 
 
 def get_skill_dashboard_bucket(skill_name: str, category_name: str) -> str | None:
-    """Map canonical skill categories into stable dashboard presentation buckets."""
+    """Map a skill + its category to a stable dashboard presentation bucket.
+
+    Fully dynamic approach — only two hard rules:
+
+    1. ``Other`` category (unclassified skills) → ``None`` (suppressed from dashboard).
+    2. ``DevOps`` skills are sub-bucketed by keyword match to avoid lumping cloud
+       infra, networking, and security into one chart.
+
+    Every other category is returned verbatim, so taxonomy changes propagate
+    to the dashboard automatically without any mapping table.
+    """
     category = str(category_name or "")
     name = str(skill_name or "").lower()
 
-    if category == "Backend":
-        return "Backend"
-    if category == "Database":
-        return "Database"
-    if category == "Frontend":
-        return "Frontend"
-    if category == "Data":
-        return "Data"
-    if category == "Support & Operations":
-        return "Support"
+    # Unclassified — never show on dashboard
+    if category == "Other":
+        return None
+
+    # DevOps: sub-bucket by keyword match
     if category == "DevOps":
-        if any(token in name for token in ("azure", "aws", "kubernetes", "docker", "ci/cd", "microsoft 365")):
+        if any(token in name for token in (
+            "azure", "aws", "kubernetes", "docker", "ci/cd",
+            "microsoft 365", "jenkins", "github actions",
+        )):
             return "Platform & Cloud"
-        if any(token in name for token in ("linux", "windows server", "windows", "network", "vpn", "active directory")):
+        if any(token in name for token in (
+            "linux", "windows server", "windows", "network",
+            "vpn", "active directory", "unix", "vmware",
+        )):
             return "Systems & Network"
-        if any(token in name for token in ("firewall", "cybersecurity", "security", "identity")):
+        if any(token in name for token in (
+            "firewall", "cybersecurity", "security", "identity",
+        )):
             return "Security & Identity"
         return "Infrastructure"
 
-    return None
+    # Everything else: pass through dynamically
+    return category
 
 
 @router.get("/overview")
