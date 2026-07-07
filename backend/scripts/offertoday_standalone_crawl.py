@@ -28,11 +28,12 @@ if BACKEND not in sys.path:
 if SCRAPY_PROJECT not in sys.path:
     sys.path.insert(0, SCRAPY_PROJECT)
 
-from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, OFFERTODAY_LISTING_BROWSE_URL, OFFERTODAY_LISTING_SEARCH_URL, build_offertoday_listing_payload
+from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, OFFERTODAY_LISTING_BROWSE_URL, OFFERTODAY_LISTING_SEARCH_URL, build_offertoday_listing_payload  # noqa: E402
 from app.sources.offertoday.search_space import (  # noqa: E402
     build_offertoday_listing_queries,
     normalize_offertoday_keywords,
 )
+from app.sources.offertoday.staging import resolve_listing_stage_decision  # noqa: E402
 from app.sources.offertoday.parsers import parse_offertoday_listing_response  # noqa: E402
 from job_scraper_spiders.downloaders.scrapling_adapter import scrapling_fetch  # noqa: E402
 
@@ -245,6 +246,12 @@ async def main() -> None:
             "which reduces WAF challenge frequency."
         ),
     )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        default=False,
+        help="Do not queue detail work for jobs that already exist in the database.",
+    )
     args = parser.parse_args()
 
     category_ids = [int(c.strip()) for c in args.category_ids.split(",") if c.strip().isdigit()]
@@ -324,6 +331,7 @@ async def main() -> None:
     seen_ids: set[str] = set()
     listing_count = 0
     new_jobs_count = 0
+    jobs_skipped_existing = 0
     page_count = 0
     search_family = ""
     event_seq = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id == cj_id).count() if args.crawl_job_id else 0
@@ -416,8 +424,6 @@ async def main() -> None:
                         continue
                     seen_ids.add(job_id_str)
 
-                    from app.sources.offertoday.parsers import parse_offertoday_listing_response
-
                     parsed_listing = parse_offertoday_listing_response(
                         {"code": 0, "data": {"resultList": [raw_job]}}
                     )
@@ -431,8 +437,15 @@ async def main() -> None:
                         )
                         .first()
                     )
-                    if not already_in_db:
+                    stage_decision = resolve_listing_stage_decision(
+                        already_in_db=already_in_db is not None,
+                        skip_existing=args.skip_existing,
+                    )
+                    if stage_decision.is_new_job:
                         new_jobs_count += 1
+                    if stage_decision.skipped_existing:
+                        jobs_skipped_existing += 1
+                        continue
 
                     db.add(
                         CrawlJobListing(
@@ -445,9 +458,7 @@ async def main() -> None:
                             detail_status="pending",
                         )
                     )
-
-                    if not already_in_db:
-                        listing_count += 1
+                    listing_count += 1
 
                 page_count += 1
 
@@ -467,6 +478,7 @@ async def main() -> None:
                             "total_pages": planned_total_pages,
                             "job_ids_collected": len(seen_ids),
                             "listings_staged": listing_count,
+                            "jobs_skipped_existing": jobs_skipped_existing,
                             "phase": 1,
                         },
                     )
@@ -478,6 +490,7 @@ async def main() -> None:
                             "total_pages": planned_total_pages,
                             "job_ids_collected": len(seen_ids),
                             "listings_staged": listing_count,
+                            "jobs_skipped_existing": jobs_skipped_existing,
                             "detail_pending": listing_count,
                             "detail_completed": 0,
                             "detail_failed": 0,
@@ -497,6 +510,7 @@ async def main() -> None:
                                 "total_pages": planned_total_pages,
                                 "job_ids_collected": len(seen_ids),
                                 "listings_staged": listing_count,
+                                "jobs_skipped_existing": jobs_skipped_existing,
                                 "detail_pending": listing_count,
                                 "items_emitted": 0,
                                 "jobs_saved": 0,
@@ -531,13 +545,23 @@ async def main() -> None:
                         "pages_processed": page_count,
                         "job_ids_collected": len(seen_ids),
                         "listings_staged": listing_count,
+                        "jobs_skipped_existing": jobs_skipped_existing,
+                        "detail_selected_rows": len(seen_ids),
+                        "detail_skipped_existing_rows": jobs_skipped_existing,
+                        "detail_target_rows": listing_count,
                         "detail_pending": listing_count,
                         "message": "Listing phase completed; detail phase will continue.",
                     },
                 )
 
             db.commit()
-            logger.info("Listing done: %d pages, %d unique IDs", page_count, listing_count)
+            logger.info(
+                "Listing done: %d pages, %d IDs found, %d staged, %d skipped existing",
+                page_count,
+                len(seen_ids),
+                listing_count,
+                jobs_skipped_existing,
+            )
 
             listings = (
                 db.query(CrawlJobListing)
@@ -657,6 +681,9 @@ async def main() -> None:
                                 "detail_fail": detail_fail,
                                 "detail_total": total_details,
                                 "detail_index": idx + 1,
+                                "detail_selected_rows": len(seen_ids),
+                                "detail_skipped_existing_rows": jobs_skipped_existing,
+                                "detail_target_rows": total_details,
                                 "phase": 2,
                             },
                         )
@@ -666,6 +693,10 @@ async def main() -> None:
                                 "pages_processed": page_count,
                                 "job_ids_collected": len(seen_ids),
                                 "listings_staged": listing_count,
+                                "jobs_skipped_existing": jobs_skipped_existing,
+                                "detail_selected_rows": len(seen_ids),
+                                "detail_skipped_existing_rows": jobs_skipped_existing,
+                                "detail_target_rows": total_details,
                                 "detail_pending": total_details - detail_ok - detail_fail,
                                 "detail_completed": detail_ok,
                                 "detail_failed": detail_fail,
@@ -703,6 +734,10 @@ async def main() -> None:
                     "job_ids_collected": len(seen_ids),
                     "listings_staged": listing_count,
                     "new_jobs_added": new_jobs_count,
+                    "jobs_skipped_existing": jobs_skipped_existing,
+                    "detail_selected_rows": len(seen_ids),
+                    "detail_skipped_existing_rows": jobs_skipped_existing,
+                    "detail_target_rows": listing_count,
                     "detail_pending": 0,
                     "detail_completed": detail_ok,
                     "detail_failed": detail_fail,

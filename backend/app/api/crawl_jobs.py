@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -17,7 +17,6 @@ from app.scraper.manual_action import ResumeStrategy
 from app.schemas.crawl_job import (
     CrawlJobCreateRequest,
     CrawlJobEventsResponse,
-    CrawlJobEventSchema,
     CrawlJobSchema,
 )
 from app.services.crawl_request_validation import normalize_source_site, validate_category_ids_for_source_site
@@ -184,6 +183,8 @@ async def create_crawl_job(
         if _keywords:
             _args.extend(["--keywords", _keywords])
         _args.extend(["--max-pages", _max_p, "--crawl-job-id", _cj_id])
+        if bool(_resolved_request_payload.get("skip_existing")):
+            _args.append("--skip-existing")
         if str(request.crawl_mode or "").lower() == "headed":
             _args.append("--headed")
         logger.info(

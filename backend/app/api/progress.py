@@ -351,6 +351,16 @@ def _build_progress_snapshot(
         detail_manual_action_required=detail_manual_action_required,
     )
 
+    detail_job_index = event_payload.get("detail_job_index")
+    if detail_job_index is None:
+        detail_job_index = event_payload.get("detail_index")
+
+    detail_job_total = event_payload.get("detail_job_total")
+    if detail_job_total is None:
+        detail_job_total = event_payload.get("detail_total")
+    if detail_job_total is None:
+        detail_job_total = detail_target_rows or None
+
     return {
         "crawl_job_id": str(crawl_job.id),
         "status": status,
@@ -378,8 +388,8 @@ def _build_progress_snapshot(
         "phase_rate": float(event_payload.get("phase_rate") or 0),
         "eta_seconds": event_payload.get("eta_seconds"),
         "current_job_title": event_payload.get("current_job_title"),
-        "detail_job_index": event_payload.get("detail_job_index"),
-        "detail_job_total": event_payload.get("detail_job_total"),
+        "detail_job_index": detail_job_index,
+        "detail_job_total": detail_job_total,
         "current_page": event_payload.get("current_page") or metrics.get("current_page"),
         "total_pages": event_payload.get("total_pages") or metrics.get("total_pages"),
         "job_ids_collected": job_ids_collected,
