@@ -24,6 +24,7 @@ from app.services.crawl_request_validation import normalize_source_site, validat
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
 from app.services.source_category_registry import get_source_category_registry
+from app.services.source_catalog import is_supported_source_site, resolve_default_max_pages
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,6 @@ crawl_job_repository = CrawlJobRepository()
 crawl_job_listing_repository = CrawlJobListingRepository()
 schedule_repository = ScheduleRepository()
 dispatch_service = CrawlJobDispatchService()
-SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs", "offertoday"}
 OFFERTODAY_AUTH_STATE_PATH = "/app/scripts/offertoday_auth_state.json"
 
 
@@ -94,7 +94,7 @@ async def create_crawl_job(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
 
         effective_source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
-        if effective_source_site not in SUPPORTED_SOURCE_SITES:
+        if not is_supported_source_site(effective_source_site):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Unsupported source_site for execution",
@@ -120,7 +120,7 @@ async def create_crawl_job(
         return dispatch_result.crawl_job
 
     effective_source_site = normalize_source_site(request.source_site)
-    if effective_source_site not in SUPPORTED_SOURCE_SITES:
+    if not is_supported_source_site(effective_source_site):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported source_site for execution",
@@ -154,7 +154,13 @@ async def create_crawl_job(
     # Queue OfferToday crawl via subprocess (reliable, no asyncio GC issues)
     if effective_source_site == "offertoday" and request.crawl_phase in (None, "listing"):
         _cat_ids = ",".join(str(c) for c in (request.category_ids or []))
-        _max_p = str(request.max_pages or 100)
+        _resolved_request_payload = dict(getattr(dispatch_result.crawl_job, "request_payload", {}) or {})
+        _resolved_max_pages = _resolved_request_payload.get("max_pages")
+        if _resolved_max_pages is None:
+            _resolved_max_pages = request.max_pages
+        if _resolved_max_pages is None:
+            _resolved_max_pages = resolve_default_max_pages(effective_source_site)
+        _max_p = str(int(_resolved_max_pages))
         _keywords = str(request.keywords or "").strip()
         _cj_id = str(dispatch_result.crawl_job.id)
         _script = "/app/scripts/offertoday_standalone_crawl.py"
@@ -179,7 +185,7 @@ async def list_listing_batches(
     db: Session = Depends(get_db),
 ):
     effective_source_site = normalize_source_site(source_site) if source_site else None
-    if effective_source_site is not None and effective_source_site not in SUPPORTED_SOURCE_SITES:
+    if effective_source_site is not None and not is_supported_source_site(effective_source_site):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported source_site",

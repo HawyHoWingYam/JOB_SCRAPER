@@ -15,6 +15,7 @@ from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.headed_crawl_runtime import ensure_headed_crawl_worker_available
+from app.services.source_catalog import resolve_default_max_pages
 from app.scraper.manual_action import (
     LEGACY_RESUME_STRATEGY_DEFAULT,
     ResumeStrategy,
@@ -58,7 +59,7 @@ class CrawlJobDispatchService:
         crawl_mode: str | None = None,
         category_ids: list[int | str],
         keywords: str | None = None,
-        max_pages: int,
+        max_pages: int | None,
         source_listing_crawl_job_id=None,
         detail_limit: int = 100,
         detail_statuses: list[str] | None = None,
@@ -71,7 +72,7 @@ class CrawlJobDispatchService:
             "crawl_mode": resolve_crawl_mode(source_site, crawl_mode),
             "category_ids": list(category_ids),
             "keywords": keywords,
-            "max_pages": max_pages,
+            "max_pages": int(max_pages) if max_pages is not None else resolve_default_max_pages(source_site),
             "source_listing_crawl_job_id": str(source_listing_crawl_job_id)
             if source_listing_crawl_job_id is not None
             else None,
@@ -85,13 +86,12 @@ class CrawlJobDispatchService:
 
     def build_schedule_request_payload(self, *, schedule: ScrapeSchedule) -> dict[str, Any]:
         resolved_phase = resolve_crawl_phase(getattr(schedule, "crawl_phase", None))
-        return {
+        payload = {
             "source_site": schedule.source_site,
             "crawl_phase": resolved_phase,
             "crawl_mode": resolve_crawl_mode(schedule.source_site, getattr(schedule, "crawl_mode", None)),
             "category_ids": list(schedule.category_ids or []),
             "keywords": schedule.keywords,
-            "location": schedule.location,
             "max_pages": schedule.max_pages or 3,
             "detail_limit": int(getattr(schedule, "detail_limit", 100) or 100),
             "detail_statuses": resolve_detail_statuses(
@@ -100,6 +100,9 @@ class CrawlJobDispatchService:
             ),
             "skip_existing": True,
         }
+        if getattr(schedule, "location", None):
+            payload["location"] = schedule.location
+        return payload
 
     def dispatch_manual_crawl_job(
         self,
@@ -110,7 +113,7 @@ class CrawlJobDispatchService:
         crawl_mode: str | None = None,
         category_ids: list[int | str],
         keywords: str | None = None,
-        max_pages: int,
+        max_pages: int | None,
         source_listing_crawl_job_id=None,
         detail_limit: int = 100,
         detail_statuses: list[str] | None = None,
@@ -321,7 +324,10 @@ class CrawlJobDispatchService:
             if source_listing_crawl_job_id and not request_payload.get("source_listing_crawl_job_id"):
                 request_payload["source_listing_crawl_job_id"] = source_listing_crawl_job_id
             request_payload["detail_statuses"] = ["manual_action_required", "pending"]
-        ensure_headed_crawl_worker_available(crawl_mode=request_payload.get("crawl_mode"), source_site=source_site)
+        ensure_headed_crawl_worker_available(
+            crawl_mode=request_payload.get("crawl_mode"),
+            source_site=crawl_job.source_site,
+        )
 
         crawl_job.status = "dispatching"
         crawl_job.completed_at = None
@@ -420,3 +426,4 @@ class CrawlJobDispatchService:
                 return request_resume_context
 
         return {}
+

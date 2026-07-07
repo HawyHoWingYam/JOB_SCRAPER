@@ -46,7 +46,7 @@ class ScheduleCreateSchema(BaseModel):
     crawl_mode: Optional[str] = Field(default=None, max_length=32)
     category_ids: Optional[List[CategoryId]] = None
     keywords: Optional[str] = None
-    location: str = Field(default="Hong Kong")
+    location: Optional[str] = None
     max_pages: int = Field(default=3, ge=1, le=1000)
     detail_limit: int = Field(default=100, ge=1, le=5000)
     is_active: bool = Field(default=True)
@@ -158,7 +158,7 @@ class ScheduleSchema(BaseModel):
     crawl_mode: Optional[str]
     category_ids: Optional[List[CategoryId]]
     keywords: Optional[str]
-    location: str
+    location: Optional[str]
     max_pages: int
     detail_limit: int
     is_active: bool
@@ -294,3 +294,4 @@ class ImmediateScrapeRequest(BaseModel):
         self.crawl_mode = validated.crawl_mode
         self.category_ids = validated.category_ids
         return self
+

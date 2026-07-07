@@ -1,25 +1,24 @@
-const DEFAULT_CRAWL_MODE_BY_SOURCE = {
-  jobsdb: 'headed',
-  ctgoodjobs: 'headed',
-  offertoday: 'headless',
-};
-
 export const CRAWL_MODE_OPTIONS = [
   { value: 'headless', label: 'Headless' },
   { value: 'headed', label: 'Headed' },
 ];
-const CRAWL_MODE_OPTIONS_BY_SOURCE = {
-  jobsdb: CRAWL_MODE_OPTIONS,
-  ctgoodjobs: CRAWL_MODE_OPTIONS.filter((option) => option.value === 'headed'),
-  offertoday: CRAWL_MODE_OPTIONS,
-};
 
-export function resolveDefaultCrawlMode(sourceSite) {
-  return DEFAULT_CRAWL_MODE_BY_SOURCE[sourceSite] || 'headless';
+export function getCrawlModeOptionsForSource(sourceSite, sources = {}) {
+  const supportedModeSet = new Set(sources?.[sourceSite]?.supported_crawl_modes || []);
+  const crawlModeOptions = CRAWL_MODE_OPTIONS.filter((option) => supportedModeSet.has(option.value));
+
+  return crawlModeOptions.length > 0 ? crawlModeOptions : CRAWL_MODE_OPTIONS;
 }
 
-export function getCrawlModeOptionsForSource(sourceSite) {
-  return CRAWL_MODE_OPTIONS_BY_SOURCE[sourceSite] || CRAWL_MODE_OPTIONS;
+export function resolveDefaultCrawlMode(sourceSite, sources = {}) {
+  const crawlModeOptions = getCrawlModeOptionsForSource(sourceSite, sources);
+  const configuredDefault = sources?.[sourceSite]?.default_crawl_mode;
+
+  if (crawlModeOptions.some((option) => option.value === configuredDefault)) {
+    return configuredDefault;
+  }
+
+  return crawlModeOptions[0]?.value || 'headless';
 }
 
 export function formatCrawlModeLabel(crawlMode) {

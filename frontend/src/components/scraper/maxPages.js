@@ -1,9 +1,9 @@
 const DEFAULT_MAX_PAGES = 3;
 
-const DEFAULT_MAX_PAGES_BY_SOURCE = {
-    offertoday: 50,
-};
+export function resolveDefaultMaxPages(sourceSite, sources = {}) {
+    const defaultMaxPages = Number.parseInt(`${sources?.[sourceSite]?.default_max_pages ?? ''}`, 10);
 
-export function resolveDefaultMaxPages(sourceSite) {
-    return DEFAULT_MAX_PAGES_BY_SOURCE[sourceSite] ?? DEFAULT_MAX_PAGES;
+    return Number.isInteger(defaultMaxPages) && defaultMaxPages > 0
+        ? defaultMaxPages
+        : DEFAULT_MAX_PAGES;
 }

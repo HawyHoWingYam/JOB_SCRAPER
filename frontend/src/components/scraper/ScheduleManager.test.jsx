@@ -6,9 +6,16 @@ const { scrapeProgressPanelSpy } = vi.hoisted(() => ({
 }));
 
 vi.mock('./ScheduleForm', () => ({
-  default: ({ onSubmit, categories, sourceSite, onSourceScopedDirtyChange }) => (
+  default: ({ onSubmit, categories, sourceSite, onSourceScopedDirtyChange, sourceCatalog = {} }) => (
     <div>
       <div>Schedule Form Source: {sourceSite}</div>
+      <div>Schedule Form Source Label: {sourceCatalog[sourceSite]?.label ?? ''}</div>
+      <div>
+        Schedule Form Source Modes: {(sourceCatalog[sourceSite]?.supported_crawl_modes ?? []).join(',')}
+      </div>
+      <div>
+        Schedule Form Source Default Max Pages: {String(sourceCatalog[sourceSite]?.default_max_pages ?? '')}
+      </div>
       <button
         type="button"
         onClick={() => {
@@ -112,6 +119,20 @@ function mockJsonResponse(payload) {
   });
 }
 
+async function waitForSourceCatalogOptions() {
+  await waitFor(() => {
+    expect(screen.getByRole('option', { name: SOURCE_CATALOG.jobsdb.label })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: SOURCE_CATALOG.ctgoodjobs.label })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: SOURCE_CATALOG.offertoday.label })).toBeInTheDocument();
+  });
+}
+
+function changeSource(sourceSite) {
+  fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
+    target: { value: sourceSite },
+  });
+}
+
 function createDeferred() {
   let resolve;
   let reject;
@@ -150,13 +171,34 @@ const MIXED_SCHEDULES = [
   },
 ];
 
+const SOURCE_CATALOG = {
+  jobsdb: {
+    supported_crawl_modes: ['headless', 'headed'],
+    default_crawl_mode: 'headed',
+    default_max_pages: 3,
+    label: 'JobsDB Live',
+  },
+  ctgoodjobs: {
+    supported_crawl_modes: ['headed'],
+    default_crawl_mode: 'headed',
+    default_max_pages: 3,
+    label: 'CTGoodJobs Live',
+  },
+  offertoday: {
+    supported_crawl_modes: ['headless', 'headed'],
+    default_crawl_mode: 'headless',
+    default_max_pages: 50,
+    label: 'OfferToday Live',
+  },
+};
+
 function createFetchMock({
   schedules = MIXED_SCHEDULES,
   jobsdbCategories = JOBSDB_CATEGORIES,
   ctgoodjobsCategories = CTGOODJOBS_CATEGORIES,
   offertodayCategories = OFFERTODAY_CATEGORIES,
   ctgoodjobsCategoryErrorDetail = null,
-  capabilities = { scheduler: { available: true, manual_run_available: true, owner: 'scheduler-worker', worker_name: 'scheduler-worker', heartbeat_status: 'fresh', reason: null } },
+  capabilities = null,
   listingBatches = [],
   scrapeProgress = { active: {}, all: {}, has_active: false },
   scrapeProgressError = null,
@@ -194,6 +236,20 @@ function createFetchMock({
     next_run_at: null,
   },
 } = {}) {
+  const runtimeCapabilities = {
+    ...(capabilities || {}),
+    scheduler: {
+      available: true,
+      manual_run_available: true,
+      owner: 'scheduler-worker',
+      worker_name: 'scheduler-worker',
+      heartbeat_status: 'fresh',
+      reason: null,
+      ...(capabilities?.scheduler || {}),
+    },
+    sources: capabilities?.sources ?? SOURCE_CATALOG,
+  };
+
   return vi.fn((input, init) => {
     const url = String(input);
 
@@ -228,7 +284,7 @@ function createFetchMock({
     }
 
     if (url === '/api/v1/capabilities') {
-      return mockJsonResponse(capabilities);
+      return mockJsonResponse(runtimeCapabilities);
     }
 
     if (url.startsWith('/api/v1/crawl-jobs/listing-batches')) {
@@ -320,12 +376,43 @@ describe('ScheduleManager', () => {
     expect(screen.queryByText('CTgoodjobs Nightly')).not.toBeInTheDocument();
   });
 
+  it('renders source labels from runtime capabilities and passes source metadata into ScheduleForm', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await waitForSourceCatalogOptions();
+    changeSource('offertoday');
+    fireEvent.click(screen.getByRole('button', { name: /new automation/i }));
+
+    expect(await screen.findByText('Schedule Form Source Label: OfferToday Live')).toBeInTheDocument();
+    expect(screen.getByText('Schedule Form Source Modes: headless,headed')).toBeInTheDocument();
+    expect(screen.getByText('Schedule Form Source Default Max Pages: 50')).toBeInTheDocument();
+  });
+
+  it('makes empty source metadata explicit when runtime capabilities omit the source catalog', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        capabilities: {
+          sources: {},
+        },
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    expect(
+      await screen.findByText(/source metadata is unavailable for this runtime/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /data source/i })).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'JobsDB' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'CTGoodJobs Live' })).not.toBeInTheDocument();
+  });
+
   it('switches source, reloads categories, and filters the list to ctgoodjobs', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'ctgoodjobs' },
-    });
+    await waitForSourceCatalogOptions();
+    changeSource('ctgoodjobs');
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith('/api/categories?source_site=ctgoodjobs');
@@ -347,9 +434,8 @@ describe('ScheduleManager', () => {
       expect(urls).toContain('/api/categories?source_site=jobsdb');
     });
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'ctgoodjobs' },
-    });
+    await waitForSourceCatalogOptions();
+    changeSource('ctgoodjobs');
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith('/api/categories?source_site=ctgoodjobs');
@@ -368,20 +454,15 @@ describe('ScheduleManager', () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
     await screen.findByText('JobsDB Nightly');
+    await waitForSourceCatalogOptions();
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'ctgoodjobs' },
-    });
+    changeSource('ctgoodjobs');
     expect(await screen.findByText('CTgoodjobs Nightly')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'jobsdb' },
-    });
+    changeSource('jobsdb');
     expect(await screen.findByText('JobsDB Nightly')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'ctgoodjobs' },
-    });
+    changeSource('ctgoodjobs');
     expect(await screen.findByText('CTgoodjobs Nightly')).toBeInTheDocument();
 
     const urls = globalThis.fetch.mock.calls.map(([url]) => url);
@@ -400,9 +481,8 @@ describe('ScheduleManager', () => {
 
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'ctgoodjobs' },
-    });
+    await waitForSourceCatalogOptions();
+    changeSource('ctgoodjobs');
 
     expect(await screen.findByText('CTgoodjobs category registry unavailable')).toBeInTheDocument();
   });
@@ -497,7 +577,11 @@ describe('ScheduleManager', () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
     await screen.findByText('Task Control Board');
+    await waitForSourceCatalogOptions();
     fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: /crawl mode/i })).toHaveValue('headed');
+    });
     const summaryPanel = screen.getByText(/this run will start a job id crawl/i).closest('.override-summary-panel');
     expect(summaryPanel).not.toBeNull();
     expect(within(summaryPanel).getByText(/^JobsDB$/i)).toBeInTheDocument();
@@ -553,7 +637,11 @@ describe('ScheduleManager', () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
     await screen.findByText('Task Control Board');
+    await waitForSourceCatalogOptions();
     fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: /crawl mode/i })).toHaveValue('headed');
+    });
 
     expect(await screen.findByText(/headed crawl worker is offline/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /start job id crawl/i })).toBeDisabled();
@@ -590,9 +678,8 @@ describe('ScheduleManager', () => {
   it('posts ctgoodjobs crawl-job payloads with string category ids and source_site', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'ctgoodjobs' },
-    });
+    await waitForSourceCatalogOptions();
+    changeSource('ctgoodjobs');
     fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
     fireEvent.click(await screen.findByRole('checkbox', { name: /information technology/i }));
     fireEvent.click(screen.getByRole('button', { name: /start job id crawl/i }));
@@ -627,9 +714,8 @@ describe('ScheduleManager', () => {
 
     await screen.findByText('Task Control Board');
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'offertoday' },
-    });
+    await waitForSourceCatalogOptions();
+    changeSource('offertoday');
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith('/api/categories?source_site=offertoday');
@@ -668,6 +754,7 @@ describe('ScheduleManager', () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
     await screen.findByText('Task Control Board');
+    await waitForSourceCatalogOptions();
     fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
 
     expect(await screen.findByText(/listing mode/i)).toBeInTheDocument();
@@ -725,7 +812,11 @@ describe('ScheduleManager', () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
     await screen.findByText('Task Control Board');
+    await waitForSourceCatalogOptions();
     fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('combobox', { name: /crawl mode/i })).toHaveValue('headed');
+    });
     fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
       target: { value: 'detail' },
     });
@@ -1151,9 +1242,8 @@ describe('ScheduleManager', () => {
   it('includes source_site when creating schedules', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'ctgoodjobs' },
-    });
+    await waitForSourceCatalogOptions();
+    changeSource('ctgoodjobs');
     fireEvent.click(screen.getByRole('button', { name: /new automation/i }));
     fireEvent.click(await screen.findByRole('button', { name: /submit schedule stub/i }));
 
@@ -1610,9 +1700,8 @@ describe('ScheduleManager', () => {
 
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
-    fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
-      target: { value: 'ctgoodjobs' },
-    });
+    await waitForSourceCatalogOptions();
+    changeSource('ctgoodjobs');
 
     expect(await screen.findByText('No CTgoodjobs automated tasks')).toBeInTheDocument();
   });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { apiFetchJson, formatApiErrorDetail } from './client';
+import { apiFetchJson } from './client';
+import { formatApiErrorDetail } from './errors';
 
 describe('api client', () => {
   it('extracts backend detail messages from failed JSON responses', async () => {

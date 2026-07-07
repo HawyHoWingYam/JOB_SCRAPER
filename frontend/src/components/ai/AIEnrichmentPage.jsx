@@ -9,11 +9,10 @@ import {
   RefreshCcw,
   Sparkles,
 } from 'lucide-react';
-import { API_BASE_URL } from '../../api/base';
+import { apiPath } from '../../api/base';
 import '../Dashboard.css';
 import './AIEnrichmentPage.css';
 
-const API_URL = API_BASE_URL;
 const ACTIVE_RUN_STATUSES = new Set(['pending', 'running']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', 'failed', 'cancelled']);
 const DEGRADED_PLACEHOLDER = 'Unavailable';
@@ -361,7 +360,7 @@ export default function AIEnrichmentPage() {
         }
 
         const overviewTask = withRequestTimeout(
-          fetch(`${API_URL}/api/v1/ai/overview`).then(async (response) => {
+          fetch(apiPath('/ai/overview')).then(async (response) => {
             if (!response.ok) {
               throw new Error(`Overview request failed with ${response.status}`);
             }
@@ -371,7 +370,7 @@ export default function AIEnrichmentPage() {
         );
 
         const runsTask = withRequestTimeout(
-          fetch(`${API_URL}/api/v1/ai/runs?monitor=true`).then(async (response) => {
+          fetch(apiPath('/ai/runs?monitor=true')).then(async (response) => {
             if (!response.ok) {
               throw new Error(`Runs request failed with ${response.status}`);
             }
@@ -522,7 +521,7 @@ export default function AIEnrichmentPage() {
       const normalizedLimit = Math.max(1, Number(pendingLimit) || 1);
       setPendingLimit(String(normalizedLimit));
 
-      const response = await fetch(`${API_URL}/api/v1/ai/runs`, {
+      const response = await fetch(apiPath('/ai/runs'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -558,7 +557,7 @@ export default function AIEnrichmentPage() {
       setActionError(null);
       setActionMessage(null);
 
-      const response = await fetch(`${API_URL}/api/v1/ai/runs`, {
+      const response = await fetch(apiPath('/ai/runs'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -592,7 +591,7 @@ export default function AIEnrichmentPage() {
       setActionError(null);
       setActionMessage(null);
 
-      const response = await fetch(`${API_URL}/api/v1/ai/runs/${retryTargetRun.id}/retry-failed`, {
+      const response = await fetch(apiPath('/ai/runs/' + retryTargetRun.id + '/retry-failed'), {
         method: 'POST',
       });
 

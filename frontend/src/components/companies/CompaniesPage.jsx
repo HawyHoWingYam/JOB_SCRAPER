@@ -4,10 +4,9 @@ import PaginationControl from '../PaginationControl';
 import CompanyDetailModal from './CompanyDetailModal';
 import CompanySummaryCard from './CompanySummaryCard';
 import useCompanyEnrichmentRun, { getRunStatusLabel } from './useCompanyEnrichmentRun';
-import { API_BASE_URL } from '../../api/base';
+import { API_BASE_URL, apiPath } from '../../api/base';
 import './CompaniesPage.css';
 
-const API_URL = API_BASE_URL;
 const PAGE_SIZE = 25;
 
 function hasCompanyAIDescription(company) {
@@ -43,7 +42,7 @@ function CompaniesPage() {
         params.append('q', query);
       }
 
-      const response = await fetch(`${API_URL}/api/v1/companies?${params.toString()}`);
+      const response = await fetch(apiPath('/companies?' + params.toString()));
       if (!response.ok) {
         throw new Error('Failed to load companies');
       }
@@ -96,7 +95,7 @@ function CompaniesPage() {
     createRun,
     getCompanyRunState,
   } = useCompanyEnrichmentRun({
-    apiUrl: API_URL,
+    apiUrl: API_BASE_URL,
     appliedQuery,
     statusFilter,
     page,

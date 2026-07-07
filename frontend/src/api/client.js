@@ -1,25 +1,4 @@
-export function formatApiErrorDetail(detail) {
-  if (!detail) {
-    return null;
-  }
-
-  if (typeof detail === 'string') {
-    return detail;
-  }
-
-  if (Array.isArray(detail)) {
-    return detail
-      .map((item) => item?.message || item?.msg || String(item))
-      .filter(Boolean)
-      .join('; ');
-  }
-
-  if (typeof detail === 'object') {
-    return detail.message || detail.error || detail.reason || JSON.stringify(detail);
-  }
-
-  return String(detail);
-}
+import { formatApiErrorDetail } from './errors';
 
 function mergeAbortSignals(callerSignal, timeoutSignal) {
   if (!callerSignal) {

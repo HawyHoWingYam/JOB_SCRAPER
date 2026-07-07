@@ -1,9 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { PlusCircle, Sparkles, Search, X, Loader, CheckCircle, AlertCircle } from 'lucide-react';
-import { API_BASE_URL } from '../../api/base';
+import { apiPath } from '../../api/base';
 import './AddJobPage.css';
-
-const API_URL = API_BASE_URL;
 
 function AddJobPage() {
   // Form state
@@ -58,7 +56,7 @@ function AddJobPage() {
       params.append('page_size', '10');
       params.append('page', '1');
 
-      const response = await fetch(`${API_URL}/api/v1/companies?${params.toString()}`);
+      const response = await fetch(apiPath('/companies?' + params.toString()));
       if (!response.ok) {
         throw new Error('Failed to search companies');
       }
@@ -150,7 +148,7 @@ function AddJobPage() {
     setCompanyCreateError('');
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/companies`, {
+      const response = await fetch(apiPath('/companies'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -235,7 +233,7 @@ function AddJobPage() {
     setIsEnriching(false);
 
     try {
-      const response = await fetch(`${API_URL}/api/v1/jobs/manual`, {
+      const response = await fetch(apiPath('/jobs/manual'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.llm_client import get_llm_client, get_llm_status, refresh_llm_status, reset_client
 from app.database import get_db
+from app.services.ai_provider_catalog import build_ai_provider_catalog
 from app.services.ai_runtime_settings_service import (
     AIRuntimeSettingsService,
     RuntimeSettingsValidationError,
@@ -88,6 +89,7 @@ def _build_ai_settings_response(service: AIRuntimeSettingsService) -> dict:
         "effective_config": service.serialize_effective_config(),
         "runtime_status": job_status,
         "company_runtime_status": company_status,
+        "provider_catalog": build_ai_provider_catalog(),
     }
 
 

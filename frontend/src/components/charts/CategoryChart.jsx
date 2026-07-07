@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
-import { API_BASE_URL } from '../../api/base';
+import { apiPath } from '../../api/base';
 
-const API_URL = API_BASE_URL;
 
 const CATEGORY_COLORS = [
   '#6aa5ff',
@@ -66,7 +65,7 @@ export default function CategoryChart({ totalJobs = 0 }) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/v1/stats/categories/dashboard`)
+    fetch(apiPath('/stats/categories/dashboard'))
       .then((res) => {
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);

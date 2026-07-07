@@ -4,6 +4,8 @@ import { getCrawlModeOptionsForSource, resolveDefaultCrawlMode } from './crawlMo
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
 import { resolveDefaultMaxPages } from './maxPages';
 
+const EMPTY_SOURCE_CATALOG = {};
+
 // Cron presets
 const CRON_PRESETS = [
     { label: 'Daily at 02:00', value: '0 2 * * *' },
@@ -18,12 +20,17 @@ function formatSourceLabel(sourceSite) {
     return sourceSite === 'ctgoodjobs' ? 'CTgoodjobs' : 'JobsDB';
 }
 
+function resolveSourceLabel(sourceSite, sourceCatalog = EMPTY_SOURCE_CATALOG) {
+    return sourceCatalog[sourceSite]?.label || formatSourceLabel(sourceSite);
+}
+
 function ScheduleForm({
     onSubmit,
     onCancel,
     categories,
     isLoading,
     sourceSite,
+    sourceCatalog = EMPTY_SOURCE_CATALOG,
     onSourceScopedDirtyChange,
 }) {
     const [formData, setFormData] = useState({
@@ -31,37 +38,65 @@ function ScheduleForm({
         cronPreset: '0 2 * * *',
         customCron: '',
         crawlPhase: resolveDefaultCrawlPhase(),
-        crawlMode: resolveDefaultCrawlMode(sourceSite),
+        crawlMode: '',
         categoryIds: [],
-        maxPages: resolveDefaultMaxPages(sourceSite),
+        maxPages: resolveDefaultMaxPages(sourceSite, sourceCatalog),
         detailLimit: 100,
     });
     const previousSourceSiteRef = useRef(sourceSite);
+    const dirtyFieldsRef = useRef({
+        crawlMode: false,
+        maxPages: false,
+    });
 
     useEffect(() => {
         onSourceScopedDirtyChange?.(formData.categoryIds.length > 0);
     }, [formData.categoryIds, onSourceScopedDirtyChange]);
 
     useEffect(() => {
-        setFormData(prev => ({
-            ...prev,
-            crawlMode: resolveDefaultCrawlMode(sourceSite),
-            categoryIds: [],
-            maxPages: (() => {
-                const previousSourceSite = previousSourceSiteRef.current;
-                const previousDefaultMaxPages = resolveDefaultMaxPages(previousSourceSite);
-                const currentMaxPages = Number.parseInt(`${prev.maxPages ?? ''}`, 10);
-                const shouldAdoptSourceDefault =
-                    !Number.isInteger(currentMaxPages) || currentMaxPages === previousDefaultMaxPages;
+        const crawlModeOptions = getCrawlModeOptionsForSource(sourceSite, sourceCatalog);
+        const nextDefaultCrawlMode = resolveDefaultCrawlMode(sourceSite, sourceCatalog);
+        const nextDefaultMaxPages = resolveDefaultMaxPages(sourceSite, sourceCatalog);
 
-                return shouldAdoptSourceDefault ? resolveDefaultMaxPages(sourceSite) : prev.maxPages;
-            })(),
-        }));
+        setFormData(prev => {
+            const previousSourceSite = previousSourceSiteRef.current;
+            const currentMaxPages = Number.parseInt(`${prev.maxPages ?? ''}`, 10);
+            const isCurrentCrawlModeValid = crawlModeOptions.some((option) => option.value === prev.crawlMode);
+            const isCurrentMaxPagesValid = Number.isInteger(currentMaxPages) && currentMaxPages > 0;
+            const shouldAdoptSourceDefaultCrawlMode =
+                !prev.crawlMode
+                || !dirtyFieldsRef.current.crawlMode
+                || !isCurrentCrawlModeValid;
+            const shouldAdoptSourceDefaultMaxPages =
+                !dirtyFieldsRef.current.maxPages
+                || !isCurrentMaxPagesValid;
+
+            if (shouldAdoptSourceDefaultCrawlMode) {
+                dirtyFieldsRef.current.crawlMode = false;
+            }
+
+            if (shouldAdoptSourceDefaultMaxPages) {
+                dirtyFieldsRef.current.maxPages = false;
+            }
+
+            return {
+                ...prev,
+                crawlMode: shouldAdoptSourceDefaultCrawlMode ? nextDefaultCrawlMode : prev.crawlMode,
+                categoryIds: previousSourceSite === sourceSite ? prev.categoryIds : [],
+                maxPages: shouldAdoptSourceDefaultMaxPages ? nextDefaultMaxPages : prev.maxPages,
+            };
+        });
         previousSourceSiteRef.current = sourceSite;
-    }, [sourceSite]);
+    }, [sourceCatalog, sourceSite]);
 
     const handleChange = (e) => {
         const { name, value } = e.target;
+        if (name === 'crawlMode') {
+            dirtyFieldsRef.current.crawlMode = true;
+        }
+        if (name === 'maxPages') {
+            dirtyFieldsRef.current.maxPages = true;
+        }
         setFormData(prev => ({ ...prev, [name]: value }));
     };
 
@@ -86,14 +121,14 @@ function ScheduleForm({
             name: formData.name,
             cron_expression: cronExpression,
             crawl_phase: formData.crawlPhase,
-            crawl_mode: formData.crawlMode,
+            crawl_mode: formData.crawlMode || resolveDefaultCrawlMode(sourceSite, sourceCatalog),
             category_ids: formData.categoryIds,
-            max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite),
+            max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite, sourceCatalog),
             detail_limit: Number.isInteger(detailLimit) ? detailLimit : 100,
         });
     };
 
-    const sourceLabel = formatSourceLabel(sourceSite);
+    const sourceLabel = resolveSourceLabel(sourceSite, sourceCatalog);
     const isDetailPhase = formData.crawlPhase === 'detail';
     const recurringGuidance = `Use automations for recurring crawls on ${sourceLabel}.`;
     const phaseGuidance = isDetailPhase
@@ -102,7 +137,7 @@ function ScheduleForm({
     const volumeGuidance = isDetailPhase
         ? 'How many staged listings this automation should expand per run.'
         : 'Pages per run for each selected sector.';
-    const crawlModeOptions = getCrawlModeOptionsForSource(sourceSite);
+    const crawlModeOptions = getCrawlModeOptionsForSource(sourceSite, sourceCatalog);
 
     return (
         <form onSubmit={handleSubmit} className="schedule-form">

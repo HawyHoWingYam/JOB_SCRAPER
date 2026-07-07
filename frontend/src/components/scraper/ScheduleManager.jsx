@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Zap, AlertTriangle, CalendarClock, X } from 'lucide-react';
-import { API_BASE_URL } from '../../api/base';
+import { API_BASE_URL, apiPath } from '../../api/base';
 import { fetchCapabilities } from '../../api/capabilities';
 import ScheduleForm from './ScheduleForm';
 import ScheduleList from './ScheduleList';
@@ -16,18 +16,13 @@ import {
 } from './listingBatchLabel';
 import './Scheduler.css';
 
-const API_URL = API_BASE_URL;
-const API_BASE = `${API_URL}/api/v1`;
-const CATEGORY_API_BASE = `${API_URL}/api`;
+const API_BASE = apiPath('');
+const CATEGORY_API_BASE = `${API_BASE_URL}/api`;
 const DEFAULT_MANUAL_ACTION_HELPER_URL = 'http://127.0.0.1:47652';
 const DIRECT_OVERRIDE_RUN_KEY = 'scheduler.directOverrideRun';
 const DIRECT_OVERRIDE_RECOVERY_WINDOW_MS = 20_000;
 const EMPTY_PROGRESS = {};
-const SOURCE_OPTIONS = [
-    { value: 'jobsdb', label: 'JobsDB' },
-    { value: 'ctgoodjobs', label: 'CTgoodjobs' },
-    { value: 'offertoday', label: 'OfferToday' },
-];
+const EMPTY_SOURCE_CATALOG = {};
 
 function readDirectOverrideRunMarker() {
     try {
@@ -134,7 +129,7 @@ function normalizeCategoryIdsForSource(sourceSite, categoryIds) {
         .filter((value) => Number.isInteger(value));
 }
 
-function buildImmediateScrapePayload(form, sourceSite) {
+function buildImmediateScrapePayload(form, sourceSite, sourceCatalog = EMPTY_SOURCE_CATALOG) {
     const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
     const categoryIds = normalizeCategoryIdsForSource(sourceSite, form?.category_ids);
     const maxPages = Number.parseInt(`${form?.max_pages ?? ''}`, 10);
@@ -169,9 +164,9 @@ function buildImmediateScrapePayload(form, sourceSite) {
         payload: {
             source_site: sourceSite,
             crawl_phase: crawlPhase,
-            crawl_mode: form?.crawl_mode || resolveDefaultCrawlMode(sourceSite),
+            crawl_mode: form?.crawl_mode || resolveDefaultCrawlMode(sourceSite, sourceCatalog),
             category_ids: categoryIds,
-            max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite),
+            max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite, sourceCatalog),
             detail_limit: crawlPhase === 'detail' ? detailLimit : 100,
             skip_existing: true,
             ...(sourceListingCrawlJobId ? { source_listing_crawl_job_id: sourceListingCrawlJobId } : {}),
@@ -347,10 +342,15 @@ function buildImmediateRunSummary(form, sourceSite, categories) {
     };
 }
 
-function buildImmediateRunReadiness(form, sourceSite, headedWorkerStatus = null) {
-    const request = buildImmediateScrapePayload(form, sourceSite);
+function buildImmediateRunReadiness(
+    form,
+    sourceSite,
+    sourceCatalog = EMPTY_SOURCE_CATALOG,
+    headedWorkerStatus = null,
+) {
+    const request = buildImmediateScrapePayload(form, sourceSite, sourceCatalog);
     const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
-    const crawlMode = form?.crawl_mode || resolveDefaultCrawlMode(sourceSite);
+    const crawlMode = form?.crawl_mode || resolveDefaultCrawlMode(sourceSite, sourceCatalog);
     const selectedSectorCount = Array.isArray(form?.category_ids) ? form.category_ids.length : 0;
     const hasBatchFilter = Boolean(`${form?.source_listing_crawl_job_id ?? ''}`.trim());
 
@@ -417,6 +417,7 @@ function ScheduleManager({ onNavigateToAI }) {
     const [schedules, setSchedules] = useState([]);
     const [categories, setCategories] = useState([]);
     const [capabilities, setCapabilities] = useState(null);
+    const sourceCatalog = capabilities?.sources ?? EMPTY_SOURCE_CATALOG;
     const [listingBatches, setListingBatches] = useState([]);
     const [currentSourceSite, setCurrentSourceSite] = useState('jobsdb');
     const [isLoading, setIsLoading] = useState(false);
@@ -425,14 +426,14 @@ function ScheduleManager({ onNavigateToAI }) {
     const [historyData, setHistoryData] = useState(null);
     const [createFormHasSourceSelections, setCreateFormHasSourceSelections] = useState(false);
     const [showImmediateScrape, setShowImmediateScrape] = useState(false);
-    const [immediateForm, setImmediateForm] = useState({
+    const [immediateForm, setImmediateForm] = useState(() => ({
         crawl_phase: resolveDefaultCrawlPhase(),
-        crawl_mode: resolveDefaultCrawlMode('jobsdb'),
+        crawl_mode: '',
         category_ids: [],
-        max_pages: resolveDefaultMaxPages('jobsdb'),
+        max_pages: resolveDefaultMaxPages('jobsdb', sourceCatalog),
         detail_limit: 100,
         source_listing_crawl_job_id: '',
-    });
+    }));
     const [scrapeStatus, setScrapeStatus] = useState(null);
     const [progressRecoveryNotice, setProgressRecoveryNotice] = useState(null);
     const [showProgress, setShowProgress] = useState(false);
@@ -441,9 +442,65 @@ function ScheduleManager({ onNavigateToAI }) {
         recoveryStartedAt: null,
     });
     const directOverrideRecoveryRef = useRef(null);
+    const immediateDirtyFieldsRef = useRef({
+        crawlMode: false,
+        maxPages: false,
+    });
     const scheduleHistoryCacheRef = useRef(new Map());
     const categoryCacheRef = useRef(new Map());
     const listingBatchesCacheRef = useRef(new Map());
+
+    const syncImmediateFormWithSourceDefaults = useCallback(() => {
+        const crawlModeOptions = getCrawlModeOptionsForSource(currentSourceSite, sourceCatalog);
+        const nextDefaultCrawlMode = resolveDefaultCrawlMode(currentSourceSite, sourceCatalog);
+        const nextDefaultMaxPages = resolveDefaultMaxPages(currentSourceSite, sourceCatalog);
+
+        setImmediateForm((prev) => {
+            const currentMaxPages = Number.parseInt(`${prev.max_pages ?? ''}`, 10);
+            const isCurrentCrawlModeValid = crawlModeOptions.some((option) => option.value === prev.crawl_mode);
+            const isCurrentMaxPagesValid = Number.isInteger(currentMaxPages) && currentMaxPages > 0;
+            const shouldAdoptDefaultCrawlMode =
+                !prev.crawl_mode
+                || !immediateDirtyFieldsRef.current.crawlMode
+                || !isCurrentCrawlModeValid;
+            const shouldAdoptDefaultMaxPages =
+                !immediateDirtyFieldsRef.current.maxPages
+                || !isCurrentMaxPagesValid;
+
+            if (shouldAdoptDefaultCrawlMode) {
+                immediateDirtyFieldsRef.current.crawlMode = false;
+            }
+
+            if (shouldAdoptDefaultMaxPages) {
+                immediateDirtyFieldsRef.current.maxPages = false;
+            }
+
+            const nextCrawlMode = shouldAdoptDefaultCrawlMode ? nextDefaultCrawlMode : prev.crawl_mode;
+            const nextMaxPages = shouldAdoptDefaultMaxPages ? nextDefaultMaxPages : prev.max_pages;
+
+            if (nextCrawlMode === prev.crawl_mode && nextMaxPages === prev.max_pages) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                crawl_mode: nextCrawlMode,
+                max_pages: nextMaxPages,
+            };
+        });
+    }, [currentSourceSite, sourceCatalog]);
+
+    useEffect(() => {
+        syncImmediateFormWithSourceDefaults();
+    }, [syncImmediateFormWithSourceDefaults]);
+
+    const handleImmediateScrapeToggle = () => {
+        if (!showImmediateScrape) {
+            syncImmediateFormWithSourceDefaults();
+        }
+
+        setShowImmediateScrape((prev) => !prev);
+    };
 
     // Fetch schedules
     const fetchSchedules = useCallback(async () => {
@@ -898,7 +955,7 @@ function ScheduleManager({ onNavigateToAI }) {
             setError('Scheduler dispatch is unavailable in the current runtime profile.');
             return;
         }
-        const request = buildImmediateScrapePayload(immediateForm, currentSourceSite);
+        const request = buildImmediateScrapePayload(immediateForm, currentSourceSite, sourceCatalog);
         if (request.error) {
             setError(request.error);
             return;
@@ -959,7 +1016,7 @@ function ScheduleManager({ onNavigateToAI }) {
     const handleSourceSiteChange = (event) => {
         const nextSourceSite = event.target.value;
 
-        if (nextSourceSite === currentSourceSite) {
+        if (!nextSourceSite || nextSourceSite === currentSourceSite) {
             return;
         }
 
@@ -975,33 +1032,31 @@ function ScheduleManager({ onNavigateToAI }) {
         setImmediateForm((prev) => ({
             ...prev,
             crawl_phase: resolveDefaultCrawlPhase(),
-            crawl_mode: resolveDefaultCrawlMode(nextSourceSite),
             category_ids: [],
             source_listing_crawl_job_id: '',
-            max_pages: (() => {
-                const previousDefaultMaxPages = resolveDefaultMaxPages(currentSourceSite);
-                const currentMaxPages = Number.parseInt(`${prev.max_pages ?? ''}`, 10);
-                const shouldAdoptSourceDefault =
-                    !Number.isInteger(currentMaxPages) || currentMaxPages === previousDefaultMaxPages;
-
-                return shouldAdoptSourceDefault
-                    ? resolveDefaultMaxPages(nextSourceSite)
-                    : prev.max_pages;
-            })(),
         }));
     };
 
     const filteredSchedules = schedules.filter(
         (schedule) => (schedule.source_site || 'jobsdb') === currentSourceSite
     );
+    const hasRuntimeSourceCatalog = Object.keys(sourceCatalog).length > 0;
+    const sourceMetadataUnavailable = capabilities !== null && !hasRuntimeSourceCatalog;
+    const sourceOptions = hasRuntimeSourceCatalog
+        ? Object.entries(sourceCatalog).map(([value, sourceMetadata]) => ({
+            value,
+            label: sourceMetadata?.label || formatSourceLabel(value),
+        }))
+        : [{ value: currentSourceSite, label: formatSourceLabel(currentSourceSite) }];
     const selectedListingBatch = listingBatches.find(
         (batch) => batch.crawl_job_id === immediateForm.source_listing_crawl_job_id
     ) || null;
-    const immediateCrawlModeOptions = getCrawlModeOptionsForSource(currentSourceSite);
+    const immediateCrawlModeOptions = getCrawlModeOptionsForSource(currentSourceSite, sourceCatalog);
     const immediateRunSummary = buildImmediateRunSummary(immediateForm, currentSourceSite, categories);
     const immediateRunReadiness = buildImmediateRunReadiness(
         immediateForm,
         currentSourceSite,
+        sourceCatalog,
         headedWorkerStatus,
     );
     const immediateRunModeCopy = buildImmediateRunModeCopy(immediateForm);
@@ -1023,7 +1078,7 @@ function ScheduleManager({ onNavigateToAI }) {
                     </button>
                     <button
                         className="cyber-btn run-btn"
-                        onClick={() => setShowImmediateScrape(!showImmediateScrape)}
+                        onClick={handleImmediateScrapeToggle}
                         disabled={manualRunDisabled}
                     >
                         {showImmediateScrape ? 'Cancel' : <><Zap size={18} /> Direct Override</>}
@@ -1038,14 +1093,27 @@ function ScheduleManager({ onNavigateToAI }) {
                     className="premium-select"
                     value={currentSourceSite}
                     onChange={handleSourceSiteChange}
+                    disabled={sourceMetadataUnavailable}
                 >
-                    {SOURCE_OPTIONS.map((option) => (
+                    {sourceOptions.map((option) => (
                         <option key={option.value} value={option.value}>
                             {option.label}
                         </option>
                     ))}
                 </select>
             </div>
+
+            {sourceMetadataUnavailable && (
+                <div className="operator-health-banner glass-panel">
+                    <AlertTriangle size={20} />
+                    <div>
+                        <strong>Source metadata is unavailable for this runtime.</strong>
+                        <div className="operator-health-issues">
+                            <span>Source switching is temporarily disabled until runtime capabilities expose `sources` metadata.</span>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <div className="scheduler-launchpad">
                 <div className="scheduler-workstream-card glass-panel">
@@ -1203,10 +1271,13 @@ function ScheduleManager({ onNavigateToAI }) {
                             id="immediate-crawl-mode"
                             className="premium-select"
                             value={immediateForm.crawl_mode}
-                            onChange={(e) => setImmediateForm(prev => ({
-                                ...prev,
-                                crawl_mode: e.target.value,
-                            }))}
+                            onChange={(e) => {
+                                immediateDirtyFieldsRef.current.crawlMode = true;
+                                setImmediateForm(prev => ({
+                                    ...prev,
+                                    crawl_mode: e.target.value,
+                                }));
+                            }}
                         >
                             {immediateCrawlModeOptions.map((option) => (
                                 <option key={option.value} value={option.value}>
@@ -1245,12 +1316,18 @@ function ScheduleManager({ onNavigateToAI }) {
                             max={immediateForm.crawl_phase === 'detail' ? '5000' : '9999'}
                             className="premium-input w-24"
                             value={immediateForm.crawl_phase === 'detail' ? immediateForm.detail_limit : immediateForm.max_pages}
-                            onChange={(e) => setImmediateForm(prev => ({
-                                ...prev,
-                                ...(immediateForm.crawl_phase === 'detail'
-                                    ? { detail_limit: e.target.value }
-                                    : { max_pages: e.target.value })
-                            }))}
+                            onChange={(e) => {
+                                if (immediateForm.crawl_phase !== 'detail') {
+                                    immediateDirtyFieldsRef.current.maxPages = true;
+                                }
+
+                                setImmediateForm(prev => ({
+                                    ...prev,
+                                    ...(immediateForm.crawl_phase === 'detail'
+                                        ? { detail_limit: e.target.value }
+                                        : { max_pages: e.target.value })
+                                }));
+                            }}
                         />
                         <p className="form-hint">
                             {immediateForm.crawl_phase === 'detail'
@@ -1357,6 +1434,7 @@ function ScheduleManager({ onNavigateToAI }) {
                     <ScheduleForm
                         categories={categories}
                         sourceSite={currentSourceSite}
+                        sourceCatalog={sourceCatalog}
                         onSubmit={handleCreate}
                         onCancel={() => setShowForm(false)}
                         onSourceScopedDirtyChange={setCreateFormHasSourceSelections}

@@ -4,11 +4,11 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.config import settings
-from app.crawl_modes import DEFAULT_CRAWL_MODE_BY_SOURCE, get_supported_crawl_modes
 from app.database import SessionLocal
 from app.models.app_runtime_settings import AppRuntimeSettings
 from app.services.headed_crawl_runtime import get_headed_crawl_worker_status
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
+from app.services.source_catalog import build_source_catalog
 
 
 def get_profile_runtime_metadata(scope: str) -> Any:
@@ -92,44 +92,28 @@ def _host_manual_action_helper_capability() -> dict[str, Any]:
 
 
 def _source_capabilities() -> dict[str, dict[str, Any]]:
-    jobsdb_modes = get_supported_crawl_modes("jobsdb")
-    ctgoodjobs_modes = get_supported_crawl_modes("ctgoodjobs")
-    offertoday_modes = get_supported_crawl_modes("offertoday")
-    return {
-        "jobsdb": {
+    capabilities = {
+        source_site: {
             "available": True,
             "listing_supported": True,
             "detail_supported": True,
-            "headless_supported": "headless" in jobsdb_modes,
-            "headed_supported": "headed" in jobsdb_modes,
+            "headless_supported": "headless" in entry["supported_crawl_modes"],
+            "headed_supported": "headed" in entry["supported_crawl_modes"],
             "manual_action_supported": True,
-            "default_crawl_mode": DEFAULT_CRAWL_MODE_BY_SOURCE["jobsdb"],
-            "category_id_type": "integer",
-        },
-        "ctgoodjobs": {
-            "available": True,
-            "listing_supported": True,
-            "detail_supported": True,
-            "headless_supported": "headless" in ctgoodjobs_modes,
-            "headed_supported": "headed" in ctgoodjobs_modes,
-            "manual_action_supported": True,
-            "default_crawl_mode": DEFAULT_CRAWL_MODE_BY_SOURCE["ctgoodjobs"],
-            "proxy_supported": True,
-            "proxy_modes_supported": list(ctgoodjobs_modes),
-            "proxy_enabled": bool(settings.ctgoodjobs_proxy_enabled),
-            "category_id_type": "string",
-        },
-        "offertoday": {
-            "available": True,
-            "listing_supported": True,
-            "detail_supported": True,
-            "headless_supported": "headless" in offertoday_modes,
-            "headed_supported": "headed" in offertoday_modes,
-            "manual_action_supported": True,
-            "default_crawl_mode": DEFAULT_CRAWL_MODE_BY_SOURCE["offertoday"],
-            "category_id_type": "integer",
-        },
+            "label": entry["label"],
+            "category_id_type": entry["category_id_type"],
+            "supported_crawl_modes": entry["supported_crawl_modes"],
+            "default_crawl_mode": entry["default_crawl_mode"],
+            "default_max_pages": entry["default_max_pages"],
+        }
+        for source_site, entry in build_source_catalog().items()
     }
+    ctgoodjobs = capabilities.get("ctgoodjobs")
+    if ctgoodjobs is not None:
+        ctgoodjobs["proxy_supported"] = True
+        ctgoodjobs["proxy_modes_supported"] = list(ctgoodjobs["supported_crawl_modes"])
+        ctgoodjobs["proxy_enabled"] = bool(settings.ctgoodjobs_proxy_enabled)
+    return capabilities
 
 
 def get_scheduler_runtime_status() -> dict:

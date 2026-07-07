@@ -15,6 +15,7 @@ from app.crawl_modes import resolve_crawl_mode
 from app.models.crawl_job import CrawlJob
 from app.models.schedule import ScrapeSchedule, ScheduleExecution
 from app.schemas.schedule import normalize_source_site
+from app.services.source_catalog import is_supported_source_site
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,6 @@ logger = logging.getLogger(__name__)
 
 class ScheduleRepository:
     """Repository for Schedule database operations."""
-
-    SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs", "offertoday"}
 
     def _normalize_source_site_and_activation(self, schedule_data: dict) -> dict:
         """Force unsupported source sites inactive during the transitional phase."""
@@ -33,7 +32,7 @@ class ScheduleRepository:
         normalized["source_site"] = source_site
         normalized["crawl_phase"] = resolve_crawl_phase(normalized.get("crawl_phase"))
         normalized["crawl_mode"] = resolve_crawl_mode(source_site, normalized.get("crawl_mode"))
-        if source_site not in self.SUPPORTED_SOURCE_SITES:
+        if not is_supported_source_site(source_site):
             normalized["is_active"] = False
         return normalized
 
@@ -141,7 +140,7 @@ class ScheduleRepository:
         if not schedule:
             return None
 
-        if normalize_source_site(getattr(schedule, "source_site", "jobsdb")) not in self.SUPPORTED_SOURCE_SITES:
+        if not is_supported_source_site(normalize_source_site(getattr(schedule, "source_site", "jobsdb"))):
             schedule.is_active = False
         else:
             schedule.is_active = not schedule.is_active

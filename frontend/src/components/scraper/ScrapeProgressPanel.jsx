@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { API_BASE_URL } from '../../api/base';
+import { apiPath } from '../../api/base';
 import { formatCrawlModeLabel } from './crawlMode';
 import { formatCrawlPhaseLabel } from './crawlPhase';
 import {
@@ -7,8 +7,7 @@ import {
     formatScraperSourceLabel,
 } from './listingBatchLabel';
 
-const API_URL = API_BASE_URL;
-const API_BASE = `${API_URL}/api/v1`;
+const API_BASE = apiPath('');
 const EMPTY_PROGRESS = {};
 const MAX_VISIBLE_TASKS = 5;
 const SEARCH_FAMILY_LABELS = {

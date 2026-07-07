@@ -24,6 +24,7 @@ from app.repositories.schedule_repository import ScheduleRepository
 from app.services.crawl_request_validation import normalize_source_site, validate_category_ids_for_source_site
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.services.source_category_registry import get_source_category_registry
+from app.services.source_catalog import is_supported_source_site
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,6 @@ class SchedulerService:
     """Service for managing scheduled scraping tasks."""
 
     _instance: Optional["SchedulerService"] = None
-    SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs", "offertoday"}
 
     def __init__(self, *, owner: str = "scheduler-worker", worker_name: str | None = None):
         self.scheduler: Optional[AsyncIOScheduler] = None
@@ -224,7 +224,7 @@ class SchedulerService:
             return False
 
         source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
-        if source_site not in self.SUPPORTED_SOURCE_SITES:
+        if not is_supported_source_site(source_site):
             logger.info(
                 "Skipping scheduler registration for unsupported source_site '%s' (schedule_id=%s)",
                 source_site,
@@ -378,7 +378,7 @@ class SchedulerService:
                 return None
 
             source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
-            if source_site not in self.SUPPORTED_SOURCE_SITES:
+            if not is_supported_source_site(source_site):
                 logger.error("Unsupported source_site '%s' for schedule %s", source_site, schedule_id)
                 return None
 
@@ -410,7 +410,7 @@ class SchedulerService:
 
     def add_schedule(self, schedule: ScrapeSchedule):
         """Add a new schedule to the scheduler."""
-        if normalize_source_site(getattr(schedule, "source_site", "jobsdb")) not in self.SUPPORTED_SOURCE_SITES:
+        if not is_supported_source_site(normalize_source_site(getattr(schedule, "source_site", "jobsdb"))):
             return
         if schedule.is_active:
             self._add_job(schedule)
@@ -427,7 +427,7 @@ class SchedulerService:
     def update_schedule(self, schedule: ScrapeSchedule):
         """Update a schedule in the scheduler."""
         self.remove_schedule(schedule.id)
-        if normalize_source_site(getattr(schedule, "source_site", "jobsdb")) not in self.SUPPORTED_SOURCE_SITES:
+        if not is_supported_source_site(normalize_source_site(getattr(schedule, "source_site", "jobsdb"))):
             return
         if schedule.is_active:
             self._add_job(schedule)

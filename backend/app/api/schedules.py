@@ -30,11 +30,11 @@ from app.services.crawl_request_validation import (
     validate_category_ids_for_source_site,
 )
 from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
+from app.services.source_catalog import is_supported_source_site
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 repository = ScheduleRepository()
 crawl_job_dispatch_service = CrawlJobDispatchService()
-SUPPORTED_SOURCE_SITES = {"jobsdb", "ctgoodjobs", "offertoday"}
 
 
 async def _validate_ctgoodjobs_category_ids_exist(category_ids: list[str] | None) -> None:
@@ -102,7 +102,8 @@ async def run_immediate_scrape(
     db: Session = Depends(get_db)
 ):
     """Run scraping immediately without creating a schedule."""
-    if request.source_site not in SUPPORTED_SOURCE_SITES:
+    effective_source_site = normalize_source_site(request.source_site)
+    if not is_supported_source_site(effective_source_site):
         raise HTTPException(
             status_code=400,
             detail="Unsupported source_site for execution",
@@ -111,7 +112,7 @@ async def run_immediate_scrape(
     try:
         dispatch_result = crawl_job_dispatch_service.dispatch_manual_crawl_job(
             db,
-            source_site=request.source_site,
+            source_site=effective_source_site,
             crawl_phase=request.crawl_phase,
             crawl_mode=request.crawl_mode,
             category_ids=list(request.category_ids or []),
@@ -250,7 +251,7 @@ async def run_schedule_now(
         raise HTTPException(status_code=404, detail="Schedule not found")
 
     effective_source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
-    if effective_source_site not in SUPPORTED_SOURCE_SITES:
+    if not is_supported_source_site(effective_source_site):
         raise HTTPException(
             status_code=400,
             detail="Unsupported source_site for execution",

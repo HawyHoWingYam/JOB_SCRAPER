@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
-import { API_BASE_URL } from '../../api/base';
+import { apiPath } from '../../api/base';
 
-const API_URL = API_BASE_URL;
 
 const SKILL_BUCKET_ORDER = [
   'Backend',
@@ -82,7 +81,7 @@ export default function SkillChart() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/v1/stats/skills?limit=30`)
+    fetch(apiPath('/stats/skills?limit=30'))
       .then((res) => {
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);

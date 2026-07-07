@@ -2,10 +2,8 @@ import { useState, useEffect } from 'react';
 import { Activity, Database, BrainCircuit, AlertTriangle, Clock3 } from 'lucide-react';
 import SkillChart from './charts/SkillChart';
 import CategoryChart from './charts/CategoryChart';
-import { API_BASE_URL } from '../api/base';
+import { apiPath } from '../api/base';
 import './Dashboard.css';
-
-const API_URL = API_BASE_URL;
 
 export default function Dashboard({ onNavigateToAI }) {
   const [stats, setStats] = useState(null);
@@ -15,8 +13,8 @@ export default function Dashboard({ onNavigateToAI }) {
 
   useEffect(() => {
     Promise.allSettled([
-      fetch(`${API_URL}/api/v1/stats/overview`),
-      fetch(`${API_URL}/api/v1/ai/overview`),
+      fetch(apiPath('/stats/overview')),
+      fetch(apiPath('/ai/overview')),
     ])
       .then(async ([statsResult, aiOverviewResult]) => {
         if (statsResult.status !== 'fulfilled') {

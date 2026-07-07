@@ -38,7 +38,7 @@ class ScrapeSchedule(Base):
     # Scraping parameters
     category_ids = Column(JSON, nullable=True)  # List of category IDs [1200, 6281, ...]
     keywords = Column(String(500), nullable=True)
-    location = Column(String(255), default="Hong Kong")
+    location = Column(String(255), nullable=True)
     max_pages = Column(Integer, default=3)
 
     # Status
@@ -156,3 +156,4 @@ class SchedulerRuntimeHeartbeat(Base):
             f"<SchedulerRuntimeHeartbeat(owner={self.owner}, worker_name={self.worker_name}, "
             f"status={self.status})>"
         )
+

@@ -4,7 +4,8 @@ import SearchBar from './SearchBar';
 import FilterPanel from './FilterPanel';
 import PaginationControl from './PaginationControl';
 import JobDetailModal from './JobDetailModal';
-import { API_BASE_URL } from '../api/base';
+import { API_BASE_URL, apiPath } from '../api/base';
+import { formatApiErrorDetail } from '../api/errors';
 import { fetchCapabilities } from '../api/capabilities';
 import {
     createEmptyJobBrowserLayer,
@@ -23,8 +24,6 @@ import {
     getDateValidationError,
 } from './jobBrowserQueryUtils';
 import './JobBrowser.css';
-
-const API_URL = API_BASE_URL;
 
 function hasQueryValue(value) {
     if (Array.isArray(value)) {
@@ -93,60 +92,6 @@ function downloadBlob(blob, filename) {
     URL.revokeObjectURL(objectUrl);
 }
 
-function formatApiErrorDetail(detail, fallback) {
-    if (typeof detail === 'string' && detail.trim()) {
-        return detail;
-    }
-
-    if (Array.isArray(detail) && detail.length > 0) {
-        const formatted = detail
-            .map((item) => {
-                if (typeof item === 'string' && item.trim()) {
-                    return item;
-                }
-
-                if (item && typeof item === 'object') {
-                    const path = Array.isArray(item.loc)
-                        ? item.loc.filter((segment) => segment !== 'body').join('.')
-                        : '';
-                    const message = typeof item.msg === 'string'
-                        ? item.msg
-                        : typeof item.message === 'string'
-                            ? item.message
-                            : '';
-
-                    if (path && message) {
-                        return `${path}: ${message}`;
-                    }
-
-                    if (message) {
-                        return message;
-                    }
-                }
-
-                return null;
-            })
-            .filter(Boolean)
-            .join('; ');
-
-        if (formatted) {
-            return formatted;
-        }
-    }
-
-    if (detail && typeof detail === 'object') {
-        if (typeof detail.message === 'string' && detail.message.trim()) {
-            return detail.message;
-        }
-
-        if (typeof detail.code === 'string' && detail.code.trim()) {
-            return detail.code;
-        }
-    }
-
-    return fallback;
-}
-
 function formatPendingChangesLabel(count) {
     if (!count) {
         return 'No refinements armed';
@@ -203,7 +148,7 @@ function JobBrowser() {
         setExportError('');
 
         try {
-            const response = await fetch(`${API_URL}/api/v1/jobs/search`, {
+            const response = await fetch(apiPath('/jobs/search'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -258,8 +203,8 @@ function JobBrowser() {
         const fetchFilterOptions = async () => {
             try {
                 const [baseResponse, subcategoriesResponse] = await Promise.all([
-                    fetch(`${API_URL}/api/v1/jobs/filters`),
-                    fetch(`${API_URL}/api/v1/filters/job-subcategories`),
+                    fetch(apiPath('/jobs/filters')),
+                    fetch(apiPath('/filters/job-subcategories')),
                 ]);
 
                 if (baseResponse.ok && subcategoriesResponse.ok) {
@@ -418,7 +363,7 @@ function JobBrowser() {
         setExportError('');
 
         try {
-            const response = await fetch(`${API_URL}/api/v1/jobs/search/export`, {
+            const response = await fetch(apiPath('/jobs/search/export'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -680,7 +625,7 @@ function JobBrowser() {
             {selectedJobId && (
                 <JobDetailModal
                     jobId={selectedJobId}
-                    apiUrl={API_URL}
+                    apiUrl={API_BASE_URL}
                     capabilities={capabilities}
                     capabilitiesLoading={capabilitiesLoading}
                     onClose={() => setSelectedJobId(null)}
