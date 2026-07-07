@@ -2,6 +2,8 @@ FROM python:3.11-slim
 
 RUN pip install --no-cache-dir scrapyd
 
+COPY run_scrapyd_quiet.py /app/run_scrapyd_quiet.py
+
 EXPOSE 6800
 
-CMD ["scrapyd"]
+CMD ["python", "/app/run_scrapyd_quiet.py"]

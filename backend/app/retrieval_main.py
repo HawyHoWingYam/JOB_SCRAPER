@@ -8,7 +8,7 @@ from app.config import settings
 from app.logging_config import configure_logging, redact_url
 from app.server_runtime import run_api_app
 
-configure_logging(settings.log_level)
+configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
 
 

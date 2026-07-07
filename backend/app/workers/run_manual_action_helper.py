@@ -7,7 +7,7 @@ from app.config import settings
 from app.host_manual_action_helper import HostManualActionHelperServer
 from app.logging_config import configure_logging
 
-configure_logging(settings.log_level)
+configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
 
 

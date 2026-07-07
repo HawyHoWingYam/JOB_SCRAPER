@@ -60,6 +60,8 @@ class JobsdbSpider(scrapy.Spider):
         self.crawl_run_id = str(kwargs.get("crawl_run_id", "") or "")
         self.jobdir = str(kwargs.get("jobdir", "") or "")
         self._detail_job_ids: list[tuple[str, str]] = []  # (external_id, title, source_url)
+        self._detail_done: int = 0
+        self._detail_total: int = 0
 
     def start_requests(self) -> AsyncIterable[scrapy.Request]:
         """Start with listing API requests for each category."""
@@ -89,6 +91,8 @@ class JobsdbSpider(scrapy.Spider):
         if not jobs:
             logger.debug("No jobs on page %d for category %s", page, category_id)
             return
+
+        logger.info("JobsDB listing cat=%s page=%d jobs=%d", category_id, page, len(jobs))
 
         for job in jobs:
             external_id = str(job.get("external_id") or "").strip()
@@ -144,6 +148,8 @@ class JobsdbSpider(scrapy.Spider):
     def _start_detail_requests(self) -> AsyncIterable[scrapy.Request]:
         """Yield detail page requests for all discovered job IDs."""
         logger.info("Starting detail phase for %d JobsDB jobs", len(self._detail_job_ids))
+        self._detail_total = len(self._detail_job_ids)
+        self._detail_done = 0
         for job_id, listing_url in self._detail_job_ids:
             yield scrapy.Request(
                 url=listing_url,
@@ -165,6 +171,15 @@ class JobsdbSpider(scrapy.Spider):
             return
 
         canonical = to_canonical(parsed, source_url=listing_url)
+
+        self._detail_done += 1
+        if self._detail_done % 10 == 0 or self._detail_done == self._detail_total:
+            logger.info(
+                "JobsDB detail progress %d/%d (%.0f%%)",
+                self._detail_done,
+                self._detail_total,
+                self._detail_done / max(self._detail_total, 1) * 100,
+            )
 
         yield JobDetailItem(
             source_site="jobsdb",
@@ -189,6 +204,7 @@ class JobsdbSpider(scrapy.Spider):
         """Handle detail page fetch failure."""
         job_id = failure.request.meta.get("job_id", "unknown")
         listing_url = failure.request.meta.get("listing_url", "")
+        self._detail_done += 1
         yield self._build_fallback_detail(job_id, listing_url)
 
     def _build_fallback_detail(self, job_id: str, listing_url: str) -> JobDetailItem:
@@ -210,4 +226,11 @@ class JobsdbSpider(scrapy.Spider):
             raw_data={},
             crawl_run_id=self.crawl_run_id,
             detail_success=False,
+        )
+
+    def spider_closed(self, spider):
+        logger.info(
+            "JobsDB spider finished: detail_done=%d detail_total=%d",
+            self._detail_done,
+            self._detail_total,
         )

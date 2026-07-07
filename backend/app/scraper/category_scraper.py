@@ -6,6 +6,7 @@ Phase 1 of the two-phase scraping approach.
 """
 
 import asyncio
+import logging
 import random
 from typing import List, Dict, Any, Optional
 
@@ -13,8 +14,11 @@ import httpx
 
 from app.config import settings
 from app.scraper.categories import JOBSDB_CATEGORIES, get_category_by_id, get_category_name
+from app.scraper.log_events import build_scrape_log_event
 from app.scraper.manual_action import ManualActionRequiredError
 from app.utils.time import utc_now
+
+logger = logging.getLogger(__name__)
 
 
 class CategoryListScraper:
@@ -124,6 +128,14 @@ class CategoryListScraper:
         page = 1
         total_count = 0
         category_name = get_category_name(classification_id) or f"Category {classification_id}"
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_START",
+                source="jobsdb",
+                category_id=classification_id,
+                max_pages=max_pages,
+            )
+        )
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             # First request to get total count
@@ -149,6 +161,24 @@ class CategoryListScraper:
             result = await self.fetch_page(classification_id, page, client)
             jobs = result.get("data", [])
             job_ids.extend([job["id"] for job in jobs])
+            logger.info(
+                build_scrape_log_event(
+                    "SCRAPE_LISTING_PAGE",
+                    source="jobsdb",
+                    category_id=classification_id,
+                    page=page,
+                    jobs=len(jobs),
+                )
+            )
+            for job in jobs:
+                logger.debug(
+                    build_scrape_log_event(
+                        "SCRAPE_LISTING_JOB",
+                        source="jobsdb",
+                        category_id=classification_id,
+                        source_job_id=job["id"],
+                    )
+                )
 
             if on_progress:
                 on_progress(page, total_pages, len(job_ids))
@@ -168,6 +198,24 @@ class CategoryListScraper:
                     break
 
                 job_ids.extend([job["id"] for job in jobs])
+                logger.info(
+                    build_scrape_log_event(
+                        "SCRAPE_LISTING_PAGE",
+                        source="jobsdb",
+                        category_id=classification_id,
+                        page=page,
+                        jobs=len(jobs),
+                    )
+                )
+                for job in jobs:
+                    logger.debug(
+                        build_scrape_log_event(
+                            "SCRAPE_LISTING_JOB",
+                            source="jobsdb",
+                            category_id=classification_id,
+                            source_job_id=job["id"],
+                        )
+                    )
 
                 if on_progress:
                     on_progress(page, total_pages, len(job_ids))

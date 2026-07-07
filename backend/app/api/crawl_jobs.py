@@ -117,6 +117,12 @@ async def create_crawl_job(
                 detail=str(exc),
             ) from exc
         response.headers["X-Crawl-Job-Id"] = str(dispatch_result.crawl_job.id)
+        logger.info(
+            "SCRAPE_REQUEST_CREATED source=%s crawl_job_id=%s trigger=schedule schedule_id=%s",
+            effective_source_site,
+            dispatch_result.crawl_job.id,
+            str(schedule.id),
+        )
         return dispatch_result.crawl_job
 
     effective_source_site = normalize_source_site(request.source_site)
@@ -150,6 +156,15 @@ async def create_crawl_job(
             detail=str(exc),
         ) from exc
     response.headers["X-Crawl-Job-Id"] = str(dispatch_result.crawl_job.id)
+    logger.info(
+        "SCRAPE_REQUEST_CREATED source=%s crawl_job_id=%s phase=%s mode=%s max_pages=%s categories=%d",
+        effective_source_site,
+        dispatch_result.crawl_job.id,
+        resolve_crawl_phase(request.crawl_phase),
+        request.crawl_mode or "default",
+        str(request.max_pages) if request.max_pages else resolve_default_max_pages(effective_source_site),
+        len(request.category_ids or []),
+    )
 
     # Queue OfferToday crawl via subprocess (reliable, no asyncio GC issues)
     if effective_source_site == "offertoday" and request.crawl_phase in (None, "listing"):
@@ -171,7 +186,12 @@ async def create_crawl_job(
         _args.extend(["--max-pages", _max_p, "--crawl-job-id", _cj_id])
         if str(request.crawl_mode or "").lower() == "headed":
             _args.append("--headed")
-        _sp.Popen(_args, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        logger.info(
+            "OfferToday subprocess starting id=%s args=%s",
+            _cj_id,
+            " ".join(_args),
+        )
+        _sp.Popen(_args)
 
     return dispatch_result.crawl_job
 

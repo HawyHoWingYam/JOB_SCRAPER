@@ -22,7 +22,7 @@ from app.database import SessionLocal
 from app.server_runtime import run_api_app
 from app.services.startup_recovery_service import StartupRecoveryService
 
-configure_logging(settings.log_level)
+configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
 
 

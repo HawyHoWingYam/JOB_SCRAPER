@@ -16,6 +16,7 @@ from typing import Dict, Any, Optional, List
 import httpx
 
 from app.config import settings
+from app.scraper.log_events import build_scrape_log_event
 from app.sources.jobsdb.parsers import parse_detail_page as parse_jobsdb_detail_page
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,14 @@ class JobDetailScraper:
         """Fetch and parse job details for a single job ID."""
         url = f"{self.BASE_URL}/{job_id}"
         referer = f"https://hk.jobsdb.com/jobs?classification={job_id[:4]}"
+        logger.debug(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_START",
+                source="jobsdb",
+                source_job_id=job_id,
+                url=url,
+            )
+        )
 
         should_close = client is None
         if client is None:
@@ -78,9 +87,27 @@ class JobDetailScraper:
             response.raise_for_status()
 
             html = response.text
-            return parse_jobsdb_detail_page(html, job_id=job_id)
+            detail = parse_jobsdb_detail_page(html, job_id=job_id)
+            logger.debug(
+                build_scrape_log_event(
+                    "SCRAPE_DETAIL_OK",
+                    source="jobsdb",
+                    source_job_id=job_id,
+                    url=url,
+                )
+            )
+            return detail
 
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            logger.warning(
+                build_scrape_log_event(
+                    "SCRAPE_DETAIL_FAIL",
+                    source="jobsdb",
+                    source_job_id=job_id,
+                    url=url,
+                    error=type(exc).__name__,
+                )
+            )
             return None
         finally:
             if should_close:
@@ -94,6 +121,13 @@ class JobDetailScraper:
         """Fetch details for multiple jobs with rate limiting."""
         results = []
         total = len(job_ids)
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_BATCH_START",
+                source="jobsdb",
+                jobs=total,
+            )
+        )
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             for i, job_id in enumerate(job_ids):
@@ -110,4 +144,12 @@ class JobDetailScraper:
                     delay = random.uniform(self.min_delay, self.max_delay)
                     await asyncio.sleep(delay)
 
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_BATCH_OK",
+                source="jobsdb",
+                jobs=total,
+                completed=len(results),
+            )
+        )
         return results

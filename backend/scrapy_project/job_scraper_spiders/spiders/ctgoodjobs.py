@@ -61,6 +61,8 @@ class CtgoodjobsSpider(scrapy.Spider):
 
         self.crawl_run_id = str(kwargs.get("crawl_run_id", "") or "")
         self.jobdir = str(kwargs.get("jobdir", "") or "")
+        self._detail_done: int = 0
+        self._detail_total: int = 0
 
         # Build category map for metadata
         self._cat_map: dict[str, dict[str, str]] = {}
@@ -123,6 +125,8 @@ class CtgoodjobsSpider(scrapy.Spider):
 
         if errors:
             logger.warning("CTGoodJobs listing page %d cat=%s errors: %s", page, category_id, errors)
+
+        logger.info("CTGoodJobs listing cat=%s page=%d jobs=%d", category_id, page, len(job_ids))
 
         for job_id, job_url in zip(job_ids, job_urls):
             yield ListingItem(
@@ -190,6 +194,10 @@ class CtgoodjobsSpider(scrapy.Spider):
 
         canonical = to_canonical(parsed)
 
+        self._detail_done += 1
+        if self._detail_done % 10 == 0:
+            logger.info("CTGoodJobs detail %d done", self._detail_done)
+
         yield JobDetailItem(
             source_site="ctgoodjobs",
             source_job_id=job_id,
@@ -213,6 +221,7 @@ class CtgoodjobsSpider(scrapy.Spider):
         """Handle detail page fetch failure."""
         job_id = failure.request.meta.get("job_id", "unknown")
         job_url = failure.request.url if hasattr(failure.request, "url") else ""
+        self._detail_done += 1
         yield JobDetailItem(
             source_site="ctgoodjobs",
             source_job_id=job_id,
@@ -230,4 +239,10 @@ class CtgoodjobsSpider(scrapy.Spider):
             raw_data={},
             crawl_run_id=self.crawl_run_id,
             detail_success=False,
+        )
+
+    def spider_closed(self, spider):
+        logger.info(
+            "CTGoodJobs spider finished: details_done=%d",
+            self._detail_done,
         )

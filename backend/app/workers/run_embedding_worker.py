@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - optional import gate
     SentenceTransformer = None
 
 
-configure_logging(settings.log_level)
+configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"

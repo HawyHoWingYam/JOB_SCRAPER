@@ -20,6 +20,7 @@ from app.repositories.company_repository import CompanyRepository
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.job_repository import JobRepository
+from app.scraper.log_events import build_scrape_log_event
 from app.utils.data_mapper import parse_listing_date, parse_salary_range
 from app.utils.source_identity import (
     build_compat_company_id,
@@ -30,7 +31,7 @@ from app.utils.source_identity import (
 
 from app.workers.event_types import INGEST_ITEM_SETTLED_EVENT_TYPE
 
-configure_logging(settings.log_level)
+configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
 _STALE_PENDING_RECLAIM_IDLE_MS = 60_000
 
@@ -41,6 +42,7 @@ class IngestActionResult:
     job_id: str
     company_id: str
     crawl_job_id: str | None
+    listing_id: str | None
     source_site: str
     source_job_id: str
 
@@ -49,6 +51,19 @@ class InvalidIngestPayloadError(ValueError):
     def __init__(self, reason: str, message: str):
         super().__init__(message)
         self.reason = reason
+
+
+def _build_ingest_result_log_message(result: IngestActionResult) -> str:
+    return build_scrape_log_event(
+        "SCRAPE_INGEST_RESULT",
+        source=result.source_site,
+        crawl_job_id=result.crawl_job_id,
+        listing_id=result.listing_id,
+        source_job_id=result.source_job_id,
+        action=result.action,
+        job_id=result.job_id,
+        company_id=result.company_id,
+    )
 
 
 class IngestWorkerService:
@@ -102,12 +117,7 @@ class IngestWorkerService:
             result = self._persist_event(db, event)
             db.commit()
             self.outbox_publisher.publish_pending_batch(db, limit=100)
-            logger.info(
-                "ingest worker processed source_site=%s source_job_id=%s action=%s",
-                result.source_site,
-                result.source_job_id,
-                result.action,
-            )
+            logger.info(_build_ingest_result_log_message(result))
         except InvalidIngestPayloadError as exc:
             db.rollback()
             self._record_ingest_failure(db, event, exc)
@@ -154,6 +164,16 @@ class IngestWorkerService:
                 listing_id=uuid.UUID(listing_id),
                 published_job_id=job.id,
                 auto_commit=False,
+            )
+            logger.debug(
+                build_scrape_log_event(
+                    "SCRAPE_INGEST_ATTACH_LISTING",
+                    source=source_site,
+                    crawl_job_id=crawl_job_id,
+                    listing_id=listing_id,
+                    source_job_id=source_job_id,
+                    job_id=str(job.id),
+                )
             )
 
         if crawl_job_id is not None:
@@ -212,6 +232,7 @@ class IngestWorkerService:
             job_id=str(job.id),
             company_id=str(company.id),
             crawl_job_id=crawl_job_id,
+            listing_id=listing_id,
             source_site=source_site,
             source_job_id=source_job_id,
         )

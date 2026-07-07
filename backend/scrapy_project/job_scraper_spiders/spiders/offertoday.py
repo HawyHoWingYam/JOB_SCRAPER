@@ -330,6 +330,14 @@ class OfferTodaySpider(scrapy.Spider):
             yield self._build_detail_fallback(eid, url, listing_data, cid)
 
         self._detail_count += 1
+        if self._detail_count % 10 == 0 or self._detail_count == len(self._detail_targets):
+            logger.info(
+                "OfferToday detail progress %d/%d (%.0f%%) ok=%s",
+                self._detail_count,
+                len(self._detail_targets),
+                self._detail_count / max(len(self._detail_targets), 1) * 100,
+                detail_success,
+            )
         yield CrawlProgressItem(
             event_type="detail_page",
             crawl_run_id=self.crawl_run_id,
@@ -386,4 +394,12 @@ class OfferTodaySpider(scrapy.Spider):
             raw_data=to_canonical(listing_data),
             crawl_run_id=self.crawl_run_id,
             detail_success=False,
+        )
+
+    def spider_closed(self, spider):
+        logger.info(
+            "OfferToday spider finished: pages=%d listings=%d details=%d",
+            self._listing_pages_processed,
+            len(self._seen_ids),
+            self._detail_count,
         )

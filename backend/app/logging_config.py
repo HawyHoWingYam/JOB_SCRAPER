@@ -19,6 +19,13 @@ SUPPRESSED_ACCESS_PATHS = frozenset(
         "/health",
     }
 )
+SCRAPER_LOGGER_NAMES = (
+    "app.scraper",
+    "app.sources",
+    "app.workers.run_ingest_worker",
+    "app.api.crawl_jobs",
+    "app.services.crawl_job_dispatch_service",
+)
 
 
 def redact_url(url: str) -> str:
@@ -65,9 +72,16 @@ class UvicornAccessFilter(logging.Filter):
         return not should_suppress_uvicorn_access_log(record)
 
 
-def configure_logging(log_level: str) -> None:
+def _resolve_log_level(value: str | None, fallback: int) -> int:
+    if not value:
+        return fallback
+    return getattr(logging, str(value).upper(), fallback)
+
+
+def configure_logging(log_level: str, scraper_log_level: str | None = None) -> None:
     """Configure root logging once and keep third-party noise down."""
-    level = getattr(logging, log_level.upper(), logging.INFO)
+    level = _resolve_log_level(log_level, logging.INFO)
+    scraper_level = _resolve_log_level(scraper_log_level, level)
     formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
     root_logger = logging.getLogger()
 
@@ -83,6 +97,9 @@ def configure_logging(log_level: str) -> None:
 
     for logger_name in NOISY_LOGGERS:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+    for logger_name in SCRAPER_LOGGER_NAMES:
+        logging.getLogger(logger_name).setLevel(scraper_level)
 
     access_logger = logging.getLogger("uvicorn.access")
     if not any(isinstance(existing_filter, UvicornAccessFilter) for existing_filter in access_logger.filters):

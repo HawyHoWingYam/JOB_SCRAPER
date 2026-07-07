@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +23,8 @@ from app.scraper.manual_action import (
     SUPPORTED_RESUME_STRATEGIES,
 )
 from app.utils.time import utc_now
+
+logger = logging.getLogger(__name__)
 
 RESUME_CONTEXT_EVENT_TYPES = {
     "crawl.manual_action_required",
@@ -224,6 +227,16 @@ class CrawlJobDispatchService:
             db.refresh(execution)
         self.outbox_publisher.publish_row(db, row=command_row)
         self.outbox_publisher.publish_pending_batch(db, limit=100)
+
+        logger.info(
+            "SCRAPE_DISPATCHED source=%s crawl_job_id=%s phase=%s mode=%s trigger=%s topic=%s",
+            source_site,
+            crawl_job.id,
+            payload.get("crawl_phase"),
+            payload.get("crawl_mode"),
+            trigger_type,
+            self._resolve_command_topic(source_site=source_site, crawl_mode=payload.get("crawl_mode")),
+        )
         return CrawlJobDispatchResult(crawl_job=crawl_job, schedule_execution=execution)
 
     def cancel_crawl_job(

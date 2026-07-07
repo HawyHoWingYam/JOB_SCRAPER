@@ -7,7 +7,7 @@ from app.logging_config import configure_logging
 from app.config import settings
 from app.services.scheduler_runtime import initialize_scheduler_runtime, shutdown_scheduler_runtime
 
-configure_logging(settings.log_level)
+configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
 
 

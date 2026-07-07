@@ -5,6 +5,7 @@ import logging
 import httpx
 
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
+from app.scraper.log_events import build_scrape_log_event
 from app.scraper.proxy_rotation import (
     CTGoodJobsProxyRuntime,
     build_ctgoodjobs_proxy_runtime,
@@ -118,6 +119,15 @@ async def fetch_html_document(
             attempt_proxy_lease = None
             owns_attempt_client = False
             try:
+                logger.debug(
+                    build_scrape_log_event(
+                        "SCRAPE_FETCH_START",
+                        source="ctgoodjobs",
+                        stage=stage,
+                        url=url,
+                        attempt=attempt + 1,
+                    )
+                )
                 if active_proxy_runtime.enabled:
                     attempt_proxy_lease = await active_proxy_runtime.acquire_lease()
                     attempt_client = httpx.AsyncClient(
@@ -160,6 +170,15 @@ async def fetch_html_document(
                         stage=stage,
                         lease=attempt_proxy_lease,
                     )
+                logger.debug(
+                    build_scrape_log_event(
+                        "SCRAPE_FETCH_OK",
+                        source="ctgoodjobs",
+                        stage=stage,
+                        url=url,
+                        attempt=attempt + 1,
+                    )
+                )
                 return response.text
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code if exc.response is not None else None

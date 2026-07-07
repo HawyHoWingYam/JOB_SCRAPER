@@ -13,7 +13,7 @@ from app.messaging.topics import STREAM_CRAWL_PROGRESS, STREAM_JOB_LIFECYCLE
 from app.services.enrichment_run_service import EnrichmentRunService
 from app.services.startup_recovery_service import StartupRecoveryService
 
-configure_logging(settings.log_level)
+configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
 _STALE_PENDING_RECLAIM_IDLE_MS = 60_000
 

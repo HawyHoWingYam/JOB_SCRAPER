@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 
 from app.config import settings
 from app.manual_actions.live_browser_registry import get_live_browser_registry
+from app.scraper.log_events import build_scrape_log_event
 from app.scraper.manual_action import (
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
@@ -81,8 +82,26 @@ class JobsDBBrowserDetailScraper:
 
     async def fetch_job_detail(self, job_id: str, client=None) -> dict | None:
         url = f"https://hk.jobsdb.com/job/{job_id}"
+        logger.debug(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_START",
+                source="jobsdb",
+                crawl_job_id=self.request_payload.get("crawl_job_id"),
+                source_job_id=job_id,
+                url=url,
+            )
+        )
         html = await self._fetch_page_content(url)
         if self._looks_like_interstitial(html):
+            logger.warning(
+                build_scrape_log_event(
+                    "SCRAPE_DETAIL_MANUAL_ACTION",
+                    source="jobsdb",
+                    crawl_job_id=self.request_payload.get("crawl_job_id"),
+                    source_job_id=job_id,
+                    url=url,
+                )
+            )
             raise ManualActionRequiredError(
                 source_site="jobsdb",
                 stage="detail_page",
@@ -95,7 +114,17 @@ class JobsDBBrowserDetailScraper:
                     "Return to the app and click Resume.",
                 ],
             )
-        return parse_jobsdb_detail_page(html, job_id=job_id)
+        detail = parse_jobsdb_detail_page(html, job_id=job_id)
+        logger.debug(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_OK",
+                source="jobsdb",
+                crawl_job_id=self.request_payload.get("crawl_job_id"),
+                source_job_id=job_id,
+                url=url,
+            )
+        )
+        return detail
 
     async def _fetch_page_content(self, url: str) -> str:
         if self.page_content_fetcher is not None:
