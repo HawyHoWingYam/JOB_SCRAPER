@@ -114,8 +114,8 @@ def _build_crawl_request_created_log_message(
 async def create_crawl_job(
     request: CrawlJobCreateRequest,
     response: Response,
-    request_context: Request = None,
     db: Session = Depends(get_db),
+    request_context: Request = None,
 ):
     request_id = getattr(getattr(request_context, "state", None), "request_id", None)
 
