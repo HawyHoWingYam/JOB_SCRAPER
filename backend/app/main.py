@@ -70,7 +70,6 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
-install_request_monitoring(app)
 
 # Configure CORS
 cors_origins = settings.cors_origins.split(",")
@@ -101,6 +100,9 @@ async def root():
         "version": "0.1.0",
         "docs": "/docs",
     }
+
+
+app = install_request_monitoring(app)
 
 
 def main() -> None:

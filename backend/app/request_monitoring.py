@@ -4,8 +4,7 @@ import logging
 import time
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REQUEST_ID_HEADER = "X-Request-ID"
 SLOW_REQUEST_THRESHOLD_MS = 1000
@@ -19,12 +18,27 @@ EXCLUDED_REQUEST_SUMMARY_PATHS = {"/api/v1/scrape/progress/stream"}
 logger = logging.getLogger("app.request_monitoring")
 
 
+def format_monitoring_log_value(value: object) -> str:
+    text = str(value)
+    escaped = (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    needs_quotes = text == "" or any(char.isspace() or char in {'=', '"', "\\"} for char in text)
+    if needs_quotes:
+        return f'"{escaped}"'
+    return escaped
+
+
 def build_monitoring_log_event(event: str, **fields: object) -> str:
     parts = [str(event).strip()]
     for key, value in fields.items():
         if value is None:
             continue
-        parts.append(f"{key}={str(value).replace(chr(10), '\\n')}")
+        parts.append(f"{key}={format_monitoring_log_value(value)}")
     return " ".join(parts)
 
 
@@ -40,9 +54,16 @@ def should_log_request_summary(*, path: str, status_code: int, duration_ms: int)
     return any(path.startswith(prefix) for prefix in IMPORTANT_REQUEST_PATH_PREFIXES)
 
 
-def log_request_summary(*, request: Request, request_id: str, status_code: int, duration_ms: int) -> None:
+def log_request_summary(
+    *,
+    request_id: str,
+    method: str,
+    path: str,
+    status_code: int,
+    duration_ms: int,
+) -> None:
     if should_log_request_summary(
-        path=request.url.path,
+        path=path,
         status_code=status_code,
         duration_ms=duration_ms,
     ):
@@ -50,50 +71,87 @@ def log_request_summary(*, request: Request, request_id: str, status_code: int, 
             build_monitoring_log_event(
                 "API_REQUEST_SUMMARY",
                 request_id=request_id,
-                method=request.method,
-                path=request.url.path,
+                method=method,
+                path=path,
                 status=status_code,
                 duration_ms=duration_ms,
             )
         )
 
 
-def install_request_monitoring(app: FastAPI) -> None:
-    @app.middleware("http")
-    async def request_monitoring_middleware(request: Request, call_next):
-        request_id = request.headers.get(REQUEST_ID_HEADER) or create_request_id()
-        request.state.request_id = request_id
+def ensure_request_id_header(message: Message, request_id: str) -> Message:
+    header_name = REQUEST_ID_HEADER.lower().encode("latin-1")
+    headers = [
+        (name, value)
+        for name, value in message.get("headers", [])
+        if name.lower() != header_name
+    ]
+    headers.append((header_name, request_id.encode("latin-1")))
+    updated_message = dict(message)
+    updated_message["headers"] = headers
+    return updated_message
+
+
+class RequestMonitoringMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request_id = self._get_request_id(scope)
+        self._set_request_state(scope, request_id)
         started_at = time.perf_counter()
+        response_started = False
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+                message = ensure_request_id_header(message, request_id)
+                duration_ms = int((time.perf_counter() - started_at) * 1000)
+                log_request_summary(
+                    request_id=request_id,
+                    method=str(scope["method"]),
+                    path=str(scope["path"]),
+                    status_code=int(message["status"]),
+                    duration_ms=duration_ms,
+                )
+            await send(message)
 
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         except Exception:
             duration_ms = int((time.perf_counter() - started_at) * 1000)
             logger.exception(
                 build_monitoring_log_event(
                     "API_REQUEST_EXCEPTION",
                     request_id=request_id,
-                    method=request.method,
-                    path=request.url.path,
+                    method=scope["method"],
+                    path=scope["path"],
                     duration_ms=duration_ms,
+                    response_started=response_started,
                 )
             )
-            response = PlainTextResponse("Internal Server Error", status_code=500)
-            response.headers[REQUEST_ID_HEADER] = request_id
-            log_request_summary(
-                request=request,
-                request_id=request_id,
-                status_code=response.status_code,
-                duration_ms=duration_ms,
-            )
-            return response
+            raise
 
-        response.headers[REQUEST_ID_HEADER] = request_id
-        duration_ms = int((time.perf_counter() - started_at) * 1000)
-        log_request_summary(
-            request=request,
-            request_id=request_id,
-            status_code=response.status_code,
-            duration_ms=duration_ms,
-        )
-        return response
+    @staticmethod
+    def _get_request_id(scope: Scope) -> str:
+        for name, value in scope.get("headers", []):
+            if name.lower() == REQUEST_ID_HEADER.lower().encode("latin-1"):
+                return value.decode("latin-1")
+        return create_request_id()
+
+    @staticmethod
+    def _set_request_state(scope: Scope, request_id: str) -> None:
+        state = scope.get("state")
+        if state is None:
+            state = {}
+            scope["state"] = state
+        state["request_id"] = request_id
+
+
+def install_request_monitoring(app: ASGIApp) -> ASGIApp:
+    return RequestMonitoringMiddleware(app)

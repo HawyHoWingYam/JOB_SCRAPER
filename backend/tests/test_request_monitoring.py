@@ -5,14 +5,14 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+import pytest
 
 from app import request_monitoring
 from app.request_monitoring import REQUEST_ID_HEADER, install_request_monitoring
 
 
-def build_test_app() -> FastAPI:
+def build_test_app():
     app = FastAPI()
-    install_request_monitoring(app)
 
     @app.get("/ok")
     async def ok():
@@ -47,7 +47,7 @@ def build_test_app() -> FastAPI:
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    return app
+    return install_request_monitoring(app)
 
 
 def test_request_monitoring_reuses_incoming_request_id():
@@ -97,6 +97,13 @@ def test_request_monitoring_logs_control_plane_and_exception_paths(caplog):
     assert "path=/boom" in caplog.text
 
 
+def test_request_monitoring_preserves_default_exception_behavior():
+    client = TestClient(build_test_app())
+
+    with pytest.raises(RuntimeError, match="boom"):
+        client.get("/boom")
+
+
 def test_request_monitoring_skips_summary_for_progress_stream(caplog):
     client = TestClient(build_test_app())
 
@@ -116,6 +123,23 @@ def test_request_monitoring_sets_request_id_on_500_response():
     assert response.status_code == 500
     assert response.headers[REQUEST_ID_HEADER]
     assert response.headers[REQUEST_ID_HEADER].startswith("req-")
+
+
+def test_request_monitoring_quotes_unsafe_incoming_request_id_in_logs(caplog):
+    client = TestClient(build_test_app())
+    unsafe_request_id = 'req bad status=999'
+
+    with caplog.at_level(logging.INFO, logger="app.request_monitoring"):
+        response = client.get(
+            "/api/v1/scrape/progress",
+            headers={REQUEST_ID_HEADER: unsafe_request_id},
+        )
+
+    assert response.status_code == 200
+    assert response.headers[REQUEST_ID_HEADER] == unsafe_request_id
+    assert 'request_id="req bad status=999"' in caplog.text
+    assert 'request_id=req bad status=999' not in caplog.text
+    assert "status=200" in caplog.text
 
 
 def test_request_monitoring_logs_5xx_summary_after_exception(caplog):
