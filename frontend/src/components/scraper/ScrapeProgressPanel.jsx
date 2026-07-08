@@ -735,6 +735,16 @@ function buildQueuedHeadedWorkerMessage(headedWorkerStatus) {
     return `Headed worker is offline. Start ${startCommand}.`;
 }
 
+function extractRequestId(value) {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+
+    return typeof value.requestId === 'string' && value.requestId.trim()
+        ? value.requestId
+        : null;
+}
+
 function ProgressItem({
     taskKey,
     data,
@@ -1031,9 +1041,11 @@ function ProgressItem({
                 setShowFreshResumeWarning(false);
             } catch (resumeError) {
                 const detail = buildInlineErrorMessage(resumeError, fallbackMessage);
+                const requestId = extractRequestId(resumeError);
                 logError('scrape_progress.resume_failed', {
                     clientStreamId,
                     crawlJobId: crawl_job_id,
+                    ...(requestId ? { requestId } : {}),
                     strategy,
                     detail,
                 });
@@ -1049,10 +1061,22 @@ function ProgressItem({
             }
 
             if (onOpenManualActionBrowser && crawl_job_id) {
-                const openResult = await onOpenManualActionBrowser(crawl_job_id);
-                const metadata = extractLiveSessionMetadata(openResult);
-                if (metadata) {
-                    setLiveSessionMetadata(metadata);
+                try {
+                    const openResult = await onOpenManualActionBrowser(crawl_job_id);
+                    const metadata = extractLiveSessionMetadata(openResult);
+                    if (metadata) {
+                        setLiveSessionMetadata(metadata);
+                    }
+                } catch (openError) {
+                    const detail = buildInlineErrorMessage(openError, 'Failed to open verification browser');
+                    const requestId = extractRequestId(openError);
+                    logError('scrape_progress.open_verification_browser_failed', {
+                        clientStreamId,
+                        crawlJobId: crawl_job_id,
+                        ...(requestId ? { requestId } : {}),
+                        detail,
+                    });
+                    setReuseStatusError(detail);
                 }
                 return;
             }
@@ -1070,9 +1094,11 @@ function ProgressItem({
             try {
                 await onCloseManualActionWindows?.(crawl_job_id);
             } catch (closeError) {
+                const requestId = extractRequestId(closeError);
                 logError('scrape_progress.close_profile_windows_failed', {
                     clientStreamId,
                     crawlJobId: crawl_job_id,
+                    ...(requestId ? { requestId } : {}),
                     detail: buildInlineErrorMessage(closeError, 'Failed to close profile windows'),
                 });
             }
@@ -1116,9 +1142,11 @@ function ProgressItem({
                     reuseError,
                     'Failed to check open-browser reuse status'
                 );
+                const requestId = extractRequestId(reuseError);
                 logError('scrape_progress.reuse_status_failed', {
                     clientStreamId,
                     crawlJobId: crawl_job_id,
+                    ...(requestId ? { requestId } : {}),
                     detail,
                 });
                 setReuseStatusError(
@@ -1149,9 +1177,11 @@ function ProgressItem({
             try {
                 await onCancelCrawlJob?.(crawl_job_id);
             } catch (cancelError) {
+                const requestId = extractRequestId(cancelError);
                 logError('scrape_progress.cancel_failed', {
                     clientStreamId,
                     crawlJobId: crawl_job_id,
+                    ...(requestId ? { requestId } : {}),
                     detail: buildInlineErrorMessage(cancelError, 'Failed to cancel crawl job'),
                 });
             }

@@ -99,13 +99,28 @@ vi.mock('./ScrapeProgressPanel', () => ({
         <button type="button" onClick={() => props.onCancelCrawlJob?.('crawl-job-123')}>
           Cancel Progress Stub
         </button>
-        <button type="button" onClick={() => props.onOpenManualActionBrowser?.('crawl-job-123')}>
+        <button
+          type="button"
+          onClick={() => {
+            Promise.resolve(props.onOpenManualActionBrowser?.('crawl-job-123')).catch(() => {});
+          }}
+        >
           Open Browser Progress Stub
         </button>
-        <button type="button" onClick={() => props.onGetManualActionReuseStatus?.('crawl-job-123')}>
+        <button
+          type="button"
+          onClick={() => {
+            Promise.resolve(props.onGetManualActionReuseStatus?.('crawl-job-123')).catch(() => {});
+          }}
+        >
           Reuse Status Progress Stub
         </button>
-        <button type="button" onClick={() => props.onCloseManualActionWindows?.('crawl-job-123')}>
+        <button
+          type="button"
+          onClick={() => {
+            Promise.resolve(props.onCloseManualActionWindows?.('crawl-job-123')).catch(() => {});
+          }}
+        >
           Close Windows Progress Stub
         </button>
         <button type="button" onClick={() => props.onClose?.('manual_close')}>
@@ -144,6 +159,22 @@ function changeSource(sourceSite) {
 
 function expectFetchCalledWithUrl(url) {
   expect(globalThis.fetch.mock.calls.some(([input]) => input === url)).toBe(true);
+}
+
+function getFetchCallsForUrl(url) {
+  return globalThis.fetch.mock.calls.filter(([input]) => input === url);
+}
+
+function getHeaderValue(headers, name) {
+  if (headers instanceof Headers) {
+    return headers.get(name);
+  }
+
+  if (!headers || typeof headers !== 'object') {
+    return null;
+  }
+
+  return headers[name] || headers[name.toLowerCase()] || null;
 }
 
 function createDeferred() {
@@ -510,6 +541,7 @@ describe('ScheduleManager', () => {
       'schedule_manager.categories_failed',
       expect.objectContaining({
         sourceSite: 'ctgoodjobs',
+        requestId: 'req-fixed',
         detail: 'CTgoodjobs category registry unavailable',
       }),
     );
@@ -555,6 +587,7 @@ describe('ScheduleManager', () => {
       expect(monitoringSpies.logError).toHaveBeenCalledWith(
         'schedule_manager.runtime_capabilities_failed',
         expect.objectContaining({
+          requestId: 'req-fixed',
           detail: 'capabilities offline',
         }),
       );
@@ -934,6 +967,7 @@ describe('ScheduleManager', () => {
         'schedule_manager.listing_batches_failed',
         expect.objectContaining({
           sourceSite: 'jobsdb',
+          requestId: 'req-fixed',
           detail: 'listing batches offline',
         }),
       );
@@ -1073,40 +1107,41 @@ describe('ScheduleManager', () => {
     fireEvent.click(screen.getByRole('button', { name: /close windows progress stub/i }));
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/crawl-jobs/crawl-job-123/resume', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strategy: 'reuse_open_browser' }),
-      });
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/crawl-jobs/crawl-job-123/resume', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ strategy: 'fresh_profile' }),
-      });
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/crawl-jobs/crawl-job-123/cancel', {
-        method: 'POST',
-      });
-      expect(globalThis.fetch).toHaveBeenCalledWith('http://127.0.0.1:47652/manual-actions/open-browser', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ crawl_job_id: 'crawl-job-123' }),
-      });
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://127.0.0.1:47652/manual-actions/reuse-status',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ crawl_job_id: 'crawl-job-123' }),
-        },
-      );
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://127.0.0.1:47652/manual-actions/close-profile-windows',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ crawl_job_id: 'crawl-job-123' }),
-        },
-      );
+      const resumeCalls = getFetchCallsForUrl('/api/v1/crawl-jobs/crawl-job-123/resume');
+      const reuseResumeCall = resumeCalls.find(([, request]) => request?.body === JSON.stringify({ strategy: 'reuse_open_browser' }));
+      const freshResumeCall = resumeCalls.find(([, request]) => request?.body === JSON.stringify({ strategy: 'fresh_profile' }));
+      const cancelCall = getFetchCallsForUrl('/api/v1/crawl-jobs/crawl-job-123/cancel')[0];
+      const openBrowserCall = getFetchCallsForUrl('http://127.0.0.1:47652/manual-actions/open-browser')[0];
+      const reuseStatusCall = getFetchCallsForUrl('http://127.0.0.1:47652/manual-actions/reuse-status')[0];
+      const closeWindowsCall = getFetchCallsForUrl('http://127.0.0.1:47652/manual-actions/close-profile-windows')[0];
+
+      expect(reuseResumeCall?.[1]?.method).toBe('POST');
+      expect(reuseResumeCall?.[1]?.body).toBe(JSON.stringify({ strategy: 'reuse_open_browser' }));
+      expect(getHeaderValue(reuseResumeCall?.[1]?.headers, 'Content-Type')).toBe('application/json');
+      expect(getHeaderValue(reuseResumeCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+
+      expect(freshResumeCall?.[1]?.method).toBe('POST');
+      expect(freshResumeCall?.[1]?.body).toBe(JSON.stringify({ strategy: 'fresh_profile' }));
+      expect(getHeaderValue(freshResumeCall?.[1]?.headers, 'Content-Type')).toBe('application/json');
+      expect(getHeaderValue(freshResumeCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+
+      expect(cancelCall?.[1]?.method).toBe('POST');
+      expect(getHeaderValue(cancelCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+
+      expect(openBrowserCall?.[1]?.method).toBe('POST');
+      expect(openBrowserCall?.[1]?.body).toBe(JSON.stringify({ crawl_job_id: 'crawl-job-123' }));
+      expect(getHeaderValue(openBrowserCall?.[1]?.headers, 'Content-Type')).toBe('application/json');
+      expect(getHeaderValue(openBrowserCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+
+      expect(reuseStatusCall?.[1]?.method).toBe('POST');
+      expect(reuseStatusCall?.[1]?.body).toBe(JSON.stringify({ crawl_job_id: 'crawl-job-123' }));
+      expect(getHeaderValue(reuseStatusCall?.[1]?.headers, 'Content-Type')).toBe('application/json');
+      expect(getHeaderValue(reuseStatusCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+
+      expect(closeWindowsCall?.[1]?.method).toBe('POST');
+      expect(closeWindowsCall?.[1]?.body).toBe(JSON.stringify({ crawl_job_id: 'crawl-job-123' }));
+      expect(getHeaderValue(closeWindowsCall?.[1]?.headers, 'Content-Type')).toBe('application/json');
+      expect(getHeaderValue(closeWindowsCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
     });
   });
 
@@ -1126,7 +1161,6 @@ describe('ScheduleManager', () => {
       },
     });
 
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.stubGlobal(
       'fetch',
       vi.fn((input, init) => {
@@ -1202,6 +1236,7 @@ describe('ScheduleManager', () => {
     expect(monitoringSpies.logError).toHaveBeenCalledWith(
       'schedule_manager.progress_bootstrap_failed',
       expect.objectContaining({
+        requestId: 'req-fixed',
         detail: 'network down',
       }),
     );
@@ -1515,9 +1550,7 @@ describe('ScheduleManager', () => {
       target: { value: 'detail' },
     });
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        '/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20',
-      );
+      expectFetchCalledWithUrl('/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20');
     });
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '250' } });
     fireEvent.change(screen.getByRole('combobox', { name: /listing batch/i }), {
@@ -1569,9 +1602,7 @@ describe('ScheduleManager', () => {
       target: { value: 'detail' },
     });
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        '/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20',
-      );
+      expectFetchCalledWithUrl('/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20');
     });
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '' } });
 

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { monitoringSpies } = vi.hoisted(() => ({
@@ -307,7 +308,11 @@ describe('JobBrowser', () => {
 
     expect(monitoringSpies.logError).toHaveBeenCalledWith(
       'job_browser.filter_options_failed',
-      expect.objectContaining({ detail: 'filters offline' }),
+      expect.objectContaining({
+        bootstrapTarget: 'filters',
+        requestId: 'req-fixed',
+        detail: 'filters offline',
+      }),
     );
   });
 
@@ -561,6 +566,7 @@ describe('JobBrowser', () => {
 
   it('jumps directly to a requested page from the shared pagination control', async () => {
     forceMultiPageResults = true;
+    const user = userEvent.setup();
 
     render(<JobBrowser />);
 
@@ -568,13 +574,9 @@ describe('JobBrowser', () => {
 
     const jumpInput = screen.getByLabelText(/jump to page/i);
 
-    fireEvent.change(jumpInput, {
-      target: { value: '2' },
-    });
-    await waitFor(() => {
-      expect(jumpInput).toHaveValue(2);
-    });
-    fireEvent.click(screen.getByRole('button', { name: /go/i }));
+    await user.clear(jumpInput);
+    await user.type(jumpInput, '2');
+    await user.click(screen.getByRole('button', { name: /go/i }));
 
     await waitFor(() => {
       expect(getLatestSearchBody(globalThis.fetch).page).toBe(2);

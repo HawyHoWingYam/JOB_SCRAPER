@@ -2,8 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Zap, AlertTriangle, CalendarClock, X } from 'lucide-react';
 import { apiFetchJson } from '../../api/client';
 import { API_BASE_URL, apiPath } from '../../api/base';
-import { fetchCapabilities } from '../../api/capabilities';
-import { logError } from '../../monitoring';
+import { createMonitoringId, logError } from '../../monitoring';
 import ScheduleForm from './ScheduleForm';
 import ScheduleList from './ScheduleList';
 import ScheduleHistory from './ScheduleHistory';
@@ -107,6 +106,18 @@ function formatApiErrorDetail(detail, fallback = 'Start failed') {
     }
 
     return fallback;
+}
+
+function attachRequestId(error, requestId, fallbackMessage = 'Request failed') {
+    const resolvedError = error instanceof Error
+        ? error
+        : new Error(typeof error === 'string' && error ? error : fallbackMessage);
+
+    if (typeof resolvedError.requestId !== 'string') {
+        resolvedError.requestId = requestId;
+    }
+
+    return resolvedError;
 }
 
 function normalizeCategoryIdsForSource(sourceSite, categoryIds) {
@@ -518,6 +529,7 @@ function ScheduleManager({ onNavigateToAI }) {
 
     // Fetch categories
     const fetchCategories = useCallback(async (sourceSite) => {
+        const requestId = createMonitoringId('req');
         try {
             const cachedCategories = categoryCacheRef.current.get(sourceSite);
             if (cachedCategories) {
@@ -526,7 +538,8 @@ function ScheduleManager({ onNavigateToAI }) {
             }
 
             const data = await apiFetchJson(
-                `${CATEGORY_API_BASE}/categories?source_site=${encodeURIComponent(sourceSite)}`
+                `${CATEGORY_API_BASE}/categories?source_site=${encodeURIComponent(sourceSite)}`,
+                { requestId }
             );
             const nextCategories = data.categories || [];
             categoryCacheRef.current.set(sourceSite, nextCategories);
@@ -534,6 +547,7 @@ function ScheduleManager({ onNavigateToAI }) {
         } catch (err) {
             logError('schedule_manager.categories_failed', {
                 sourceSite,
+                requestId,
                 detail: err instanceof Error ? err.message : err,
             });
             setCategories([]);
@@ -542,10 +556,17 @@ function ScheduleManager({ onNavigateToAI }) {
     }, []);
 
     const fetchRuntimeCapabilities = useCallback(async () => {
+        const requestId = createMonitoringId('req');
         try {
-            setCapabilities(await fetchCapabilities());
+            setCapabilities(
+                await apiFetchJson(apiPath('/capabilities'), {
+                    requestId,
+                    timeoutMs: 8000,
+                })
+            );
         } catch (err) {
             logError('schedule_manager.runtime_capabilities_failed', {
+                requestId,
                 detail: err instanceof Error ? err.message : err,
             });
             setCapabilities(null);
@@ -553,6 +574,7 @@ function ScheduleManager({ onNavigateToAI }) {
     }, []);
 
     const fetchListingBatches = useCallback(async (sourceSite) => {
+        const requestId = createMonitoringId('req');
         try {
             const cachedListingBatches = listingBatchesCacheRef.current.get(sourceSite);
             if (cachedListingBatches) {
@@ -561,19 +583,17 @@ function ScheduleManager({ onNavigateToAI }) {
             }
 
             setListingBatches([]);
-            const response = await fetch(
-                `${API_BASE}/crawl-jobs/listing-batches?source_site=${encodeURIComponent(sourceSite)}&limit=20`
+            const data = await apiFetchJson(
+                `${API_BASE}/crawl-jobs/listing-batches?source_site=${encodeURIComponent(sourceSite)}&limit=20`,
+                { requestId }
             );
-            if (!response.ok) {
-                throw new Error('Failed to load listing batches');
-            }
-            const data = await response.json();
             const nextBatches = Array.isArray(data.batches) ? data.batches : [];
             listingBatchesCacheRef.current.set(sourceSite, nextBatches);
             setListingBatches(nextBatches);
         } catch (err) {
             logError('schedule_manager.listing_batches_failed', {
                 sourceSite,
+                requestId,
                 detail: err instanceof Error ? err.message : err,
             });
             setListingBatches([]);
@@ -594,6 +614,7 @@ function ScheduleManager({ onNavigateToAI }) {
     }, []);
 
     const bootstrapProgressPanel = useCallback(async () => {
+        const requestId = createMonitoringId('req');
         const applyRecoveryFallback = () => {
             const recoveryMarker = getFreshDirectOverrideRecoveryMarker();
 
@@ -618,7 +639,7 @@ function ScheduleManager({ onNavigateToAI }) {
         };
 
         try {
-            const data = await apiFetchJson(`${API_BASE}/scrape/progress`);
+            const data = await apiFetchJson(`${API_BASE}/scrape/progress`, { requestId });
             const initialProgress = data.all || {};
             const hasRecentProgress = Object.keys(initialProgress).length > 0;
 
@@ -635,6 +656,7 @@ function ScheduleManager({ onNavigateToAI }) {
             applyRecoveryFallback();
         } catch (err) {
             logError('schedule_manager.progress_bootstrap_failed', {
+                requestId,
                 detail: err instanceof Error ? err.message : err,
             });
             applyRecoveryFallback();
@@ -659,51 +681,39 @@ function ScheduleManager({ onNavigateToAI }) {
 
     const handleResumeCrawlJob = useCallback(async (crawlJobId, strategy) => {
         const requestBody = strategy ? JSON.stringify({ strategy }) : null;
-        const response = await fetch(`${API_BASE}/crawl-jobs/${crawlJobId}/resume`, {
-            method: 'POST',
-            headers: requestBody ? { 'Content-Type': 'application/json' } : undefined,
-            body: requestBody,
-        });
+        const requestId = createMonitoringId('req');
 
-        if (!response.ok) {
-            let detail = 'Failed to resume crawl job';
-
-            try {
-                const payload = await response.json();
-                detail = formatApiErrorDetail(payload.detail, detail);
-            } catch {
-                // Fall back to the default message when no JSON error is available.
-            }
-
+        try {
+            const data = await apiFetchJson(`${API_BASE}/crawl-jobs/${crawlJobId}/resume`, {
+                method: 'POST',
+                headers: requestBody ? { 'Content-Type': 'application/json' } : undefined,
+                body: requestBody,
+                requestId,
+            });
+            setError(null);
+            return data;
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : 'Failed to resume crawl job';
             setError(detail);
-            throw new Error(detail);
+            throw attachRequestId(err, requestId, detail);
         }
-
-        setError(null);
-        return response.json();
     }, []);
 
     const handleCancelCrawlJob = useCallback(async (crawlJobId) => {
-        const response = await fetch(`${API_BASE}/crawl-jobs/${crawlJobId}/cancel`, {
-            method: 'POST',
-        });
+        const requestId = createMonitoringId('req');
 
-        if (!response.ok) {
-            let detail = 'Failed to cancel crawl job';
-
-            try {
-                const payload = await response.json();
-                detail = formatApiErrorDetail(payload.detail, detail);
-            } catch {
-                // Fall back to the default message when no JSON error is available.
-            }
-
+        try {
+            const data = await apiFetchJson(`${API_BASE}/crawl-jobs/${crawlJobId}/cancel`, {
+                method: 'POST',
+                requestId,
+            });
+            setError(null);
+            return data;
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : 'Failed to cancel crawl job';
             setError(detail);
-            throw new Error(detail);
+            throw attachRequestId(err, requestId, detail);
         }
-
-        setError(null);
-        return response.json();
     }, []);
 
     const getManualActionHelperUrl = useCallback(() => {
@@ -711,36 +721,27 @@ function ScheduleManager({ onNavigateToAI }) {
     }, [capabilities]);
 
     const postManualActionHelper = useCallback(async ({ path, actionLabel, fallbackDetail, crawlJobId }) => {
-        let response;
-
+        const requestId = createMonitoringId('req');
         try {
-            response = await fetch(`${getManualActionHelperUrl()}${path}`, {
+            const data = await apiFetchJson(`${getManualActionHelperUrl()}${path}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ crawl_job_id: crawlJobId }),
+                requestId,
             });
+            setError(null);
+            return data;
         } catch (requestError) {
-            const detail = buildManualActionHelperUnavailableMessage(actionLabel);
+            const isTransportFailure = requestError instanceof Error
+                && (requestError.name === 'TypeError' || requestError.name === 'AbortError');
+            const detail = isTransportFailure
+                ? buildManualActionHelperUnavailableMessage(actionLabel)
+                : requestError instanceof Error && requestError.message
+                    ? requestError.message
+                    : fallbackDetail;
             setError(detail);
-            throw new Error(detail);
+            throw attachRequestId(new Error(detail), requestId, detail);
         }
-
-        if (!response.ok) {
-            let detail = fallbackDetail;
-
-            try {
-                const payload = await response.json();
-                detail = formatApiErrorDetail(payload.detail, detail);
-            } catch {
-                // Fall back to the default message when no JSON error is available.
-            }
-
-            setError(detail);
-            throw new Error(detail);
-        }
-
-        setError(null);
-        return response.json();
     }, [getManualActionHelperUrl]);
 
     const handleGetManualActionReuseStatus = useCallback(async (crawlJobId) => {
@@ -753,16 +754,12 @@ function ScheduleManager({ onNavigateToAI }) {
     }, [postManualActionHelper]);
 
     const handleOpenManualActionBrowser = useCallback(async (crawlJobId) => {
-        try {
-            return await postManualActionHelper({
-                path: '/manual-actions/open-browser',
-                actionLabel: 'opening the verification browser',
-                fallbackDetail: 'Failed to open verification browser',
-                crawlJobId,
-            });
-        } catch {
-            return null;
-        }
+        return postManualActionHelper({
+            path: '/manual-actions/open-browser',
+            actionLabel: 'opening the verification browser',
+            fallbackDetail: 'Failed to open verification browser',
+            crawlJobId,
+        });
     }, [postManualActionHelper]);
 
     const handleCloseManualActionWindows = useCallback(async (crawlJobId) => {

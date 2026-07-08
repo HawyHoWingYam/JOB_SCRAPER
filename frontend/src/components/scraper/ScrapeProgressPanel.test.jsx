@@ -956,6 +956,57 @@ describe('ScrapeProgressPanel', () => {
     unmount();
   });
 
+  it('logs open-browser failures with stream and request correlation', async () => {
+    const openBrowserError = Object.assign(new Error('manual-action helper is unavailable'), {
+      requestId: 'req-open-fixed',
+    });
+    const onOpenManualActionBrowser = vi.fn().mockRejectedValue(openBrowserError);
+
+    render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        onOpenManualActionBrowser={onOpenManualActionBrowser}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-open-fail': {
+            crawl_job_id: 'crawl-job-open-fail',
+            status: 'manual_action_required',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              stage: 'category_page',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: ['Open the headed browser profile.'],
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /open verification browser/i }));
+
+    await waitFor(() => {
+      expect(monitoringSpies.logError).toHaveBeenCalledWith(
+        'scrape_progress.open_verification_browser_failed',
+        expect.objectContaining({
+          clientStreamId: 'stream-fixed',
+          crawlJobId: 'crawl-job-open-fail',
+          requestId: 'req-open-fixed',
+          detail: 'manual-action helper is unavailable',
+        }),
+      );
+    });
+  });
+
   it('sends the reuse_open_browser strategy when resuming with an open browser', async () => {
     const onResumeCrawlJob = vi.fn().mockResolvedValue({ status: 'dispatching' });
     const onGetManualActionReuseStatus = vi.fn().mockResolvedValue({
@@ -1057,7 +1108,10 @@ describe('ScrapeProgressPanel', () => {
   });
 
   it('logs reuse-status failures when the open-browser probe rejects', async () => {
-    const onGetManualActionReuseStatus = vi.fn().mockRejectedValue(new Error('reuse probe offline'));
+    const reuseStatusError = Object.assign(new Error('reuse probe offline'), {
+      requestId: 'req-reuse-fixed',
+    });
+    const onGetManualActionReuseStatus = vi.fn().mockRejectedValue(reuseStatusError);
 
     render(
       <ScrapeProgressPanel
@@ -1097,6 +1151,7 @@ describe('ScrapeProgressPanel', () => {
         expect.objectContaining({
           clientStreamId: 'stream-fixed',
           crawlJobId: 'crawl-job-558',
+          requestId: 'req-reuse-fixed',
           detail: 'reuse probe offline',
         }),
       );
@@ -1153,7 +1208,10 @@ describe('ScrapeProgressPanel', () => {
   });
 
   it('logs cancel failures for manual-action jobs', async () => {
-    const onCancelCrawlJob = vi.fn().mockRejectedValue(new Error('cancel offline'));
+    const cancelError = Object.assign(new Error('cancel offline'), {
+      requestId: 'req-cancel-fixed',
+    });
+    const onCancelCrawlJob = vi.fn().mockRejectedValue(cancelError);
 
     render(
       <ScrapeProgressPanel
@@ -1193,6 +1251,7 @@ describe('ScrapeProgressPanel', () => {
         expect.objectContaining({
           clientStreamId: 'stream-fixed',
           crawlJobId: 'crawl-job-559',
+          requestId: 'req-cancel-fixed',
           detail: 'cancel offline',
         }),
       );
@@ -1721,7 +1780,10 @@ describe('ScrapeProgressPanel', () => {
   });
 
   it('logs close-profile-window failures for manual-action jobs', async () => {
-    const onCloseManualActionWindows = vi.fn().mockRejectedValue(new Error('window close offline'));
+    const closeWindowsError = Object.assign(new Error('window close offline'), {
+      requestId: 'req-close-fixed',
+    });
+    const onCloseManualActionWindows = vi.fn().mockRejectedValue(closeWindowsError);
 
     render(
       <ScrapeProgressPanel
@@ -1764,6 +1826,7 @@ describe('ScrapeProgressPanel', () => {
         expect.objectContaining({
           clientStreamId: 'stream-fixed',
           crawlJobId: 'crawl-job-457',
+          requestId: 'req-close-fixed',
           detail: 'window close offline',
         }),
       );

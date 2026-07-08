@@ -8,7 +8,7 @@ import { apiFetchJson } from '../api/client';
 import { API_BASE_URL, apiPath } from '../api/base';
 import { formatApiErrorDetail } from '../api/errors';
 import { fetchCapabilities } from '../api/capabilities';
-import { logError } from '../monitoring';
+import { createMonitoringId, logError } from '../monitoring';
 import {
     createEmptyJobBrowserLayer,
     createEmptyJobBrowserScope,
@@ -203,20 +203,43 @@ function JobBrowser() {
 
     useEffect(() => {
         const fetchFilterOptions = async () => {
-            try {
-                const [data, jobSubcategories] = await Promise.all([
-                    apiFetchJson(apiPath('/jobs/filters')),
-                    apiFetchJson(apiPath('/filters/job-subcategories')),
-                ]);
-                setFilterOptions({
-                    ...data,
-                    job_subcategories: jobSubcategories,
-                });
-            } catch (err) {
+            const filtersRequestId = createMonitoringId('req');
+            const jobSubcategoriesRequestId = createMonitoringId('req');
+            const [filtersResult, jobSubcategoriesResult] = await Promise.allSettled([
+                apiFetchJson(apiPath('/jobs/filters'), { requestId: filtersRequestId }),
+                apiFetchJson(apiPath('/filters/job-subcategories'), { requestId: jobSubcategoriesRequestId }),
+            ]);
+
+            let hasFailure = false;
+
+            if (filtersResult.status === 'rejected') {
+                hasFailure = true;
                 logError('job_browser.filter_options_failed', {
-                    detail: err instanceof Error ? err.message : err,
+                    bootstrapTarget: 'filters',
+                    requestId: filtersRequestId,
+                    detail: filtersResult.reason instanceof Error ? filtersResult.reason.message : filtersResult.reason,
                 });
             }
+
+            if (jobSubcategoriesResult.status === 'rejected') {
+                hasFailure = true;
+                logError('job_browser.filter_options_failed', {
+                    bootstrapTarget: 'job_subcategories',
+                    requestId: jobSubcategoriesRequestId,
+                    detail: jobSubcategoriesResult.reason instanceof Error
+                        ? jobSubcategoriesResult.reason.message
+                        : jobSubcategoriesResult.reason,
+                });
+            }
+
+            if (hasFailure) {
+                return;
+            }
+
+            setFilterOptions({
+                ...filtersResult.value,
+                job_subcategories: jobSubcategoriesResult.value,
+            });
         };
 
         fetchFilterOptions();
