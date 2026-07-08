@@ -1,8 +1,10 @@
 export const APP_MONITOR_PREFIX = 'APP_MONITOR';
+let registeredGlobalHandlers = null;
+let globalHandlerRefCount = 0;
 
 function stringifyField(value) {
   if (value instanceof Error) {
-    return `${value.name}: ${value.message}`;
+    return value.stack || `${value.name}: ${value.message}`;
   }
   if (typeof value === 'string') {
     return value;
@@ -48,27 +50,46 @@ export function logError(event, fields = {}) {
 }
 
 export function registerGlobalMonitoringHandlers() {
-  const handleWindowError = (event) => {
-    logError('window.error', {
-      message: event.message,
-      filename: event.filename,
-      lineno: event.lineno,
-      colno: event.colno,
-      error: event.error,
-    });
-  };
+  if (!registeredGlobalHandlers) {
+    const handleWindowError = (event) => {
+      logError('window.error', {
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        error: event.error,
+      });
+    };
 
-  const handleUnhandledRejection = (event) => {
-    logError('window.unhandledrejection', {
-      reason: event.reason,
-    });
-  };
+    const handleUnhandledRejection = (event) => {
+      logError('window.unhandledrejection', {
+        reason: event.reason,
+      });
+    };
 
-  window.addEventListener('error', handleWindowError);
-  window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    window.addEventListener('error', handleWindowError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    registeredGlobalHandlers = {
+      handleWindowError,
+      handleUnhandledRejection,
+    };
+  }
+
+  globalHandlerRefCount += 1;
+  let unregistered = false;
 
   return () => {
-    window.removeEventListener('error', handleWindowError);
-    window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    if (unregistered) {
+      return;
+    }
+
+    unregistered = true;
+    globalHandlerRefCount = Math.max(0, globalHandlerRefCount - 1);
+
+    if (globalHandlerRefCount === 0 && registeredGlobalHandlers) {
+      window.removeEventListener('error', registeredGlobalHandlers.handleWindowError);
+      window.removeEventListener('unhandledrejection', registeredGlobalHandlers.handleUnhandledRejection);
+      registeredGlobalHandlers = null;
+    }
   };
 }

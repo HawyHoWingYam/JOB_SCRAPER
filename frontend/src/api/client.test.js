@@ -53,6 +53,33 @@ describe('api client', () => {
     );
   });
 
+  it('reuses a caller supplied request id for headers and failure logs', async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 503,
+        json: async () => ({ detail: { message: 'retrieval-api unavailable' } }),
+      }),
+    );
+
+    await expect(
+      apiFetchJson('/api/v1/capabilities', {
+        headers: {
+          'X-Request-ID': 'req-caller',
+        },
+      }),
+    ).rejects.toThrow('retrieval-api unavailable');
+
+    const headers = globalThis.fetch.mock.calls[0][1].headers;
+    expect(headers.get('X-Request-ID')).toBe('req-caller');
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      'api.request_failed',
+      expect.objectContaining({
+        requestId: 'req-caller',
+      }),
+    );
+  });
+
   it('extracts backend detail messages from failed JSON responses', async () => {
     globalThis.fetch = vi.fn(() =>
       Promise.resolve({

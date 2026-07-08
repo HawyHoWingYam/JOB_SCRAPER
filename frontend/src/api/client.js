@@ -37,10 +37,11 @@ export async function apiFetchJson(url, options = {}) {
   const { timeoutMs = 15000, requestId = createMonitoringId('req'), ...fetchOptions } = options;
   const startedAt = Date.now();
   const headers = new Headers(fetchOptions.headers || {});
+  const effectiveRequestId = headers.get('X-Request-ID') || requestId;
   const method = (fetchOptions.method || 'GET').toUpperCase();
   let failureLogged = false;
 
-  headers.set('X-Request-ID', headers.get('X-Request-ID') || requestId);
+  headers.set('X-Request-ID', effectiveRequestId);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -59,7 +60,7 @@ export async function apiFetchJson(url, options = {}) {
 
       failureLogged = true;
       logError('api.request_failed', {
-        requestId,
+        requestId: effectiveRequestId,
         method,
         status: response.status,
         url,
@@ -73,7 +74,7 @@ export async function apiFetchJson(url, options = {}) {
   } catch (error) {
     if (!failureLogged) {
       logError('api.request_failed', {
-        requestId,
+        requestId: effectiveRequestId,
         method,
         url,
         durationMs: Date.now() - startedAt,
