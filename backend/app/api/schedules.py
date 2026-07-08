@@ -3,7 +3,7 @@ Schedule API Routes - CRUD endpoints for scheduled scraping tasks.
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from typing import List
@@ -11,6 +11,8 @@ from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
+from app.api.crawl_jobs import _build_crawl_request_created_log_message
+from app.crawl_phases import resolve_crawl_phase
 from app.database import get_db
 from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.crawl_job import CrawlJobSchema
@@ -30,7 +32,7 @@ from app.services.crawl_request_validation import (
     validate_category_ids_for_source_site,
 )
 from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
-from app.services.source_catalog import is_supported_source_site
+from app.services.source_catalog import is_supported_source_site, resolve_default_max_pages
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 repository = ScheduleRepository()
@@ -243,6 +245,7 @@ async def toggle_schedule(
 )
 async def run_schedule_now(
     schedule_id: UUID,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     """Run a schedule immediately."""
@@ -274,6 +277,30 @@ async def run_schedule_now(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+    request_id = getattr(getattr(request, "state", None), "request_id", None)
+    resolved_request_payload = dict(getattr(dispatch_result.crawl_job, "request_payload", {}) or {})
+    logger.info(
+        _build_crawl_request_created_log_message(
+            request_id=request_id,
+            source_site=effective_source_site,
+            crawl_job_id=str(dispatch_result.crawl_job.id),
+            crawl_phase=resolve_crawl_phase(resolved_request_payload.get("crawl_phase")),
+            crawl_mode=resolved_request_payload.get("crawl_mode") or "default",
+            max_pages=resolved_request_payload.get("max_pages")
+            if resolved_request_payload.get("max_pages") is not None
+            else resolve_default_max_pages(effective_source_site),
+            category_count=len(
+                resolved_request_payload.get("category_ids")
+                or getattr(schedule, "category_ids", None)
+                or []
+            ),
+            source_listing_crawl_job_id=str(
+                resolved_request_payload.get("source_listing_crawl_job_id") or ""
+            ) or None,
+            trigger="schedule",
+            schedule_id=str(schedule.id),
+        )
+    )
     return dispatch_result.crawl_job
 
 
