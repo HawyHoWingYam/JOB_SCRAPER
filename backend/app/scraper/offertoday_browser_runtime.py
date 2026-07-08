@@ -79,12 +79,16 @@ class OfferTodayBrowserRuntime:
         from playwright.async_api import async_playwright
 
         self._playwright = await async_playwright().start()
-        if self.resume_strategy == RESUME_STRATEGY_REUSE_OPEN_BROWSER:
-            await self._attach_to_live_browser()
-        else:
-            await self._launch_fresh_profile()
+        try:
+            if self.resume_strategy == RESUME_STRATEGY_REUSE_OPEN_BROWSER:
+                await self._attach_to_live_browser()
+            else:
+                await self._launch_fresh_profile()
+            await self._warmup_page()
+        except Exception:
+            await self.stop()
+            raise
         self._runtime_started = True
-        await self._warmup_page()
 
     async def stop(self) -> None:
         try:
