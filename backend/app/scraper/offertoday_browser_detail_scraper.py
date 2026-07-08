@@ -35,6 +35,7 @@ class OfferTodayBrowserDetailScraper:
         self.headed = headed
         self.manual_verification_timeout_seconds = manual_verification_timeout_seconds
         self._runtime: OfferTodayBrowserRuntime | None = None
+        self._page = None
 
     @staticmethod
     def is_waf_challenge_url(url: str | None) -> bool:
@@ -42,8 +43,13 @@ class OfferTodayBrowserDetailScraper:
 
     async def __aenter__(self):
         if self.detail_json_fetcher is None:
-            self._runtime = OfferTodayBrowserRuntime(resume_strategy=self.resume_strategy)
+            self._runtime = OfferTodayBrowserRuntime(
+                headed=self.headed,
+                auth_state_path=self.auth_state_path,
+                resume_strategy=self.resume_strategy,
+            )
             await self._runtime.__aenter__()
+            self._page = self._runtime._page
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -51,12 +57,24 @@ class OfferTodayBrowserDetailScraper:
             runtime = self._runtime
             self._runtime = None
             await runtime.__aexit__(exc_type, exc, tb)
+        self._page = None
         return None
 
     async def fetch_job_detail(self, job_id: str) -> dict[str, Any] | None:
         payload = await self._fetch_detail_payload(job_id)
         if not isinstance(payload, dict):
             return None
+        if payload.get("code") == -1000035:
+            if self.headed and self._page is not None:
+                cleared = await self._await_manual_verification(job_id)
+                if cleared:
+                    payload = await self._fetch_detail_payload(job_id)
+                    if not isinstance(payload, dict):
+                        return None
+                else:
+                    raise OfferTodayIPBlockedError(job_id=job_id, code=-1000035)
+            else:
+                raise OfferTodayIPBlockedError(job_id=job_id, code=-1000035)
         if payload.get("code") == -1000035:
             raise OfferTodayIPBlockedError(job_id=job_id, code=-1000035)
         if payload.get("code") != 0:
@@ -74,3 +92,41 @@ class OfferTodayBrowserDetailScraper:
         if self._runtime is None:
             raise RuntimeError("OfferTodayBrowserDetailScraper runtime has not been started")
         return await self._runtime.fetch_detail_json(job_id=job_id)
+
+    async def _warmup_page(self) -> None:
+        if self._page is None:
+            return
+        await self._page.goto(
+            "https://www.offertoday.com/hk/search",
+            wait_until="domcontentloaded",
+            timeout=30_000,
+        )
+        if self.headed and self.is_waf_challenge_url(getattr(self._page, "url", None)):
+            await self._page.wait_for_url(
+                lambda current_url: not self.is_waf_challenge_url(current_url),
+                timeout=self.manual_verification_timeout_seconds * 1000,
+            )
+
+    async def _await_manual_verification(self, job_id: str) -> bool:
+        if self._page is None:
+            return False
+
+        job_url = f"https://www.offertoday.com/hk/job/{job_id}"
+        try:
+            await self._page.goto(job_url, wait_until="domcontentloaded", timeout=30_000)
+        except Exception:
+            return False
+
+        if not self.is_waf_challenge_url(getattr(self._page, "url", None)):
+            return True
+
+        try:
+            await self._page.wait_for_url(
+                lambda current_url: not self.is_waf_challenge_url(current_url),
+                timeout=self.manual_verification_timeout_seconds * 1000,
+            )
+        except Exception:
+            return False
+
+        await self._warmup_page()
+        return True

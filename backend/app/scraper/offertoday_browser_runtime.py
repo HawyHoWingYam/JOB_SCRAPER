@@ -38,12 +38,16 @@ class OfferTodayBrowserRuntime:
     def __init__(
         self,
         *,
+        headed: bool = True,
+        auth_state_path: str | None = None,
         resume_strategy: str = RESUME_STRATEGY_FRESH_PROFILE,
         browser_channel: str | None = None,
         user_data_dir: str | None = None,
         executable_path: str | None = None,
         navigation_timeout_ms: int | None = None,
     ) -> None:
+        self.headed = headed
+        self.auth_state_path = auth_state_path
         self.resume_strategy = resume_strategy or RESUME_STRATEGY_FRESH_PROFILE
         self.browser_channel = browser_channel or settings.offertoday_headed_browser_channel
         self.user_data_dir = user_data_dir or settings.offertoday_headed_browser_user_data_dir
@@ -58,6 +62,7 @@ class OfferTodayBrowserRuntime:
         self._context = None
         self._page = None
         self._owns_context = False
+        self._owns_browser = False
         self._runtime_started = False
 
     async def __aenter__(self) -> "OfferTodayBrowserRuntime":
@@ -94,6 +99,8 @@ class OfferTodayBrowserRuntime:
         try:
             if self._owns_context and self._context is not None:
                 await self._context.close()
+            if self._owns_browser and self._browser is not None:
+                await self._browser.close()
         finally:
             if self._playwright is not None:
                 await self._playwright.stop()
@@ -102,6 +109,7 @@ class OfferTodayBrowserRuntime:
         self._browser = None
         self._playwright = None
         self._owns_context = False
+        self._owns_browser = False
         self._runtime_started = False
 
     async def fetch_listing_json(self, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -145,6 +153,30 @@ class OfferTodayBrowserRuntime:
         )
 
     async def _launch_fresh_profile(self) -> None:
+        if not self.headed:
+            launch_args = ["--no-sandbox", "--disable-dev-shm-usage"]
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=launch_args,
+            )
+            context_kwargs: dict[str, Any] = {
+                "user_agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36"
+                ),
+                "locale": "zh-HK",
+            }
+            if self.auth_state_path:
+                auth_path = Path(self.auth_state_path).resolve()
+                if auth_path.exists():
+                    context_kwargs["storage_state"] = str(auth_path)
+            self._context = await self._browser.new_context(**context_kwargs)
+            self._context.set_default_navigation_timeout(self.navigation_timeout_ms)
+            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+            self._owns_context = True
+            self._owns_browser = True
+            return
+
         launch_kwargs: dict[str, Any] = {"headless": False}
         if self.executable_path:
             launch_kwargs["executable_path"] = self.executable_path
@@ -157,6 +189,7 @@ class OfferTodayBrowserRuntime:
         self._context.set_default_navigation_timeout(self.navigation_timeout_ms)
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         self._owns_context = True
+        self._owns_browser = False
 
     async def _attach_to_live_browser(self) -> None:
         session = get_live_browser_registry().get(str(self._resolve_user_data_dir()))
@@ -191,6 +224,7 @@ class OfferTodayBrowserRuntime:
         self._context.set_default_navigation_timeout(self.navigation_timeout_ms)
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         self._owns_context = False
+        self._owns_browser = False
 
     async def _warmup_page(self) -> None:
         if self._page is None:

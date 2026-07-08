@@ -255,8 +255,9 @@ async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_stra
     runtime_calls: list[dict[str, object]] = []
 
     class _FakeRuntime:
-        def __init__(self, *, resume_strategy: str) -> None:
-            runtime_calls.append({"resume_strategy": resume_strategy})
+        def __init__(self, **kwargs) -> None:
+            runtime_calls.append(dict(kwargs))
+            self._page = object()
 
         async def __aenter__(self):
             return self
@@ -279,7 +280,13 @@ async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_stra
     ) as scraper:
         detail_payload = await scraper.fetch_job_detail("jid-1")
 
-    assert runtime_calls == [{"resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER}]
+    assert runtime_calls == [
+        {
+            "headed": False,
+            "auth_state_path": None,
+            "resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+        }
+    ]
     assert detail_payload["jobId"] == "jid-1"
 
 
@@ -297,8 +304,8 @@ async def test_offertoday_browser_detail_scraper_propagates_manual_action_requir
     )
 
     class _FakeRuntime:
-        def __init__(self, *, resume_strategy: str) -> None:
-            self.resume_strategy = resume_strategy
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = dict(kwargs)
 
         async def __aenter__(self):
             raise expected_error
