@@ -260,7 +260,8 @@ class OfferTodayBrowserRuntime:
                 )
             )
         self._context.set_default_navigation_timeout(self.navigation_timeout_ms)
-        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        # Use a dedicated page for automation probes instead of hijacking the user's current tab.
+        self._page = await self._context.new_page()
         self._owns_context = False
         self._owns_browser = False
 

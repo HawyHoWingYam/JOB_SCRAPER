@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     jobsdb_headed_browser_executable_path: Optional[str] = None
     jobsdb_headed_navigation_timeout_ms: int = 60000
     offertoday_headed_browser_channel: str = "msedge"
-    offertoday_headed_browser_user_data_dir: Optional[str] = None
+    offertoday_headed_browser_user_data_dir: Optional[str] = str(
+        DEFAULT_RUNTIME_DIR / "manual_actions" / "offertoday-browser-profile"
+    )
     offertoday_headed_browser_executable_path: Optional[str] = None
     offertoday_headed_navigation_timeout_ms: int = 60000
     jobsdb_headed_worker_lock_port: int = 47651

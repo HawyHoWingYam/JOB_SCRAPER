@@ -197,19 +197,12 @@ def _build_probe_listing_payload(
     category_ids: list[int],
     keywords: str,
 ) -> dict[str, Any]:
-    listing_tasks = build_offertoday_listing_queries(
-        category_ids,
-        keywords=keywords or None,
-        max_pages_per_query=1,
+    category_id = category_ids[0] if category_ids else None
+    return build_offertoday_listing_payload(
+        category_id=category_id,
+        keyword=keywords,
+        page=1,
     )
-    if listing_tasks:
-        first_task = listing_tasks[0]
-        return build_offertoday_listing_payload(
-            category_id=first_task.get("category_id"),
-            keyword=str(first_task.get("keyword") or ""),
-            page=int(first_task.get("page") or 1),
-        )
-    return {"keyword": keywords, "page": 1, "pageSize": 1}
 
 
 async def _run_runtime_probe(
