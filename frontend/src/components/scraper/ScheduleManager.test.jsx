@@ -5,6 +5,15 @@ const { scrapeProgressPanelSpy } = vi.hoisted(() => ({
   scrapeProgressPanelSpy: vi.fn(),
 }));
 
+const { monitoringSpies } = vi.hoisted(() => ({
+  monitoringSpies: {
+    createMonitoringId: vi.fn(() => 'req-fixed'),
+    logError: vi.fn(),
+  },
+}));
+
+vi.mock('../../monitoring', () => monitoringSpies);
+
 vi.mock('./ScheduleForm', () => ({
   default: ({ onSubmit, categories, sourceSite, onSourceScopedDirtyChange, sourceCatalog = {} }) => (
     <div>
@@ -131,6 +140,10 @@ function changeSource(sourceSite) {
   fireEvent.change(screen.getByRole('combobox', { name: /data source/i }), {
     target: { value: sourceSite },
   });
+}
+
+function expectFetchCalledWithUrl(url) {
+  expect(globalThis.fetch.mock.calls.some(([input]) => input === url)).toBe(true);
 }
 
 function createDeferred() {
@@ -355,6 +368,7 @@ describe('ScheduleManager', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW);
     sessionStorage.clear();
+    monitoringSpies.logError.mockClear();
     scrapeProgressPanelSpy.mockClear();
   });
 
@@ -367,7 +381,7 @@ describe('ScheduleManager', () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/categories?source_site=jobsdb');
+      expectFetchCalledWithUrl('/api/categories?source_site=jobsdb');
     });
 
     expect(await screen.findByRole('heading', { name: /scheduled automation/i })).toBeInTheDocument();
@@ -415,7 +429,7 @@ describe('ScheduleManager', () => {
     changeSource('ctgoodjobs');
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/categories?source_site=ctgoodjobs');
+      expectFetchCalledWithUrl('/api/categories?source_site=ctgoodjobs');
     });
 
     expect(await screen.findByText('CTgoodjobs Nightly')).toBeInTheDocument();
@@ -438,7 +452,7 @@ describe('ScheduleManager', () => {
     changeSource('ctgoodjobs');
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/categories?source_site=ctgoodjobs');
+      expectFetchCalledWithUrl('/api/categories?source_site=ctgoodjobs');
     });
 
     const urls = globalThis.fetch.mock.calls.map(([url]) => url);
@@ -470,8 +484,7 @@ describe('ScheduleManager', () => {
     expect(urls.filter((url) => url === '/api/categories?source_site=ctgoodjobs')).toHaveLength(1);
   });
 
-  it('shows backend category error detail when ctgoodjobs categories fail to load', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('logs contextual monitoring details when category bootstrap fails', async () => {
     vi.stubGlobal(
       'fetch',
       createFetchMock({
@@ -485,6 +498,13 @@ describe('ScheduleManager', () => {
     changeSource('ctgoodjobs');
 
     expect(await screen.findByText('CTgoodjobs category registry unavailable')).toBeInTheDocument();
+    expect(monitoringSpies.logError).toHaveBeenCalledWith(
+      'schedule_manager.categories_failed',
+      expect.objectContaining({
+        sourceSite: 'ctgoodjobs',
+        detail: 'CTgoodjobs category registry unavailable',
+      }),
+    );
   });
 
   it('shows a scheduler warning when runtime capabilities report scheduler dispatch unavailable', async () => {
@@ -718,7 +738,7 @@ describe('ScheduleManager', () => {
     changeSource('offertoday');
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/categories?source_site=offertoday');
+      expectFetchCalledWithUrl('/api/categories?source_site=offertoday');
     });
 
     fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
@@ -1105,7 +1125,6 @@ describe('ScheduleManager', () => {
 
   it('restores recovery mode when progress bootstrap fails but the marker is fresh', async () => {
     const startedAt = new Date(FIXED_NOW - 5_000).toISOString();
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     sessionStorage.setItem(
       DIRECT_OVERRIDE_MARKER_KEY,
       JSON.stringify({ crawlJobId: 'crawl-job-123', sourceSite: 'jobsdb', startedAt }),
@@ -1123,6 +1142,12 @@ describe('ScheduleManager', () => {
 
     expect(screen.getByTestId('progress-initial')).toHaveTextContent('{}');
     expect(screen.getByTestId('progress-recovery-started-at')).toHaveTextContent(startedAt);
+    expect(monitoringSpies.logError).toHaveBeenCalledWith(
+      'schedule_manager.progress_bootstrap_failed',
+      expect.objectContaining({
+        detail: 'network down',
+      }),
+    );
   });
 
   it('does not wipe a newer recovery state when an in-flight bootstrap finishes after crawl-job success', async () => {

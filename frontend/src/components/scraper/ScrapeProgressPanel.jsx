@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { apiPath } from '../../api/base';
+import { createMonitoringId, logError, logInfo, logWarn } from '../../monitoring';
 import { formatCrawlModeLabel } from './crawlMode';
 import { formatCrawlPhaseLabel } from './crawlPhase';
 import {
@@ -45,6 +46,7 @@ function ScrapeProgressPanel({
     const eventSourceRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
     const recoveryTimeoutRef = useRef(null);
+    const streamClientIdRef = useRef(createMonitoringId('stream'));
     const wasVisibleRef = useRef(false);
     const onCloseRef = useRef(onClose);
 
@@ -113,7 +115,10 @@ function ScrapeProgressPanel({
         }
 
         const connectSSE = () => {
-            const eventSource = new EventSource(`${API_BASE}/scrape/progress/stream`);
+            const clientStreamId = streamClientIdRef.current;
+            const eventSource = new EventSource(
+                `${API_BASE}/scrape/progress/stream?client_stream_id=${encodeURIComponent(clientStreamId)}`
+            );
             eventSourceRef.current = eventSource;
             const isCurrentStream = () => eventSourceRef.current === eventSource;
 
@@ -123,6 +128,10 @@ function ScrapeProgressPanel({
                 }
                 setIsConnected(true);
                 setError(null);
+                logInfo('scrape_progress.stream_open', {
+                    clientStreamId,
+                    url: eventSource.url,
+                });
             };
 
             eventSource.onmessage = (event) => {
@@ -132,6 +141,10 @@ function ScrapeProgressPanel({
                 try {
                     const data = JSON.parse(event.data);
                     if (data.closed) {
+                        logInfo('scrape_progress.stream_closed', {
+                            clientStreamId,
+                            reason: data.reason || 'closed',
+                        });
                         clearRecoveryTimeout();
                         eventSource.close();
                         eventSourceRef.current = null;
@@ -141,7 +154,11 @@ function ScrapeProgressPanel({
                     }
                     setProgress(data.all || {});
                 } catch (e) {
-                    console.error('Failed to parse SSE data:', e);
+                    logError('scrape_progress.stream_parse_failed', {
+                        clientStreamId,
+                        detail: e,
+                        payload: event.data,
+                    });
                 }
             };
 
@@ -153,6 +170,10 @@ function ScrapeProgressPanel({
                 setIsConnected(false);
                 eventSource.close();
                 eventSourceRef.current = null;
+                logWarn('scrape_progress.stream_error', {
+                    clientStreamId,
+                    reconnectDelayMs: 3000,
+                });
                 reconnectTimeoutRef.current = setTimeout(() => {
                     reconnectTimeoutRef.current = null;
                     connectSSE();
@@ -661,35 +682,48 @@ function resolveMetricScope(data) {
 }
 
 function buildDetailRunMetricLines({
-    detailSelectedRows,
+    detailQueueTotal,
+    jobIdsCollected,
     detailSkippedExistingRows,
-    detailTargetRows,
     jobsScraped,
     detailRunFailed,
     detailRunManualActionRequired,
 }) {
     const lines = [];
-    const runnableRows = detailTargetRows || Math.max(detailSelectedRows - detailSkippedExistingRows, 0);
+    lines.push(`Detail crawled: ${detailQueueTotal > 0 ? formatCountPair(jobsScraped, detailQueueTotal) : formatCount(jobsScraped)}`);
 
-    if (detailSelectedRows > 0) {
-        lines.push(`Rows checked: ${formatCount(detailSelectedRows)}`);
+    if (jobIdsCollected > 0) {
+        lines.push(`IDs found: ${formatCount(jobIdsCollected)}`);
     }
     if (detailSkippedExistingRows > 0) {
         lines.push(`Skipped existing: ${formatCount(detailSkippedExistingRows)}`);
     }
-
-    lines.push(
-        `Detail crawled: ${runnableRows > 0
-            ? formatCountPair(jobsScraped, runnableRows)
-            : formatCount(jobsScraped)
-        }`
-    );
 
     if (detailRunFailed > 0) {
         lines.push(`Failed rows: ${formatCount(detailRunFailed)}`);
     }
     if (detailRunManualActionRequired > 0) {
         lines.push(`Manual review: ${formatCount(detailRunManualActionRequired)}`);
+    }
+
+    return lines;
+}
+
+function buildListingRunMetricLines({
+    currentPage,
+    totalPages,
+    jobIdsCollected,
+    detailQueueTotal,
+    jobsSkippedExisting,
+}) {
+    const lines = [
+        `IDs found: ${formatCount(jobIdsCollected)}`,
+        `Detail queue: ${formatCount(detailQueueTotal)}`,
+        `Pages: ${formatCountPair(currentPage || 0, totalPages)}`,
+    ];
+
+    if (jobsSkippedExisting > 0) {
+        lines.push(`Skipped existing: ${formatCount(jobsSkippedExisting)}`);
     }
 
     return lines;
@@ -793,8 +827,9 @@ function ProgressItem({
     } = data;
     const taskId = crawl_job_id || taskKey;
     const elapsedLabel = formatDuration(elapsed_seconds);
-    const effectiveDetailTotal = detail_job_total || total_jobs;
     const effectiveDetailIndex = detail_job_index || jobs_scraped;
+    const listingQueueTotal = detail_target_rows || listings_staged;
+    const detailQueueTotal = detail_target_rows || detail_job_total || total_jobs;
     const aiProcessedItems = ai_completed_items + ai_failed_items;
     const aiTotalItems = ai_total_items || save_total || jobs_saved || total_jobs || jobs_scraped || aiProcessedItems;
     const sourceListingBatchId = `${request_payload?.source_listing_crawl_job_id || ''}`.trim();
@@ -908,21 +943,33 @@ function ProgressItem({
         const metricLines = [];
 
         if (phase === 1) {
-            metricLines.push(`Pages: ${formatCountPair(current_page || 0, total_pages)}`);
-            metricLines.push(`IDs found: ${formatCount(job_ids_collected)}`);
+            metricLines.push(
+                ...buildListingRunMetricLines({
+                    currentPage: current_page,
+                    totalPages: total_pages,
+                    jobIdsCollected: job_ids_collected,
+                    detailQueueTotal: listingQueueTotal,
+                    jobsSkippedExisting: jobs_skipped_existing,
+                })
+            );
         } else if (phase === 2) {
             metricLines.push(
                 ...buildDetailRunMetricLines({
-                    detailSelectedRows: detail_selected_rows,
+                    detailQueueTotal,
+                    jobIdsCollected: job_ids_collected,
                     detailSkippedExistingRows: detail_skipped_existing_rows,
-                    detailTargetRows: detail_target_rows || effectiveDetailTotal,
                     jobsScraped: jobs_scraped,
                     detailRunFailed: detail_run_failed,
                     detailRunManualActionRequired: detail_run_manual_action_required || 1,
                 })
             );
-            if (detail_job_index || effectiveDetailTotal) {
-                metricLines.push(`Current target: ${formatCountPair(effectiveDetailIndex, effectiveDetailTotal)}`);
+            if (detail_job_index || detailQueueTotal) {
+                metricLines.push(
+                    `Current row: ${detailQueueTotal > 0
+                        ? formatCountPair(effectiveDetailIndex, detailQueueTotal)
+                        : formatCount(effectiveDetailIndex)
+                    }`
+                );
             }
         } else if (phase === 5 || ai_run_id) {
             metricLines.push(`Items processed: ${formatCountPair(aiProcessedItems, aiTotalItems)}`);
@@ -982,7 +1029,12 @@ function ProgressItem({
                 setShowFreshResumeWarning(false);
             } catch (resumeError) {
                 const detail = buildInlineErrorMessage(resumeError, fallbackMessage);
-                console.error('Failed to resume crawl job:', resumeError);
+                logError('scrape_progress.resume_failed', {
+                    clientStreamId: streamClientIdRef.current,
+                    crawlJobId: crawl_job_id,
+                    strategy,
+                    detail,
+                });
                 setReuseStatusError(detail);
             } finally {
                 setIsResumeSubmitting(null);
@@ -1290,7 +1342,6 @@ function ProgressItem({
     const detailLines = [];
     const isBacklogPoolScope = metricScope === 'backlog_pool';
     const isDetailRunScope = metricScope === 'detail_run';
-    const detailTargetTotal = detail_target_rows || effectiveDetailTotal;
 
     if (effectiveStatus === 'queued') {
         statusText = 'Queued';
@@ -1332,25 +1383,34 @@ function ProgressItem({
         }
     } else if (phase === 1) {
         statusText = 'Collecting IDs';
-        metricLines.push(`Pages: ${formatCountPair(current_page || 0, total_pages)}`);
-        metricLines.push(`New IDs: ${formatCount(job_ids_collected)}`);
-        if (jobs_skipped_existing > 0) {
-            metricLines.push(`Existing skipped: ${formatCount(jobs_skipped_existing)}`);
-        }
+        metricLines.push(
+            ...buildListingRunMetricLines({
+                currentPage: current_page,
+                totalPages: total_pages,
+                jobIdsCollected: job_ids_collected,
+                detailQueueTotal: listingQueueTotal,
+                jobsSkippedExisting: jobs_skipped_existing,
+            })
+        );
     } else if (phase === 2 || isDetailRunScope) {
         statusText = 'Scraping Details';
         metricLines.push(
             ...buildDetailRunMetricLines({
-                detailSelectedRows: detail_selected_rows,
+                detailQueueTotal,
+                jobIdsCollected: job_ids_collected,
                 detailSkippedExistingRows: detail_skipped_existing_rows || jobs_skipped_existing,
-                detailTargetRows: detailTargetTotal,
                 jobsScraped: jobs_scraped,
                 detailRunFailed: detail_run_failed,
                 detailRunManualActionRequired: detail_run_manual_action_required,
             })
         );
-        if (detail_job_index || effectiveDetailTotal) {
-            metricLines.push(`Current target: ${formatCountPair(effectiveDetailIndex, effectiveDetailTotal)}`);
+        if (detail_job_index || detailQueueTotal) {
+            metricLines.push(
+                `Current row: ${detailQueueTotal > 0
+                    ? formatCountPair(effectiveDetailIndex, detailQueueTotal)
+                    : formatCount(effectiveDetailIndex)
+                }`
+            );
         }
         if (current_job_title) {
             detailLines.push(`Current title: ${current_job_title}`);

@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Zap, AlertTriangle, CalendarClock, X } from 'lucide-react';
+import { apiFetchJson } from '../../api/client';
 import { API_BASE_URL, apiPath } from '../../api/base';
 import { fetchCapabilities } from '../../api/capabilities';
+import { logError } from '../../monitoring';
 import ScheduleForm from './ScheduleForm';
 import ScheduleList from './ScheduleList';
 import ScheduleHistory from './ScheduleHistory';
@@ -523,26 +525,17 @@ function ScheduleManager({ onNavigateToAI }) {
                 return;
             }
 
-            const response = await fetch(
+            const data = await apiFetchJson(
                 `${CATEGORY_API_BASE}/categories?source_site=${encodeURIComponent(sourceSite)}`
             );
-            if (!response.ok) {
-                let detail = '';
-                try {
-                    const payload = await response.json();
-                    detail = typeof payload?.detail === 'string' ? payload.detail : '';
-                } catch {
-                    detail = '';
-                }
-                throw new Error(detail || 'Failed to load categories');
-            }
-            if (!response.ok) throw new Error('Failed to load categories');
-            const data = await response.json();
             const nextCategories = data.categories || [];
             categoryCacheRef.current.set(sourceSite, nextCategories);
             setCategories(nextCategories);
         } catch (err) {
-            console.error('Failed to fetch categories:', err);
+            logError('schedule_manager.categories_failed', {
+                sourceSite,
+                detail: err instanceof Error ? err.message : err,
+            });
             setCategories([]);
             setError(err.message);
         }
@@ -620,12 +613,7 @@ function ScheduleManager({ onNavigateToAI }) {
         };
 
         try {
-            const response = await fetch(`${API_BASE}/scrape/progress`);
-            if (!response.ok) {
-                throw new Error('Failed to load crawl progress');
-            }
-
-            const data = await response.json();
+            const data = await apiFetchJson(`${API_BASE}/scrape/progress`);
             const initialProgress = data.all || {};
             const hasRecentProgress = Object.keys(initialProgress).length > 0;
 
@@ -641,8 +629,9 @@ function ScheduleManager({ onNavigateToAI }) {
 
             applyRecoveryFallback();
         } catch (err) {
-            console.error('Failed to bootstrap scrape progress:', err);
-
+            logError('schedule_manager.progress_bootstrap_failed', {
+                detail: err instanceof Error ? err.message : err,
+            });
             applyRecoveryFallback();
         }
     }, [getFreshDirectOverrideRecoveryMarker]);

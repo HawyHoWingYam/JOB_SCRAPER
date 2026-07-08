@@ -4,9 +4,11 @@ import SearchBar from './SearchBar';
 import FilterPanel from './FilterPanel';
 import PaginationControl from './PaginationControl';
 import JobDetailModal from './JobDetailModal';
+import { apiFetchJson } from '../api/client';
 import { API_BASE_URL, apiPath } from '../api/base';
 import { formatApiErrorDetail } from '../api/errors';
 import { fetchCapabilities } from '../api/capabilities';
+import { logError } from '../monitoring';
 import {
     createEmptyJobBrowserLayer,
     createEmptyJobBrowserScope,
@@ -202,23 +204,18 @@ function JobBrowser() {
     useEffect(() => {
         const fetchFilterOptions = async () => {
             try {
-                const [baseResponse, subcategoriesResponse] = await Promise.all([
-                    fetch(apiPath('/jobs/filters')),
-                    fetch(apiPath('/filters/job-subcategories')),
+                const [data, jobSubcategories] = await Promise.all([
+                    apiFetchJson(apiPath('/jobs/filters')),
+                    apiFetchJson(apiPath('/filters/job-subcategories')),
                 ]);
-
-                if (baseResponse.ok && subcategoriesResponse.ok) {
-                    const [data, jobSubcategories] = await Promise.all([
-                        baseResponse.json(),
-                        subcategoriesResponse.json(),
-                    ]);
-                    setFilterOptions({
-                        ...data,
-                        job_subcategories: jobSubcategories,
-                    });
-                }
+                setFilterOptions({
+                    ...data,
+                    job_subcategories: jobSubcategories,
+                });
             } catch (err) {
-                console.error('Failed to fetch filter options:', err);
+                logError('job_browser.filter_options_failed', {
+                    detail: err instanceof Error ? err.message : err,
+                });
             }
         };
 

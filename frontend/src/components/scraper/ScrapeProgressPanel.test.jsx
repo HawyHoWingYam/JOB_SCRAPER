@@ -2,6 +2,17 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { monitoringSpies } = vi.hoisted(() => ({
+  monitoringSpies: {
+    createMonitoringId: vi.fn(() => 'stream-fixed'),
+    logError: vi.fn(),
+    logInfo: vi.fn(),
+    logWarn: vi.fn(),
+  },
+}));
+
+vi.mock('../../monitoring', () => monitoringSpies);
+
 import ScrapeProgressPanel from './ScrapeProgressPanel';
 
 class MockEventSource {
@@ -37,6 +48,10 @@ describe('ScrapeProgressPanel', () => {
   beforeEach(() => {
     MockEventSource.instances = [];
     vi.stubGlobal('EventSource', MockEventSource);
+    monitoringSpies.createMonitoringId.mockClear();
+    monitoringSpies.logError.mockClear();
+    monitoringSpies.logInfo.mockClear();
+    monitoringSpies.logWarn.mockClear();
   });
 
   afterEach(() => {
@@ -109,7 +124,7 @@ describe('ScrapeProgressPanel', () => {
     );
 
     const stream = latestEventSource();
-    expect(stream.url).toBe('/api/v1/scrape/progress/stream');
+    expect(stream.url).toBe('/api/v1/scrape/progress/stream?client_stream_id=stream-fixed');
     act(() => {
       stream.emitOpen();
       stream.emitMessage({
@@ -186,6 +201,7 @@ describe('ScrapeProgressPanel', () => {
             current_page: 2,
             total_pages: 8,
             job_ids_collected: 49,
+            detail_target_rows: 42,
             jobs_skipped_existing: 7,
             elapsed_seconds: 11,
           },
@@ -193,9 +209,10 @@ describe('ScrapeProgressPanel', () => {
       });
     });
 
+    expect(await screen.findByText(/ids found: 49/i)).toBeInTheDocument();
+    expect(screen.getByText(/detail queue: 42/i)).toBeInTheDocument();
     expect(await screen.findByText(/pages: 2\/8/i)).toBeInTheDocument();
-    expect(screen.getByText(/new ids: 49/i)).toBeInTheDocument();
-    expect(screen.getByText(/existing skipped: 7/i)).toBeInTheDocument();
+    expect(screen.getByText(/skipped existing: 7/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
     expect(screen.getByText(/elapsed: 11s/i)).toBeInTheDocument();
     expect(screen.queryByText(/rate:/i)).not.toBeInTheDocument();
@@ -222,6 +239,7 @@ describe('ScrapeProgressPanel', () => {
             current_page: 1,
             total_pages: 6,
             job_ids_collected: 128,
+            detail_target_rows: 72,
             search_family: 'it_keyword',
             search_families: ['it_category', 'it_keyword', 'it_hybrid'],
             request_payload: {
@@ -235,7 +253,45 @@ describe('ScrapeProgressPanel', () => {
     expect(
       await screen.findByText(/search families: it category, it keyword, it hybrid/i)
     ).toBeInTheDocument();
-    expect(screen.getByText(/new ids: 128/i)).toBeInTheDocument();
+    expect(screen.getByText(/ids found: 128/i)).toBeInTheDocument();
+    expect(screen.getByText(/detail queue: 72/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('adds client_stream_id to the EventSource URL and logs SSE parse failures', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    expect(stream.url).toContain('client_stream_id=stream-fixed');
+
+    act(() => {
+      stream.emitOpen();
+      stream.onmessage?.({ data: '{not-json' });
+    });
+
+    expect(monitoringSpies.logError).toHaveBeenCalledWith(
+      'scrape_progress.stream_parse_failed',
+      expect.objectContaining({ clientStreamId: 'stream-fixed' }),
+    );
+
+    unmount();
+  });
+
+  it('logs reconnect attempts when the SSE connection errors', async () => {
+    vi.useFakeTimers();
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitError();
+    });
+
+    expect(monitoringSpies.logWarn).toHaveBeenCalledWith(
+      'scrape_progress.stream_error',
+      expect.objectContaining({ clientStreamId: 'stream-fixed', reconnectDelayMs: 3000 }),
+    );
 
     unmount();
   });
@@ -257,6 +313,7 @@ describe('ScrapeProgressPanel', () => {
             detail_skipped_existing_rows: 2,
             detail_target_rows: 10,
             jobs_scraped: 2,
+            job_ids_collected: 12,
             total_jobs: 12,
             detail_job_index: 3,
             detail_job_total: 12,
@@ -273,10 +330,11 @@ describe('ScrapeProgressPanel', () => {
       });
     });
 
-    expect(await screen.findByText(/rows checked: 12/i)).toBeInTheDocument();
+    expect(await screen.findByText(/detail crawled: 2\/10/i)).toBeInTheDocument();
+    expect(screen.getByText(/ids found: 12/i)).toBeInTheDocument();
     expect(screen.getByText(/skipped existing: 2/i)).toBeInTheDocument();
-    expect(screen.getByText(/detail crawled: 2\/10/i)).toBeInTheDocument();
-    expect(screen.getByText(/current target: 3\/12/i)).toBeInTheDocument();
+    expect(screen.getByText(/current row: 3\/10/i)).toBeInTheDocument();
+    expect(screen.queryByText(/rows checked:/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
     expect(screen.getByText(/current title: senior data analyst/i)).toBeInTheDocument();
     expect(screen.getByText(/queued:/i)).toBeInTheDocument();
@@ -287,6 +345,34 @@ describe('ScrapeProgressPanel', () => {
     expect(container.querySelector('.progress-bar-fill')).toBeNull();
     expect(screen.queryByText(/rate:/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/eta:/i)).not.toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('falls back to detail_target_rows when detail job total is missing', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            status: 'running',
+            category_name: 'Engineering',
+            metric_scope: 'detail_run',
+            phase: 2,
+            detail_target_rows: 10,
+            detail_job_index: 3,
+            jobs_scraped: 2,
+            elapsed_seconds: 9,
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/detail crawled: 2\/10/i)).toBeInTheDocument();
+    expect(screen.getByText(/current row: 3\/10/i)).toBeInTheDocument();
 
     unmount();
   });

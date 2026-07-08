@@ -1,6 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { monitoringSpies } = vi.hoisted(() => ({
+  monitoringSpies: {
+    createMonitoringId: vi.fn(() => 'req-fixed'),
+    logError: vi.fn(),
+  },
+}));
+
+vi.mock('../monitoring', () => monitoringSpies);
+
 import JobBrowser from './JobBrowser';
 
 const ALL_JOBS = [
@@ -159,6 +168,7 @@ describe('JobBrowser', () => {
     exportShouldFail = false;
     forcedSearchErrorDetail = null;
     forceMultiPageResults = false;
+    monitoringSpies.logError.mockClear();
     capabilitiesPayload = {
       search: {
         lexical: { available: true },
@@ -260,6 +270,45 @@ describe('JobBrowser', () => {
       page: 1,
       page_size: 24,
     });
+  });
+
+  it('logs contextual monitoring details when filter bootstrap fails', async () => {
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = new URL(String(input), 'http://localhost');
+
+      if (url.pathname === '/api/v1/capabilities') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => capabilitiesPayload,
+        });
+      }
+
+      if (url.pathname === '/api/v1/jobs/filters') {
+        return Promise.reject(new Error('filters offline'));
+      }
+
+      if (url.pathname === '/api/v1/filters/job-subcategories') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ([]),
+        });
+      }
+
+      if (url.pathname === '/api/v1/jobs/search' && (init.method || 'GET') === 'POST') {
+        return mockSearchResponse({ scope: { layers: [] }, page: 1, page_size: 24 });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
+    });
+
+    render(<JobBrowser />);
+
+    await screen.findByText('Healthcare ERP Lead');
+
+    expect(monitoringSpies.logError).toHaveBeenCalledWith(
+      'job_browser.filter_options_failed',
+      expect.objectContaining({ detail: 'filters offline' }),
+    );
   });
 
   it('submits the selected retrieval mode with search requests', async () => {
@@ -517,8 +566,13 @@ describe('JobBrowser', () => {
 
     await screen.findByText('Healthcare ERP Lead');
 
-    fireEvent.change(screen.getByLabelText(/jump to page/i), {
+    const jumpInput = screen.getByLabelText(/jump to page/i);
+
+    fireEvent.change(jumpInput, {
       target: { value: '2' },
+    });
+    await waitFor(() => {
+      expect(jumpInput).toHaveValue(2);
     });
     fireEvent.click(screen.getByRole('button', { name: /go/i }));
 
