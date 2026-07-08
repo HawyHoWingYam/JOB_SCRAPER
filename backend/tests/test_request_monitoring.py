@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
-from app.request_monitoring import (
-    REQUEST_ID_HEADER,
-    SLOW_REQUEST_THRESHOLD_MS,
-    install_request_monitoring,
-)
+from app import request_monitoring
+from app.request_monitoring import REQUEST_ID_HEADER, install_request_monitoring
 
 
 def build_test_app() -> FastAPI:
@@ -35,10 +32,20 @@ def build_test_app() -> FastAPI:
     async def boom():
         raise RuntimeError("boom")
 
+    @app.get("/request-id")
+    async def request_id(request: Request):
+        return {"request_id": request.state.request_id}
+
     @app.get("/slow")
     async def slow():
-        await asyncio.sleep((SLOW_REQUEST_THRESHOLD_MS + 50) / 1000)
         return {"slow": True}
+
+    @app.get("/api/v1/scrape/progress/stream")
+    async def progress_stream():
+        async def event_stream():
+            yield "data: ok\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     return app
 
@@ -62,6 +69,15 @@ def test_request_monitoring_generates_request_id_when_missing():
     assert response.headers[REQUEST_ID_HEADER].startswith("req-")
 
 
+def test_request_monitoring_populates_request_state():
+    client = TestClient(build_test_app())
+
+    response = client.get("/request-id")
+
+    assert response.status_code == 200
+    assert response.json()["request_id"] == response.headers[REQUEST_ID_HEADER]
+
+
 def test_request_monitoring_logs_control_plane_and_exception_paths(caplog):
     progress_client = TestClient(build_test_app())
     error_client = TestClient(build_test_app(), raise_server_exceptions=False)
@@ -79,6 +95,17 @@ def test_request_monitoring_logs_control_plane_and_exception_paths(caplog):
     assert error_response.status_code == 500
     assert "API_REQUEST_EXCEPTION" in caplog.text
     assert "path=/boom" in caplog.text
+
+
+def test_request_monitoring_skips_summary_for_progress_stream(caplog):
+    client = TestClient(build_test_app())
+
+    with caplog.at_level(logging.INFO, logger="app.request_monitoring"):
+        response = client.get("/api/v1/scrape/progress/stream")
+
+    assert response.status_code == 200
+    assert "API_REQUEST_SUMMARY" not in caplog.text
+    assert "path=/api/v1/scrape/progress/stream" not in caplog.text
 
 
 def test_request_monitoring_sets_request_id_on_500_response():
@@ -103,7 +130,8 @@ def test_request_monitoring_logs_5xx_summary_after_exception(caplog):
     assert "status=500" in caplog.text
 
 
-def test_request_monitoring_logs_slow_request_summary_for_non_control_plane_path(caplog):
+def test_request_monitoring_logs_slow_request_summary_for_non_control_plane_path(caplog, monkeypatch):
+    monkeypatch.setattr(request_monitoring, "SLOW_REQUEST_THRESHOLD_MS", 0)
     client = TestClient(build_test_app())
 
     with caplog.at_level(logging.INFO, logger="app.request_monitoring"):

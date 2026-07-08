@@ -14,6 +14,7 @@ IMPORTANT_REQUEST_PATH_PREFIXES = (
     "/api/v1/scrape/progress",
     "/api/v1/schedules",
 )
+EXCLUDED_REQUEST_SUMMARY_PATHS = {"/api/v1/scrape/progress/stream"}
 
 logger = logging.getLogger("app.request_monitoring")
 
@@ -32,6 +33,8 @@ def create_request_id() -> str:
 
 
 def should_log_request_summary(*, path: str, status_code: int, duration_ms: int) -> bool:
+    if path in EXCLUDED_REQUEST_SUMMARY_PATHS:
+        return False
     if status_code >= 500 or duration_ms >= SLOW_REQUEST_THRESHOLD_MS:
         return True
     return any(path.startswith(prefix) for prefix in IMPORTANT_REQUEST_PATH_PREFIXES)
