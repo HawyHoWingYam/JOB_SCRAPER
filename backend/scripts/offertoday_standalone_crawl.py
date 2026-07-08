@@ -29,6 +29,11 @@ if SCRAPY_PROJECT not in sys.path:
     sys.path.insert(0, SCRAPY_PROJECT)
 
 from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, OFFERTODAY_LISTING_BROWSE_URL, OFFERTODAY_LISTING_SEARCH_URL, build_offertoday_listing_payload  # noqa: E402
+from app.scraper.manual_action import (  # noqa: E402
+    RESUME_STRATEGY_FRESH_PROFILE,
+    RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+)
+from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
 from app.sources.offertoday.search_space import (  # noqa: E402
     build_offertoday_listing_queries,
     normalize_offertoday_keywords,
@@ -48,6 +53,11 @@ _WAF_CHALLENGE_PATH = "/web/passport/cm/verify"
 _WAF_MANUAL_TIMEOUT_SECONDS = 180
 
 _COMMON_HEADERS = OFFERTODAY_COMMON_HEADERS
+
+_RESUME_STRATEGY_CHOICES = (
+    RESUME_STRATEGY_FRESH_PROFILE,
+    RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+)
 
 
 async def _check_and_handle_waf_challenge(page, *, headed: bool, crawl_job_id: str, db: Any) -> bool:
@@ -134,18 +144,158 @@ async def _check_and_handle_waf_challenge(page, *, headed: bool, crawl_job_id: s
     return True
 
 
+def _build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Standalone OfferToday crawler")
+    parser.add_argument("--category-ids", type=str, default="")
+    parser.add_argument("--keywords", type=str, default="")
+    parser.add_argument("--max-pages", type=int, default=100)
+    parser.add_argument("--crawl-job-id", type=str, default="")
+    parser.add_argument(
+        "--headed",
+        action="store_true",
+        default=False,
+        help="Run with a visible browser window so WAF challenges can be completed manually.",
+    )
+    parser.add_argument(
+        "--auth-state",
+        default="",
+        help=(
+            "Path to a Playwright storage_state JSON file produced by offertoday_auth_setup.py. "
+            "Loads cookies and localStorage so the crawl starts pre-authenticated, "
+            "which reduces WAF challenge frequency."
+        ),
+    )
+    parser.add_argument(
+        "--resume-strategy",
+        choices=_RESUME_STRATEGY_CHOICES,
+        default=RESUME_STRATEGY_FRESH_PROFILE,
+        help="How the runtime should create or attach to the browser session.",
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        default=False,
+        help="Do not queue detail work for jobs that already exist in the database.",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        default=False,
+        help="Warm the shared browser runtime and run a lightweight listing probe.",
+    )
+    parser.add_argument(
+        "--smoke-test",
+        action="store_true",
+        default=False,
+        help="Run the runtime check plus one detail probe from the listing response.",
+    )
+    return parser
+
+
+def _build_probe_listing_payload(
+    *,
+    category_ids: list[int],
+    keywords: str,
+) -> dict[str, Any]:
+    listing_tasks = build_offertoday_listing_queries(
+        category_ids,
+        keywords=keywords or None,
+        max_pages_per_query=1,
+    )
+    if listing_tasks:
+        first_task = listing_tasks[0]
+        return build_offertoday_listing_payload(
+            category_id=first_task.get("category_id"),
+            keyword=str(first_task.get("keyword") or ""),
+            page=int(first_task.get("page") or 1),
+        )
+    return {"keyword": keywords, "page": 1, "pageSize": 1}
+
+
+async def _run_runtime_probe(
+    *,
+    headed: bool,
+    auth_state: str,
+    resume_strategy: str,
+    category_ids: list[int],
+    keywords: str,
+    smoke_test: bool,
+) -> int:
+    listing_payload = _build_probe_listing_payload(category_ids=category_ids, keywords=keywords)
+    async with OfferTodayBrowserRuntime(
+        headed=headed,
+        auth_state_path=auth_state or None,
+        resume_strategy=resume_strategy,
+    ) as runtime:
+        page = runtime._page
+        if page is not None:
+            await _check_and_handle_waf_challenge(page, headed=headed, crawl_job_id="", db=None)
+        session_check = await runtime.check_session(listing_payload=listing_payload)
+        logger.info(
+            "OfferToday runtime check: waf=%s url=%s listing_results=%d",
+            session_check.is_waf_challenge,
+            session_check.current_url,
+            session_check.listing_result_count,
+        )
+        if session_check.is_waf_challenge:
+            logger.error("OfferToday runtime check hit a WAF challenge.")
+            return 1
+        if not smoke_test:
+            return 0
+
+        result_list = (((session_check.listing_probe_payload or {}).get("data") or {}).get("resultList") or [])
+        if not result_list:
+            logger.error("OfferToday smoke test could not find a listing to probe.")
+            return 1
+
+        first_job = result_list[0] if isinstance(result_list[0], dict) else {}
+        job_id = str(first_job.get("jobId") or "").strip()
+        encrypted_job_id = str(first_job.get("encryptJobId") or job_id).strip()
+        if not job_id:
+            logger.error("OfferToday smoke test listing response did not include a jobId.")
+            return 1
+
+        detail_payload = await runtime.fetch_detail_json(
+            job_id=job_id,
+            encrypted_job_id=encrypted_job_id,
+        )
+        detail_code = None if not isinstance(detail_payload, dict) else detail_payload.get("code")
+        detail_job_id = (
+            ""
+            if not isinstance(detail_payload, dict)
+            else str(((detail_payload.get("data") or {}).get("jobId")) or "").strip()
+        )
+        logger.info(
+            "OfferToday smoke test detail probe: job_id=%s code=%s detail_job_id=%s",
+            job_id,
+            detail_code,
+            detail_job_id or "[missing]",
+        )
+        return 0 if detail_code == 0 and detail_job_id else 1
+
+
 async def _fetch_listing_json(
-    page, payload: dict[str, Any], *, listing_url: str | None = None
+    runtime: OfferTodayBrowserRuntime,
+    payload: dict[str, Any],
+    *,
+    listing_url: str | None = None,
 ) -> dict[str, Any]:
     url = listing_url or OFFERTODAY_LISTING_SEARCH_URL
-    js = (
-        f"()=>fetch('{url}',{{method:'POST',"
-        f"headers:{json.dumps(_COMMON_HEADERS, ensure_ascii=False)},"
-        f"body:JSON.stringify({json.dumps(payload, ensure_ascii=False)})"
-        f"}}).then(r=>r.json())"
-    )
     try:
-        return await asyncio.wait_for(page.evaluate(js), timeout=30)
+        if listing_url is None:
+            result = await runtime.fetch_listing_json(payload)
+        else:
+            page = runtime._page
+            if page is None:
+                raise RuntimeError("OfferToday browser runtime was not initialized")
+            js = (
+                f"()=>fetch('{url}',{{method:'POST',"
+                f"headers:{json.dumps(_COMMON_HEADERS, ensure_ascii=False)},"
+                f"body:JSON.stringify({json.dumps(payload, ensure_ascii=False)})"
+                f"}}).then(r=>r.json())"
+            )
+            result = await asyncio.wait_for(page.evaluate(js), timeout=30)
+        return result or {}
     except Exception as exc:
         logger.warning("Playwright listing fetch failed; trying Scrapling fallback: %s", exc)
 
@@ -164,14 +314,11 @@ async def _fetch_listing_json(
         return {}
 
 
-async def _fetch_detail_json(page, jid: str) -> dict[str, Any]:
+async def _fetch_detail_json(runtime: OfferTodayBrowserRuntime, jid: str) -> dict[str, Any]:
     detail_url = OFFERTODAY_DETAIL_URL_TPL.format(jid, jid)
-    js = (
-        f"()=>fetch('{detail_url}',{{headers:{{"
-        f"'api-language':'zh_HK','x-requested-with':'XMLHttpRequest'}}}}).then(r=>r.json())"
-    )
     try:
-        return await asyncio.wait_for(page.evaluate(js), timeout=30)
+        result = await runtime.fetch_detail_json(job_id=jid, encrypted_job_id=jid)
+        return result or {}
     except Exception as exc:
         logger.warning("Playwright detail fetch failed; trying Scrapling fallback: %s", exc)
 
@@ -226,36 +373,24 @@ def _emit_listing_completed_checkpoint(
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="Standalone OfferToday crawler")
-    parser.add_argument("--category-ids", type=str, default="")
-    parser.add_argument("--keywords", type=str, default="")
-    parser.add_argument("--max-pages", type=int, default=100)
-    parser.add_argument("--crawl-job-id", type=str, default="")
-    parser.add_argument(
-        "--headed",
-        action="store_true",
-        default=False,
-        help="Run with a visible browser window so WAF challenges can be completed manually.",
-    )
-    parser.add_argument(
-        "--auth-state",
-        default="",
-        help=(
-            "Path to a Playwright storage_state JSON file produced by offertoday_auth_setup.py. "
-            "Loads cookies and localStorage so the crawl starts pre-authenticated, "
-            "which reduces WAF challenge frequency."
-        ),
-    )
-    parser.add_argument(
-        "--skip-existing",
-        action="store_true",
-        default=False,
-        help="Do not queue detail work for jobs that already exist in the database.",
-    )
+    parser = _build_argument_parser()
     args = parser.parse_args()
 
     category_ids = [int(c.strip()) for c in args.category_ids.split(",") if c.strip().isdigit()]
     keywords = normalize_offertoday_keywords(args.keywords)
+    if args.check or args.smoke_test:
+        exit_code = await _run_runtime_probe(
+            headed=args.headed,
+            auth_state=args.auth_state,
+            resume_strategy=args.resume_strategy,
+            category_ids=category_ids,
+            keywords=keywords,
+            smoke_test=args.smoke_test,
+        )
+        if exit_code != 0:
+            raise SystemExit(exit_code)
+        return
+
     page_limit_per_query = min(args.max_pages, MAX_PAGES_GLOBAL)
     listing_tasks = build_offertoday_listing_queries(
         category_ids,
@@ -285,7 +420,6 @@ async def main() -> None:
         build_offertoday_company_data,
         build_offertoday_job_data,
     )
-    from playwright.async_api import async_playwright
 
     db = SessionLocal()
     detail_ok = 0
@@ -340,30 +474,14 @@ async def main() -> None:
     )
 
     try:
-        async with async_playwright() as pw:
-            launch_args = [] if args.headed else ["--no-sandbox", "--disable-dev-shm-usage"]
-            browser = await pw.chromium.launch(headless=not args.headed, args=launch_args)
-            auth_state_path = Path(args.auth_state).resolve() if args.auth_state else None
-            context_kwargs: dict = {
-                "user_agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36"
-                ),
-                "locale": "zh-HK",
-            }
-            if auth_state_path and auth_state_path.exists():
-                context_kwargs["storage_state"] = str(auth_state_path)
-                logger.info("Loading auth state from %s", auth_state_path)
-            elif args.auth_state:
-                logger.warning(
-                    "Auth state file not found: %s — starting without pre-loaded session",
-                    auth_state_path,
-                )
-            context = await browser.new_context(**context_kwargs)
-            page = await context.new_page()
-
-            await page.goto(f"{OFFERTODAY_BASE_URL}/hk/search", wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(2.0)
+        async with OfferTodayBrowserRuntime(
+            headed=args.headed,
+            auth_state_path=args.auth_state or None,
+            resume_strategy=args.resume_strategy,
+        ) as runtime:
+            page = runtime._page
+            if page is None:
+                raise RuntimeError("OfferToday browser runtime did not initialize a page")
             # Check immediately whether WAF fired on the warmup page.
             await _check_and_handle_waf_challenge(
                 page, headed=args.headed, crawl_job_id=cj_id, db=db
@@ -387,7 +505,11 @@ async def main() -> None:
                     if task.get("endpoint") == "browse"
                     else None
                 )
-                data: dict[str, Any] = await _fetch_listing_json(page, payload, listing_url=task_listing_url)
+                data: dict[str, Any] = await _fetch_listing_json(
+                    runtime,
+                    payload,
+                    listing_url=task_listing_url,
+                )
 
                 if not data or data.get("code") != 0:
                     consecutive_failures += 1
@@ -581,7 +703,7 @@ async def main() -> None:
 
                 detail_success = False
                 for attempt in range(1, 4):
-                    data = await _fetch_detail_json(page, jid)
+                    data = await _fetch_detail_json(runtime, jid)
                     if data and data.get("code") == 0 and data.get("data", {}).get("jobId"):
                         listing.detail_payload = dict(data["data"])
                         listing.detail_status = "completed"
@@ -704,7 +826,6 @@ async def main() -> None:
                 await asyncio.sleep(1.5)
 
             db.commit()
-            await browser.close()
 
         if args.crawl_job_id:
             event_seq += 1

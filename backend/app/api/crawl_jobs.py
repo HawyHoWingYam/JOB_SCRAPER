@@ -230,14 +230,26 @@ async def create_crawl_job(
         _keywords = str(request.keywords or "").strip()
         _cj_id = str(dispatch_result.crawl_job.id)
         _script = "/app/scripts/offertoday_standalone_crawl.py"
+        _resolved_resume_strategy = str(
+            _resolved_request_payload.get("resume_strategy") or "fresh_profile"
+        ).strip() or "fresh_profile"
         import subprocess as _sp
-        _args = ["python", _script, "--category-ids", _cat_ids, "--auth-state", OFFERTODAY_AUTH_STATE_PATH]
+        _args = [
+            "python",
+            _script,
+            "--category-ids",
+            _cat_ids,
+            "--auth-state",
+            OFFERTODAY_AUTH_STATE_PATH,
+            "--resume-strategy",
+            _resolved_resume_strategy,
+        ]
         if _keywords:
             _args.extend(["--keywords", _keywords])
         _args.extend(["--max-pages", _max_p, "--crawl-job-id", _cj_id])
         if bool(_resolved_request_payload.get("skip_existing")):
             _args.append("--skip-existing")
-        if str(request.crawl_mode or "").lower() == "headed":
+        if str(_resolved_request_payload.get("crawl_mode") or request.crawl_mode or "").lower() == "headed":
             _args.append("--headed")
         logger.info(
             "OfferToday subprocess starting id=%s args=%s",

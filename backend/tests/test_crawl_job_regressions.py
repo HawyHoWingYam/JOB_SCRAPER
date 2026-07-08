@@ -91,6 +91,45 @@ async def test_create_crawl_job_uses_resolved_max_pages_for_offertoday_subproces
     assert subprocess_calls[0][subprocess_calls[0].index("--max-pages") + 1] == "50"
 
 
+@pytest.mark.asyncio
+async def test_create_crawl_job_passes_skip_existing_to_offertoday_subprocess(monkeypatch):
+    subprocess_calls: list[list[str]] = []
+    crawl_job_id = uuid4()
+
+    class _FakeDispatchService:
+        def dispatch_manual_crawl_job(self, db, **kwargs):
+            return SimpleNamespace(
+                crawl_job=SimpleNamespace(
+                    id=crawl_job_id,
+                    request_payload={"max_pages": 50, "skip_existing": True},
+                )
+            )
+
+    def fake_popen(args, stdout=None, stderr=None):
+        subprocess_calls.append(list(args))
+        return SimpleNamespace()
+
+    monkeypatch.setattr(crawl_jobs_api, "dispatch_service", _FakeDispatchService())
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    request = CrawlJobCreateRequest(
+        source_site="offertoday",
+        crawl_phase="listing",
+        category_ids=[],
+        max_pages=None,
+        skip_existing=True,
+    )
+
+    await crawl_jobs_api.create_crawl_job(
+        request=request,
+        response=Response(),
+        db=object(),
+    )
+
+    assert subprocess_calls, "expected OfferToday subprocess to be launched"
+    assert "--skip-existing" in subprocess_calls[0]
+
+
 def test_resume_crawl_job_uses_crawl_job_source_site_for_headed_worker_check(monkeypatch):
     observed: dict[str, str | None] = {}
     crawl_job = SimpleNamespace(
@@ -144,3 +183,99 @@ def test_resume_crawl_job_uses_crawl_job_source_site_for_headed_worker_check(mon
         "crawl_mode": "headed",
         "source_site": "offertoday",
     }
+
+
+def test_resume_crawl_job_persists_selected_resume_strategy(monkeypatch):
+    crawl_job = SimpleNamespace(
+        id=uuid4(),
+        source_site="offertoday",
+        status="manual_action_required",
+        request_payload={"crawl_mode": "headed", "crawl_phase": "listing"},
+        trigger_type="manual",
+        schedule_id=None,
+        requested_by="api",
+        queued_at=None,
+        completed_at=None,
+        error_message="previous error",
+    )
+    latest_event = SimpleNamespace(
+        payload={
+            "manual_action": {
+                "resume_supported": True,
+                "resume_context": {"crawl_phase": "listing"},
+            }
+        }
+    )
+
+    monkeypatch.setattr(
+        dispatch_module,
+        "ensure_headed_crawl_worker_available",
+        lambda **kwargs: None,
+    )
+
+    service = CrawlJobDispatchService(
+        crawl_job_repository=_FakeCrawlJobRepository(
+            crawl_job=crawl_job,
+            latest_event=latest_event,
+        ),
+        event_outbox_repository=_FakeEventOutboxRepository(),
+        outbox_publisher=_FakeOutboxPublisher(),
+    )
+
+    result = service.resume_crawl_job(
+        _FakeDbSession(),
+        crawl_job_id=crawl_job.id,
+        requested_by="api",
+        strategy="reuse_open_browser",
+    )
+
+    assert result is crawl_job
+    assert crawl_job.request_payload["resume_strategy"] == "reuse_open_browser"
+
+
+@pytest.mark.asyncio
+async def test_create_crawl_job_passes_resolved_resume_strategy_to_offertoday_subprocess(monkeypatch):
+    subprocess_calls: list[list[str]] = []
+    crawl_job_id = uuid4()
+
+    class _FakeDispatchService:
+        def dispatch_manual_crawl_job(self, db, **kwargs):
+            return SimpleNamespace(
+                crawl_job=SimpleNamespace(
+                    id=crawl_job_id,
+                    request_payload={
+                        "max_pages": 50,
+                        "crawl_mode": "headed",
+                        "resume_strategy": "fresh_profile",
+                    },
+                )
+            )
+
+    def fake_popen(args, stdout=None, stderr=None):
+        subprocess_calls.append(list(args))
+        return SimpleNamespace()
+
+    monkeypatch.setattr(crawl_jobs_api, "dispatch_service", _FakeDispatchService())
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    request = CrawlJobCreateRequest(
+        source_site="offertoday",
+        crawl_phase="listing",
+        category_ids=[],
+        max_pages=None,
+        crawl_mode=None,
+    )
+
+    await crawl_jobs_api.create_crawl_job(
+        request=request,
+        response=Response(),
+        db=object(),
+    )
+
+    assert subprocess_calls, "expected OfferToday subprocess to be launched"
+    assert "--headed" in subprocess_calls[0]
+    assert "--resume-strategy" in subprocess_calls[0]
+    assert (
+        subprocess_calls[0][subprocess_calls[0].index("--resume-strategy") + 1]
+        == "fresh_profile"
+    )
