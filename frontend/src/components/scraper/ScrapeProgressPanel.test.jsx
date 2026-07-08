@@ -1056,6 +1056,53 @@ describe('ScrapeProgressPanel', () => {
     expect(onResumeCrawlJob).not.toHaveBeenCalled();
   });
 
+  it('logs reuse-status failures when the open-browser probe rejects', async () => {
+    const onGetManualActionReuseStatus = vi.fn().mockRejectedValue(new Error('reuse probe offline'));
+
+    render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        onGetManualActionReuseStatus={onGetManualActionReuseStatus}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-558': {
+            crawl_job_id: 'crawl-job-558',
+            status: 'manual_action_required',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              stage: 'category_page',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: ['Keep the manual browser open after verification clears.'],
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /resume using open browser/i }));
+
+    await waitFor(() => {
+      expect(monitoringSpies.logError).toHaveBeenCalledWith(
+        'scrape_progress.reuse_status_failed',
+        expect.objectContaining({
+          clientStreamId: 'stream-fixed',
+          crawlJobId: 'crawl-job-558',
+          detail: 'reuse probe offline',
+        }),
+      );
+    });
+  });
+
   it('shows the fresh warning path and still resumes with the fresh_profile strategy', async () => {
     const onResumeCrawlJob = vi.fn().mockResolvedValue({ status: 'dispatching' });
 
@@ -1102,6 +1149,53 @@ describe('ScrapeProgressPanel', () => {
 
     await waitFor(() => {
       expect(onResumeCrawlJob).toHaveBeenCalledWith('crawl-job-557', 'fresh_profile');
+    });
+  });
+
+  it('logs cancel failures for manual-action jobs', async () => {
+    const onCancelCrawlJob = vi.fn().mockRejectedValue(new Error('cancel offline'));
+
+    render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        onCancelCrawlJob={onCancelCrawlJob}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-559': {
+            crawl_job_id: 'crawl-job-559',
+            status: 'manual_action_required',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              stage: 'category_page',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: ['Keep the manual browser open after verification clears.'],
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /cancel/i }));
+
+    await waitFor(() => {
+      expect(monitoringSpies.logError).toHaveBeenCalledWith(
+        'scrape_progress.cancel_failed',
+        expect.objectContaining({
+          clientStreamId: 'stream-fixed',
+          crawlJobId: 'crawl-job-559',
+          detail: 'cancel offline',
+        }),
+      );
     });
   });
 
@@ -1624,6 +1718,56 @@ describe('ScrapeProgressPanel', () => {
     expect(onCloseManualActionWindows).toHaveBeenCalledWith('crawl-job-456');
 
     unmount();
+  });
+
+  it('logs close-profile-window failures for manual-action jobs', async () => {
+    const onCloseManualActionWindows = vi.fn().mockRejectedValue(new Error('window close offline'));
+
+    render(
+      <ScrapeProgressPanel
+        isVisible
+        onClose={vi.fn()}
+        onCloseManualActionWindows={onCloseManualActionWindows}
+      />
+    );
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-457': {
+            crawl_job_id: 'crawl-job-457',
+            status: 'manual_action_required',
+            category_name: 'Information Technology',
+            crawl_mode: 'headed',
+            manual_action: {
+              stage: 'browser_profile_in_use',
+              blocked_url: 'https://jobs.ctgoodjobs.hk/jobs',
+              browser_profile_path: 'C:\\profiles\\ctgoodjobs-headed',
+              browser_channel: 'msedge',
+              instructions: [
+                'Close all Edge windows that use the listed automation profile.',
+                'Return to the app and click Resume.',
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /close profile windows/i }));
+
+    await waitFor(() => {
+      expect(monitoringSpies.logError).toHaveBeenCalledWith(
+        'scrape_progress.close_profile_windows_failed',
+        expect.objectContaining({
+          clientStreamId: 'stream-fixed',
+          crawlJobId: 'crawl-job-457',
+          detail: 'window close offline',
+        }),
+      );
+    });
   });
 
 

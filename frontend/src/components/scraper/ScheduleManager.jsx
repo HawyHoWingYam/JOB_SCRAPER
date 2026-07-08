@@ -545,7 +545,9 @@ function ScheduleManager({ onNavigateToAI }) {
         try {
             setCapabilities(await fetchCapabilities());
         } catch (err) {
-            console.error('Failed to fetch runtime capabilities:', err);
+            logError('schedule_manager.runtime_capabilities_failed', {
+                detail: err instanceof Error ? err.message : err,
+            });
             setCapabilities(null);
         }
     }, []);
@@ -570,7 +572,10 @@ function ScheduleManager({ onNavigateToAI }) {
             listingBatchesCacheRef.current.set(sourceSite, nextBatches);
             setListingBatches(nextBatches);
         } catch (err) {
-            console.error('Failed to fetch listing batches:', err);
+            logError('schedule_manager.listing_batches_failed', {
+                sourceSite,
+                detail: err instanceof Error ? err.message : err,
+            });
             setListingBatches([]);
         }
     }, []);

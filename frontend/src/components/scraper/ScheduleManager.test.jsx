@@ -212,7 +212,9 @@ function createFetchMock({
   offertodayCategories = OFFERTODAY_CATEGORIES,
   ctgoodjobsCategoryErrorDetail = null,
   capabilities = null,
+  capabilitiesError = null,
   listingBatches = [],
+  listingBatchesError = null,
   scrapeProgress = { active: {}, all: {}, has_active: false },
   scrapeProgressError = null,
   crawlJobId = 'crawl-job-123',
@@ -297,10 +299,16 @@ function createFetchMock({
     }
 
     if (url === '/api/v1/capabilities') {
+      if (capabilitiesError) {
+        return Promise.reject(capabilitiesError);
+      }
       return mockJsonResponse(runtimeCapabilities);
     }
 
     if (url.startsWith('/api/v1/crawl-jobs/listing-batches')) {
+      if (listingBatchesError) {
+        return Promise.reject(listingBatchesError);
+      }
       return mockJsonResponse({ batches: listingBatches });
     }
 
@@ -529,6 +537,28 @@ describe('ScheduleManager', () => {
     expect(
       await screen.findByText('Scheduler dispatch is unavailable in the current runtime profile.'),
     ).toBeInTheDocument();
+  });
+
+  it('logs contextual monitoring details when runtime capability bootstrap fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        capabilitiesError: new Error('capabilities offline'),
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+
+    await waitFor(() => {
+      expect(monitoringSpies.logError).toHaveBeenCalledWith(
+        'schedule_manager.runtime_capabilities_failed',
+        expect.objectContaining({
+          detail: 'capabilities offline',
+        }),
+      );
+    });
   });
 
   it('disables manual and scheduled controls when runtime capabilities explicitly disable scheduler dispatch', async () => {
@@ -881,6 +911,33 @@ describe('ScheduleManager', () => {
 
     const urls = globalThis.fetch.mock.calls.map(([url]) => url);
     expect(urls.filter((url) => url === '/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20')).toHaveLength(1);
+  });
+
+  it('logs contextual monitoring details when listing batch loading fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        listingBatchesError: new Error('listing batches offline'),
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    await waitFor(() => {
+      expect(monitoringSpies.logError).toHaveBeenCalledWith(
+        'schedule_manager.listing_batches_failed',
+        expect.objectContaining({
+          sourceSite: 'jobsdb',
+          detail: 'listing batches offline',
+        }),
+      );
+    });
   });
 
   it('invalidates cached listing batches after launching a new listing crawl', async () => {

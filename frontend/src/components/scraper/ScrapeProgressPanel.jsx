@@ -274,6 +274,7 @@ function ScrapeProgressPanel({
                                     key={taskKey}
                                     taskKey={taskKey}
                                     data={data}
+                                    clientStreamId={streamClientIdRef.current}
                                     headedWorkerStatus={headedWorkerStatus}
                                     onNavigateToAI={onNavigateToAI}
                                     onResumeCrawlJob={onResumeCrawlJob}
@@ -737,6 +738,7 @@ function buildQueuedHeadedWorkerMessage(headedWorkerStatus) {
 function ProgressItem({
     taskKey,
     data,
+    clientStreamId,
     headedWorkerStatus,
     onNavigateToAI,
     onResumeCrawlJob,
@@ -1030,7 +1032,7 @@ function ProgressItem({
             } catch (resumeError) {
                 const detail = buildInlineErrorMessage(resumeError, fallbackMessage);
                 logError('scrape_progress.resume_failed', {
-                    clientStreamId: streamClientIdRef.current,
+                    clientStreamId,
                     crawlJobId: crawl_job_id,
                     strategy,
                     detail,
@@ -1068,7 +1070,11 @@ function ProgressItem({
             try {
                 await onCloseManualActionWindows?.(crawl_job_id);
             } catch (closeError) {
-                console.error('Failed to close manual action profile windows:', closeError);
+                logError('scrape_progress.close_profile_windows_failed', {
+                    clientStreamId,
+                    crawlJobId: crawl_job_id,
+                    detail: buildInlineErrorMessage(closeError, 'Failed to close profile windows'),
+                });
             }
         };
 
@@ -1106,9 +1112,17 @@ function ProgressItem({
                 );
                 setShowReuseRecoveryPrompt(true);
             } catch (reuseError) {
-                console.error('Failed to check manual action reuse status:', reuseError);
+                const detail = buildInlineErrorMessage(
+                    reuseError,
+                    'Failed to check open-browser reuse status'
+                );
+                logError('scrape_progress.reuse_status_failed', {
+                    clientStreamId,
+                    crawlJobId: crawl_job_id,
+                    detail,
+                });
                 setReuseStatusError(
-                    buildInlineErrorMessage(reuseError, 'Failed to check open-browser reuse status')
+                    detail
                 );
                 setShowReuseRecoveryPrompt(true);
             } finally {
@@ -1135,7 +1149,11 @@ function ProgressItem({
             try {
                 await onCancelCrawlJob?.(crawl_job_id);
             } catch (cancelError) {
-                console.error('Failed to cancel crawl job:', cancelError);
+                logError('scrape_progress.cancel_failed', {
+                    clientStreamId,
+                    crawlJobId: crawl_job_id,
+                    detail: buildInlineErrorMessage(cancelError, 'Failed to cancel crawl job'),
+                });
             }
         };
 
