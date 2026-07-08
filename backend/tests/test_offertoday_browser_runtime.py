@@ -13,14 +13,22 @@ from app.scraper.manual_action import (
 
 
 class _FakePage:
-    def __init__(self, *, evaluate_results: list[object] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        evaluate_results: list[object] | None = None,
+        goto_error: Exception | None = None,
+    ) -> None:
         self.url = "about:blank"
         self.goto_calls: list[str] = []
         self.evaluate_calls: list[str] = []
         self.wait_for_timeout_calls: list[int] = []
         self.evaluate_results = list(evaluate_results or [])
+        self.goto_error = goto_error
 
     async def goto(self, url: str, **kwargs) -> None:
+        if self.goto_error is not None:
+            raise self.goto_error
         self.url = url
         self.goto_calls.append(url)
 
@@ -103,13 +111,18 @@ class _FakeRegistry:
         return self.session
 
 
-def _install_fake_async_playwright(monkeypatch: pytest.MonkeyPatch, chromium: _FakeChromium) -> None:
+def _install_fake_async_playwright(
+    monkeypatch: pytest.MonkeyPatch,
+    chromium: _FakeChromium,
+) -> _FakePlaywright:
     async_api_module = types.ModuleType("playwright.async_api")
-    async_api_module.async_playwright = lambda: _FakePlaywrightManager(_FakePlaywright(chromium))
+    fake_playwright = _FakePlaywright(chromium)
+    async_api_module.async_playwright = lambda: _FakePlaywrightManager(fake_playwright)
     playwright_module = types.ModuleType("playwright")
     playwright_module.async_api = async_api_module
     monkeypatch.setitem(sys.modules, "playwright", playwright_module)
     monkeypatch.setitem(sys.modules, "playwright.async_api", async_api_module)
+    return fake_playwright
 
 
 @pytest.mark.asyncio
@@ -121,7 +134,7 @@ async def test_reuse_open_browser_requires_live_session(monkeypatch):
     context = _FakeContext(page)
     browser = _FakeBrowser(context)
     chromium = _FakeChromium(browser=browser)
-    _install_fake_async_playwright(monkeypatch, chromium)
+    fake_playwright = _install_fake_async_playwright(monkeypatch, chromium)
     monkeypatch.setattr(runtime_module, "get_live_browser_registry", lambda: _FakeRegistry(session=None))
 
     runtime = runtime_cls(
@@ -133,6 +146,38 @@ async def test_reuse_open_browser_requires_live_session(monkeypatch):
         await runtime.start()
 
     assert "Fresh Profile" in str(exc_info.value)
+    assert fake_playwright.stopped is True
+    assert runtime._playwright is None
+    assert runtime._context is None
+    assert runtime._page is None
+    assert runtime._runtime_started is False
+
+
+@pytest.mark.asyncio
+async def test_start_cleans_up_when_warmup_fails_after_fresh_profile_launch(monkeypatch):
+    runtime_module = importlib.import_module("app.scraper.offertoday_browser_runtime")
+    runtime_cls = getattr(runtime_module, "OfferTodayBrowserRuntime")
+
+    page = _FakePage(goto_error=RuntimeError("warmup failed"))
+    context = _FakeContext(page)
+    browser = _FakeBrowser(context)
+    chromium = _FakeChromium(browser=browser)
+    fake_playwright = _install_fake_async_playwright(monkeypatch, chromium)
+
+    runtime = runtime_cls(
+        user_data_dir="C:/tmp/offertoday-profile",
+        navigation_timeout_ms=45_000,
+    )
+
+    with pytest.raises(RuntimeError, match="warmup failed"):
+        await runtime.start()
+
+    assert context.closed is True
+    assert fake_playwright.stopped is True
+    assert runtime._playwright is None
+    assert runtime._context is None
+    assert runtime._page is None
+    assert runtime._runtime_started is False
 
 
 @pytest.mark.asyncio
