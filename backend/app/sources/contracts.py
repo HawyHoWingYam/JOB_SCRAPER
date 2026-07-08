@@ -1,7 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
+from datetime import datetime
 from typing import Any
+
+from app.utils.data_mapper import parse_listing_date, parse_salary_range
+from app.utils.source_identity import (
+    build_compat_company_id,
+    build_compat_job_id,
+    derive_source_company_id_from_raw_data,
+)
 
 
 def _normalize_salary_range(value: Any) -> str | None:
@@ -120,10 +129,14 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
     """
     from app.sources.offertoday.parsers import build_offertoday_job_url
 
-    encrypted_id = str(parsed_job.get("encrypted_job_id") or "").strip()
+    encrypted_id = str(
+        parsed_job.get("encrypted_job_id")
+        or parsed_job.get("jobId")
+        or ""
+    ).strip()
 
     # Extract classification from job_functions (available in listing + detail)
-    job_functions = parsed_job.get("job_functions") or []
+    job_functions = parsed_job.get("job_functions") or parsed_job.get("jobFunctions") or []
     source_classification_id = None
     source_classification_name = None
     source_subclassification_id = None
@@ -143,23 +156,125 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
         source_site="offertoday",
         source_job_id=encrypted_id,
         source_url=build_offertoday_job_url(encrypted_id),
-        title=parsed_job.get("title") or "",
+        title=parsed_job.get("title") or parsed_job.get("jobName") or "",
         description=(
             parsed_job.get("description_html")
             or parsed_job.get("description_text")
+            or parsed_job.get("jobDesc")
             or parsed_job.get("abstract")
         ),
-        company_name=parsed_job.get("company_name"),
-        location=parsed_job.get("location") or parsed_job.get("level3_location"),
-        salary_range=parsed_job.get("salary_range"),
-        employment_type=parsed_job.get("employment_type") or parsed_job.get("employ_type"),
+        company_name=(
+            parsed_job.get("company_name")
+            or parsed_job.get("companyName")
+            or parsed_job.get("brandName")
+        ),
+        location=(
+            parsed_job.get("location")
+            or parsed_job.get("locationDesc")
+            or parsed_job.get("level3_location")
+        ),
+        salary_range=parsed_job.get("salary_range") or parsed_job.get("salaryDesc"),
+        employment_type=(
+            parsed_job.get("employment_type")
+            or parsed_job.get("jobTypeDesc")
+            or parsed_job.get("employ_type")
+        ),
         source_classification_id=source_classification_id or None,
         source_classification_name=source_classification_name or None,
         source_subclassification_id=source_subclassification_id or None,
         source_subclassification_name=source_subclassification_name or None,
-        posted_date=parsed_job.get("posted_desc") or parsed_job.get("posted_at"),
+        posted_date=(
+            parsed_job.get("posted_desc")
+            or parsed_job.get("postDateDesc")
+            or parsed_job.get("posted_at")
+        ),
         raw_data=dict(parsed_job),
     )
+
+
+def build_offertoday_company_data(
+    canonical_job: CanonicalScrapedJob,
+) -> dict[str, Any]:
+    source_company_id = derive_source_company_id_from_raw_data(
+        canonical_job.source_site,
+        canonical_job.raw_data,
+    )
+    company_name = str(canonical_job.company_name or "").strip()
+    if not source_company_id:
+        source_company_id = _derive_fallback_source_company_id(
+            source_site=canonical_job.source_site,
+            company_name=company_name,
+        )
+
+    return {
+        "source_site": canonical_job.source_site,
+        "source_company_id": source_company_id,
+        "company_id": build_compat_company_id(canonical_job.source_site, source_company_id),
+        "name": company_name,
+        "industry": canonical_job.raw_data.get("company_industry"),
+        "location": canonical_job.location,
+        "extra_data": {
+            "source_url": canonical_job.source_url,
+            "raw_data": canonical_job.raw_data,
+            "source_identity": "fallback_company_name"
+            if str(source_company_id).startswith("fallback:name:")
+            else "source_company_id",
+        },
+    }
+
+
+def build_offertoday_job_data(
+    canonical_job: CanonicalScrapedJob,
+    company_id: Any,
+) -> dict[str, Any]:
+    salary_range = _normalize_salary_range(canonical_job.salary_range)
+    salary_min, salary_max, salary_currency = parse_salary_range(
+        salary_range if isinstance(salary_range, str) else None
+    )
+    posted_date = _parse_optional_datetime(canonical_job.posted_date)
+
+    return {
+        "job_id": build_compat_job_id(canonical_job.source_site, canonical_job.source_job_id),
+        "source_site": canonical_job.source_site,
+        "source_job_id": canonical_job.source_job_id,
+        "company_id": company_id,
+        "title": canonical_job.title,
+        "description": canonical_job.description,
+        "salary_range": salary_range,
+        "salary_min": salary_min,
+        "salary_max": salary_max,
+        "salary_currency": salary_currency,
+        "location": canonical_job.location,
+        "employment_type": canonical_job.employment_type,
+        "source_classification_id": canonical_job.source_classification_id,
+        "source_classification_name": canonical_job.source_classification_name,
+        "source_subclassification_id": canonical_job.source_subclassification_id,
+        "source_subclassification_name": canonical_job.source_subclassification_name,
+        "posted_date": posted_date,
+        "raw_data": canonical_job.raw_data,
+    }
+
+
+def _derive_fallback_source_company_id(*, source_site: str, company_name: str) -> str:
+    normalized_company_name = " ".join(str(company_name or "").strip().lower().split())
+    digest = hashlib.sha1(f"{source_site}:{normalized_company_name}".encode("utf-8")).hexdigest()[:16]
+    return f"fallback:name:{digest}"
+
+
+def _parse_optional_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        parsed = parse_listing_date(value)
+        if parsed is not None:
+            return parsed
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
 
 
 def build_ctgoodjobs_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrapedJob:

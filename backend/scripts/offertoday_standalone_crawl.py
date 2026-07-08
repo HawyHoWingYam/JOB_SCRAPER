@@ -277,14 +277,21 @@ async def main() -> None:
     from app.database import SessionLocal
     from app.models.crawl_job import CrawlJob, CrawlJobEvent
     from app.models.crawl_job_listing import CrawlJobListing
-    from app.models.company import Company
     from app.models.job import Job
-    from app.sources.contracts import build_offertoday_canonical_job
+    from app.repositories.company_repository import CompanyRepository
+    from app.repositories.job_repository import JobRepository
+    from app.sources.contracts import (
+        build_offertoday_canonical_job,
+        build_offertoday_company_data,
+        build_offertoday_job_data,
+    )
     from playwright.async_api import async_playwright
 
     db = SessionLocal()
     detail_ok = 0
     detail_fail = 0
+    company_repository = CompanyRepository()
+    job_repository = JobRepository()
 
     if args.crawl_job_id:
         cj_id = args.crawl_job_id
@@ -314,19 +321,6 @@ async def main() -> None:
             logger.info("Crawl job %s: running", cj_id)
     else:
         cj_id = str(uuid.uuid4())
-
-    company = db.query(Company).filter(Company.source_site == "offertoday").first()
-    if not company:
-        company = Company(
-            id=uuid.uuid4(),
-            company_id="offertoday-default",
-            source_site="offertoday",
-            source_company_id="offertoday",
-            name="OfferToday",
-        )
-        db.add(company)
-        db.flush()
-    company_id = company.id
 
     seen_ids: set[str] = set()
     listing_count = 0
@@ -641,32 +635,34 @@ async def main() -> None:
                 merged = {**(listing.listing_payload or {}), **(listing.detail_payload or {})}
                 try:
                     canonical = build_offertoday_canonical_job(merged)
-                    exists = (
-                        db.query(Job)
-                        .filter(Job.source_site == "offertoday", Job.source_job_id == jid)
-                        .first()
+                    company_data = build_offertoday_company_data(canonical)
+                    company, _company_action = company_repository.upsert_company(
+                        db,
+                        company_data,
+                        auto_commit=False,
                     )
-                    if not exists:
-                        db.add(
-                            Job(
-                                id=uuid.uuid4(),
-                                job_id=jid,
-                                source_site="offertoday",
-                                source_job_id=jid,
-                                company_id=company_id,
-                                title=canonical.title or "",
-                                description=canonical.description or "",
-                                location=canonical.location or "",
-                                salary_range=canonical.salary_range or "",
-                                employment_type=canonical.employment_type or "",
-                                raw_data=canonical.raw_data,
-                                created_at=datetime.utcnow(),
-                                updated_at=datetime.utcnow(),
-                                is_deleted=False,
-                            )
-                        )
+                    existing_job = job_repository.get_job_by_source_key(
+                        db,
+                        source_site="offertoday",
+                        source_job_id=jid,
+                    )
+                    job_data = build_offertoday_job_data(canonical, company.id)
+                    if existing_job is not None:
+                        if not job_data.get("description") and existing_job.description:
+                            job_data["description"] = existing_job.description
+                        if not job_data.get("posted_date") and existing_job.posted_date:
+                            job_data["posted_date"] = existing_job.posted_date
+
+                    saved_job, _job_action = job_repository.upsert_source_job(
+                        db,
+                        job_data,
+                        skip_existing=False,
+                        auto_commit=False,
+                    )
+                    if listing.published_job_id != saved_job.id:
+                        listing.published_job_id = saved_job.id
                 except Exception:
-                    pass
+                    logger.exception("Failed to persist OfferToday job source_job_id=%s", jid)
 
                 if (idx + 1) % 10 == 0:
                     if args.crawl_job_id:

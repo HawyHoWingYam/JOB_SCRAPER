@@ -46,13 +46,37 @@ def derive_source_company_id_from_raw_data(source_site: Any, raw_data: Any) -> s
         return None
 
     normalized_source = normalize_source_site(source_site)
-    if normalized_source == "ctgoodjobs":
-        value = raw_data.get("company_id")
-    else:
-        value = raw_data.get("advertiser_id") or raw_data.get("company_id")
 
-    if value is None:
-        return None
+    for candidate in _iter_source_identity_payloads(raw_data):
+        value = _derive_source_company_id_from_payload(normalized_source, candidate)
+        if value is None:
+            continue
+        normalized_value = str(value).strip()
+        if normalized_value:
+            return normalized_value
 
-    normalized_value = str(value).strip()
-    return normalized_value or None
+    return None
+
+
+def _iter_source_identity_payloads(raw_data: dict[str, Any]):
+    yield raw_data
+
+    nested_raw = raw_data.get("raw_data")
+    if isinstance(nested_raw, dict):
+        yield nested_raw
+
+
+def _derive_source_company_id_from_payload(source_site: str, raw_data: dict[str, Any]) -> Any:
+    if source_site == "ctgoodjobs":
+        return raw_data.get("company_id")
+
+    if source_site == "offertoday":
+        return (
+            raw_data.get("brandId")
+            or raw_data.get("encryptBrandId")
+            or raw_data.get("brand_id")
+            or raw_data.get("companyId")
+            or raw_data.get("company_id")
+        )
+
+    return raw_data.get("advertiser_id") or raw_data.get("company_id")
