@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from starlette.requests import Request
+from starlette.responses import StreamingResponse
 
 from app.api import progress as progress_api
 from app.api.progress import _build_progress_snapshot
@@ -88,4 +90,80 @@ async def test_progress_event_generator_logs_open_idle_and_close_once(monkeypatc
     assert "PROGRESS_STREAM_OPEN request_id=req-1 client_stream_id=stream-1" in caplog.text
     assert "PROGRESS_STREAM_IDLE request_id=req-1 client_stream_id=stream-1" in caplog.text
     assert "PROGRESS_STREAM_CLOSE request_id=req-1 client_stream_id=stream-1 reason=idle" in caplog.text
+    assert caplog.text.count("PROGRESS_STREAM_CLOSE") == 1
     assert caplog.text.count("PROGRESS_STREAM_STATE") == 2
+
+
+@pytest.mark.asyncio
+async def test_progress_event_generator_logs_close_once_on_early_generator_close(monkeypatch, caplog):
+    monkeypatch.setattr(
+        progress_api,
+        "_collect_progress_payload",
+        lambda: {
+            "active": {"job-1": {}},
+            "all": {"job-1": {}},
+            "backlog": {},
+            "has_active": True,
+            "has_backlog": False,
+        },
+    )
+
+    generator = progress_api._progress_event_generator(
+        request_id="req-2",
+        client_stream_id="stream-2",
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.api.progress"):
+        chunk = await generator.__anext__()
+        await generator.aclose()
+
+    assert chunk == 'data: {"active": {"job-1": {}}, "all": {"job-1": {}}, "backlog": {}, "has_active": true, "has_backlog": false}\n\n'
+    assert "PROGRESS_STREAM_OPEN request_id=req-2 client_stream_id=stream-2" in caplog.text
+    assert "PROGRESS_STREAM_CLOSE request_id=req-2 client_stream_id=stream-2 reason=client_disconnect" in caplog.text
+    assert caplog.text.count("PROGRESS_STREAM_CLOSE") == 1
+    assert "PROGRESS_STREAM_IDLE" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stream_progress_forwards_request_and_client_stream_ids(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_progress_event_generator(*, request_id, client_stream_id, max_idle=30):
+        captured["request_id"] = request_id
+        captured["client_stream_id"] = client_stream_id
+        captured["max_idle"] = max_idle
+
+        async def iterator():
+            yield 'data: {"ok": true}\n\n'
+
+        return iterator()
+
+    monkeypatch.setattr(progress_api, "_progress_event_generator", fake_progress_event_generator)
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/scrape/progress/stream",
+            "headers": [],
+            "query_string": b"",
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "root_path": "",
+            "http_version": "1.1",
+            "state": {"request_id": "req-3"},
+        }
+    )
+
+    response = await progress_api.stream_progress(
+        request=request,
+        client_stream_id="stream-3",
+    )
+
+    assert isinstance(response, StreamingResponse)
+    assert captured == {
+        "request_id": "req-3",
+        "client_stream_id": "stream-3",
+        "max_idle": 30,
+    }

@@ -711,49 +711,67 @@ async def _progress_event_generator(
 ):
     idle_count = 0
     previous_summary: dict[str, int | bool] | None = None
+    latest_summary: dict[str, int | bool] | None = None
+    close_logged = False
+    close_reason = "client_disconnect"
     _log_progress_stream_event(
         "PROGRESS_STREAM_OPEN",
         request_id=request_id,
         client_stream_id=client_stream_id,
     )
 
-    while True:
-        event_data = _collect_progress_payload()
-        summary = _build_progress_stream_summary(event_data)
-        if summary != previous_summary:
+    try:
+        while True:
+            event_data = _collect_progress_payload()
+            summary = _build_progress_stream_summary(event_data)
+            latest_summary = summary
+            if summary != previous_summary:
+                _log_progress_stream_event(
+                    "PROGRESS_STREAM_STATE",
+                    request_id=request_id,
+                    client_stream_id=client_stream_id,
+                    summary=summary,
+                )
+                previous_summary = summary
+
+            yield f"data: {json.dumps(event_data)}\n\n"
+
+            if not event_data["has_active"]:
+                idle_count += 1
+                if idle_count == 1:
+                    _log_progress_stream_event(
+                        "PROGRESS_STREAM_IDLE",
+                        request_id=request_id,
+                        client_stream_id=client_stream_id,
+                        summary=summary,
+                    )
+                if idle_count >= max_idle:
+                    _log_progress_stream_event(
+                        "PROGRESS_STREAM_CLOSE",
+                        request_id=request_id,
+                        client_stream_id=client_stream_id,
+                        summary=summary,
+                        reason="idle",
+                    )
+                    close_logged = True
+                    yield f"data: {json.dumps({'closed': True, 'reason': 'idle'})}\n\n"
+                    break
+            else:
+                idle_count = 0
+
+            await asyncio.sleep(1)
+    except Exception:
+        close_reason = "error"
+        raise
+    finally:
+        if not close_logged:
             _log_progress_stream_event(
-                "PROGRESS_STREAM_STATE",
+                "PROGRESS_STREAM_CLOSE",
                 request_id=request_id,
                 client_stream_id=client_stream_id,
-                summary=summary,
+                summary=latest_summary,
+                reason=close_reason,
             )
-            previous_summary = summary
-
-        yield f"data: {json.dumps(event_data)}\n\n"
-
-        if not event_data["has_active"]:
-            idle_count += 1
-            if idle_count == 1:
-                _log_progress_stream_event(
-                    "PROGRESS_STREAM_IDLE",
-                    request_id=request_id,
-                    client_stream_id=client_stream_id,
-                    summary=summary,
-                )
-            if idle_count >= max_idle:
-                _log_progress_stream_event(
-                    "PROGRESS_STREAM_CLOSE",
-                    request_id=request_id,
-                    client_stream_id=client_stream_id,
-                    summary=summary,
-                    reason="idle",
-                )
-                yield f"data: {json.dumps({'closed': True, 'reason': 'idle'})}\n\n"
-                break
-        else:
-            idle_count = 0
-
-        await asyncio.sleep(1)
 
 
 @router.get("/progress/stream")

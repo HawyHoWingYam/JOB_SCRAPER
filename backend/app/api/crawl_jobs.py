@@ -147,16 +147,26 @@ async def create_crawl_job(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
             ) from exc
+        resolved_request_payload = dict(getattr(dispatch_result.crawl_job, "request_payload", {}) or {})
         response.headers["X-Crawl-Job-Id"] = str(dispatch_result.crawl_job.id)
         logger.info(
             _build_crawl_request_created_log_message(
                 request_id=request_id,
                 source_site=effective_source_site,
                 crawl_job_id=str(dispatch_result.crawl_job.id),
-                crawl_phase=resolve_crawl_phase(getattr(schedule, "crawl_phase", None)),
-                crawl_mode=getattr(schedule, "crawl_mode", None) or "default",
-                max_pages=getattr(schedule, "max_pages", None) or resolve_default_max_pages(effective_source_site),
-                category_count=len(getattr(schedule, "category_ids", None) or []),
+                crawl_phase=resolve_crawl_phase(resolved_request_payload.get("crawl_phase")),
+                crawl_mode=resolved_request_payload.get("crawl_mode") or "default",
+                max_pages=resolved_request_payload.get("max_pages")
+                if resolved_request_payload.get("max_pages") is not None
+                else resolve_default_max_pages(effective_source_site),
+                category_count=len(
+                    resolved_request_payload.get("category_ids")
+                    or getattr(schedule, "category_ids", None)
+                    or []
+                ),
+                source_listing_crawl_job_id=str(
+                    resolved_request_payload.get("source_listing_crawl_job_id") or ""
+                ) or None,
                 trigger="schedule",
                 schedule_id=str(schedule.id),
             )
