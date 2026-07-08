@@ -143,6 +143,14 @@ function mockJsonResponse(payload) {
   });
 }
 
+function mockErrorResponse(detail, status = 500) {
+  return Promise.resolve({
+    ok: false,
+    status,
+    json: async () => ({ detail }),
+  });
+}
+
 async function waitForSourceCatalogOptions() {
   await waitFor(() => {
     expect(screen.getByRole('option', { name: SOURCE_CATALOG.jobsdb.label })).toBeInTheDocument();
@@ -248,6 +256,13 @@ function createFetchMock({
   listingBatchesError = null,
   scrapeProgress = { active: {}, all: {}, has_active: false },
   scrapeProgressError = null,
+  schedulesErrorDetail = null,
+  createScheduleErrorDetail = null,
+  toggleScheduleErrorDetail = null,
+  deleteScheduleErrorDetail = null,
+  runScheduleErrorDetail = null,
+  scheduleHistoryErrorDetail = null,
+  directOverrideErrorDetail = null,
   crawlJobId = 'crawl-job-123',
   scheduleHistories = {
     'jobsdb-nightly': {
@@ -344,14 +359,23 @@ function createFetchMock({
     }
 
     if (url === '/api/v1/crawl-jobs' && init?.method === 'POST') {
+      if (directOverrideErrorDetail) {
+        return mockErrorResponse(directOverrideErrorDetail);
+      }
       return mockJsonResponse({ id: crawlJobId, status: 'queued' });
     }
 
     if (/^\/api\/v1\/schedules\/[^/]+\/run$/.test(url) && init?.method === 'POST') {
+      if (runScheduleErrorDetail) {
+        return mockErrorResponse(runScheduleErrorDetail);
+      }
       return mockJsonResponse({ id: crawlJobId, status: 'queued' });
     }
 
     if (/^\/api\/v1\/schedules\/[^/]+\/history$/.test(url)) {
+      if (scheduleHistoryErrorDetail) {
+        return mockErrorResponse(scheduleHistoryErrorDetail);
+      }
       const scheduleId = url.split('/')[4];
       return mockJsonResponse(scheduleHistories[scheduleId] || { executions: [] });
     }
@@ -365,10 +389,16 @@ function createFetchMock({
     }
 
     if (/^\/api\/v1\/schedules\/[^/]+\/toggle$/.test(url) && init?.method === 'POST') {
+      if (toggleScheduleErrorDetail) {
+        return mockErrorResponse(toggleScheduleErrorDetail);
+      }
       return mockJsonResponse(toggledSchedule);
     }
 
     if (/^\/api\/v1\/schedules\/[^/]+$/.test(url) && init?.method === 'DELETE') {
+      if (deleteScheduleErrorDetail) {
+        return mockErrorResponse(deleteScheduleErrorDetail);
+      }
       return mockJsonResponse({ message: 'Schedule deleted' });
     }
 
@@ -389,10 +419,16 @@ function createFetchMock({
     }
 
     if (url === '/api/v1/schedules' && init?.method === 'POST') {
+      if (createScheduleErrorDetail) {
+        return mockErrorResponse(createScheduleErrorDetail);
+      }
       return mockJsonResponse(createdSchedule);
     }
 
     if (url === '/api/v1/schedules') {
+      if (schedulesErrorDetail) {
+        return mockErrorResponse(schedulesErrorDetail);
+      }
       return mockJsonResponse({ schedules });
     }
 
@@ -650,9 +686,9 @@ describe('ScheduleManager', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /run now/i })[0]);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/schedules/jobsdb-nightly/run', {
-        method: 'POST',
-      });
+      const runCall = getFetchCallsForUrl('/api/v1/schedules/jobsdb-nightly/run')[0];
+      expect(runCall?.[1]?.method).toBe('POST');
+      expect(getHeaderValue(runCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
     });
   });
 
@@ -1356,6 +1392,181 @@ describe('ScheduleManager', () => {
     expect(screen.getByText(/the run was likely interrupted by a restart or connection loss/i)).toBeInTheDocument();
   });
 
+  it('adds X-Request-ID headers to the remaining schedule control-plane fetches', async () => {
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    const scheduleCard = (await screen.findByText('JobsDB Nightly')).closest('.schedule-card');
+    expect(scheduleCard).not.toBeNull();
+
+    await waitFor(() => {
+      const bootstrapCall = getFetchCallsForUrl('/api/v1/schedules').find(
+        ([, request]) => !request?.method,
+      );
+      expect(getHeaderValue(bootstrapCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /new automation/i }));
+    fireEvent.click(screen.getByRole('button', { name: /submit schedule stub/i }));
+
+    await waitFor(() => {
+      const createCall = getFetchCallsForUrl('/api/v1/schedules').find(
+        ([, request]) => request?.method === 'POST',
+      );
+      expect(getHeaderValue(createCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+    });
+
+    fireEvent.click(within(scheduleCard).getByRole('checkbox'));
+
+    await waitFor(() => {
+      const toggleCall = getFetchCallsForUrl('/api/v1/schedules/jobsdb-nightly/toggle')[0];
+      expect(getHeaderValue(toggleCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+    });
+
+    fireEvent.click(within(scheduleCard).getAllByRole('button', { name: /logs/i })[0]);
+
+    await waitFor(() => {
+      const historyCall = getFetchCallsForUrl('/api/v1/schedules/jobsdb-nightly/history')[0];
+      expect(getHeaderValue(historyCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+    });
+
+    fireEvent.click(within(scheduleCard).getAllByRole('button', { name: /run now/i })[0]);
+
+    await waitFor(() => {
+      const runCall = getFetchCallsForUrl('/api/v1/schedules/jobsdb-nightly/run')[0];
+      expect(getHeaderValue(runCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /engineering/i }));
+    fireEvent.click(screen.getByRole('button', { name: /start job id crawl/i }));
+
+    await waitFor(() => {
+      const directOverrideCall = getFetchCallsForUrl('/api/v1/crawl-jobs')[0];
+      expect(getHeaderValue(directOverrideCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+    });
+
+    fireEvent.click(within(scheduleCard).getAllByRole('button')[2]);
+
+    await waitFor(() => {
+      const deleteCall = getFetchCallsForUrl('/api/v1/schedules/jobsdb-nightly')[0];
+      expect(getHeaderValue(deleteCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
+    });
+  });
+
+  it.each([
+    {
+      name: 'schedule bootstrap',
+      fetchMock: () => createFetchMock({ schedulesErrorDetail: 'Schedule bootstrap unavailable' }),
+      trigger: async () => {
+        render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+        expect(await screen.findByText('Schedule bootstrap unavailable')).toBeInTheDocument();
+      },
+      event: 'schedule_manager.schedules_bootstrap_failed',
+      detail: 'Schedule bootstrap unavailable',
+      fields: {},
+    },
+    {
+      name: 'schedule creation',
+      fetchMock: () => createFetchMock({ createScheduleErrorDetail: 'Schedule creation failed' }),
+      trigger: async () => {
+        render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+        await screen.findByText('JobsDB Nightly');
+        fireEvent.click(screen.getByRole('button', { name: /new automation/i }));
+        fireEvent.click(screen.getByRole('button', { name: /submit schedule stub/i }));
+        expect(await screen.findByText('Schedule creation failed')).toBeInTheDocument();
+      },
+      event: 'schedule_manager.schedule_create_failed',
+      detail: 'Schedule creation failed',
+      fields: {
+        sourceSite: 'jobsdb',
+        scheduleName: 'jobsdb automation',
+      },
+    },
+    {
+      name: 'schedule toggle',
+      fetchMock: () => createFetchMock({ toggleScheduleErrorDetail: 'Schedule toggle failed' }),
+      trigger: async () => {
+        render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+        const scheduleCard = (await screen.findByText('JobsDB Nightly')).closest('.schedule-card');
+        fireEvent.click(within(scheduleCard).getByRole('checkbox'));
+        expect(await screen.findByText('Schedule toggle failed')).toBeInTheDocument();
+      },
+      event: 'schedule_manager.schedule_toggle_failed',
+      detail: 'Schedule toggle failed',
+      fields: { scheduleId: 'jobsdb-nightly' },
+    },
+    {
+      name: 'schedule deletion',
+      fetchMock: () => createFetchMock({ deleteScheduleErrorDetail: 'Schedule delete failed' }),
+      trigger: async () => {
+        render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+        const scheduleCard = (await screen.findByText('JobsDB Nightly')).closest('.schedule-card');
+        fireEvent.click(within(scheduleCard).getAllByRole('button')[2]);
+        expect(await screen.findByText('Schedule delete failed')).toBeInTheDocument();
+      },
+      event: 'schedule_manager.schedule_delete_failed',
+      detail: 'Schedule delete failed',
+      fields: { scheduleId: 'jobsdb-nightly' },
+    },
+    {
+      name: 'schedule manual run',
+      fetchMock: () => createFetchMock({ runScheduleErrorDetail: 'Schedule run failed' }),
+      trigger: async () => {
+        render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+        await screen.findByText('JobsDB Nightly');
+        fireEvent.click(screen.getAllByRole('button', { name: /run now/i })[0]);
+        expect(await screen.findByText('Schedule run failed')).toBeInTheDocument();
+      },
+      event: 'schedule_manager.schedule_run_failed',
+      detail: 'Schedule run failed',
+      fields: { scheduleId: 'jobsdb-nightly' },
+    },
+    {
+      name: 'schedule history bootstrap',
+      fetchMock: () => createFetchMock({ scheduleHistoryErrorDetail: 'Schedule history failed' }),
+      trigger: async () => {
+        render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+        await screen.findByText('JobsDB Nightly');
+        fireEvent.click(screen.getAllByRole('button', { name: /logs/i })[0]);
+        expect(await screen.findByText('Schedule history failed')).toBeInTheDocument();
+      },
+      event: 'schedule_manager.schedule_history_failed',
+      detail: 'Schedule history failed',
+      fields: { scheduleId: 'jobsdb-nightly' },
+    },
+    {
+      name: 'direct override crawl creation',
+      fetchMock: () => createFetchMock({ directOverrideErrorDetail: 'Direct override failed' }),
+      trigger: async () => {
+        render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+        await screen.findByText('Task Control Board');
+        fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+        fireEvent.click(screen.getByRole('checkbox', { name: /engineering/i }));
+        fireEvent.click(screen.getByRole('button', { name: /start job id crawl/i }));
+        expect(await screen.findByText('Direct override failed')).toBeInTheDocument();
+      },
+      event: 'schedule_manager.direct_override_create_failed',
+      detail: 'Direct override failed',
+      fields: {
+        sourceSite: 'jobsdb',
+        crawlPhase: 'listing',
+      },
+    },
+  ])('logs contextual monitoring details when the $name flow fails', async ({ fetchMock, trigger, event, detail, fields }) => {
+    vi.stubGlobal('fetch', fetchMock());
+
+    await trigger();
+
+    expect(monitoringSpies.logError).toHaveBeenCalledWith(
+      event,
+      expect.objectContaining({
+        requestId: 'req-fixed',
+        detail,
+        ...fields,
+      }),
+    );
+  });
+
   it('includes source_site when creating schedules', async () => {
     render(<ScheduleManager onNavigateToAI={vi.fn()} />);
 
@@ -1462,9 +1673,9 @@ describe('ScheduleManager', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /run now/i })[0]);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/schedules/jobsdb-nightly/run', {
-        method: 'POST',
-      });
+      const runCall = getFetchCallsForUrl('/api/v1/schedules/jobsdb-nightly/run')[0];
+      expect(runCall?.[1]?.method).toBe('POST');
+      expect(getHeaderValue(runCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
     });
 
     const urls = globalThis.fetch.mock.calls.map(([url]) => url);
@@ -1507,9 +1718,9 @@ describe('ScheduleManager', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: /run now/i })[0]);
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/schedules/jobsdb-nightly/run', {
-        method: 'POST',
-      });
+      const runCall = getFetchCallsForUrl('/api/v1/schedules/jobsdb-nightly/run')[0];
+      expect(runCall?.[1]?.method).toBe('POST');
+      expect(getHeaderValue(runCall?.[1]?.headers, 'X-Request-ID')).toBe('req-fixed');
     });
 
     fireEvent.click(screen.getAllByRole('button', { name: /logs/i })[0]);

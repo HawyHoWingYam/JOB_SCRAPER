@@ -76,38 +76,6 @@ function isFreshDirectOverrideRunMarker(marker) {
     return Date.now() - startedAtMs <= DIRECT_OVERRIDE_RECOVERY_WINDOW_MS;
 }
 
-function formatApiErrorDetail(detail, fallback = 'Start failed') {
-    if (typeof detail === 'string' && detail.trim()) {
-        return detail;
-    }
-
-    if (Array.isArray(detail) && detail.length > 0) {
-        return detail
-            .map((item) => {
-                if (typeof item === 'string') {
-                    return item;
-                }
-
-                if (item && typeof item === 'object') {
-                    const path = Array.isArray(item.loc) ? item.loc.slice(1).join('.') : '';
-                    const message = typeof item.msg === 'string' ? item.msg : '';
-                    if (path && message) {
-                        return `${path}: ${message}`;
-                    }
-                    if (message) {
-                        return message;
-                    }
-                }
-
-                return null;
-            })
-            .filter(Boolean)
-            .join('; ') || fallback;
-    }
-
-    return fallback;
-}
-
 function attachRequestId(error, requestId, fallbackMessage = 'Request failed') {
     const resolvedError = error instanceof Error
         ? error
@@ -118,6 +86,33 @@ function attachRequestId(error, requestId, fallbackMessage = 'Request failed') {
     }
 
     return resolvedError;
+}
+
+async function apiFetchJsonWithMonitoring(url, {
+    failureEvent,
+    failureContext = null,
+    fallbackMessage = 'Request failed',
+    requestId = createMonitoringId('req'),
+    ...options
+} = {}) {
+    try {
+        return await apiFetchJson(url, {
+            ...options,
+            requestId,
+        });
+    } catch (err) {
+        const detail = err instanceof Error && err.message
+            ? err.message
+            : fallbackMessage;
+
+        logError(failureEvent, {
+            ...(failureContext || {}),
+            requestId,
+            detail,
+        });
+
+        throw attachRequestId(err, requestId, fallbackMessage);
+    }
 }
 
 function normalizeCategoryIdsForSource(sourceSite, categoryIds) {
@@ -518,9 +513,10 @@ function ScheduleManager({ onNavigateToAI }) {
     // Fetch schedules
     const fetchSchedules = useCallback(async () => {
         try {
-            const response = await fetch(`${API_BASE}/schedules`);
-            if (!response.ok) throw new Error('Failed to load schedules');
-            const data = await response.json();
+            const data = await apiFetchJsonWithMonitoring(`${API_BASE}/schedules`, {
+                failureEvent: 'schedule_manager.schedules_bootstrap_failed',
+                fallbackMessage: 'Failed to load schedules',
+            });
             setSchedules(data.schedules || []);
         } catch (err) {
             setError(err.message);
@@ -818,16 +814,17 @@ function ScheduleManager({ onNavigateToAI }) {
             category_ids: normalizeCategoryIdsForSource(currentSourceSite, formData.category_ids),
         };
         try {
-            const response = await fetch(`${API_BASE}/schedules`, {
+            const createdSchedule = await apiFetchJsonWithMonitoring(`${API_BASE}/schedules`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                failureEvent: 'schedule_manager.schedule_create_failed',
+                failureContext: {
+                    sourceSite: currentSourceSite,
+                    scheduleName: payload.name,
+                },
+                fallbackMessage: 'Failed to create schedule',
             });
-            if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.detail || 'Failed to create schedule');
-            }
-            const createdSchedule = await response.json();
             setSchedules((prev) => [createdSchedule, ...prev]);
             setShowForm(false);
             setCreateFormHasSourceSelections(false);
@@ -846,11 +843,14 @@ function ScheduleManager({ onNavigateToAI }) {
         }
         setIsLoading(true);
         try {
-            const response = await fetch(`${API_BASE}/schedules/${id}/toggle`, {
-                method: 'POST'
+            const updatedSchedule = await apiFetchJsonWithMonitoring(`${API_BASE}/schedules/${id}/toggle`, {
+                method: 'POST',
+                failureEvent: 'schedule_manager.schedule_toggle_failed',
+                failureContext: {
+                    scheduleId: id,
+                },
+                fallbackMessage: 'Failed to toggle schedule',
             });
-            if (!response.ok) throw new Error('Failed to toggle schedule');
-            const updatedSchedule = await response.json();
             setSchedules((prev) =>
                 prev.map((schedule) =>
                     schedule.id === id
@@ -874,10 +874,14 @@ function ScheduleManager({ onNavigateToAI }) {
         if (!window.confirm('Delete this schedule?')) return;
         setIsLoading(true);
         try {
-            const response = await fetch(`${API_BASE}/schedules/${id}`, {
-                method: 'DELETE'
+            await apiFetchJsonWithMonitoring(`${API_BASE}/schedules/${id}`, {
+                method: 'DELETE',
+                failureEvent: 'schedule_manager.schedule_delete_failed',
+                failureContext: {
+                    scheduleId: id,
+                },
+                fallbackMessage: 'Failed to delete schedule',
             });
-            if (!response.ok) throw new Error('Failed to delete schedule');
             scheduleHistoryCacheRef.current.delete(id);
             setSchedules((prev) => prev.filter((schedule) => schedule.id !== id));
         } catch (err) {
@@ -895,19 +899,14 @@ function ScheduleManager({ onNavigateToAI }) {
         }
         setIsLoading(true);
         try {
-            const response = await fetch(`${API_BASE}/schedules/${id}/run`, {
-                method: 'POST'
+            await apiFetchJsonWithMonitoring(`${API_BASE}/schedules/${id}/run`, {
+                method: 'POST',
+                failureEvent: 'schedule_manager.schedule_run_failed',
+                failureContext: {
+                    scheduleId: id,
+                },
+                fallbackMessage: 'Failed to run schedule',
             });
-            if (!response.ok) {
-                let detail = 'Failed to run schedule';
-                try {
-                    const payload = await response.json();
-                    detail = formatApiErrorDetail(payload.detail, detail);
-                } catch {
-                    // Fall back to the default message when no JSON error is available.
-                }
-                throw new Error(detail);
-            }
             scheduleHistoryCacheRef.current.delete(id);
         } catch (err) {
             setError(err.message);
@@ -925,9 +924,13 @@ function ScheduleManager({ onNavigateToAI }) {
                 return;
             }
 
-            const response = await fetch(`${API_BASE}/schedules/${id}/history`);
-            if (!response.ok) throw new Error('Failed to load execution history');
-            const data = await response.json();
+            const data = await apiFetchJsonWithMonitoring(`${API_BASE}/schedules/${id}/history`, {
+                failureEvent: 'schedule_manager.schedule_history_failed',
+                failureContext: {
+                    scheduleId: id,
+                },
+                fallbackMessage: 'Failed to load execution history',
+            });
             const schedule = schedules.find(s => s.id === id);
             const historyPayload = {
                 executions: data.executions || [],
@@ -956,18 +959,19 @@ function ScheduleManager({ onNavigateToAI }) {
         setProgressRecoveryNotice(null);
         setScrapeStatus('Queueing crawl job...');
         try {
-            const response = await fetch(`${API_BASE}/crawl-jobs`, {
+            const payload = await apiFetchJsonWithMonitoring(`${API_BASE}/crawl-jobs`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(request.payload)
+                body: JSON.stringify(request.payload),
+                failureEvent: 'schedule_manager.direct_override_create_failed',
+                failureContext: {
+                    sourceSite: currentSourceSite,
+                    crawlPhase: request.payload.crawl_phase,
+                },
+                fallbackMessage: 'Start failed',
             });
-            if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(formatApiErrorDetail(errData.detail));
-            }
-            const payload = await response.json();
             const runMarker = {
-                crawlJobId: payload.id || response.headers.get('X-Crawl-Job-Id') || null,
+                crawlJobId: payload.id || null,
                 sourceSite: currentSourceSite,
                 startedAt: new Date(Date.now()).toISOString(),
             };
