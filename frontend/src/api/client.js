@@ -1,3 +1,4 @@
+import { createMonitoringId, logError } from '../monitoring';
 import { formatApiErrorDetail } from './errors';
 
 function mergeAbortSignals(callerSignal, timeoutSignal) {
@@ -33,7 +34,14 @@ function mergeAbortSignals(callerSignal, timeoutSignal) {
 }
 
 export async function apiFetchJson(url, options = {}) {
-  const { timeoutMs = 15000, ...fetchOptions } = options;
+  const { timeoutMs = 15000, requestId = createMonitoringId('req'), ...fetchOptions } = options;
+  const startedAt = Date.now();
+  const headers = new Headers(fetchOptions.headers || {});
+  const method = (fetchOptions.method || 'GET').toUpperCase();
+  let failureLogged = false;
+
+  headers.set('X-Request-ID', headers.get('X-Request-ID') || requestId);
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const { signal, cleanup } = mergeAbortSignals(fetchOptions.signal, controller.signal);
@@ -41,15 +49,39 @@ export async function apiFetchJson(url, options = {}) {
   try {
     const response = await fetch(url, {
       ...fetchOptions,
+      headers,
       signal,
     });
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
-      throw new Error(formatApiErrorDetail(data?.detail) || `Request failed with status ${response.status}`);
+      const message = formatApiErrorDetail(data?.detail) || `Request failed with status ${response.status}`;
+
+      failureLogged = true;
+      logError('api.request_failed', {
+        requestId,
+        method,
+        status: response.status,
+        url,
+        durationMs: Date.now() - startedAt,
+        detail: message,
+      });
+      throw new Error(message);
     }
 
     return data;
+  } catch (error) {
+    if (!failureLogged) {
+      logError('api.request_failed', {
+        requestId,
+        method,
+        url,
+        durationMs: Date.now() - startedAt,
+        detail: error,
+      });
+    }
+
+    throw error;
   } finally {
     clearTimeout(timeout);
     cleanup();
