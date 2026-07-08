@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
@@ -10,6 +11,8 @@ import pytest
 
 from app import request_monitoring
 from app.request_monitoring import REQUEST_ID_HEADER, install_request_monitoring
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def build_test_app():
@@ -178,9 +181,15 @@ def test_request_monitoring_logs_slow_request_summary_for_non_control_plane_path
 
 
 def test_main_module_preserves_fastapi_app_export_and_wrapped_asgi_export():
+    dev_compose_text = (PROJECT_ROOT / "docker-compose.dev.yml").read_text(encoding="utf-8")
     main_module = importlib.reload(importlib.import_module("app.main"))
+    client = TestClient(main_module.asgi_app)
+    response = client.get("/")
 
+    assert "uvicorn app.main:asgi_app" in dev_compose_text
     assert isinstance(main_module.app, FastAPI)
     assert callable(main_module.asgi_app)
     assert main_module.asgi_app is not main_module.app
     assert main_module.app.openapi()["openapi"]
+    assert response.status_code == 200
+    assert response.headers[REQUEST_ID_HEADER].startswith("req-")
