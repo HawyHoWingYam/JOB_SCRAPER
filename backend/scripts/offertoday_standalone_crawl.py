@@ -230,7 +230,11 @@ async def _run_runtime_probe(
         page = runtime._page
         if page is not None:
             await _check_and_handle_waf_challenge(page, headed=headed, crawl_job_id="", db=None)
-        session_check = await runtime.check_session(listing_payload=listing_payload)
+        try:
+            session_check = await runtime.check_session(listing_payload=listing_payload)
+        except Exception as exc:
+            logger.error("OfferToday runtime check failed: %s", exc)
+            return 1
         logger.info(
             "OfferToday runtime check: waf=%s url=%s listing_results=%d",
             session_check.is_waf_challenge,
@@ -255,10 +259,14 @@ async def _run_runtime_probe(
             logger.error("OfferToday smoke test listing response did not include a jobId.")
             return 1
 
-        detail_payload = await runtime.fetch_detail_json(
-            job_id=job_id,
-            encrypted_job_id=encrypted_job_id,
-        )
+        try:
+            detail_payload = await runtime.fetch_detail_json(
+                job_id=job_id,
+                encrypted_job_id=encrypted_job_id,
+            )
+        except Exception as exc:
+            logger.error("OfferToday smoke test detail probe failed: %s", exc)
+            return 1
         detail_code = None if not isinstance(detail_payload, dict) else detail_payload.get("code")
         detail_job_id = (
             ""

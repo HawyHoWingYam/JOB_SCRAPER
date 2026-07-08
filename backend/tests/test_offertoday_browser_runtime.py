@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 import types
+from types import SimpleNamespace
 
 import pytest
 
@@ -257,3 +258,46 @@ async def test_check_session_returns_listing_probe_results(monkeypatch):
     }
     assert result.listing_result_count == 1
     assert page.evaluate_calls
+
+
+@pytest.mark.asyncio
+async def test_run_smoke_test_reports_detail_codes():
+    runtime_module = importlib.import_module("app.scraper.offertoday_browser_runtime")
+    runtime_cls = getattr(runtime_module, "OfferTodayBrowserRuntime")
+
+    runtime = runtime_cls()
+
+    async def fake_check_session(*, listing_payload: dict[str, object] | None = None):
+        return SimpleNamespace(
+            current_url="https://www.offertoday.com/hk/search",
+            is_waf_challenge=False,
+            listing_probe_payload={
+                "data": {
+                    "resultList": [
+                        {"jobId": "job-1", "encryptJobId": "job-1"},
+                        {"jobId": "job-2", "encryptJobId": "job-2"},
+                    ]
+                }
+            },
+            listing_result_count=2,
+        )
+
+    async def fake_fetch_detail_json(*, job_id: str, encrypted_job_id: str | None = None):
+        if job_id == "job-2":
+            return {"code": -1000035, "data": {}}
+        return {"code": 0, "data": {"jobId": job_id}}
+
+    runtime.check_session = fake_check_session
+    runtime.fetch_detail_json = fake_fetch_detail_json
+
+    result = await runtime.run_smoke_test(
+        listing_payload={"keyword": "data", "page": 1, "pageSize": 1},
+        detail_limit=2,
+    )
+
+    assert result["listing_ok"] is True
+    assert result["listing_count"] == 2
+    assert result["detail_results"] == [
+        {"job_id": "job-1", "code": 0},
+        {"job_id": "job-2", "code": -1000035},
+    ]

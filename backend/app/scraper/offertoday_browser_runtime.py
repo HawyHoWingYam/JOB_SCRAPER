@@ -152,6 +152,44 @@ class OfferTodayBrowserRuntime:
             listing_result_count=listing_result_count,
         )
 
+    async def run_smoke_test(
+        self,
+        *,
+        listing_payload: dict[str, Any] | None = None,
+        detail_limit: int = 1,
+    ) -> dict[str, Any]:
+        session_check = await self.check_session(listing_payload=listing_payload)
+        result_list = (
+            (((session_check.listing_probe_payload or {}).get("data") or {}).get("resultList") or [])
+            if isinstance(session_check.listing_probe_payload, dict)
+            else []
+        )
+        detail_results: list[dict[str, Any]] = []
+        for row in result_list[: max(int(detail_limit or 0), 0)]:
+            if not isinstance(row, dict):
+                continue
+            job_id = str(row.get("jobId") or "").strip()
+            encrypted_job_id = str(row.get("encryptJobId") or job_id).strip()
+            if not job_id:
+                continue
+            detail_payload = await self.fetch_detail_json(
+                job_id=job_id,
+                encrypted_job_id=encrypted_job_id,
+            )
+            detail_results.append(
+                {
+                    "job_id": job_id,
+                    "code": None if not isinstance(detail_payload, dict) else detail_payload.get("code"),
+                }
+            )
+        return {
+            "listing_ok": not session_check.is_waf_challenge,
+            "listing_count": session_check.listing_result_count,
+            "detail_results": detail_results,
+            "current_url": session_check.current_url,
+            "is_waf_challenge": session_check.is_waf_challenge,
+        }
+
     async def _launch_fresh_profile(self) -> None:
         if not self.headed:
             launch_args = ["--no-sandbox", "--disable-dev-shm-usage"]
