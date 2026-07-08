@@ -3,13 +3,14 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.crawl_phases import resolve_crawl_phase
 from app.database import get_db
+from app.request_monitoring import build_monitoring_log_event
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.schedule_repository import ScheduleRepository
@@ -81,12 +82,43 @@ async def _validate_effective_category_ids(
         await _validate_ctgoodjobs_category_ids_exist(category_ids)
 
 
+def _build_crawl_request_created_log_message(
+    *,
+    request_id: str | None,
+    source_site: str,
+    crawl_job_id: str,
+    crawl_phase: str | None,
+    crawl_mode: str | None,
+    max_pages: int | str | None,
+    category_count: int,
+    source_listing_crawl_job_id: str | None = None,
+    trigger: str | None = None,
+    schedule_id: str | None = None,
+) -> str:
+    return build_monitoring_log_event(
+        "SCRAPE_REQUEST_CREATED",
+        request_id=request_id,
+        source=source_site,
+        crawl_job_id=crawl_job_id,
+        trigger=trigger,
+        schedule_id=schedule_id,
+        phase=crawl_phase,
+        mode=crawl_mode,
+        max_pages=max_pages,
+        categories=category_count,
+        source_listing_crawl_job_id=source_listing_crawl_job_id,
+    )
+
+
 @router.post("", response_model=CrawlJobSchema, status_code=status.HTTP_202_ACCEPTED)
 async def create_crawl_job(
     request: CrawlJobCreateRequest,
     response: Response,
+    request_context: Request = None,
     db: Session = Depends(get_db),
 ):
+    request_id = getattr(getattr(request_context, "state", None), "request_id", None)
+
     if request.schedule_id is not None:
         schedule = schedule_repository.get_schedule_by_id(db, request.schedule_id)
         if schedule is None:
@@ -117,10 +149,17 @@ async def create_crawl_job(
             ) from exc
         response.headers["X-Crawl-Job-Id"] = str(dispatch_result.crawl_job.id)
         logger.info(
-            "SCRAPE_REQUEST_CREATED source=%s crawl_job_id=%s trigger=schedule schedule_id=%s",
-            effective_source_site,
-            dispatch_result.crawl_job.id,
-            str(schedule.id),
+            _build_crawl_request_created_log_message(
+                request_id=request_id,
+                source_site=effective_source_site,
+                crawl_job_id=str(dispatch_result.crawl_job.id),
+                crawl_phase=resolve_crawl_phase(getattr(schedule, "crawl_phase", None)),
+                crawl_mode=getattr(schedule, "crawl_mode", None) or "default",
+                max_pages=getattr(schedule, "max_pages", None) or resolve_default_max_pages(effective_source_site),
+                category_count=len(getattr(schedule, "category_ids", None) or []),
+                trigger="schedule",
+                schedule_id=str(schedule.id),
+            )
         )
         return dispatch_result.crawl_job
 
@@ -156,13 +195,16 @@ async def create_crawl_job(
         ) from exc
     response.headers["X-Crawl-Job-Id"] = str(dispatch_result.crawl_job.id)
     logger.info(
-        "SCRAPE_REQUEST_CREATED source=%s crawl_job_id=%s phase=%s mode=%s max_pages=%s categories=%d",
-        effective_source_site,
-        dispatch_result.crawl_job.id,
-        resolve_crawl_phase(request.crawl_phase),
-        request.crawl_mode or "default",
-        str(request.max_pages) if request.max_pages else resolve_default_max_pages(effective_source_site),
-        len(request.category_ids or []),
+        _build_crawl_request_created_log_message(
+            request_id=request_id,
+            source_site=effective_source_site,
+            crawl_job_id=str(dispatch_result.crawl_job.id),
+            crawl_phase=resolve_crawl_phase(request.crawl_phase),
+            crawl_mode=request.crawl_mode or "default",
+            max_pages=str(request.max_pages) if request.max_pages else resolve_default_max_pages(effective_source_site),
+            category_count=len(request.category_ids or []),
+            source_listing_crawl_job_id=str(request.source_listing_crawl_job_id or "") or None,
+        )
     )
 
     # Queue OfferToday crawl via subprocess (reliable, no asyncio GC issues)

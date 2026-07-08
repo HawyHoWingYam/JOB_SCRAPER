@@ -7,9 +7,10 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
+from app.request_monitoring import build_monitoring_log_event
 from app.database import SessionLocal
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.services.source_category_registry import get_source_category_registry
@@ -674,37 +675,103 @@ def _collect_progress_payload() -> dict[str, Any]:
     }
 
 
+def _build_progress_stream_summary(event_data: dict[str, Any]) -> dict[str, int | bool]:
+    return {
+        "active_count": len(event_data.get("active") or {}),
+        "backlog_count": len(event_data.get("backlog") or {}),
+        "all_count": len(event_data.get("all") or {}),
+        "has_active": bool(event_data.get("has_active")),
+        "has_backlog": bool(event_data.get("has_backlog")),
+    }
+
+
+def _log_progress_stream_event(
+    event: str,
+    *,
+    request_id: str | None,
+    client_stream_id: str | None,
+    summary: dict[str, int | bool] | None = None,
+    reason: str | None = None,
+) -> None:
+    fields: dict[str, object] = {
+        "request_id": request_id,
+        "client_stream_id": client_stream_id,
+        "reason": reason,
+    }
+    if summary is not None:
+        fields.update(summary)
+    logger.info(build_monitoring_log_event(event, **fields))
+
+
+async def _progress_event_generator(
+    *,
+    request_id: str | None,
+    client_stream_id: str | None,
+    max_idle: int = 30,
+):
+    idle_count = 0
+    previous_summary: dict[str, int | bool] | None = None
+    _log_progress_stream_event(
+        "PROGRESS_STREAM_OPEN",
+        request_id=request_id,
+        client_stream_id=client_stream_id,
+    )
+
+    while True:
+        event_data = _collect_progress_payload()
+        summary = _build_progress_stream_summary(event_data)
+        if summary != previous_summary:
+            _log_progress_stream_event(
+                "PROGRESS_STREAM_STATE",
+                request_id=request_id,
+                client_stream_id=client_stream_id,
+                summary=summary,
+            )
+            previous_summary = summary
+
+        yield f"data: {json.dumps(event_data)}\n\n"
+
+        if not event_data["has_active"]:
+            idle_count += 1
+            if idle_count == 1:
+                _log_progress_stream_event(
+                    "PROGRESS_STREAM_IDLE",
+                    request_id=request_id,
+                    client_stream_id=client_stream_id,
+                    summary=summary,
+                )
+            if idle_count >= max_idle:
+                _log_progress_stream_event(
+                    "PROGRESS_STREAM_CLOSE",
+                    request_id=request_id,
+                    client_stream_id=client_stream_id,
+                    summary=summary,
+                    reason="idle",
+                )
+                yield f"data: {json.dumps({'closed': True, 'reason': 'idle'})}\n\n"
+                break
+        else:
+            idle_count = 0
+
+        await asyncio.sleep(1)
+
+
 @router.get("/progress/stream")
-async def stream_progress():
+async def stream_progress(
+    request: Request,
+    client_stream_id: str | None = Query(default=None),
+):
     """
     SSE endpoint for real-time scraping progress.
     Streams progress updates every second while scraping is active.
     Automatically closes when no active scrapes for 30 seconds.
     """
-    async def event_generator():
-        idle_count = 0
-        max_idle = 30  # Close after 30 seconds of no activity
-
-        while True:
-            event_data = _collect_progress_payload()
-
-            # Send SSE event
-            yield f"data: {json.dumps(event_data)}\n\n"
-
-            # Track idle time
-            if not event_data["has_active"]:
-                idle_count += 1
-                if idle_count >= max_idle:
-                    # Send close event and exit
-                    yield f"data: {json.dumps({'closed': True, 'reason': 'idle'})}\n\n"
-                    break
-            else:
-                idle_count = 0
-
-            await asyncio.sleep(1)  # Update every second
-
+    request_id = getattr(request.state, "request_id", None)
     return StreamingResponse(
-        event_generator(),
+        _progress_event_generator(
+            request_id=request_id,
+            client_stream_id=client_stream_id,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
