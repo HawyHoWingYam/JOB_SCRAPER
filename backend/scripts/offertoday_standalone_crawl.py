@@ -16,7 +16,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("offertoday-crawl")
@@ -33,7 +33,14 @@ from app.scraper.manual_action import (  # noqa: E402
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
 )
+from app.scraper.offertoday_pacing import (  # noqa: E402
+    pause_after_transient_detail_failure,
+    pause_before_detail_request,
+)
+from app.scraper.log_events import build_scrape_log_event  # noqa: E402
+from app.services.crawl_job_runtime import CrawlJobRuntime  # noqa: E402
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
+from app.repositories.crawl_job_repository import CrawlJobRepository  # noqa: E402
 from app.sources.offertoday.search_space import (  # noqa: E402
     build_offertoday_listing_queries,
     normalize_offertoday_keywords,
@@ -150,6 +157,10 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keywords", type=str, default="")
     parser.add_argument("--max-pages", type=int, default=100)
     parser.add_argument("--crawl-job-id", type=str, default="")
+    parser.add_argument("--crawl-phase", choices=["full", "listing", "detail"], default="full")
+    parser.add_argument("--source-listing-crawl-job-id", type=str, default="")
+    parser.add_argument("--detail-limit", type=int, default=100)
+    parser.add_argument("--detail-statuses", type=str, default="pending,manual_action_required")
     parser.add_argument(
         "--headed",
         action="store_true",
@@ -195,14 +206,66 @@ def _build_argument_parser() -> argparse.ArgumentParser:
 def _build_probe_listing_payload(
     *,
     category_ids: list[int],
-    keywords: str,
+    keywords: str | Sequence[str] | None,
 ) -> dict[str, Any]:
     category_id = category_ids[0] if category_ids else None
+    normalized_keywords = normalize_offertoday_keywords(keywords)
     return build_offertoday_listing_payload(
         category_id=category_id,
-        keyword=keywords,
+        keyword=normalized_keywords[0] if normalized_keywords else "",
         page=1,
     )
+
+
+def _load_request_payload(crawl_job_id: str) -> dict[str, Any]:
+    if not str(crawl_job_id or "").strip():
+        return {}
+
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        crawl_job = CrawlJobRepository().get_crawl_job_by_id(db, crawl_job_id)
+        if crawl_job is None:
+            return {}
+        return dict(crawl_job.request_payload or {})
+    finally:
+        db.close()
+
+
+def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> None:
+    if not request_payload:
+        return
+
+    category_ids = request_payload.get("category_ids") or []
+    if category_ids:
+        args.category_ids = ",".join(str(category_id) for category_id in category_ids)
+    keywords = request_payload.get("keywords")
+    if keywords:
+        if isinstance(keywords, str):
+            args.keywords = keywords
+        else:
+            args.keywords = ",".join(str(keyword) for keyword in keywords if str(keyword).strip())
+    if request_payload.get("max_pages") is not None:
+        args.max_pages = int(request_payload["max_pages"])
+    if request_payload.get("resume_strategy"):
+        args.resume_strategy = str(request_payload["resume_strategy"])
+    if request_payload.get("skip_existing") is not None:
+        args.skip_existing = bool(request_payload["skip_existing"])
+    crawl_mode = str(request_payload.get("crawl_mode") or "").strip().lower()
+    args.headed = crawl_mode == "headed" or bool(args.headed)
+    requested_phase = str(request_payload.get("crawl_phase") or "").strip().lower()
+    if requested_phase in {"listing", "detail"}:
+        args.crawl_phase = requested_phase
+    else:
+        args.crawl_phase = "full"
+    if request_payload.get("source_listing_crawl_job_id"):
+        args.source_listing_crawl_job_id = str(request_payload["source_listing_crawl_job_id"])
+    if request_payload.get("detail_limit") is not None:
+        args.detail_limit = int(request_payload["detail_limit"])
+    detail_statuses = request_payload.get("detail_statuses")
+    if detail_statuses:
+        args.detail_statuses = ",".join(str(status) for status in detail_statuses if str(status).strip())
 
 
 async def _run_runtime_probe(
@@ -211,7 +274,7 @@ async def _run_runtime_probe(
     auth_state: str,
     resume_strategy: str,
     category_ids: list[int],
-    keywords: str,
+    keywords: str | Sequence[str] | None,
     smoke_test: bool,
 ) -> int:
     listing_payload = _build_probe_listing_payload(category_ids=category_ids, keywords=keywords)
@@ -240,39 +303,25 @@ async def _run_runtime_probe(
         if not smoke_test:
             return 0
 
-        result_list = (((session_check.listing_probe_payload or {}).get("data") or {}).get("resultList") or [])
-        if not result_list:
-            logger.error("OfferToday smoke test could not find a listing to probe.")
-            return 1
-
-        first_job = result_list[0] if isinstance(result_list[0], dict) else {}
-        job_id = str(first_job.get("jobId") or "").strip()
-        encrypted_job_id = str(first_job.get("encryptJobId") or job_id).strip()
-        if not job_id:
-            logger.error("OfferToday smoke test listing response did not include a jobId.")
-            return 1
-
-        try:
-            detail_payload = await runtime.fetch_detail_json(
-                job_id=job_id,
-                encrypted_job_id=encrypted_job_id,
-            )
-        except Exception as exc:
-            logger.error("OfferToday smoke test detail probe failed: %s", exc)
-            return 1
-        detail_code = None if not isinstance(detail_payload, dict) else detail_payload.get("code")
-        detail_job_id = (
-            ""
-            if not isinstance(detail_payload, dict)
-            else str(((detail_payload.get("data") or {}).get("jobId")) or "").strip()
+        smoke_result = await runtime.run_smoke_test(
+            listing_payload=listing_payload,
+            detail_limit=1,
         )
         logger.info(
-            "OfferToday smoke test detail probe: job_id=%s code=%s detail_job_id=%s",
-            job_id,
-            detail_code,
-            detail_job_id or "[missing]",
+            "OfferToday smoke test: listing_ok=%s listing_count=%s detail_results=%s",
+            smoke_result.get("listing_ok"),
+            smoke_result.get("listing_count"),
+            smoke_result.get("detail_results"),
         )
-        return 0 if detail_code == 0 and detail_job_id else 1
+        detail_codes = [
+            row.get("code")
+            for row in smoke_result.get("detail_results", [])
+            if isinstance(row, dict)
+        ]
+        has_detail_success = any(code == 0 for code in detail_codes)
+        if not smoke_result.get("listing_ok") or not has_detail_success:
+            return 1
+        return 0
 
 
 async def _fetch_listing_json(
@@ -315,10 +364,20 @@ async def _fetch_listing_json(
         return {}
 
 
-async def _fetch_detail_json(runtime: OfferTodayBrowserRuntime, jid: str) -> dict[str, Any]:
-    detail_url = OFFERTODAY_DETAIL_URL_TPL.format(jid, jid)
+async def _fetch_detail_json_with_identifiers(
+    runtime: OfferTodayBrowserRuntime,
+    *,
+    job_id: str,
+    encrypted_job_id: str | None = None,
+) -> dict[str, Any]:
+    resolved_job_id = str(job_id or "").strip()
+    resolved_encrypted_job_id = str(encrypted_job_id or resolved_job_id).strip()
+    detail_url = OFFERTODAY_DETAIL_URL_TPL.format(resolved_job_id, resolved_encrypted_job_id)
     try:
-        result = await runtime.fetch_detail_json(job_id=jid, encrypted_job_id=jid)
+        result = await runtime.fetch_detail_json(
+            job_id=resolved_job_id,
+            encrypted_job_id=resolved_encrypted_job_id,
+        )
         return result or {}
     except Exception as exc:
         logger.warning("Playwright detail fetch failed; trying Scrapling fallback: %s", exc)
@@ -355,27 +414,82 @@ def _write_progress_event(db, *, crawl_job_id: str, sequence_no: int, event_type
     db.add(evt)
 
 
-def _emit_listing_completed_checkpoint(
-    db,
+def _persist_listing_checkpoint(
     *,
+    crawl_runtime: CrawlJobRuntime,
     crawl_job_id: str,
-    sequence_no: int,
-    payload: dict[str, Any],
-) -> None:
-    """Write the checkpoint that marks the listing phase as finished."""
-    _write_progress_event(
-        db,
+    search_family: str,
+    search_families: list[str],
+    category_id: int | None,
+    keyword: str,
+    current_page: int,
+    total_pages: int,
+    pending_listing_payloads: list[dict[str, Any]],
+    jobs_skipped_existing: int,
+    skip_existing: bool,
+):
+    listing_batch_result = crawl_runtime.stage_listing_batch(
         crawl_job_id=crawl_job_id,
-        sequence_no=sequence_no,
-        event_type="listing_completed",
-        payload=payload,
+        source_site="offertoday",
+        payloads=pending_listing_payloads,
+        skip_existing=skip_existing,
     )
-    db.commit()
+    logger.info(
+        build_scrape_log_event(
+            "SCRAPE_LISTING_BATCH_STAGED",
+            source="offertoday",
+            crawl_job_id=crawl_job_id,
+            search_family=search_family,
+            category_id=category_id,
+            keyword=keyword,
+            current_page=current_page,
+            total_pages=total_pages,
+            job_ids=listing_batch_result.job_ids_seen,
+            listings_staged=listing_batch_result.rows_staged,
+            jobs_skipped_existing=jobs_skipped_existing + listing_batch_result.skipped_existing,
+        )
+    )
+    crawl_runtime.write_progress_event(
+        crawl_job_id=crawl_job_id,
+        event_type="crawl.page_processed",
+        emitted_by="offertoday-crawl",
+        payload={
+            "search_family": search_family,
+            "search_families": search_families,
+            "category_id": category_id,
+            "keyword": keyword,
+            "current_page": current_page,
+            "total_pages": total_pages,
+            "job_ids_collected": listing_batch_result.job_ids_seen,
+            "listings_staged": listing_batch_result.rows_staged,
+            "jobs_skipped_existing": jobs_skipped_existing + listing_batch_result.skipped_existing,
+            "phase": 1,
+        },
+    )
+    return listing_batch_result
 
 
 async def main() -> None:
     parser = _build_argument_parser()
     args = parser.parse_args()
+    _apply_request_payload_defaults(args, _load_request_payload(args.crawl_job_id))
+    crawl_phase = str(args.crawl_phase or "full").strip().lower()
+    logger.info(
+        build_scrape_log_event(
+            "SCRAPE_EXECUTOR_START",
+            source="offertoday",
+            crawl_job_id=args.crawl_job_id or None,
+            crawl_phase=crawl_phase,
+            crawl_mode="headed" if args.headed else "headless",
+            category_ids=args.category_ids or None,
+            keywords=args.keywords or None,
+            max_pages=args.max_pages,
+            detail_limit=args.detail_limit,
+            source_listing_crawl_job_id=args.source_listing_crawl_job_id or None,
+            resume_strategy=args.resume_strategy,
+            skip_existing=args.skip_existing,
+        )
+    )
 
     category_ids = [int(c.strip()) for c in args.category_ids.split(",") if c.strip().isdigit()]
     keywords = normalize_offertoday_keywords(args.keywords)
@@ -393,10 +507,14 @@ async def main() -> None:
         return
 
     page_limit_per_query = min(args.max_pages, MAX_PAGES_GLOBAL)
-    listing_tasks = build_offertoday_listing_queries(
-        category_ids,
-        keywords=keywords or None,
-        max_pages_per_query=page_limit_per_query,
+    listing_tasks = (
+        build_offertoday_listing_queries(
+            category_ids,
+            keywords=keywords or None,
+            max_pages_per_query=page_limit_per_query,
+        )
+        if crawl_phase != "detail"
+        else []
     )
     search_families = list(
         dict.fromkeys(
@@ -411,8 +529,7 @@ async def main() -> None:
     )
 
     from app.database import SessionLocal
-    from app.models.crawl_job import CrawlJob, CrawlJobEvent
-    from app.models.crawl_job_listing import CrawlJobListing
+    from app.models.crawl_job import CrawlJob
     from app.models.job import Job
     from app.repositories.company_repository import CompanyRepository
     from app.repositories.job_repository import JobRepository
@@ -423,6 +540,7 @@ async def main() -> None:
     )
 
     db = SessionLocal()
+    crawl_runtime = CrawlJobRuntime()
     detail_ok = 0
     detail_fail = 0
     company_repository = CompanyRepository()
@@ -433,27 +551,20 @@ async def main() -> None:
         cj_id = args.crawl_job_id
         cj = db.query(CrawlJob).filter(CrawlJob.id == cj_id).first()
         if cj:
-            cj.status = "running"
-            cj.started_at = datetime.now(timezone.utc)
-            cj.metrics = {
-                "pages_processed": 0,
-                "job_ids_collected": 0,
-                "listings_staged": 0,
-                "detail_pending": 0,
-                "items_emitted": 0,
-                "jobs_saved": 0,
-                "search_families": search_families,
-            }
-            db.flush()
-            last_seq = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id == cj_id).count()
-            _write_progress_event(
-                db,
+            crawl_runtime.mark_started(
                 crawl_job_id=cj_id,
-                sequence_no=last_seq + 1,
-                event_type="crawl.started",
-                payload={"phase": 1, "source_site": "offertoday"},
+                source_site="offertoday",
+                payload={"phase": 2 if crawl_phase == "detail" else 1, "source_site": "offertoday"},
+                metrics={
+                    "pages_processed": 0,
+                    "job_ids_collected": 0,
+                    "listings_staged": 0,
+                    "detail_pending": 0,
+                    "items_emitted": 0,
+                    "jobs_saved": 0,
+                    "search_families": search_families,
+                },
             )
-            db.commit()
             logger.info("Crawl job %s: running", cj_id)
     else:
         cj_id = str(uuid.uuid4())
@@ -464,7 +575,6 @@ async def main() -> None:
     jobs_skipped_existing = 0
     page_count = 0
     search_family = ""
-    event_seq = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id == cj_id).count() if args.crawl_job_id else 0
 
     existing_count = db.query(Job).filter(Job.source_site == "offertoday").count()
     logger.info("Existing OfferToday jobs in DB: %d", existing_count)
@@ -547,6 +657,7 @@ async def main() -> None:
                     exhausted_conditions.add(condition_key)
                     continue
 
+                pending_listing_payloads: list[dict[str, Any]] = []
                 for raw_job in result_list:
                     job_id_str = str(raw_job.get("jobId") or "").strip()
                     if not job_id_str or job_id_str in seen_ids:
@@ -576,41 +687,33 @@ async def main() -> None:
                         jobs_skipped_existing += 1
                         continue
 
-                    db.add(
-                        CrawlJobListing(
-                            id=uuid.uuid4(),
-                            crawl_job_id=cj_id,
-                            source_site="offertoday",
-                            source_job_id=job_id_str,
-                            source_url=f"{OFFERTODAY_BASE_URL}/hk/job/{job_id_str}",
-                            listing_payload=enriched_listing,
-                            detail_status="pending",
-                        )
+                    pending_listing_payloads.append(
+                        {
+                            "source_job_id": job_id_str,
+                            "source_url": f"{OFFERTODAY_BASE_URL}/hk/job/{job_id_str}",
+                            "source_classification_id": str(category_id) if category_id is not None else None,
+                            "listing_page": page_number,
+                            "listing_payload": enriched_listing,
+                        }
                     )
-                    listing_count += 1
 
                 page_count += 1
 
                 if args.crawl_job_id:
-                    event_seq += 1
-                    _write_progress_event(
-                        db,
+                    listing_batch_result = _persist_listing_checkpoint(
+                        crawl_runtime=crawl_runtime,
                         crawl_job_id=cj_id,
-                        sequence_no=event_seq,
-                        event_type="crawl.page_processed",
-                        payload={
-                            "search_family": search_family,
-                            "search_families": search_families,
-                            "category_id": category_id,
-                            "keyword": keyword,
-                            "current_page": page_count,
-                            "total_pages": planned_total_pages,
-                            "job_ids_collected": len(seen_ids),
-                            "listings_staged": listing_count,
-                            "jobs_skipped_existing": jobs_skipped_existing,
-                            "phase": 1,
-                        },
+                        search_family=search_family,
+                        search_families=search_families,
+                        category_id=category_id,
+                        keyword=keyword,
+                        current_page=page_count,
+                        total_pages=planned_total_pages,
+                        pending_listing_payloads=pending_listing_payloads,
+                        jobs_skipped_existing=jobs_skipped_existing,
+                        skip_existing=args.skip_existing,
                     )
+                    listing_count += listing_batch_result.rows_staged
                     cj = db.query(CrawlJob).filter(CrawlJob.id == cj_id).first()
                     if cj:
                         cj.metrics = {
@@ -628,6 +731,8 @@ async def main() -> None:
                             "search_families": search_families,
                             "search_family": search_family,
                         }
+                else:
+                    listing_count += len(pending_listing_payloads)
 
                 if page_count % 5 == 0 or page_count == 1:
                     if args.crawl_job_id:
@@ -663,12 +768,46 @@ async def main() -> None:
             if is_default_it_crawl and len(seen_ids) >= DEFAULT_IT_UNIQUE_JOB_TARGET:
                 logger.info("Default IT crawl target reached; skipping remaining listing tasks.")
 
+            detail_target_rows = listing_count
+            detail_selected_rows = len(seen_ids)
+            detail_skipped_existing_rows = jobs_skipped_existing
+            detail_targets: list[dict[str, Any]] = []
+
             if args.crawl_job_id:
-                event_seq += 1
-                _emit_listing_completed_checkpoint(
-                    db,
+                if crawl_phase in {"full", "detail"}:
+                    detail_load_result = crawl_runtime.load_detail_targets(
+                        source_site="offertoday",
+                        request_payload={
+                            "crawl_phase": "detail",
+                            "crawl_mode": "headed" if args.headed else "headless",
+                            "source_listing_crawl_job_id": args.source_listing_crawl_job_id or cj_id,
+                            "category_ids": category_ids,
+                            "detail_limit": listing_count if crawl_phase == "full" else args.detail_limit,
+                            "detail_statuses": [status.strip() for status in str(args.detail_statuses).split(",") if status.strip()],
+                            "skip_existing": args.skip_existing,
+                        },
+                        detail_crawl_job_id=cj_id,
+                    )
+                    detail_targets = list(detail_load_result.targets)
+                    detail_target_rows = int(detail_load_result.target_rows)
+                    detail_selected_rows = int(detail_load_result.selected_rows)
+                    detail_skipped_existing_rows = int(detail_load_result.skipped_existing_rows)
+                    logger.info(
+                        build_scrape_log_event(
+                            "SCRAPE_DETAIL_TARGETS_LOADED",
+                            source="offertoday",
+                            crawl_job_id=cj_id,
+                            source_listing_crawl_job_id=args.source_listing_crawl_job_id or cj_id,
+                            detail_selected_rows=detail_selected_rows,
+                            detail_skipped_existing_rows=detail_skipped_existing_rows,
+                            detail_target_rows=detail_target_rows,
+                        )
+                    )
+
+                crawl_runtime.write_progress_event(
                     crawl_job_id=cj_id,
-                    sequence_no=event_seq,
+                    emitted_by="offertoday-crawl",
+                    event_type="listing_completed",
                     payload={
                         "phase": 1,
                         "search_families": search_families,
@@ -676,11 +815,13 @@ async def main() -> None:
                         "job_ids_collected": len(seen_ids),
                         "listings_staged": listing_count,
                         "jobs_skipped_existing": jobs_skipped_existing,
-                        "detail_selected_rows": len(seen_ids),
-                        "detail_skipped_existing_rows": jobs_skipped_existing,
-                        "detail_target_rows": listing_count,
-                        "detail_pending": listing_count,
-                        "message": "Listing phase completed; detail phase will continue.",
+                        "detail_selected_rows": detail_selected_rows,
+                        "detail_skipped_existing_rows": detail_skipped_existing_rows,
+                        "detail_target_rows": detail_target_rows,
+                        "detail_pending": detail_target_rows,
+                        "message": "Listing phase completed; detail phase will continue."
+                        if crawl_phase == "full"
+                        else "Listing phase completed.",
                     },
                 )
 
@@ -693,32 +834,78 @@ async def main() -> None:
                 jobs_skipped_existing,
             )
 
-            listings = (
-                db.query(CrawlJobListing)
-                .filter(
-                    CrawlJobListing.crawl_job_id == cj_id,
-                    CrawlJobListing.detail_status == "pending",
-                )
-                .all()
-            )
-            total_details = len(listings)
+            if crawl_phase == "listing":
+                detail_targets = []
 
-            for idx, listing in enumerate(listings):
+            total_details = detail_target_rows
+            for idx, target in enumerate(detail_targets):
                 if idx > 0 and idx % 20 == 0:
                     await _check_and_handle_waf_challenge(
                         page, headed=args.headed, crawl_job_id=cj_id, db=db
                     )
 
-                jid = listing.source_job_id or ""
-                if not jid:
+                crawl_runtime.mark_detail_running(
+                    listing_id=target["listing_id"],
+                    detail_crawl_job_id=cj_id,
+                )
+                listing_payload = dict(target.get("listing_payload") or {})
+                job_id = str(
+                    listing_payload.get("job_id")
+                    or listing_payload.get("jobId")
+                    or ((listing_payload.get("raw_data") or {}).get("jobId") if isinstance(listing_payload.get("raw_data"), dict) else "")
+                    or target.get("source_job_id")
+                    or ""
+                ).strip()
+                encrypted_job_id = str(
+                    listing_payload.get("encrypted_job_id")
+                    or listing_payload.get("encryptJobId")
+                    or ((listing_payload.get("raw_data") or {}).get("encryptJobId") if isinstance(listing_payload.get("raw_data"), dict) else "")
+                    or job_id
+                    or ""
+                ).strip()
+                jid = str(target.get("source_job_id") or job_id or "").strip()
+                logger.info(
+                    build_scrape_log_event(
+                        "SCRAPE_DETAIL_ITEM_START",
+                        source="offertoday",
+                        crawl_job_id=cj_id,
+                        detail_index=idx + 1,
+                        detail_total=total_details,
+                        source_job_id=jid or None,
+                        listing_id=target["listing_id"],
+                    )
+                )
+                if not job_id or not encrypted_job_id:
+                    crawl_runtime.mark_detail_failed(
+                        listing_id=target["listing_id"],
+                        detail_crawl_job_id=cj_id,
+                        error_message="Missing OfferToday detail identifiers",
+                    )
+                    detail_fail += 1
+                    logger.warning(
+                        build_scrape_log_event(
+                            "SCRAPE_DETAIL_ITEM_FAIL",
+                            source="offertoday",
+                            crawl_job_id=cj_id,
+                            detail_index=idx + 1,
+                            detail_total=total_details,
+                            source_job_id=jid or None,
+                            error="missing_offer_today_detail_identifiers",
+                        )
+                    )
                     continue
 
                 detail_success = False
+                detail_payload: dict[str, Any] | None = None
                 for attempt in range(1, 4):
-                    data = await _fetch_detail_json(runtime, jid)
+                    await pause_before_detail_request()
+                    data = await _fetch_detail_json_with_identifiers(
+                        runtime,
+                        job_id=job_id,
+                        encrypted_job_id=encrypted_job_id,
+                    )
                     if data and data.get("code") == 0 and data.get("data", {}).get("jobId"):
-                        listing.detail_payload = dict(data["data"])
-                        listing.detail_status = "completed"
+                        detail_payload = dict(data["data"])
                         detail_success = True
                         break
 
@@ -728,15 +915,13 @@ async def main() -> None:
                         break
 
                     if attempt < 3:
-                        await asyncio.sleep(2.0 ** attempt)
+                        await pause_after_transient_detail_failure(attempt - 1)
 
                 if ip_blocked:
                     if args.crawl_job_id:
-                        event_seq += 1
-                        _write_progress_event(
-                            db,
+                        crawl_runtime.write_progress_event(
                             crawl_job_id=cj_id,
-                            sequence_no=event_seq,
+                            emitted_by="offertoday-crawl",
                             event_type="crawl.ip_blocked",
                             payload={
                                 "error_code": -1000035,
@@ -747,23 +932,39 @@ async def main() -> None:
                                 "detail_failed": detail_fail,
                             },
                         )
-                        remaining = total_details - detail_ok - detail_fail
-                        if remaining > 0:
-                            db.query(CrawlJobListing).filter(
-                                CrawlJobListing.crawl_job_id == cj_id,
-                                CrawlJobListing.detail_status == "pending",
-                            ).update({"detail_status": "failed"}, synchronize_session=False)
-                            detail_fail += remaining
-                        db.commit()
+                        logger.warning(
+                            build_scrape_log_event(
+                                "SCRAPE_DETAIL_ITEM_IP_BLOCKED",
+                                source="offertoday",
+                                crawl_job_id=cj_id,
+                                detail_index=idx + 1,
+                                detail_total=total_details,
+                                source_job_id=jid or None,
+                                error_code=-1000035,
+                            )
+                        )
+                        for remaining_target in detail_targets[idx:]:
+                            crawl_runtime.mark_detail_failed(
+                                listing_id=remaining_target["listing_id"],
+                                detail_crawl_job_id=cj_id,
+                                error_message="OfferToday IP blocked during detail phase",
+                            )
+                            detail_fail += 1
                     break
 
                 if detail_success:
+                    if detail_payload is None:
+                        raise RuntimeError("OfferToday detail fetch succeeded without payload")
                     detail_ok += 1
                 else:
-                    listing.detail_status = "failed"
+                    crawl_runtime.mark_detail_failed(
+                        listing_id=target["listing_id"],
+                        detail_crawl_job_id=cj_id,
+                        error_message="OfferToday detail fetch failed",
+                    )
                     detail_fail += 1
 
-                merged = {**(listing.listing_payload or {}), **(listing.detail_payload or {})}
+                merged = {**listing_payload, **(detail_payload or {})}
                 try:
                     canonical = build_offertoday_canonical_job(merged)
                     company_data = build_offertoday_company_data(canonical)
@@ -790,26 +991,61 @@ async def main() -> None:
                         skip_existing=False,
                         auto_commit=False,
                     )
-                    if listing.published_job_id != saved_job.id:
-                        listing.published_job_id = saved_job.id
+                    db.commit()
+                    if detail_success:
+                        crawl_runtime.mark_detail_completed(
+                            listing_id=target["listing_id"],
+                            detail_crawl_job_id=cj_id,
+                            detail_payload=detail_payload or {},
+                            published_job_id=saved_job.id,
+                        )
+                        logger.info(
+                            build_scrape_log_event(
+                                "SCRAPE_DETAIL_ITEM_OK",
+                                source="offertoday",
+                                crawl_job_id=cj_id,
+                                detail_index=idx + 1,
+                                detail_total=total_details,
+                                source_job_id=jid or None,
+                                published_job_id=saved_job.id,
+                            )
+                        )
                 except Exception:
+                    db.rollback()
                     logger.exception("Failed to persist OfferToday job source_job_id=%s", jid)
+                    crawl_runtime.mark_detail_failed(
+                        listing_id=target["listing_id"],
+                        detail_crawl_job_id=cj_id,
+                        error_message=f"Failed to persist OfferToday job source_job_id={jid}",
+                    )
+                    if detail_success:
+                        detail_ok -= 1
+                        detail_fail += 1
+                    logger.warning(
+                        build_scrape_log_event(
+                            "SCRAPE_DETAIL_ITEM_FAIL",
+                            source="offertoday",
+                            crawl_job_id=cj_id,
+                            detail_index=idx + 1,
+                            detail_total=total_details,
+                            source_job_id=jid or None,
+                            error=f"persist_failed:{jid}",
+                        )
+                    )
 
                 if (idx + 1) % 10 == 0:
                     if args.crawl_job_id:
-                        event_seq += 1
-                        _write_progress_event(
-                            db,
+                        crawl_runtime.write_progress_event(
                             crawl_job_id=cj_id,
-                            sequence_no=event_seq,
+                            emitted_by="offertoday-crawl",
                             event_type="crawl.detail_progress",
                             payload={
                                 "detail_ok": detail_ok,
                                 "detail_fail": detail_fail,
                                 "detail_total": total_details,
                                 "detail_index": idx + 1,
-                                "detail_selected_rows": len(seen_ids),
-                                "detail_skipped_existing_rows": jobs_skipped_existing,
+                                "detail_selected_rows": detail_selected_rows,
+                                "detail_skipped_existing_rows": detail_skipped_existing_rows,
                                 "detail_target_rows": total_details,
                                 "phase": 2,
                             },
@@ -821,8 +1057,8 @@ async def main() -> None:
                                 "job_ids_collected": len(seen_ids),
                                 "listings_staged": listing_count,
                                 "jobs_skipped_existing": jobs_skipped_existing,
-                                "detail_selected_rows": len(seen_ids),
-                                "detail_skipped_existing_rows": jobs_skipped_existing,
+                                "detail_selected_rows": detail_selected_rows,
+                                "detail_skipped_existing_rows": detail_skipped_existing_rows,
                                 "detail_target_rows": total_details,
                                 "detail_pending": total_details - detail_ok - detail_fail,
                                 "detail_completed": detail_ok,
@@ -837,12 +1073,9 @@ async def main() -> None:
             db.commit()
 
         if args.crawl_job_id:
-            event_seq += 1
-            _write_progress_event(
-                db,
+            crawl_runtime.mark_completed(
                 crawl_job_id=cj_id,
-                sequence_no=event_seq,
-                event_type="crawl.completed",
+                source_site="offertoday",
                 payload={
                     "pages": page_count,
                     "listings": listing_count,
@@ -850,41 +1083,52 @@ async def main() -> None:
                     "detail_fail": detail_fail,
                     "ip_blocked": ip_blocked,
                 },
-            )
-            cj = db.query(CrawlJob).filter(CrawlJob.id == cj_id).first()
-            if cj:
-                cj.status = "completed"
-                cj.completed_at = datetime.now(timezone.utc)
-                cj.metrics = {
+                metrics={
                     "pages_processed": page_count,
                     "job_ids_collected": len(seen_ids),
                     "listings_staged": listing_count,
                     "new_jobs_added": new_jobs_count,
                     "jobs_skipped_existing": jobs_skipped_existing,
-                    "detail_selected_rows": len(seen_ids),
-                    "detail_skipped_existing_rows": jobs_skipped_existing,
-                    "detail_target_rows": listing_count,
-                    "detail_pending": 0,
+                    "detail_selected_rows": detail_selected_rows,
+                    "detail_skipped_existing_rows": detail_skipped_existing_rows,
+                    "detail_target_rows": total_details,
+                    "detail_pending": max(total_details - detail_ok - detail_fail, 0),
                     "detail_completed": detail_ok,
                     "detail_failed": detail_fail,
                     "items_emitted": detail_ok,
                     "jobs_saved": detail_ok,
                     "search_families": search_families,
-                }
-                if new_jobs_count == 0:
-                    cj.error_message = "No new OfferToday jobs were discovered for this crawl."
-                db.commit()
-                logger.info("Crawl job %s: completed", cj_id)
+                },
+                error_message="No new OfferToday jobs were discovered for this crawl."
+                if new_jobs_count == 0 and crawl_phase != "detail"
+                else None,
+            )
+            logger.info(
+                build_scrape_log_event(
+                    "SCRAPE_EXECUTOR_DONE",
+                    source="offertoday",
+                    crawl_job_id=cj_id,
+                    crawl_phase=crawl_phase,
+                    crawl_mode="headed" if args.headed else "headless",
+                    job_ids_collected=len(seen_ids),
+                    listings_staged=listing_count,
+                    detail_target_rows=total_details,
+                    detail_completed=detail_ok,
+                    detail_failed=detail_fail,
+                    jobs_skipped_existing=jobs_skipped_existing,
+                )
+            )
+            logger.info("Crawl job %s: completed", cj_id)
 
     except Exception as exc:
         logger.error("Crawl failed: %s", exc)
         if args.crawl_job_id:
-            cj = db.query(CrawlJob).filter(CrawlJob.id == cj_id).first()
-            if cj:
-                cj.status = "failed"
-                cj.error_message = str(exc)
-                cj.completed_at = datetime.now(timezone.utc)
-                db.commit()
+            crawl_runtime.mark_failed(
+                crawl_job_id=cj_id,
+                source_site="offertoday",
+                error_message=str(exc),
+                payload={"phase": 2 if crawl_phase == "detail" else 1},
+            )
     finally:
         db.close()
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 from types import SimpleNamespace
 from uuid import uuid4
@@ -167,3 +167,88 @@ async def test_stream_progress_forwards_request_and_client_stream_ids(monkeypatc
         "client_stream_id": "stream-3",
         "max_idle": 30,
     }
+
+
+@pytest.mark.asyncio
+async def test_progress_event_generator_stays_open_while_backlog_visible(monkeypatch, caplog):
+    payloads = iter(
+        [
+            {"active": {}, "all": {"job-1": {}}, "backlog": {"job-1": {}}, "has_active": False, "has_backlog": True},
+            {"active": {}, "all": {"job-1": {}}, "backlog": {"job-1": {}}, "has_active": False, "has_backlog": True},
+            {"active": {}, "all": {"job-1": {}}, "backlog": {"job-1": {}}, "has_active": False, "has_backlog": True},
+            {"active": {}, "all": {}, "backlog": {}, "has_active": False, "has_backlog": False},
+            {"active": {}, "all": {}, "backlog": {}, "has_active": False, "has_backlog": False},
+        ]
+    )
+
+    monkeypatch.setattr(progress_api, "_collect_progress_payload", lambda: next(payloads))
+
+    async def fast_sleep(_seconds: float):
+        return None
+
+    monkeypatch.setattr(progress_api.asyncio, "sleep", fast_sleep)
+
+    generator = progress_api._progress_event_generator(
+        request_id="req-backlog",
+        client_stream_id="stream-backlog",
+        max_idle=2,
+    )
+
+    chunks: list[str] = []
+    with caplog.at_level(logging.INFO, logger="app.api.progress"):
+        for _ in range(7):
+            try:
+                chunks.append(await generator.__anext__())
+            except StopAsyncIteration:
+                break
+
+    # While backlog is visible (has_backlog=True, has_active=False) the stream must
+    # keep pushing data instead of closing, so completed records remain visible.
+    assert len(chunks) >= 4
+    assert "closed" not in chunks[0]
+    assert "closed" not in chunks[2]
+    # Once the backlog clears and `all` is empty, idle counting resumes and closes.
+    assert chunks[-1] == 'data: {"closed": true, "reason": "idle"}\n\n'
+    assert "PROGRESS_STREAM_IDLE" in caplog.text
+    assert "PROGRESS_STREAM_CLOSE" in caplog.text
+
+
+def test_build_progress_snapshot_includes_listing_and_detail_elapsed_seconds():
+    base = datetime(2026, 7, 8, 14, 0, 0, tzinfo=timezone.utc)
+    crawl_job = SimpleNamespace(
+        id=uuid4(),
+        status="completed",
+        source_site="offertoday",
+        trigger_type="manual",
+        schedule_id=None,
+        request_payload={"crawl_mode": "headless"},
+        queued_at=base,
+        started_at=base,
+        completed_at=base + timedelta(seconds=400),
+        updated_at=base + timedelta(seconds=400),
+        error_message=None,
+        metrics={},
+    )
+    started_event = SimpleNamespace(event_type="crawl.started", payload={}, created_at=base)
+    listing_done_event = SimpleNamespace(
+        event_type="listing_completed",
+        payload={"phase": 1},
+        created_at=base + timedelta(seconds=120),
+    )
+    completed_event = SimpleNamespace(
+        event_type="crawl.completed",
+        payload={},
+        created_at=base + timedelta(seconds=400),
+    )
+    events = [started_event, listing_done_event, completed_event]
+
+    snapshot = _build_progress_snapshot(
+        crawl_job,
+        completed_event,
+        now=base + timedelta(seconds=400),
+        events=events,
+        category_lookup_cache={},
+    )
+
+    assert snapshot["listing_elapsed_seconds"] == 120
+    assert snapshot["detail_elapsed_seconds"] == 280

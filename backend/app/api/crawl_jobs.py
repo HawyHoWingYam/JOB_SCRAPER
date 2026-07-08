@@ -34,7 +34,6 @@ crawl_job_repository = CrawlJobRepository()
 crawl_job_listing_repository = CrawlJobListingRepository()
 schedule_repository = ScheduleRepository()
 dispatch_service = CrawlJobDispatchService()
-OFFERTODAY_AUTH_STATE_PATH = "/app/scripts/offertoday_auth_state.json"
 
 
 class ResumeCrawlJobRequest(BaseModel):
@@ -216,47 +215,6 @@ async def create_crawl_job(
             source_listing_crawl_job_id=str(request.source_listing_crawl_job_id or "") or None,
         )
     )
-
-    # Queue OfferToday crawl via subprocess (reliable, no asyncio GC issues)
-    if effective_source_site == "offertoday" and request.crawl_phase in (None, "listing"):
-        _cat_ids = ",".join(str(c) for c in (request.category_ids or []))
-        _resolved_request_payload = dict(getattr(dispatch_result.crawl_job, "request_payload", {}) or {})
-        _resolved_max_pages = _resolved_request_payload.get("max_pages")
-        if _resolved_max_pages is None:
-            _resolved_max_pages = request.max_pages
-        if _resolved_max_pages is None:
-            _resolved_max_pages = resolve_default_max_pages(effective_source_site)
-        _max_p = str(int(_resolved_max_pages))
-        _keywords = str(request.keywords or "").strip()
-        _cj_id = str(dispatch_result.crawl_job.id)
-        _script = "/app/scripts/offertoday_standalone_crawl.py"
-        _resolved_resume_strategy = str(
-            _resolved_request_payload.get("resume_strategy") or "fresh_profile"
-        ).strip() or "fresh_profile"
-        import subprocess as _sp
-        _args = [
-            "python",
-            _script,
-            "--category-ids",
-            _cat_ids,
-            "--auth-state",
-            OFFERTODAY_AUTH_STATE_PATH,
-            "--resume-strategy",
-            _resolved_resume_strategy,
-        ]
-        if _keywords:
-            _args.extend(["--keywords", _keywords])
-        _args.extend(["--max-pages", _max_p, "--crawl-job-id", _cj_id])
-        if bool(_resolved_request_payload.get("skip_existing")):
-            _args.append("--skip-existing")
-        if str(_resolved_request_payload.get("crawl_mode") or request.crawl_mode or "").lower() == "headed":
-            _args.append("--headed")
-        logger.info(
-            "OfferToday subprocess starting id=%s args=%s",
-            _cj_id,
-            " ".join(_args),
-        )
-        _sp.Popen(_args)
 
     return dispatch_result.crawl_job
 

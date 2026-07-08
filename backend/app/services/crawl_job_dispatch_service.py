@@ -15,6 +15,7 @@ from app.models.schedule import ScrapeSchedule, ScheduleExecution
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.schedule_repository import ScheduleRepository
+from app.services.crawl_job_execution_launcher import CrawlJobExecutionLauncher
 from app.services.headed_crawl_runtime import ensure_headed_crawl_worker_available
 from app.services.source_catalog import resolve_default_max_pages
 from app.scraper.manual_action import (
@@ -48,11 +49,13 @@ class CrawlJobDispatchService:
         event_outbox_repository: EventOutboxRepository | None = None,
         outbox_publisher: OutboxPublisher | None = None,
         schedule_repository: ScheduleRepository | None = None,
+        execution_launcher: CrawlJobExecutionLauncher | None = None,
     ):
         self.crawl_job_repository = crawl_job_repository or CrawlJobRepository()
         self.event_outbox_repository = event_outbox_repository or EventOutboxRepository()
         self.outbox_publisher = outbox_publisher or OutboxPublisher()
         self.schedule_repository = schedule_repository or ScheduleRepository()
+        self.execution_launcher = execution_launcher or CrawlJobExecutionLauncher()
 
     def build_manual_request_payload(
         self,
@@ -211,31 +214,39 @@ class CrawlJobDispatchService:
             emitted_by=requested_by or trigger_type,
             auto_commit=False,
         )
-        command_row = self.event_outbox_repository.enqueue(
-            db,
-            topic=self._resolve_command_topic(source_site=source_site, crawl_mode=payload.get("crawl_mode")),
-            aggregate_type="crawl_job",
-            aggregate_id=str(crawl_job.id),
-            event_type="crawl.requested",
-            payload=event_payload,
-            auto_commit=False,
-        )
+        command_row = None
+        if self._should_enqueue_command(source_site=source_site, payload=payload):
+            command_row = self.event_outbox_repository.enqueue(
+                db,
+                topic=self._resolve_command_topic(source_site=source_site, crawl_mode=payload.get("crawl_mode")),
+                aggregate_type="crawl_job",
+                aggregate_id=str(crawl_job.id),
+                event_type="crawl.requested",
+                payload=event_payload,
+                auto_commit=False,
+            )
 
         db.commit()
         db.refresh(crawl_job)
         if execution is not None:
             db.refresh(execution)
-        self.outbox_publisher.publish_row(db, row=command_row)
-        self.outbox_publisher.publish_pending_batch(db, limit=100)
+        launch_result = self.execution_launcher.launch(crawl_job)
+        if command_row is not None:
+            self.outbox_publisher.publish_row(db, row=command_row)
+            self.outbox_publisher.publish_pending_batch(db, limit=100)
 
         logger.info(
-            "SCRAPE_DISPATCHED source=%s crawl_job_id=%s phase=%s mode=%s trigger=%s topic=%s",
+            "SCRAPE_DISPATCHED source=%s crawl_job_id=%s phase=%s mode=%s trigger=%s topic=%s launched=%s command=%s",
             source_site,
             crawl_job.id,
             payload.get("crawl_phase"),
             payload.get("crawl_mode"),
             trigger_type,
-            self._resolve_command_topic(source_site=source_site, crawl_mode=payload.get("crawl_mode")),
+            self._resolve_command_topic(source_site=source_site, crawl_mode=payload.get("crawl_mode"))
+            if command_row is not None
+            else None,
+            launch_result.launched,
+            " ".join(launch_result.command or []),
         )
         return CrawlJobDispatchResult(crawl_job=crawl_job, schedule_execution=execution)
 
@@ -373,23 +384,35 @@ class CrawlJobDispatchService:
             emitted_by=requested_by or "api",
             auto_commit=False,
         )
-        command_row = self.event_outbox_repository.enqueue(
-            db,
-            topic=self._resolve_command_topic(
-                source_site=crawl_job.source_site,
-                crawl_mode=request_payload.get("crawl_mode"),
-            ),
-            aggregate_type="crawl_job",
-            aggregate_id=str(crawl_job.id),
-            event_type="crawl.requested",
-            payload=requested_payload,
-            auto_commit=False,
-        )
+        command_row = None
+        if self._should_enqueue_command(source_site=crawl_job.source_site, payload=request_payload):
+            command_row = self.event_outbox_repository.enqueue(
+                db,
+                topic=self._resolve_command_topic(
+                    source_site=crawl_job.source_site,
+                    crawl_mode=request_payload.get("crawl_mode"),
+                ),
+                aggregate_type="crawl_job",
+                aggregate_id=str(crawl_job.id),
+                event_type="crawl.requested",
+                payload=requested_payload,
+                auto_commit=False,
+            )
 
         db.commit()
         db.refresh(crawl_job)
-        self.outbox_publisher.publish_row(db, row=command_row)
-        self.outbox_publisher.publish_pending_batch(db, limit=100)
+        launch_result = self.execution_launcher.launch(crawl_job)
+        if command_row is not None:
+            self.outbox_publisher.publish_row(db, row=command_row)
+            self.outbox_publisher.publish_pending_batch(db, limit=100)
+        logger.info(
+            "SCRAPE_RESUMED source=%s crawl_job_id=%s mode=%s launched=%s command=%s",
+            crawl_job.source_site,
+            crawl_job.id,
+            request_payload.get("crawl_mode"),
+            launch_result.launched,
+            " ".join(launch_result.command or []),
+        )
         return crawl_job
 
     def _build_requested_event_payload(self, crawl_job: CrawlJob) -> dict[str, Any]:
@@ -439,4 +462,16 @@ class CrawlJobDispatchService:
                 return request_resume_context
 
         return {}
+
+    def _should_enqueue_command(self, *, source_site: str, payload: dict[str, Any]) -> bool:
+        crawl_job = type(
+            "_LaunchCandidate",
+            (),
+            {
+                "id": payload.get("crawl_job_id") or "",
+                "source_site": source_site,
+                "request_payload": payload,
+            },
+        )()
+        return not self.execution_launcher.should_launch_locally(crawl_job)
 

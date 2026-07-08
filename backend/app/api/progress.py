@@ -32,6 +32,7 @@ INACTIVE_WORK_EVENT_TYPES = {
     "crawl.failed",
     "crawl.cancelled",
 }
+TERMINAL_WORK_EVENT_TYPES = {"crawl.completed", "crawl.failed", "crawl.cancelled"}
 ACTIVITY_INTERVAL_EVENT_TYPES = ACTIVE_WORK_EVENT_TYPES | INACTIVE_WORK_EVENT_TYPES
 PROGRESS_CONTEXT_EVENT_TYPES = ACTIVITY_INTERVAL_EVENT_TYPES | {
     "listing_completed",
@@ -56,6 +57,31 @@ def _elapsed_seconds(reference_time, timestamp) -> int:
         return int((effective_reference - effective_timestamp).total_seconds())
     except TypeError:
         return 0
+
+
+def _phase_elapsed_seconds(
+    *,
+    start_event: Any | None,
+    end_event: Any | None,
+    now,
+    fallback_running: bool,
+) -> int:
+    """Elapsed seconds between two phase-boundary events.
+
+    Falls back to ``now - start`` when the end event has not been emitted yet and
+    ``fallback_running`` is true (the phase is still in progress).
+    """
+    if start_event is None:
+        return 0
+    start_at = getattr(start_event, "created_at", None)
+    if start_at is None:
+        return 0
+    end_at = getattr(end_event, "created_at", None) if end_event is not None else None
+    if end_at is not None:
+        return max(0, _elapsed_seconds(end_at, start_at))
+    if fallback_running:
+        return max(0, _elapsed_seconds(now, start_at))
+    return 0
 
 
 def _latest_event_of_type(events: list[Any] | None, event_type: str) -> Any | None:
@@ -185,6 +211,8 @@ def _build_progress_snapshot(
         events,
         "listing_completed",
     )
+    crawl_started_event = _latest_event_of_type(events, "crawl.started")
+    terminal_event = _latest_event_of_types(events, TERMINAL_WORK_EVENT_TYPES)
     waf_state_event = latest_event if latest_event_type in {"waf.challenge", "waf.challenge_cleared"} else _latest_event_of_types(
         events,
         {"waf.challenge", "waf.challenge_cleared"},
@@ -362,6 +390,20 @@ def _build_progress_snapshot(
     if detail_job_total is None:
         detail_job_total = detail_target_rows or None
 
+    is_running = crawl_job.status == "running"
+    listing_elapsed_seconds = _phase_elapsed_seconds(
+        start_event=crawl_started_event,
+        end_event=listing_completed_event,
+        now=now,
+        fallback_running=is_running,
+    )
+    detail_elapsed_seconds = _phase_elapsed_seconds(
+        start_event=listing_completed_event,
+        end_event=terminal_event,
+        now=now,
+        fallback_running=is_running,
+    )
+
     return {
         "crawl_job_id": str(crawl_job.id),
         "status": status,
@@ -384,6 +426,8 @@ def _build_progress_snapshot(
             events=list(events or []),
             now=now,
         ),
+        "listing_elapsed_seconds": listing_elapsed_seconds,
+        "detail_elapsed_seconds": detail_elapsed_seconds,
         "search_family": search_family,
         "search_families": search_families,
         "phase_rate": float(event_payload.get("phase_rate") or 0),
@@ -736,7 +780,12 @@ async def _progress_event_generator(
 
             yield f"data: {json.dumps(event_data)}\n\n"
 
-            if not event_data["has_active"]:
+            has_visible_work = (
+                event_data["has_active"]
+                or event_data["has_backlog"]
+                or bool(event_data.get("all"))
+            )
+            if not has_visible_work:
                 idle_count += 1
                 if idle_count == 1:
                     _log_progress_stream_event(

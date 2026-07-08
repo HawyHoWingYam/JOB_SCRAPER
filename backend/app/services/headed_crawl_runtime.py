@@ -5,12 +5,14 @@ import redis
 
 from app.config import settings
 from app.messaging.topics import STREAM_CRAWL_COMMANDS_HEADED
+from app.services.crawl_job_execution_launcher import DIRECT_LAUNCH_SCRIPT_MAP
 from app.utils.redis_client import RedisClient
 from app.utils.time import utc_now
 
 HEADED_CRAWL_GROUP_NAME = "crawl-headed-workers"
 HEADED_CRAWL_DEFAULT_CONSUMER = "crawl-headed-worker"
 HEADED_CRAWL_START_COMMAND = r"python backend\scripts\prepare_headed_crawl_worker_host.py"
+DIRECT_LAUNCH_HEADED_SOURCES = frozenset({"offertoday", "jobsdb", "ctgoodjobs"})
 
 
 class HeadedCrawlWorkerUnavailableError(RuntimeError):
@@ -134,7 +136,8 @@ def ensure_headed_crawl_worker_available(*, crawl_mode: str | None, source_site:
         return
 
     # OfferToday runs headed mode inside the same Docker container — no host-side worker needed
-    if str(source_site or "").strip().lower() == "offertoday":
+    normalized_source = str(source_site or "").strip().lower()
+    if normalized_source in DIRECT_LAUNCH_SCRIPT_MAP or normalized_source in DIRECT_LAUNCH_HEADED_SOURCES:
         return
 
     status = get_headed_crawl_worker_status()
