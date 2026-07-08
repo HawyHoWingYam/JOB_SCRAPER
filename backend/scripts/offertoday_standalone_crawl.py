@@ -426,6 +426,7 @@ async def main() -> None:
     detail_fail = 0
     company_repository = CompanyRepository()
     job_repository = JobRepository()
+    ip_blocked = False
 
     if args.crawl_job_id:
         cj_id = args.crawl_job_id
@@ -474,15 +475,24 @@ async def main() -> None:
     )
 
     try:
+        auth_state_path = Path(args.auth_state).resolve() if args.auth_state else None
+        if auth_state_path and auth_state_path.exists():
+            logger.info("Loading auth state from %s", auth_state_path)
+        elif args.auth_state:
+            logger.warning(
+                "Auth state file not found: %s ??starting without pre-loaded session",
+                auth_state_path,
+            )
+
         async with OfferTodayBrowserRuntime(
             headed=args.headed,
-            auth_state_path=args.auth_state or None,
+            auth_state_path=str(auth_state_path) if auth_state_path else None,
             resume_strategy=args.resume_strategy,
         ) as runtime:
             page = runtime._page
             if page is None:
-                raise RuntimeError("OfferToday browser runtime did not initialize a page")
-            # Check immediately whether WAF fired on the warmup page.
+                raise RuntimeError("OfferToday browser runtime did not create a page")
+
             await _check_and_handle_waf_challenge(
                 page, headed=args.headed, crawl_job_id=cj_id, db=db
             )
@@ -499,13 +509,17 @@ async def main() -> None:
                 if condition_key in exhausted_conditions:
                     continue
 
-                payload = build_offertoday_listing_payload(category_id=category_id, keyword=keyword, page=page_number)
+                payload = build_offertoday_listing_payload(
+                    category_id=category_id,
+                    keyword=keyword,
+                    page=page_number,
+                )
                 task_listing_url = (
                     OFFERTODAY_LISTING_BROWSE_URL
                     if task.get("endpoint") == "browse"
                     else None
                 )
-                data: dict[str, Any] = await _fetch_listing_json(
+                data = await _fetch_listing_json(
                     runtime,
                     payload,
                     listing_url=task_listing_url,
@@ -513,7 +527,6 @@ async def main() -> None:
 
                 if not data or data.get("code") != 0:
                     consecutive_failures += 1
-                    # After 3 consecutive bad responses, check for WAF challenge.
                     if consecutive_failures >= 3:
                         await _check_and_handle_waf_challenge(
                             page, headed=args.headed, crawl_job_id=cj_id, db=db
@@ -523,7 +536,6 @@ async def main() -> None:
 
                 consecutive_failures = 0
 
-                # Periodic WAF check every 50 processed tasks.
                 if task_index > 0 and task_index % 50 == 0:
                     await _check_and_handle_waf_challenge(
                         page, headed=args.headed, crawl_job_id=cj_id, db=db
@@ -646,6 +658,7 @@ async def main() -> None:
 
                 if not data.get("data", {}).get("hasMore"):
                     exhausted_conditions.add(condition_key)
+
             if is_default_it_crawl and len(seen_ids) >= DEFAULT_IT_UNIQUE_JOB_TARGET:
                 logger.info("Default IT crawl target reached; skipping remaining listing tasks.")
 
@@ -688,10 +701,8 @@ async def main() -> None:
                 .all()
             )
             total_details = len(listings)
-            ip_blocked = False
 
             for idx, listing in enumerate(listings):
-                # periodic WAF check — mirrors the listing-loop pattern
                 if idx > 0 and idx % 20 == 0:
                     await _check_and_handle_waf_challenge(
                         page, headed=args.headed, crawl_job_id=cj_id, db=db
@@ -710,7 +721,6 @@ async def main() -> None:
                         detail_success = True
                         break
 
-                    # IP block detection: code -1000035 = IP 行为异常, an environment-level block
                     if data and data.get("code") == -1000035:
                         logger.warning("IP block detected (code=-1000035) at detail index %d", idx + 1)
                         ip_blocked = True
@@ -720,7 +730,6 @@ async def main() -> None:
                         await asyncio.sleep(2.0 ** attempt)
 
                 if ip_blocked:
-                    # Environment-level block — write event, bulk-fail remaining, break
                     if args.crawl_job_id:
                         event_seq += 1
                         _write_progress_event(
@@ -737,7 +746,6 @@ async def main() -> None:
                                 "detail_failed": detail_fail,
                             },
                         )
-                        # bulk mark remaining pending as failed
                         remaining = total_details - detail_ok - detail_fail
                         if remaining > 0:
                             db.query(CrawlJobListing).filter(
