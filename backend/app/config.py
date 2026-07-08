@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     jobsdb_headed_browser_user_data_dir: Optional[str] = None
     jobsdb_headed_browser_executable_path: Optional[str] = None
     jobsdb_headed_navigation_timeout_ms: int = 60000
+    offertoday_headed_browser_channel: str = "msedge"
+    offertoday_headed_browser_user_data_dir: Optional[str] = None
+    offertoday_headed_browser_executable_path: Optional[str] = None
+    offertoday_headed_navigation_timeout_ms: int = 60000
     jobsdb_headed_worker_lock_port: int = 47651
     jobsdb_headed_worker_stale_seconds: int = 60
     manual_action_helper_host: str = "127.0.0.1"
@@ -89,6 +93,8 @@ class Settings(BaseSettings):
         'recommendation_api_url',
         'jobsdb_headed_browser_user_data_dir',
         'jobsdb_headed_browser_executable_path',
+        'offertoday_headed_browser_user_data_dir',
+        'offertoday_headed_browser_executable_path',
         'ctgoodjobs_proxy_static_url',
         'ctgoodjobs_proxy_pool_api_base_url',
         'ctgoodjobs_proxy_pool_delete_path',
