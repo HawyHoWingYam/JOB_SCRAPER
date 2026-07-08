@@ -141,7 +141,10 @@ class RequestMonitoringMiddleware:
     def _get_request_id(scope: Scope) -> str:
         for name, value in scope.get("headers", []):
             if name.lower() == REQUEST_ID_HEADER.lower().encode("latin-1"):
-                return value.decode("latin-1")
+                request_id = value.decode("latin-1").strip()
+                if request_id:
+                    return request_id
+                break
         return create_request_id()
 
     @staticmethod

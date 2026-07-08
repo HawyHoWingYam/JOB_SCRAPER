@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import logging
 
 from fastapi import FastAPI, Request
@@ -67,6 +68,16 @@ def test_request_monitoring_generates_request_id_when_missing():
     assert response.status_code == 200
     assert response.headers[REQUEST_ID_HEADER]
     assert response.headers[REQUEST_ID_HEADER].startswith("req-")
+
+
+def test_request_monitoring_generates_request_id_for_blank_incoming_header():
+    client = TestClient(build_test_app())
+
+    response = client.get("/request-id", headers={REQUEST_ID_HEADER: "   "})
+
+    assert response.status_code == 200
+    assert response.headers[REQUEST_ID_HEADER].startswith("req-")
+    assert response.json()["request_id"] == response.headers[REQUEST_ID_HEADER]
 
 
 def test_request_monitoring_populates_request_state():
@@ -164,3 +175,12 @@ def test_request_monitoring_logs_slow_request_summary_for_non_control_plane_path
     assert response.status_code == 200
     assert "API_REQUEST_SUMMARY" in caplog.text
     assert "path=/slow" in caplog.text
+
+
+def test_main_module_preserves_fastapi_app_export_and_wrapped_asgi_export():
+    main_module = importlib.reload(importlib.import_module("app.main"))
+
+    assert isinstance(main_module.app, FastAPI)
+    assert callable(main_module.asgi_app)
+    assert main_module.asgi_app is not main_module.app
+    assert main_module.app.openapi()["openapi"]

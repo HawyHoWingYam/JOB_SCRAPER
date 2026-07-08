@@ -102,11 +102,11 @@ async def root():
     }
 
 
-app = install_request_monitoring(app)
+asgi_app = install_request_monitoring(app)
 
 
 def main() -> None:
-    run_api_app("app.main:app", settings_obj=settings)
+    run_api_app("app.main:asgi_app", settings_obj=settings)
 
 
 if __name__ == "__main__":
