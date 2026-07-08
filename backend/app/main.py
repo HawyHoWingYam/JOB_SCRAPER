@@ -3,11 +3,12 @@ JobsDB Scraper - FastAPI Backend Application
 Main entry point for the backend API service.
 """
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import logging
+
 from app.config import settings
 from app.api import router
 from app.api.category_routes import router as category_router
@@ -19,6 +20,7 @@ from app.api.stats import router as stats_router
 from app.api.skills import router as skills_router
 from app.logging_config import configure_logging, redact_url
 from app.database import SessionLocal
+from app.request_monitoring import install_request_monitoring
 from app.server_runtime import run_api_app
 from app.services.startup_recovery_service import StartupRecoveryService
 
@@ -68,6 +70,7 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+install_request_monitoring(app)
 
 # Configure CORS
 cors_origins = settings.cors_origins.split(",")
