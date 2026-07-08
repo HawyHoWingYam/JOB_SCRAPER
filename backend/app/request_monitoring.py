@@ -5,6 +5,7 @@ import time
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
 
 REQUEST_ID_HEADER = "X-Request-ID"
 SLOW_REQUEST_THRESHOLD_MS = 1000
@@ -36,6 +37,24 @@ def should_log_request_summary(*, path: str, status_code: int, duration_ms: int)
     return any(path.startswith(prefix) for prefix in IMPORTANT_REQUEST_PATH_PREFIXES)
 
 
+def log_request_summary(*, request: Request, request_id: str, status_code: int, duration_ms: int) -> None:
+    if should_log_request_summary(
+        path=request.url.path,
+        status_code=status_code,
+        duration_ms=duration_ms,
+    ):
+        logger.info(
+            build_monitoring_log_event(
+                "API_REQUEST_SUMMARY",
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                status=status_code,
+                duration_ms=duration_ms,
+            )
+        )
+
+
 def install_request_monitoring(app: FastAPI) -> None:
     @app.middleware("http")
     async def request_monitoring_middleware(request: Request, call_next):
@@ -56,23 +75,22 @@ def install_request_monitoring(app: FastAPI) -> None:
                     duration_ms=duration_ms,
                 )
             )
-            raise
+            response = PlainTextResponse("Internal Server Error", status_code=500)
+            response.headers[REQUEST_ID_HEADER] = request_id
+            log_request_summary(
+                request=request,
+                request_id=request_id,
+                status_code=response.status_code,
+                duration_ms=duration_ms,
+            )
+            return response
 
         response.headers[REQUEST_ID_HEADER] = request_id
         duration_ms = int((time.perf_counter() - started_at) * 1000)
-        if should_log_request_summary(
-            path=request.url.path,
+        log_request_summary(
+            request=request,
+            request_id=request_id,
             status_code=response.status_code,
             duration_ms=duration_ms,
-        ):
-            logger.info(
-                build_monitoring_log_event(
-                    "API_REQUEST_SUMMARY",
-                    request_id=request_id,
-                    method=request.method,
-                    path=request.url.path,
-                    status=response.status_code,
-                    duration_ms=duration_ms,
-                )
-            )
+        )
         return response
