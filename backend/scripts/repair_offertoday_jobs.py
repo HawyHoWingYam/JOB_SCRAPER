@@ -5,15 +5,19 @@ import asyncio
 import argparse
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.database import SessionLocal
+from app.scraper.manual_action import RESUME_STRATEGY_FRESH_PROFILE
 from app.scraper.offertoday_browser_detail_scraper import (
     OfferTodayBrowserDetailScraper,
+    OfferTodayDetailUnavailableError,
     OfferTodayIPBlockedError,
 )
+from app.scraper.offertoday_pacing import pause_before_detail_request
 from app.services.offertoday_job_repair_service import OfferTodayJobRepairService
 
 
@@ -24,6 +28,7 @@ async def repair_jobs(
     live_fetch_missing: bool = True,
     auth_state_path: str | None = None,
     headed: bool = False,
+    resume_strategy: str = RESUME_STRATEGY_FRESH_PROFILE,
     manual_verification_timeout_seconds: int = 180,
 ) -> dict[str, int]:
     db = SessionLocal()
@@ -60,17 +65,31 @@ async def repair_jobs(
             live_candidates = [job for job in jobs if service.is_degraded_job(job)]
             if live_candidates:
                 async with OfferTodayBrowserDetailScraper(
+                    request_payload={"resume_strategy": resume_strategy},
                     auth_state_path=auth_state_path,
                     headed=headed,
                     manual_verification_timeout_seconds=manual_verification_timeout_seconds,
                 ) as scraper:
                     for job in live_candidates:
+                        listing = service.get_latest_listing(job.source_job_id)
+                        job_id, encrypted_job_id = service.resolve_detail_identifiers(job, listing)
                         try:
-                            detail_payload = await scraper.fetch_job_detail(job.source_job_id)
+                            await pause_before_detail_request()
+                            detail_payload = await scraper.fetch_job_detail(
+                                job_id,
+                                encrypted_job_id=encrypted_job_id,
+                            )
                         except OfferTodayIPBlockedError as exc:
                             live_ip_blocked = True
                             live_ip_blocked_job_id = exc.job_id
                             break
+                        except OfferTodayDetailUnavailableError as exc:
+                            live_fetch_failed += 1
+                            if listing is not None:
+                                listing.detail_status = "failed"
+                                listing.detail_error_message = str(exc)
+                                listing.detail_completed_at = datetime.now(UTC)
+                            continue
                         if not detail_payload:
                             live_fetch_failed += 1
                             continue
@@ -143,6 +162,12 @@ def main() -> None:
         help="Run OfferToday live detail repair in a visible browser so WAF verification can be completed manually.",
     )
     parser.add_argument(
+        "--resume-strategy",
+        default=RESUME_STRATEGY_FRESH_PROFILE,
+        choices=("fresh_profile", "reuse_open_browser"),
+        help="How live detail repair should create or attach to the browser session.",
+    )
+    parser.add_argument(
         "--manual-timeout",
         type=int,
         default=180,
@@ -157,6 +182,7 @@ def main() -> None:
             live_fetch_missing=not args.skip_live_fetch,
             auth_state_path=args.auth_state or None,
             headed=args.headed,
+            resume_strategy=args.resume_strategy,
             manual_verification_timeout_seconds=args.manual_timeout,
         )
     )

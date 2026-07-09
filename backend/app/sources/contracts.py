@@ -129,9 +129,16 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
     """
     from app.sources.offertoday.parsers import build_offertoday_job_url
 
+    raw_job_id = str(
+        parsed_job.get("job_id")
+        or parsed_job.get("jobId")
+        or parsed_job.get("encrypted_job_id")
+        or ""
+    ).strip()
     encrypted_id = str(
         parsed_job.get("encrypted_job_id")
-        or parsed_job.get("jobId")
+        or parsed_job.get("encryptJobId")
+        or raw_job_id
         or ""
     ).strip()
 
@@ -154,7 +161,7 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
 
     return CanonicalScrapedJob(
         source_site="offertoday",
-        source_job_id=encrypted_id,
+        source_job_id=raw_job_id,
         source_url=build_offertoday_job_url(encrypted_id),
         title=parsed_job.get("title") or parsed_job.get("jobName") or "",
         description=(

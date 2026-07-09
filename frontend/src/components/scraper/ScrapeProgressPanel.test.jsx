@@ -212,7 +212,7 @@ describe('ScrapeProgressPanel', () => {
     expect(await screen.findByText(/ids found: 49/i)).toBeInTheDocument();
     expect(screen.getByText(/detail queue: 42/i)).toBeInTheDocument();
     expect(await screen.findByText(/pages: 2\/8/i)).toBeInTheDocument();
-    expect(screen.getByText(/skipped existing: 7/i)).toBeInTheDocument();
+    expect(screen.getByText(/duplicate ids skipped: 7/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
     expect(screen.getByText(/elapsed: 11s/i)).toBeInTheDocument();
     expect(screen.queryByText(/rate:/i)).not.toBeInTheDocument();
@@ -332,7 +332,7 @@ describe('ScrapeProgressPanel', () => {
 
     expect(await screen.findByText(/detail crawled: 2\/10/i)).toBeInTheDocument();
     expect(screen.getByText(/ids found: 12/i)).toBeInTheDocument();
-    expect(screen.getByText(/skipped existing: 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/duplicate ids skipped: 2/i)).toBeInTheDocument();
     expect(screen.getByText(/current row: 3\/10/i)).toBeInTheDocument();
     expect(screen.queryByText(/rows checked:/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /diagnostics/i }));
@@ -2093,6 +2093,198 @@ describe('ScrapeProgressPanel', () => {
 
     expect(MockEventSource.instances).toHaveLength(1);
     expect(firstStream.close).not.toHaveBeenCalled();
+
+    unmount();
+  });
+
+  it('keeps the last progress visible and does not call onClose when the stream ends with reason idle', () => {
+    const onClose = vi.fn();
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={onClose} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          'crawl-job-idle-1': {
+            crawl_job_id: 'crawl-job-idle-1',
+            status: 'completed',
+            operator_state: 'completed_with_downstream_backlog',
+            metric_scope: 'backlog_pool',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            phase: 1,
+            listings_staged: 10,
+            detail_pending: 4,
+            detail_completed: 6,
+            completed_at: '2026-05-27T09:05:00Z',
+          },
+        },
+      });
+    });
+
+    expect(screen.getByText(/task crawl-job-idle-1/i)).toBeInTheDocument();
+
+    act(() => {
+      stream.emitMessage({ closed: true, reason: 'idle' });
+    });
+
+    // The panel stays mounted with the last DB-backed record visible; onClose is NOT called.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/task crawl-job-idle-1/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('reconnects the SSE stream when idle polling detects new active work', async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        has_active: true,
+        has_backlog: false,
+        all: {
+          engineering: {
+            crawl_job_id: 'crawl-job-new',
+            status: 'running',
+            category_name: 'Engineering',
+            phase: 1,
+            current_page: 1,
+            total_pages: 3,
+            job_ids_collected: 1,
+          },
+        },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          done: {
+            crawl_job_id: 'done',
+            status: 'completed',
+            category_name: 'Done',
+            completed_at: '2026-05-27T09:05:00Z',
+          },
+        },
+      });
+    });
+
+    act(() => {
+      stream.emitMessage({ closed: true, reason: 'idle' });
+    });
+    expect(MockEventSource.instances).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/scrape/progress'));
+    expect(MockEventSource.instances).toHaveLength(2);
+
+    unmount();
+    vi.useRealTimers();
+  });
+
+  it('labels skipped existing rows as duplicate IDs skipped in the listing run', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            crawl_job_id: 'crawl-job-listing-dup',
+            status: 'running',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            phase: 1,
+            current_page: 2,
+            total_pages: 8,
+            job_ids_collected: 49,
+            detail_target_rows: 42,
+            jobs_skipped_existing: 7,
+            elapsed_seconds: 11,
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/duplicate ids skipped: 7/i)).toBeInTheDocument();
+    expect(screen.queryByText(/skipped existing:/i)).not.toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('surfaces duplicate and failed counts on a completed detail run', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            crawl_job_id: 'crawl-job-detail-done',
+            status: 'completed',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            metric_scope: 'detail_run',
+            phase: 2,
+            detail_target_rows: 50,
+            jobs_scraped: 45,
+            job_ids_collected: 50,
+            detail_skipped_existing_rows: 3,
+            detail_failed: 2,
+            detail_run_failed: 2,
+            completed_at: '2026-05-27T09:05:00Z',
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByText(/completed/i, { selector: '.status-badge' })).toBeInTheDocument();
+    expect(screen.getByText(/detail crawled: 45\/50/i)).toBeInTheDocument();
+    expect(screen.getByText(/duplicate ids skipped: 3/i)).toBeInTheDocument();
+    expect(screen.getByText(/failed details: 2/i)).toBeInTheDocument();
+
+    unmount();
+  });
+
+  it('shows listing time and detail time in diagnostics for completed runs', async () => {
+    const { unmount } = render(<ScrapeProgressPanel isVisible onClose={vi.fn()} />);
+
+    const stream = latestEventSource();
+    act(() => {
+      stream.emitOpen();
+      stream.emitMessage({
+        all: {
+          engineering: {
+            crawl_job_id: 'crawl-job-timing',
+            status: 'completed',
+            source_site: 'jobsdb',
+            category_name: 'Engineering',
+            metric_scope: 'detail_run',
+            phase: 2,
+            detail_target_rows: 50,
+            jobs_scraped: 50,
+            listing_elapsed_seconds: 120,
+            detail_elapsed_seconds: 280,
+            completed_at: '2026-05-27T09:05:00Z',
+          },
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /diagnostics/i }));
+    expect(screen.getByText(/listing time: 2m 0s/i)).toBeInTheDocument();
+    expect(screen.getByText(/detail time: 4m 40s/i)).toBeInTheDocument();
 
     unmount();
   });

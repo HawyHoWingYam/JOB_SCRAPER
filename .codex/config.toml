@@ -1,0 +1,15 @@
+[mcp_servers.playwright]
+type = "stdio"
+command = "cmd"
+args = ["/c", "npx", "-y", "@playwright/mcp@latest"]
+startup_timeout_sec = 30
+
+[mcp_servers.chrome-devtools]
+type = "stdio"
+command = "cmd"
+args = ["/c", "npx", "-y", "chrome-devtools-mcp@latest"]
+startup_timeout_sec = 20
+
+[mcp_servers.chrome-devtools.env]
+PROGRAMFILES = "C:\\Program Files"
+SystemRoot = "C:\\Windows"

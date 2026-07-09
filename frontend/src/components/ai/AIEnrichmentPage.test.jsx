@@ -605,7 +605,9 @@ describe('AIEnrichmentPage', () => {
     render(<AIEnrichmentPage />);
 
     expect(await screen.findByText(/pending ai-eligible jobs/i)).toBeInTheDocument();
-    expect(screen.getByText(/no ai-eligible jobs currently available for enrichment/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/^no ai-eligible jobs currently available for enrichment$/i),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/0 of 0 ai-eligible jobs/i)).not.toBeInTheDocument();
     expect(screen.getByText(/285 acquired jobs are outside the ai queue/i)).toBeInTheDocument();
   });

@@ -18,6 +18,17 @@ class OfferTodayIPBlockedError(RuntimeError):
         self.code = code
 
 
+class OfferTodayDetailUnavailableError(RuntimeError):
+    def __init__(self, *, job_id: str, code: int, message: str | None = None) -> None:
+        resolved_message = str(message or "").strip() or "OfferToday detail fetch failed"
+        super().__init__(
+            f"OfferToday detail unavailable for job_id={job_id} code={code}: {resolved_message}"
+        )
+        self.job_id = job_id
+        self.code = code
+        self.message = resolved_message
+
+
 class OfferTodayBrowserDetailScraper:
     def __init__(
         self,
@@ -60,15 +71,23 @@ class OfferTodayBrowserDetailScraper:
         self._page = None
         return None
 
-    async def fetch_job_detail(self, job_id: str) -> dict[str, Any] | None:
-        payload = await self._fetch_detail_payload(job_id)
+    async def fetch_job_detail(
+        self,
+        job_id: str,
+        *,
+        encrypted_job_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        payload = await self._fetch_detail_payload(job_id, encrypted_job_id=encrypted_job_id)
         if not isinstance(payload, dict):
             return None
         if payload.get("code") == -1000035:
             if self.headed and self._page is not None:
                 cleared = await self._await_manual_verification(job_id)
                 if cleared:
-                    payload = await self._fetch_detail_payload(job_id)
+                    payload = await self._fetch_detail_payload(
+                        job_id,
+                        encrypted_job_id=encrypted_job_id,
+                    )
                     if not isinstance(payload, dict):
                         return None
                 else:
@@ -78,7 +97,11 @@ class OfferTodayBrowserDetailScraper:
         if payload.get("code") == -1000035:
             raise OfferTodayIPBlockedError(job_id=job_id, code=-1000035)
         if payload.get("code") != 0:
-            return None
+            raise OfferTodayDetailUnavailableError(
+                job_id=job_id,
+                code=int(payload.get("code") or 0),
+                message=payload.get("msg"),
+            )
         data = payload.get("data")
         if not isinstance(data, dict):
             return None
@@ -86,12 +109,20 @@ class OfferTodayBrowserDetailScraper:
             return None
         return dict(data)
 
-    async def _fetch_detail_payload(self, job_id: str) -> dict[str, Any] | None:
+    async def _fetch_detail_payload(
+        self,
+        job_id: str,
+        *,
+        encrypted_job_id: str | None = None,
+    ) -> dict[str, Any] | None:
         if self.detail_json_fetcher is not None:
             return await self.detail_json_fetcher(job_id)
         if self._runtime is None:
             raise RuntimeError("OfferTodayBrowserDetailScraper runtime has not been started")
-        return await self._runtime.fetch_detail_json(job_id=job_id)
+        return await self._runtime.fetch_detail_json(
+            job_id=job_id,
+            encrypted_job_id=encrypted_job_id,
+        )
 
     async def _warmup_page(self) -> None:
         if self._page is None:

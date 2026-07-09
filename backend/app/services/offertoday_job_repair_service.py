@@ -182,6 +182,44 @@ class OfferTodayJobRepairService:
             .first()
         )
 
+    def resolve_detail_identifiers(
+        self,
+        job: Job | Any,
+        listing: CrawlJobListing | Any | None = None,
+    ) -> tuple[str, str]:
+        listing_payload = getattr(listing, "listing_payload", None)
+        if not isinstance(listing_payload, dict):
+            listing_payload = {}
+
+        job_raw_data = getattr(job, "raw_data", None)
+        if not isinstance(job_raw_data, dict):
+            job_raw_data = {}
+
+        listing_raw_data = listing_payload.get("raw_data")
+        if not isinstance(listing_raw_data, dict):
+            listing_raw_data = {}
+
+        job_id = str(
+            listing_payload.get("job_id")
+            or listing_payload.get("jobId")
+            or listing_raw_data.get("jobId")
+            or job_raw_data.get("job_id")
+            or job_raw_data.get("jobId")
+            or getattr(job, "source_job_id", None)
+            or getattr(job, "job_id", None)
+            or ""
+        ).strip()
+        encrypted_job_id = str(
+            listing_payload.get("encrypted_job_id")
+            or listing_payload.get("encryptJobId")
+            or listing_raw_data.get("encryptJobId")
+            or job_raw_data.get("encrypted_job_id")
+            or job_raw_data.get("encryptJobId")
+            or job_id
+            or ""
+        ).strip()
+        return job_id, encrypted_job_id
+
     def build_canonical_job_snapshot(
         self,
         job: Job | Any,

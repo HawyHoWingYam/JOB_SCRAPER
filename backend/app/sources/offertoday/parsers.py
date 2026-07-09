@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.sources.offertoday.quality import clean_description_text, normalize_tag_terms
+
 OFFERTODOAY_JOB_URL_TEMPLATE = "https://www.offertoday.com/hk/job/{encrypted_job_id}"
 
 # Employment type mapping
@@ -38,9 +40,11 @@ def parse_offertoday_listing_response(response_data: dict[str, Any]) -> list[dic
 def _parse_listing_job(raw: dict[str, Any]) -> dict[str, Any]:
     """Convert a single listing API item into the internal raw dict."""
     job_id = str(raw.get("jobId") or "").strip()
+    encrypted_job_id = str(raw.get("encryptJobId") or job_id).strip()
     return {
         "source_site": "offertoday",
-        "encrypted_job_id": job_id,
+        "job_id": job_id,
+        "encrypted_job_id": encrypted_job_id,
         "title": str(raw.get("jobName") or "").strip(),
         "company_name": str(raw.get("companyName") or "").strip(),
         "location": str(raw.get("locationDesc") or "").strip(),
@@ -70,12 +74,19 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
     """Parse the job detail API response into a dict."""
     data = response_data.get("data") or {}
     job_id = str(data.get("jobId") or "").strip()
+    encrypted_job_id = str(data.get("encryptJobId") or job_id).strip()
+    description_html = str(data.get("jobDesc") or "").strip()
+    description_text = clean_description_text(_strip_html(description_html))
+    blocked_terms = {
+        str(value).strip() for value in (data.get("benefits") or []) if str(value).strip()
+    }
     return {
         "source_site": "offertoday",
-        "encrypted_job_id": job_id,
+        "job_id": job_id,
+        "encrypted_job_id": encrypted_job_id,
         "title": str(data.get("jobName") or "").strip(),
-        "description_html": str(data.get("jobDesc") or "").strip(),
-        "description_text": _strip_html(str(data.get("jobDesc") or "")),
+        "description_html": description_html,
+        "description_text": description_text,
         "company_name": str(data.get("companyName") or "").strip(),
         "company_brand": str(data.get("brandName") or "").strip(),
         "company_logo": str(data.get("brandLogo") or "").strip(),
@@ -89,9 +100,12 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
         "employment_type": str(data.get("jobTypeDesc") or "").strip(),
         "experience": str(data.get("workExperienceDesc") or "").strip(),
         "education": str(data.get("educationDesc") or "").strip(),
-        "skills": data.get("skills") or [],
-        "skill_list": data.get("skillList") or [],
-        "keywords": data.get("keywords") or [],
+        "skills": normalize_tag_terms(data.get("skills") or [], blocked_terms=blocked_terms),
+        "skill_list": normalize_tag_terms(
+            data.get("skillList") or [],
+            blocked_terms=blocked_terms,
+        ),
+        "keywords": normalize_tag_terms(data.get("keywords") or [], blocked_terms=blocked_terms),
         "benefits": data.get("benefits") or [],
         "working_days": str(data.get("workingDays") or "").strip(),
         "working_model": str(data.get("workingModels") or "").strip(),

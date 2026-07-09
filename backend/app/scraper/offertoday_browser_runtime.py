@@ -284,9 +284,14 @@ class OfferTodayBrowserRuntime:
         if self._page is None:
             raise RuntimeError("OfferToday browser runtime has not been started")
 
+        headers = dict(OFFERTODAY_COMMON_HEADERS)
+        csrf_token = await self._read_csrf_token()
+        if csrf_token:
+            headers["csrf-token"] = csrf_token
         fetch_options: dict[str, Any] = {
             "method": method,
-            "headers": dict(OFFERTODAY_COMMON_HEADERS),
+            "headers": headers,
+            "credentials": "include",
         }
         if payload is not None:
             fetch_options["body"] = json.dumps(payload, ensure_ascii=True)
@@ -298,6 +303,20 @@ class OfferTodayBrowserRuntime:
         )
         result = await self._page.evaluate(script, {"url": url, "options": fetch_options})
         return result if isinstance(result, dict) else None
+
+    async def _read_csrf_token(self) -> str | None:
+        if self._page is None:
+            raise RuntimeError("OfferToday browser runtime has not been started")
+
+        script = (
+            "() => {"
+            "  const match = document.cookie.match(/(?:^|;\\s*)Csrf-Token=([^;]+)/);"
+            "  return match ? decodeURIComponent(match[1]) : null;"
+            "}"
+        )
+        token = await self._page.evaluate(script)
+        resolved = str(token or "").strip()
+        return resolved or None
 
     def _build_reuse_open_browser_unavailable_error(self, *, message: str) -> ManualActionRequiredError:
         return ManualActionRequiredError(

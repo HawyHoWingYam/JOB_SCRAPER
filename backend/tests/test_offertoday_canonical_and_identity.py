@@ -12,6 +12,7 @@ from app.utils.source_identity import derive_source_company_id_from_raw_data
 def _sample_listing_raw() -> dict:
     return {
         "jobId": "jid-1",
+        "encryptJobId": "enc-jid-1",
         "jobName": "Data Engineer",
         "companyName": "Alpha Ltd",
         "locationDesc": "Wan Chai",
@@ -82,6 +83,7 @@ def test_build_offertoday_canonical_job_reads_description_from_raw_detail_shape(
         }
     )[0]
 
+    assert listing["encrypted_job_id"] == "enc-jid-1"
     canonical = build_offertoday_canonical_job({**listing, **_sample_detail_raw()})
 
     assert canonical.source_job_id == "jid-1"
@@ -199,6 +201,43 @@ def test_offertoday_job_repair_service_builds_canonical_snapshot_from_live_detai
     assert canonical.description == "<p>Hello detail</p>"
 
 
+def test_offertoday_job_repair_service_resolves_distinct_detail_identifiers_from_listing_payload():
+    service_module = importlib.import_module("app.services.offertoday_job_repair_service")
+    service_cls = getattr(service_module, "OfferTodayJobRepairService", None)
+    assert service_cls is not None
+
+    service = service_cls(db=None)
+    listing = type(
+        "ListingStub",
+        (),
+        {
+            "listing_payload": parse_offertoday_listing_response(
+                {
+                    "code": 0,
+                    "data": {
+                        "resultList": [_sample_listing_raw()],
+                    },
+                }
+            )[0],
+        },
+    )()
+    job = type(
+        "JobStub",
+        (),
+        {
+            "source_site": "offertoday",
+            "source_job_id": "jid-1",
+            "job_id": "jid-1",
+            "raw_data": {},
+        },
+    )()
+
+    job_id, encrypted_job_id = service.resolve_detail_identifiers(job, listing)
+
+    assert job_id == "jid-1"
+    assert encrypted_job_id == "enc-jid-1"
+
+
 @pytest.mark.asyncio
 async def test_offertoday_browser_detail_scraper_uses_injected_fetcher():
     spec = importlib.util.find_spec("app.scraper.offertoday_browser_detail_scraper")
@@ -253,6 +292,7 @@ async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_stra
     assert scraper_cls is not None
 
     runtime_calls: list[dict[str, object]] = []
+    fetch_calls: list[tuple[str, str | None]] = []
 
     class _FakeRuntime:
         def __init__(self, **kwargs) -> None:
@@ -266,8 +306,7 @@ async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_stra
             return None
 
         async def fetch_detail_json(self, *, job_id: str, encrypted_job_id: str | None = None):
-            assert job_id == "jid-1"
-            assert encrypted_job_id is None
+            fetch_calls.append((job_id, encrypted_job_id))
             return {
                 "code": 0,
                 "data": _sample_detail_raw(),
@@ -278,7 +317,7 @@ async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_stra
     async with scraper_cls(
         request_payload={"resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER}
     ) as scraper:
-        detail_payload = await scraper.fetch_job_detail("jid-1")
+        detail_payload = await scraper.fetch_job_detail("jid-1", encrypted_job_id="enc-jid-1")
 
     assert runtime_calls == [
         {
@@ -287,6 +326,7 @@ async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_stra
             "resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER,
         }
     ]
+    assert fetch_calls == [("jid-1", "enc-jid-1")]
     assert detail_payload["jobId"] == "jid-1"
 
 

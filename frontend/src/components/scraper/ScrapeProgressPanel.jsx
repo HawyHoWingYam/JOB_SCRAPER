@@ -11,6 +11,7 @@ import {
 const API_BASE = apiPath('');
 const EMPTY_PROGRESS = {};
 const MAX_VISIBLE_TASKS = 5;
+const IDLE_POLL_INTERVAL_MS = 10000;
 const SEARCH_FAMILY_LABELS = {
     it_category: 'IT category',
     it_keyword: 'IT keyword',
@@ -46,6 +47,7 @@ function ScrapeProgressPanel({
     const eventSourceRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
     const recoveryTimeoutRef = useRef(null);
+    const idlePollRef = useRef(null);
     const streamClientIdRef = useRef(createMonitoringId('stream'));
     const wasVisibleRef = useRef(false);
     const onCloseRef = useRef(onClose);
@@ -63,6 +65,13 @@ function ScrapeProgressPanel({
         if (recoveryTimeoutRef.current) {
             clearTimeout(recoveryTimeoutRef.current);
             recoveryTimeoutRef.current = null;
+        }
+    };
+
+    const clearIdlePoll = () => {
+        if (idlePollRef.current) {
+            clearInterval(idlePollRef.current);
+            idlePollRef.current = null;
         }
     };
 
@@ -109,6 +118,7 @@ function ScrapeProgressPanel({
     useEffect(() => {
         if (!isVisible || !isPageVisible) {
             clearReconnectTimeout();
+            clearIdlePoll();
             closeEventSource();
             setIsConnected(false);
             return;
@@ -126,6 +136,7 @@ function ScrapeProgressPanel({
                 if (!isCurrentStream()) {
                     return;
                 }
+                clearIdlePoll();
                 setIsConnected(true);
                 setError(null);
                 logInfo('scrape_progress.stream_open', {
@@ -141,6 +152,21 @@ function ScrapeProgressPanel({
                 try {
                     const data = JSON.parse(event.data);
                     if (data.closed) {
+                        if (data.reason === 'idle') {
+                            // The stream closed because there is no active work right now.
+                            // Keep the last DB-backed records visible (do not unmount the
+                            // panel) and poll the progress endpoint so any new scrape —
+                            // including scheduled runs — reconnects the live SSE stream.
+                            logInfo('scrape_progress.stream_idle', {
+                                clientStreamId,
+                                reason: data.reason,
+                            });
+                            eventSource.close();
+                            eventSourceRef.current = null;
+                            setIsConnected(false);
+                            startIdlePolling();
+                            return;
+                        }
                         logInfo('scrape_progress.stream_closed', {
                             clientStreamId,
                             reason: data.reason || 'closed',
@@ -181,10 +207,37 @@ function ScrapeProgressPanel({
             };
         };
 
+        const startIdlePolling = () => {
+            clearIdlePoll();
+            const clientStreamId = streamClientIdRef.current;
+            idlePollRef.current = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/scrape/progress`);
+                    if (!response.ok) {
+                        return;
+                    }
+                    const data = await response.json();
+                    if (data.has_active) {
+                        clearIdlePoll();
+                        connectSSE();
+                        return;
+                    }
+                    // Keep the frozen last records visible; only reconnect when new
+                    // active work appears so completed summaries remain on screen.
+                } catch (pollError) {
+                    logWarn('scrape_progress.idle_poll_failed', {
+                        clientStreamId,
+                        detail: pollError,
+                    });
+                }
+            }, IDLE_POLL_INTERVAL_MS);
+        };
+
         connectSSE();
 
         return () => {
             clearReconnectTimeout();
+            clearIdlePoll();
             closeEventSource();
         };
     }, [isPageVisible, isVisible]);
@@ -697,11 +750,11 @@ function buildDetailRunMetricLines({
         lines.push(`IDs found: ${formatCount(jobIdsCollected)}`);
     }
     if (detailSkippedExistingRows > 0) {
-        lines.push(`Skipped existing: ${formatCount(detailSkippedExistingRows)}`);
+        lines.push(`Duplicate IDs skipped: ${formatCount(detailSkippedExistingRows)}`);
     }
 
     if (detailRunFailed > 0) {
-        lines.push(`Failed rows: ${formatCount(detailRunFailed)}`);
+        lines.push(`Failed details: ${formatCount(detailRunFailed)}`);
     }
     if (detailRunManualActionRequired > 0) {
         lines.push(`Manual review: ${formatCount(detailRunManualActionRequired)}`);
@@ -724,7 +777,7 @@ function buildListingRunMetricLines({
     ];
 
     if (jobsSkippedExisting > 0) {
-        lines.push(`Skipped existing: ${formatCount(jobsSkippedExisting)}`);
+        lines.push(`Duplicate IDs skipped: ${formatCount(jobsSkippedExisting)}`);
     }
 
     return lines;
@@ -835,6 +888,8 @@ function ProgressItem({
         ip_blocked = false,
         ip_blocked_message,
         elapsed_seconds = 0,
+        listing_elapsed_seconds = 0,
+        detail_elapsed_seconds = 0,
         error
     } = data;
     const taskId = crawl_job_id || taskKey;
@@ -940,6 +995,17 @@ function ProgressItem({
             <div className="progress-text">Ended: {formatTaskTimestamp(completed_at)}</div>
         </div>
     );
+
+    const renderPhaseTiming = () => {
+        const listingSeconds = Number(listing_elapsed_seconds || 0);
+        const detailSeconds = Number(detail_elapsed_seconds || 0);
+        return (
+            <>
+                {listingSeconds > 0 && <span>Listing time: {formatDuration(listingSeconds)}</span>}
+                {detailSeconds > 0 && <span>Detail time: {formatDuration(detailSeconds)}</span>}
+            </>
+        );
+    };
 
     if (effectiveStatus === 'manual_action_required' && manual_action) {
         const instructions = Array.isArray(manual_action.instructions)
@@ -1270,6 +1336,7 @@ function ProgressItem({
                             {renderTimingBlock()}
                             <div className="progress-stats">
                                 <span>Elapsed: {elapsedLabel}</span>
+                                {renderPhaseTiming()}
                             </div>
                         </div>
                         <div className="progress-diagnostics-section">
@@ -1611,6 +1678,7 @@ function ProgressItem({
                         {renderTimingBlock()}
                         <div className="progress-stats">
                             <span>Elapsed: {elapsedLabel}</span>
+                            {renderPhaseTiming()}
                         </div>
                     </div>
                     <div className="progress-diagnostics-section">
