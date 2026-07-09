@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 
 from app.config import settings
 from app.manual_actions.live_browser_registry import get_live_browser_registry
+from app.scraper.browser_launch import launch_persistent_context_with_fallback
 from app.scraper.log_events import build_scrape_log_event
 from app.scraper.manual_action import (
     ManualActionRequiredError,
@@ -163,10 +164,24 @@ class JobsDBBrowserDetailScraper:
         else:
             launch_kwargs["channel"] = self.browser_channel
 
-        self._sync_context = self._sync_playwright.chromium.launch_persistent_context(
+        launch_result = launch_persistent_context_with_fallback(
+            self._sync_playwright.chromium,
             user_data_dir=str(self._resolve_user_data_dir()),
-            **launch_kwargs,
+            browser_channel=self.browser_channel,
+            executable_path=self.executable_path,
+            headless=False,
+            extra_launch_kwargs={
+                key: value for key, value in launch_kwargs.items() if key != "headless"
+            },
         )
+        if launch_result.attempted_fallback:
+            logger.warning(
+                "jobsdb_browser_channel_fallback requested=%s resolved=%s crawl_job_id=%s",
+                launch_result.requested_channel,
+                launch_result.resolved_channel,
+                self.request_payload.get("crawl_job_id"),
+            )
+        self._sync_context = launch_result.context
         self._sync_context.set_default_navigation_timeout(self.navigation_timeout_ms)
         self._sync_page = self._sync_context.pages[0] if self._sync_context.pages else self._sync_context.new_page()
         self._runtime_started = True

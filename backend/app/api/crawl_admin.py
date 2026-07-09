@@ -12,6 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 import httpx
 
@@ -81,7 +82,7 @@ async def admin_status():
     """Check Scrapyd daemon health and job counts."""
     client = _get_scrapyd_client()
     try:
-        status_info = client.daemon_status()
+        status_info = await run_in_threadpool(client.daemon_status)
         return ScrapydStatusResponse(
             scrapyd_available=True,
             scrapyd_node_name=status_info.get("node_name"),
@@ -109,7 +110,8 @@ async def schedule_spider(
     client = _get_scrapyd_client()
 
     try:
-        scrapyd_job_id = client.schedule(
+        scrapyd_job_id = await run_in_threadpool(
+            client.schedule,
             project=request.scrapyd_project,
             spider=request.scrapyd_spider,
             crawl_run_id=str(request.crawl_job_id),
@@ -146,7 +148,11 @@ async def cancel_spider_run(
     client = _get_scrapyd_client()
     if run.scrapyd_job_id:
         try:
-            client.cancel(project=run.scrapyd_project, job_id=run.scrapyd_job_id)
+            await run_in_threadpool(
+                client.cancel,
+                project=run.scrapyd_project,
+                job_id=run.scrapyd_job_id,
+            )
         except httpx.HTTPError as exc:
             logger.warning("Scrapyd cancel failed (may already be stopped): %s", exc)
 

@@ -9,6 +9,7 @@ import ScheduleHistory from './ScheduleHistory';
 import ScrapeProgressPanel from './ScrapeProgressPanel';
 import { getCrawlModeOptionsForSource, resolveDefaultCrawlMode } from './crawlMode';
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
+import { sourceRequiresExternalHeadedWorker } from './headedRuntime';
 import { resolveDefaultMaxPages } from './maxPages';
 import {
     formatListingBatchIdentity,
@@ -362,15 +363,17 @@ function buildImmediateRunReadiness(
     const selectedSectorCount = Array.isArray(form?.category_ids) ? form.category_ids.length : 0;
     const hasBatchFilter = Boolean(`${form?.source_listing_crawl_job_id ?? ''}`.trim());
 
-    // OfferToday runs headed mode inside the same Docker container — no host-side worker needed
-    if (crawlMode === 'headed' && headedWorkerStatus?.available === false) {
-        if (sourceSite !== 'offertoday') {
-            return {
-                isReady: false,
-                statusLabel: 'Headed worker offline',
-                detail: buildHeadedWorkerUnavailableMessage(headedWorkerStatus),
-            };
-        }
+    // Only runtimes that explicitly depend on an external headed worker should block launch here.
+    if (
+        crawlMode === 'headed'
+        && sourceRequiresExternalHeadedWorker(sourceSite, sourceCatalog)
+        && headedWorkerStatus?.available === false
+    ) {
+        return {
+            isReady: false,
+            statusLabel: 'Headed worker offline',
+            detail: buildHeadedWorkerUnavailableMessage(headedWorkerStatus),
+        };
     }
 
     if (request.error) {
@@ -420,7 +423,7 @@ function buildImmediateRunModeCopy(form) {
     };
 }
 
-function ScheduleManager({ onNavigateToAI }) {
+function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
     // State
     const [schedules, setSchedules] = useState([]);
     const [categories, setCategories] = useState([]);
@@ -1200,8 +1203,10 @@ function ScheduleManager({ onNavigateToAI }) {
                     recoveryStartedAt={progressPanelState.recoveryStartedAt}
                     recoveryWindowMs={DIRECT_OVERRIDE_RECOVERY_WINDOW_MS}
                     headedWorkerStatus={headedWorkerStatus}
+                    sourceCatalog={sourceCatalog}
                     onClose={handleProgressClose}
                     onNavigateToAI={onNavigateToAI}
+                    onOpenCrawlTasks={onNavigateToCrawlTasks}
                     onResumeCrawlJob={handleResumeCrawlJob}
                     onCancelCrawlJob={handleCancelCrawlJob}
                     onOpenManualActionBrowser={handleOpenManualActionBrowser}

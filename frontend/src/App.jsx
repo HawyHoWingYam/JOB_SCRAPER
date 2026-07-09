@@ -8,8 +8,9 @@ const AIEnrichmentPage = lazy(() => import('./components/ai/AIEnrichmentPage'));
 const CompaniesPage = lazy(() => import('./components/companies/CompaniesPage'));
 const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage'));
 const ScheduleManager = lazy(() => import('./components/scraper/ScheduleManager'));
+const CrawlTasksPage = lazy(() => import('./components/scraper/CrawlTasksPage'));
 const AddJobPage = lazy(() => import('./components/jobs/AddJobPage'));
-const VALID_VIEWS = new Set(['dashboard', 'jobs', 'add-job', 'companies', 'ai', 'settings', 'scheduler']);
+const VALID_VIEWS = new Set(['dashboard', 'jobs', 'add-job', 'companies', 'ai', 'settings', 'scheduler', 'crawl-tasks']);
 
 function resolveInitialView() {
   if (typeof window === 'undefined') {
@@ -23,6 +24,7 @@ function resolveInitialView() {
 function App() {
   const [activeView, setActiveView] = useState(resolveInitialView);
   const navigateToAI = () => setActiveView('ai');
+  const navigateToCrawlTasks = () => setActiveView('crawl-tasks');
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -64,7 +66,13 @@ function App() {
             {activeView === 'companies' && <CompaniesPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
             {activeView === 'settings' && <AISettingsPage />}
-            {activeView === 'scheduler' && <ScheduleManager onNavigateToAI={navigateToAI} />}
+            {activeView === 'scheduler' && (
+              <ScheduleManager
+                onNavigateToAI={navigateToAI}
+                onNavigateToCrawlTasks={navigateToCrawlTasks}
+              />
+            )}
+            {activeView === 'crawl-tasks' && <CrawlTasksPage />}
           </Suspense>
         </div>
       </main>

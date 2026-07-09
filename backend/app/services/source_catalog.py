@@ -22,6 +22,12 @@ SOURCE_DEFAULT_MAX_PAGES = {
     "offertoday": 50,
 }
 
+SOURCE_HEADED_RUNTIME_MODES = {
+    "jobsdb": "source_executor",
+    "ctgoodjobs": "source_executor",
+    "offertoday": "in_process",
+}
+
 
 def list_supported_source_sites() -> tuple[str, ...]:
     return tuple(SOURCE_LABELS.keys())
@@ -39,6 +45,7 @@ def resolve_default_max_pages(source_site: str | None) -> int:
 def build_source_catalog() -> dict[str, dict[str, Any]]:
     payload: dict[str, dict[str, Any]] = {}
     for source_site in list_supported_source_sites():
+        headed_runtime_mode = SOURCE_HEADED_RUNTIME_MODES.get(source_site, "source_executor")
         payload[source_site] = {
             "key": source_site,
             "label": SOURCE_LABELS[source_site],
@@ -46,5 +53,7 @@ def build_source_catalog() -> dict[str, dict[str, Any]]:
             "supported_crawl_modes": list(get_supported_crawl_modes(source_site)),
             "default_crawl_mode": resolve_crawl_mode(source_site, None),
             "default_max_pages": resolve_default_max_pages(source_site),
+            "headed_runtime_mode": headed_runtime_mode,
+            "headed_runtime_requires_worker": headed_runtime_mode == "external_worker",
         }
     return payload

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from sqlalchemy import desc, func
+from sqlalchemy import and_, desc, func, or_
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -338,6 +338,63 @@ class CrawlJobRepository:
         if limit is not None:
             return query.limit(limit).all()
         return query.all()
+
+    def list_crawl_task_page(
+        self,
+        db: Session,
+        *,
+        page: int,
+        page_size: int,
+        status: str | None,
+        source_site: str | None,
+        crawl_mode: str | None,
+        updated_since=None,
+    ) -> tuple[list[CrawlJob], int]:
+        query = db.query(CrawlJob)
+        if status:
+            query = query.filter(CrawlJob.status == status)
+        if source_site:
+            query = query.filter(CrawlJob.source_site == source_site)
+        if updated_since is not None:
+            query = query.filter(CrawlJob.updated_at >= updated_since)
+        if crawl_mode:
+            query = query.filter(self._effective_crawl_mode_clause(crawl_mode))
+
+        total = int(query.count() or 0)
+        rows = (
+            query.order_by(
+                desc(CrawlJob.updated_at),
+                desc(CrawlJob.queued_at),
+                desc(CrawlJob.created_at),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        return rows, total
+
+    def _effective_crawl_mode_clause(self, crawl_mode: str):
+        payload_mode = func.lower(CrawlJob.request_payload["crawl_mode"].astext)
+        if crawl_mode == "headed":
+            return or_(
+                and_(
+                    CrawlJob.source_site == "jobsdb",
+                    or_(payload_mode == "headed", payload_mode.is_(None)),
+                ),
+                and_(
+                    CrawlJob.source_site == "ctgoodjobs",
+                    or_(payload_mode == "headed", payload_mode == "headless", payload_mode.is_(None)),
+                ),
+                and_(CrawlJob.source_site == "offertoday", payload_mode == "headed"),
+            )
+
+        return or_(
+            and_(CrawlJob.source_site == "jobsdb", payload_mode == "headless"),
+            and_(
+                CrawlJob.source_site == "offertoday",
+                or_(payload_mode == "headless", payload_mode.is_(None)),
+            ),
+        )
 
     def _merge_metrics(self, existing_metrics, metrics_patch: dict[str, Any]) -> dict[str, Any]:
         merged = dict(existing_metrics or {})

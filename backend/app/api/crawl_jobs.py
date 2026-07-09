@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -19,12 +20,18 @@ from app.schemas.crawl_job import (
     CrawlJobCreateRequest,
     CrawlJobEventsResponse,
     CrawlJobSchema,
+    CrawlTaskListResponse,
 )
 from app.services.crawl_request_validation import normalize_source_site, validate_category_ids_for_source_site
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
+from app.services.crawl_task_snapshot_service import (
+    PROGRESS_CONTEXT_EVENT_TYPES,
+    build_crawl_task_snapshot,
+)
 from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
 from app.services.source_category_registry import get_source_category_registry
 from app.services.source_catalog import is_supported_source_site, resolve_default_max_pages
+from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,31 @@ dispatch_service = CrawlJobDispatchService()
 
 class ResumeCrawlJobRequest(BaseModel):
     strategy: ResumeStrategy | None = None
+
+
+def _resolve_time_range_start(time_range: str):
+    normalized = str(time_range or "all").strip().lower()
+    now = utc_now()
+    if normalized == "all":
+        return None
+    if normalized == "24h":
+        return now - timedelta(hours=24)
+    if normalized == "7d":
+        return now - timedelta(days=7)
+    if normalized == "30d":
+        return now - timedelta(days=30)
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail="Unsupported time_range",
+    )
+
+
+def _raise_action_http_error(exc: Exception) -> None:
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if isinstance(exc, RuntimeError):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    raise exc
 
 
 async def _validate_ctgoodjobs_category_ids_exist(category_ids: list[str] | None) -> None:
@@ -244,12 +276,97 @@ async def list_listing_batches(
     }
 
 
+@router.get("/tasks", response_model=CrawlTaskListResponse)
+async def list_crawl_tasks(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    status: str | None = None,
+    source_site: str | None = None,
+    crawl_mode: str | None = None,
+    time_range: str = Query(default="all"),
+    db: Session = Depends(get_db),
+):
+    updated_since = _resolve_time_range_start(time_range)
+    normalized_source_site = normalize_source_site(source_site) if source_site else None
+    rows, total = crawl_job_repository.list_crawl_task_page(
+        db,
+        page=page,
+        page_size=page_size,
+        status=status,
+        source_site=normalized_source_site,
+        crawl_mode=crawl_mode,
+        updated_since=updated_since,
+    )
+    crawl_job_ids = [row.id for row in rows]
+    latest_events_by_job = crawl_job_repository.list_latest_events_for_jobs(
+        db,
+        crawl_job_ids=crawl_job_ids,
+    )
+    events_by_job = crawl_job_repository.list_events_by_job_ids(
+        db,
+        crawl_job_ids=crawl_job_ids,
+        event_types=PROGRESS_CONTEXT_EVENT_TYPES,
+    )
+    now = utc_now()
+    category_lookup_cache: dict[str, dict[str, str]] = {}
+    items = [
+        build_crawl_task_snapshot(
+            row,
+            latest_event=latest_events_by_job.get(row.id),
+            now=now,
+            events=events_by_job.get(row.id, []),
+            category_lookup_cache=category_lookup_cache,
+        )
+        for row in rows
+    ]
+    return CrawlTaskListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        status=status,
+        source_site=normalized_source_site,
+        crawl_mode=crawl_mode,
+        time_range=str(time_range or "all").strip().lower() or "all",
+        refreshed_at=now.isoformat(),
+    )
+
+
 @router.get("/{crawl_job_id}", response_model=CrawlJobSchema)
 async def get_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
     crawl_job = crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
     if crawl_job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crawl job not found")
     return crawl_job
+
+
+@router.post("/{crawl_job_id}/resume", response_model=CrawlJobSchema)
+async def resume_crawl_job(
+    crawl_job_id: UUID,
+    request: ResumeCrawlJobRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        return dispatch_service.resume_crawl_job(
+            db,
+            crawl_job_id=crawl_job_id,
+            requested_by="api",
+            strategy=request.strategy,
+        )
+    except Exception as exc:
+        _raise_action_http_error(exc)
+
+
+@router.post("/{crawl_job_id}/cancel", response_model=CrawlJobSchema)
+async def cancel_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
+    try:
+        return dispatch_service.cancel_crawl_job(
+            db,
+            crawl_job_id=crawl_job_id,
+            requested_by="api",
+        )
+    except Exception as exc:
+        _raise_action_http_error(exc)
 
 
 @router.get("/{crawl_job_id}/events", response_model=CrawlJobEventsResponse)

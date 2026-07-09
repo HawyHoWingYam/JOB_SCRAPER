@@ -60,6 +60,11 @@ The default `backend-api` image only supports the lexical search baseline. Seman
 - `GET /api/v1/jobs/{job_id}/similar` and `GET /api/v1/recommendations/jobs` proxy to `recommendation-api`.
 - Scrape progress is sourced from durable `crawl_jobs` and `crawl_job_events`; the legacy in-process category scrape endpoints are no longer part of the runtime path.
 
+## Crawl Tasks
+
+- Use the Sidebar `Crawl Tasks` page for running, failed, completed, cancelled, and manual-action crawl jobs.
+- The `Scraping Progress` panel is now a live-status surface for stream health and quick recovery hints, not the durable task history.
+
 ## Headed Crawl Worker
 
 `JobsDB` full detail capture is currently expected to run through the local host-side headed worker because direct HTTP and containerized headless browser fetches can be blocked by Cloudflare.
@@ -81,7 +86,8 @@ python backend\scripts\prepare_headed_crawl_worker_host.py
 Recommended profile setup:
 
 - use a dedicated browser profile directory via `JOBSDB_HEADED_BROWSER_USER_DATA_DIR`
-- pick `JOBSDB_HEADED_BROWSER_CHANNEL=msedge` or `chrome`
+- container-owned headed automation now defaults to Playwright `chromium`
+- host-side manual/browser-helper flows can still target `JOBSDB_HEADED_BROWSER_CHANNEL=msedge` or `chrome`
 - open a JobsDB or CTGoodJobs page once in that automation profile and complete any anti-bot challenge before relying on automated headed runs
 - keep the script running while you want headed JobsDB jobs to keep progressing
 - if you want a separate persistent window without blocking your current shell, run `prepare_headed_crawl_worker_host.py` in a new terminal

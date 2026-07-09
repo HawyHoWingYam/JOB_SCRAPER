@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from app.config import settings
 from app.manual_actions.live_browser_registry import get_live_browser_registry
+from app.scraper.browser_launch import launch_persistent_context_with_fallback_async
 from app.scraper.manual_action import (
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
@@ -18,6 +20,8 @@ from app.sources.offertoday.constants import (
     OFFERTODAY_COMMON_HEADERS,
     OFFERTODAY_LISTING_SEARCH_URL,
 )
+
+logger = logging.getLogger(__name__)
 
 
 _WAF_CHALLENGE_PATH = "/web/passport/cm/verify"
@@ -220,10 +224,24 @@ class OfferTodayBrowserRuntime:
             launch_kwargs["executable_path"] = self.executable_path
         else:
             launch_kwargs["channel"] = self.browser_channel
-        self._context = await self._playwright.chromium.launch_persistent_context(
+        launch_result = await launch_persistent_context_with_fallback_async(
+            self._playwright.chromium,
             user_data_dir=str(self._resolve_user_data_dir()),
-            **launch_kwargs,
+            browser_channel=self.browser_channel,
+            executable_path=self.executable_path,
+            headless=False,
+            extra_launch_kwargs={
+                key: value for key, value in launch_kwargs.items() if key != "headless"
+            },
         )
+        if launch_result.attempted_fallback:
+            logger.warning(
+                "offertoday_browser_channel_fallback requested=%s resolved=%s user_data_dir=%s",
+                launch_result.requested_channel,
+                launch_result.resolved_channel,
+                str(self._resolve_user_data_dir()),
+            )
+        self._context = launch_result.context
         self._context.set_default_navigation_timeout(self.navigation_timeout_ms)
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         self._owns_context = True

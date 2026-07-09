@@ -3,6 +3,7 @@ import { apiPath } from '../../api/base';
 import { createMonitoringId, logError, logInfo, logWarn } from '../../monitoring';
 import { formatCrawlModeLabel } from './crawlMode';
 import { formatCrawlPhaseLabel } from './crawlPhase';
+import { sourceRequiresExternalHeadedWorker } from './headedRuntime';
 import {
     formatListingBatchIdentity,
     formatScraperSourceLabel,
@@ -26,8 +27,10 @@ function ScrapeProgressPanel({
     recoveryStartedAt,
     recoveryWindowMs,
     headedWorkerStatus = null,
+    sourceCatalog = {},
     onClose,
     onNavigateToAI,
+    onOpenCrawlTasks,
     onResumeCrawlJob,
     onCancelCrawlJob,
     onOpenManualActionBrowser,
@@ -293,53 +296,36 @@ function ScrapeProgressPanel({
 
     if (!isVisible) return null;
     const isRecovering = Boolean(recoveryStartedAt) && !hasProgress;
+    const statusMessage = isConnected ? 'Live stream connected' : 'Waiting for live stream connection';
+    const activityMessage = hasProgress
+        ? 'Active crawl work detected'
+        : 'No active crawl work detected';
+    const summaryHint = hasProgress
+        ? 'Live progress is being tracked here. Open Crawl Tasks for task history and actions.'
+        : 'Open Crawl Tasks to inspect running, failed, and completed crawl jobs.';
 
     return (
         <div className="scrape-progress-panel">
             <div className="progress-panel-header">
                 <div>
                     <h3>Scraping Progress</h3>
-                    {hasProgress && (
-                        <div className="progress-count-hint">
-                            Showing {visibleTaskCount} of {progressEntries.length} operator-visible tasks
-                        </div>
-                    )}
+                    <div className="progress-count-hint">{summaryHint}</div>
                 </div>
-                <div className="connection-status">
-                    <span className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`} />
-                    {isConnected ? 'Live' : 'Connecting...'}
-                </div>
+                <button type="button" onClick={() => onOpenCrawlTasks?.()}>
+                    Open Crawl Tasks
+                </button>
             </div>
 
             {error && <div className="progress-error">{error}</div>}
 
             <div className="progress-panel-body">
-                {!hasProgress ? (
-                    <div className="no-progress">
-                        {isRecovering ? 'Reconnecting to active Direct Override...' : 'No active scraping tasks'}
-                    </div>
-                ) : (
-                    progressSections.map((section) => (
-                        <div key={section.key} className="progress-section">
-                            <div className="progress-count-hint">{section.title}</div>
-                            {section.entries.map(([taskKey, data]) => (
-                                <ProgressItem
-                                    key={taskKey}
-                                    taskKey={taskKey}
-                                    data={data}
-                                    clientStreamId={streamClientIdRef.current}
-                                    headedWorkerStatus={headedWorkerStatus}
-                                    onNavigateToAI={onNavigateToAI}
-                                    onResumeCrawlJob={onResumeCrawlJob}
-                                    onCancelCrawlJob={onCancelCrawlJob}
-                                    onOpenManualActionBrowser={onOpenManualActionBrowser}
-                                    onGetManualActionReuseStatus={onGetManualActionReuseStatus}
-                                    onCloseManualActionWindows={onCloseManualActionWindows}
-                                />
-                            ))}
-                        </div>
-                    ))
+                {isRecovering && (
+                    <div className="no-progress">Reconnecting to active Direct Override...</div>
                 )}
+                <div className="glass-panel progress-summary-shell">
+                    <div className="progress-text">{statusMessage}</div>
+                    <div className="progress-text">{activityMessage}</div>
+                </div>
             </div>
         </div>
     );
@@ -803,6 +789,7 @@ function ProgressItem({
     data,
     clientStreamId,
     headedWorkerStatus,
+    sourceCatalog = {},
     onNavigateToAI,
     onResumeCrawlJob,
     onCancelCrawlJob,
@@ -824,7 +811,6 @@ function ProgressItem({
     const {
         crawl_job_id,
         status,
-        operator_state,
         source_site,
         category_name,
         crawl_mode,
@@ -849,12 +835,10 @@ function ProgressItem({
         // Phase 4
         jobs_saved = 0,
         save_total = 0,
-        ingest_items_settled = 0,
         ingest_items_failed = 0,
         ingest_dead_lettered = 0,
         listings_staged = 0,
         jobs_skipped_existing = 0,
-        detail_selected_rows = 0,
         detail_skipped_existing_rows = 0,
         detail_target_rows = 0,
         detail_run_failed = 0,
@@ -906,8 +890,6 @@ function ProgressItem({
             crawlJobId: sourceListingBatchId,
         })
         : null;
-    const hasDownstreamBacklog = operator_state === 'completed_with_downstream_backlog'
-        || operator_state === 'stale_downstream_backlog';
     const metricScope = resolveMetricScope(data);
     const crawlPhase = resolveTaskCrawlPhase(data, metricScope);
     const contextChips = buildContextChips({
@@ -934,10 +916,14 @@ function ProgressItem({
     const hasWafChallenge = Boolean(waf_challenge);
     const hasIpBlocked = Boolean(ip_blocked);
     const isPartialComplete = Boolean(listing_completed && effectiveStatus === 'failed');
+    const runtimeSourceSite = `${manual_action?.source_site || request_payload?.source_site || source_site || ''}`.trim().toLowerCase();
     const isQueuedHeadedRun =
         effectiveStatus === 'queued'
         && `${request_payload?.crawl_mode || crawl_mode || ''}`.trim().toLowerCase() === 'headed';
-    const headedWorkerUnavailable = isQueuedHeadedRun && headedWorkerStatus?.available === false;
+    const headedWorkerUnavailable =
+        isQueuedHeadedRun
+        && sourceRequiresExternalHeadedWorker(runtimeSourceSite, sourceCatalog)
+        && headedWorkerStatus?.available === false;
     if (headedWorkerUnavailable) {
         taskStatusSignals.push('Headed worker offline');
     }

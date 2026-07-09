@@ -39,6 +39,14 @@ def _fetch_ctgoodjobs_registry_html() -> str:
     return asyncio.run(fetch_category_page_html(f"{CTGOODJOBS_BASE_URL}/jobs"))
 
 
+def _has_running_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 @dataclass
 class _TtlCache:
     ttl_s: float
@@ -94,34 +102,25 @@ class SourceCategoryRegistry:
             if isinstance(cached, list):
                 return cached
 
+            if _has_running_event_loop():
+                if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
+                    return self._ctgoodjobs_last_value
+                payload = self._static_ctgoodjobs_payload()
+                self._ctgoodjobs_last_value = payload
+                return payload
+
             try:
                 html = _fetch_ctgoodjobs_registry_html()
             except Exception:
                 if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
                     return self._ctgoodjobs_last_value
-                payload = [
-                    {
-                        "id": category.source_classification_id,
-                        "name": category.name,
-                        "slug": category.slug,
-                        "source_site": "ctgoodjobs",
-                    }
-                    for category in get_static_ctgoodjobs_categories()
-                ]
+                payload = self._static_ctgoodjobs_payload()
                 self._ctgoodjobs_last_value = payload
                 return payload
             if not html.strip():
                 if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
                     return self._ctgoodjobs_last_value
-                payload = [
-                    {
-                        "id": category.source_classification_id,
-                        "name": category.name,
-                        "slug": category.slug,
-                        "source_site": "ctgoodjobs",
-                    }
-                    for category in get_static_ctgoodjobs_categories()
-                ]
+                payload = self._static_ctgoodjobs_payload()
                 self._ctgoodjobs_last_value = payload
                 return payload
 
@@ -129,15 +128,7 @@ class SourceCategoryRegistry:
             if not registry:
                 if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
                     return self._ctgoodjobs_last_value
-                payload = [
-                    {
-                        "id": category.source_classification_id,
-                        "name": category.name,
-                        "slug": category.slug,
-                        "source_site": "ctgoodjobs",
-                    }
-                    for category in get_static_ctgoodjobs_categories()
-                ]
+                payload = self._static_ctgoodjobs_payload()
                 self._ctgoodjobs_last_value = payload
                 return payload
 
@@ -158,6 +149,18 @@ class SourceCategoryRegistry:
             return payload
 
         raise ValueError(f"Unsupported source_site: {normalized}")
+
+    @staticmethod
+    def _static_ctgoodjobs_payload() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": category.source_classification_id,
+                "name": category.name,
+                "slug": category.slug,
+                "source_site": "ctgoodjobs",
+            }
+            for category in get_static_ctgoodjobs_categories()
+        ]
 
 
 _registry: SourceCategoryRegistry | None = None

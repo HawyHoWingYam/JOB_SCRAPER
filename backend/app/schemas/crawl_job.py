@@ -112,3 +112,28 @@ class CrawlJobEventSchema(BaseModel):
 class CrawlJobEventsResponse(BaseModel):
     events: list[CrawlJobEventSchema]
     total: int
+
+
+class CrawlTaskListItemSchema(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    crawl_job_id: str
+    persisted_status: str
+    status: str
+    source_site: str
+    crawl_mode: str | None = None
+    updated_at: str | None = None
+    error: str | None = None
+    request_payload: dict | None = None
+
+
+class CrawlTaskListResponse(BaseModel):
+    items: list[CrawlTaskListItemSchema]
+    total: int
+    page: int
+    page_size: int
+    status: str | None = None
+    source_site: str | None = None
+    crawl_mode: str | None = None
+    time_range: str = "all"
+    refreshed_at: str
