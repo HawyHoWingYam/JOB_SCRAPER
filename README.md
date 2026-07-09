@@ -64,6 +64,15 @@ The default `backend-api` image only supports the lexical search baseline. Seman
 
 - Use the Sidebar `Crawl Tasks` page for running, failed, completed, cancelled, and manual-action crawl jobs.
 - The `Scraping Progress` panel is now a live-status surface for stream health and quick recovery hints, not the durable task history.
+- Live smoke commands and artifact expectations for the scheduler-driven crawl matrix are documented in `docs/runbooks/live-frontend-source-crawl-smoke.md`.
+
+### Live Smoke Matrix
+
+| Source | Listing smoke | Detail smoke | Expected operator outcome |
+|--------|---------------|--------------|---------------------------|
+| JobsDB | Yes | Yes | Detail can pause in `manual_action_required` when the headed automation profile is already open |
+| CTGoodJobs | Yes | Yes | Listing/detail can pause in `manual_action_required` for headed profile reuse recovery |
+| OfferToday | Yes | Yes | Healthy auth can finish with `success`; stale auth or anti-bot pressure should classify into session/WAF/IP/manual buckets |
 
 ## Headed Crawl Worker
 

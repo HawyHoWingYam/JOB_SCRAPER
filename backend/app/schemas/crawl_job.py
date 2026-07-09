@@ -124,6 +124,10 @@ class CrawlTaskListItemSchema(BaseModel):
     crawl_mode: str | None = None
     updated_at: str | None = None
     error: str | None = None
+    issue_class: str | None = None
+    issue_code: str | None = None
+    issue_stage: str | None = None
+    latest_issue_text: str | None = None
     request_payload: dict | None = None
 
 

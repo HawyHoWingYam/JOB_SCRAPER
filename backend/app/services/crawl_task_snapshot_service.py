@@ -192,6 +192,97 @@ def _max_count(*values: Any) -> int:
     return max((_to_int(value) for value in values), default=0)
 
 
+def _extract_issue_text(*, latest_event, crawl_job) -> str:
+    event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
+    manual_action = (
+        event_payload.get("manual_action")
+        if isinstance(event_payload.get("manual_action"), dict)
+        else {}
+    )
+    candidates = (
+        manual_action.get("reason"),
+        manual_action.get("message"),
+        event_payload.get("error"),
+        event_payload.get("message"),
+        event_payload.get("detail"),
+        getattr(crawl_job, "error_message", None),
+    )
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        text = str(candidate).strip()
+        if text:
+            return text
+    return ""
+
+
+def _extract_issue_code(*, latest_event, crawl_job) -> str | None:
+    event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
+    manual_action = (
+        event_payload.get("manual_action")
+        if isinstance(event_payload.get("manual_action"), dict)
+        else {}
+    )
+    candidates = (
+        manual_action.get("code"),
+        event_payload.get("code"),
+        getattr(crawl_job, "error_code", None),
+    )
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        issue_code = str(candidate).strip()
+        if issue_code:
+            return issue_code
+    return None
+
+
+def _extract_issue_stage(latest_event) -> str | None:
+    event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
+    manual_action = (
+        event_payload.get("manual_action")
+        if isinstance(event_payload.get("manual_action"), dict)
+        else {}
+    )
+    for candidate in (manual_action.get("stage"), event_payload.get("stage")):
+        if candidate is None:
+            continue
+        issue_stage = str(candidate).strip()
+        if issue_stage:
+            return issue_stage
+    return None
+
+
+def _derive_issue_metadata(latest_event, *, crawl_job) -> dict[str, str | None]:
+    issue_text = _extract_issue_text(latest_event=latest_event, crawl_job=crawl_job)
+    issue_code = _extract_issue_code(latest_event=latest_event, crawl_job=crawl_job)
+    issue_stage = _extract_issue_stage(latest_event)
+    latest_event_type = str(getattr(latest_event, "event_type", "") or "")
+    normalized_issue_text = issue_text.lower()
+
+    if issue_code == "1002" or "login expired" in normalized_issue_text:
+        issue_class = "session_expired"
+    elif issue_code == "-1000035" or "ip blocked" in normalized_issue_text or "ip block" in normalized_issue_text:
+        issue_class = "ip_blocked"
+    elif issue_code == "2520":
+        issue_class = "detail_unavailable"
+    elif latest_event_type == "waf.challenge" or "waf" in normalized_issue_text or "verify" in normalized_issue_text or "captcha" in normalized_issue_text:
+        issue_class = "waf_challenge"
+    elif crawl_job.status == "manual_action_required" or latest_event_type == "crawl.manual_action_required":
+        issue_class = "manual_action_required"
+    elif issue_text:
+        issue_class = "infrastructure_failure"
+    else:
+        issue_class = None
+
+    return {
+        "issue_class": issue_class,
+        "issue_code": issue_code,
+        "issue_stage": issue_stage,
+        "latest_issue_text": issue_text or None,
+    }
+
+
 def _derive_progress_status(
     status: str,
     *,
@@ -553,6 +644,7 @@ def build_crawl_task_snapshot(
         now=now,
         fallback_running=is_running,
     )
+    issue_metadata = _derive_issue_metadata(latest_event, crawl_job=crawl_job)
 
     return {
         "crawl_job_id": str(crawl_job.id),
@@ -622,6 +714,7 @@ def build_crawl_task_snapshot(
         "ai_total_items": ai_total_items,
         "manual_action": event_payload.get("manual_action"),
         "manual_action_resolution": event_payload.get("manual_action_resolution"),
+        **issue_metadata,
         "listing_completed": listing_completed,
         "waf_challenge": waf_challenge,
         "waf_challenge_message": waf_event_payload.get("message") if waf_challenge else None,

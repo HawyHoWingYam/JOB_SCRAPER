@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 from pathlib import Path
+import socket
 from typing import Awaitable, Callable
 
 from app.config import settings
@@ -222,6 +223,11 @@ class CTGoodJobsBrowserPageScraper:
             raise self._build_reuse_open_browser_unavailable_error(
                 message="No reusable browser session is available for this automation profile. Open the manual browser again or choose Fresh Profile."
             )
+        cdp_host = settings.manual_action_cdp_host or settings.manual_action_helper_host
+        try:
+            cdp_connect_host = socket.gethostbyname(cdp_host)
+        except OSError:
+            cdp_connect_host = cdp_host
 
         logger.info(
             "manual_action_attach_attempt",
@@ -229,12 +235,14 @@ class CTGoodJobsBrowserPageScraper:
                 "crawl_job_id": self.request_payload.get("crawl_job_id"),
                 "strategy": self.resume_strategy,
                 "source_site": "ctgoodjobs",
+                "cdp_host": cdp_host,
+                "cdp_connect_host": cdp_connect_host,
                 "debug_port": session.debug_port,
             },
         )
         try:
             self._sync_browser = self._sync_playwright.chromium.connect_over_cdp(
-                f"http://127.0.0.1:{session.debug_port}"
+                f"http://{cdp_connect_host}:{session.debug_port}"
             )
         except ManualActionRequiredError:
             raise
@@ -245,6 +253,8 @@ class CTGoodJobsBrowserPageScraper:
                     "crawl_job_id": self.request_payload.get("crawl_job_id"),
                     "strategy": self.resume_strategy,
                     "source_site": "ctgoodjobs",
+                    "cdp_host": cdp_host,
+                    "cdp_connect_host": cdp_connect_host,
                     "debug_port": session.debug_port,
                     "error": str(exc),
                 },
@@ -260,6 +270,8 @@ class CTGoodJobsBrowserPageScraper:
                     "crawl_job_id": self.request_payload.get("crawl_job_id"),
                     "strategy": self.resume_strategy,
                     "source_site": "ctgoodjobs",
+                    "cdp_host": cdp_host,
+                    "cdp_connect_host": cdp_connect_host,
                     "debug_port": session.debug_port,
                     "error": "Attached browser exposes no reusable context",
                 },
@@ -277,6 +289,8 @@ class CTGoodJobsBrowserPageScraper:
                 "crawl_job_id": self.request_payload.get("crawl_job_id"),
                 "strategy": self.resume_strategy,
                 "source_site": "ctgoodjobs",
+                "cdp_host": cdp_host,
+                "cdp_connect_host": cdp_connect_host,
                 "debug_port": session.debug_port,
             },
         )

@@ -311,7 +311,11 @@ function ScrapeProgressPanel({
                     <h3>Scraping Progress</h3>
                     <div className="progress-count-hint">{summaryHint}</div>
                 </div>
-                <button type="button" onClick={() => onOpenCrawlTasks?.()}>
+                <button
+                    type="button"
+                    data-testid="scrape-progress-open-crawl-tasks"
+                    onClick={() => onOpenCrawlTasks?.()}
+                >
                     Open Crawl Tasks
                 </button>
             </div>
@@ -322,7 +326,7 @@ function ScrapeProgressPanel({
                 {isRecovering && (
                     <div className="no-progress">Reconnecting to active Direct Override...</div>
                 )}
-                <div className="glass-panel progress-summary-shell">
+                <div className="glass-panel progress-summary-shell" data-testid="scrape-progress-shell">
                     <div className="progress-text">{statusMessage}</div>
                     <div className="progress-text">{activityMessage}</div>
                 </div>

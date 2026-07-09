@@ -137,7 +137,13 @@ function buildScopeHint(task) {
 }
 
 function buildIssueSummary(task) {
-  return task?.manual_action?.reason || task?.error || task?.status_reason || null;
+  return (
+    task?.latest_issue_text ||
+    task?.manual_action?.reason ||
+    task?.error ||
+    task?.status_reason ||
+    null
+  );
 }
 
 function formatStatusLabel(status) {
@@ -329,6 +335,7 @@ export default function CrawlTasksPage() {
           <span className="filter-label">Status</span>
           <select
             aria-label="Status"
+            data-testid="crawl-tasks-filter-status"
             className="premium-select"
             value={filters.status}
             onChange={handleFilterChange('status')}
@@ -345,6 +352,7 @@ export default function CrawlTasksPage() {
           <span className="filter-label">Source Site</span>
           <select
             aria-label="Source Site"
+            data-testid="crawl-tasks-filter-source"
             className="premium-select"
             value={filters.sourceSite}
             onChange={handleFilterChange('sourceSite')}
@@ -361,6 +369,7 @@ export default function CrawlTasksPage() {
           <span className="filter-label">Crawl Mode</span>
           <select
             aria-label="Crawl Mode"
+            data-testid="crawl-tasks-filter-mode"
             className="premium-select"
             value={filters.crawlMode}
             onChange={handleFilterChange('crawlMode')}
@@ -377,6 +386,7 @@ export default function CrawlTasksPage() {
           <span className="filter-label">Time Range</span>
           <select
             aria-label="Time Range"
+            data-testid="crawl-tasks-filter-time-range"
             className="premium-select"
             value={filters.timeRange}
             onChange={handleFilterChange('timeRange')}
@@ -422,6 +432,7 @@ export default function CrawlTasksPage() {
                     key={task.crawl_job_id}
                     type="button"
                     role="listitem"
+                    data-testid={`crawl-task-row-${task.crawl_job_id}`}
                     className={`crawl-task-row ${isSelected ? 'selected' : ''}`}
                     aria-pressed={isSelected}
                     onClick={() => handleSelectTask(task.crawl_job_id)}
@@ -495,6 +506,7 @@ export default function CrawlTasksPage() {
                   <>
                     <button
                       type="button"
+                      data-testid="crawl-task-resume-open-browser"
                       disabled={actionState.pending !== null}
                       onClick={() =>
                         void runTaskAction(
@@ -510,6 +522,7 @@ export default function CrawlTasksPage() {
 
                     <button
                       type="button"
+                      data-testid="crawl-task-resume-fresh"
                       disabled={actionState.pending !== null}
                       onClick={() =>
                         void runTaskAction('resume_fresh', 'Resume fresh', () =>
@@ -523,6 +536,7 @@ export default function CrawlTasksPage() {
 
                     <button
                       type="button"
+                      data-testid="crawl-task-open-browser"
                       disabled={actionState.pending !== null}
                       onClick={() =>
                         void runTaskAction('open_browser', 'Open browser', () =>
@@ -536,6 +550,7 @@ export default function CrawlTasksPage() {
 
                     <button
                       type="button"
+                      data-testid="crawl-task-check-reuse-status"
                       disabled={actionState.pending !== null}
                       onClick={() =>
                         void runTaskAction('reuse_status', 'Check reuse status', () =>
@@ -549,6 +564,7 @@ export default function CrawlTasksPage() {
 
                     <button
                       type="button"
+                      data-testid="crawl-task-close-profile-windows"
                       disabled={actionState.pending !== null}
                       onClick={() =>
                         void runTaskAction('close_windows', 'Close profile windows', () =>
@@ -563,6 +579,7 @@ export default function CrawlTasksPage() {
                 ) : (
                   <button
                     type="button"
+                    data-testid="crawl-task-resume"
                     disabled={actionState.pending !== null}
                     onClick={() =>
                       void runTaskAction('resume', 'Resume task', () =>
@@ -577,6 +594,7 @@ export default function CrawlTasksPage() {
 
                 <button
                   type="button"
+                  data-testid="crawl-task-cancel"
                   disabled={actionState.pending !== null}
                   onClick={() =>
                     void runTaskAction('cancel', 'Cancel crawl job', () =>
@@ -631,10 +649,33 @@ export default function CrawlTasksPage() {
                 </div>
               </dl>
 
+              <div className="crawl-tasks-detail-block">
+                <div className="crawl-tasks-detail-label">Issue Class</div>
+                <div className="crawl-tasks-detail-text" data-testid="crawl-task-issue-class">
+                  {selectedTask.issue_class || 'none'}
+                </div>
+              </div>
+
+              <div className="crawl-tasks-detail-block">
+                <div className="crawl-tasks-detail-label">Issue Code</div>
+                <div className="crawl-tasks-detail-text" data-testid="crawl-task-issue-code">
+                  {selectedTask.issue_code || 'none'}
+                </div>
+              </div>
+
+              <div className="crawl-tasks-detail-block">
+                <div className="crawl-tasks-detail-label">Issue Stage</div>
+                <div className="crawl-tasks-detail-text" data-testid="crawl-task-issue-stage">
+                  {selectedTask.issue_stage || 'none'}
+                </div>
+              </div>
+
               {buildIssueSummary(selectedTask) && (
                 <div className="crawl-tasks-detail-block">
                   <div className="crawl-tasks-detail-label">Latest issue</div>
-                  <div className="crawl-tasks-detail-text">{buildIssueSummary(selectedTask)}</div>
+                  <div className="crawl-tasks-detail-text" data-testid="crawl-task-latest-issue-text">
+                    {buildIssueSummary(selectedTask)}
+                  </div>
                 </div>
               )}
 

@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     jobsdb_headed_worker_lock_port: int = 47651
     jobsdb_headed_worker_stale_seconds: int = 60
     manual_action_helper_host: str = "127.0.0.1"
+    manual_action_cdp_host: str | None = None
     jobsdb_headed_manual_action_helper_port: int = 47652
     manual_action_registry_state_path: str = str(
         DEFAULT_RUNTIME_DIR / "manual_actions" / "live_browser_sessions.json"

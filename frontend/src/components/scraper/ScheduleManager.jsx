@@ -1076,6 +1076,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                     </button>
                     <button
                         className="cyber-btn run-btn"
+                        data-testid="direct-override-toggle"
                         onClick={handleImmediateScrapeToggle}
                         disabled={manualRunDisabled}
                     >
@@ -1088,6 +1089,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                 <label htmlFor="scheduler-source-site">Data Source</label>
                 <select
                     id="scheduler-source-site"
+                    data-testid="scheduler-source-site"
                     className="premium-select"
                     value={currentSourceSite}
                     onChange={handleSourceSiteChange}
@@ -1247,6 +1249,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                         <label htmlFor="immediate-crawl-phase">Crawl Phase</label>
                         <select
                             id="immediate-crawl-phase"
+                            data-testid="direct-override-phase"
                             className="premium-select"
                             value={immediateForm.crawl_phase}
                             onChange={(e) => setImmediateForm(prev => ({
@@ -1269,6 +1272,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                         <label htmlFor="immediate-crawl-mode">Crawl Mode</label>
                         <select
                             id="immediate-crawl-mode"
+                            data-testid="direct-override-mode"
                             className="premium-select"
                             value={immediateForm.crawl_mode}
                             onChange={(e) => {
@@ -1312,6 +1316,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                         <label>{immediateForm.crawl_phase === 'detail' ? 'Detail Crawl Target' : 'Max Depth (Pages)'}</label>
                         <input
                             type="number"
+                            data-testid="direct-override-limit"
                             min="1"
                             max={immediateForm.crawl_phase === 'detail' ? '5000' : '9999'}
                             className="premium-input w-24"
@@ -1343,6 +1348,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                             <label htmlFor="source-listing-crawl-job-id">Legacy Listing Batch Filter</label>
                             <select
                                 id="source-listing-crawl-job-id"
+                                data-testid="direct-override-listing-batch"
                                 className="premium-select"
                                 value={immediateForm.source_listing_crawl_job_id}
                                 onChange={(e) => setImmediateForm(prev => ({
@@ -1420,6 +1426,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                     <div className="form-actions mt-6">
                         <button
                             className="cyber-btn run-btn w-full"
+                            data-testid="direct-override-start"
                             onClick={handleImmediateScrape}
                             disabled={isLoading || !immediateRunReadiness.isReady}
                         >
