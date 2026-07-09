@@ -27,6 +27,12 @@ SyncPageContentFetcher = Callable[[str], str]
 
 logger = logging.getLogger(__name__)
 
+HEADED_DISPLAY_UNAVAILABLE_MARKERS = (
+    "without having a XServer running",
+    "Missing X server or $DISPLAY",
+    "use 'xvfb-run",
+)
+
 
 class CTGoodJobsBrowserPageScraper:
     def __init__(
@@ -74,6 +80,7 @@ class CTGoodJobsBrowserPageScraper:
             except Exception as exc:
                 await self._cleanup_failed_startup(loop)
                 if self.resume_strategy == RESUME_STRATEGY_FRESH_PROFILE:
+                    self._raise_if_headed_display_unavailable(exc)
                     self._raise_if_profile_in_use(exc)
                 raise
         return self
@@ -371,11 +378,45 @@ class CTGoodJobsBrowserPageScraper:
             for marker in challenge_markers
         )
 
+    def _raise_if_headed_display_unavailable(self, exc: Exception) -> None:
+        message = str(exc or "")
+        if not any(marker in message for marker in HEADED_DISPLAY_UNAVAILABLE_MARKERS):
+            return
+
+        logger.warning(
+            "ctgoodjobs_headed_display_unavailable crawl_job_id=%s user_data_dir=%s error=%s",
+            self.request_payload.get("crawl_job_id"),
+            self._resolve_user_data_dir(),
+            message.splitlines()[0] if message else type(exc).__name__,
+        )
+        raise ManualActionRequiredError(
+            source_site="ctgoodjobs",
+            stage="headed_display_unavailable",
+            blocked_url=f"{CTGOODJOBS_BASE_URL}/jobs",
+            message=(
+                "CTGoodJobs headed browser could not start because this runtime has no X server/$DISPLAY. "
+                "Start the host-side headed worker or run the crawl from a desktop session, then resume."
+            ),
+            action_type="environment_setup",
+            instructions=[
+                "Start the host-side headed worker or run the backend in a desktop session with display support.",
+                "Retry the crawl after headed browser launch is available in this runtime.",
+            ],
+        ) from exc
+
     def _raise_if_profile_in_use(self, exc: Exception) -> None:
         message = str(exc or "")
+        if any(marker in message for marker in HEADED_DISPLAY_UNAVAILABLE_MARKERS):
+            return
         if "launch_persistent_context" not in message or "Target page, context or browser has been closed" not in message:
             return
 
+        logger.warning(
+            "ctgoodjobs_browser_profile_in_use crawl_job_id=%s user_data_dir=%s error=%s",
+            self.request_payload.get("crawl_job_id"),
+            self._resolve_user_data_dir(),
+            message.splitlines()[0] if message else type(exc).__name__,
+        )
         raise ManualActionRequiredError(
             source_site="ctgoodjobs",
             stage="browser_profile_in_use",
