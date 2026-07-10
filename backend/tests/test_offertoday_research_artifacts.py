@@ -893,6 +893,91 @@ def test_provenance_excludes_complete_marker_bearing_assignment_keys(
 @pytest.mark.parametrize(
     "content",
     (
+        'config["api_token"] = "hard-coded-secret"\n',
+        "config['api_token'] = 'hard-coded-secret'\n",
+        'os.environ["API_TOKEN"] = "hard-coded-secret"\n',
+        "os.environ['API_TOKEN'] = 'hard-coded-secret'\n",
+        'API_TOKEN += "hard-coded-secret"\n',
+        "API_TOKEN += 'hard-coded-secret'\n",
+    ),
+    ids=(
+        "double-quoted-subscript",
+        "single-quoted-subscript",
+        "double-quoted-dotted-subscript",
+        "single-quoted-dotted-subscript",
+        "double-quoted-augmented-assignment",
+        "single-quoted-augmented-assignment",
+    ),
+)
+def test_provenance_excludes_secret_subscript_and_augmented_assignments(
+    tmp_path,
+    content,
+) -> None:
+    repo = initialize_git_fixture(
+        tmp_path,
+        tracked_files={"backend/app/tracked_assignment.py": "SAFE_VALUE = 1\n"},
+    )
+    tracked = write_file(repo, "backend/app/tracked_assignment.py", content)
+    untracked = write_file(repo, "backend/tests/untracked_assignment.py", content)
+
+    provenance = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+        relevant_source_paths=(),
+    )
+
+    assert provenance.excluded_tracked_file_hashes == {
+        "backend/app/tracked_assignment.py": file_sha256(tracked)
+    }
+    assert provenance.excluded_untracked_file_hashes == {
+        "backend/tests/untracked_assignment.py": file_sha256(untracked)
+    }
+    assert provenance.untracked_file_hashes == {}
+    assert "tracked_assignment.py" not in provenance.working_tree_patch
+    assert "untracked_assignment.py" not in provenance.working_tree_patch
+    assert "hard-coded-secret" not in provenance.working_tree_patch
+
+
+@pytest.mark.parametrize(
+    "content",
+    (
+        'config["feature_enabled"] = True\n',
+        "RETRY_COUNT += 1\n",
+    ),
+    ids=("non-secret-subscript", "non-secret-augmented-assignment"),
+)
+def test_provenance_keeps_non_secret_subscript_and_augmented_assignments(
+    tmp_path,
+    content,
+) -> None:
+    repo = initialize_git_fixture(
+        tmp_path,
+        tracked_files={"backend/app/tracked_near_match.py": "SAFE_VALUE = 1\n"},
+    )
+    write_file(repo, "backend/app/tracked_near_match.py", content)
+    untracked = write_file(repo, "backend/tests/untracked_near_match.py", content)
+
+    provenance = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+        relevant_source_paths=(),
+    )
+
+    assert provenance.excluded_tracked_file_hashes == {}
+    assert provenance.excluded_untracked_file_hashes == {}
+    assert provenance.untracked_file_hashes == {
+        "backend/tests/untracked_near_match.py": file_sha256(untracked)
+    }
+    assert "backend/app/tracked_near_match.py" in provenance.working_tree_patch
+    assert "backend/tests/untracked_near_match.py" in provenance.working_tree_patch
+    assert content.strip() in provenance.working_tree_patch
+
+
+@pytest.mark.parametrize(
+    "content",
+    (
         'API_TOKEN = "$upersecret-value"\n',
         '{"api_token":"hard-coded-secret"}\n',
         "- api_token: hard-coded-secret\n",
