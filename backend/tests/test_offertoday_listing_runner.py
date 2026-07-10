@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
+from itertools import permutations
 from typing import Any
 from uuid import UUID
 
@@ -791,6 +792,118 @@ async def test_identity_conflict_and_deferral_evidence_is_permutation_stable(
     assert conflict.reason == expected_reason
 
 
+@pytest.mark.parametrize(
+    (
+        "history_pairs",
+        "page_pairs",
+        "expected_job_ids",
+        "expected_encrypted_job_ids",
+        "expected_reason",
+    ),
+    [
+        (
+            (),
+            (
+                ("j-forward", "enc-a"),
+                ("j-forward", "enc-b"),
+                ("j-forward", "enc-c"),
+            ),
+            ("j-forward",),
+            ("enc-a", "enc-b", "enc-c"),
+            "one_job_id_to_multiple_encrypted_ids",
+        ),
+        (
+            (),
+            (
+                ("j-a", "enc-reverse"),
+                ("j-b", "enc-reverse"),
+                ("j-c", "enc-reverse"),
+            ),
+            ("j-a", "j-b", "j-c"),
+            ("enc-reverse",),
+            "one_encrypted_id_to_multiple_job_ids",
+        ),
+        (
+            (("j-forward", "enc-a"),),
+            (("j-forward", "enc-b"), ("j-forward", "enc-c")),
+            ("j-forward",),
+            ("enc-a", "enc-b", "enc-c"),
+            "one_job_id_to_multiple_encrypted_ids",
+        ),
+        (
+            (("j-a", "enc-reverse"),),
+            (("j-b", "enc-reverse"), ("j-c", "enc-reverse")),
+            ("j-a", "j-b", "j-c"),
+            ("enc-reverse",),
+            "one_encrypted_id_to_multiple_job_ids",
+        ),
+    ],
+    ids=["forward", "reverse", "forward-with-history", "reverse-with-history"],
+)
+@pytest.mark.asyncio
+async def test_three_way_conflict_evidence_is_complete_for_every_permutation(
+    history_pairs: tuple[tuple[str, str], ...],
+    page_pairs: tuple[tuple[str, str], ...],
+    expected_job_ids: tuple[str, ...],
+    expected_encrypted_job_ids: tuple[str, ...],
+    expected_reason: str,
+) -> None:
+    expected_evidence = [
+        (expected_job_ids, expected_encrypted_job_ids, expected_reason)
+    ]
+    expected_deferrals = [
+        {
+            "job_ids": expected_job_ids,
+            "encrypted_job_ids": expected_encrypted_job_ids,
+            "reason": expected_reason,
+        }
+    ]
+
+    for page_order in permutations(page_pairs):
+        steps = []
+        if history_pairs:
+            steps.append(
+                _listing_response(
+                    [
+                        _listing_row(job_id, encrypted_id)
+                        for job_id, encrypted_id in history_pairs
+                    ],
+                    has_more=True,
+                )
+            )
+        steps.append(
+            _listing_response(
+                [
+                    _listing_row(job_id, encrypted_id)
+                    for job_id, encrypted_id in page_order
+                ],
+                has_more=True,
+            )
+        )
+        transport = ScriptedTransport(*steps)
+
+        result, observations, staging, _sleep = await _run(
+            transport,
+            max_pages=2,
+        )
+
+        conflict_evidence = [
+            (conflict.job_ids, conflict.encrypted_job_ids, conflict.reason)
+            for conflict in result.identity_conflicts
+        ]
+        observation_evidence = [
+            (conflict.job_ids, conflict.encrypted_job_ids, conflict.reason)
+            for conflict in observations.observations[-1].identity_conflicts
+        ]
+        assert conflict_evidence == expected_evidence, page_order
+        assert observation_evidence == expected_evidence, page_order
+        assert staging.deferrals == expected_deferrals, page_order
+        assert result.stop_reason == "identity_conflict"
+        assert result.accepted_job_ids == ()
+        assert result.id_pairs == ()
+        assert len(staging.staged_pages) == int(bool(history_pairs))
+
+
 @pytest.mark.asyncio
 async def test_identity_issue_blocks_other_valid_rows_on_the_same_page_from_staging() -> (
     None
@@ -1040,6 +1153,83 @@ async def test_programmer_exception_propagates_without_retry_or_network_observat
     assert staging_sink.staged_pages == []
     assert staging_sink.deferrals == []
     assert sleep.delays == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        FileNotFoundError("missing browser fixture"),
+        PermissionError("browser profile permission denied"),
+    ],
+    ids=["file-not-found", "permission-denied"],
+)
+@pytest.mark.asyncio
+async def test_non_network_os_errors_propagate_without_retry_or_observation(
+    failure: OSError,
+) -> None:
+    transport = ScriptedTransport(failure, failure, failure)
+    observation_sink = MemoryObservationSink()
+    staging_sink = MemoryStagingSink()
+    sleep = NoWaitSleep()
+    runner = OfferTodayListingRunner(
+        transport,
+        sleep=sleep,
+        clock=DeterministicClock(),
+    )
+    result = None
+
+    with pytest.raises(type(failure), match=str(failure)):
+        result = await runner.run(
+            conditions=[_condition()],
+            stop_policy=ListingStopPolicy(max_pages_per_condition=3),
+            retry_policy=ListingRetryPolicy(
+                max_attempts_per_page=3,
+                retry_delays_seconds=(0.1, 0.2),
+            ),
+            observation_sink=observation_sink,
+            staging_sink=staging_sink,
+            session_mode="saved-session",
+        )
+
+    assert result is None
+    assert len(transport.requests) == 1
+    assert observation_sink.observations == []
+    assert observation_sink.outcomes == []
+    assert staging_sink.staged_pages == []
+    assert staging_sink.deferrals == []
+    assert sleep.delays == []
+
+
+@pytest.mark.asyncio
+async def test_connection_errors_retry_same_page_then_record_gap() -> None:
+    transport = ScriptedTransport(
+        ConnectionError("connection reset 1"),
+        ConnectionError("connection reset 2"),
+        ConnectionError("connection reset 3"),
+    )
+
+    result, observations, staging, sleep = await _run(transport)
+
+    assert [request[0]["page"] for request in transport.requests] == [1, 1, 1]
+    assert result.stop_reason == "unresolved_gap"
+    assert result.is_complete is False
+    assert len(result.gaps) == 1
+    assert result.gaps[0].attempts == 3
+    assert result.gaps[0].last_kind is OfferTodayResponseKind.TRANSIENT_TRANSPORT
+    assert [item.classification for item in observations.observations] == [
+        "transient_transport",
+        "transient_transport",
+        "transient_transport",
+    ]
+    assert [item.retry_reason for item in observations.observations] == [
+        "transient_transport",
+        "transient_transport",
+        None,
+    ]
+    assert observations.observations[-1].stop_reason == "unresolved_gap"
+    assert staging.staged_pages == []
+    assert staging.deferrals == []
+    assert sleep.delays == [0.1, 0.2]
 
 
 @pytest.mark.asyncio

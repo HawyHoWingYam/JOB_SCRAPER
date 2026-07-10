@@ -430,7 +430,11 @@ class OfferTodayListingRunner:
                             payload,
                             listing_url=listing_url,
                         )
-                    except (OfferTodayTransportError, OSError) as exc:
+                    except (
+                        OfferTodayTransportError,
+                        TimeoutError,
+                        ConnectionError,
+                    ) as exc:
                         transport_error = exc
                         error_payload = getattr(exc, "payload", None)
                         if isinstance(error_payload, Mapping):
@@ -539,6 +543,8 @@ class OfferTodayListingRunner:
                     ] = set()
                     candidate_job_to_encrypted_id = dict(job_to_encrypted_id)
                     candidate_encrypted_id_to_job = dict(encrypted_id_to_job)
+                    page_job_to_encrypted_ids: dict[str, set[str]] = {}
+                    page_encrypted_id_to_jobs: dict[str, set[str]] = {}
                     candidate_accepted_job_ids = set(accepted_job_ids)
                     page_rejected_job_ids: set[str] = set()
 
@@ -600,46 +606,49 @@ class OfferTodayListingRunner:
                             page_pair_values.add(pair_value)
                             page_pairs.append(OfferTodayIdentityPair(*pair_value))
 
-                        known_encrypted_job_id = candidate_job_to_encrypted_id.get(
-                            job_id
+                        encrypted_job_ids = page_job_to_encrypted_ids.setdefault(
+                            job_id,
+                            set(),
                         )
-                        if (
-                            known_encrypted_job_id is not None
-                            and known_encrypted_job_id != encrypted_job_id
-                        ):
+                        encrypted_job_ids.add(encrypted_job_id)
+                        known_encrypted_job_id = job_to_encrypted_id.get(job_id)
+                        if known_encrypted_job_id is not None:
+                            encrypted_job_ids.add(known_encrypted_job_id)
+
+                        job_ids = page_encrypted_id_to_jobs.setdefault(
+                            encrypted_job_id,
+                            set(),
+                        )
+                        job_ids.add(job_id)
+                        known_job_id = encrypted_id_to_job.get(encrypted_job_id)
+                        if known_job_id is not None:
+                            job_ids.add(known_job_id)
+
+                        candidate_job_to_encrypted_id[job_id] = encrypted_job_id
+                        candidate_encrypted_id_to_job[encrypted_job_id] = job_id
+                        if job_id not in deferred_job_ids:
+                            candidate_accepted_job_ids.add(job_id)
+
+                    for job_id in sorted(page_job_to_encrypted_ids):
+                        encrypted_job_ids = page_job_to_encrypted_ids[job_id]
+                        if len(encrypted_job_ids) > 1:
                             add_conflict(
                                 ListingIdentityConflict(
                                     job_ids=(job_id,),
-                                    encrypted_job_ids=(
-                                        known_encrypted_job_id,
-                                        encrypted_job_id,
-                                    ),
+                                    encrypted_job_ids=tuple(sorted(encrypted_job_ids)),
                                     reason="one_job_id_to_multiple_encrypted_ids",
                                 )
                             )
-
-                        known_job_id = candidate_encrypted_id_to_job.get(
-                            encrypted_job_id
-                        )
-                        if known_job_id is not None and known_job_id != job_id:
+                    for encrypted_job_id in sorted(page_encrypted_id_to_jobs):
+                        job_ids = page_encrypted_id_to_jobs[encrypted_job_id]
+                        if len(job_ids) > 1:
                             add_conflict(
                                 ListingIdentityConflict(
-                                    job_ids=(known_job_id, job_id),
+                                    job_ids=tuple(sorted(job_ids)),
                                     encrypted_job_ids=(encrypted_job_id,),
                                     reason="one_encrypted_id_to_multiple_job_ids",
                                 )
                             )
-
-                        candidate_job_to_encrypted_id.setdefault(
-                            job_id,
-                            encrypted_job_id,
-                        )
-                        candidate_encrypted_id_to_job.setdefault(
-                            encrypted_job_id,
-                            job_id,
-                        )
-                        if job_id not in deferred_job_ids:
-                            candidate_accepted_job_ids.add(job_id)
 
                     for conflict in page_conflicts:
                         for conflicted_job_id in conflict.job_ids:
