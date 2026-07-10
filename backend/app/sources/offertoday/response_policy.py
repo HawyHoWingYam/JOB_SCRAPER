@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal, Mapping
@@ -41,7 +42,7 @@ class OfferTodayTransportError(RuntimeError):
         super().__init__(message)
         self.http_status = http_status
         self.response_url = response_url
-        self.payload = dict(payload) if isinstance(payload, Mapping) else None
+        self.payload = deepcopy(dict(payload)) if isinstance(payload, Mapping) else None
         self.error_kind = error_kind
 
 
@@ -60,7 +61,7 @@ def _result(
         code=code,
         message=message,
         data=data,
-        raw_payload=dict(payload) if isinstance(payload, Mapping) else None,
+        raw_payload=deepcopy(dict(payload)) if isinstance(payload, Mapping) else None,
         retryable=retryable,
         stop_batch=stop_batch,
     )
@@ -145,10 +146,10 @@ def classify_offertoday_response(
         )
 
     raw_code = payload.get("code")
-    code = raw_code if isinstance(raw_code, int) else None
+    code = raw_code if type(raw_code) is int else None
     message = str(payload.get("msg") or payload.get("message") or "").strip() or None
     raw_data = payload.get("data")
-    data = dict(raw_data) if isinstance(raw_data, Mapping) else None
+    data = deepcopy(dict(raw_data)) if isinstance(raw_data, Mapping) else None
 
     if code == 1002:
         return _result(
@@ -194,13 +195,14 @@ def classify_offertoday_response(
             stop_batch=False,
         )
 
+    raw_job_id = raw_data.get("jobId") if isinstance(raw_data, Mapping) else None
     valid_shape = isinstance(raw_data, Mapping) and (
         (
             isinstance(raw_data.get("resultList"), list)
             and all(isinstance(row, Mapping) for row in raw_data.get("resultList"))
         )
         if operation == "listing"
-        else bool(str(raw_data.get("jobId") or "").strip())
+        else isinstance(raw_job_id, str) and bool(raw_job_id.strip())
     )
     if not valid_shape:
         return _result(
@@ -214,7 +216,7 @@ def classify_offertoday_response(
         )
 
     if operation == "detail" and expected_job_id is not None:
-        response_job_id = str(raw_data.get("jobId") or "").strip()
+        response_job_id = raw_job_id.strip()
         if response_job_id != str(expected_job_id).strip():
             return _result(
                 OfferTodayResponseKind.ID_MISMATCH,

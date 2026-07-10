@@ -140,6 +140,19 @@ def test_listing_code_2520_is_an_unknown_api_failure():
     assert classification.stop_batch is False
 
 
+@pytest.mark.parametrize("raw_code", [False, True, 0.0, "0", [], {}])
+def test_boolean_and_malformed_codes_are_invalid(raw_code: object):
+    classification = classify_offertoday_response(
+        {"code": raw_code, "data": {"resultList": []}},
+        operation="listing",
+    )
+
+    assert classification.kind is OfferTodayResponseKind.INVALID_PAYLOAD
+    assert classification.code is None
+    assert classification.retryable is True
+    assert classification.stop_batch is False
+
+
 def test_detail_job_id_mismatch_stops_the_batch():
     classification = classify_offertoday_response(
         {"code": 0, "msg": "ok", "data": {"jobId": "actual-id"}},
@@ -151,6 +164,21 @@ def test_detail_job_id_mismatch_stops_the_batch():
     assert classification.message == "Expected jobId= expected-id , got jobId=actual-id"
     assert classification.retryable is False
     assert classification.stop_batch is True
+
+
+@pytest.mark.parametrize(
+    "job_id",
+    [123, True, ["job-123"], {"id": "job-123"}],
+)
+def test_detail_success_requires_string_job_id(job_id: object):
+    classification = classify_offertoday_response(
+        {"code": 0, "data": {"jobId": job_id}},
+        operation="detail",
+    )
+
+    assert classification.kind is OfferTodayResponseKind.INVALID_PAYLOAD
+    assert classification.retryable is False
+    assert classification.stop_batch is False
 
 
 @pytest.mark.parametrize("http_status", [429, 500, 502, 503, 504])
@@ -301,3 +329,36 @@ def test_transport_error_copies_context_and_response_payloads_are_copied():
     assert classification.raw_payload == {"code": 0, "data": {"resultList": []}}
     with pytest.raises(FrozenInstanceError):
         classification.retryable = True
+
+
+def test_transport_error_deep_copies_nested_payload_evidence():
+    payload = {"context": {"attempts": [1]}}
+    error = OfferTodayTransportError(
+        "request failed",
+        http_status=503,
+        response_url="https://www.offertoday.com/failure",
+        payload=payload,
+        error_kind="http",
+    )
+
+    payload["context"]["attempts"].append(2)
+
+    assert error.payload == {"context": {"attempts": [1]}}
+
+
+def test_classification_deep_copies_nested_raw_and_data_evidence():
+    payload = {
+        "code": 0,
+        "data": {
+            "resultList": [{"jobId": "job-123", "metadata": {"tags": ["python"]}}]
+        },
+    }
+    classification = classify_offertoday_response(payload, operation="listing")
+
+    payload["data"]["resultList"][0]["metadata"]["tags"].append("sql")
+
+    expected_data = {
+        "resultList": [{"jobId": "job-123", "metadata": {"tags": ["python"]}}]
+    }
+    assert classification.raw_payload == {"code": 0, "data": expected_data}
+    assert classification.data == expected_data
