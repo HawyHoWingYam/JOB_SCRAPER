@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, overload
 
@@ -23,6 +24,11 @@ class OfferTodayDetailFetchResult:
     raw_response: dict[str, Any] | None
     parsed_detail: dict[str, Any] | None
     canonical_detail: dict[str, Any] | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "raw_response", deepcopy(self.raw_response))
+        object.__setattr__(self, "parsed_detail", deepcopy(self.parsed_detail))
+        object.__setattr__(self, "canonical_detail", deepcopy(self.canonical_detail))
 
 
 @overload

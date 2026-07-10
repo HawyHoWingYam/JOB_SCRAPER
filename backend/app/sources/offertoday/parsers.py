@@ -13,7 +13,7 @@ and cookies (acw_tc for WAF). Job IDs are base64-encrypted strings.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from app.sources.offertoday.quality import clean_description_text, normalize_tag_terms
 
@@ -25,6 +25,24 @@ EMPLOYMENT_TYPE_MAP: dict[int, str] = {
     2: "兼職",
     3: "實習",
 }
+
+
+class OfferTodayPayloadParseError(ValueError):
+    pass
+
+
+def _optional_object(
+    payload: Mapping[str, Any],
+    field_name: str,
+) -> dict[str, Any]:
+    value = payload.get(field_name)
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise OfferTodayPayloadParseError(
+            f"OfferToday detail field {field_name} must be an object"
+        )
+    return dict(value)
 
 
 def parse_offertoday_listing_response(
@@ -74,7 +92,10 @@ def _parse_listing_job(raw: dict[str, Any]) -> dict[str, Any]:
 
 def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str, Any]:
     """Parse the job detail API response into a dict."""
-    data = response_data.get("data") or {}
+    data = _optional_object(response_data, "data")
+    industry = _optional_object(data, "industry")
+    employ_type = _optional_object(data, "employType")
+    address = _optional_object(data, "addressVO")
     job_id = str(data.get("jobId") or "").strip()
     encrypted_job_id = str(data.get("encryptJobId") or "").strip()
     description_html = str(data.get("jobDesc") or "").strip()
@@ -94,7 +115,7 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
         "company_name": str(data.get("companyName") or "").strip(),
         "company_brand": str(data.get("brandName") or "").strip(),
         "company_logo": str(data.get("brandLogo") or "").strip(),
-        "company_industry": str((data.get("industry") or {}).get("name") or "").strip(),
+        "company_industry": str(industry.get("name") or "").strip(),
         "company_size": str(data.get("sizeDesc") or "").strip(),
         "company_type": str(data.get("typeDesc") or "").strip(),
         "location": str(data.get("locationDesc") or "").strip(),
@@ -119,10 +140,10 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
         "posted_days_ago": data.get("postDaysAgo"),
         "job_functions": data.get("jobFunctions") or [],
         "locations_tree": data.get("locations") or {},
-        "employ_type": (data.get("employType") or {}).get("name"),
-        "address": data.get("addressVO") or {},
-        "latitude": (data.get("addressVO") or {}).get("latitude"),
-        "longitude": (data.get("addressVO") or {}).get("longitude"),
+        "employ_type": employ_type.get("name"),
+        "address": address,
+        "latitude": address.get("latitude"),
+        "longitude": address.get("longitude"),
         "recruiter_name": str(data.get("bossName") or "").strip(),
         "recruiter_title": str(data.get("bossTitle") or "").strip(),
         "work_permit_list": data.get("workPermitList") or [],

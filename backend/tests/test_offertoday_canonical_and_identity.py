@@ -493,6 +493,72 @@ async def test_offertoday_browser_detail_scraper_passes_both_ids_and_builds_type
 
 
 @pytest.mark.asyncio
+async def test_offertoday_browser_detail_scraper_types_malformed_nested_payload():
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    response_payload = {
+        "code": 0,
+        "data": {
+            **_sample_detail_raw(),
+            "industry": "not-an-object",
+        },
+    }
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        return response_payload
+
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    )
+
+    result = await scraper.fetch_job_detail(
+        "jid-1",
+        encrypted_job_id="enc-jid-1",
+    )
+
+    assert result.classification.kind is OfferTodayResponseKind.INVALID_PAYLOAD
+    assert result.classification.retryable is False
+    assert result.classification.stop_batch is False
+    assert result.raw_response == response_payload
+    assert result.parsed_detail is None
+    assert result.canonical_detail is None
+
+
+@pytest.mark.asyncio
+async def test_detail_fetch_result_isolates_nested_evidence_representations():
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    response_payload = {"code": 0, "data": _sample_detail_raw()}
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        return response_payload
+
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    )
+    result = await scraper.fetch_job_detail(
+        "jid-1",
+        encrypted_job_id="enc-jid-1",
+    )
+
+    result.canonical_detail["job_functions"][0]["children"][0][
+        "name"
+    ] = "Mutated canonical evidence"
+
+    assert result.parsed_detail["job_functions"][0]["children"][0]["name"] == (
+        "Software"
+    )
+    assert result.raw_response["data"]["jobFunctions"][0]["children"][0]["name"] == (
+        "Software"
+    )
+    assert response_payload["data"]["jobFunctions"][0]["children"][0]["name"] == (
+        "Software"
+    )
+
+
+@pytest.mark.asyncio
 async def test_offertoday_browser_detail_scraper_missing_encrypted_id_makes_zero_fetch_calls():
     scraper_module = importlib.import_module(
         "app.scraper.offertoday_browser_detail_scraper"
@@ -909,6 +975,30 @@ def test_offline_parsed_repair_build_failure_leaves_listing_unchanged(monkeypatc
     assert vars(listing) == listing_before
 
 
+def test_offline_parsed_repair_persist_failure_leaves_listing_unchanged(monkeypatch):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = service_module.OfferTodayJobRepairService(db=object())
+    listing = _listing_stub()
+    listing_before = dict(vars(listing))
+    parsed_detail = parse_offertoday_detail_response(
+        {"code": 0, "data": _sample_detail_raw_missing_encrypted()}
+    )
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise RuntimeError("offline persist failed")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(RuntimeError, match="offline persist failed"):
+        service.repair_job_with_parsed_detail(_job_stub(), parsed_detail)
+
+    assert vars(listing) == listing_before
+
+
 def test_offline_parsed_repair_persists_canonical_identity_for_cached_round_trip(
     monkeypatch,
 ):
@@ -953,8 +1043,7 @@ def test_offline_parsed_repair_persists_canonical_identity_for_cached_round_trip
     assert listing.detail_payload["encrypted_job_id"] == "enc-jid-1"
     assert len(persisted_canonical) == 2
     assert all(
-        canonical.source_url.endswith("/enc-jid-1")
-        for canonical in persisted_canonical
+        canonical.source_url.endswith("/enc-jid-1") for canonical in persisted_canonical
     )
 
 
@@ -1113,6 +1202,28 @@ def test_repair_detail_result_build_failure_leaves_listing_unchanged(monkeypatch
     monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
 
     with pytest.raises(ValueError, match="canonical build failed"):
+        service.repair_job_with_detail_result(_job_stub(), result)
+
+    assert vars(listing) == listing_before
+
+
+def test_repair_detail_result_persist_failure_leaves_listing_unchanged(monkeypatch):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = service_module.OfferTodayJobRepairService(db=object())
+    listing = _listing_stub()
+    listing_before = dict(vars(listing))
+    result = _detail_fetch_result()
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise RuntimeError("typed result persist failed")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(RuntimeError, match="typed result persist failed"):
         service.repair_job_with_detail_result(_job_stub(), result)
 
     assert vars(listing) == listing_before

@@ -123,12 +123,13 @@ class OfferTodayJobRepairService:
             listing,
             detail_payload_override=canonical_detail,
         )
+        repair_result = self._persist_canonical_job(job, canonical, listing)
         if listing is not None:
             listing.detail_payload = deepcopy(canonical_detail)
             listing.detail_status = "completed"
             listing.detail_error_message = None
             listing.detail_completed_at = datetime.now(UTC)
-        return self._persist_canonical_job(job, canonical, listing)
+        return repair_result
 
     def repair_job_with_detail_result(
         self,
@@ -182,12 +183,13 @@ class OfferTodayJobRepairService:
                 listing,
                 detail_payload_override=result.canonical_detail,
             )
+            repair_result = self._persist_canonical_job(job, canonical, listing)
             if listing is not None:
                 listing.detail_payload = deepcopy(result.canonical_detail)
                 listing.detail_status = "completed"
                 listing.detail_error_message = None
                 listing.detail_completed_at = datetime.now(UTC)
-            return self._persist_canonical_job(job, canonical, listing)
+            return repair_result
 
         if listing is not None:
             listing.detail_payload = deepcopy(result.raw_response)

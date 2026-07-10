@@ -12,7 +12,10 @@ from app.sources.offertoday.detail_identity import (
     OfferTodayIdentityError,
     validate_offertoday_detail_identity,
 )
-from app.sources.offertoday.parsers import parse_offertoday_detail_response
+from app.sources.offertoday.parsers import (
+    OfferTodayPayloadParseError,
+    parse_offertoday_detail_response,
+)
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseClassification,
     OfferTodayResponseKind,
@@ -189,7 +192,22 @@ class OfferTodayBrowserDetailScraper:
                 canonical_detail=None,
             )
 
-        parsed_detail = parse_offertoday_detail_response(raw_response or {})
+        try:
+            parsed_detail = parse_offertoday_detail_response(raw_response or {})
+        except OfferTodayPayloadParseError as exc:
+            return OfferTodayDetailFetchResult(
+                identity=identity,
+                classification=replace(
+                    classification,
+                    kind=OfferTodayResponseKind.INVALID_PAYLOAD,
+                    message=str(exc),
+                    retryable=False,
+                    stop_batch=False,
+                ),
+                raw_response=raw_response,
+                parsed_detail=None,
+                canonical_detail=None,
+            )
         validate_offertoday_detail_identity(identity, parsed_detail)
         canonical_detail = {
             **parsed_detail,
