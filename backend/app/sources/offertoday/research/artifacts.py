@@ -23,6 +23,7 @@ _SECRET_KEY_PARTS = (
     "credential",
     "csrf",
     "header",
+    "passwd",
     "password",
     "private-key",
     "private_key",
@@ -33,6 +34,8 @@ _SECRET_KEY_PARTS = (
     "storagestate",
     "token",
 )
+_REQUIRED_ARTIFACT_FILES = ("observations.jsonl", "working-tree.patch")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 DEFAULT_RELEVANT_SOURCE_PATHS = (
     "backend/app/sources/offertoday",
@@ -79,27 +82,30 @@ _SENSITIVE_FILE_MARKERS = (
     "token",
 )
 _SENSITIVE_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
-_SECRET_ASSIGNMENT_RE = re.compile(
+_ASSIGNMENT_RE = re.compile(
     r"""
+    ^[+\- ]?[ \t]*
     (?P<key>
-        authorization|cookie|csrf(?:[-_]?token)?|password|passwd|secret|
-        storage_state|api[-_]?(?:key|token)|access[-_]?token|
-        refresh[-_]?token|client[-_]?secret|private[-_]?key|token
+        "[^"\r\n]+"
+        |
+        '[^'\r\n]+'
+        |
+        [A-Za-z_][A-Za-z0-9_. -]*?
     )
-    \s*["']?\s*
+    [ \t]*
     (?:
-        :\s*[A-Za-z_][A-Za-z0-9_\[\], .|]*\s*=
+        :[ \t]*[A-Za-z_][A-Za-z0-9_\[\], .|]*[ \t]*=
         |
         [=:]
     )
-    \s*
+    [ \t]*
     (?P<value>
         (?:[rubf]{0,2})?["'][^"'\r\n]{4,}["']
         |
         [^\s,;#}\]\r\n]{8,}
     )
     """,
-    re.IGNORECASE | re.VERBOSE,
+    re.IGNORECASE | re.MULTILINE | re.VERBOSE,
 )
 _CREDENTIAL_URL_RE = re.compile(r"://[^\s/:]+:[^\s/@]+@")
 _BEARER_TOKEN_RE = re.compile(
@@ -235,21 +241,52 @@ def export_research_artifact(
 
 def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
     manifest_path = artifact_dir / "manifest.json"
-    if not manifest_path.exists():
+    required_paths = {
+        relative_name: artifact_dir / relative_name
+        for relative_name in _REQUIRED_ARTIFACT_FILES
+    }
+    missing = [
+        relative_name
+        for relative_name, path in required_paths.items()
+        if not path.is_file()
+    ]
+    if not manifest_path.is_file():
         return ArtifactVerificationResult(
             valid=False,
-            missing_files=("manifest.json",),
+            missing_files=tuple(sorted(["manifest.json", *missing])),
             mismatched_files=(),
         )
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    missing: list[str] = []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return ArtifactVerificationResult(
+            valid=False,
+            missing_files=tuple(sorted(missing)),
+            mismatched_files=("manifest.json",),
+        )
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    files_are_valid = (
+        isinstance(files, dict)
+        and set(files) == set(_REQUIRED_ARTIFACT_FILES)
+        and all(
+            isinstance(expected_hash, str)
+            and _SHA256_RE.fullmatch(expected_hash) is not None
+            for expected_hash in files.values()
+        )
+    )
+    if not files_are_valid:
+        return ArtifactVerificationResult(
+            valid=False,
+            missing_files=tuple(sorted(missing)),
+            mismatched_files=("manifest.json",),
+        )
+
     mismatched: list[str] = []
-    for relative_name, expected_hash in manifest.get("files", {}).items():
-        path = artifact_dir / relative_name
-        if not path.exists():
-            missing.append(relative_name)
+    for relative_name in _REQUIRED_ARTIFACT_FILES:
+        path = required_paths[relative_name]
+        if relative_name in missing:
             continue
-        if _sha256(path.read_bytes()) != expected_hash:
+        if _sha256(path.read_bytes()) != files[relative_name]:
             mismatched.append(relative_name)
     return ArtifactVerificationResult(
         valid=not missing and not mismatched,
@@ -266,6 +303,16 @@ def _git(repo_root: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         encoding="utf-8",
+    )
+    return result.stdout
+
+
+def _git_bytes(repo_root: Path, *args: str) -> bytes:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
     )
     return result.stdout
 
@@ -289,7 +336,15 @@ def _contains_sensitive_content(text: str) -> bool:
         or _PRIVATE_KEY_MARKER_RE.search(text)
     ):
         return True
-    for match in _SECRET_ASSIGNMENT_RE.finditer(text):
+    for match in _ASSIGNMENT_RE.finditer(text):
+        key = match.group("key").strip().strip("\"'").lower()
+        compact_key = re.sub(r"[^a-z0-9]", "", key)
+        if not any(
+            part in key
+            or re.sub(r"[^a-z0-9]", "", part) in compact_key
+            for part in _SECRET_KEY_PARTS
+        ):
+            continue
         value = match.group("value").strip().lstrip("rubfRUBF").strip("\"'")
         lowered = value.lower()
         if value.startswith("$") or lowered.startswith(
@@ -312,6 +367,40 @@ def _contains_sensitive_content(text: str) -> bool:
 
 def _hash_or_deleted(path: Path) -> str:
     return _sha256(path.read_bytes()) if path.is_file() else "deleted"
+
+
+def _git_blob_short_sha(payload: bytes) -> str:
+    header = f"blob {len(payload)}\0".encode("ascii")
+    return hashlib.sha1(  # noqa: S324 - Git patch object ID, not security.
+        header + payload,
+        usedforsecurity=False,
+    ).hexdigest()[:7]
+
+
+def _untracked_file_patch(
+    relative_path: str,
+    payload: bytes,
+    text: str,
+) -> str:
+    normalized_path = relative_path.replace(os.sep, "/")
+    patch = (
+        f"diff --git a/{normalized_path} b/{normalized_path}\n"
+        "new file mode 100644\n"
+        f"index 0000000..{_git_blob_short_sha(payload)}\n"
+    )
+    if not payload:
+        return patch
+    patch += "".join(
+        difflib.unified_diff(
+            [],
+            text.splitlines(keepends=True),
+            fromfile="/dev/null",
+            tofile=f"b/{normalized_path}",
+        )
+    )
+    if not payload.endswith(b"\n"):
+        patch += "\n\\ No newline at end of file\n"
+    return patch
 
 
 def capture_research_provenance(
@@ -339,7 +428,7 @@ def capture_research_provenance(
         if _is_sensitive_path(relative_path):
             excluded_tracked_hashes[relative_path] = _hash_or_deleted(path)
             continue
-        candidate_patch = _git(
+        candidate_patch_bytes = _git_bytes(
             repo_root,
             "diff",
             "HEAD",
@@ -349,10 +438,18 @@ def capture_research_provenance(
             f":(literal){relative_path}",
         )
         if (
-            "GIT binary patch" in candidate_patch
-            or "Binary files " in candidate_patch
-            or _contains_sensitive_content(candidate_patch)
+            b"GIT binary patch" in candidate_patch_bytes
+            or b"Binary files " in candidate_patch_bytes
+            or b"\0" in candidate_patch_bytes
         ):
+            excluded_tracked_hashes[relative_path] = _hash_or_deleted(path)
+            continue
+        try:
+            candidate_patch = candidate_patch_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            excluded_tracked_hashes[relative_path] = _hash_or_deleted(path)
+            continue
+        if _contains_sensitive_content(candidate_patch):
             excluded_tracked_hashes[relative_path] = _hash_or_deleted(path)
             continue
         tracked_patches.append(candidate_patch)
@@ -371,13 +468,13 @@ def capture_research_provenance(
     untracked_patches: list[str] = []
     for relative_path in sorted(filter(None, untracked_output.split("\0"))):
         path = repo_root / relative_path
+        if _is_sensitive_path(relative_path):
+            excluded_untracked_hashes[relative_path] = _sha256(path.read_bytes())
+            continue
         if path.suffix.lower() not in _UNTRACKED_SUFFIXES:
             continue
         payload = path.read_bytes()
         payload_hash = _sha256(payload)
-        if _is_sensitive_path(relative_path):
-            excluded_untracked_hashes[relative_path] = payload_hash
-            continue
         if b"\0" in payload:
             excluded_untracked_hashes[relative_path] = payload_hash
             continue
@@ -390,16 +487,7 @@ def capture_research_provenance(
             excluded_untracked_hashes[relative_path] = payload_hash
             continue
         untracked_hashes[relative_path] = payload_hash
-        untracked_patches.append(
-            "".join(
-                difflib.unified_diff(
-                    [],
-                    text.splitlines(keepends=True),
-                    fromfile="/dev/null",
-                    tofile=f"b/{relative_path.replace(os.sep, '/')}",
-                )
-            )
-        )
+        untracked_patches.append(_untracked_file_patch(relative_path, payload, text))
 
     relevant_source_files: list[Path] = []
     for relative_path in relevant_source_paths:
@@ -417,9 +505,7 @@ def capture_research_provenance(
         for name in ("docker-compose.yml", "docker-compose.dev.yml")
         if (repo_root / name).exists()
     }
-    combined_patch = tracked_patch
-    if untracked_patches:
-        combined_patch += "\n" + "\n".join(untracked_patches)
+    combined_patch = tracked_patch + "".join(untracked_patches)
     return ResearchProvenance(
         commit_sha=commit_sha,
         working_tree_patch=combined_patch,

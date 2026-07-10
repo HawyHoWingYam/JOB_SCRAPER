@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from uuid import UUID
 
+import pytest
+
 from app.sources.offertoday.research.artifacts import (
     DEFAULT_RELEVANT_SOURCE_PATHS,
     ResearchProvenance,
@@ -260,8 +262,108 @@ def test_verifier_reports_missing_files_deterministically(tmp_path) -> None:
     (artifact_dir / "manifest.json").unlink()
     no_manifest = verify_research_artifact(artifact_dir)
     assert no_manifest.valid is False
-    assert no_manifest.missing_files == ("manifest.json",)
+    assert no_manifest.missing_files == (
+        "manifest.json",
+        "observations.jsonl",
+        "working-tree.patch",
+    )
     assert no_manifest.mismatched_files == ()
+
+
+@pytest.mark.parametrize(
+    "invalid_files",
+    (
+        {},
+        [],
+        None,
+        {
+            "observations.jsonl": 123,
+            "working-tree.patch": "0" * 64,
+        },
+        {
+            "observations.jsonl": "not-a-sha256",
+            "working-tree.patch": "0" * 64,
+        },
+        {"observations.jsonl": "0" * 64},
+    ),
+    ids=(
+        "empty-map",
+        "list",
+        "null",
+        "wrong-hash-type",
+        "malformed-hash",
+        "missing-required-name",
+    ),
+)
+def test_verifier_rejects_malformed_fixed_file_maps(tmp_path, invalid_files) -> None:
+    artifact_dir = build_fixture_artifact(tmp_path)
+    manifest_path = artifact_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"] = invalid_files
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = verify_research_artifact(artifact_dir)
+
+    assert result.valid is False
+    assert result.missing_files == ()
+    assert result.mismatched_files == ("manifest.json",)
+
+
+@pytest.mark.parametrize("extra_kind", ("ordinary", "parent", "absolute"))
+def test_verifier_rejects_extra_and_outside_file_names(tmp_path, extra_kind) -> None:
+    artifact_dir = build_fixture_artifact(tmp_path)
+    outside = write_file(tmp_path, "outside.txt", "outside evidence\n")
+    manifest_path = artifact_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if extra_kind == "ordinary":
+        extra_name = "extra.txt"
+    elif extra_kind == "parent":
+        extra_name = "../outside.txt"
+    else:
+        extra_name = str(outside.resolve())
+    manifest["files"][extra_name] = file_sha256(outside)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = verify_research_artifact(artifact_dir)
+
+    assert result.valid is False
+    assert result.missing_files == ()
+    assert result.mismatched_files == ("manifest.json",)
+
+
+@pytest.mark.parametrize(
+    "manifest_text",
+    (
+        "{not-json",
+        "[]",
+        '"not-an-object"',
+    ),
+    ids=("invalid-json", "array", "scalar"),
+)
+def test_verifier_rejects_malformed_manifest_shapes(tmp_path, manifest_text) -> None:
+    artifact_dir = build_fixture_artifact(tmp_path)
+    (artifact_dir / "manifest.json").write_text(manifest_text, encoding="utf-8")
+
+    result = verify_research_artifact(artifact_dir)
+
+    assert result.valid is False
+    assert result.missing_files == ()
+    assert result.mismatched_files == ("manifest.json",)
+
+
+def test_invalid_manifest_still_reports_missing_required_artifacts(tmp_path) -> None:
+    artifact_dir = build_fixture_artifact(tmp_path)
+    (artifact_dir / "observations.jsonl").unlink()
+    manifest_path = artifact_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"] = {}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = verify_research_artifact(artifact_dir)
+
+    assert result.valid is False
+    assert result.missing_files == ("observations.jsonl",)
+    assert result.mismatched_files == ("manifest.json",)
 
 
 def test_provenance_captures_staged_unstaged_and_ignored_safe_files(tmp_path) -> None:
@@ -376,6 +478,7 @@ def test_provenance_fails_closed_for_sensitive_and_binary_candidates(tmp_path) -
 
     excluded_untracked_payloads: dict[str, str | bytes] = {
         "backend/app/runtime/profile.json": '{"safe":"path-sensitive"}\n',
+        "backend/tests/client.pem": "sensitive-suffix-candidate\n",
         "backend/tests/cookie_fixture.json": '{"safe":"path-sensitive"}\n',
         "backend/tests/test_probe.py": 'API_TOKEN = "untracked-hard-coded"\n',
         "backend/tests/test_bearer.py": "VALUE = 'Bearer abcdefghijklmnop'\n",
@@ -439,6 +542,118 @@ def test_provenance_fails_closed_for_sensitive_and_binary_candidates(tmp_path) -
         "username:password@",
     ):
         assert sensitive_value not in provenance.working_tree_patch
+
+
+@pytest.mark.parametrize(
+    "assignment_key",
+    (
+        "SECRET_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "CREDENTIAL",
+        "REQUEST_HEADERS",
+    ),
+)
+def test_provenance_excludes_complete_marker_bearing_assignment_keys(
+    tmp_path,
+    assignment_key,
+) -> None:
+    repo = initialize_git_fixture(
+        tmp_path,
+        tracked_files={"backend/app/tracked_probe.py": "SAFE_VALUE = 1\n"},
+    )
+    tracked = write_file(
+        repo,
+        "backend/app/tracked_probe.py",
+        f'{assignment_key} = "tracked-hard-coded-value"\n',
+    )
+    untracked = write_file(
+        repo,
+        "backend/tests/assignment_probe.py",
+        f'{assignment_key} = "untracked-hard-coded-value"\n',
+    )
+
+    provenance = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+    )
+
+    assert provenance.excluded_tracked_file_hashes == {
+        "backend/app/tracked_probe.py": file_sha256(tracked)
+    }
+    assert provenance.excluded_untracked_file_hashes == {
+        "backend/tests/assignment_probe.py": file_sha256(untracked)
+    }
+    assert "tracked-hard-coded-value" not in provenance.working_tree_patch
+    assert "untracked-hard-coded-value" not in provenance.working_tree_patch
+    assert provenance.untracked_file_hashes == {}
+
+
+def test_provenance_hash_excludes_tracked_non_utf8_text_diff(tmp_path) -> None:
+    repo = initialize_git_fixture(
+        tmp_path,
+        tracked_files={"backend/app/opaque.py": "VALUE = 'before'\n"},
+    )
+    opaque = write_file(
+        repo,
+        "backend/app/opaque.py",
+        b"VALUE = 'after-\xff\xfe'\n",
+    )
+
+    provenance = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+    )
+
+    assert provenance.working_tree_patch == ""
+    assert provenance.excluded_tracked_file_hashes == {
+        "backend/app/opaque.py": file_sha256(opaque)
+    }
+
+
+def test_provenance_emits_empty_and_no_final_newline_file_patches(tmp_path) -> None:
+    repo = initialize_git_fixture(tmp_path)
+    no_final_newline = write_file(
+        repo,
+        "backend/tests/a_no_final_newline.py",
+        "VALUE = 1",
+    )
+    following = write_file(
+        repo,
+        "backend/tests/b_following.py",
+        "VALUE = 2\n",
+    )
+    empty = write_file(repo, "backend/tests/c_empty.py", b"")
+
+    provenance = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+    )
+
+    assert provenance.untracked_file_hashes == {
+        "backend/tests/a_no_final_newline.py": file_sha256(no_final_newline),
+        "backend/tests/b_following.py": file_sha256(following),
+        "backend/tests/c_empty.py": file_sha256(empty),
+    }
+    assert (
+        "--- /dev/null\n"
+        "+++ b/backend/tests/a_no_final_newline.py\n"
+        "@@ -0,0 +1 @@\n"
+        "+VALUE = 1\n"
+        "\\ No newline at end of file\n"
+        "diff --git a/backend/tests/b_following.py "
+        "b/backend/tests/b_following.py\n"
+    ) in provenance.working_tree_patch
+    empty_record = provenance.working_tree_patch.split(
+        "diff --git a/backend/tests/c_empty.py b/backend/tests/c_empty.py\n"
+    )[-1]
+    empty_lines = empty_record.splitlines()
+    assert empty_lines[:1] == ["new file mode 100644"]
+    assert len(empty_lines) == 2
+    assert empty_lines[1].startswith("index 0000000..")
+    assert len(empty_lines[1].removeprefix("index 0000000..")) == 7
 
 
 def test_provenance_hashes_default_sources_compose_and_redacts_runtime(tmp_path) -> None:
