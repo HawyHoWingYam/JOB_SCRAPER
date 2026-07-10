@@ -20,6 +20,11 @@ OFFERTODAY_COMMON_HEADERS: dict[str, str] = {
 }
 
 
+def _validate_offertoday_rcd_type(rcd_type: Any) -> None:
+    if rcd_type is not None and type(rcd_type) is not int:
+        raise ValueError("rcd_type must be an int or None")
+
+
 def build_offertoday_listing_payload(
     *,
     category_id: int | None,
@@ -28,6 +33,7 @@ def build_offertoday_listing_payload(
     rcd_type: int | None = 7,
 ) -> dict[str, Any]:
     """Build the canonical OfferToday listing/search API payload."""
+    _validate_offertoday_rcd_type(rcd_type)
     payload: dict[str, Any] = {
         "keyword": keyword,
     }

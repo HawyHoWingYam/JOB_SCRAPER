@@ -26,8 +26,8 @@ from app.sources.offertoday.response_policy import (
 
 
 def _listing_row(
-    job_id: str | None,
-    encrypted_job_id: str | None,
+    job_id: Any,
+    encrypted_job_id: Any,
     *,
     title: str = "Platform Engineer",
     function_codes: tuple[str, ...] = ("118000", "118003", "118003"),
@@ -394,6 +394,34 @@ async def test_unique_job_cap_is_an_explicit_incomplete_target_stop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unique_job_cap_precedes_terminal_completion_when_confirmation_disabled() -> (
+    None
+):
+    transport = ScriptedTransport(
+        _listing_response(
+            [_listing_row("j-terminal-cap", "enc-terminal-cap")],
+            has_more=False,
+        )
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        unique_job_cap=1,
+        require_empty_confirmation=False,
+    )
+
+    assert len(transport.requests) == 1
+    assert result.ordered_job_ids == ("j-terminal-cap",)
+    assert result.accepted_job_ids == ("j-terminal-cap",)
+    assert len(staging.staged_pages) == 1
+    assert observations.observations[0].stop_reason == "target_cap"
+    assert result.condition_outcomes[0].stop_reason == "target_cap"
+    assert result.condition_outcomes[0].is_complete is False
+    assert result.stop_reason == "target_cap"
+    assert result.is_complete is False
+
+
+@pytest.mark.asyncio
 async def test_same_page_forward_identity_conflict_is_hard_and_stages_nothing() -> None:
     transport = ScriptedTransport(
         _listing_response(
@@ -457,7 +485,7 @@ async def test_later_mapping_change_defers_earlier_staged_canonical_row() -> Non
     assert staging.deferrals == [
         {
             "job_ids": ("j-later",),
-            "encrypted_job_ids": ("enc-original", "enc-changed"),
+            "encrypted_job_ids": ("enc-changed", "enc-original"),
             "reason": "one_job_id_to_multiple_encrypted_ids",
         }
     ]
@@ -469,16 +497,41 @@ async def test_later_mapping_change_defers_earlier_staged_canonical_row() -> Non
 
 
 @pytest.mark.parametrize(
-    ("job_id", "encrypted_job_id", "reason", "missing_field"),
+    (
+        "job_id",
+        "encrypted_job_id",
+        "expected_job_id",
+        "expected_encrypted_job_id",
+        "reason",
+        "missing_field",
+    ),
     [
-        (None, "enc-orphan", "missing_job_id", "job_id"),
-        ("j-unresolved", None, "missing_encrypted_job_id", "encrypted_job_id"),
+        (None, "enc-orphan", None, "enc-orphan", "missing_job_id", "job_id"),
+        ("  ", "enc-blank", None, "enc-blank", "missing_job_id", "job_id"),
+        (
+            "j-unresolved",
+            None,
+            "j-unresolved",
+            None,
+            "missing_encrypted_job_id",
+            "encrypted_job_id",
+        ),
+        (
+            "j-blank",
+            "  ",
+            "j-blank",
+            None,
+            "missing_encrypted_job_id",
+            "encrypted_job_id",
+        ),
     ],
 )
 @pytest.mark.asyncio
 async def test_missing_identity_fields_are_observed_and_never_staged(
-    job_id: str | None,
-    encrypted_job_id: str | None,
+    job_id: Any,
+    encrypted_job_id: Any,
+    expected_job_id: str | None,
+    expected_encrypted_job_id: str | None,
     reason: str,
     missing_field: str,
 ) -> None:
@@ -495,8 +548,8 @@ async def test_missing_identity_fields_are_observed_and_never_staged(
     assert result.is_complete is False
     assert len(result.identity_issues) == 1
     issue = result.identity_issues[0]
-    assert issue.job_id == job_id
-    assert issue.encrypted_job_id == encrypted_job_id
+    assert issue.job_id == expected_job_id
+    assert issue.encrypted_job_id == expected_encrypted_job_id
     assert issue.reason == reason
     observation = observations.observations[0]
     assert observation.identity_issues == (issue,)
@@ -509,10 +562,60 @@ async def test_missing_identity_fields_are_observed_and_never_staged(
     assert staging.staged_pages == []
     assert staging.deferrals == []
     assert result.accepted_job_ids == ()
-    if job_id is None:
+    if expected_job_id is None:
         assert result.ordered_job_ids == ()
     else:
-        assert result.ordered_job_ids == (job_id,)
+        assert result.ordered_job_ids == (expected_job_id,)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value", "expected_reason"),
+    [
+        ("jobId", ["bad"], "invalid_job_id"),
+        ("jobId", {"bad": 1}, "invalid_job_id"),
+        ("jobId", True, "invalid_job_id"),
+        ("jobId", 101, "invalid_job_id"),
+        ("encryptJobId", ["bad"], "invalid_encrypted_job_id"),
+        ("encryptJobId", {"bad": 1}, "invalid_encrypted_job_id"),
+        ("encryptJobId", False, "invalid_encrypted_job_id"),
+        ("encryptJobId", 202, "invalid_encrypted_job_id"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_non_string_raw_identity_values_are_rejected_before_staging(
+    field_name: str,
+    invalid_value: object,
+    expected_reason: str,
+) -> None:
+    raw_row = _listing_row("j-valid", "enc-valid")
+    raw_row[field_name] = invalid_value
+    transport = ScriptedTransport(
+        _listing_response([raw_row], has_more=True),
+    )
+
+    result, observations, staging, _sleep = await _run(transport, max_pages=1)
+
+    assert result.stop_reason == "identity_issue"
+    assert result.is_complete is False
+    assert result.accepted_job_ids == ()
+    assert result.id_pairs == ()
+    assert len(result.identity_issues) == 1
+    assert result.identity_issues[0].reason == expected_reason
+    assert observations.observations[0].classification == "identity_issue"
+    assert observations.observations[0].identity_issues == result.identity_issues
+    assert observations.observations[0].missing_job_id_count == 0
+    assert observations.observations[0].missing_encrypted_job_id_count == 0
+    assert staging.staged_pages == []
+
+    evidence = observations.observations[0].rows[0]
+    if field_name == "jobId":
+        assert evidence.job_id is None
+        assert evidence.encrypted_job_id == "enc-valid"
+        assert result.ordered_job_ids == ()
+    else:
+        assert evidence.job_id == "j-valid"
+        assert evidence.encrypted_job_id is None
+        assert result.ordered_job_ids == ("j-valid",)
 
 
 @pytest.mark.asyncio
@@ -581,6 +684,69 @@ async def test_reverse_identity_conflict_defers_both_canonical_ids_and_stages_no
     ]
 
 
+@pytest.mark.parametrize(
+    (
+        "first_order",
+        "second_order",
+        "expected_job_ids",
+        "expected_encrypted_job_ids",
+        "expected_reason",
+    ),
+    [
+        (
+            (("j-forward", "enc-z"), ("j-forward", "enc-a")),
+            (("j-forward", "enc-a"), ("j-forward", "enc-z")),
+            ("j-forward",),
+            ("enc-a", "enc-z"),
+            "one_job_id_to_multiple_encrypted_ids",
+        ),
+        (
+            (("j-z", "enc-reverse"), ("j-a", "enc-reverse")),
+            (("j-a", "enc-reverse"), ("j-z", "enc-reverse")),
+            ("j-a", "j-z"),
+            ("enc-reverse",),
+            "one_encrypted_id_to_multiple_job_ids",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_identity_conflict_and_deferral_evidence_is_permutation_stable(
+    first_order: tuple[tuple[str, str], ...],
+    second_order: tuple[tuple[str, str], ...],
+    expected_job_ids: tuple[str, ...],
+    expected_encrypted_job_ids: tuple[str, ...],
+    expected_reason: str,
+) -> None:
+    async def run_order(
+        identity_pairs: tuple[tuple[str, str], ...],
+    ) -> tuple[object, MemoryStagingSink]:
+        transport = ScriptedTransport(
+            _listing_response(
+                [
+                    _listing_row(job_id, encrypted_id)
+                    for job_id, encrypted_id in identity_pairs
+                ],
+                has_more=True,
+            )
+        )
+        result, _observations, staging, _sleep = await _run(
+            transport,
+            max_pages=1,
+        )
+        return result, staging
+
+    first_result, first_staging = await run_order(first_order)
+    second_result, second_staging = await run_order(second_order)
+
+    assert first_result.identity_conflicts == second_result.identity_conflicts
+    assert first_staging.deferrals == second_staging.deferrals
+    assert len(first_result.identity_conflicts) == 1
+    conflict = first_result.identity_conflicts[0]
+    assert conflict.job_ids == expected_job_ids
+    assert conflict.encrypted_job_ids == expected_encrypted_job_ids
+    assert conflict.reason == expected_reason
+
+
 @pytest.mark.asyncio
 async def test_identity_issue_blocks_other_valid_rows_on_the_same_page_from_staging() -> (
     None
@@ -595,11 +761,16 @@ async def test_identity_issue_blocks_other_valid_rows_on_the_same_page_from_stag
         )
     )
 
-    result, _observations, staging, _sleep = await _run(transport, max_pages=1)
+    result, observations, staging, _sleep = await _run(transport, max_pages=1)
 
     assert result.stop_reason == "identity_issue"
     assert result.ordered_job_ids == ("j-valid",)
-    assert result.accepted_job_ids == ("j-valid",)
+    assert result.accepted_job_ids == ()
+    assert result.id_pairs == ()
+    assert [
+        (pair.job_id, pair.encrypted_job_id)
+        for pair in observations.observations[0].id_pairs
+    ] == [("j-valid", "enc-valid")]
     assert staging.staged_pages == []
 
 
@@ -790,6 +961,41 @@ async def test_stop_batch_classifications_stop_before_later_conditions(
     assert observations.observations[0].retry_reason is None
     assert observations.observations[0].stop_reason == expected_kind.value
     assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_programmer_exception_propagates_without_retry_or_network_observation() -> (
+    None
+):
+    transport = ScriptedTransport(AssertionError("programmer contract failed"))
+    observation_sink = MemoryObservationSink()
+    staging_sink = MemoryStagingSink()
+    sleep = NoWaitSleep()
+    runner = OfferTodayListingRunner(
+        transport,
+        sleep=sleep,
+        clock=DeterministicClock(),
+    )
+
+    with pytest.raises(AssertionError, match="programmer contract failed"):
+        await runner.run(
+            conditions=[_condition()],
+            stop_policy=ListingStopPolicy(max_pages_per_condition=3),
+            retry_policy=ListingRetryPolicy(
+                max_attempts_per_page=3,
+                retry_delays_seconds=(0.1, 0.2),
+            ),
+            observation_sink=observation_sink,
+            staging_sink=staging_sink,
+            session_mode="saved-session",
+        )
+
+    assert len(transport.requests) == 1
+    assert observation_sink.observations == []
+    assert observation_sink.outcomes == []
+    assert staging_sink.staged_pages == []
+    assert staging_sink.deferrals == []
+    assert sleep.delays == []
 
 
 @pytest.mark.asyncio

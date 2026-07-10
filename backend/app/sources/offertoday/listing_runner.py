@@ -13,12 +13,14 @@ from uuid import UUID
 from app.sources.offertoday.constants import (
     OFFERTODAY_LISTING_BROWSE_URL,
     OFFERTODAY_LISTING_SEARCH_URL,
+    _validate_offertoday_rcd_type,
     build_offertoday_listing_payload,
 )
 from app.sources.offertoday.parsers import parse_offertoday_listing_response
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseClassification,
     OfferTodayResponseKind,
+    OfferTodayTransportError,
     classify_offertoday_response,
 )
 
@@ -30,6 +32,11 @@ class OfferTodayListingCondition:
     keyword: str
     endpoint: Literal["search", "browse"]
     rcd_type: int | None = 7
+
+    def __post_init__(self) -> None:
+        if self.endpoint not in ("search", "browse"):
+            raise ValueError("endpoint must be 'search' or 'browse'")
+        _validate_offertoday_rcd_type(self.rcd_type)
 
     @property
     def condition_id(self) -> str:
@@ -158,6 +165,12 @@ class ListingRunResult:
     is_complete: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _ListingRowIdentityAnalysis:
+    evidence: ListingRowEvidence
+    issue: ListingIdentityIssue | None
+
+
 class OfferTodayListingTransport(Protocol):
     async def fetch_listing_json(
         self,
@@ -239,9 +252,20 @@ def _retry_delay(policy: ListingRetryPolicy, attempt: int) -> float:
     return policy.retry_delays_seconds[index]
 
 
-def _normalized_optional_id(value: Any) -> str | None:
-    normalized = str(value or "").strip()
-    return normalized or None
+def _analyze_raw_identity_value(
+    value: Any,
+    *,
+    missing_reason: str,
+    invalid_reason: str,
+) -> tuple[str | None, str | None]:
+    if value is None:
+        return None, missing_reason
+    if type(value) is not str:
+        return None, invalid_reason
+    normalized = value.strip()
+    if not normalized:
+        return None, missing_reason
+    return normalized, None
 
 
 def _job_function_codes(job_functions: Any) -> tuple[str, ...]:
@@ -270,15 +294,43 @@ def _job_function_codes(job_functions: Any) -> tuple[str, ...]:
     return tuple(codes)
 
 
-def _row_evidence(parsed_row: dict[str, Any]) -> ListingRowEvidence:
+def _analyze_listing_row(
+    parsed_row: dict[str, Any],
+) -> _ListingRowIdentityAnalysis:
+    raw_data = parsed_row.get("raw_data")
+    if not isinstance(raw_data, Mapping):
+        raw_data = {}
+    job_id, job_issue_reason = _analyze_raw_identity_value(
+        raw_data.get("jobId"),
+        missing_reason="missing_job_id",
+        invalid_reason="invalid_job_id",
+    )
+    encrypted_job_id, encrypted_issue_reason = _analyze_raw_identity_value(
+        raw_data.get("encryptJobId"),
+        missing_reason="missing_encrypted_job_id",
+        invalid_reason="invalid_encrypted_job_id",
+    )
     title = str(parsed_row.get("title") or "").strip()
-    return ListingRowEvidence(
-        job_id=_normalized_optional_id(parsed_row.get("job_id")),
-        encrypted_job_id=_normalized_optional_id(parsed_row.get("encrypted_job_id")),
+    evidence = ListingRowEvidence(
+        job_id=job_id,
+        encrypted_job_id=encrypted_job_id,
         title=title,
         job_function_codes=_job_function_codes(parsed_row.get("job_functions")),
         title_language=_classify_title_language(title),
         api_language="zh_HK",
+    )
+    issue_reason = job_issue_reason or encrypted_issue_reason
+    return _ListingRowIdentityAnalysis(
+        evidence=evidence,
+        issue=(
+            ListingIdentityIssue(
+                job_id=job_id,
+                encrypted_job_id=encrypted_job_id,
+                reason=issue_reason,
+            )
+            if issue_reason is not None
+            else None
+        ),
     )
 
 
@@ -374,7 +426,7 @@ class OfferTodayListingRunner:
                             payload,
                             listing_url=listing_url,
                         )
-                    except Exception as exc:
+                    except (OfferTodayTransportError, OSError) as exc:
                         transport_error = exc
                         error_payload = getattr(exc, "payload", None)
                         if isinstance(error_payload, Mapping):
@@ -464,7 +516,10 @@ class OfferTodayListingRunner:
                     page_succeeded = True
                     pages_observed += 1
 
-                    row_evidence = tuple(_row_evidence(row) for row in parsed_rows)
+                    row_analyses = tuple(
+                        _analyze_listing_row(row) for row in parsed_rows
+                    )
+                    row_evidence = tuple(analysis.evidence for analysis in row_analyses)
                     page_pairs: list[OfferTodayIdentityPair] = []
                     page_pair_values: set[tuple[str, str]] = set()
                     page_issues: list[ListingIdentityIssue] = []
@@ -478,6 +533,10 @@ class OfferTodayListingRunner:
                     page_deferral_keys: set[
                         tuple[tuple[str, ...], tuple[str, ...], str]
                     ] = set()
+                    candidate_job_to_encrypted_id = dict(job_to_encrypted_id)
+                    candidate_encrypted_id_to_job = dict(encrypted_id_to_job)
+                    candidate_accepted_job_ids = set(accepted_job_ids)
+                    page_rejected_job_ids: set[str] = set()
 
                     def add_deferral(
                         job_ids: tuple[str, ...],
@@ -491,6 +550,11 @@ class OfferTodayListingRunner:
                         page_deferrals.append(key)
 
                     def add_conflict(conflict: ListingIdentityConflict) -> None:
+                        conflict = ListingIdentityConflict(
+                            job_ids=tuple(sorted(conflict.job_ids)),
+                            encrypted_job_ids=tuple(sorted(conflict.encrypted_job_ids)),
+                            reason=conflict.reason,
+                        )
                         key = (
                             conflict.job_ids,
                             conflict.encrypted_job_ids,
@@ -504,39 +568,27 @@ class OfferTodayListingRunner:
                             identity_conflict_keys.add(key)
                             identity_conflicts.append(conflict)
 
-                    for evidence in row_evidence:
+                    for analysis in row_analyses:
+                        evidence = analysis.evidence
                         job_id = evidence.job_id
                         encrypted_job_id = evidence.encrypted_job_id
                         if job_id is not None and job_id not in ordered_job_id_set:
                             ordered_job_id_set.add(job_id)
                             ordered_job_ids.append(job_id)
 
-                        if job_id is None:
-                            issue = ListingIdentityIssue(
-                                job_id=None,
-                                encrypted_job_id=encrypted_job_id,
-                                reason="missing_job_id",
-                            )
+                        if analysis.issue is not None:
+                            issue = analysis.issue
                             page_issues.append(issue)
                             identity_issues.append(issue)
-                            continue
-                        if encrypted_job_id is None:
-                            issue = ListingIdentityIssue(
-                                job_id=job_id,
-                                encrypted_job_id=None,
-                                reason="missing_encrypted_job_id",
-                            )
-                            page_issues.append(issue)
-                            identity_issues.append(issue)
-                            accepted_job_ids.discard(job_id)
-                            deferred_job_ids.add(job_id)
-                            known_encrypted_job_id = job_to_encrypted_id.get(job_id)
-                            if known_encrypted_job_id is not None:
-                                add_deferral(
-                                    (job_id,),
-                                    (known_encrypted_job_id,),
-                                    issue.reason,
-                                )
+                            if job_id is not None:
+                                page_rejected_job_ids.add(job_id)
+                                known_encrypted_job_id = job_to_encrypted_id.get(job_id)
+                                if known_encrypted_job_id is not None:
+                                    add_deferral(
+                                        (job_id,),
+                                        (known_encrypted_job_id,),
+                                        issue.reason,
+                                    )
                             continue
 
                         pair_value = (job_id, encrypted_job_id)
@@ -544,7 +596,9 @@ class OfferTodayListingRunner:
                             page_pair_values.add(pair_value)
                             page_pairs.append(OfferTodayIdentityPair(*pair_value))
 
-                        known_encrypted_job_id = job_to_encrypted_id.get(job_id)
+                        known_encrypted_job_id = candidate_job_to_encrypted_id.get(
+                            job_id
+                        )
                         if (
                             known_encrypted_job_id is not None
                             and known_encrypted_job_id != encrypted_job_id
@@ -560,7 +614,9 @@ class OfferTodayListingRunner:
                                 )
                             )
 
-                        known_job_id = encrypted_id_to_job.get(encrypted_job_id)
+                        known_job_id = candidate_encrypted_id_to_job.get(
+                            encrypted_job_id
+                        )
                         if known_job_id is not None and known_job_id != job_id:
                             add_conflict(
                                 ListingIdentityConflict(
@@ -570,21 +626,21 @@ class OfferTodayListingRunner:
                                 )
                             )
 
-                        job_to_encrypted_id.setdefault(job_id, encrypted_job_id)
-                        encrypted_id_to_job.setdefault(encrypted_job_id, job_id)
+                        candidate_job_to_encrypted_id.setdefault(
+                            job_id,
+                            encrypted_job_id,
+                        )
+                        candidate_encrypted_id_to_job.setdefault(
+                            encrypted_job_id,
+                            job_id,
+                        )
+                        if job_id not in deferred_job_ids:
+                            candidate_accepted_job_ids.add(job_id)
 
                     for conflict in page_conflicts:
                         for conflicted_job_id in conflict.job_ids:
-                            deferred_job_ids.add(conflicted_job_id)
-                            accepted_job_ids.discard(conflicted_job_id)
-
-                    for evidence in row_evidence:
-                        if (
-                            evidence.job_id is not None
-                            and evidence.encrypted_job_id is not None
-                            and evidence.job_id not in deferred_job_ids
-                        ):
-                            accepted_job_ids.add(evidence.job_id)
+                            page_rejected_job_ids.add(conflicted_job_id)
+                            candidate_accepted_job_ids.discard(conflicted_job_id)
 
                     stage_rows: list[dict[str, Any]] = []
                     stage_pair_values: list[tuple[str, str]] = []
@@ -625,6 +681,13 @@ class OfferTodayListingRunner:
                     elif page_issues:
                         attempt_stop_reason = "identity_issue"
                         condition_stop_reason = "identity_issue"
+                    elif (
+                        stop_policy.unique_job_cap is not None
+                        and len(candidate_accepted_job_ids)
+                        >= stop_policy.unique_job_cap
+                    ):
+                        attempt_stop_reason = "target_cap"
+                        condition_stop_reason = "target_cap"
                     elif natural_exhaustion:
                         attempt_stop_reason = "natural_exhaustion"
                         condition_stop_reason = "natural_exhaustion"
@@ -635,13 +698,7 @@ class OfferTodayListingRunner:
                         if terminal_signal:
                             awaiting_empty_confirmation = True
 
-                        if (
-                            stop_policy.unique_job_cap is not None
-                            and len(ordered_job_ids) >= stop_policy.unique_job_cap
-                        ):
-                            attempt_stop_reason = "target_cap"
-                            condition_stop_reason = "target_cap"
-                        elif page >= stop_policy.max_pages_per_condition:
+                        if page >= stop_policy.max_pages_per_condition:
                             attempt_stop_reason = "page_cap"
                             condition_stop_reason = "page_cap"
                         else:
@@ -672,11 +729,11 @@ class OfferTodayListingRunner:
                         has_more=has_more,
                         row_count=len(raw_rows),
                         missing_job_id_count=sum(
-                            evidence.job_id is None for evidence in row_evidence
+                            issue.reason == "missing_job_id" for issue in page_issues
                         ),
                         missing_encrypted_job_id_count=sum(
-                            evidence.encrypted_job_id is None
-                            for evidence in row_evidence
+                            issue.reason == "missing_encrypted_job_id"
+                            for issue in page_issues
                         ),
                         id_pairs=tuple(page_pairs),
                         rows=row_evidence,
@@ -695,12 +752,19 @@ class OfferTodayListingRunner:
                             encrypted_job_ids=encrypted_job_ids,
                             reason=reason,
                         )
-                    if stage_rows:
-                        await staging_sink.stage_page(
-                            condition=condition,
-                            page=page,
-                            rows=stage_rows,
-                        )
+                    if page_issues or page_conflicts:
+                        deferred_job_ids.update(page_rejected_job_ids)
+                        accepted_job_ids.difference_update(page_rejected_job_ids)
+                    else:
+                        if stage_rows:
+                            await staging_sink.stage_page(
+                                condition=condition,
+                                page=page,
+                                rows=stage_rows,
+                            )
+                        job_to_encrypted_id = candidate_job_to_encrypted_id
+                        encrypted_id_to_job = candidate_encrypted_id_to_job
+                        accepted_job_ids = candidate_accepted_job_ids
                         staged_pair_values.update(stage_pair_values)
                     break
 
