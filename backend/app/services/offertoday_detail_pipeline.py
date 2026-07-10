@@ -214,16 +214,31 @@ class OfferTodayDetailPipeline:
                     ),
                 )
             except Exception as exc:
+                final_non_success = (
+                    not will_retry
+                    and classification.kind is not OfferTodayResponseKind.SUCCESS
+                )
+                if final_non_success:
+                    detail_status = self._detail_status_for(classification.kind)
+                    outcome = classification.kind
+                    error_message = (
+                        f"{self._classification_error(classification)};"
+                        f"attempt_event_failure:{type(exc).__name__}"
+                    )
+                else:
+                    detail_status = "failed"
+                    outcome = OfferTodayResponseKind.PERSIST_FAILURE
+                    error_message = f"attempt_event_failure:{type(exc).__name__}"
                 self._transition_outcome(
                     target=target,
                     detail_crawl_job_id=detail_crawl_job_id,
-                    detail_status="failed",
-                    error_message=f"attempt_event_failure:{type(exc).__name__}",
+                    detail_status=detail_status,
+                    error_message=error_message,
                     detail_payload=classification.raw_payload,
                 )
                 return OfferTodayDetailProcessResult(
                     source_job_id=target.identity.job_id,
-                    outcome=OfferTodayResponseKind.PERSIST_FAILURE,
+                    outcome=outcome,
                     stop_batch=classification.stop_batch,
                 )
             if will_retry:

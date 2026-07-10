@@ -16,7 +16,10 @@ from app.services.offertoday_detail_pipeline import (
     OfferTodayDetailTarget,
 )
 from app.sources.offertoday.detail_identity import OfferTodayDetailIdentity
-from app.sources.offertoday.response_policy import OfferTodayResponseKind
+from app.sources.offertoday.response_policy import (
+    OfferTodayResponseKind,
+    OfferTodayTransportError,
+)
 
 
 @dataclass
@@ -744,6 +747,124 @@ async def test_attempt_event_failure_marks_entire_group_failed_in_fresh_transact
         == "attempt_event_failure:RuntimeError"
         for key in target.listing_ids
     )
+    assert env.store.jobs == {}
+    assert env.store.companies == {}
+    assert _attempt_events(env.store) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "fetch_outcome",
+        "expected_kind",
+        "expected_status",
+        "expected_stop_batch",
+        "expected_error",
+        "expected_payload",
+    ),
+    [
+        pytest.param(
+            _success_response("different"),
+            OfferTodayResponseKind.ID_MISMATCH,
+            "identity_conflict",
+            True,
+            (
+                "id_mismatch:Expected jobId=100, got jobId=different;"
+                "attempt_event_failure:RuntimeError"
+            ),
+            _success_response("different"),
+            id="id-mismatch",
+        ),
+        pytest.param(
+            {"code": 1002, "msg": "login expired", "data": {}},
+            OfferTodayResponseKind.AUTH_EXPIRED,
+            "manual_action_required",
+            True,
+            "auth_expired:login expired;attempt_event_failure:RuntimeError",
+            {"code": 1002, "msg": "login expired", "data": {}},
+            id="auth-expired",
+        ),
+        pytest.param(
+            OfferTodayTransportError(
+                "sensitive upstream diagnostic",
+                http_status=200,
+                response_url="https://www.offertoday.com/web/passport/cm/verify",
+                payload={"challenge": "verification-page"},
+                error_kind="http",
+            ),
+            OfferTodayResponseKind.WAF_CHALLENGE,
+            "manual_action_required",
+            True,
+            (
+                "waf_challenge:OfferToday verification challenge;"
+                "attempt_event_failure:RuntimeError"
+            ),
+            {"challenge": "verification-page"},
+            id="waf-challenge",
+        ),
+        pytest.param(
+            {"code": -1000035, "msg": "IP blocked", "data": {}},
+            OfferTodayResponseKind.IP_BLOCKED,
+            "manual_action_required",
+            True,
+            "ip_blocked:IP blocked;attempt_event_failure:RuntimeError",
+            {"code": -1000035, "msg": "IP blocked", "data": {}},
+            id="ip-blocked",
+        ),
+        pytest.param(
+            {"code": 2520, "msg": "position unavailable", "data": {}},
+            OfferTodayResponseKind.TERMINAL_UNAVAILABLE,
+            "terminal_unavailable",
+            False,
+            (
+                "terminal_unavailable:position unavailable;"
+                "attempt_event_failure:RuntimeError"
+            ),
+            {"code": 2520, "msg": "position unavailable", "data": {}},
+            id="terminal-unavailable",
+        ),
+    ],
+)
+async def test_final_classification_survives_attempt_event_persistence_failure(
+    fetch_outcome,
+    expected_kind,
+    expected_status,
+    expected_stop_batch,
+    expected_error,
+    expected_payload,
+):
+    env = _build_pipeline(
+        [fetch_outcome],
+        fail_detail_attempt_once=True,
+    )
+    target = OfferTodayDetailTarget.from_runtime_target(_runtime_target())
+
+    result = await env.pipeline.process_target(
+        target=target,
+        detail_crawl_job_id="detail-run",
+        fetch_detail=env.fetcher,
+    )
+
+    assert result.outcome is expected_kind
+    assert result.stop_batch is expected_stop_batch
+    assert {env.store.rows[key]["detail_status"] for key in target.listing_ids} == {
+        expected_status
+    }
+    assert all(
+        env.store.rows[key]["detail_error_message"] == expected_error
+        for key in target.listing_ids
+    )
+    assert all(
+        env.store.rows[key]["detail_payload"] == expected_payload
+        for key in target.listing_ids
+    )
+    assert all(
+        "sensitive upstream diagnostic"
+        not in env.store.rows[key]["detail_error_message"]
+        for key in target.listing_ids
+    )
+    assert env.store.rows["listing-a"]["detail_attempts"] == 1
+    assert env.store.rows["listing-b"]["detail_attempts"] == 0
     assert env.store.jobs == {}
     assert env.store.companies == {}
     assert _attempt_events(env.store) == []
