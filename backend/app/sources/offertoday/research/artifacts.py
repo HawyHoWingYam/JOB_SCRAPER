@@ -245,16 +245,27 @@ def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
         relative_name: artifact_dir / relative_name
         for relative_name in _REQUIRED_ARTIFACT_FILES
     }
+    symlinked = [
+        relative_name
+        for relative_name, path in required_paths.items()
+        if path.is_symlink()
+    ]
     missing = [
         relative_name
         for relative_name, path in required_paths.items()
-        if not path.is_file()
+        if relative_name not in symlinked and not path.is_file()
     ]
+    if manifest_path.is_symlink():
+        return ArtifactVerificationResult(
+            valid=False,
+            missing_files=tuple(sorted(missing)),
+            mismatched_files=tuple(sorted(["manifest.json", *symlinked])),
+        )
     if not manifest_path.is_file():
         return ArtifactVerificationResult(
             valid=False,
             missing_files=tuple(sorted(["manifest.json", *missing])),
-            mismatched_files=(),
+            mismatched_files=tuple(sorted(symlinked)),
         )
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -262,7 +273,7 @@ def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
         return ArtifactVerificationResult(
             valid=False,
             missing_files=tuple(sorted(missing)),
-            mismatched_files=("manifest.json",),
+            mismatched_files=tuple(sorted(["manifest.json", *symlinked])),
         )
     files = manifest.get("files") if isinstance(manifest, dict) else None
     files_are_valid = (
@@ -278,13 +289,13 @@ def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
         return ArtifactVerificationResult(
             valid=False,
             missing_files=tuple(sorted(missing)),
-            mismatched_files=("manifest.json",),
+            mismatched_files=tuple(sorted(["manifest.json", *symlinked])),
         )
 
-    mismatched: list[str] = []
+    mismatched = list(symlinked)
     for relative_name in _REQUIRED_ARTIFACT_FILES:
         path = required_paths[relative_name]
-        if relative_name in missing:
+        if relative_name in missing or relative_name in symlinked:
             continue
         if _sha256(path.read_bytes()) != files[relative_name]:
             mismatched.append(relative_name)

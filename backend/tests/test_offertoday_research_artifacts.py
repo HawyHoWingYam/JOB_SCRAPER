@@ -366,6 +366,59 @@ def test_invalid_manifest_still_reports_missing_required_artifacts(tmp_path) -> 
     assert result.mismatched_files == ("manifest.json",)
 
 
+@pytest.mark.parametrize(
+    "fixed_name",
+    ("manifest.json", "observations.jsonl", "working-tree.patch"),
+)
+@pytest.mark.parametrize("broken", (False, True), ids=("existing", "broken"))
+def test_verifier_rejects_fixed_name_symlinks_without_following(
+    tmp_path,
+    monkeypatch,
+    fixed_name,
+    broken,
+) -> None:
+    artifact_dir = build_fixture_artifact(tmp_path)
+    unsafe_path = artifact_dir / fixed_name
+    if broken:
+        unsafe_path.unlink()
+
+    original_is_symlink = Path.is_symlink
+    original_is_file = Path.is_file
+    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
+
+    def fake_is_symlink(path):
+        if path == unsafe_path:
+            return True
+        return original_is_symlink(path)
+
+    def guarded_is_file(path):
+        if path == unsafe_path:
+            raise AssertionError(f"unsafe is_file call for {fixed_name}")
+        return original_is_file(path)
+
+    def guarded_read_text(path, *args, **kwargs):
+        if path == unsafe_path:
+            raise AssertionError(f"unsafe read_text call for {fixed_name}")
+        return original_read_text(path, *args, **kwargs)
+
+    def guarded_read_bytes(path):
+        if path == unsafe_path:
+            raise AssertionError(f"unsafe read_bytes call for {fixed_name}")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "is_symlink", fake_is_symlink)
+    monkeypatch.setattr(Path, "is_file", guarded_is_file)
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+
+    result = verify_research_artifact(artifact_dir)
+
+    assert result.valid is False
+    assert result.missing_files == ()
+    assert result.mismatched_files == (fixed_name,)
+
+
 def test_provenance_captures_staged_unstaged_and_ignored_safe_files(tmp_path) -> None:
     repo = initialize_git_fixture(
         tmp_path,
