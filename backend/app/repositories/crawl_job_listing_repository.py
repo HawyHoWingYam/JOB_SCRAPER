@@ -253,6 +253,7 @@ class CrawlJobListingRepository:
             ),
             CrawlJobListing.listing_rank.asc().nullslast(),
             CrawlJobListing.created_at.asc(),
+            CrawlJobListing.id.asc(),
         )
         query = query.offset(max(int(offset or 0), 0))
         if limit is not None:

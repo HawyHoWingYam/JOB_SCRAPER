@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine
@@ -1835,6 +1835,40 @@ def test_repository_explicit_ids_override_scope_and_use_status_priority():
         )
 
     assert [row.source_job_id for row in selected] == ["manual", "failed", "pending"]
+
+
+def test_repository_candidate_order_uses_id_as_final_tie_breaker():
+    engine = create_engine("sqlite://")
+    CrawlJobListing.__table__.create(engine)
+    lower_id = UUID("aaaaaaaa-0000-0000-0000-000000000001")
+    higher_id = UUID("bbbbbbbb-0000-0000-0000-000000000002")
+    higher_row = _database_listing(
+        "jobsdb",
+        "higher-id",
+        status="pending",
+        rank=1,
+    )
+    lower_row = _database_listing(
+        "jobsdb",
+        "lower-id",
+        status="pending",
+        rank=1,
+    )
+    higher_row.id = higher_id
+    lower_row.id = lower_id
+
+    with Session(engine) as db:
+        db.add_all([higher_row, lower_row])
+        db.commit()
+
+        selected = CrawlJobListingRepository().list_detail_candidates(
+            db,
+            source_site="jobsdb",
+            statuses=["pending"],
+            limit=None,
+        )
+
+    assert [row.id for row in selected] == [lower_id, higher_id]
 
 
 @pytest.mark.parametrize("blocking_status", ["terminal_unavailable", "identity_conflict"])
