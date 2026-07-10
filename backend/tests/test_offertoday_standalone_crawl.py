@@ -795,3 +795,25 @@ def test_apply_request_payload_defaults_hydrates_launcher_only_invocation():
     assert args.resume_strategy == "reuse_open_browser"
     assert args.skip_existing is True
     assert args.headed is True
+
+
+def test_batch_scoped_it_detail_does_not_exact_filter_root_category():
+    search_space = importlib.import_module("app.sources.offertoday.search_space")
+    resolver = getattr(search_space, "resolve_offertoday_detail_category_ids", None)
+
+    assert callable(resolver)
+    assert resolver(
+        [118000],
+        source_listing_crawl_job_id="listing-run-1",
+    ) == []
+
+
+def test_unbatched_it_detail_expands_root_to_full_it_tree():
+    search_space = importlib.import_module("app.sources.offertoday.search_space")
+    resolver = getattr(search_space, "resolve_offertoday_detail_category_ids", None)
+
+    assert callable(resolver)
+    assert resolver(
+        [118000],
+        source_listing_crawl_job_id=None,
+    ) == list(search_space.OFFERTODAY_IT_CATEGORY_CODES)

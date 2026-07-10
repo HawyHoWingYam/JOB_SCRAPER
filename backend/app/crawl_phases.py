@@ -12,6 +12,7 @@ SUPPORTED_DETAIL_STATUSES = {
     "skipped",
     "manual_action_required",
     "identity_conflict",
+    "terminal_unavailable",
 }
 DEFAULT_DETAIL_RETRY_STATUSES = ("pending", "failed", "manual_action_required")
 

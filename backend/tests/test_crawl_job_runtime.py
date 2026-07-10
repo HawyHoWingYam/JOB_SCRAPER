@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Session
 
 from app.crawl_phases import DEFAULT_DETAIL_RETRY_STATUSES, SUPPORTED_DETAIL_STATUSES
+from app.models.crawl_job_listing import CrawlJobListing
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.job_repository import JobRepository
 from app.services.crawl_job_runtime import CrawlJobRuntime, ListingBatchPersistResult
@@ -19,14 +25,22 @@ class _FakeSession:
         self.rollbacks = 0
         self.closed = False
         self.trace = trace
+        self._rollback_actions = []
+
+    def register_rollback(self, action) -> None:
+        self._rollback_actions.append(action)
 
     def commit(self) -> None:
         self.commits += 1
+        self._rollback_actions.clear()
         if self.trace is not None:
             self.trace.append("commit")
 
     def rollback(self) -> None:
         self.rollbacks += 1
+        for action in reversed(self._rollback_actions):
+            action()
+        self._rollback_actions.clear()
         if self.trace is not None:
             self.trace.append("rollback")
 
@@ -48,6 +62,21 @@ class _FakeListing:
     detail_status: str = "pending"
     last_detail_crawl_job_id: str | None = None
     published_job_id: str | None = None
+    detail_error_message: str | None = None
+    listing_rank: int | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        if self.source_site == "offertoday" and not self.listing_payload:
+            encrypted_job_id = f"enc-{self.source_job_id}"
+            self.listing_payload = {
+                "job_id": self.source_job_id,
+                "encrypted_job_id": encrypted_job_id,
+                "raw_data": {
+                    "jobId": self.source_job_id,
+                    "encryptJobId": encrypted_job_id,
+                },
+            }
 
 
 class _FakeCrawlJobRepository:
@@ -99,6 +128,10 @@ class _FakeCrawlJobListingRepository:
         self.listings: list[_FakeListing] = list(listings or [])
         self.trace = trace
         self.upsert_calls: list[dict] = []
+        self.candidate_calls: list[dict] = []
+        self.list_identity_history_calls = 0
+        self.completed_listing_ids: list[str] = []
+        self.identity_conflict_listing_ids: list[str] = []
 
     def acquire_offertoday_staging_lock(self, _db) -> None:
         if self.trace is not None:
@@ -211,23 +244,74 @@ class _FakeCrawlJobListingRepository:
         category_ids=None,
         statuses=None,
         source_job_ids=None,
-        limit=100,
+        limit=None,
         offset=0,
     ):
+        self.candidate_calls.append(
+            {
+                "source_site": source_site,
+                "source_listing_crawl_job_id": source_listing_crawl_job_id,
+                "category_ids": list(category_ids or []),
+                "statuses": None if statuses is None else list(statuses),
+                "source_job_ids": None if source_job_ids is None else list(source_job_ids),
+                "limit": limit,
+                "offset": offset,
+            }
+        )
         normalized_statuses = set(statuses or ["pending", "failed", "manual_action_required"])
+        normalized_source_job_ids = None if source_job_ids is None else set(source_job_ids)
+        blocked_source_job_ids = {
+            listing.source_job_id
+            for listing in self.listings
+            if listing.source_site == "offertoday"
+            and listing.detail_status in {"terminal_unavailable", "identity_conflict"}
+        }
         rows = [
             listing
             for listing in self.listings
             if listing.source_site == source_site
-            and (source_listing_crawl_job_id is None or listing.crawl_job_id == str(source_listing_crawl_job_id))
-            and (source_job_ids is None or listing.source_job_id in set(source_job_ids))
             and (
-                not category_ids
+                normalized_source_job_ids is not None
+                or source_listing_crawl_job_id is None
+                or listing.crawl_job_id == str(source_listing_crawl_job_id)
+            )
+            and (
+                normalized_source_job_ids is None
+                or listing.source_job_id in normalized_source_job_ids
+            )
+            and (
+                normalized_source_job_ids is not None
+                or not category_ids
                 or str(listing.source_classification_id) in {str(value) for value in category_ids}
             )
             and listing.detail_status in normalized_statuses
+            and (
+                source_site != "offertoday"
+                or listing.source_job_id not in blocked_source_job_ids
+            )
         ]
-        return rows[offset : offset + limit]
+        priority = {
+            "manual_action_required": 0,
+            "failed": 1,
+            "pending": 2,
+        }
+        rows.sort(
+            key=lambda listing: (
+                priority.get(listing.detail_status, 3),
+                listing.listing_rank is None,
+                listing.listing_rank or 0,
+                listing.created_at,
+            )
+        )
+        rows = rows[offset:]
+        return rows if limit is None else rows[:limit]
+
+    def list_offertoday_identity_history(self, _db):
+        self.list_identity_history_calls += 1
+        return sorted(
+            (listing for listing in self.listings if listing.source_site == "offertoday"),
+            key=lambda listing: (listing.created_at, listing.id),
+        )
 
     def mark_detail_completed(
         self,
@@ -240,10 +324,57 @@ class _FakeCrawlJobListingRepository:
         auto_commit=True,
     ):
         listing = next(item for item in self.listings if item.id == listing_id)
+        before = (
+            listing.detail_status,
+            listing.last_detail_crawl_job_id,
+            listing.detail_payload,
+            listing.published_job_id,
+        )
+        if hasattr(_db, "register_rollback"):
+            def restore() -> None:
+                (
+                    listing.detail_status,
+                    listing.last_detail_crawl_job_id,
+                    listing.detail_payload,
+                    listing.published_job_id,
+                ) = before
+
+            _db.register_rollback(restore)
         listing.detail_status = "completed"
         listing.last_detail_crawl_job_id = str(detail_crawl_job_id)
         listing.detail_payload = dict(detail_payload or {})
         listing.published_job_id = published_job_id
+        self.completed_listing_ids.append(listing_id)
+        return listing
+
+    def mark_detail_identity_conflict(
+        self,
+        _db,
+        *,
+        listing_id,
+        detail_crawl_job_id,
+        error_message,
+        auto_commit=True,
+    ):
+        listing = next(item for item in self.listings if item.id == listing_id)
+        before = (
+            listing.detail_status,
+            listing.last_detail_crawl_job_id,
+            listing.detail_error_message,
+        )
+        if hasattr(_db, "register_rollback"):
+            def restore() -> None:
+                (
+                    listing.detail_status,
+                    listing.last_detail_crawl_job_id,
+                    listing.detail_error_message,
+                ) = before
+
+            _db.register_rollback(restore)
+        listing.detail_status = "identity_conflict"
+        listing.last_detail_crawl_job_id = str(detail_crawl_job_id)
+        listing.detail_error_message = error_message
+        self.identity_conflict_listing_ids.append(listing_id)
         return listing
 
     def count_detail_statuses_for_detail_crawl_job(self, _db, *, detail_crawl_job_id, source_site=None):
@@ -380,6 +511,11 @@ def test_load_detail_targets_marks_skip_existing_rows_completed():
             {
                 "job-1": SimpleNamespace(
                     id=str(uuid4()),
+                    source_site="offertoday",
+                    source_job_id="job-1",
+                    title="Developer",
+                    company_id=str(uuid4()),
+                    description="Complete description",
                     raw_data={"jobId": "job-1"},
                 )
             }
@@ -406,6 +542,84 @@ def test_load_detail_targets_marks_skip_existing_rows_completed():
     assert crawl_job_repository.jobs[detail_crawl_job_id].metrics["detail_selected_rows"] == 2
     assert crawl_job_repository.jobs[detail_crawl_job_id].metrics["detail_target_rows"] == 1
     assert crawl_job_repository.jobs[detail_crawl_job_id].metrics["detail_skipped_existing_rows"] == 1
+
+
+def test_load_detail_targets_retries_all_statuses_when_offertoday_job_is_partial():
+    """A partial published row is not proof that any staging status is detail-complete."""
+    session = _FakeSession()
+    source_listing_crawl_job_id = str(uuid4())
+    detail_crawl_job_id = str(uuid4())
+
+    existing_job_ns = SimpleNamespace(
+        id=str(uuid4()),
+        source_site="offertoday",
+        source_job_id="job-1",
+        title="Developer",
+        company_id=str(uuid4()),
+        description="",
+        raw_data={"jobId": "job-1"},
+    )
+
+    listing_pending = _FakeListing(
+        id=str(uuid4()),
+        crawl_job_id=source_listing_crawl_job_id,
+        source_site="offertoday",
+        source_job_id="job-1",
+        source_url="https://www.offertoday.com/hk/job/job-1",
+        detail_status="pending",
+    )
+    listing_failed = _FakeListing(
+        id=str(uuid4()),
+        crawl_job_id=source_listing_crawl_job_id,
+        source_site="offertoday",
+        source_job_id="job-2",
+        source_url="https://www.offertoday.com/hk/job/job-2",
+        detail_status="failed",
+    )
+    listing_manual = _FakeListing(
+        id=str(uuid4()),
+        crawl_job_id=source_listing_crawl_job_id,
+        source_site="offertoday",
+        source_job_id="job-3",
+        source_url="https://www.offertoday.com/hk/job/job-3",
+        detail_status="manual_action_required",
+    )
+
+    # All three source_job_ids exist in the jobs table.
+    runtime = CrawlJobRuntime(
+        lambda: session,
+        crawl_job_repository=_FakeCrawlJobRepository(),
+        crawl_job_listing_repository=_FakeCrawlJobListingRepository(
+            [listing_pending, listing_failed, listing_manual]
+        ),
+        job_repository=_FakeJobRepository(
+            {
+                "job-1": existing_job_ns,
+                "job-2": existing_job_ns,
+                "job-3": existing_job_ns,
+            }
+        ),
+    )
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={
+            "source_listing_crawl_job_id": source_listing_crawl_job_id,
+            "detail_limit": 10,
+            "detail_statuses": ["pending", "failed", "manual_action_required"],
+            "skip_existing": True,
+        },
+        detail_crawl_job_id=detail_crawl_job_id,
+    )
+
+    assert result.selected_rows == 3
+    assert result.skipped_existing_rows == 0
+    assert result.target_rows == 3
+    target_job_ids = {t["source_job_id"] for t in result.targets}
+    assert target_job_ids == {"job-1", "job-2", "job-3"}
+    assert listing_failed.detail_status == "failed"
+    assert listing_manual.detail_status == "manual_action_required"
+    assert listing_pending.detail_status == "pending"
 
 
 def test_mark_started_clears_completion_without_wiping_started_at_on_completion():
@@ -992,3 +1206,674 @@ def test_defer_listing_identity_conflict_rolls_back_event_failure():
 
     assert session.commits == 0
     assert session.rollbacks == 1
+
+
+def _detail_listing(
+    listing_id: str,
+    source_job_id: str,
+    *,
+    source_site: str = "offertoday",
+    encrypted_job_id: str | None = None,
+    status: str = "pending",
+    rank: int | None = None,
+    crawl_job_id: str = "batch-1",
+    category_id: str | None = "118000",
+    listing_payload: dict | None = None,
+) -> _FakeListing:
+    encrypted_job_id = encrypted_job_id or f"enc-{source_job_id}"
+    if listing_payload is None:
+        listing_payload = {
+            "job_id": source_job_id,
+            "encrypted_job_id": encrypted_job_id,
+            "raw_data": {
+                "jobId": source_job_id,
+                "encryptJobId": encrypted_job_id,
+            },
+        }
+    return _FakeListing(
+        id=listing_id,
+        crawl_job_id=crawl_job_id,
+        source_site=source_site,
+        source_job_id=source_job_id,
+        source_url=f"https://example.test/job/{encrypted_job_id}",
+        source_classification_id=category_id,
+        listing_payload=listing_payload,
+        detail_status=status,
+        listing_rank=rank,
+        created_at=datetime(2026, 7, 10, tzinfo=UTC)
+        + timedelta(seconds=rank or 0),
+    )
+
+
+def _published_job(
+    source_job_id: str,
+    *,
+    source_site: str = "offertoday",
+    title: str = "Developer",
+    description: str = "Complete description",
+    company_id: str | None = "company-1",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=f"job-{source_job_id}",
+        source_site=source_site,
+        source_job_id=source_job_id,
+        title=title,
+        description=description,
+        company_id=company_id,
+        raw_data={"jobId": source_job_id, "description": description},
+    )
+
+
+def _detail_runtime(
+    rows: list[_FakeListing],
+    *,
+    jobs: list[SimpleNamespace] | None = None,
+    fail_event: bool = False,
+):
+    session = _FakeSession()
+    listing_repository = _FakeCrawlJobListingRepository(rows)
+    crawl_job_repository = _FakeCrawlJobRepository(fail_event=fail_event)
+    runtime = CrawlJobRuntime(
+        lambda: session,
+        crawl_job_repository=crawl_job_repository,
+        crawl_job_listing_repository=listing_repository,
+        job_repository=_FakeJobRepository(
+            {job.source_job_id: job for job in (jobs or [])}
+        ),
+    )
+    return runtime, listing_repository, crawl_job_repository, session
+
+
+def _expected_cohort_hash(source_job_ids: tuple[str, ...]) -> str:
+    payload = json.dumps(
+        source_job_ids,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def test_detail_limit_applies_after_grouping_duplicate_rows():
+    rows = [
+        _detail_listing("row-1", "j-1", rank=1),
+        _detail_listing("row-2", "j-1", rank=2),
+        _detail_listing("row-3", "j-2", rank=3),
+    ]
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 1, "skip_existing": False},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert repository.candidate_calls[-1]["limit"] is None
+    assert result.selected_rows == 3
+    assert result.distinct_selected_ids == 2
+    assert result.duplicate_rows == 1
+    assert result.target_rows == 1
+    assert result.targets[0]["source_job_id"] == "j-1"
+    assert result.targets[0]["duplicate_listing_ids"] == ("row-2",)
+    assert result.targets[0]["identity"].job_id == "j-1"
+    assert result.fetch_cohort_source_job_ids == ("j-1",)
+    assert result.fetch_cohort_hash == _expected_cohort_hash(("j-1",))
+
+
+def test_complete_job_reconciles_all_duplicates_before_limit_and_records_event():
+    rows = [
+        _detail_listing("row-1", "j-complete", status="pending", rank=1),
+        _detail_listing("row-2", "j-complete", status="failed", rank=2),
+        _detail_listing("row-3", "j-fetch", status="pending", rank=3),
+    ]
+    complete_job = _published_job("j-complete")
+    runtime, repository, crawl_jobs, session = _detail_runtime(
+        rows,
+        jobs=[complete_job],
+    )
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 1, "skip_existing": True},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    expected_records = [
+        {
+            "listing_id": "row-2",
+            "source_job_id": "j-complete",
+            "before_status": "failed",
+            "after_status": "completed",
+            "published_job_id": "job-j-complete",
+        },
+        {
+            "listing_id": "row-1",
+            "source_job_id": "j-complete",
+            "before_status": "pending",
+            "after_status": "completed",
+            "published_job_id": "job-j-complete",
+        },
+    ]
+    assert repository.completed_listing_ids == ["row-2", "row-1"]
+    assert result.reconciled_rows == result.skipped_existing_rows == 2
+    assert result.reconciled_source_job_ids == ("j-complete",)
+    assert result.reconciliation_records == tuple(expected_records)
+    assert result.fetch_cohort_source_job_ids == ("j-fetch",)
+    assert result.fetch_cohort_hash == _expected_cohort_hash(("j-fetch",))
+    assert [target["source_job_id"] for target in result.targets] == ["j-fetch"]
+    assert crawl_jobs.events[-1] == {
+        "crawl_job_id": "detail-run-1",
+        "event_type": "crawl.detail_reconciled",
+        "payload": {"records": expected_records},
+        "emitted_by": "crawl-runtime",
+        "auto_commit": False,
+    }
+    assert session.commits == 1
+
+
+def test_reconciliation_event_failure_rolls_back_all_duplicate_transitions():
+    rows = [
+        _detail_listing("row-1", "j-complete", status="pending", rank=1),
+        _detail_listing("row-2", "j-complete", status="failed", rank=2),
+    ]
+    runtime, _repository, crawl_jobs, session = _detail_runtime(
+        rows,
+        jobs=[_published_job("j-complete")],
+        fail_event=True,
+    )
+
+    with pytest.raises(RuntimeError, match="event write failed"):
+        runtime.load_detail_targets(
+            source_site="offertoday",
+            request_payload={"detail_limit": 1, "skip_existing": True},
+            detail_crawl_job_id="detail-run-1",
+        )
+
+    assert [row.detail_status for row in rows] == ["pending", "failed"]
+    assert crawl_jobs.events == []
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_job_id", " "),
+        ("title", ""),
+        ("description", None),
+        ("company_id", None),
+    ],
+)
+def test_incomplete_offertoday_job_remains_a_fetch_target(field, value):
+    row = _detail_listing("row-1", "j-partial", rank=1)
+    partial_job = _published_job("j-partial")
+    setattr(partial_job, field, value)
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(
+        [row],
+        jobs=[partial_job],
+    )
+    runtime.job_repository.existing_jobs["j-partial"] = partial_job
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 1, "skip_existing": True},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert [target["source_job_id"] for target in result.targets] == ["j-partial"]
+    assert repository.completed_listing_ids == []
+
+
+def test_complete_offertoday_job_normalizes_source_site_for_reconciliation():
+    row = _detail_listing("row-1", "j-complete", rank=1)
+    complete_job = _published_job("j-complete", source_site=" OfferToday ")
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(
+        [row],
+        jobs=[complete_job],
+    )
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 1, "skip_existing": True},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.targets == []
+    assert result.reconciled_source_job_ids == ("j-complete",)
+    assert repository.completed_listing_ids == ["row-1"]
+
+
+def test_authoritative_row_priority_is_manual_then_failed_then_pending():
+    rows = [
+        _detail_listing("pending", "j-1", status="pending", rank=1),
+        _detail_listing("failed", "j-1", status="failed", rank=2),
+        _detail_listing(
+            "manual",
+            "j-1",
+            status="manual_action_required",
+            rank=3,
+        ),
+    ]
+    runtime, _repository, _crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 1},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.targets[0]["listing_id"] == "manual"
+    assert result.targets[0]["duplicate_listing_ids"] == ("failed", "pending")
+
+
+def test_batch_scope_keeps_leaf_and_keyword_only_rows():
+    rows = [
+        _detail_listing(
+            "leaf",
+            "j-leaf",
+            category_id="118005",
+            crawl_job_id="batch-1",
+            rank=1,
+        ),
+        _detail_listing(
+            "keyword",
+            "j-keyword",
+            category_id=None,
+            crawl_job_id="batch-1",
+            rank=2,
+        ),
+        _detail_listing(
+            "other",
+            "j-other",
+            category_id="118000",
+            crawl_job_id="batch-2",
+            rank=3,
+        ),
+    ]
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={
+            "source_listing_crawl_job_id": "batch-1",
+            "category_ids": [118000],
+            "detail_limit": 10,
+        },
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert repository.candidate_calls[-1]["category_ids"] == []
+    assert {target["source_job_id"] for target in result.targets} == {
+        "j-leaf",
+        "j-keyword",
+    }
+
+
+def test_changed_encrypted_id_defers_every_selected_duplicate():
+    rows = [
+        _detail_listing("row-1", "j-1", encrypted_job_id="enc-a", rank=1),
+        _detail_listing("row-2", "j-1", encrypted_job_id="enc-b", rank=2),
+    ]
+    runtime, repository, crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    expected_evidence = {
+        "source_job_id": "j-1",
+        "encrypted_job_ids": ["enc-a", "enc-b"],
+        "reverse_peer_job_ids": [],
+        "reason": "missing_or_changed_encrypted_id",
+    }
+    assert result.targets == []
+    assert result.fetch_cohort_source_job_ids == ()
+    assert result.fetch_cohort_hash == _expected_cohort_hash(())
+    assert result.identity_conflict_ids == ("j-1",)
+    assert result.identity_conflict_evidence == (expected_evidence,)
+    assert repository.identity_conflict_listing_ids == ["row-1", "row-2"]
+    assert [row.detail_status for row in rows] == [
+        "identity_conflict",
+        "identity_conflict",
+    ]
+    assert crawl_jobs.events[-1]["event_type"] == "crawl.detail_identity_conflict"
+    assert crawl_jobs.events[-1]["payload"] == {"conflicts": [expected_evidence]}
+
+
+def test_same_encrypted_id_for_two_canonical_ids_defers_both_groups():
+    rows = [
+        _detail_listing("row-1", "j-1", encrypted_job_id="enc-shared", rank=1),
+        _detail_listing("row-2", "j-2", encrypted_job_id="enc-shared", rank=2),
+    ]
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.targets == []
+    assert result.identity_conflict_ids == ("j-1", "j-2")
+    assert result.identity_conflict_evidence == (
+        {
+            "source_job_id": "j-1",
+            "encrypted_job_ids": ["enc-shared"],
+            "reverse_peer_job_ids": ["j-2"],
+            "reason": "reverse_collision",
+        },
+        {
+            "source_job_id": "j-2",
+            "encrypted_job_ids": ["enc-shared"],
+            "reverse_peer_job_ids": ["j-1"],
+            "reason": "reverse_collision",
+        },
+    )
+    assert repository.identity_conflict_listing_ids == ["row-1", "row-2"]
+
+
+def test_completed_history_mapping_change_defers_new_pending_row():
+    rows = [
+        _detail_listing(
+            "old",
+            "j-1",
+            encrypted_job_id="enc-a",
+            status="completed",
+            rank=1,
+            crawl_job_id="old-batch",
+        ),
+        _detail_listing(
+            "new",
+            "j-1",
+            encrypted_job_id="enc-b",
+            status="pending",
+            rank=2,
+            crawl_job_id="new-batch",
+        ),
+    ]
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.targets == []
+    assert result.identity_conflict_ids == ("j-1",)
+    assert repository.identity_conflict_listing_ids == ["new"]
+    assert rows[0].detail_status == "completed"
+    assert rows[1].detail_status == "identity_conflict"
+
+
+def test_any_identity_conflict_suppresses_otherwise_valid_batch_targets():
+    rows = [
+        _detail_listing("bad-a", "j-bad", encrypted_job_id="enc-a", rank=1),
+        _detail_listing("bad-b", "j-bad", encrypted_job_id="enc-b", rank=2),
+        _detail_listing("valid", "j-valid", encrypted_job_id="enc-v", rank=3),
+    ]
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.targets == []
+    assert result.identity_conflict_ids == ("j-bad",)
+    assert repository.identity_conflict_listing_ids == ["bad-a", "bad-b"]
+    assert rows[2].detail_status == "pending"
+
+
+def test_missing_identity_is_durable_conflict_and_event_failure_rolls_back():
+    row = _detail_listing(
+        "bad",
+        "j-bad",
+        listing_payload={"job_id": "j-bad", "encrypted_job_id": ""},
+        rank=1,
+    )
+    runtime, _repository, _crawl_jobs, session = _detail_runtime(
+        [row],
+        fail_event=True,
+    )
+
+    with pytest.raises(RuntimeError, match="event write failed"):
+        runtime.load_detail_targets(
+            source_site="offertoday",
+            request_payload={"detail_limit": 10},
+            detail_crawl_job_id="detail-run-1",
+        )
+
+    assert row.detail_status == "pending"
+    assert session.commits == 0
+    assert session.rollbacks == 1
+
+
+def test_non_offertoday_keeps_generic_reconciliation_without_identity_history():
+    row = _detail_listing(
+        "row-1",
+        "jobsdb-1",
+        source_site="jobsdb",
+        rank=1,
+    )
+    generic_partial_job = _published_job(
+        "jobsdb-1",
+        source_site="jobsdb",
+        description="",
+        company_id=None,
+    )
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(
+        [row],
+        jobs=[generic_partial_job],
+    )
+
+    result = runtime.load_detail_targets(
+        source_site="jobsdb",
+        request_payload={"detail_limit": 1, "skip_existing": True},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.targets == []
+    assert result.reconciled_rows == 1
+    assert result.identity_conflict_ids == ()
+    assert repository.list_identity_history_calls == 0
+
+
+def test_offertoday_status_metrics_include_terminal_and_identity_conflict_rows():
+    rows = [
+        _detail_listing(
+            "terminal",
+            "j-terminal",
+            status="terminal_unavailable",
+            crawl_job_id="batch-1",
+            rank=1,
+        ),
+        _detail_listing(
+            "conflict",
+            "j-conflict",
+            status="identity_conflict",
+            crawl_job_id="batch-1",
+            rank=2,
+        ),
+    ]
+    runtime, repository, crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={
+            "source_listing_crawl_job_id": "batch-1",
+            "detail_limit": 10,
+        },
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.targets == []
+    assert repository.list_identity_history_calls == 0
+    metrics = crawl_jobs.jobs["batch-1"].metrics
+    assert metrics["detail_terminal_unavailable"] == 1
+    assert metrics["detail_identity_conflict"] == 1
+
+
+def _database_listing(
+    source_site: str,
+    source_job_id: str,
+    *,
+    status: str,
+    rank: int,
+    crawl_job_id=None,
+    category_id: str | None = "118000",
+) -> CrawlJobListing:
+    encrypted_job_id = f"enc-{source_job_id}"
+    return CrawlJobListing(
+        id=uuid4(),
+        crawl_job_id=crawl_job_id or uuid4(),
+        source_site=source_site,
+        source_job_id=source_job_id,
+        source_url=f"https://example.test/job/{encrypted_job_id}",
+        source_classification_id=category_id,
+        listing_rank=rank,
+        listing_payload={
+            "jobId": source_job_id,
+            "encryptJobId": encrypted_job_id,
+        },
+        detail_status=status,
+        created_at=datetime(2026, 7, 10, tzinfo=UTC) + timedelta(seconds=rank),
+        updated_at=datetime(2026, 7, 10, tzinfo=UTC) + timedelta(seconds=rank),
+    )
+
+
+def test_repository_lists_all_offertoday_identity_history_in_creation_order():
+    engine = create_engine("sqlite://")
+    CrawlJobListing.__table__.create(engine)
+    rows = [
+        _database_listing("offertoday", "later", status="completed", rank=2),
+        _database_listing("jobsdb", "ignored", status="pending", rank=0),
+        _database_listing("offertoday", "earlier", status="failed", rank=1),
+    ]
+    with Session(engine) as db:
+        db.add_all(rows)
+        db.commit()
+
+        history = CrawlJobListingRepository().list_offertoday_identity_history(db)
+
+    assert [row.source_job_id for row in history] == ["earlier", "later"]
+    assert [row.detail_status for row in history] == ["failed", "completed"]
+
+
+def test_repository_identity_conflict_transition_participates_in_caller_transaction():
+    engine = create_engine("sqlite://")
+    CrawlJobListing.__table__.create(engine)
+    row = _database_listing("offertoday", "j-1", status="pending", rank=1)
+    row_id = row.id
+    detail_crawl_job_id = uuid4()
+    with Session(engine) as db:
+        db.add(row)
+        db.commit()
+
+        transitioned = CrawlJobListingRepository().mark_detail_identity_conflict(
+            db,
+            listing_id=row_id,
+            detail_crawl_job_id=detail_crawl_job_id,
+            error_message="mapping conflict",
+            auto_commit=False,
+        )
+
+        assert transitioned.detail_status == "identity_conflict"
+        assert transitioned.last_detail_crawl_job_id == detail_crawl_job_id
+        assert transitioned.detail_error_message == "mapping conflict"
+        assert transitioned.detail_completed_at is not None
+        db.rollback()
+        restored = db.get(CrawlJobListing, row_id)
+        assert restored.detail_status == "pending"
+        assert restored.last_detail_crawl_job_id is None
+        assert restored.detail_error_message is None
+
+
+def test_repository_explicit_ids_override_scope_and_use_status_priority():
+    engine = create_engine("sqlite://")
+    CrawlJobListing.__table__.create(engine)
+    batch_1 = uuid4()
+    batch_2 = uuid4()
+    rows = [
+        _database_listing(
+            "jobsdb",
+            "pending",
+            status="pending",
+            rank=1,
+            crawl_job_id=batch_1,
+        ),
+        _database_listing(
+            "jobsdb",
+            "failed",
+            status="failed",
+            rank=2,
+            crawl_job_id=batch_1,
+        ),
+        _database_listing(
+            "jobsdb",
+            "manual",
+            status="manual_action_required",
+            rank=3,
+            crawl_job_id=batch_2,
+            category_id="999999",
+        ),
+    ]
+    with Session(engine) as db:
+        db.add_all(rows)
+        db.commit()
+
+        selected = CrawlJobListingRepository().list_detail_candidates(
+            db,
+            source_site="jobsdb",
+            source_listing_crawl_job_id=batch_1,
+            category_ids=[118000],
+            statuses=["pending", "failed", "manual_action_required"],
+            source_job_ids=["pending", "failed", "manual"],
+            limit=None,
+        )
+
+    assert [row.source_job_id for row in selected] == ["manual", "failed", "pending"]
+
+
+@pytest.mark.parametrize("blocking_status", ["terminal_unavailable", "identity_conflict"])
+def test_repository_offertoday_historical_blocker_excludes_pending_sibling(
+    blocking_status,
+):
+    engine = create_engine("sqlite://")
+    CrawlJobListing.__table__.create(engine)
+    rows = [
+        _database_listing(
+            "offertoday",
+            "j-1",
+            status=blocking_status,
+            rank=1,
+        ),
+        _database_listing("offertoday", "j-1", status="pending", rank=2),
+        _database_listing("jobsdb", "j-1", status=blocking_status, rank=3),
+        _database_listing("jobsdb", "j-1", status="pending", rank=4),
+    ]
+    with Session(engine) as db:
+        db.add_all(rows)
+        db.commit()
+        repository = CrawlJobListingRepository()
+
+        offertoday_rows = repository.list_detail_candidates(
+            db,
+            source_site="offertoday",
+            limit=None,
+        )
+        jobsdb_rows = repository.list_detail_candidates(
+            db,
+            source_site="jobsdb",
+            limit=None,
+        )
+
+    assert offertoday_rows == []
+    assert [row.detail_status for row in jobsdb_rows] == ["pending"]
+
+
+def test_terminal_unavailable_is_supported_but_not_retried_by_default():
+    assert "terminal_unavailable" in SUPPORTED_DETAIL_STATUSES
+    assert "terminal_unavailable" not in DEFAULT_DETAIL_RETRY_STATUSES

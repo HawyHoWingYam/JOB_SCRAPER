@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.crawl_phases import DEFAULT_DETAIL_RETRY_STATUSES, resolve_detail_statuses
 from app.models.crawl_job import CrawlJob
@@ -185,11 +185,12 @@ class CrawlJobListingRepository:
         category_ids: Iterable[str | int] | None = None,
         statuses: Iterable[str] | None = None,
         source_job_ids: Iterable[str] | None = None,
-        limit: int = 100,
+        limit: int | None = None,
         offset: int = 0,
     ) -> list[CrawlJobListing]:
+        normalized_source_site = str(source_site).strip().lower()
         query = db.query(CrawlJobListing).filter(
-            CrawlJobListing.source_site == str(source_site).strip().lower(),
+            CrawlJobListing.source_site == normalized_source_site,
         )
         normalized_source_job_ids: list[str] | None = None
         if source_job_ids is not None:
@@ -208,24 +209,66 @@ class CrawlJobListingRepository:
             detail_statuses=statuses,
         )
         query = query.filter(CrawlJobListing.detail_status.in_(normalized_statuses))
-        if source_listing_crawl_job_id is not None:
-            query = query.filter(CrawlJobListing.crawl_job_id == source_listing_crawl_job_id)
+        if normalized_source_job_ids is None:
+            if source_listing_crawl_job_id is not None:
+                query = query.filter(
+                    CrawlJobListing.crawl_job_id == source_listing_crawl_job_id
+                )
 
-        normalized_category_ids = [str(category_id).strip() for category_id in (category_ids or []) if str(category_id).strip()]
-        if normalized_category_ids:
-            query = query.filter(CrawlJobListing.source_classification_id.in_(normalized_category_ids))
+            normalized_category_ids = [
+                str(category_id).strip()
+                for category_id in (category_ids or [])
+                if str(category_id).strip()
+            ]
+            if normalized_category_ids:
+                query = query.filter(
+                    CrawlJobListing.source_classification_id.in_(
+                        normalized_category_ids
+                    )
+                )
+
+        if normalized_source_site == "offertoday":
+            historical_blocker = aliased(CrawlJobListing)
+            blocking_sibling_exists = (
+                select(historical_blocker.id)
+                .where(
+                    historical_blocker.source_site == CrawlJobListing.source_site,
+                    historical_blocker.source_job_id
+                    == CrawlJobListing.source_job_id,
+                    historical_blocker.detail_status.in_(
+                        ("terminal_unavailable", "identity_conflict")
+                    ),
+                )
+                .correlate(CrawlJobListing)
+                .exists()
+            )
+            query = query.filter(~blocking_sibling_exists)
+
+        query = query.order_by(
+            case(
+                (CrawlJobListing.detail_status == "manual_action_required", 0),
+                (CrawlJobListing.detail_status == "failed", 1),
+                (CrawlJobListing.detail_status == "pending", 2),
+                else_=3,
+            ),
+            CrawlJobListing.listing_rank.asc().nullslast(),
+            CrawlJobListing.created_at.asc(),
+        )
+        query = query.offset(max(int(offset or 0), 0))
+        if limit is not None:
+            query = query.limit(max(int(limit), 0))
+        return query.all()
+
+    def list_offertoday_identity_history(
+        self,
+        db: Session,
+    ) -> list[CrawlJobListing]:
+        """Return OfferToday staging identity evidence in deterministic creation order."""
 
         return (
-            query.order_by(
-                case(
-                    (CrawlJobListing.detail_status == "manual_action_required", 0),
-                    else_=1,
-                ),
-                CrawlJobListing.listing_rank.asc().nullslast(),
-                CrawlJobListing.created_at.asc(),
-            )
-            .offset(max(int(offset or 0), 0))
-            .limit(limit)
+            db.query(CrawlJobListing)
+            .filter(CrawlJobListing.source_site == "offertoday")
+            .order_by(CrawlJobListing.created_at.asc(), CrawlJobListing.id.asc())
             .all()
         )
 
@@ -391,6 +434,12 @@ class CrawlJobListingRepository:
                     "detail_completed": status_counts.get("completed", 0),
                     "detail_failed": status_counts.get("failed", 0),
                     "detail_manual_action_required": status_counts.get("manual_action_required", 0),
+                    "detail_terminal_unavailable": status_counts.get(
+                        "terminal_unavailable", 0
+                    ),
+                    "detail_identity_conflict": status_counts.get(
+                        "identity_conflict", 0
+                    ),
                 }
             )
 
@@ -494,6 +543,33 @@ class CrawlJobListingRepository:
         listing.detail_started_at = listing.detail_started_at or timestamp
         listing.detail_completed_at = timestamp
         listing.detail_error_message = None
+        if auto_commit:
+            db.commit()
+            db.refresh(listing)
+        else:
+            db.flush()
+        return listing
+
+    def mark_detail_identity_conflict(
+        self,
+        db: Session,
+        *,
+        listing_id,
+        detail_crawl_job_id,
+        error_message: str,
+        auto_commit: bool = True,
+    ) -> CrawlJobListing:
+        listing = (
+            db.query(CrawlJobListing)
+            .filter(CrawlJobListing.id == listing_id)
+            .one()
+        )
+        timestamp = utc_now()
+        listing.detail_status = "identity_conflict"
+        listing.last_detail_crawl_job_id = detail_crawl_job_id
+        listing.detail_started_at = listing.detail_started_at or timestamp
+        listing.detail_completed_at = timestamp
+        listing.detail_error_message = error_message
         if auto_commit:
             db.commit()
             db.refresh(listing)

@@ -255,6 +255,18 @@ def expand_offertoday_category_ids(
     return expanded
 
 
+def resolve_offertoday_detail_category_ids(
+    category_ids: Sequence[int] | None,
+    *,
+    source_listing_crawl_job_id: str | None,
+) -> list[int]:
+    """Resolve detail scope without narrowing an already bounded listing run."""
+
+    if source_listing_crawl_job_id is not None:
+        return []
+    return expand_offertoday_category_ids(category_ids, default_to_it=False)
+
+
 def _should_include_default_it_keyword_pack(
     *,
     category_ids: Sequence[int] | None,
