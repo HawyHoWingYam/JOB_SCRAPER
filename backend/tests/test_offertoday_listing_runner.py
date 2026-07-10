@@ -318,6 +318,9 @@ async def test_exhausted_confirmation_retries_create_gap_without_advancing() -> 
     assert result.condition_outcomes[0].pages_observed == 1
     assert result.condition_outcomes[0].stop_reason == "unresolved_gap"
     assert result.condition_outcomes[0].is_complete is False
+    assert [
+        observation.retry_reason for observation in observations.observations[1:]
+    ] == ["transient_transport", "transient_transport", None]
     assert observations.observations[-1].stop_reason == "unresolved_gap"
     assert observations.outcomes == list(result.condition_outcomes)
     assert staging.staged_pages == []
@@ -415,6 +418,7 @@ async def test_same_page_forward_identity_conflict_is_hard_and_stages_nothing() 
     assert conflict.encrypted_job_ids == ("enc-first", "enc-second")
     assert conflict.reason == "one_job_id_to_multiple_encrypted_ids"
     assert observations.observations[0].identity_conflicts == (conflict,)
+    assert observations.observations[0].classification == "identity_conflict"
     assert observations.observations[0].stop_reason == "identity_conflict"
     assert [
         (pair.job_id, pair.encrypted_job_id)
@@ -496,6 +500,7 @@ async def test_missing_identity_fields_are_observed_and_never_staged(
     assert issue.reason == reason
     observation = observations.observations[0]
     assert observation.identity_issues == (issue,)
+    assert observation.classification == "identity_issue"
     assert observation.missing_job_id_count == (missing_field == "job_id")
     assert observation.missing_encrypted_job_id_count == (
         missing_field == "encrypted_job_id"
@@ -565,6 +570,7 @@ async def test_reverse_identity_conflict_defers_both_canonical_ids_and_stages_no
     assert conflict.encrypted_job_ids == ("enc-shared",)
     assert conflict.reason == "one_encrypted_id_to_multiple_job_ids"
     assert observations.observations[0].identity_conflicts == (conflict,)
+    assert observations.observations[0].classification == "identity_conflict"
     assert staging.staged_pages == []
     assert staging.deferrals == [
         {

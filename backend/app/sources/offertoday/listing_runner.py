@@ -416,9 +416,7 @@ class OfferTodayListingRunner:
                             latency_ms=latency_ms,
                             session_mode=session_mode,
                             retry_reason=(
-                                classification.kind.value
-                                if classification.retryable
-                                else None
+                                classification.kind.value if will_retry else None
                             ),
                             stop_reason=attempt_stop_reason,
                         )
@@ -649,6 +647,15 @@ class OfferTodayListingRunner:
                         else:
                             attempt_stop_reason = None
 
+                    if page_conflicts:
+                        observation_classification = "identity_conflict"
+                    elif page_issues:
+                        observation_classification = "identity_issue"
+                    elif is_nonempty_confirmation:
+                        observation_classification = "contract_anomaly"
+                    else:
+                        observation_classification = classification.kind.value
+
                     observation = ListingPageObservation(
                         condition_id=condition.condition_id,
                         search_family=condition.search_family,
@@ -659,11 +666,7 @@ class OfferTodayListingRunner:
                         page=page,
                         attempt=attempt,
                         request_fingerprint=fingerprint,
-                        classification=(
-                            "contract_anomaly"
-                            if is_nonempty_confirmation
-                            else classification.kind.value
-                        ),
+                        classification=observation_classification,
                         api_code=classification.code,
                         reported_total=reported_total,
                         has_more=has_more,
