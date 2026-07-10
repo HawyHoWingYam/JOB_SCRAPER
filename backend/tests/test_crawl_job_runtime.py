@@ -98,6 +98,7 @@ class _FakeCrawlJobListingRepository:
     ) -> None:
         self.listings: list[_FakeListing] = list(listings or [])
         self.trace = trace
+        self.upsert_calls: list[dict] = []
 
     def acquire_offertoday_staging_lock(self, _db) -> None:
         if self.trace is not None:
@@ -151,6 +152,12 @@ class _FakeCrawlJobListingRepository:
         listing_payload,
         auto_commit=True,
     ):
+        self.upsert_calls.append(
+            {
+                "source_job_id": source_job_id,
+                "listing_rank": listing_rank,
+            }
+        )
         existing = next(
             (
                 listing
@@ -437,9 +444,10 @@ def _offertoday_stage_payload(
     category_name: str = "Information Technology",
     keyword: str = "python",
     page: int = 1,
+    listing_rank: int | None = None,
 ) -> dict:
     encrypted_id = encrypted_job_id or f"enc-{source_job_id}"
-    return {
+    payload = {
         "source_job_id": source_job_id,
         "source_url": f"https://www.offertoday.com/hk/job/{encrypted_id}",
         "source_classification_id": category_id,
@@ -459,6 +467,9 @@ def _offertoday_stage_payload(
         "keyword": keyword,
         "page": page,
     }
+    if listing_rank is not None:
+        payload["listing_rank"] = listing_rank
+    return payload
 
 
 def test_listing_batch_result_reports_true_created_rows_with_compatibility_alias():
@@ -578,6 +589,74 @@ def test_offertoday_stage_batch_locks_then_partitions_global_canonical_ids_and_r
             "emitted_by": "offertoday-crawl",
             "auto_commit": False,
         }
+    ]
+
+
+def test_offertoday_stage_batches_assign_monotonic_run_global_listing_ranks():
+    session = _FakeSession()
+    listing_repository = _FakeCrawlJobListingRepository()
+    runtime = CrawlJobRuntime(
+        lambda: session,
+        crawl_job_repository=_FakeCrawlJobRepository(),
+        crawl_job_listing_repository=listing_repository,
+        job_repository=_FakeJobRepository(),
+    )
+
+    for page, source_job_ids in (
+        (1, ("page-1-job-1", "page-1-job-2")),
+        (2, ("page-2-job-1", "page-2-job-2")),
+    ):
+        runtime.stage_listing_batch(
+            crawl_job_id="crawl-1",
+            source_site="offertoday",
+            payloads=[
+                _offertoday_stage_payload(
+                    source_job_id,
+                    page=page,
+                    listing_rank=page_local_rank,
+                )
+                for page_local_rank, source_job_id in enumerate(
+                    source_job_ids,
+                    start=1,
+                )
+            ],
+            skip_existing=False,
+        )
+
+    assert listing_repository.upsert_calls == [
+        {"source_job_id": "page-1-job-1", "listing_rank": 1},
+        {"source_job_id": "page-1-job-2", "listing_rank": 2},
+        {"source_job_id": "page-2-job-1", "listing_rank": 3},
+        {"source_job_id": "page-2-job-2", "listing_rank": 4},
+    ]
+
+
+def test_non_offertoday_stage_batch_preserves_explicit_listing_rank():
+    session = _FakeSession()
+    listing_repository = _FakeCrawlJobListingRepository()
+    runtime = CrawlJobRuntime(
+        lambda: session,
+        crawl_job_repository=_FakeCrawlJobRepository(),
+        crawl_job_listing_repository=listing_repository,
+        job_repository=_FakeJobRepository(),
+    )
+
+    runtime.stage_listing_batch(
+        crawl_job_id="crawl-1",
+        source_site="jobsdb",
+        payloads=[
+            {
+                "source_job_id": "job-1",
+                "source_url": "https://hk.jobsdb.com/job/job-1",
+                "listing_rank": 37,
+                "listing_payload": {"id": "job-1"},
+            }
+        ],
+        skip_existing=False,
+    )
+
+    assert listing_repository.upsert_calls == [
+        {"source_job_id": "job-1", "listing_rank": 37}
     ]
 
 

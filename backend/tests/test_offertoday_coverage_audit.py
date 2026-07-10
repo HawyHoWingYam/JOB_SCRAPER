@@ -170,6 +170,49 @@ async def test_audit_and_production_both_reject_three_attempt_page_gap():
 
 
 @pytest.mark.asyncio
+async def test_audit_report_summarizes_retry_attempts_as_terminal_logical_pages():
+    audit_module = importlib.import_module("backend.scripts.offertoday_coverage_audit")
+    result, _ = await _run_audit_saved_responses(
+        [
+            TimeoutError("retry page 1"),
+            _success_page([_listing_row("j-1", "enc-1")], has_more=False),
+            _success_page([], has_more=False),
+        ]
+    )
+
+    observations = result.listing_result.observations
+    assert [observation.classification for observation in observations] == [
+        "transient_transport",
+        "success",
+        "success",
+    ]
+    assert (observations[0].condition_id, observations[0].page) == (
+        observations[1].condition_id,
+        observations[1].page,
+    )
+    assert observations[0].attempt == 1
+    assert observations[1].attempt == 2
+
+    assert result.processed_tasks == 2
+    assert result.global_sample_unique_job_ids == 1
+    assert result.global_reported_total == 1
+    family_stats = next(iter(result.families.values()))
+    assert family_stats.pages_fetched == 2
+    assert family_stats.listing_rows == 1
+    assert family_stats.sample_unique_job_ids == 1
+    assert family_stats.duplicate_job_ids == 0
+    assert family_stats.reported_total == 1
+    assert family_stats.failed_pages == 0
+
+    report = audit_module.render_coverage_audit_report(result)
+    assert "Processed tasks: 2" in report
+    assert (
+        f"{family_stats.search_family:<20} {2:>5} {1:>6} "
+        f"{1:>7} {1:>7} {0:>7} {0:>6}"
+    ) in report
+
+
+@pytest.mark.asyncio
 async def test_audit_and_production_report_same_shared_encrypted_id_conflict():
     responses = [
         _success_page(

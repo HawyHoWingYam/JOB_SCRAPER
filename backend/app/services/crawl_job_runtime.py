@@ -236,6 +236,11 @@ class CrawlJobRuntime:
                     continue
 
                 next_rank += 1
+                listing_rank = (
+                    next_rank
+                    if is_offertoday
+                    else self._optional_int(payload.get("listing_rank")) or next_rank
+                )
                 _listing, persistence_status = (
                     self.crawl_job_listing_repository.upsert_listing(
                         db,
@@ -250,8 +255,7 @@ class CrawlJobRuntime:
                             payload.get("source_classification_name")
                         ),
                         listing_page=self._optional_int(payload.get("listing_page")),
-                        listing_rank=self._optional_int(payload.get("listing_rank"))
-                        or next_rank,
+                        listing_rank=listing_rank,
                         listing_payload=dict(payload.get("listing_payload") or {}),
                         auto_commit=False,
                     )

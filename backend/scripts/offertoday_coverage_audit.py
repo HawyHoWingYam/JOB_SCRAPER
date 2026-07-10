@@ -176,11 +176,19 @@ def _summarize_listing_result(
     planned_tasks: int,
     planned_families: list[str],
 ) -> CoverageAuditResult:
+    terminal_observations_by_page = {}
+    for observation in listing_result.observations:
+        page_key = (observation.condition_id, observation.page)
+        previous = terminal_observations_by_page.get(page_key)
+        if previous is None or observation.attempt >= previous.attempt:
+            terminal_observations_by_page[page_key] = observation
+    terminal_observations = tuple(terminal_observations_by_page.values())
+
     result = CoverageAuditResult(
         target_unique_job_ids=target_unique_job_ids,
         planned_tasks=planned_tasks,
         listing_result=listing_result,
-        processed_tasks=len(listing_result.observations),
+        processed_tasks=len(terminal_observations),
         global_sample_unique_job_ids=len(listing_result.ordered_job_ids),
         stopped_early=False,
     )
@@ -189,7 +197,7 @@ def _summarize_listing_result(
 
     globally_seen_ids: set[str] = set()
     reported_condition_ids: set[str] = set()
-    for observation in listing_result.observations:
+    for observation in terminal_observations:
         stats = _get_family_stats(result, observation.search_family)
         stats.pages_fetched += 1
         stats.listing_rows += int(observation.row_count)
