@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,19 @@ from app.sources.offertoday.research.contracts import (
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "offertoday_research"
+
+
+def _response_identity_hash(job_id: str, encrypted_job_id: str) -> str:
+    canonical = json.dumps(
+        {
+            "encrypted_job_id": encrypted_job_id,
+            "job_id": job_id,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _staged(
@@ -90,6 +104,42 @@ def test_listing_gap_invalidates_zero_difference_report():
     assert report.raw_rows.difference == 0
     assert report.distinct_ids.difference == 0
     assert report.is_valid is False
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "raw_listing_rows",
+        "rows_missing_job_id",
+        "rows_containing_job_id",
+        "newly_created_staging_rows",
+        "unresolved_gaps",
+    ],
+)
+@pytest.mark.parametrize("invalid_value", [True, 1.0, -1])
+def test_listing_conservation_rejects_non_integer_or_negative_numeric_evidence(
+    field_name,
+    invalid_value,
+):
+    arguments = {
+        "raw_listing_rows": 1,
+        "rows_missing_job_id": 0,
+        "rows_containing_job_id": 1,
+        "valid_distinct_job_ids": {"j-1"},
+        "already_published_ids": {"j-1"},
+        "preexisting_staged_unpublished_ids": set(),
+        "newly_staged_ids": set(),
+        "deferred_identity_conflict_ids": set(),
+        "newly_created_staging_rows": 0,
+        "unresolved_gaps": 0,
+    }
+    arguments[field_name] = invalid_value
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^{field_name} must be a nonnegative integer$",
+    ):
+        build_listing_conservation_report(**arguments)
 
 
 def test_listing_overlap_and_symmetric_unexplained_ids_are_sorted_and_invalid():
@@ -463,6 +513,121 @@ def _crawl_job(*, crawl_job_id="crawl-run", status="completed", published=(), st
     )
 
 
+@pytest.mark.parametrize(
+    ("evidence_field", "invalid_value", "include_observed"),
+    [
+        ("row_count", True, False),
+        ("missing_job_id_count", 0.5, False),
+        ("rows_created", -1, True),
+    ],
+)
+def test_replay_rejects_corrupt_numeric_listing_evidence(
+    evidence_field,
+    invalid_value,
+    include_observed,
+):
+    page_payload = {
+        "condition_id": "condition-1",
+        "page": 1,
+        "classification": "success",
+        "row_count": 1,
+        "missing_job_id_count": 0,
+        "rows": [{"job_id": "j-1", "encrypted_job_id": "enc-1"}],
+    }
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": page_payload,
+        }
+    ]
+    if include_observed:
+        events.append(
+            {
+                "sequence_no": 2,
+                "event_type": "crawl.listing_observed",
+                "payload": {"records": [], "rows_created": 0},
+            }
+        )
+        events[-1]["payload"][evidence_field] = invalid_value
+    else:
+        page_payload[evidence_field] = invalid_value
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^{evidence_field} must be a nonnegative integer$",
+    ):
+        replay_research_conservation(
+            crawl_job=_crawl_job(published=("j-1",)),
+            events=events,
+            listings=[],
+            jobs=[],
+        )
+
+
+@pytest.mark.parametrize(
+    ("outcome_types", "expected_gaps"),
+    [
+        (("incomplete", "completed"), 0),
+        (("completed", "incomplete"), 1),
+        (("incomplete", "incomplete"), 1),
+    ],
+)
+def test_replay_uses_final_condition_outcome_per_canonical_condition(
+    outcome_types,
+    expected_gaps,
+):
+    condition = {
+        "search_family": "it_category",
+        "category_id": 118000,
+        "keyword": "",
+        "endpoint": "search",
+        "rcd_type": 7,
+    }
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "page-condition",
+                "page": 1,
+                "classification": "success",
+                "row_count": 1,
+                "missing_job_id_count": 0,
+                "rows": [{"job_id": "j-1", "encrypted_job_id": "enc-1"}],
+            },
+        }
+    ]
+    for sequence_no, outcome_type in enumerate(outcome_types, start=2):
+        events.append(
+            {
+                "sequence_no": sequence_no,
+                "event_type": f"research.condition_{outcome_type}",
+                "payload": {
+                    "condition": dict(condition),
+                    "pages_observed": 1,
+                    "stop_reason": (
+                        "natural_exhaustion"
+                        if outcome_type == "completed"
+                        else "transport_failure"
+                    ),
+                    "is_complete": outcome_type == "completed",
+                },
+            }
+        )
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=("j-1",)),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.unresolved_gaps == expected_gaps
+    assert report.is_valid is (expected_gaps == 0)
+
+
 def test_replay_partitions_listing_ids_by_frozen_run_start_priority():
     rows = [
         {"job_id": "j-1", "encrypted_job_id": "enc-1"},
@@ -527,6 +692,7 @@ def test_replay_keeps_reconciled_ids_outside_frozen_fetch_conservation():
             "job-fetch",
             "listing-run",
             1,
+            encrypted_job_id="enc-fetch",
             last_detail_crawl_job_id="detail-run",
             has_detail_payload=True,
         )
@@ -549,7 +715,16 @@ def test_replay_keeps_reconciled_ids_outside_frozen_fetch_conservation():
         SimpleNamespace(
             sequence_no=2,
             event_type="crawl.detail_persisted",
-            payload={"source_job_id": "j-fetch"},
+            payload={
+                "detail_crawl_job_id": "detail-run",
+                "source_job_id": "j-fetch",
+                "listing_ids": ["row-fetch"],
+                "published_job_id": "job-fetch",
+                "response_identity_hash": _response_identity_hash(
+                    "j-fetch",
+                    "enc-fetch",
+                ),
+            },
         ),
     ]
 
@@ -570,6 +745,54 @@ def test_replay_keeps_reconciled_ids_outside_frozen_fetch_conservation():
         if row.last_detail_crawl_job_id == "detail-run"
     }
     assert report.is_valid is True
+
+
+def test_replay_rejects_reconciled_fetch_overlap_and_filters_denominator():
+    listings = [
+        _staged(
+            "row-fetch",
+            "j-fetch",
+            "failed",
+            None,
+            "listing-run",
+            1,
+            last_detail_crawl_job_id="detail-run",
+        ),
+        _staged(
+            "row-overlap",
+            "j-overlap",
+            "failed",
+            None,
+            "listing-run",
+            1,
+            last_detail_crawl_job_id="detail-run",
+        ),
+    ]
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "crawl.detail_cohort_frozen",
+            "payload": {
+                "fetch_cohort_source_job_ids": ["j-overlap", "j-fetch"],
+                "reconciled_source_job_ids": ["j-overlap"],
+            },
+        }
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(crawl_job_id="detail-run"),
+        events=events,
+        listings=listings,
+        jobs=[],
+    )
+
+    assert report.reconciled_fetch_overlap_ids == ("j-overlap",)
+    assert report.reconciled_source_job_ids == ("j-overlap",)
+    assert report.detail is not None
+    assert report.detail.distinct_eligible == 1
+    assert report.detail.outcomes["retryable_failed"] == 1
+    assert sum(report.detail.outcomes.values()) == 1
+    assert report.is_valid is False
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -607,7 +830,7 @@ def test_fixed_listing_observation_fixtures_replay_deterministically(
     assert report.is_valid is expected_valid
 
 
-def test_duplicate_cross_run_fixture_counts_one_canonical_detail_outcome():
+def test_duplicate_cross_run_fixture_replays_one_correlated_canonical_outcome():
     payload = json.loads(
         (FIXTURE_ROOT / "duplicate_cross_run" / "snapshot.json").read_text(
             encoding="utf-8"
@@ -617,10 +840,9 @@ def test_duplicate_cross_run_fixture_counts_one_canonical_detail_outcome():
     jobs = [PublishedJobSnapshot(**row) for row in payload["jobs"]]
 
     baseline = build_baseline_snapshot(listings=listings, jobs=jobs)
-    detail = build_detail_conservation_report(
-        detail_crawl_job_id="detail-run-1",
-        fetch_cohort_source_job_ids={"j-1"},
-        persisted_source_job_ids={"j-1"},
+    report = replay_research_conservation(
+        crawl_job=SimpleNamespace(**payload["crawl_job"]),
+        events=payload["events"],
         listings=listings,
         jobs=jobs,
     )
@@ -628,7 +850,50 @@ def test_duplicate_cross_run_fixture_counts_one_canonical_detail_outcome():
     assert baseline.staged_rows == 2
     assert baseline.distinct_staged_ids == 1
     assert baseline.duplicate_staging_rows == 1
-    assert detail.distinct_eligible == 1
-    assert detail.outcomes["completed"] == 1
-    assert sum(detail.outcomes.values()) == 1
-    assert detail.is_valid is True
+    assert report.detail is not None
+    assert report.detail.distinct_eligible == 1
+    assert report.detail.outcomes["completed"] == 1
+    assert sum(report.detail.outcomes.values()) == 1
+    assert report.detail.persisted_evidence_mismatch_ids == ()
+    assert report.is_valid is True
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("detail_crawl_job_id", "other-detail-run"),
+        ("listing_ids", ["old-row"]),
+        ("published_job_id", "job-other"),
+        ("response_identity_hash", "0" * 64),
+    ],
+)
+def test_duplicate_cross_run_replay_rejects_uncorrelated_persisted_event(
+    field_name,
+    invalid_value,
+):
+    payload = json.loads(
+        (FIXTURE_ROOT / "duplicate_cross_run" / "snapshot.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    persisted_event = next(
+        event
+        for event in payload["events"]
+        if event["event_type"] == "crawl.detail_persisted"
+    )
+    persisted_event["payload"][field_name] = invalid_value
+
+    report = replay_research_conservation(
+        crawl_job=SimpleNamespace(**payload["crawl_job"]),
+        events=payload["events"],
+        listings=[
+            StagedListingSnapshot(**row) for row in payload["listings"]
+        ],
+        jobs=[PublishedJobSnapshot(**row) for row in payload["jobs"]],
+    )
+
+    assert report.detail is not None
+    assert report.detail.outcomes["completed"] == 0
+    assert report.detail.outcomes["retryable_failed"] == 1
+    assert report.detail.persisted_evidence_mismatch_ids == ("j-1",)
+    assert report.is_valid is False

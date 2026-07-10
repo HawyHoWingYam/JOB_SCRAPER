@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -44,6 +46,11 @@ _PAGE_EVENT_TYPES = {
 _INCOMPLETE_CONDITION_EVENT_TYPES = {
     "research.condition_incomplete",
     "crawl.listing_condition_incomplete",
+}
+
+_COMPLETED_CONDITION_EVENT_TYPES = {
+    "research.condition_completed",
+    "crawl.listing_condition_completed",
 }
 
 _TERMINAL_CRAWL_STATUSES = {
@@ -97,6 +104,7 @@ class DetailConservationReport:
     missing_eligible_ids: tuple[str, ...]
     unclassified_statuses: tuple[str, ...]
     run_is_terminal: bool
+    persisted_evidence_mismatch_ids: tuple[str, ...] = ()
 
     @property
     def is_valid(self) -> bool:
@@ -105,6 +113,7 @@ class DetailConservationReport:
             and not self.status_job_mismatches
             and not self.missing_eligible_ids
             and not self.unclassified_statuses
+            and not self.persisted_evidence_mismatch_ids
             and (
                 not self.run_is_terminal
                 or self.outcomes.get("running", 0) == 0
@@ -117,11 +126,22 @@ class ResearchConservationReport:
     listing: ListingConservationReport | None
     detail: DetailConservationReport | None
     reconciled_source_job_ids: tuple[str, ...] = ()
+    reconciled_fetch_overlap_ids: tuple[str, ...] = ()
 
     @property
     def is_valid(self) -> bool:
         reports = [report for report in (self.listing, self.detail) if report]
-        return bool(reports) and all(report.is_valid for report in reports)
+        return (
+            bool(reports)
+            and all(report.is_valid for report in reports)
+            and not self.reconciled_fetch_overlap_ids
+        )
+
+
+def _require_nonnegative_int(value: Any, *, evidence_name: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{evidence_name} must be a nonnegative integer")
+    return value
 
 
 def build_listing_conservation_report(
@@ -137,6 +157,26 @@ def build_listing_conservation_report(
     newly_created_staging_rows: int,
     unresolved_gaps: int,
 ) -> ListingConservationReport:
+    raw_listing_rows = _require_nonnegative_int(
+        raw_listing_rows,
+        evidence_name="raw_listing_rows",
+    )
+    rows_missing_job_id = _require_nonnegative_int(
+        rows_missing_job_id,
+        evidence_name="rows_missing_job_id",
+    )
+    rows_containing_job_id = _require_nonnegative_int(
+        rows_containing_job_id,
+        evidence_name="rows_containing_job_id",
+    )
+    newly_created_staging_rows = _require_nonnegative_int(
+        newly_created_staging_rows,
+        evidence_name="newly_created_staging_rows",
+    )
+    unresolved_gaps = _require_nonnegative_int(
+        unresolved_gaps,
+        evidence_name="unresolved_gaps",
+    )
     valid_ids = set(valid_distinct_job_ids)
     partitions = {
         "already_published": set(already_published_ids),
@@ -231,6 +271,7 @@ def build_detail_conservation_report(
     listings: Sequence[StagedListingSnapshot],
     jobs: Sequence[PublishedJobSnapshot],
     run_is_terminal: bool = True,
+    persisted_evidence_mismatch_ids: set[str] | None = None,
 ) -> DetailConservationReport:
     detail_run_id = str(detail_crawl_job_id)
     eligible_ids = _canonical_id_set(fetch_cohort_source_job_ids)
@@ -315,6 +356,9 @@ def build_detail_conservation_report(
         missing_eligible_ids=tuple(sorted(missing_ids)),
         unclassified_statuses=tuple(sorted(set(unclassified_statuses))),
         run_is_terminal=run_is_terminal,
+        persisted_evidence_mismatch_ids=tuple(
+            sorted(_canonical_id_set(persisted_evidence_mismatch_ids or set()))
+        ),
     )
 
 
@@ -333,6 +377,20 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _payload_nonnegative_int(
+    payload: Mapping[str, Any],
+    field_name: str,
+    *,
+    default: int,
+) -> int:
+    if field_name not in payload:
+        return default
+    return _require_nonnegative_int(
+        payload[field_name],
+        evidence_name=field_name,
+    )
 
 
 def _normalize_events(events: Sequence[Any]) -> list[dict[str, Any]]:
@@ -461,8 +519,47 @@ def _listing_observation_evidence(
         if payload.get("rows_created") is None:
             newly_created_rows += len(newly_staged_records)
         else:
-            newly_created_rows += _as_int(payload.get("rows_created"))
+            newly_created_rows += _require_nonnegative_int(
+                payload.get("rows_created"),
+                evidence_name="rows_created",
+            )
     return newly_staged_ids, newly_created_rows
+
+
+def _condition_evidence_key(payload: Mapping[str, Any]) -> str:
+    condition_id = payload.get("condition_id")
+    if isinstance(condition_id, str) and condition_id.strip():
+        return f"condition-id:{condition_id.strip()}"
+    condition = payload.get("condition")
+    if isinstance(condition, Mapping):
+        canonical_json = json.dumps(
+            dict(condition),
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        digest = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        return f"condition-json:{digest}"
+    return "missing-condition"
+
+
+def _count_final_unresolved_conditions(
+    events: Sequence[Mapping[str, Any]],
+) -> int:
+    incomplete_by_condition: dict[str, bool] = {}
+    condition_event_types = (
+        _INCOMPLETE_CONDITION_EVENT_TYPES
+        | _COMPLETED_CONDITION_EVENT_TYPES
+    )
+    for event in events:
+        event_type = event["event_type"]
+        if event_type not in condition_event_types:
+            continue
+        condition_key = _condition_evidence_key(event["payload"])
+        incomplete_by_condition[condition_key] = (
+            event_type in _INCOMPLETE_CONDITION_EVENT_TYPES
+        )
+    return sum(incomplete_by_condition.values())
 
 
 def _reconciled_source_job_ids(
@@ -486,6 +583,139 @@ def _reconciled_source_job_ids(
             )
         )
     return tuple(sorted(reconciled_ids))
+
+
+def _expected_response_identity_hash(
+    *,
+    source_job_id: str,
+    encrypted_job_id: str,
+) -> str:
+    canonical_json = json.dumps(
+        {
+            "encrypted_job_id": encrypted_job_id,
+            "job_id": source_job_id,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def _expected_persisted_evidence_by_source_id(
+    *,
+    detail_crawl_job_id: str,
+    eligible_ids: set[str],
+    listings: Sequence[StagedListingSnapshot],
+    jobs: Sequence[PublishedJobSnapshot],
+) -> dict[str, dict[str, Any]]:
+    jobs_by_id = {str(job.job_id): job for job in jobs}
+    rows_by_source_id: dict[str, list[StagedListingSnapshot]] = {}
+    for row in listings:
+        source_job_ids = _canonical_id_set([row.source_job_id])
+        if len(source_job_ids) != 1:
+            continue
+        source_job_id = next(iter(source_job_ids))
+        if (
+            source_job_id not in eligible_ids
+            or str(row.last_detail_crawl_job_id or "")
+            != detail_crawl_job_id
+            or str(row.detail_status).strip().lower() != "completed"
+        ):
+            continue
+        rows_by_source_id.setdefault(source_job_id, []).append(row)
+
+    expected: dict[str, dict[str, Any]] = {}
+    for source_job_id, rows in rows_by_source_id.items():
+        listing_ids = _canonical_id_set(row.row_id for row in rows)
+        published_job_ids = _canonical_id_set(
+            row.published_job_id for row in rows
+        )
+        encrypted_job_ids = _canonical_id_set(
+            row.encrypted_job_id for row in rows
+        )
+        if (
+            len(listing_ids) != len(rows)
+            or len(published_job_ids) != 1
+            or len(encrypted_job_ids) != 1
+            or not all(row.has_detail_payload for row in rows)
+        ):
+            continue
+        published_job_id = next(iter(published_job_ids))
+        encrypted_job_id = next(iter(encrypted_job_ids))
+        published_job = jobs_by_id.get(published_job_id)
+        if (
+            published_job is None
+            or not published_job.is_complete
+            or _canonical_id_set([published_job.source_job_id])
+            != {source_job_id}
+        ):
+            continue
+        expected[source_job_id] = {
+            "detail_crawl_job_id": detail_crawl_job_id,
+            "listing_ids": listing_ids,
+            "published_job_id": published_job_id,
+            "response_identity_hash": _expected_response_identity_hash(
+                source_job_id=source_job_id,
+                encrypted_job_id=encrypted_job_id,
+            ),
+        }
+    return expected
+
+
+def _validate_persisted_events(
+    *,
+    events: Sequence[Mapping[str, Any]],
+    detail_crawl_job_id: str,
+    eligible_ids: set[str],
+    listings: Sequence[StagedListingSnapshot],
+    jobs: Sequence[PublishedJobSnapshot],
+) -> tuple[set[str], set[str]]:
+    expected_by_source_id = _expected_persisted_evidence_by_source_id(
+        detail_crawl_job_id=detail_crawl_job_id,
+        eligible_ids=eligible_ids,
+        listings=listings,
+        jobs=jobs,
+    )
+    valid_ids: set[str] = set()
+    mismatch_ids: set[str] = set()
+    for event in events:
+        if event["event_type"] != "crawl.detail_persisted":
+            continue
+        payload = event["payload"]
+        source_ids = _canonical_id_set([payload.get("source_job_id")])
+        if len(source_ids) != 1:
+            mismatch_ids.add("<missing_source_job_id>")
+            continue
+        source_job_id = next(iter(source_ids))
+        expected = expected_by_source_id.get(source_job_id)
+        raw_listing_ids = payload.get("listing_ids")
+        listing_ids = (
+            _canonical_id_set(raw_listing_ids)
+            if isinstance(raw_listing_ids, (list, tuple))
+            else set()
+        )
+        listing_ids_are_exact = (
+            isinstance(raw_listing_ids, (list, tuple))
+            and len(listing_ids) == len(raw_listing_ids)
+        )
+        is_valid = (
+            source_job_id in eligible_ids
+            and expected is not None
+            and str(payload.get("detail_crawl_job_id") or "")
+            == expected["detail_crawl_job_id"]
+            and listing_ids_are_exact
+            and listing_ids == expected["listing_ids"]
+            and str(payload.get("published_job_id") or "").strip()
+            == expected["published_job_id"]
+            and str(payload.get("response_identity_hash") or "").strip()
+            == expected["response_identity_hash"]
+        )
+        if is_valid:
+            valid_ids.add(source_job_id)
+        else:
+            mismatch_ids.add(source_job_id)
+    return valid_ids, mismatch_ids
 
 
 def replay_research_conservation(
@@ -569,16 +799,22 @@ def replay_research_conservation(
             - deferred_partition_ids
         )
         raw_listing_rows = sum(
-            _as_int(payload.get("row_count"), len(_page_row_evidence(payload)))
+            _payload_nonnegative_int(
+                payload,
+                "row_count",
+                default=len(_page_row_evidence(payload)),
+            )
             for payload in page_payloads
         )
         rows_missing_job_id = sum(
-            _as_int(
-                payload.get("missing_job_id_count"),
-                max(
-                    _as_int(
-                        payload.get("row_count"),
-                        len(_page_row_evidence(payload)),
+            _payload_nonnegative_int(
+                payload,
+                "missing_job_id_count",
+                default=max(
+                    _payload_nonnegative_int(
+                        payload,
+                        "row_count",
+                        default=len(_page_row_evidence(payload)),
                     )
                     - sum(
                         bool(row.get("job_id") or row.get("source_job_id"))
@@ -593,9 +829,8 @@ def replay_research_conservation(
             bool(row.get("job_id") or row.get("source_job_id"))
             for row in row_evidence
         )
-        unresolved_condition_gaps = sum(
-            event["event_type"] in _INCOMPLETE_CONDITION_EVENT_TYPES
-            for event in normalized_events
+        unresolved_condition_gaps = _count_final_unresolved_conditions(
+            normalized_events
         )
         listing_report = build_listing_conservation_report(
             raw_listing_rows=raw_listing_rows,
@@ -624,18 +859,28 @@ def replay_research_conservation(
         normalized_events,
         cohort_event,
     )
+    reconciled_fetch_overlap_ids: tuple[str, ...] = ()
     detail_report: DetailConservationReport | None = None
     if cohort_event is not None:
         fetch_ids = _canonical_id_set(
             cohort_event["payload"].get("fetch_cohort_source_job_ids") or []
         )
-        persisted_ids = _canonical_id_set(
-            event["payload"].get("source_job_id")
-            for event in normalized_events
-            if event["event_type"] == "crawl.detail_persisted"
+        reconciled_fetch_overlap_ids = tuple(
+            sorted(fetch_ids & set(reconciled_ids))
+        )
+        fetch_ids.difference_update(reconciled_fetch_overlap_ids)
+        detail_crawl_job_id = str(_object_value(crawl_job, "id", ""))
+        persisted_ids, persisted_evidence_mismatch_ids = (
+            _validate_persisted_events(
+                events=normalized_events,
+                detail_crawl_job_id=detail_crawl_job_id,
+                eligible_ids=fetch_ids,
+                listings=listings,
+                jobs=jobs,
+            )
         )
         detail_report = build_detail_conservation_report(
-            detail_crawl_job_id=str(_object_value(crawl_job, "id", "")),
+            detail_crawl_job_id=detail_crawl_job_id,
             fetch_cohort_source_job_ids=fetch_ids,
             persisted_source_job_ids=persisted_ids,
             listings=listings,
@@ -644,10 +889,12 @@ def replay_research_conservation(
                 str(_object_value(crawl_job, "status", "")).strip().lower()
                 in _TERMINAL_CRAWL_STATUSES
             ),
+            persisted_evidence_mismatch_ids=persisted_evidence_mismatch_ids,
         )
 
     return ResearchConservationReport(
         listing=listing_report,
         detail=detail_report,
         reconciled_source_job_ids=reconciled_ids,
+        reconciled_fetch_overlap_ids=reconciled_fetch_overlap_ids,
     )

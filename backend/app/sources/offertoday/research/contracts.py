@@ -48,6 +48,7 @@ class StagedListingSnapshot:
     updated_at: str | None = None
     encrypted_job_id: str | None = None
     identity_error: str | None = None
+    identity_error_classification: str | None = None
     detail_error_classification: str | None = None
     last_detail_crawl_job_id: str | None = None
     has_detail_payload: bool = False
@@ -70,6 +71,7 @@ class PublishedJobSnapshot:
 class BaselineSnapshot:
     staged_rows: int
     distinct_staged_ids: int
+    invalid_source_job_id_rows: int
     published_jobs: int
     distinct_staged_unpublished_ids: int
     pending_rows: int
@@ -80,6 +82,8 @@ class BaselineSnapshot:
     duplicate_staging_rows: int
     missing_encrypted_job_id_rows: int
     identity_mapping_conflict_ids: tuple[str, ...]
+    identity_evidence_conflict_ids: tuple[str, ...]
+    identity_error_classifications: dict[str, int]
     detail_status_rows: dict[str, int]
     detail_error_classifications: dict[str, int]
     data_hash: str

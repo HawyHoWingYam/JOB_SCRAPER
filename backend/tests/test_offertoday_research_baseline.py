@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session
 
+from app.repositories import offertoday_research_repository as research_repository
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.job import Job
@@ -213,6 +217,37 @@ def test_baseline_and_inventory_hashes_are_canonical_and_content_sensitive():
     assert inventory.data_hash != changed_inventory.data_hash
 
 
+def test_baseline_canonicalizes_nonblank_source_ids_and_accounts_invalid_rows():
+    listings = [
+        _listing("row-1", "j-1", "pending", None, "run-1"),
+        _listing("row-2", " j-1 ", "failed", None, "run-2"),
+        _listing(
+            "row-3",
+            "   ",
+            "pending",
+            None,
+            "run-3",
+            encrypted_job_id="enc-1",
+        ),
+    ]
+
+    snapshot = build_baseline_snapshot(listings=listings, jobs=[])
+    reordered = build_baseline_snapshot(
+        listings=list(reversed(listings)),
+        jobs=[],
+    )
+    inventory = build_run_start_inventory(listings=listings, jobs=[])
+
+    assert snapshot.staged_rows == 3
+    assert snapshot.distinct_staged_ids == 1
+    assert snapshot.invalid_source_job_id_rows == 1
+    assert snapshot.duplicate_staging_rows == 1
+    assert snapshot.distinct_pending_ids == 1
+    assert snapshot.identity_mapping_conflict_ids == ()
+    assert snapshot.data_hash == reordered.data_hash
+    assert inventory.staged_unpublished_job_ids == ("j-1",)
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
@@ -267,6 +302,59 @@ def test_snapshot_identity_error_is_separate_from_persisted_error_classification
     assert "persist_failure" not in extract_snapshot_identity_error(
         source_job_id="j-1", listing_payload=missing_encrypted
     )
+
+
+def test_structured_identity_errors_distinguish_alias_conflict_from_missing():
+    alias_conflict = {
+        "job_id": "j-1",
+        "encrypted_job_id": "enc-a",
+        "raw_data": {"jobId": "j-1", "encryptJobId": "enc-b"},
+    }
+    missing_encrypted = {
+        "job_id": "j-2",
+        "raw_data": {"jobId": "j-2"},
+    }
+
+    conflict_classification = research_repository.classify_snapshot_identity_error(
+        source_job_id="j-1",
+        listing_payload=alias_conflict,
+    )
+    missing_classification = research_repository.classify_snapshot_identity_error(
+        source_job_id="j-2",
+        listing_payload=missing_encrypted,
+    )
+
+    assert conflict_classification == "encrypted_job_id_alias_conflict"
+    assert missing_classification == "missing_encrypted_job_id"
+
+    snapshot = build_baseline_snapshot(
+        listings=[
+            _listing(
+                "row-1",
+                "j-1",
+                "pending",
+                None,
+                "run-1",
+                identity_error_classification=conflict_classification,
+            ),
+            _listing(
+                "row-2",
+                "j-2",
+                "pending",
+                None,
+                "run-1",
+                identity_error_classification=missing_classification,
+            ),
+        ],
+        jobs=[],
+    )
+
+    assert snapshot.identity_evidence_conflict_ids == ("j-1",)
+    assert snapshot.identity_mapping_conflict_ids == ("j-1",)
+    assert snapshot.identity_error_classifications == {
+        "encrypted_job_id_alias_conflict": 1,
+        "missing_encrypted_job_id": 1,
+    }
 
 
 @pytest.mark.parametrize(
@@ -327,12 +415,17 @@ class _ReadOnlySession:
         self.queries: list[tuple[object, _ReadOnlyQuery]] = []
         self.write_calls: list[str] = []
 
-    def query(self, model):
+    def query(self, *entities):
         if not self.responses:
             raise AssertionError("unexpected extra repository query")
         query = _ReadOnlyQuery(self.responses.pop(0))
-        self.queries.append((model, query))
+        selected = entities[0] if len(entities) == 1 else entities
+        self.queries.append((selected, query))
         return query
+
+    @property
+    def no_autoflush(self):
+        return nullcontext()
 
     def _forbid_write(self, name):
         self.write_calls.append(name)
@@ -421,7 +514,13 @@ def test_repository_published_events_and_crawl_job_helpers_are_read_only():
         PublishedJobSnapshot(str(published_row.id), "j-1", True, True, False)
     ]
     model, query = published_db.queries[0]
-    assert model is Job
+    assert tuple(str(entity) for entity in model) == (
+        "Job.id",
+        "Job.source_job_id",
+        "Job.title",
+        "Job.company_id",
+        "Job.description",
+    )
     assert "jobs.source_site" in _criteria_text(query)
     assert "jobs.is_deleted" in _criteria_text(query)
     assert published_db.write_calls == []
@@ -439,6 +538,77 @@ def test_repository_published_events_and_crawl_job_helpers_are_read_only():
     assert repository.get_crawl_job(crawl_db, "crawl-1") is crawl_job
     assert crawl_db.queries[0][0] is CrawlJob
     assert crawl_db.write_calls == []
+
+
+def test_published_snapshot_query_projects_once_without_autoflush_or_deferred_loads():
+    engine = create_engine("sqlite://")
+    Job.__table__.create(engine)
+    company_id = uuid4()
+    committed_rows = [
+        Job(
+            id=uuid4(),
+            job_id=f"offertoday:{source_job_id}",
+            source_site="offertoday",
+            source_job_id=source_job_id,
+            company_id=company_id,
+            title=title,
+            description=description,
+            raw_data={"large": "payload"},
+            ai_summary="must not be selected",
+            is_deleted=False,
+        )
+        for source_job_id, title, description in (
+            ("j-1", "Data Engineer", "Complete description"),
+            ("j-2", "Platform Engineer", "Another description"),
+        )
+    ]
+    statements: list[str] = []
+
+    with Session(engine) as db:
+        db.add_all(committed_rows)
+        db.commit()
+        db.add(
+            Job(
+                id=uuid4(),
+                job_id="offertoday:pending",
+                source_site="offertoday",
+                source_job_id="pending",
+                company_id=company_id,
+                title="Pending write",
+                description="Must remain pending",
+                is_deleted=False,
+            )
+        )
+
+        event.listen(
+            engine,
+            "before_cursor_execute",
+            lambda _conn, _cursor, statement, _parameters, _context, _many: (
+                statements.append(statement)
+            ),
+        )
+        snapshots = OfferTodayResearchRepository().list_published_snapshots(db)
+
+        assert [snapshot.source_job_id for snapshot in snapshots] == ["j-1", "j-2"]
+        assert len(db.new) == 1
+
+    assert len(statements) == 1
+    assert statements[0].lstrip().upper().startswith("SELECT")
+    selected_sql = statements[0].lower()
+    assert "jobs.raw_data" not in selected_sql
+    assert "jobs.ai_summary" not in selected_sql
+    assert "jobs.search_vector" not in selected_sql
+    assert all(
+        column in selected_sql
+        for column in (
+            "jobs.id",
+            "jobs.source_job_id",
+            "jobs.title",
+            "jobs.company_id",
+            "jobs.description",
+        )
+    )
+    engine.dispose()
 
 
 def test_recent_crawl_job_snapshots_copy_json_and_timestamps_without_writes():
@@ -473,5 +643,6 @@ def test_recent_crawl_job_snapshots_copy_json_and_timestamps_without_writes():
     assert model is CrawlJob
     assert "crawl_jobs.source_site" in _criteria_text(query)
     assert "crawl_jobs.created_at DESC" in _criteria_text(query)
+    assert "crawl_jobs.id DESC" in _criteria_text(query)
     assert query.limits == [7]
     assert db.write_calls == []
