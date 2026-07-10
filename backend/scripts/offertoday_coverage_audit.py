@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Live OfferToday coverage audit.
 
-This script measures how much of OfferToday's IT surface the crawler can reach
-by replaying the same planner and browser transport that the crawler uses.
+This compatibility wrapper measures OfferToday coverage through the production
+listing runner and authenticated browser runtime.
 
 It prints per-family counts for:
   - pages fetched
@@ -10,8 +10,8 @@ It prints per-family counts for:
   - unique job IDs discovered
   - duplicate job IDs suppressed
 
-The script exits non-zero if the measured unique job ID total does not reach
-the requested threshold.
+The requested unique-ID threshold is diagnostic only. Completeness is decided
+by the shared runner's stop contract.
 """
 
 from __future__ import annotations
@@ -28,30 +28,30 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 logger = logging.getLogger("offertoday-audit")
 
 BACKEND = str(Path(__file__).resolve().parents[1])
-SCRAPY_PROJECT = str(Path(__file__).resolve().parents[1] / "scrapy_project")
 if BACKEND not in sys.path:
     sys.path.insert(0, BACKEND)
-if SCRAPY_PROJECT not in sys.path:
-    sys.path.insert(0, SCRAPY_PROJECT)
 
-from app.sources.offertoday.constants import (
-    OFFERTODAY_BASE_URL,
-    OFFERTODAY_COMMON_HEADERS,
+from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
+from app.sources.offertoday.constants import (  # noqa: E402
     OFFERTODAY_LISTING_BROWSE_URL,
     OFFERTODAY_LISTING_SEARCH_URL,
-    build_offertoday_listing_payload,
 )
-from app.sources.offertoday.parsers import parse_offertoday_listing_response  # noqa: E402
-from app.sources.offertoday.search_space import build_offertoday_listing_queries, normalize_offertoday_keywords  # noqa: E402
-from job_scraper_spiders.downloaders.offertoday_transport import PlaywrightPageTransport  # noqa: E402
-
-OFFERTODAY_SEARCH_URL = f"{OFFERTODAY_BASE_URL}/hk/search"
+from app.sources.offertoday.listing_runner import (  # noqa: E402
+    ListingRetryPolicy,
+    ListingStopPolicy,
+    OfferTodayListingRunner,
+)
+from app.sources.offertoday.search_space import (  # noqa: E402
+    build_offertoday_listing_conditions,
+    normalize_offertoday_keywords,
+)
+from scripts.offertoday_standalone_crawl import (  # noqa: E402
+    MemoryListingObservationSink,
+    NoopListingStagingSink,
+)
 
 MAX_PAGES_GLOBAL = 9999
 DEFAULT_MAX_PAGES = 100
-DEFAULT_WARMUP_DELAY_SECONDS = 2.0
-
-_COMMON_HEADERS = OFFERTODAY_COMMON_HEADERS
 
 
 @dataclass
@@ -77,6 +77,7 @@ class CoverageConditionStats:
 class CoverageAuditResult:
     target_unique_job_ids: int
     planned_tasks: int
+    listing_result: Any
     processed_tasks: int = 0
     global_reported_total: int = 0
     global_sample_unique_job_ids: int = 0
@@ -85,6 +86,9 @@ class CoverageAuditResult:
     family_order: list[str] = field(default_factory=list)
     families: dict[str, CoverageFamilyStats] = field(default_factory=dict)
     conditions: list[CoverageConditionStats] = field(default_factory=list)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.listing_result, name)
 
 
 def _parse_category_ids(raw_category_ids: str) -> list[int]:
@@ -114,8 +118,14 @@ def render_coverage_audit_report(result: CoverageAuditResult) -> str:
         f"Target unique job IDs: {result.target_unique_job_ids}",
         f"Global reported total: {result.global_reported_total}",
         f"Global sample unique rows: {result.global_sample_unique_job_ids}",
-        f"Target reached: {'yes' if result.global_sample_unique_job_ids >= result.target_unique_job_ids else 'no'}",
+        f"Threshold reached: {'yes' if result.global_sample_unique_job_ids >= result.target_unique_job_ids else 'no'}",
         f"Shortfall: {max(result.target_unique_job_ids - result.global_sample_unique_job_ids, 0)}",
+        f"Runner complete: {'yes' if result.is_complete else 'no'}",
+        f"Runner stop reason: {result.stop_reason}",
+        (
+            "Deprecated for future live research: use offertoday_research.py "
+            "after Plan 2 census commands are available."
+        ),
     ]
 
     if result.last_family_with_new_ids:
@@ -159,6 +169,63 @@ def render_coverage_audit_report(result: CoverageAuditResult) -> str:
     return "\n".join(lines)
 
 
+def _summarize_listing_result(
+    listing_result,
+    *,
+    target_unique_job_ids: int,
+    planned_tasks: int,
+    planned_families: list[str],
+) -> CoverageAuditResult:
+    result = CoverageAuditResult(
+        target_unique_job_ids=target_unique_job_ids,
+        planned_tasks=planned_tasks,
+        listing_result=listing_result,
+        processed_tasks=len(listing_result.observations),
+        global_sample_unique_job_ids=len(listing_result.ordered_job_ids),
+        stopped_early=False,
+    )
+    for family in planned_families:
+        _get_family_stats(result, family)
+
+    globally_seen_ids: set[str] = set()
+    reported_condition_ids: set[str] = set()
+    for observation in listing_result.observations:
+        stats = _get_family_stats(result, observation.search_family)
+        stats.pages_fetched += 1
+        stats.listing_rows += int(observation.row_count)
+        if observation.classification not in {"success", "contract_anomaly"}:
+            stats.failed_pages += 1
+
+        if (
+            observation.condition_id not in reported_condition_ids
+            and observation.reported_total is not None
+        ):
+            reported_total = int(observation.reported_total)
+            reported_condition_ids.add(observation.condition_id)
+            stats.reported_total += reported_total
+            result.global_reported_total += reported_total
+            result.conditions.append(
+                CoverageConditionStats(
+                    family=observation.search_family,
+                    category_id=observation.category_id,
+                    keyword=observation.keyword,
+                    reported_total=reported_total,
+                )
+            )
+
+        for row in observation.rows:
+            job_id = str(row.job_id or "").strip()
+            if not job_id:
+                continue
+            if job_id in globally_seen_ids:
+                stats.duplicate_job_ids += 1
+                continue
+            globally_seen_ids.add(job_id)
+            stats.sample_unique_job_ids += 1
+            result.last_family_with_new_ids = observation.search_family
+    return result
+
+
 async def run_offertoday_coverage_audit(
     *,
     category_ids: list[int],
@@ -166,13 +233,10 @@ async def run_offertoday_coverage_audit(
     max_pages_per_query: int,
     target_unique_job_ids: int,
     listing_url: str | None = None,
+    browser_runtime=None,
+    listing_runner=None,
 ) -> CoverageAuditResult:
-    """Fetch OfferToday listing pages and count unique IDs by search family.
-
-    ``listing_url`` selects the API endpoint:
-    - None / OFFERTODAY_LISTING_SEARCH_URL (default): recommendation-filtered search
-    - OFFERTODAY_LISTING_BROWSE_URL: plain category browse (use to test hypothesis B)
-    """
+    """Run the shared listing contract and summarize its saved observations."""
     if max_pages_per_query < 1:
         raise ValueError("max_pages_per_query must be >= 1")
     if max_pages_per_query > MAX_PAGES_GLOBAL:
@@ -180,150 +244,61 @@ async def run_offertoday_coverage_audit(
     if target_unique_job_ids < 1:
         raise ValueError("target_unique_job_ids must be >= 1")
 
-    normalized_keywords = normalize_offertoday_keywords(keywords)
-    listing_tasks = build_offertoday_listing_queries(
+    if listing_url in {None, OFFERTODAY_LISTING_SEARCH_URL}:
+        endpoint = "search"
+    elif listing_url == OFFERTODAY_LISTING_BROWSE_URL:
+        endpoint = "browse"
+    else:
+        raise ValueError(f"Unsupported OfferToday listing URL: {listing_url!r}")
+
+    conditions = build_offertoday_listing_conditions(
         category_ids,
-        keywords=normalized_keywords or None,
-        max_pages_per_query=max_pages_per_query,
+        keywords=normalize_offertoday_keywords(keywords) or None,
+        default_to_it=True,
+        endpoint=endpoint,
     )
-    result = CoverageAuditResult(
-        target_unique_job_ids=target_unique_job_ids,
-        planned_tasks=len(listing_tasks),
-    )
-    global_seen_ids: set[str] = set()
-    seen_reported_conditions: set[tuple[str, Any, str]] = set()
-    exhausted_conditions: set[tuple[Any, str]] = set()  # (category_id, keyword) → empty page seen
+    observation_sink = MemoryListingObservationSink()
+    staging_sink = NoopListingStagingSink()
 
-    from playwright.async_api import async_playwright
-
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+    async def execute(active_runtime):
+        await active_runtime.require_healthy_session()
+        runner = listing_runner
+        if runner is None:
+            runner = OfferTodayListingRunner(active_runtime)
+        elif isinstance(runner, type):
+            runner = runner(active_runtime)
+        return await runner.run(
+            conditions=conditions,
+            stop_policy=ListingStopPolicy(
+                max_pages_per_condition=max_pages_per_query,
+                unique_job_cap=None,
+                require_empty_confirmation=True,
+            ),
+            retry_policy=ListingRetryPolicy(
+                max_attempts_per_page=3,
+                retry_delays_seconds=(1.0, 2.0),
+                page_delay_seconds=1.5,
+            ),
+            observation_sink=observation_sink,
+            staging_sink=staging_sink,
+            session_mode="headless",
         )
-        context = None
-        try:
-            context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36"
-                ),
-                locale="zh-HK",
-            )
-            page = await context.new_page()
 
-            await page.goto(OFFERTODAY_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(DEFAULT_WARMUP_DELAY_SECONDS)
+    if browser_runtime is None:
+        async with OfferTodayBrowserRuntime(headed=False) as active_runtime:
+            listing_result = await execute(active_runtime)
+    else:
+        listing_result = await execute(browser_runtime)
 
-            transport = PlaywrightPageTransport(page, listing_url=listing_url or OFFERTODAY_LISTING_SEARCH_URL)
-
-            for task in listing_tasks:
-                family = str(task.get("search_family") or "").strip() or "category_search"
-                stats = _get_family_stats(result, family)
-                category_id = task.get("category_id")
-                keyword = str(task.get("keyword") or "")
-                page_number = int(task.get("page") or 1)
-                condition_key = (family, category_id, keyword)
-
-                # Skip remaining pages for conditions that already returned empty results.
-                exhaustion_key = (category_id, keyword)
-                if exhaustion_key in exhausted_conditions:
-                    logger.debug(
-                        "Skipping exhausted condition family=%s cat=%s keyword=%s page=%s",
-                        family, category_id, keyword, page_number,
-                    )
-                    continue
-
-                result.processed_tasks += 1
-                stats.pages_fetched += 1
-
-                try:
-                    task_listing_url = (
-                        OFFERTODAY_LISTING_BROWSE_URL
-                        if task.get("endpoint") == "browse"
-                        else listing_url or OFFERTODAY_LISTING_SEARCH_URL
-                    )
-                    response = await transport.fetch_listing(
-                        build_offertoday_listing_payload(
-                            category_id=category_id,
-                            keyword=keyword,
-                            page=page_number,
-                        ),
-                        listing_url=task_listing_url,
-                    )
-                except Exception as exc:  # pragma: no cover - live transport failure path
-                    stats.failed_pages += 1
-                    logger.warning(
-                        "OfferToday listing fetch failed for family=%s category=%s keyword=%s page=%s: %s",
-                        family,
-                        category_id,
-                        keyword,
-                        page_number,
-                        exc,
-                    )
-                    continue
-
-                if not response or response.get("code") != 0:
-                    stats.failed_pages += 1
-                    logger.warning(
-                        "OfferToday listing returned non-success payload for family=%s category=%s keyword=%s page=%s: code=%s",
-                        family,
-                        category_id,
-                        keyword,
-                        page_number,
-                        response.get("code") if isinstance(response, dict) else None,
-                    )
-                    continue
-
-                if condition_key not in seen_reported_conditions:
-                    condition_total = int(response.get("data", {}).get("total") or 0)
-                    stats.reported_total += condition_total
-                    result.global_reported_total += condition_total
-                    seen_reported_conditions.add(condition_key)
-                    result.conditions.append(
-                        CoverageConditionStats(
-                            family=family,
-                            category_id=category_id,
-                            keyword=keyword,
-                            reported_total=condition_total,
-                        )
-                    )
-
-                parsed_jobs = parse_offertoday_listing_response(response)
-                stats.listing_rows += len(parsed_jobs)
-
-                if not parsed_jobs:
-                    # Mark this (category_id, keyword) pair exhausted so subsequent
-                    # pages for the same condition are skipped without fetching.
-                    exhausted_conditions.add((category_id, keyword))
-                    logger.debug(
-                        "Condition exhausted family=%s cat=%s keyword=%s page=%s",
-                        family, category_id, keyword, page_number,
-                    )
-                    continue
-
-                for job in parsed_jobs:
-                    job_id = str(job.get("encrypted_job_id") or "").strip()
-                    if not job_id:
-                        continue
-                    if job_id in global_seen_ids:
-                        stats.duplicate_job_ids += 1
-                        continue
-
-                    global_seen_ids.add(job_id)
-                    stats.sample_unique_job_ids += 1
-                    result.global_sample_unique_job_ids += 1
-                    result.last_family_with_new_ids = family
-
-                if result.global_sample_unique_job_ids >= target_unique_job_ids:
-                    result.stopped_early = True
-                    break
-        finally:
-            if context is not None:
-                await context.close()
-            await browser.close()
-
-    return result
+    planned_families = list(
+        dict.fromkeys(condition.search_family for condition in conditions)
+    )
+    return _summarize_listing_result(
+        listing_result,
+        target_unique_job_ids=target_unique_job_ids,
+        planned_tasks=len(conditions) * max_pages_per_query,
+        planned_families=planned_families,
+    )
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -359,7 +334,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--target-unique-job-ids",
         type=int,
         required=True,
-        help="Unique job ID threshold required for a passing audit",
+        help="Diagnostic unique job ID threshold (does not stop the crawl)",
     )
     return parser
 
@@ -382,7 +357,7 @@ async def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(render_coverage_audit_report(result))
-    return 0 if result.global_sample_unique_job_ids >= result.target_unique_job_ids else 1
+    return 0 if result.is_complete else 3
 
 
 if __name__ == "__main__":
