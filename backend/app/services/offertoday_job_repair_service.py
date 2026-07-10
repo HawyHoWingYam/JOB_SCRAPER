@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import json
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import and_, exists, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.crawl_job_listing import CrawlJobListing
@@ -26,6 +26,12 @@ from app.sources.offertoday.detail_identity import (
     validate_offertoday_detail_identity,
 )
 from app.sources.offertoday.response_policy import OfferTodayResponseKind
+
+
+_AUTO_REPAIR_BLOCKING_DETAIL_STATUSES = (
+    "terminal_unavailable",
+    "identity_conflict",
+)
 
 
 @dataclass(frozen=True)
@@ -76,6 +82,17 @@ class OfferTodayJobRepairService:
             .options(joinedload(Job.company))
             .filter(Job.source_site == "offertoday", Job.is_deleted.is_(False))
             .filter(or_(Job.description.is_(None), Job.description == ""))
+            .filter(
+                ~exists().where(
+                    and_(
+                        CrawlJobListing.source_site == "offertoday",
+                        CrawlJobListing.source_job_id == Job.source_job_id,
+                        CrawlJobListing.detail_status.in_(
+                            _AUTO_REPAIR_BLOCKING_DETAIL_STATUSES
+                        ),
+                    )
+                )
+            )
             .order_by(Job.updated_at.desc(), Job.created_at.desc())
         )
         if limit is not None:
@@ -191,22 +208,33 @@ class OfferTodayJobRepairService:
                 listing.detail_completed_at = datetime.now(UTC)
             return repair_result
 
-        if listing is not None:
-            listing.detail_payload = deepcopy(result.raw_response)
-            listing.detail_status = "failed"
-            listing.detail_error_message = json.dumps(
-                {
-                    "code": result.classification.code,
-                    "encrypted_job_id": result.identity.encrypted_job_id,
-                    "job_id": result.identity.job_id,
-                    "kind": result.classification.kind.value,
-                    "message": result.classification.message,
-                    "retryable": result.classification.retryable,
-                    "stop_batch": result.classification.stop_batch,
-                },
-                sort_keys=True,
-            )
-            listing.detail_completed_at = datetime.now(UTC)
+        detail_status = {
+            OfferTodayResponseKind.TERMINAL_UNAVAILABLE: "terminal_unavailable",
+            OfferTodayResponseKind.ID_MISMATCH: "identity_conflict",
+        }.get(result.classification.kind, "failed")
+        affected_listings = (
+            self.get_listings_for_canonical_id(job.source_job_id)
+            if detail_status in _AUTO_REPAIR_BLOCKING_DETAIL_STATUSES
+            else ([listing] if listing is not None else [])
+        )
+        error_message = json.dumps(
+            {
+                "code": result.classification.code,
+                "encrypted_job_id": result.identity.encrypted_job_id,
+                "job_id": result.identity.job_id,
+                "kind": result.classification.kind.value,
+                "message": result.classification.message,
+                "retryable": result.classification.retryable,
+                "stop_batch": result.classification.stop_batch,
+            },
+            sort_keys=True,
+        )
+        completed_at = datetime.now(UTC)
+        for affected_listing in affected_listings:
+            affected_listing.detail_payload = deepcopy(result.raw_response)
+            affected_listing.detail_status = detail_status
+            affected_listing.detail_error_message = error_message
+            affected_listing.detail_completed_at = completed_at
 
         return OfferTodayRepairResult(
             action=result.classification.kind.value,
@@ -271,6 +299,25 @@ class OfferTodayJobRepairService:
                 CrawlJobListing.created_at.desc(),
             )
             .first()
+        )
+
+    def get_listings_for_canonical_id(
+        self, source_job_id: str
+    ) -> list[CrawlJobListing]:
+        if self.db is None:
+            return []
+
+        return (
+            self.db.query(CrawlJobListing)
+            .filter(
+                CrawlJobListing.source_site == "offertoday",
+                CrawlJobListing.source_job_id == str(source_job_id or "").strip(),
+            )
+            .order_by(
+                CrawlJobListing.created_at.asc(),
+                CrawlJobListing.id.asc(),
+            )
+            .all()
         )
 
     def get_latest_completed_listing(

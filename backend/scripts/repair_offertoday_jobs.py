@@ -11,7 +11,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.database import SessionLocal
-from app.scraper.manual_action import RESUME_STRATEGY_FRESH_PROFILE
+from app.scraper.manual_action import (
+    RESUME_STRATEGY_FRESH_PROFILE,
+    ManualActionRequiredError,
+)
 from app.scraper.offertoday_browser_detail_scraper import OfferTodayBrowserDetailScraper
 from app.scraper.offertoday_pacing import pause_before_detail_request
 from app.services.offertoday_job_repair_service import OfferTodayJobRepairService
@@ -43,6 +46,7 @@ async def repair_jobs(
         live_updated_jobs = 0
         live_created_jobs = 0
         live_fetch_failed = 0
+        live_terminal_unavailable = 0
         live_ip_blocked = False
         live_ip_blocked_job_id = None
 
@@ -98,6 +102,12 @@ async def repair_jobs(
                             live_ip_blocked = True
                             live_ip_blocked_job_id = detail_result.identity.job_id
                             break
+                        if (
+                            classification.kind
+                            is OfferTodayResponseKind.TERMINAL_UNAVAILABLE
+                        ):
+                            live_terminal_unavailable += 1
+                            continue
                         if classification.kind is not OfferTodayResponseKind.SUCCESS:
                             live_fetch_failed += 1
                             if classification.stop_batch:
@@ -136,11 +146,15 @@ async def repair_jobs(
             "updated_jobs": cached_updated_jobs + live_updated_jobs,
             "created_jobs": cached_created_jobs + live_created_jobs,
             "live_fetch_failed": live_fetch_failed,
+            "live_terminal_unavailable": live_terminal_unavailable,
             "live_ip_blocked": int(live_ip_blocked),
             "live_ip_blocked_job_id": live_ip_blocked_job_id,
             "remaining_missing_descriptions": remaining_missing,
             "committed": int(execute),
         }
+    except ManualActionRequiredError:
+        db.rollback()
+        raise
     finally:
         db.close()
 

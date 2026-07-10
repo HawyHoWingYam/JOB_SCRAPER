@@ -3,11 +3,19 @@ from __future__ import annotations
 import importlib
 import json
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 import app.sources.contracts as contracts
+from app.database import Base
+from app.models.company import Company
+from app.models.crawl_job_listing import CrawlJobListing
+from app.models.job import Job
 from app.scraper.manual_action import (
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
     ManualActionRequiredError,
@@ -128,6 +136,83 @@ def _listing_stub(*, listing_payload: dict | None = None) -> SimpleNamespace:
         detail_error_message=None,
         detail_completed_at=None,
         published_job_id=None,
+    )
+
+
+def _repair_database() -> Session:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            Company.__table__,
+            Job.__table__,
+            CrawlJobListing.__table__,
+        ],
+    )
+    return Session(engine)
+
+
+def _database_company() -> Company:
+    return Company(
+        id=uuid4(),
+        company_id="offertoday:brand-old",
+        source_site="offertoday",
+        source_company_id="brand-old",
+        name="Old Company",
+        is_deleted=False,
+    )
+
+
+def _database_job(
+    source_job_id: str,
+    *,
+    company_id,
+    description: str = "",
+    updated_offset: int = 0,
+) -> Job:
+    timestamp = datetime(2026, 7, 10, tzinfo=UTC) + timedelta(
+        seconds=updated_offset
+    )
+    return Job(
+        id=uuid4(),
+        job_id=f"offertoday:{source_job_id}",
+        source_site="offertoday",
+        source_job_id=source_job_id,
+        company_id=company_id,
+        title=f"OfferToday {source_job_id}",
+        description=description,
+        raw_data={},
+        is_deleted=False,
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+
+
+def _database_listing(
+    source_job_id: str,
+    *,
+    source_site: str = "offertoday",
+    detail_status: str = "pending",
+    listing_payload: dict | None = None,
+    created_offset: int = 0,
+) -> CrawlJobListing:
+    timestamp = datetime(2026, 7, 10, tzinfo=UTC) + timedelta(
+        seconds=created_offset
+    )
+    return CrawlJobListing(
+        id=uuid4(),
+        crawl_job_id=uuid4(),
+        source_site=source_site,
+        source_job_id=source_job_id,
+        source_url=f"https://example.test/{source_site}/{source_job_id}",
+        listing_payload=listing_payload
+        or {
+            "jobId": source_job_id,
+            "encryptJobId": f"enc-{source_job_id}",
+        },
+        detail_status=detail_status,
+        created_at=timestamp,
+        updated_at=timestamp,
     )
 
 
@@ -793,6 +878,63 @@ async def test_offertoday_browser_detail_scraper_returns_typed_ip_block():
     assert result.canonical_detail is None
 
 
+@pytest.mark.parametrize(
+    "terminal_status",
+    ["terminal_unavailable", "identity_conflict"],
+)
+def test_repair_candidates_exclude_any_historical_terminal_canonical_id(
+    terminal_status: str,
+):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    db = _repair_database()
+    try:
+        company = _database_company()
+        blocked = _database_job(
+            "blocked",
+            company_id=company.id,
+            updated_offset=1,
+        )
+        eligible = _database_job(
+            "eligible",
+            company_id=company.id,
+            updated_offset=2,
+        )
+        db.add_all(
+            [
+                company,
+                blocked,
+                eligible,
+                _database_listing(
+                    "blocked",
+                    detail_status=terminal_status,
+                    created_offset=1,
+                ),
+                _database_listing(
+                    "blocked",
+                    detail_status="pending",
+                    created_offset=2,
+                ),
+                _database_listing(
+                    "eligible",
+                    source_site="jobsdb",
+                    detail_status=terminal_status,
+                    created_offset=3,
+                ),
+            ]
+        )
+        db.commit()
+
+        candidates = service_module.OfferTodayJobRepairService(
+            db
+        ).iter_repair_candidates()
+
+        assert [job.source_job_id for job in candidates] == ["eligible"]
+    finally:
+        db.close()
+
+
 @pytest.mark.asyncio
 async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_strategy_request_payload(
     monkeypatch,
@@ -802,6 +944,7 @@ async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_stra
     )
     runtime_calls: list[dict[str, object]] = []
     fetch_calls: list[tuple[str, str]] = []
+    lifecycle: list[str] = []
 
     class _FakePage:
         url = "https://www.offertoday.com/hk/search"
@@ -812,12 +955,18 @@ async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_stra
             self._page = _FakePage()
 
         async def __aenter__(self):
+            lifecycle.append("enter")
             return self
 
         async def __aexit__(self, exc_type, exc, tb):
+            lifecycle.append("exit")
             return None
 
+        async def require_healthy_session(self):
+            lifecycle.append("preflight")
+
         async def fetch_detail_json(self, *, job_id: str, encrypted_job_id: str):
+            lifecycle.append("fetch")
             fetch_calls.append((job_id, encrypted_job_id))
             return {
                 "code": 0,
@@ -846,9 +995,117 @@ async def test_offertoday_browser_detail_scraper_builds_runtime_from_resume_stra
             "resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER,
         }
     ]
+    assert lifecycle == ["enter", "preflight", "fetch", "exit"]
     assert fetch_calls == [("jid-1", "enc-jid-1")]
     assert result.classification.kind is OfferTodayResponseKind.SUCCESS
     assert result.canonical_detail["job_id"] == "jid-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("classification", "api_code"),
+    [
+        (OfferTodayResponseKind.AUTH_EXPIRED, 1002),
+        (OfferTodayResponseKind.WAF_CHALLENGE, None),
+    ],
+)
+async def test_repair_browser_preflight_manual_action_exits_and_clears_runtime_before_fetch(
+    monkeypatch,
+    classification: OfferTodayResponseKind,
+    api_code: int | None,
+):
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    expected_error = ManualActionRequiredError(
+        source_site="offertoday",
+        stage="browser_session",
+        blocked_url="https://www.offertoday.com/hk/search",
+        message=f"preflight {classification.value}",
+        resume_context={
+            "classification": classification.value,
+            "api_code": api_code,
+        },
+    )
+    lifecycle: list[object] = []
+
+    class _FakePage:
+        url = "https://www.offertoday.com/hk/search"
+
+    class _FakeRuntime:
+        def __init__(self, **kwargs) -> None:
+            self._page = _FakePage()
+
+        async def __aenter__(self):
+            lifecycle.append("enter")
+            return self
+
+        async def require_healthy_session(self):
+            lifecycle.append("preflight")
+            raise expected_error
+
+        async def fetch_detail_json(self, **kwargs):
+            lifecycle.append("fetch")
+            raise AssertionError("detail fetch must not run before healthy preflight")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            lifecycle.append(("exit", exc_type, exc, tb))
+            return None
+
+    monkeypatch.setattr(
+        scraper_module,
+        "OfferTodayBrowserRuntime",
+        _FakeRuntime,
+        raising=False,
+    )
+    scraper = scraper_module.OfferTodayBrowserDetailScraper()
+
+    with pytest.raises(ManualActionRequiredError) as exc_info:
+        await scraper.__aenter__()
+
+    assert exc_info.value is expected_error
+    assert lifecycle[:2] == ["enter", "preflight"]
+    assert "fetch" not in lifecycle
+    exit_call = lifecycle[2]
+    assert exit_call[0] == "exit"
+    assert exit_call[1] is ManualActionRequiredError
+    assert exit_call[2] is expected_error
+    assert exit_call[3] is not None
+    assert scraper._runtime is None
+    assert scraper._page is None
+
+
+@pytest.mark.asyncio
+async def test_injected_detail_fetcher_skips_browser_runtime_and_preflight(monkeypatch):
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+
+    class _UnexpectedRuntime:
+        def __init__(self, **kwargs) -> None:
+            raise AssertionError("offline fetcher must own the full fetch path")
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        return {"code": 0, "data": _sample_detail_raw()}
+
+    monkeypatch.setattr(
+        scraper_module,
+        "OfferTodayBrowserRuntime",
+        _UnexpectedRuntime,
+        raising=False,
+    )
+
+    async with scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    ) as scraper:
+        result = await scraper.fetch_job_detail(
+            "jid-1",
+            encrypted_job_id="enc-jid-1",
+        )
+
+    assert result.classification.kind is OfferTodayResponseKind.SUCCESS
+    assert scraper._runtime is None
+    assert scraper._page is None
 
 
 @pytest.mark.asyncio
@@ -864,6 +1121,7 @@ async def test_offertoday_browser_detail_scraper_propagates_manual_action_requir
         blocked_url="https://www.offertoday.com/hk/search",
         message="Manual action required",
     )
+    exit_calls: list[tuple[object, object, object]] = []
 
     class _FakeRuntime:
         def __init__(self, **kwargs) -> None:
@@ -873,6 +1131,7 @@ async def test_offertoday_browser_detail_scraper_propagates_manual_action_requir
             raise expected_error
 
         async def __aexit__(self, exc_type, exc, tb):
+            exit_calls.append((exc_type, exc, tb))
             return None
 
     monkeypatch.setattr(
@@ -882,13 +1141,20 @@ async def test_offertoday_browser_detail_scraper_propagates_manual_action_requir
         raising=False,
     )
 
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        request_payload={"resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER}
+    )
     with pytest.raises(ManualActionRequiredError) as exc_info:
-        async with scraper_module.OfferTodayBrowserDetailScraper(
-            request_payload={"resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER}
-        ):
+        async with scraper:
             pass
 
     assert exc_info.value is expected_error
+    assert len(exit_calls) == 1
+    assert exit_calls[0][0] is ManualActionRequiredError
+    assert exit_calls[0][1] is expected_error
+    assert exit_calls[0][2] is not None
+    assert scraper._runtime is None
+    assert scraper._page is None
 
 
 def test_offertoday_browser_detail_scraper_detects_waf_challenge_urls():
@@ -1087,6 +1353,82 @@ def test_offline_parsed_repair_persists_canonical_identity_for_cached_round_trip
 
 
 @pytest.mark.asyncio
+async def test_terminal_detail_is_classified_once_not_parsed_and_marks_all_canonical_rows(
+    monkeypatch,
+):
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    raw_response = {
+        "code": 2520,
+        "msg": "Position unavailable",
+        "data": None,
+    }
+    classify_calls = 0
+    parse_calls = 0
+    real_classify = scraper_module.classify_offertoday_response
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        return raw_response
+
+    def classify_spy(payload, **kwargs):
+        nonlocal classify_calls
+        classify_calls += 1
+        return real_classify(payload, **kwargs)
+
+    def fail_parse(payload):
+        nonlocal parse_calls
+        parse_calls += 1
+        raise AssertionError("terminal responses must not be parsed")
+
+    monkeypatch.setattr(scraper_module, "classify_offertoday_response", classify_spy)
+    monkeypatch.setattr(scraper_module, "parse_offertoday_detail_response", fail_parse)
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    )
+
+    fetch_result = await scraper.fetch_job_detail(
+        "jid-1",
+        encrypted_job_id="enc-jid-1",
+    )
+
+    latest = _listing_stub()
+    historical = _listing_stub()
+    service = service_module.OfferTodayJobRepairService(db=object())
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: latest)
+    monkeypatch.setattr(
+        service,
+        "get_listings_for_canonical_id",
+        lambda source_job_id: [latest, historical],
+        raising=False,
+    )
+
+    repair_result = service.repair_job_with_detail_result(
+        _job_stub(),
+        fetch_result,
+    )
+
+    assert classify_calls == 1
+    assert parse_calls == 0
+    assert fetch_result.classification.kind is OfferTodayResponseKind.TERMINAL_UNAVAILABLE
+    assert fetch_result.raw_response == raw_response
+    assert fetch_result.parsed_detail is None
+    assert fetch_result.canonical_detail is None
+    assert repair_result.action == "terminal_unavailable"
+    assert [latest.detail_status, historical.detail_status] == [
+        "terminal_unavailable",
+        "terminal_unavailable",
+    ]
+    assert latest.detail_payload == raw_response
+    assert historical.detail_payload == raw_response
+    assert latest.detail_completed_at is not None
+    assert historical.detail_completed_at is not None
+
+
+@pytest.mark.asyncio
 async def test_repair_success_consumes_parsed_once_typed_result(monkeypatch):
     scraper_module = importlib.import_module(
         "app.scraper.offertoday_browser_detail_scraper"
@@ -1142,6 +1484,63 @@ async def test_repair_success_consumes_parsed_once_typed_result(monkeypatch):
     assert captured["listing"] is listing
     assert captured["canonical"].raw_data["description_text"] == "Build ETL pipelines."
     assert captured["canonical"].source_url.endswith("/enc-jid-1")
+
+
+@pytest.mark.asyncio
+async def test_repair_success_updates_job_description_with_one_parse_across_scraper_and_service(
+    monkeypatch,
+):
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    parse_calls = 0
+    real_parse = parse_offertoday_detail_response
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        return {"code": 0, "data": _sample_detail_raw_missing_encrypted()}
+
+    def parse_spy(payload: dict) -> dict:
+        nonlocal parse_calls
+        parse_calls += 1
+        return real_parse(payload)
+
+    monkeypatch.setattr(scraper_module, "parse_offertoday_detail_response", parse_spy)
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    )
+    fetch_result = await scraper.fetch_job_detail(
+        "jid-1",
+        encrypted_job_id="enc-jid-1",
+    )
+
+    db = _repair_database()
+    try:
+        company = _database_company()
+        job = _database_job("jid-1", company_id=company.id)
+        listing = _database_listing(
+            "jid-1",
+            listing_payload=_parsed_listing(),
+        )
+        db.add_all([company, job, listing])
+        db.commit()
+
+        repair_result = service_module.OfferTodayJobRepairService(
+            db
+        ).repair_job_with_detail_result(job, fetch_result)
+        db.flush()
+        db.refresh(job)
+        db.refresh(listing)
+
+        assert parse_calls == 1
+        assert repair_result.description_repaired is True
+        assert "Build ETL pipelines." in job.description
+        assert listing.detail_status == "completed"
+        assert listing.published_job_id == job.id
+    finally:
+        db.close()
 
 
 @pytest.mark.parametrize(
@@ -1269,15 +1668,17 @@ def test_repair_detail_result_persist_failure_leaves_listing_unchanged(monkeypat
 
 
 @pytest.mark.parametrize(
-    ("payload", "expected_kind"),
+    ("payload", "expected_kind", "expected_status"),
     [
         (
             {"code": 2520, "msg": "Position unavailable", "data": None},
             OfferTodayResponseKind.TERMINAL_UNAVAILABLE,
+            "terminal_unavailable",
         ),
         (
             {"code": 1002, "msg": "Login expired", "data": None},
             OfferTodayResponseKind.AUTH_EXPIRED,
+            "failed",
         ),
     ],
 )
@@ -1285,6 +1686,7 @@ def test_repair_non_success_records_evidence_without_merging_job(
     monkeypatch,
     payload: dict,
     expected_kind: OfferTodayResponseKind,
+    expected_status: str,
 ):
     identity_module = _identity_module()
     policy_module = importlib.import_module("app.sources.offertoday.response_policy")
@@ -1313,6 +1715,12 @@ def test_repair_non_success_records_evidence_without_merging_job(
     job_before = dict(vars(job))
 
     monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+    monkeypatch.setattr(
+        service,
+        "get_listings_for_canonical_id",
+        lambda source_job_id: [listing],
+        raising=False,
+    )
 
     def fail_persist(*args, **kwargs):
         raise AssertionError("non-success response must not merge into Job")
@@ -1324,7 +1732,7 @@ def test_repair_non_success_records_evidence_without_merging_job(
     assert repair_result.action == expected_kind.value
     assert repair_result.description_repaired is False
     assert vars(job) == job_before
-    assert listing.detail_status == "failed"
+    assert listing.detail_status == expected_status
     assert listing.detail_payload == payload
     evidence = json.loads(listing.detail_error_message)
     assert evidence == {

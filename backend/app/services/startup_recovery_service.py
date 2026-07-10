@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from copy import deepcopy
 import logging
 
 from sqlalchemy import inspect, text
@@ -9,6 +11,9 @@ from app.models.crawl_job import CrawlJob
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.company_enrichment_run import CompanyEnrichmentRun, CompanyEnrichmentRunItem
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
+from app.models.job import Job
+from app.repositories.crawl_job_repository import CrawlJobRepository
+from app.sources.offertoday.completeness import is_complete_offertoday_job
 from app.utils.time import utc_now
 
 AI_RESTART_MESSAGE = "Service restarted before AI enrichment run could finish."
@@ -30,6 +35,7 @@ class StartupRecoveryService:
 
     def __init__(self, db: Session):
         self.db = db
+        self.crawl_job_repository = CrawlJobRepository()
 
     def recover_interrupted_operations(
         self,
@@ -186,6 +192,7 @@ class StartupRecoveryService:
         active_jobs = (
             self.db.query(CrawlJob)
             .filter(CrawlJob.status.in_(ACTIVE_CRAWL_JOB_STATUSES))
+            .order_by(CrawlJob.created_at.asc(), CrawlJob.id.asc())
             .all()
         )
         if not active_jobs:
@@ -198,21 +205,108 @@ class StartupRecoveryService:
             crawl_job.completed_at = crawl_job.completed_at or timestamp
             crawl_job.error_message = CRAWL_JOB_RESTART_MESSAGE
 
-        if "crawl_job_listings" in inspector.get_table_names():
-            (
+        recovery_records_by_job_id: dict[object, list[dict[str, object]]] = (
+            defaultdict(list)
+        )
+        table_names = set(inspector.get_table_names())
+        if "crawl_job_listings" in table_names:
+            running_listings = (
                 self.db.query(CrawlJobListing)
                 .filter(
                     CrawlJobListing.last_detail_crawl_job_id.in_(recovered_job_ids),
                     CrawlJobListing.detail_status == "running",
                 )
-                .update(
-                    {
-                        CrawlJobListing.detail_status: "failed",
-                        CrawlJobListing.detail_error_message: CRAWL_JOB_RESTART_MESSAGE,
-                        CrawlJobListing.detail_completed_at: timestamp,
-                    },
-                    synchronize_session=False,
+                .order_by(
+                    CrawlJobListing.last_detail_crawl_job_id.asc(),
+                    CrawlJobListing.source_site.asc(),
+                    CrawlJobListing.source_job_id.asc(),
+                    CrawlJobListing.created_at.asc(),
+                    CrawlJobListing.id.asc(),
                 )
+                .all()
+            )
+
+            offertoday_source_job_ids = sorted(
+                {
+                    row.source_job_id
+                    for row in running_listings
+                    if row.source_site == "offertoday"
+                }
+            )
+            offertoday_jobs_by_source_id: dict[str, Job] = {}
+            if offertoday_source_job_ids and "jobs" in table_names:
+                offertoday_jobs = (
+                    self.db.query(Job)
+                    .filter(
+                        Job.source_site == "offertoday",
+                        Job.source_job_id.in_(offertoday_source_job_ids),
+                        Job.is_deleted.is_(False),
+                    )
+                    .all()
+                )
+                offertoday_jobs_by_source_id = {
+                    job.source_job_id: job for job in offertoday_jobs
+                }
+
+            for listing in running_listings:
+                before_status = listing.detail_status
+                existing_job = (
+                    offertoday_jobs_by_source_id.get(listing.source_job_id)
+                    if listing.source_site == "offertoday"
+                    else None
+                )
+                if existing_job is not None and is_complete_offertoday_job(
+                    existing_job
+                ):
+                    listing.detail_status = "completed"
+                    listing.published_job_id = existing_job.id
+                    listing.detail_payload = deepcopy(
+                        dict(existing_job.raw_data or {})
+                    )
+                    listing.detail_error_message = None
+                    outcome = "reconciled_existing_job"
+                else:
+                    listing.detail_status = "failed"
+                    listing.published_job_id = None
+                    listing.detail_error_message = CRAWL_JOB_RESTART_MESSAGE
+                    outcome = (
+                        "interrupted_retryable"
+                        if listing.source_site == "offertoday"
+                        else "interrupted_failed"
+                    )
+                listing.detail_completed_at = timestamp
+
+                published_job_id = listing.published_job_id
+                recovery_records_by_job_id[
+                    listing.last_detail_crawl_job_id
+                ].append(
+                    {
+                        "listing_id": str(listing.id),
+                        "source_site": listing.source_site,
+                        "source_job_id": listing.source_job_id,
+                        "before_status": before_status,
+                        "after_status": listing.detail_status,
+                        "outcome": outcome,
+                        "published_job_id": (
+                            str(published_job_id)
+                            if published_job_id is not None
+                            else None
+                        ),
+                        "counts_as_fetch_success": False,
+                    }
+                )
+
+        for crawl_job in active_jobs:
+            records = recovery_records_by_job_id.get(crawl_job.id, [])
+            if not records:
+                continue
+            self.crawl_job_repository.append_event(
+                self.db,
+                crawl_job_id=crawl_job.id,
+                event_type="crawl.detail_recovered",
+                payload={"records": records},
+                emitted_by="startup-recovery",
+                auto_commit=False,
             )
 
         return len(active_jobs)

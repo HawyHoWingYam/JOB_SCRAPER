@@ -62,13 +62,28 @@ class OfferTodayBrowserDetailScraper:
 
     async def __aenter__(self):
         if self.detail_json_fetcher is None:
-            self._runtime = OfferTodayBrowserRuntime(
+            runtime = OfferTodayBrowserRuntime(
                 headed=self.headed,
                 auth_state_path=self.auth_state_path,
                 resume_strategy=self.resume_strategy,
             )
-            await self._runtime.__aenter__()
-            self._page = self._runtime._page
+            self._runtime = runtime
+            try:
+                await runtime.__aenter__()
+                self._page = runtime._page
+                await runtime.require_healthy_session()
+            except BaseException as exc:
+                try:
+                    await runtime.__aexit__(type(exc), exc, exc.__traceback__)
+                except BaseException as cleanup_exc:
+                    exc.add_note(
+                        "OfferToday browser runtime cleanup also failed: "
+                        f"{cleanup_exc!r}"
+                    )
+                finally:
+                    self._runtime = None
+                    self._page = None
+                raise
         return self
 
     async def __aexit__(self, exc_type, exc, tb):

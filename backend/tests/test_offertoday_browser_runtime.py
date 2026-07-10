@@ -1224,19 +1224,38 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_repair_jobs_marks_listing_failed_for_unavailable_detail(monkeypatch):
+async def test_repair_jobs_records_terminal_detail_without_generic_failure_and_continues(
+    monkeypatch,
+):
     repair_module = importlib.import_module("backend.scripts.repair_offertoday_jobs")
     identity_module = importlib.import_module("app.sources.offertoday.detail_identity")
     policy_module = importlib.import_module("app.sources.offertoday.response_policy")
 
-    job = SimpleNamespace(
-        source_site="offertoday", source_job_id="jid-1", job_id="jid-1", description=""
-    )
-    listing = SimpleNamespace(
-        detail_status="pending",
-        detail_error_message=None,
-        detail_completed_at=None,
-    )
+    jobs = [
+        SimpleNamespace(
+            source_site="offertoday",
+            source_job_id="jid-terminal",
+            job_id="jid-terminal",
+            description="",
+        ),
+        SimpleNamespace(
+            source_site="offertoday",
+            source_job_id="jid-success",
+            job_id="jid-success",
+            description="",
+        ),
+    ]
+    listings = {
+        job.source_job_id: SimpleNamespace(
+            detail_status="pending",
+            detail_payload=None,
+            detail_error_message=None,
+            detail_completed_at=None,
+        )
+        for job in jobs
+    }
+    fetch_calls: list[str] = []
+    consumed_results: list[object] = []
 
     class _FakeSession:
         def rollback(self) -> None:
@@ -1244,6 +1263,156 @@ async def test_repair_jobs_marks_listing_failed_for_unavailable_detail(monkeypat
 
         def close(self) -> None:
             return None
+
+    class _FakeService:
+        def __init__(self, db) -> None:
+            self.db = db
+
+        def iter_repair_candidates(self, *, limit: int | None = None):
+            return jobs
+
+        def repair_job(self, _job):
+            return SimpleNamespace(
+                description_repaired=False,
+                company_reassigned=False,
+                listing_attached=False,
+                action="unchanged",
+            )
+
+        def is_degraded_job(self, _job) -> bool:
+            return not bool(_job.description)
+
+        def get_latest_listing(self, source_job_id: str):
+            return listings[source_job_id]
+
+        def resolve_detail_identifiers(self, _job, _listing):
+            return (_job.source_job_id, f"enc-{_job.source_job_id}")
+
+        def repair_job_with_detail_result(self, target_job, detail_result):
+            consumed_results.append(detail_result)
+            target_listing = listings[target_job.source_job_id]
+            if (
+                detail_result.classification.kind
+                is OfferTodayResponseKind.TERMINAL_UNAVAILABLE
+            ):
+                target_listing.detail_status = "terminal_unavailable"
+                target_listing.detail_payload = detail_result.raw_response
+                target_listing.detail_error_message = "terminal_unavailable:2520"
+                target_listing.detail_completed_at = object()
+                return SimpleNamespace(
+                    description_repaired=False,
+                    company_reassigned=False,
+                    listing_attached=False,
+                    action="terminal_unavailable",
+                )
+
+            target_job.description = "repaired"
+            return SimpleNamespace(
+                description_repaired=True,
+                company_reassigned=False,
+                listing_attached=False,
+                action="updated",
+            )
+
+    class _FakeScraper:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = dict(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def fetch_job_detail(
+            self, job_id: str, *, encrypted_job_id: str | None = None
+        ):
+            fetch_calls.append(job_id)
+            if job_id == "jid-terminal":
+                raw_response = {
+                    "code": 2520,
+                    "msg": "job unavailable",
+                    "data": None,
+                }
+                parsed_detail = None
+                canonical_detail = None
+            else:
+                raw_response = {"code": 0, "data": {"jobId": job_id}}
+                parsed_detail = {"job_id": job_id}
+                canonical_detail = {
+                    "job_id": job_id,
+                    "encrypted_job_id": encrypted_job_id,
+                }
+            return identity_module.OfferTodayDetailFetchResult(
+                identity=identity_module.OfferTodayDetailIdentity(
+                    job_id=job_id,
+                    encrypted_job_id=encrypted_job_id,
+                ),
+                classification=policy_module.classify_offertoday_response(
+                    raw_response,
+                    operation="detail",
+                    expected_job_id=job_id,
+                ),
+                raw_response=raw_response,
+                parsed_detail=parsed_detail,
+                canonical_detail=canonical_detail,
+            )
+
+    monkeypatch.setattr(repair_module, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(repair_module, "OfferTodayJobRepairService", _FakeService)
+    monkeypatch.setattr(repair_module, "OfferTodayBrowserDetailScraper", _FakeScraper)
+
+    result = await repair_module.repair_jobs(
+        execute=False,
+        live_fetch_missing=True,
+        resume_strategy=RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+    )
+
+    terminal_listing = listings["jid-terminal"]
+    assert fetch_calls == ["jid-terminal", "jid-success"]
+    assert len(consumed_results) == 2
+    assert all(
+        isinstance(result, identity_module.OfferTodayDetailFetchResult)
+        for result in consumed_results
+    )
+    assert terminal_listing.detail_status == "terminal_unavailable"
+    assert terminal_listing.detail_payload == {
+        "code": 2520,
+        "msg": "job unavailable",
+        "data": None,
+    }
+    assert "2520" in str(terminal_listing.detail_error_message)
+    assert result["live_terminal_unavailable"] == 1
+    assert result["live_fetch_failed"] == 0
+    assert result["live_repaired_descriptions"] == 1
+
+
+@pytest.mark.asyncio
+async def test_repair_jobs_rolls_back_and_propagates_manual_action_preflight(
+    monkeypatch,
+):
+    repair_module = importlib.import_module("backend.scripts.repair_offertoday_jobs")
+    expected_error = ManualActionRequiredError(
+        source_site="offertoday",
+        stage="browser_session",
+        blocked_url="https://www.offertoday.com/hk/search",
+        message="OfferToday login expired",
+    )
+    job = SimpleNamespace(
+        source_site="offertoday",
+        source_job_id="jid-1",
+        job_id="jid-1",
+        description="",
+    )
+    session_state = {"rollbacks": 0, "closed": 0}
+    fetch_calls = 0
+
+    class _FakeSession:
+        def rollback(self) -> None:
+            session_state["rollbacks"] += 1
+
+        def close(self) -> None:
+            session_state["closed"] += 1
 
     class _FakeService:
         def __init__(self, db) -> None:
@@ -1263,70 +1432,31 @@ async def test_repair_jobs_marks_listing_failed_for_unavailable_detail(monkeypat
         def is_degraded_job(self, _job) -> bool:
             return True
 
-        def get_latest_listing(self, source_job_id: str):
-            assert source_job_id == "jid-1"
-            return listing
-
-        def resolve_detail_identifiers(self, _job, _listing):
-            return ("jid-1", "enc-jid-1")
-
-        def repair_job_with_detail_result(self, _job, detail_result):
-            listing.detail_status = "failed"
-            listing.detail_error_message = (
-                f"{detail_result.classification.kind.value}:"
-                f"{detail_result.classification.code}"
-            )
-            listing.detail_completed_at = object()
-            return SimpleNamespace(
-                description_repaired=False,
-                company_reassigned=False,
-                listing_attached=False,
-                action=detail_result.classification.kind.value,
-            )
-
     class _FakeScraper:
         def __init__(self, **kwargs) -> None:
             self.kwargs = dict(kwargs)
 
         async def __aenter__(self):
-            return self
+            raise expected_error
 
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def fetch_job_detail(
-            self, job_id: str, *, encrypted_job_id: str | None = None
-        ):
-            raw_response = {
-                "code": 2520,
-                "msg": "job unavailable",
-                "data": None,
-            }
-            return identity_module.OfferTodayDetailFetchResult(
-                identity=identity_module.OfferTodayDetailIdentity(
-                    job_id=job_id,
-                    encrypted_job_id=encrypted_job_id,
-                ),
-                classification=policy_module.classify_offertoday_response(
-                    raw_response,
-                    operation="detail",
-                    expected_job_id=job_id,
-                ),
-                raw_response=raw_response,
-                parsed_detail=None,
-                canonical_detail=None,
-            )
+        async def fetch_job_detail(self, *args, **kwargs):
+            nonlocal fetch_calls
+            fetch_calls += 1
+            raise AssertionError("preflight failure must prevent detail fetch")
 
     monkeypatch.setattr(repair_module, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(repair_module, "OfferTodayJobRepairService", _FakeService)
     monkeypatch.setattr(repair_module, "OfferTodayBrowserDetailScraper", _FakeScraper)
 
-    result = await repair_module.repair_jobs(
-        execute=False,
-        live_fetch_missing=True,
-        resume_strategy=RESUME_STRATEGY_REUSE_OPEN_BROWSER,
-    )
+    with pytest.raises(ManualActionRequiredError) as exc_info:
+        await repair_module.repair_jobs(
+            execute=True,
+            live_fetch_missing=True,
+        )
 
-    assert listing.detail_status == "failed"
-    assert "2520" in str(listing.detail_error_message)
-    assert result["live_fetch_failed"] == 1
+    assert exc_info.value is expected_error
+    assert session_state == {"rollbacks": 1, "closed": 1}
+    assert fetch_calls == 0
