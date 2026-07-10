@@ -60,9 +60,12 @@ class _FakeListing:
     listing_payload: dict | None = field(default_factory=dict)
     detail_payload: dict | None = field(default_factory=dict)
     detail_status: str = "pending"
+    detail_attempts: int = 0
     last_detail_crawl_job_id: str | None = None
     published_job_id: str | None = None
     detail_error_message: str | None = None
+    detail_started_at: datetime | None = None
+    detail_completed_at: datetime | None = None
     listing_rank: int | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -345,6 +348,74 @@ class _FakeCrawlJobListingRepository:
         listing.detail_payload = dict(detail_payload or {})
         listing.published_job_id = published_job_id
         self.completed_listing_ids.append(listing_id)
+        return listing
+
+    def mark_detail_running(
+        self,
+        _db,
+        *,
+        listing_id,
+        detail_crawl_job_id,
+        auto_commit=True,
+    ):
+        listing = next(item for item in self.listings if item.id == listing_id)
+        before = (
+            listing.detail_status,
+            listing.detail_attempts,
+            listing.last_detail_crawl_job_id,
+            listing.detail_error_message,
+        )
+        if hasattr(_db, "register_rollback"):
+            def restore() -> None:
+                (
+                    listing.detail_status,
+                    listing.detail_attempts,
+                    listing.last_detail_crawl_job_id,
+                    listing.detail_error_message,
+                ) = before
+
+            _db.register_rollback(restore)
+        listing.detail_status = "running"
+        listing.detail_attempts += 1
+        listing.last_detail_crawl_job_id = str(detail_crawl_job_id)
+        listing.detail_error_message = None
+        return listing
+
+    def mark_detail_outcome(
+        self,
+        _db,
+        *,
+        listing_id,
+        detail_crawl_job_id,
+        status=None,
+        error_message,
+        detail_payload=None,
+        detail_status=None,
+        auto_commit=True,
+    ):
+        detail_status = status if status is not None else detail_status
+        listing = next(item for item in self.listings if item.id == listing_id)
+        before = (
+            listing.detail_status,
+            listing.last_detail_crawl_job_id,
+            listing.detail_error_message,
+            listing.detail_payload,
+        )
+        if hasattr(_db, "register_rollback"):
+            def restore() -> None:
+                (
+                    listing.detail_status,
+                    listing.last_detail_crawl_job_id,
+                    listing.detail_error_message,
+                    listing.detail_payload,
+                ) = before
+
+            _db.register_rollback(restore)
+        listing.detail_status = detail_status
+        listing.last_detail_crawl_job_id = str(detail_crawl_job_id)
+        listing.detail_error_message = error_message
+        if detail_payload is not None:
+            listing.detail_payload = dict(detail_payload)
         return listing
 
     def mark_detail_identity_conflict(
@@ -1911,3 +1982,194 @@ def test_repository_offertoday_historical_blocker_excludes_pending_sibling(
 def test_terminal_unavailable_is_supported_but_not_retried_by_default():
     assert "terminal_unavailable" in SUPPORTED_DETAIL_STATUSES
     assert "terminal_unavailable" not in DEFAULT_DETAIL_RETRY_STATUSES
+
+
+@pytest.mark.parametrize(
+    "detail_status",
+    [
+        "failed",
+        "manual_action_required",
+        "terminal_unavailable",
+        "identity_conflict",
+    ],
+)
+def test_repository_mark_detail_outcome_is_transactional_and_does_not_increment_attempts(
+    detail_status,
+):
+    engine = create_engine("sqlite://")
+    CrawlJobListing.__table__.create(engine)
+    row = _database_listing(
+        "offertoday",
+        "j-outcome",
+        status="running",
+        rank=1,
+    )
+    row.detail_attempts = 2
+    row_id = row.id
+    detail_crawl_job_id = uuid4()
+
+    with Session(engine) as db:
+        db.add(row)
+        db.commit()
+
+        transitioned = CrawlJobListingRepository().mark_detail_outcome(
+            db,
+            listing_id=row_id,
+            detail_crawl_job_id=detail_crawl_job_id,
+            detail_status=detail_status,
+            error_message="classified outcome",
+            detail_payload={"code": 2520},
+            auto_commit=False,
+        )
+
+        assert transitioned.detail_status == detail_status
+        assert transitioned.detail_attempts == 2
+        assert transitioned.last_detail_crawl_job_id == detail_crawl_job_id
+        assert transitioned.detail_error_message == "classified outcome"
+        assert transitioned.detail_payload == {"code": 2520}
+        db.rollback()
+        restored = db.get(CrawlJobListing, row_id)
+        assert restored.detail_status == "running"
+        assert restored.detail_attempts == 2
+        assert restored.last_detail_crawl_job_id is None
+
+
+def test_repository_mark_detail_outcome_rejects_noncanonical_status():
+    engine = create_engine("sqlite://")
+    CrawlJobListing.__table__.create(engine)
+    row = _database_listing("offertoday", "j-invalid", status="running", rank=1)
+    row_id = row.id
+
+    with Session(engine) as db:
+        db.add(row)
+        db.commit()
+
+        with pytest.raises(ValueError, match="detail outcome status"):
+            CrawlJobListingRepository().mark_detail_outcome(
+                db,
+                listing_id=row_id,
+                detail_crawl_job_id=uuid4(),
+                detail_status="completed",
+                error_message="must be rejected",
+                auto_commit=False,
+            )
+
+        db.rollback()
+        assert db.get(CrawlJobListing, row_id).detail_status == "running"
+
+
+def test_repository_and_runtime_outcome_helpers_accept_status_keyword_contract():
+    rows = [_detail_listing("authoritative", "j-1", rank=1)]
+    runtime, _repository, _crawl_jobs, session = _detail_runtime(rows)
+
+    runtime.transition_detail_outcome(
+        session,
+        listing_ids=("authoritative",),
+        detail_crawl_job_id="detail-run",
+        status="failed",
+        error_message="classified failure",
+    )
+
+    assert rows[0].detail_status == "failed"
+
+
+def test_runtime_no_commit_detail_helpers_fan_out_without_duplicate_attempts():
+    rows = [
+        _detail_listing("authoritative", "j-1", rank=1),
+        _detail_listing("duplicate", "j-1", rank=2),
+    ]
+    runtime, _repository, crawl_jobs, session = _detail_runtime(rows)
+
+    running = runtime.transition_detail_running(
+        session,
+        listing_id="authoritative",
+        detail_crawl_job_id="detail-run",
+    )
+
+    assert running.id == "authoritative"
+    assert session.commits == 0
+    assert rows[0].detail_status == "running"
+    assert rows[0].detail_attempts == 1
+    assert rows[1].detail_status == "pending"
+    assert rows[1].detail_attempts == 0
+    session.commit()
+
+    completed = runtime.transition_detail_completed(
+        session,
+        listing_ids=("authoritative", "duplicate"),
+        detail_crawl_job_id="detail-run",
+        detail_payload={"jobId": "j-1"},
+        published_job_id="published-j-1",
+    )
+
+    assert [listing.id for listing in completed] == ["authoritative", "duplicate"]
+    assert session.commits == 1
+    assert [row.detail_status for row in rows] == ["completed", "completed"]
+    assert [row.detail_attempts for row in rows] == [1, 0]
+    assert all(row.published_job_id == "published-j-1" for row in rows)
+    session.rollback()
+    assert [row.detail_status for row in rows] == ["running", "pending"]
+
+    outcomes = runtime.transition_detail_outcome(
+        session,
+        listing_ids=("authoritative", "duplicate"),
+        detail_crawl_job_id="detail-run",
+        detail_status="terminal_unavailable",
+        error_message="code=2520",
+        detail_payload={"code": 2520},
+    )
+
+    assert [listing.id for listing in outcomes] == ["authoritative", "duplicate"]
+    assert session.commits == 1
+    assert [row.detail_status for row in rows] == [
+        "terminal_unavailable",
+        "terminal_unavailable",
+    ]
+    assert [row.detail_attempts for row in rows] == [1, 0]
+    assert crawl_jobs.jobs["detail-run"].metrics[
+        "detail_run_terminal_unavailable"
+    ] == 2
+
+
+@pytest.mark.parametrize(
+    ("transition", "terminal_status"),
+    [("completed", "completed"), ("outcome", "terminal_unavailable")],
+)
+def test_duplicate_group_terminal_transition_prevents_pending_sibling_reload(
+    transition,
+    terminal_status,
+):
+    rows = [
+        _detail_listing("authoritative", "j-1", rank=1),
+        _detail_listing("duplicate", "j-1", rank=2),
+    ]
+    runtime, repository, _crawl_jobs, session = _detail_runtime(rows)
+
+    if transition == "completed":
+        runtime.transition_detail_completed(
+            session,
+            listing_ids=("authoritative", "duplicate"),
+            detail_crawl_job_id="detail-run",
+            detail_payload={"jobId": "j-1"},
+            published_job_id="published-j-1",
+        )
+    else:
+        runtime.transition_detail_outcome(
+            session,
+            listing_ids=("authoritative", "duplicate"),
+            detail_crawl_job_id="detail-run",
+            detail_status=terminal_status,
+            error_message="terminal",
+        )
+    session.commit()
+
+    reloaded = repository.list_detail_candidates(
+        session,
+        source_site="offertoday",
+        source_listing_crawl_job_id="batch-1",
+        statuses=DEFAULT_DETAIL_RETRY_STATUSES,
+        limit=None,
+    )
+
+    assert reloaded == []
+    assert [row.detail_status for row in rows] == [terminal_status, terminal_status]

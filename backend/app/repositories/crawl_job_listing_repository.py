@@ -16,6 +16,14 @@ class CrawlJobListingRepository:
     """Repository for listing-stage staging rows and detail execution state."""
 
     OFFERTODAY_STAGING_LOCK_KEY = "job_scraper:offertoday:staging"
+    DETAIL_OUTCOME_STATUSES = frozenset(
+        {
+            "failed",
+            "manual_action_required",
+            "terminal_unavailable",
+            "identity_conflict",
+        }
+    )
 
     def acquire_offertoday_staging_lock(self, db: Session) -> None:
         """Serialize OfferToday identity checks and inserts within this transaction."""
@@ -544,6 +552,44 @@ class CrawlJobListingRepository:
         listing.detail_started_at = listing.detail_started_at or timestamp
         listing.detail_completed_at = timestamp
         listing.detail_error_message = None
+        if auto_commit:
+            db.commit()
+            db.refresh(listing)
+        else:
+            db.flush()
+        return listing
+
+    def mark_detail_outcome(
+        self,
+        db: Session,
+        *,
+        listing_id,
+        detail_crawl_job_id,
+        status: str | None = None,
+        error_message: str,
+        detail_payload: dict[str, Any] | None = None,
+        detail_status: str | None = None,
+        auto_commit: bool = True,
+    ) -> CrawlJobListing:
+        if status is not None and detail_status is not None and status != detail_status:
+            raise ValueError("Conflicting detail outcome status values")
+        requested_status = status if status is not None else detail_status
+        normalized_status = str(requested_status or "").strip().lower()
+        if normalized_status not in self.DETAIL_OUTCOME_STATUSES:
+            allowed = ", ".join(sorted(self.DETAIL_OUTCOME_STATUSES))
+            raise ValueError(
+                f"Unsupported detail outcome status {requested_status!r}; allowed: {allowed}"
+            )
+
+        listing = db.query(CrawlJobListing).filter(CrawlJobListing.id == listing_id).one()
+        timestamp = utc_now()
+        listing.detail_status = normalized_status
+        listing.last_detail_crawl_job_id = detail_crawl_job_id
+        if detail_payload is not None:
+            listing.detail_payload = dict(detail_payload)
+        listing.detail_started_at = listing.detail_started_at or timestamp
+        listing.detail_completed_at = timestamp
+        listing.detail_error_message = error_message
         if auto_commit:
             db.commit()
             db.refresh(listing)

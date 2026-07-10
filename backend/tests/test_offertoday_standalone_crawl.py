@@ -295,9 +295,12 @@ class _FakeListingBrowserRuntime:
             raise response
         return response
 
+    async def fetch_detail_json(self, *, job_id, encrypted_job_id):
+        raise AssertionError("The injected fake detail pipeline owns this fetch")
+
 
 class _FakeCrawlRuntime:
-    def __init__(self):
+    def __init__(self, *, detail_load_result=None, trace=None, metrics=None):
         self.stage_calls = []
         self.defer_calls = []
         self.events = []
@@ -305,6 +308,9 @@ class _FakeCrawlRuntime:
         self.manual_action_payload = None
         self.failed_payload = None
         self.completed_calls = []
+        self.detail_load_result = detail_load_result
+        self.trace = trace
+        self.metrics = dict(metrics or {})
 
     def stage_listing_batch(self, **kwargs):
         self.stage_calls.append(dict(kwargs))
@@ -327,25 +333,44 @@ class _FakeCrawlRuntime:
 
     def write_progress_event(self, **kwargs):
         self.events.append(dict(kwargs))
+        if self.trace is not None:
+            self.trace.append(kwargs["event_type"])
 
     def load_detail_targets(self, **kwargs):
         self.load_detail_targets_calls.append(dict(kwargs))
+        if self.trace is not None:
+            self.trace.append("load_detail_targets")
+        if self.detail_load_result is not None:
+            return self.detail_load_result
         source_job_ids = list(kwargs["request_payload"].get("source_job_ids") or [])
         return SimpleNamespace(
             targets=[{"source_job_id": source_job_id} for source_job_id in source_job_ids],
             target_rows=len(source_job_ids),
             selected_rows=len(source_job_ids),
             skipped_existing_rows=0,
+            distinct_selected_ids=len(source_job_ids),
+            reconciled_rows=0,
+            duplicate_rows=0,
+            fetch_cohort_source_job_ids=tuple(source_job_ids),
+            fetch_cohort_hash="empty-test-hash",
+            reconciled_source_job_ids=(),
+            identity_conflict_ids=(),
+            identity_conflict_evidence=(),
         )
 
     def mark_manual_action_required(self, **kwargs):
         self.manual_action_payload = dict(kwargs["payload"])
+        if self.trace is not None:
+            self.trace.append("manual_action_required")
 
     def mark_failed(self, **kwargs):
         self.failed_payload = dict(kwargs["payload"])
 
     def mark_completed(self, **kwargs):
         self.completed_calls.append(dict(kwargs))
+        self.metrics.update(dict(kwargs.get("metrics") or {}))
+        if self.trace is not None:
+            self.trace.append("completed")
 
 
 @pytest.mark.asyncio
@@ -797,6 +822,36 @@ def test_apply_request_payload_defaults_hydrates_launcher_only_invocation():
     assert args.headed is True
 
 
+def test_resolve_detail_scope_defaults_to_category_backlog_for_detail_only_runs():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+
+    source_listing_crawl_job_id, detail_scope = crawl_module._resolve_detail_scope(
+        SimpleNamespace(
+            crawl_job_id="detail-job-1",
+            source_listing_crawl_job_id="",
+        ),
+        listing_phase_completed=False,
+    )
+
+    assert source_listing_crawl_job_id is None
+    assert detail_scope == "category_backlog"
+
+
+def test_resolve_detail_scope_uses_current_listing_batch_after_listing_phase():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+
+    source_listing_crawl_job_id, detail_scope = crawl_module._resolve_detail_scope(
+        SimpleNamespace(
+            crawl_job_id="listing-job-1",
+            source_listing_crawl_job_id="",
+        ),
+        listing_phase_completed=True,
+    )
+
+    assert source_listing_crawl_job_id == "listing-job-1"
+    assert detail_scope == "current_run_listing_batch"
+
+
 def test_batch_scoped_it_detail_does_not_exact_filter_root_category():
     search_space = importlib.import_module("app.sources.offertoday.search_space")
     resolver = getattr(search_space, "resolve_offertoday_detail_category_ids", None)
@@ -817,3 +872,301 @@ def test_unbatched_it_detail_expands_root_to_full_it_tree():
         [118000],
         source_listing_crawl_job_id=None,
     ) == list(search_space.OFFERTODAY_IT_CATEGORY_CODES)
+
+
+def _detail_runtime_target(
+    source_job_id: str,
+    *,
+    listing_id: str | None = None,
+    duplicate_listing_ids=(),
+):
+    encrypted_job_id = f"enc-{source_job_id}"
+    return {
+        "listing_id": listing_id or f"listing-{source_job_id}",
+        "duplicate_listing_ids": tuple(duplicate_listing_ids),
+        "source_job_id": source_job_id,
+        "listing_payload": {
+            "job_id": source_job_id,
+            "encrypted_job_id": encrypted_job_id,
+            "raw_data": {
+                "jobId": source_job_id,
+                "encryptJobId": encrypted_job_id,
+            },
+        },
+    }
+
+
+def _detail_load_result(
+    targets=(),
+    *,
+    fetch_cohort_hash="cohort-hash",
+    reconciled_source_job_ids=(),
+    identity_conflict_ids=(),
+    identity_conflict_evidence=(),
+    selected_rows=None,
+    duplicate_rows=0,
+):
+    targets = list(targets)
+    fetch_ids = tuple(target["source_job_id"] for target in targets)
+    selected_rows = (
+        len(targets) + len(reconciled_source_job_ids) + duplicate_rows
+        if selected_rows is None
+        else selected_rows
+    )
+    return SimpleNamespace(
+        targets=targets,
+        target_rows=len(targets),
+        selected_rows=selected_rows,
+        skipped_existing_rows=len(reconciled_source_job_ids),
+        distinct_selected_ids=len(fetch_ids) + len(reconciled_source_job_ids),
+        reconciled_rows=len(reconciled_source_job_ids),
+        duplicate_rows=duplicate_rows,
+        fetch_cohort_source_job_ids=fetch_ids,
+        fetch_cohort_hash=fetch_cohort_hash,
+        reconciled_source_job_ids=tuple(reconciled_source_job_ids),
+        identity_conflict_ids=tuple(identity_conflict_ids),
+        identity_conflict_evidence=tuple(identity_conflict_evidence),
+    )
+
+
+class _FakeDetailPipeline:
+    def __init__(self, outcomes=(), *, trace=None):
+        self.outcomes = list(outcomes)
+        self.trace = trace
+        self.targets = []
+        self.fetchers = []
+
+    async def process_target(
+        self,
+        *,
+        target,
+        detail_crawl_job_id,
+        fetch_detail,
+    ):
+        self.targets.append(target)
+        self.fetchers.append(fetch_detail)
+        if self.trace is not None:
+            self.trace.append(f"fetch:{target.identity.job_id}")
+        return self.outcomes.pop(0)
+
+
+def _detail_process_result(
+    kind,
+    *,
+    job_action=None,
+    company_action=None,
+    stop_batch=False,
+):
+    pipeline_module = importlib.import_module(
+        "app.services.offertoday_detail_pipeline"
+    )
+    response_module = importlib.import_module(
+        "app.sources.offertoday.response_policy"
+    )
+    return pipeline_module.OfferTodayDetailProcessResult(
+        source_job_id="unused-by-fake",
+        outcome=response_module.OfferTodayResponseKind(kind),
+        job_action=job_action,
+        company_action=company_action,
+        stop_batch=stop_batch,
+    )
+
+
+@pytest.mark.asyncio
+async def test_detail_only_preflights_then_freezes_cohort_before_first_fetch():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+    trace = []
+    load_result = _detail_load_result(
+        [_detail_runtime_target("job-1")],
+        fetch_cohort_hash="exact-hash",
+        reconciled_source_job_ids=("reconciled-1",),
+    )
+    crawl_runtime = _FakeCrawlRuntime(
+        detail_load_result=load_result,
+        trace=trace,
+    )
+    pipeline = _FakeDetailPipeline(
+        [
+            _detail_process_result(
+                "success",
+                job_action="created",
+                company_action="created",
+            )
+        ],
+        trace=trace,
+    )
+
+    result = await crawl_module._run_detail_phase(
+        args=_default_listing_args(crawl_phase="detail", category_ids=[118000]),
+        browser_runtime=_FakeListingBrowserRuntime(trace=trace),
+        crawl_runtime=crawl_runtime,
+        crawl_job_id="detail-run",
+        pipeline=pipeline,
+    )
+
+    assert trace[:4] == [
+        "preflight",
+        "load_detail_targets",
+        "crawl.detail_cohort_frozen",
+        "fetch:job-1",
+    ]
+    assert len(crawl_runtime.load_detail_targets_calls) == 1
+    request_payload = crawl_runtime.load_detail_targets_calls[0]["request_payload"]
+    assert request_payload["category_ids"] == [118000]
+    assert "source_listing_crawl_job_id" not in request_payload
+    cohort = next(
+        event["payload"]
+        for event in crawl_runtime.events
+        if event["event_type"] == "crawl.detail_cohort_frozen"
+    )
+    assert cohort == {
+        "fetch_cohort_source_job_ids": ["job-1"],
+        "fetch_cohort_hash": "exact-hash",
+        "reconciled_source_job_ids": ["reconciled-1"],
+        "identity_conflict_ids": [],
+        "identity_conflict_evidence": [],
+        "fetch_cohort_distinct": 1,
+    }
+    assert result.stop_batch is False
+    assert len(crawl_runtime.completed_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_load_time_identity_conflict_enters_identity_audit_without_fetch_or_completion():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+    trace = []
+    evidence = {
+        "source_job_id": "conflict-1",
+        "encrypted_job_ids": ["enc-a", "enc-b"],
+        "reason": "job_id_to_multiple_encrypted_ids",
+    }
+    load_result = _detail_load_result(
+        [],
+        fetch_cohort_hash="conflict-hash",
+        identity_conflict_ids=("conflict-1",),
+        identity_conflict_evidence=(evidence,),
+        selected_rows=2,
+        duplicate_rows=1,
+    )
+    crawl_runtime = _FakeCrawlRuntime(
+        detail_load_result=load_result,
+        trace=trace,
+    )
+    pipeline = _FakeDetailPipeline(trace=trace)
+
+    result = await crawl_module._run_detail_phase(
+        args=_default_listing_args(crawl_phase="detail"),
+        browser_runtime=_FakeListingBrowserRuntime(trace=trace),
+        crawl_runtime=crawl_runtime,
+        crawl_job_id="detail-run",
+        pipeline=pipeline,
+    )
+
+    assert trace == [
+        "preflight",
+        "load_detail_targets",
+        "crawl.detail_cohort_frozen",
+        "manual_action_required",
+    ]
+    assert pipeline.targets == []
+    assert crawl_runtime.completed_calls == []
+    assert crawl_runtime.manual_action_payload["action_type"] == "identity_audit"
+    assert crawl_runtime.manual_action_payload["classification"] == "identity_conflict"
+    assert crawl_runtime.manual_action_payload["evidence"] == {
+        "identity_conflict_ids": ["conflict-1"],
+        "identity_conflict_evidence": [evidence],
+    }
+    assert result.stop_batch is True
+
+
+@pytest.mark.asyncio
+async def test_stopped_detail_result_leaves_later_target_unprocessed_and_never_completes_run():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+    trace = []
+    load_result = _detail_load_result(
+        [_detail_runtime_target("blocked"), _detail_runtime_target("later")]
+    )
+    crawl_runtime = _FakeCrawlRuntime(trace=trace)
+    pipeline = _FakeDetailPipeline(
+        [_detail_process_result("ip_blocked", stop_batch=True)],
+        trace=trace,
+    )
+
+    result = await crawl_module._run_detail_phase(
+        args=_default_listing_args(crawl_phase="full"),
+        browser_runtime=_FakeListingBrowserRuntime(trace=trace),
+        crawl_runtime=crawl_runtime,
+        crawl_job_id="detail-run",
+        detail_load_result=load_result,
+        pipeline=pipeline,
+    )
+
+    assert [target.identity.job_id for target in pipeline.targets] == ["blocked"]
+    assert "fetch:later" not in trace
+    assert crawl_runtime.completed_calls == []
+    assert crawl_runtime.manual_action_payload["classification"] == "ip_blocked"
+    assert crawl_runtime.manual_action_payload["action_type"] == "session_recovery"
+    assert result.stop_batch is True
+
+
+@pytest.mark.asyncio
+async def test_detail_phase_passes_duplicate_listing_ids_and_preserves_task7_metrics_after_ten_targets():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+    targets = [
+        _detail_runtime_target(
+            f"job-{index}",
+            duplicate_listing_ids=(f"duplicate-{index}",) if index == 0 else (),
+        )
+        for index in range(11)
+    ]
+    load_result = _detail_load_result(
+        targets,
+        reconciled_source_job_ids=("reconciled-1", "reconciled-2"),
+        selected_rows=14,
+        duplicate_rows=1,
+    )
+    task7_metrics = {
+        "detail_selected_rows": 14,
+        "detail_reconciled_rows": 2,
+        "detail_duplicate_rows": 1,
+        "detail_distinct_selected_ids": 13,
+    }
+    crawl_runtime = _FakeCrawlRuntime(metrics=task7_metrics)
+    outcomes = [
+        _detail_process_result(
+            "success",
+            job_action="created" if index < 4 else "updated",
+            company_action="created" if index == 0 else "updated",
+        )
+        for index in range(11)
+    ]
+    pipeline = _FakeDetailPipeline(outcomes)
+
+    result = await crawl_module._run_detail_phase(
+        args=_default_listing_args(crawl_phase="full"),
+        browser_runtime=_FakeListingBrowserRuntime(),
+        crawl_runtime=crawl_runtime,
+        crawl_job_id="detail-run",
+        detail_load_result=load_result,
+        pipeline=pipeline,
+    )
+
+    assert pipeline.targets[0].listing_ids == (
+        "listing-job-0",
+        "duplicate-0",
+    )
+    assert any(
+        event["event_type"] == "crawl.detail_progress"
+        for event in crawl_runtime.events
+    )
+    for metric_name, value in task7_metrics.items():
+        assert crawl_runtime.metrics[metric_name] == value
+    assert crawl_runtime.metrics["jobs_created"] == 4
+    assert crawl_runtime.metrics["jobs_updated"] == 7
+    assert crawl_runtime.metrics["jobs_reconciled"] == 2
+    assert crawl_runtime.metrics["terminal_unavailable"] == 0
+    assert crawl_runtime.metrics["persist_failure"] == 0
+    assert crawl_runtime.metrics["jobs_saved"] == 11
+    assert result.jobs_created == 4
+    assert result.jobs_updated == 7
+    assert result.jobs_reconciled == 2

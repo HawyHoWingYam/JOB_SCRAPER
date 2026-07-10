@@ -822,21 +822,117 @@ class CrawlJobRuntime:
         finally:
             db.close()
 
-    def mark_detail_running(self, *, listing_id, detail_crawl_job_id) -> None:
-        db = self.session_factory()
-        try:
-            listing = self.crawl_job_listing_repository.mark_detail_running(
+    def transition_detail_running(self, db, *, listing_id, detail_crawl_job_id):
+        listing = self.crawl_job_listing_repository.mark_detail_running(
+            db,
+            listing_id=listing_id,
+            detail_crawl_job_id=detail_crawl_job_id,
+            auto_commit=False,
+        )
+        self._sync_detail_group_transition_metrics(
+            db,
+            listings=(listing,),
+            detail_crawl_job_id=detail_crawl_job_id,
+        )
+        return listing
+
+    def transition_detail_completed(
+        self,
+        db,
+        *,
+        listing_ids,
+        detail_crawl_job_id,
+        detail_payload: dict[str, Any],
+        published_job_id=None,
+    ):
+        listings = tuple(
+            self.crawl_job_listing_repository.mark_detail_completed(
                 db,
                 listing_id=listing_id,
                 detail_crawl_job_id=detail_crawl_job_id,
+                detail_payload=detail_payload,
+                published_job_id=published_job_id,
                 auto_commit=False,
             )
-            self._sync_detail_transition_metrics(
+            for listing_id in listing_ids
+        )
+        self._sync_detail_group_transition_metrics(
+            db,
+            listings=listings,
+            detail_crawl_job_id=detail_crawl_job_id,
+        )
+        return listings
+
+    def transition_detail_outcome(
+        self,
+        db,
+        *,
+        listing_ids,
+        detail_crawl_job_id,
+        status: str | None = None,
+        error_message: str,
+        detail_payload: dict[str, Any] | None = None,
+        detail_status: str | None = None,
+    ):
+        if status is not None and detail_status is not None and status != detail_status:
+            raise ValueError("Conflicting detail outcome status values")
+        requested_status = status if status is not None else detail_status
+        listings = tuple(
+            self.crawl_job_listing_repository.mark_detail_outcome(
                 db,
-                listing=listing,
+                listing_id=listing_id,
+                detail_crawl_job_id=detail_crawl_job_id,
+                status=requested_status,
+                error_message=error_message,
+                detail_payload=detail_payload,
+                auto_commit=False,
+            )
+            for listing_id in listing_ids
+        )
+        self._sync_detail_group_transition_metrics(
+            db,
+            listings=listings,
+            detail_crawl_job_id=detail_crawl_job_id,
+        )
+        return listings
+
+    def record_detail_persisted(
+        self,
+        db,
+        *,
+        detail_crawl_job_id,
+        source_job_id: str,
+        listing_ids,
+        published_job_id,
+        response_identity_hash: str,
+    ):
+        return self.crawl_job_repository.append_event(
+            db,
+            crawl_job_id=detail_crawl_job_id,
+            event_type="crawl.detail_persisted",
+            payload={
+                "detail_crawl_job_id": str(detail_crawl_job_id),
+                "source_job_id": str(source_job_id),
+                "listing_ids": [str(listing_id) for listing_id in listing_ids],
+                "published_job_id": str(published_job_id),
+                "response_identity_hash": str(response_identity_hash),
+            },
+            emitted_by="offertoday-detail-pipeline",
+            auto_commit=False,
+        )
+
+    def mark_detail_running(self, *, listing_id, detail_crawl_job_id) -> None:
+        db = self.session_factory()
+        try:
+            self.transition_detail_running(
+                db,
+                listing_id=listing_id,
                 detail_crawl_job_id=detail_crawl_job_id,
             )
             db.commit()
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -850,20 +946,17 @@ class CrawlJobRuntime:
     ) -> None:
         db = self.session_factory()
         try:
-            listing = self.crawl_job_listing_repository.mark_detail_completed(
+            self.transition_detail_completed(
                 db,
-                listing_id=listing_id,
+                listing_ids=(listing_id,),
                 detail_crawl_job_id=detail_crawl_job_id,
                 detail_payload=detail_payload,
                 published_job_id=published_job_id,
-                auto_commit=False,
-            )
-            self._sync_detail_transition_metrics(
-                db,
-                listing=listing,
-                detail_crawl_job_id=detail_crawl_job_id,
             )
             db.commit()
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -876,19 +969,17 @@ class CrawlJobRuntime:
     ) -> None:
         db = self.session_factory()
         try:
-            listing = self.crawl_job_listing_repository.mark_detail_failed(
+            self.transition_detail_outcome(
                 db,
-                listing_id=listing_id,
+                listing_ids=(listing_id,),
                 detail_crawl_job_id=detail_crawl_job_id,
+                status="failed",
                 error_message=error_message,
-                auto_commit=False,
-            )
-            self._sync_detail_transition_metrics(
-                db,
-                listing=listing,
-                detail_crawl_job_id=detail_crawl_job_id,
             )
             db.commit()
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -901,19 +992,17 @@ class CrawlJobRuntime:
     ) -> None:
         db = self.session_factory()
         try:
-            listing = self.crawl_job_listing_repository.mark_detail_manual_action_required(
+            self.transition_detail_outcome(
                 db,
-                listing_id=listing_id,
+                listing_ids=(listing_id,),
                 detail_crawl_job_id=detail_crawl_job_id,
+                status="manual_action_required",
                 error_message=error_message,
-                auto_commit=False,
-            )
-            self._sync_detail_transition_metrics(
-                db,
-                listing=listing,
-                detail_crawl_job_id=detail_crawl_job_id,
             )
             db.commit()
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -973,17 +1062,37 @@ class CrawlJobRuntime:
             db.close()
 
     def _sync_detail_transition_metrics(self, db, *, listing, detail_crawl_job_id) -> None:
-        self._sync_listing_metrics(
+        self._sync_detail_group_transition_metrics(
             db,
-            crawl_job_id=listing.crawl_job_id,
-            source_site=listing.source_site,
-            skipped_existing_delta=0,
-        )
-        self._sync_detail_run_metrics(
-            db,
+            listings=(listing,),
             detail_crawl_job_id=detail_crawl_job_id,
-            source_site=listing.source_site,
         )
+
+    def _sync_detail_group_transition_metrics(
+        self,
+        db,
+        *,
+        listings,
+        detail_crawl_job_id,
+    ) -> None:
+        normalized_listings = tuple(listings)
+        listing_batches = {
+            (listing.crawl_job_id, listing.source_site)
+            for listing in normalized_listings
+        }
+        for crawl_job_id, source_site in listing_batches:
+            self._sync_listing_metrics(
+                db,
+                crawl_job_id=crawl_job_id,
+                source_site=source_site,
+                skipped_existing_delta=0,
+            )
+        for source_site in {listing.source_site for listing in normalized_listings}:
+            self._sync_detail_run_metrics(
+                db,
+                detail_crawl_job_id=detail_crawl_job_id,
+                source_site=source_site,
+            )
 
     def _sync_listing_metrics(
         self,
