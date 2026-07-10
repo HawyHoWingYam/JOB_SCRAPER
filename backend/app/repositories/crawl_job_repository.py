@@ -27,16 +27,20 @@ class CrawlJobRepository:
         requested_by: str | None = None,
         schedule_id=None,
         status: str = "queued",
+        crawl_job_id=None,
         auto_commit: bool = True,
     ) -> CrawlJob:
-        crawl_job = CrawlJob(
-            source_site=source_site,
-            trigger_type=trigger_type,
-            schedule_id=schedule_id,
-            status=status,
-            request_payload=request_payload,
-            requested_by=requested_by,
-        )
+        crawl_job_kwargs = {
+            "source_site": source_site,
+            "trigger_type": trigger_type,
+            "schedule_id": schedule_id,
+            "status": status,
+            "request_payload": request_payload,
+            "requested_by": requested_by,
+        }
+        if crawl_job_id is not None:
+            crawl_job_kwargs["id"] = crawl_job_id
+        crawl_job = CrawlJob(**crawl_job_kwargs)
         db.add(crawl_job)
         if auto_commit:
             db.commit()
