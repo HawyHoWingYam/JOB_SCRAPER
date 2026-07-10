@@ -909,6 +909,55 @@ def test_offline_parsed_repair_build_failure_leaves_listing_unchanged(monkeypatc
     assert vars(listing) == listing_before
 
 
+def test_offline_parsed_repair_persists_canonical_identity_for_cached_round_trip(
+    monkeypatch,
+):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = service_module.OfferTodayJobRepairService(db=object())
+    listing = _listing_stub()
+    job = _job_stub()
+    parsed_detail = parse_offertoday_detail_response(
+        {"code": 0, "data": _sample_detail_raw_missing_encrypted()}
+    )
+    expected_repair_result = service_module.OfferTodayRepairResult(
+        action="updated",
+        description_repaired=True,
+        company_reassigned=False,
+        listing_attached=False,
+    )
+    persisted_canonical = []
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+    monkeypatch.setattr(
+        service,
+        "get_latest_completed_listing",
+        lambda source_job_id: listing,
+    )
+
+    def fake_persist(job, canonical, persisted_listing):
+        persisted_canonical.append(canonical)
+        assert persisted_listing is listing
+        return expected_repair_result
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fake_persist)
+
+    assert (
+        service.repair_job_with_parsed_detail(job, parsed_detail)
+        is expected_repair_result
+    )
+    assert service.repair_job(job) is expected_repair_result
+
+    assert listing.detail_payload["job_id"] == "jid-1"
+    assert listing.detail_payload["encrypted_job_id"] == "enc-jid-1"
+    assert len(persisted_canonical) == 2
+    assert all(
+        canonical.source_url.endswith("/enc-jid-1")
+        for canonical in persisted_canonical
+    )
+
+
 @pytest.mark.asyncio
 async def test_repair_success_consumes_parsed_once_typed_result(monkeypatch):
     scraper_module = importlib.import_module(
