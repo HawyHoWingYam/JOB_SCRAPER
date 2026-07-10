@@ -45,6 +45,20 @@ def _optional_object(
     return dict(value)
 
 
+def _optional_sequence(
+    payload: Mapping[str, Any],
+    field_name: str,
+) -> list[Any]:
+    value = payload.get(field_name)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise OfferTodayPayloadParseError(
+            f"OfferToday detail field {field_name} must be an array"
+        )
+    return list(value)
+
+
 def parse_offertoday_listing_response(
     response_data: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -96,15 +110,15 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
     industry = _optional_object(data, "industry")
     employ_type = _optional_object(data, "employType")
     address = _optional_object(data, "addressVO")
+    benefits = _optional_sequence(data, "benefits")
+    skills = _optional_sequence(data, "skills")
+    skill_list = _optional_sequence(data, "skillList")
+    keywords = _optional_sequence(data, "keywords")
     job_id = str(data.get("jobId") or "").strip()
     encrypted_job_id = str(data.get("encryptJobId") or "").strip()
     description_html = str(data.get("jobDesc") or "").strip()
     description_text = clean_description_text(_strip_html(description_html))
-    blocked_terms = {
-        str(value).strip()
-        for value in (data.get("benefits") or [])
-        if str(value).strip()
-    }
+    blocked_terms = {str(value).strip() for value in benefits if str(value).strip()}
     return {
         "source_site": "offertoday",
         "job_id": job_id,
@@ -123,17 +137,13 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
         "employment_type": str(data.get("jobTypeDesc") or "").strip(),
         "experience": str(data.get("workExperienceDesc") or "").strip(),
         "education": str(data.get("educationDesc") or "").strip(),
-        "skills": normalize_tag_terms(
-            data.get("skills") or [], blocked_terms=blocked_terms
-        ),
+        "skills": normalize_tag_terms(skills, blocked_terms=blocked_terms),
         "skill_list": normalize_tag_terms(
-            data.get("skillList") or [],
+            skill_list,
             blocked_terms=blocked_terms,
         ),
-        "keywords": normalize_tag_terms(
-            data.get("keywords") or [], blocked_terms=blocked_terms
-        ),
-        "benefits": data.get("benefits") or [],
+        "keywords": normalize_tag_terms(keywords, blocked_terms=blocked_terms),
+        "benefits": benefits,
         "working_days": str(data.get("workingDays") or "").strip(),
         "working_model": str(data.get("workingModels") or "").strip(),
         "posted_desc": str(data.get("postDateDesc") or "").strip(),

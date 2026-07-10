@@ -526,6 +526,45 @@ async def test_offertoday_browser_detail_scraper_types_malformed_nested_payload(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field_name",
+    ["benefits", "skills", "skillList", "keywords"],
+)
+async def test_offertoday_browser_detail_scraper_types_malformed_collection_payload(
+    field_name: str,
+):
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    response_payload = {
+        "code": 0,
+        "data": {
+            **_sample_detail_raw(),
+            field_name: 1,
+        },
+    }
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        return response_payload
+
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    )
+
+    result = await scraper.fetch_job_detail(
+        "jid-1",
+        encrypted_job_id="enc-jid-1",
+    )
+
+    assert result.classification.kind is OfferTodayResponseKind.INVALID_PAYLOAD
+    assert result.classification.retryable is False
+    assert result.classification.stop_batch is False
+    assert result.raw_response == response_payload
+    assert result.parsed_detail is None
+    assert result.canonical_detail is None
+
+
+@pytest.mark.asyncio
 async def test_detail_fetch_result_isolates_nested_evidence_representations():
     scraper_module = importlib.import_module(
         "app.scraper.offertoday_browser_detail_scraper"
