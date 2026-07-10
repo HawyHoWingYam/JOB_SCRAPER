@@ -138,7 +138,8 @@ def build_baseline_snapshot(
         "published_partial_jobs": sum(not job.is_complete for job in jobs),
         "duplicate_staging_rows": len(valid_staged_ids) - len(staged_ids),
         "missing_encrypted_job_id_rows": sum(
-            not row.encrypted_job_id for row in listings
+            _canonical_nonblank(row.encrypted_job_id) is None
+            for row in listings
         ),
         "identity_mapping_conflict_ids": tuple(
             sorted(identity_mapping_conflict_ids)

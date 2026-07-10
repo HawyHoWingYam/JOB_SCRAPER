@@ -248,6 +248,52 @@ def test_baseline_canonicalizes_nonblank_source_ids_and_accounts_invalid_rows():
     assert inventory.staged_unpublished_job_ids == ("j-1",)
 
 
+def test_baseline_counts_whitespace_encrypted_id_as_missing_in_canonical_hash():
+    listings = [
+        _listing(
+            "row-1",
+            "j-1",
+            "pending",
+            None,
+            "run-1",
+            encrypted_job_id="   ",
+        ),
+        _listing(
+            "row-2",
+            "j-2",
+            "pending",
+            None,
+            "run-1",
+            encrypted_job_id="enc-2",
+        ),
+    ]
+
+    snapshot = build_baseline_snapshot(listings=listings, jobs=[])
+    reordered = build_baseline_snapshot(
+        listings=list(reversed(listings)),
+        jobs=[],
+    )
+    changed = build_baseline_snapshot(
+        listings=[
+            _listing(
+                "row-1",
+                "j-1",
+                "pending",
+                None,
+                "run-1",
+                encrypted_job_id="enc-1",
+            ),
+            listings[1],
+        ],
+        jobs=[],
+    )
+
+    assert snapshot.missing_encrypted_job_id_rows == 1
+    assert snapshot.data_hash == reordered.data_hash
+    assert changed.missing_encrypted_job_id_rows == 0
+    assert snapshot.data_hash != changed.data_hash
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [

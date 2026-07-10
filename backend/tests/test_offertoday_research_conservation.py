@@ -519,6 +519,7 @@ def _crawl_job(*, crawl_job_id="crawl-run", status="completed", published=(), st
         ("row_count", True, False),
         ("missing_job_id_count", 0.5, False),
         ("rows_created", -1, True),
+        ("rows_created", None, True),
     ],
 )
 def test_replay_rejects_corrupt_numeric_listing_evidence(
@@ -563,6 +564,47 @@ def test_replay_rejects_corrupt_numeric_listing_evidence(
             listings=[],
             jobs=[],
         )
+
+
+def test_replay_derives_created_rows_only_when_rows_created_key_is_absent():
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": 1,
+                "classification": "success",
+                "row_count": 1,
+                "missing_job_id_count": 0,
+                "rows": [{"job_id": "j-1", "encrypted_job_id": "enc-1"}],
+            },
+        },
+        {
+            "sequence_no": 2,
+            "event_type": "crawl.listing_observed",
+            "payload": {
+                "records": [
+                    {
+                        "source_job_id": "j-1",
+                        "classification": "newly_staged",
+                    }
+                ]
+            },
+        },
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.newly_created_staging_rows == 1
+    assert report.listing.newly_staged_distinct_ids == 1
+    assert report.is_valid is True
 
 
 @pytest.mark.parametrize(

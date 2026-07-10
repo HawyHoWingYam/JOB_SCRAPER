@@ -516,11 +516,11 @@ def _listing_observation_evidence(
         newly_staged_ids.update(
             _canonical_id_set(payload.get("created_source_job_ids") or [])
         )
-        if payload.get("rows_created") is None:
+        if "rows_created" not in payload:
             newly_created_rows += len(newly_staged_records)
         else:
             newly_created_rows += _require_nonnegative_int(
-                payload.get("rows_created"),
+                payload["rows_created"],
                 evidence_name="rows_created",
             )
     return newly_staged_ids, newly_created_rows
