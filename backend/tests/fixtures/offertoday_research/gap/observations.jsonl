@@ -1,0 +1,4 @@
+{"sequence_no":1,"event_type":"research.page_attempt","payload":{"page":1,"attempt":1,"classification":"success","row_count":1,"id_pairs":[{"job_id":"j-1","encrypted_job_id":"enc-1"}],"rows":[{"job_id":"j-1","encrypted_job_id":"enc-1","title":"Data Engineer","job_function_codes":["118000","118005"],"title_language":"en","api_language":"zh_HK"}]}}
+{"sequence_no":2,"event_type":"research.page_attempt","payload":{"page":2,"attempt":1,"classification":"success","row_count":0,"id_pairs":[]}}
+{"sequence_no":3,"event_type":"research.page_attempt","payload":{"page":3,"attempt":1,"classification":"failed","row_count":0,"id_pairs":[],"error":"synthetic_transport_failure"}}
+{"sequence_no":4,"event_type":"research.condition_incomplete","payload":{"stop_reason":"transport_failure","is_complete":false}}
