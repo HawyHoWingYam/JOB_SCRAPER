@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 
+import app.sources.offertoday.research.artifacts as artifacts_module
 from app.sources.offertoday.research.artifacts import (
     DEFAULT_RELEVANT_SOURCE_PATHS,
     ResearchProvenance,
@@ -18,6 +20,11 @@ from app.sources.offertoday.research.artifacts import (
 
 
 RUN_ID = "11111111-1111-1111-1111-111111111111"
+SHA256_A = "a" * 64
+SHA256_B = "b" * 64
+SHA256_C = "c" * 64
+SHA256_D = "d" * 64
+SHA256_E = "e" * 64
 
 
 def git(repo: Path, *args: str) -> str:
@@ -44,6 +51,17 @@ def write_file(repo: Path, relative_path: str, payload: str | bytes) -> Path:
 
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def create_directory_indirection(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=True,
+            capture_output=True,
+        )
+        return
+    link.symlink_to(target, target_is_directory=True)
 
 
 def initialize_git_fixture(
@@ -74,13 +92,18 @@ def fixture_provenance(**overrides) -> ResearchProvenance:
     values = {
         "commit_sha": "fixture-sha",
         "working_tree_patch": "diff --git a/safe.py b/safe.py\n",
-        "source_hashes": {"backend/app/safe.py": "source-hash"},
-        "compose_file_hashes": {"docker-compose.yml": "compose-hash"},
+        "source_hashes": {"backend/app/safe.py": SHA256_A},
+        "compose_file_hashes": {"docker-compose.yml": SHA256_B},
         "captured_at": "2026-07-10T00:00:00+00:00",
         "runtime_context": {"session_mode": "fixture"},
-        "untracked_file_hashes": {},
-        "excluded_tracked_file_hashes": {},
-        "excluded_untracked_file_hashes": {},
+        "untracked_file_hashes": {"backend/app/new.py": SHA256_C},
+        "excluded_tracked_file_hashes": {
+            ".env.local": "deleted",
+            "backend/app/private.py": SHA256_D,
+        },
+        "excluded_untracked_file_hashes": {
+            "backend/tests/private.py": SHA256_E
+        },
     }
     values.update(overrides)
     return ResearchProvenance(**values)
@@ -200,6 +223,110 @@ def test_export_is_atomic_canonical_hashed_and_recursively_redacted(tmp_path) ->
     for secret_value in (*secret_values.values(), "runtime-secret-value"):
         assert secret_value.encode() not in serialized_payloads
     assert verify_research_artifact(artifact_dir).valid is True
+
+
+@pytest.mark.parametrize("run_id", ("../escaped", "not-a-uuid"))
+def test_export_rejects_non_uuid_and_traversal_run_ids(tmp_path, run_id) -> None:
+    root = tmp_path / "artifacts"
+
+    with pytest.raises(ValueError):
+        export_research_artifact(
+            root=root,
+            run_id=run_id,
+            metadata={"experiment": "fixture"},
+            events=[],
+            provenance=fixture_provenance(),
+        )
+
+    assert not (tmp_path / "escaped").exists()
+    assert not (root / "not-a-uuid").exists()
+
+
+def test_export_rejects_absolute_run_id(tmp_path) -> None:
+    root = tmp_path / "artifacts"
+    outside = (tmp_path / "absolute-run").resolve()
+
+    with pytest.raises(ValueError):
+        export_research_artifact(
+            root=root,
+            run_id=str(outside),
+            metadata={"experiment": "fixture"},
+            events=[],
+            provenance=fixture_provenance(),
+        )
+
+    assert not outside.exists()
+
+
+def test_export_canonicalizes_uuid_for_directory_and_manifest(tmp_path) -> None:
+    uppercase_run_id = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+    canonical_run_id = uppercase_run_id.lower()
+
+    artifact_dir = export_research_artifact(
+        root=tmp_path,
+        run_id=uppercase_run_id,
+        metadata={"experiment": "fixture"},
+        events=[],
+        provenance=fixture_provenance(),
+    )
+
+    assert artifact_dir == tmp_path / canonical_run_id
+    manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["run_id"] == canonical_run_id
+
+
+def test_export_rejects_preexisting_run_directory_indirection(tmp_path) -> None:
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    create_directory_indirection(root / RUN_ID, outside)
+
+    with pytest.raises(ValueError, match="indirection"):
+        export_research_artifact(
+            root=root,
+            run_id=RUN_ID,
+            metadata={"experiment": "fixture"},
+            events=[],
+            provenance=fixture_provenance(),
+        )
+
+    assert list(outside.iterdir()) == []
+
+
+def test_export_does_not_touch_predictable_temp_names(tmp_path) -> None:
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    destination = artifact_dir / "manifest.json"
+    sentinel = artifact_dir / "manifest.json.tmp"
+    sentinel.write_text("sentinel", encoding="utf-8")
+
+    artifacts_module._write_atomic(destination, b"payload")
+
+    assert sentinel.read_text(encoding="utf-8") == "sentinel"
+    assert destination.read_bytes() == b"payload"
+
+
+def test_atomic_write_cleans_unique_temp_after_replace_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def fail_replace(source, destination):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(artifacts_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        export_research_artifact(
+            root=tmp_path,
+            run_id=RUN_ID,
+            metadata={"experiment": "fixture"},
+            events=[],
+            provenance=fixture_provenance(),
+        )
+
+    artifact_dir = tmp_path / RUN_ID
+    assert all(not path.name.endswith(".tmp") for path in artifact_dir.iterdir())
 
 
 def test_redaction_does_not_remove_excluded_sensitive_path_hash_keys(tmp_path) -> None:
@@ -417,6 +544,127 @@ def test_verifier_rejects_fixed_name_symlinks_without_following(
     assert result.valid is False
     assert result.missing_files == ()
     assert result.mismatched_files == (fixed_name,)
+
+
+def test_verifier_rejects_manifest_with_only_valid_files_map(tmp_path) -> None:
+    artifact_dir = build_fixture_artifact(tmp_path)
+    manifest_path = artifact_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_path.write_text(
+        json.dumps({"files": manifest["files"]}),
+        encoding="utf-8",
+    )
+
+    result = verify_research_artifact(artifact_dir)
+
+    assert result.valid is False
+    assert result.missing_files == ()
+    assert result.mismatched_files == ("manifest.json",)
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "artifact-version",
+        "artifact-version-bool",
+        "noncanonical-run-id",
+        "run-id-directory-mismatch",
+        "invalid-run-id",
+        "metadata-type",
+        "provenance-type",
+        "top-level-missing",
+        "top-level-extra",
+        "provenance-missing",
+        "provenance-extra",
+        "commit-sha-type",
+        "captured-at-invalid",
+        "captured-at-naive",
+        "runtime-context-type",
+        "source-hash",
+        "compose-hash",
+        "untracked-hash",
+        "excluded-untracked-hash",
+        "excluded-tracked-hash",
+    ),
+)
+def test_verifier_rejects_malformed_v1_manifest_schema(tmp_path, case) -> None:
+    artifact_dir = build_fixture_artifact(tmp_path)
+    manifest_path = artifact_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    provenance = manifest["provenance"]
+
+    if case == "artifact-version":
+        manifest["artifact_version"] = 2
+    elif case == "artifact-version-bool":
+        manifest["artifact_version"] = True
+    elif case == "noncanonical-run-id":
+        manifest["run_id"] = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+    elif case == "run-id-directory-mismatch":
+        manifest["run_id"] = "22222222-2222-2222-2222-222222222222"
+    elif case == "invalid-run-id":
+        manifest["run_id"] = "not-a-uuid"
+    elif case == "metadata-type":
+        manifest["metadata"] = []
+    elif case == "provenance-type":
+        manifest["provenance"] = []
+    elif case == "top-level-missing":
+        manifest.pop("metadata")
+    elif case == "top-level-extra":
+        manifest["unexpected"] = True
+    elif case == "provenance-missing":
+        provenance.pop("runtime_context")
+    elif case == "provenance-extra":
+        provenance["unexpected"] = True
+    elif case == "commit-sha-type":
+        provenance["commit_sha"] = 123
+    elif case == "captured-at-invalid":
+        provenance["captured_at"] = "not-a-timestamp"
+    elif case == "captured-at-naive":
+        provenance["captured_at"] = "2026-07-10T00:00:00"
+    elif case == "runtime-context-type":
+        provenance["runtime_context"] = []
+    elif case == "source-hash":
+        provenance["source_hashes"] = {"source.py": "deleted"}
+    elif case == "compose-hash":
+        provenance["compose_file_hashes"] = {"compose.yml": "bad"}
+    elif case == "untracked-hash":
+        provenance["untracked_file_hashes"] = {"new.py": 123}
+    elif case == "excluded-untracked-hash":
+        provenance["excluded_untracked_file_hashes"] = {"new.py": "deleted"}
+    elif case == "excluded-tracked-hash":
+        provenance["excluded_tracked_file_hashes"] = {"secret.py": "bad"}
+    else:
+        raise AssertionError(f"unknown schema case: {case}")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = verify_research_artifact(artifact_dir)
+
+    assert result.valid is False
+    assert result.missing_files == ()
+    assert result.mismatched_files == ("manifest.json",)
+
+
+@pytest.mark.parametrize("entry_kind", ("executable", "temp", "directory"))
+def test_verifier_rejects_unexpected_artifact_directory_entries(
+    tmp_path,
+    entry_kind,
+) -> None:
+    artifact_dir = build_fixture_artifact(tmp_path)
+    if entry_kind == "executable":
+        unexpected = artifact_dir / "unexpected.exe"
+        unexpected.write_bytes(b"executable")
+    elif entry_kind == "temp":
+        unexpected = artifact_dir / ".manifest.json.stale.tmp"
+        unexpected.write_bytes(b"temporary")
+    else:
+        unexpected = artifact_dir / "unexpected-directory"
+        unexpected.mkdir()
+
+    result = verify_research_artifact(artifact_dir)
+
+    assert result.valid is False
+    assert result.missing_files == ()
+    assert result.mismatched_files == (unexpected.name,)
 
 
 def test_provenance_captures_staged_unstaged_and_ignored_safe_files(tmp_path) -> None:
@@ -642,6 +890,90 @@ def test_provenance_excludes_complete_marker_bearing_assignment_keys(
     assert provenance.untracked_file_hashes == {}
 
 
+@pytest.mark.parametrize(
+    "content",
+    (
+        'API_TOKEN = "$upersecret-value"\n',
+        '{"api_token":"hard-coded-secret"}\n',
+        "- api_token: hard-coded-secret\n",
+        '# API_TOKEN = "commented-secret"\n',
+        'API_TOKEN = "abc"\n',
+        'API_TOKEN = "os.getenv(\\"API_TOKEN\\")"\n',
+    ),
+    ids=(
+        "invalid-dollar-value",
+        "one-line-json",
+        "yaml-list",
+        "commented-assignment",
+        "short-quoted-secret",
+        "quoted-getter-text",
+    ),
+)
+def test_provenance_excludes_secret_assignment_shapes(tmp_path, content) -> None:
+    repo = initialize_git_fixture(
+        tmp_path,
+        tracked_files={"backend/app/scanner_probe.py": "SAFE_VALUE = 1\n"},
+    )
+    tracked = write_file(repo, "backend/app/scanner_probe.py", content)
+    untracked = write_file(repo, "backend/tests/scanner_probe.py", content)
+
+    provenance = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+        relevant_source_paths=(),
+    )
+
+    assert provenance.excluded_tracked_file_hashes == {
+        "backend/app/scanner_probe.py": file_sha256(tracked)
+    }
+    assert provenance.excluded_untracked_file_hashes == {
+        "backend/tests/scanner_probe.py": file_sha256(untracked)
+    }
+    assert "scanner_probe.py" not in provenance.working_tree_patch
+
+
+@pytest.mark.parametrize(
+    "content",
+    (
+        "api_token: $TOKEN\n",
+        "api_token: ${TOKEN}\n",
+        "API_TOKEN = os.getenv('API_TOKEN')\n",
+        "API_TOKEN = getenv('API_TOKEN')\n",
+        "API_TOKEN = settings.api_token\n",
+        "API_TOKEN = '<redacted>'\n",
+    ),
+    ids=(
+        "dollar-name",
+        "braced-dollar-name",
+        "os-getenv",
+        "getenv",
+        "settings",
+        "redacted",
+    ),
+)
+def test_provenance_keeps_explicit_secret_reference_shapes(tmp_path, content) -> None:
+    repo = initialize_git_fixture(tmp_path)
+    safe_reference = write_file(
+        repo,
+        "backend/tests/scanner_reference.yaml",
+        content,
+    )
+
+    provenance = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+        relevant_source_paths=(),
+    )
+
+    assert provenance.untracked_file_hashes == {
+        "backend/tests/scanner_reference.yaml": file_sha256(safe_reference)
+    }
+    assert provenance.excluded_untracked_file_hashes == {}
+    assert "backend/tests/scanner_reference.yaml" in provenance.working_tree_patch
+
+
 def test_provenance_hash_excludes_tracked_non_utf8_text_diff(tmp_path) -> None:
     repo = initialize_git_fixture(
         tmp_path,
@@ -663,6 +995,94 @@ def test_provenance_hash_excludes_tracked_non_utf8_text_diff(tmp_path) -> None:
     assert provenance.excluded_tracked_file_hashes == {
         "backend/app/opaque.py": file_sha256(opaque)
     }
+
+
+def test_provenance_excludes_untracked_directory_indirection_without_reading_target(
+    tmp_path,
+) -> None:
+    repo = initialize_git_fixture(tmp_path)
+    outside = tmp_path / "outside-untracked"
+    innocent = write_file(outside, "innocent.py", "OUTSIDE_VALUE = 'entered'\n")
+    link = repo / "backend/tests/linked"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    create_directory_indirection(link, outside)
+
+    first = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+        relevant_source_paths=(),
+    )
+    second = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+        relevant_source_paths=(),
+    )
+
+    relative_path = "backend/tests/linked/innocent.py"
+    marker_hash = first.excluded_untracked_file_hashes[relative_path]
+    assert marker_hash == second.excluded_untracked_file_hashes[relative_path]
+    assert len(marker_hash) == 64
+    assert marker_hash != file_sha256(innocent)
+    assert relative_path not in first.untracked_file_hashes
+    assert "OUTSIDE_VALUE" not in first.working_tree_patch
+
+
+def test_sensitive_tracked_indirection_is_not_hashed_from_target(tmp_path) -> None:
+    repo = initialize_git_fixture(tmp_path)
+    outside = tmp_path / "outside-tracked"
+    state = write_file(outside, "state.py", "VALUE = 'before'\n")
+    link = repo / "backend/app/secrets"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    create_directory_indirection(link, outside)
+    git(repo, "add", "-f", "backend/app/secrets/state.py")
+    git(repo, "commit", "-m", "track junction fixture")
+    state.write_text("VALUE = 'after'\n", encoding="utf-8")
+
+    provenance = capture_research_provenance(
+        repo_root=repo,
+        runtime_context={"session_mode": "fixture"},
+        captured_at="2026-07-10T00:00:00+00:00",
+        relevant_source_paths=(),
+    )
+
+    relative_path = "backend/app/secrets/state.py"
+    marker_hash = provenance.excluded_tracked_file_hashes[relative_path]
+    assert len(marker_hash) == 64
+    assert marker_hash != file_sha256(state)
+    assert "VALUE = 'after'" not in provenance.working_tree_patch
+
+
+def test_provenance_rejects_relevant_source_directory_indirection(tmp_path) -> None:
+    repo = initialize_git_fixture(tmp_path)
+    outside = tmp_path / "outside-source"
+    write_file(outside, "outside.py", "OUTSIDE_SOURCE = True\n")
+    link = repo / "backend/app/sources/offertoday"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    create_directory_indirection(link, outside)
+
+    with pytest.raises(ValueError, match="indirection"):
+        capture_research_provenance(
+            repo_root=repo,
+            runtime_context={"session_mode": "fixture"},
+            captured_at="2026-07-10T00:00:00+00:00",
+        )
+
+
+def test_provenance_rejects_compose_indirection(tmp_path) -> None:
+    repo = initialize_git_fixture(tmp_path)
+    outside = tmp_path / "outside-compose"
+    write_file(outside, "docker-compose.yml", "services: {}\n")
+    create_directory_indirection(repo / "docker-compose.yml", outside)
+
+    with pytest.raises(ValueError, match="indirection"):
+        capture_research_provenance(
+            repo_root=repo,
+            runtime_context={"session_mode": "fixture"},
+            captured_at="2026-07-10T00:00:00+00:00",
+            relevant_source_paths=(),
+        )
 
 
 def test_provenance_emits_empty_and_no_final_newline_file_patches(tmp_path) -> None:

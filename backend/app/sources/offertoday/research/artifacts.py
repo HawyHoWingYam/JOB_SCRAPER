@@ -5,8 +5,11 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Sequence
@@ -35,7 +38,31 @@ _SECRET_KEY_PARTS = (
     "token",
 )
 _REQUIRED_ARTIFACT_FILES = ("observations.jsonl", "working-tree.patch")
+_ARTIFACT_DIRECTORY_FILES = ("manifest.json", *_REQUIRED_ARTIFACT_FILES)
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_MANIFEST_KEYS = {
+    "artifact_version",
+    "run_id",
+    "metadata",
+    "provenance",
+    "files",
+}
+_PROVENANCE_KEYS = {
+    "commit_sha",
+    "source_hashes",
+    "compose_file_hashes",
+    "captured_at",
+    "runtime_context",
+    "untracked_file_hashes",
+    "excluded_tracked_file_hashes",
+    "excluded_untracked_file_hashes",
+}
+_PROVENANCE_SHA256_MAPPINGS = (
+    "source_hashes",
+    "compose_file_hashes",
+    "untracked_file_hashes",
+    "excluded_untracked_file_hashes",
+)
 
 DEFAULT_RELEVANT_SOURCE_PATHS = (
     "backend/app/sources/offertoday",
@@ -84,11 +111,11 @@ _SENSITIVE_FILE_MARKERS = (
 _SENSITIVE_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
 _ASSIGNMENT_RE = re.compile(
     r"""
-    ^[+\- ]?[ \t]*
+    (?<![A-Za-z0-9_.])
     (?P<key>
-        "[^"\r\n]+"
+        "(?:\\.|[^"\\\r\n])+"
         |
-        '[^'\r\n]+'
+        '(?:\\.|[^'\\\r\n])+'
         |
         [A-Za-z_][A-Za-z0-9_. -]*?
     )
@@ -100,12 +127,19 @@ _ASSIGNMENT_RE = re.compile(
     )
     [ \t]*
     (?P<value>
-        (?:[rubf]{0,2})?["'][^"'\r\n]{4,}["']
+        \$\{[A-Za-z_][A-Za-z0-9_]*\}
         |
-        [^\s,;#}\]\r\n]{8,}
+        (?:[rubf]{0,2})?"(?:\\.|[^"\\\r\n])*"
+        |
+        (?:[rubf]{0,2})?'(?:\\.|[^'\\\r\n])*'
+        |
+        [^\s,;#}\]\r\n]+
     )
     """,
-    re.IGNORECASE | re.MULTILINE | re.VERBOSE,
+    re.IGNORECASE | re.VERBOSE,
+)
+_ENV_REFERENCE_RE = re.compile(
+    r"^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$"
 )
 _CREDENTIAL_URL_RE = re.compile(r"://[^\s/:]+:[^\s/@]+@")
 _BEARER_TOKEN_RE = re.compile(
@@ -174,18 +208,195 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
+
+
+def _is_hash_mapping(value: Any, *, allow_deleted: bool = False) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(key, str)
+        and (_is_sha256(item) or (allow_deleted and item == "deleted"))
+        for key, item in value.items()
+    )
+
+
+def _is_aware_iso8601(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
+
+
+def _is_valid_v1_manifest(manifest: Any, artifact_dir: Path) -> bool:
+    if not isinstance(manifest, dict) or set(manifest) != _MANIFEST_KEYS:
+        return False
+    if type(manifest["artifact_version"]) is not int:
+        return False
+    if manifest["artifact_version"] != 1:
+        return False
+    run_id = manifest["run_id"]
+    if not isinstance(run_id, str):
+        return False
+    try:
+        if str(UUID(run_id)) != run_id:
+            return False
+    except ValueError:
+        return False
+    if artifact_dir.name != run_id or not isinstance(manifest["metadata"], dict):
+        return False
+
+    provenance = manifest["provenance"]
+    if not isinstance(provenance, dict) or set(provenance) != _PROVENANCE_KEYS:
+        return False
+    if not isinstance(provenance["commit_sha"], str):
+        return False
+    if not _is_aware_iso8601(provenance["captured_at"]):
+        return False
+    if not isinstance(provenance["runtime_context"], dict):
+        return False
+    if not all(
+        _is_hash_mapping(provenance[name])
+        for name in _PROVENANCE_SHA256_MAPPINGS
+    ):
+        return False
+    if not _is_hash_mapping(
+        provenance["excluded_tracked_file_hashes"],
+        allow_deleted=True,
+    ):
+        return False
+
+    files = manifest["files"]
+    return (
+        isinstance(files, dict)
+        and set(files) == set(_REQUIRED_ARTIFACT_FILES)
+        and all(_is_sha256(expected_hash) for expected_hash in files.values())
+    )
+
+
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _is_path_indirection(path: Path) -> bool:
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return False
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    file_attributes = getattr(path_stat, "st_file_attributes", 0)
+    return stat.S_ISLNK(path_stat.st_mode) or bool(
+        file_attributes & reparse_attribute
+    )
+
+
+def _normalize_repo_relative_path(relative_path: str) -> str:
+    normalized = relative_path.replace("\\", "/")
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or re.match(r"^[A-Za-z]:/", normalized)
+    ):
+        raise ValueError(f"unsafe repository path: {relative_path!r}")
+    parts = [part for part in normalized.split("/") if part not in ("", ".")]
+    if not parts or any(part == ".." or "\0" in part for part in parts):
+        raise ValueError(f"unsafe repository path: {relative_path!r}")
+    return "/".join(parts)
+
+
+def _repo_candidate_path(repo_root: Path, relative_path: str) -> tuple[str, Path]:
+    normalized = _normalize_repo_relative_path(relative_path)
+    path = repo_root.joinpath(*normalized.split("/"))
+    try:
+        path.relative_to(repo_root)
+    except ValueError as exc:
+        raise ValueError(f"repository path escaped root: {relative_path!r}") from exc
+    return normalized, path
+
+
+def _indirection_component(repo_root: Path, path: Path) -> Path | None:
+    relative = path.relative_to(repo_root)
+    current = repo_root
+    for part in relative.parts:
+        current /= part
+        if _is_path_indirection(current):
+            return current
+        if not os.path.lexists(current):
+            return None
+    return None
+
+
+def _indirection_hash(relative_path: str) -> str:
+    marker = f"filesystem-indirection:{relative_path}".encode("utf-8")
+    return _sha256(marker)
+
+
+def _read_regular_file(repo_root: Path, relative_path: str) -> bytes:
+    normalized, path = _repo_candidate_path(repo_root, relative_path)
+    indirection = _indirection_component(repo_root, path)
+    if indirection is not None:
+        raise ValueError(f"filesystem indirection is not allowed: {normalized}")
+    if not os.path.lexists(path):
+        raise FileNotFoundError(path)
+    resolved = path.resolve(strict=True)
+    try:
+        resolved.relative_to(repo_root)
+    except ValueError as exc:
+        raise ValueError(f"repository path escaped root: {normalized}") from exc
+
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    file_descriptor = os.open(path, flags)
+    try:
+        opened_stat = os.fstat(file_descriptor)
+        if not stat.S_ISREG(opened_stat.st_mode):
+            raise ValueError(f"repository candidate is not a regular file: {normalized}")
+        path_stat = path.lstat()
+        if _is_path_indirection(path):
+            raise ValueError(f"filesystem indirection is not allowed: {normalized}")
+        if (opened_stat.st_dev, opened_stat.st_ino) != (
+            path_stat.st_dev,
+            path_stat.st_ino,
+        ):
+            raise ValueError(f"repository candidate changed while reading: {normalized}")
+        chunks: list[bytes] = []
+        while chunk := os.read(file_descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        if _indirection_component(repo_root, path) is not None:
+            raise ValueError(f"filesystem indirection is not allowed: {normalized}")
+        return b"".join(chunks)
+    finally:
+        os.close(file_descriptor)
+
+
 def _write_atomic(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.tmp")
-    with temporary.open("wb") as handle:
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
-    temporary.replace(path)
+    if _is_path_indirection(path.parent):
+        raise ValueError("artifact directory indirection is not allowed")
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        handle = os.fdopen(file_descriptor, "wb")
+        file_descriptor = -1
+        with handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def export_research_artifact(
@@ -196,8 +407,28 @@ def export_research_artifact(
     events: Sequence[dict[str, Any]],
     provenance: ResearchProvenance,
 ) -> Path:
-    artifact_dir = root / str(run_id)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        canonical_run_id = str(UUID(str(run_id)))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("run_id must be a valid UUID") from exc
+
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    root_anchor = root.resolve(strict=True)
+    if not root_anchor.is_dir():
+        raise ValueError("artifact root must be a directory")
+    artifact_dir = root_anchor / canonical_run_id
+    try:
+        artifact_dir.mkdir()
+    except FileExistsError as exc:
+        if _is_path_indirection(artifact_dir):
+            raise ValueError("artifact directory indirection is not allowed") from exc
+        raise FileExistsError(f"research artifact already exists: {canonical_run_id}") from exc
+    if _is_path_indirection(artifact_dir):
+        raise ValueError("artifact directory indirection is not allowed")
+    resolved_artifact_dir = artifact_dir.resolve(strict=True)
+    if resolved_artifact_dir.parent != root_anchor:
+        raise ValueError("artifact directory escaped the artifact root")
     observation_lines = [
         _canonical_json_bytes(_redact(event)).rstrip(b"\n") for event in events
     ]
@@ -211,7 +442,7 @@ def export_research_artifact(
     }
     manifest = {
         "artifact_version": 1,
-        "run_id": str(run_id),
+        "run_id": canonical_run_id,
         "metadata": _redact(metadata),
         "provenance": {
             "commit_sha": provenance.commit_sha,
@@ -240,6 +471,14 @@ def export_research_artifact(
 
 
 def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
+    """Verify local v1 structure and hashes, not artifact authenticity/signatures."""
+    artifact_dir = Path(artifact_dir)
+    if _is_path_indirection(artifact_dir):
+        return ArtifactVerificationResult(
+            valid=False,
+            missing_files=(),
+            mismatched_files=("manifest.json",),
+        )
     manifest_path = artifact_dir / "manifest.json"
     required_paths = {
         relative_name: artifact_dir / relative_name
@@ -250,12 +489,33 @@ def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
         for relative_name, path in required_paths.items()
         if path.is_symlink()
     ]
+    manifest_is_symlink = manifest_path.is_symlink()
+    try:
+        actual_names = {entry.name for entry in os.scandir(artifact_dir)}
+    except (FileNotFoundError, NotADirectoryError, OSError):
+        return ArtifactVerificationResult(
+            valid=False,
+            missing_files=tuple(sorted(_ARTIFACT_DIRECTORY_FILES)),
+            mismatched_files=(),
+        )
+    effective_names = set(actual_names)
+    effective_names.update(symlinked)
+    if manifest_is_symlink:
+        effective_names.add("manifest.json")
     missing = [
         relative_name
         for relative_name, path in required_paths.items()
-        if relative_name not in symlinked and not path.is_file()
+        if relative_name not in symlinked
+        and (relative_name not in effective_names or not path.is_file())
     ]
-    if manifest_path.is_symlink():
+    unexpected = sorted(actual_names - set(_ARTIFACT_DIRECTORY_FILES))
+    if unexpected:
+        return ArtifactVerificationResult(
+            valid=False,
+            missing_files=tuple(sorted(missing)),
+            mismatched_files=tuple(sorted([*unexpected, *symlinked])),
+        )
+    if manifest_is_symlink:
         return ArtifactVerificationResult(
             valid=False,
             missing_files=tuple(sorted(missing)),
@@ -275,17 +535,7 @@ def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
             missing_files=tuple(sorted(missing)),
             mismatched_files=tuple(sorted(["manifest.json", *symlinked])),
         )
-    files = manifest.get("files") if isinstance(manifest, dict) else None
-    files_are_valid = (
-        isinstance(files, dict)
-        and set(files) == set(_REQUIRED_ARTIFACT_FILES)
-        and all(
-            isinstance(expected_hash, str)
-            and _SHA256_RE.fullmatch(expected_hash) is not None
-            for expected_hash in files.values()
-        )
-    )
-    if not files_are_valid:
+    if not _is_valid_v1_manifest(manifest, artifact_dir):
         return ArtifactVerificationResult(
             valid=False,
             missing_files=tuple(sorted(missing)),
@@ -293,6 +543,7 @@ def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
         )
 
     mismatched = list(symlinked)
+    files = manifest["files"]
     for relative_name in _REQUIRED_ARTIFACT_FILES:
         path = required_paths[relative_name]
         if relative_name in missing or relative_name in symlinked:
@@ -356,9 +607,18 @@ def _contains_sensitive_content(text: str) -> bool:
             for part in _SECRET_KEY_PARTS
         ):
             continue
-        value = match.group("value").strip().lstrip("rubfRUBF").strip("\"'")
+        raw_value = match.group("value").strip()
+        quoted_match = re.match(r"(?i)^[rubf]{0,2}([\"'])", raw_value)
+        is_quoted = quoted_match is not None
+        if is_quoted:
+            quote_index = quoted_match.end() - 1
+            value = raw_value[quote_index + 1 : -1]
+        else:
+            value = raw_value
         lowered = value.lower()
-        if value.startswith("$") or lowered.startswith(
+        if _ENV_REFERENCE_RE.fullmatch(value):
+            continue
+        if not is_quoted and lowered.startswith(
             (
                 "env.",
                 "environment.",
@@ -376,8 +636,18 @@ def _contains_sensitive_content(text: str) -> bool:
     return False
 
 
-def _hash_or_deleted(path: Path) -> str:
-    return _sha256(path.read_bytes()) if path.is_file() else "deleted"
+def _hash_or_deleted(repo_root: Path, relative_path: str) -> str:
+    normalized, path = _repo_candidate_path(repo_root, relative_path)
+    if not os.path.lexists(path):
+        return "deleted"
+    if _indirection_component(repo_root, path) is not None:
+        return _indirection_hash(normalized)
+    try:
+        return _sha256(_read_regular_file(repo_root, normalized))
+    except FileNotFoundError:
+        return "deleted"
+    except ValueError:
+        return _indirection_hash(normalized)
 
 
 def _git_blob_short_sha(payload: bytes) -> str:
@@ -414,6 +684,52 @@ def _untracked_file_patch(
     return patch
 
 
+def _collect_relevant_source_paths(
+    repo_root: Path,
+    relative_path: str,
+) -> list[str]:
+    normalized, path = _repo_candidate_path(repo_root, relative_path)
+    if not os.path.lexists(path):
+        return []
+    if _indirection_component(repo_root, path) is not None:
+        raise ValueError(f"filesystem indirection is not allowed: {normalized}")
+    path_stat = path.lstat()
+    if stat.S_ISREG(path_stat.st_mode):
+        return [normalized]
+    if not stat.S_ISDIR(path_stat.st_mode):
+        raise ValueError(f"relevant source is not a regular path: {normalized}")
+
+    collected: list[str] = []
+    pending = [(normalized, path)]
+    while pending:
+        directory_relative, directory = pending.pop()
+        resolved_directory = directory.resolve(strict=True)
+        try:
+            resolved_directory.relative_to(repo_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"relevant source escaped repository root: {directory_relative}"
+            ) from exc
+        with os.scandir(directory) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                child_relative = f"{directory_relative}/{entry.name}"
+                child = Path(entry.path)
+                if _is_path_indirection(child):
+                    raise ValueError(
+                        f"filesystem indirection is not allowed: {child_relative}"
+                    )
+                child_stat = entry.stat(follow_symlinks=False)
+                if stat.S_ISDIR(child_stat.st_mode):
+                    pending.append((child_relative, child))
+                elif stat.S_ISREG(child_stat.st_mode) and child.suffix == ".py":
+                    collected.append(child_relative)
+                elif child.suffix == ".py":
+                    raise ValueError(
+                        f"relevant source is not a regular file: {child_relative}"
+                    )
+    return sorted(collected)
+
+
 def capture_research_provenance(
     *,
     repo_root: Path,
@@ -421,6 +737,9 @@ def capture_research_provenance(
     captured_at: str,
     relevant_source_paths: Sequence[str] = DEFAULT_RELEVANT_SOURCE_PATHS,
 ) -> ResearchProvenance:
+    repo_root = Path(repo_root).resolve(strict=True)
+    if not repo_root.is_dir():
+        raise ValueError("repository root must be a directory")
     commit_sha = _git(repo_root, "rev-parse", "HEAD").strip()
     tracked_output = _git(
         repo_root,
@@ -434,10 +753,24 @@ def capture_research_provenance(
     tracked_paths = sorted(filter(None, tracked_output.split("\0")))
     excluded_tracked_hashes: dict[str, str] = {}
     tracked_patches: list[str] = []
-    for relative_path in tracked_paths:
-        path = repo_root / relative_path
+    for reported_path in tracked_paths:
+        relative_path, path = _repo_candidate_path(repo_root, reported_path)
+        if _indirection_component(repo_root, path) is not None:
+            excluded_tracked_hashes[relative_path] = _indirection_hash(relative_path)
+            continue
+        if os.path.lexists(path):
+            try:
+                _read_regular_file(repo_root, relative_path)
+            except (OSError, ValueError):
+                excluded_tracked_hashes[relative_path] = _indirection_hash(
+                    relative_path
+                )
+                continue
         if _is_sensitive_path(relative_path):
-            excluded_tracked_hashes[relative_path] = _hash_or_deleted(path)
+            excluded_tracked_hashes[relative_path] = _hash_or_deleted(
+                repo_root,
+                relative_path,
+            )
             continue
         candidate_patch_bytes = _git_bytes(
             repo_root,
@@ -453,15 +786,24 @@ def capture_research_provenance(
             or b"Binary files " in candidate_patch_bytes
             or b"\0" in candidate_patch_bytes
         ):
-            excluded_tracked_hashes[relative_path] = _hash_or_deleted(path)
+            excluded_tracked_hashes[relative_path] = _hash_or_deleted(
+                repo_root,
+                relative_path,
+            )
             continue
         try:
             candidate_patch = candidate_patch_bytes.decode("utf-8")
         except UnicodeDecodeError:
-            excluded_tracked_hashes[relative_path] = _hash_or_deleted(path)
+            excluded_tracked_hashes[relative_path] = _hash_or_deleted(
+                repo_root,
+                relative_path,
+            )
             continue
         if _contains_sensitive_content(candidate_patch):
-            excluded_tracked_hashes[relative_path] = _hash_or_deleted(path)
+            excluded_tracked_hashes[relative_path] = _hash_or_deleted(
+                repo_root,
+                relative_path,
+            )
             continue
         tracked_patches.append(candidate_patch)
     tracked_patch = "".join(tracked_patches)
@@ -477,14 +819,28 @@ def capture_research_provenance(
     untracked_hashes: dict[str, str] = {}
     excluded_untracked_hashes: dict[str, str] = {}
     untracked_patches: list[str] = []
-    for relative_path in sorted(filter(None, untracked_output.split("\0"))):
-        path = repo_root / relative_path
+    for reported_path in sorted(filter(None, untracked_output.split("\0"))):
+        relative_path, path = _repo_candidate_path(repo_root, reported_path)
+        if _indirection_component(repo_root, path) is not None:
+            excluded_untracked_hashes[relative_path] = _indirection_hash(relative_path)
+            continue
         if _is_sensitive_path(relative_path):
-            excluded_untracked_hashes[relative_path] = _sha256(path.read_bytes())
+            try:
+                excluded_untracked_hashes[relative_path] = _sha256(
+                    _read_regular_file(repo_root, relative_path)
+                )
+            except (OSError, ValueError):
+                excluded_untracked_hashes[relative_path] = _indirection_hash(
+                    relative_path
+                )
             continue
         if path.suffix.lower() not in _UNTRACKED_SUFFIXES:
             continue
-        payload = path.read_bytes()
+        try:
+            payload = _read_regular_file(repo_root, relative_path)
+        except (OSError, ValueError):
+            excluded_untracked_hashes[relative_path] = _indirection_hash(relative_path)
+            continue
         payload_hash = _sha256(payload)
         if b"\0" in payload:
             excluded_untracked_hashes[relative_path] = payload_hash
@@ -500,22 +856,23 @@ def capture_research_provenance(
         untracked_hashes[relative_path] = payload_hash
         untracked_patches.append(_untracked_file_patch(relative_path, payload, text))
 
-    relevant_source_files: list[Path] = []
+    relevant_source_files: list[str] = []
     for relative_path in relevant_source_paths:
-        path = repo_root / relative_path
-        if path.is_file():
-            relevant_source_files.append(path)
-        elif path.is_dir():
-            relevant_source_files.extend(path.rglob("*.py"))
+        relevant_source_files.extend(
+            _collect_relevant_source_paths(repo_root, relative_path)
+        )
     source_hashes = {
-        path.relative_to(repo_root).as_posix(): _sha256(path.read_bytes())
-        for path in sorted(set(relevant_source_files))
+        relative_path: _sha256(_read_regular_file(repo_root, relative_path))
+        for relative_path in sorted(set(relevant_source_files))
     }
-    compose_hashes = {
-        name: _sha256((repo_root / name).read_bytes())
-        for name in ("docker-compose.yml", "docker-compose.dev.yml")
-        if (repo_root / name).exists()
-    }
+    compose_hashes: dict[str, str] = {}
+    for name in ("docker-compose.yml", "docker-compose.dev.yml"):
+        _, path = _repo_candidate_path(repo_root, name)
+        if not os.path.lexists(path):
+            continue
+        if _indirection_component(repo_root, path) is not None:
+            raise ValueError(f"filesystem indirection is not allowed: {name}")
+        compose_hashes[name] = _sha256(_read_regular_file(repo_root, name))
     combined_patch = tracked_patch + "".join(untracked_patches)
     return ResearchProvenance(
         commit_sha=commit_sha,

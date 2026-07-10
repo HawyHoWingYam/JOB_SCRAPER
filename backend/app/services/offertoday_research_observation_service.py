@@ -70,7 +70,10 @@ class OfferTodayResearchObservationService:
         self._append(event_type, listing_observation_to_payload(outcome))
 
     def record_run_summary(self, payload: dict[str, Any]) -> None:
-        self._append("research.run_summary", dict(payload))
+        self._append(
+            "research.run_summary",
+            listing_observation_to_payload(payload),
+        )
 
     def _append(self, event_type: str, payload: dict[str, Any]) -> None:
         if self.crawl_job_id is None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from dataclasses import dataclass
+from enum import StrEnum
+from types import MappingProxyType, SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -22,6 +24,16 @@ from app.sources.offertoday.research.contracts import (
 
 
 RUN_ID = UUID("11111111-1111-1111-1111-111111111111")
+
+
+class SummaryState(StrEnum):
+    COMPLETE = "complete"
+
+
+@dataclass(frozen=True)
+class SummaryEvidence:
+    evidence_id: UUID
+    state: SummaryState
 
 
 class FakeCrawlJobRepository:
@@ -258,6 +270,44 @@ def test_recording_requires_a_crawl_job_id() -> None:
 
     with pytest.raises(ValueError, match="crawl_job_id"):
         service.record_run_summary({"is_complete": False})
+
+
+def test_run_summary_uses_shared_recursive_json_serializer() -> None:
+    repository = FakeCrawlJobRepository()
+    crawl_job_id = uuid4()
+    nested_id = UUID("22222222-2222-2222-2222-222222222222")
+    service = OfferTodayResearchObservationService(
+        db=object(),
+        crawl_job_repository=repository,
+        crawl_job_id=crawl_job_id,
+    )
+
+    service.record_run_summary(
+        {
+            "run_id": RUN_ID,
+            "state": SummaryState.COMPLETE,
+            "evidence": SummaryEvidence(nested_id, SummaryState.COMPLETE),
+            "items": [
+                SummaryEvidence(RUN_ID, SummaryState.COMPLETE),
+                MappingProxyType({"nested_id": nested_id}),
+            ],
+        }
+    )
+
+    event = repository.events[0]
+    assert event["event_type"] == "research.run_summary"
+    assert event["payload"] == {
+        "run_id": str(RUN_ID),
+        "state": "complete",
+        "evidence": {"evidence_id": str(nested_id), "state": "complete"},
+        "items": [
+            {"evidence_id": str(RUN_ID), "state": "complete"},
+            {"nested_id": str(nested_id)},
+        ],
+    }
+    assert event["crawl_job_id"] == crawl_job_id
+    assert event["emitted_by"] == "offertoday-research"
+    assert event["auto_commit"] is True
 
 
 def test_create_run_rejects_invalid_run_uuid() -> None:
