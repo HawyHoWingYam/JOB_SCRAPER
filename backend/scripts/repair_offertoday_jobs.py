@@ -12,13 +12,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.database import SessionLocal
 from app.scraper.manual_action import RESUME_STRATEGY_FRESH_PROFILE
-from app.scraper.offertoday_browser_detail_scraper import (
-    OfferTodayBrowserDetailScraper,
-    OfferTodayDetailUnavailableError,
-    OfferTodayIPBlockedError,
-)
+from app.scraper.offertoday_browser_detail_scraper import OfferTodayBrowserDetailScraper
 from app.scraper.offertoday_pacing import pause_before_detail_request
 from app.services.offertoday_job_repair_service import OfferTodayJobRepairService
+from app.sources.offertoday.detail_identity import OfferTodayIdentityError
+from app.sources.offertoday.response_policy import OfferTodayResponseKind
 
 
 async def repair_jobs(
@@ -72,28 +70,39 @@ async def repair_jobs(
                 ) as scraper:
                     for job in live_candidates:
                         listing = service.get_latest_listing(job.source_job_id)
-                        job_id, encrypted_job_id = service.resolve_detail_identifiers(job, listing)
                         try:
+                            job_id, encrypted_job_id = (
+                                service.resolve_detail_identifiers(
+                                    job,
+                                    listing,
+                                )
+                            )
                             await pause_before_detail_request()
-                            detail_payload = await scraper.fetch_job_detail(
+                            detail_result = await scraper.fetch_job_detail(
                                 job_id,
                                 encrypted_job_id=encrypted_job_id,
                             )
-                        except OfferTodayIPBlockedError as exc:
-                            live_ip_blocked = True
-                            live_ip_blocked_job_id = exc.job_id
-                            break
-                        except OfferTodayDetailUnavailableError as exc:
+                        except OfferTodayIdentityError as exc:
                             live_fetch_failed += 1
                             if listing is not None:
                                 listing.detail_status = "failed"
                                 listing.detail_error_message = str(exc)
                                 listing.detail_completed_at = datetime.now(UTC)
                             continue
-                        if not detail_payload:
+
+                        result = service.repair_job_with_detail_result(
+                            job, detail_result
+                        )
+                        classification = detail_result.classification
+                        if classification.kind is OfferTodayResponseKind.IP_BLOCKED:
+                            live_ip_blocked = True
+                            live_ip_blocked_job_id = detail_result.identity.job_id
+                            break
+                        if classification.kind is not OfferTodayResponseKind.SUCCESS:
                             live_fetch_failed += 1
+                            if classification.stop_batch:
+                                break
                             continue
-                        result = service.repair_job_with_detail_payload(job, detail_payload)
                         if result.description_repaired:
                             live_repaired_descriptions += 1
                         if result.company_reassigned:
@@ -116,7 +125,8 @@ async def repair_jobs(
             "scanned_jobs": len(jobs),
             "cached_repaired_descriptions": cached_repaired_descriptions,
             "live_repaired_descriptions": live_repaired_descriptions,
-            "repaired_descriptions": cached_repaired_descriptions + live_repaired_descriptions,
+            "repaired_descriptions": cached_repaired_descriptions
+            + live_repaired_descriptions,
             "reassigned_companies": reassigned_companies,
             "attached_listings": attached_listings,
             "cached_updated_jobs": cached_updated_jobs,
@@ -136,8 +146,15 @@ async def repair_jobs(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Repair stored OfferToday jobs using cached detail payloads.")
-    parser.add_argument("--limit", type=int, default=None, help="Maximum number of OfferToday jobs to inspect.")
+    parser = argparse.ArgumentParser(
+        description="Repair stored OfferToday jobs using cached detail payloads."
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of OfferToday jobs to inspect.",
+    )
     parser.add_argument(
         "--execute",
         action="store_true",

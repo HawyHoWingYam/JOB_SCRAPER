@@ -1,26 +1,50 @@
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from copy import deepcopy
+from typing import Any, Mapping, Protocol
 
 from app.scraper.manual_action import RESUME_STRATEGY_FRESH_PROFILE
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime
+from app.sources.offertoday.detail_identity import (
+    OfferTodayDetailFetchResult,
+    OfferTodayDetailIdentity,
+    OfferTodayIdentityError,
+    validate_offertoday_detail_identity,
+)
+from app.sources.offertoday.parsers import parse_offertoday_detail_response
+from app.sources.offertoday.response_policy import (
+    OfferTodayResponseClassification,
+    OfferTodayResponseKind,
+    classify_offertoday_response,
+)
 
 
-DetailJsonFetcher = Callable[[str], Awaitable[dict[str, Any] | None]]
+class DetailJsonFetcher(Protocol):
+    async def __call__(
+        self,
+        *,
+        job_id: str,
+        encrypted_job_id: str,
+    ) -> dict[str, Any] | None: ...
+
 
 _WAF_CHALLENGE_PATH = "/web/passport/cm/verify"
 
 
 class OfferTodayIPBlockedError(RuntimeError):
     def __init__(self, *, job_id: str, code: int) -> None:
-        super().__init__(f"OfferToday detail fetch blocked for job_id={job_id} code={code}")
+        super().__init__(
+            f"OfferToday detail fetch blocked for job_id={job_id} code={code}"
+        )
         self.job_id = job_id
         self.code = code
 
 
 class OfferTodayDetailUnavailableError(RuntimeError):
     def __init__(self, *, job_id: str, code: int, message: str | None = None) -> None:
-        resolved_message = str(message or "").strip() or "OfferToday detail fetch failed"
+        resolved_message = (
+            str(message or "").strip() or "OfferToday detail fetch failed"
+        )
         super().__init__(
             f"OfferToday detail unavailable for job_id={job_id} code={code}: {resolved_message}"
         )
@@ -40,7 +64,9 @@ class OfferTodayBrowserDetailScraper:
         manual_verification_timeout_seconds: int = 180,
     ) -> None:
         self.request_payload = dict(request_payload or {})
-        self.resume_strategy = self.request_payload.get("resume_strategy") or RESUME_STRATEGY_FRESH_PROFILE
+        self.resume_strategy = (
+            self.request_payload.get("resume_strategy") or RESUME_STRATEGY_FRESH_PROFILE
+        )
         self.detail_json_fetcher = detail_json_fetcher
         self.auth_state_path = auth_state_path
         self.headed = headed
@@ -76,53 +102,130 @@ class OfferTodayBrowserDetailScraper:
         job_id: str,
         *,
         encrypted_job_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        payload = await self._fetch_detail_payload(job_id, encrypted_job_id=encrypted_job_id)
-        if not isinstance(payload, dict):
-            return None
-        if payload.get("code") == -1000035:
-            if self.headed and self._page is not None:
-                cleared = await self._await_manual_verification(job_id)
-                if cleared:
-                    payload = await self._fetch_detail_payload(
-                        job_id,
-                        encrypted_job_id=encrypted_job_id,
-                    )
-                    if not isinstance(payload, dict):
-                        return None
-                else:
-                    raise OfferTodayIPBlockedError(job_id=job_id, code=-1000035)
-            else:
-                raise OfferTodayIPBlockedError(job_id=job_id, code=-1000035)
-        if payload.get("code") == -1000035:
-            raise OfferTodayIPBlockedError(job_id=job_id, code=-1000035)
-        if payload.get("code") != 0:
-            raise OfferTodayDetailUnavailableError(
-                job_id=job_id,
-                code=int(payload.get("code") or 0),
-                message=payload.get("msg"),
-            )
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            return None
-        if not str(data.get("jobId") or "").strip():
-            return None
-        return dict(data)
-
-    async def _fetch_detail_payload(
-        self,
-        job_id: str,
-        *,
-        encrypted_job_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        if self.detail_json_fetcher is not None:
-            return await self.detail_json_fetcher(job_id)
-        if self._runtime is None:
-            raise RuntimeError("OfferTodayBrowserDetailScraper runtime has not been started")
-        return await self._runtime.fetch_detail_json(
+    ) -> OfferTodayDetailFetchResult:
+        identity = self._build_request_identity(
             job_id=job_id,
             encrypted_job_id=encrypted_job_id,
         )
+        classification = await self._fetch_and_classify(identity)
+
+        if (
+            classification.kind is OfferTodayResponseKind.IP_BLOCKED
+            and self.headed
+            and self._page is not None
+        ):
+            cleared = await self._await_manual_verification(identity.encrypted_job_id)
+            if cleared:
+                classification = await self._fetch_and_classify(identity)
+
+        return self._build_fetch_result(identity, classification)
+
+    @staticmethod
+    def _build_request_identity(
+        *,
+        job_id: Any,
+        encrypted_job_id: Any,
+    ) -> OfferTodayDetailIdentity:
+        if not isinstance(job_id, str) or not job_id.strip():
+            raise OfferTodayIdentityError(
+                f"Missing nonblank string jobId; got {job_id!r}"
+            )
+        if not isinstance(encrypted_job_id, str) or not encrypted_job_id.strip():
+            raise OfferTodayIdentityError(
+                f"Missing nonblank string encryptJobId; got {encrypted_job_id!r}"
+            )
+        return OfferTodayDetailIdentity(
+            job_id=job_id.strip(),
+            encrypted_job_id=encrypted_job_id.strip(),
+        )
+
+    async def _fetch_and_classify(
+        self,
+        identity: OfferTodayDetailIdentity,
+    ) -> OfferTodayResponseClassification:
+        try:
+            payload = await self._fetch_detail_payload(identity)
+        except Exception as exc:
+            raw_payload = getattr(exc, "payload", None)
+            payload = dict(raw_payload) if isinstance(raw_payload, Mapping) else None
+            response_url = getattr(exc, "response_url", None)
+            current_url = (
+                response_url
+                if isinstance(response_url, str) and response_url.strip()
+                else self._current_page_url()
+            )
+            http_status = getattr(exc, "http_status", None)
+            return classify_offertoday_response(
+                payload,
+                operation="detail",
+                current_url=current_url,
+                expected_job_id=identity.job_id,
+                transport_error=exc,
+                http_status=http_status if isinstance(http_status, int) else None,
+            )
+
+        return classify_offertoday_response(
+            payload,
+            operation="detail",
+            current_url=self._current_page_url(),
+            expected_job_id=identity.job_id,
+        )
+
+    def _build_fetch_result(
+        self,
+        identity: OfferTodayDetailIdentity,
+        classification: OfferTodayResponseClassification,
+    ) -> OfferTodayDetailFetchResult:
+        raw_response = (
+            deepcopy(classification.raw_payload)
+            if classification.raw_payload is not None
+            else None
+        )
+        if classification.kind is not OfferTodayResponseKind.SUCCESS:
+            return OfferTodayDetailFetchResult(
+                identity=identity,
+                classification=classification,
+                raw_response=raw_response,
+                parsed_detail=None,
+                canonical_detail=None,
+            )
+
+        parsed_detail = parse_offertoday_detail_response(raw_response or {})
+        validate_offertoday_detail_identity(identity, parsed_detail)
+        canonical_detail = {
+            **parsed_detail,
+            "job_id": identity.job_id,
+            "encrypted_job_id": identity.encrypted_job_id,
+        }
+        return OfferTodayDetailFetchResult(
+            identity=identity,
+            classification=classification,
+            raw_response=raw_response,
+            parsed_detail=parsed_detail,
+            canonical_detail=canonical_detail,
+        )
+
+    async def _fetch_detail_payload(
+        self,
+        identity: OfferTodayDetailIdentity,
+    ) -> dict[str, Any] | None:
+        if self.detail_json_fetcher is not None:
+            return await self.detail_json_fetcher(
+                job_id=identity.job_id,
+                encrypted_job_id=identity.encrypted_job_id,
+            )
+        if self._runtime is None:
+            raise RuntimeError(
+                "OfferTodayBrowserDetailScraper runtime has not been started"
+            )
+        return await self._runtime.fetch_detail_json(
+            job_id=identity.job_id,
+            encrypted_job_id=identity.encrypted_job_id,
+        )
+
+    def _current_page_url(self) -> str | None:
+        current_url = getattr(self._page, "url", None)
+        return current_url if isinstance(current_url, str) else None
 
     async def _warmup_page(self) -> None:
         if self._page is None:
@@ -138,13 +241,15 @@ class OfferTodayBrowserDetailScraper:
                 timeout=self.manual_verification_timeout_seconds * 1000,
             )
 
-    async def _await_manual_verification(self, job_id: str) -> bool:
+    async def _await_manual_verification(self, encrypted_job_id: str) -> bool:
         if self._page is None:
             return False
 
-        job_url = f"https://www.offertoday.com/hk/job/{job_id}"
+        job_url = f"https://www.offertoday.com/hk/job/{encrypted_job_id}"
         try:
-            await self._page.goto(job_url, wait_until="domcontentloaded", timeout=30_000)
+            await self._page.goto(
+                job_url, wait_until="domcontentloaded", timeout=30_000
+            )
         except Exception:
             return False
 

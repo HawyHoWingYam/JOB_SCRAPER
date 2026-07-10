@@ -363,8 +363,12 @@ def test_build_probe_listing_payload_flattens_empty_keyword_sequence():
 @pytest.mark.asyncio
 async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch):
     repair_module = importlib.import_module("backend.scripts.repair_offertoday_jobs")
+    identity_module = importlib.import_module("app.sources.offertoday.detail_identity")
+    policy_module = importlib.import_module("app.sources.offertoday.response_policy")
 
-    job = SimpleNamespace(source_site="offertoday", source_job_id="jid-1", job_id="jid-1", description="")
+    job = SimpleNamespace(
+        source_site="offertoday", source_job_id="jid-1", job_id="jid-1", description=""
+    )
     captured: dict[str, object] = {}
 
     class _FakeSession:
@@ -403,8 +407,8 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
             captured["resolved_listing"] = listing
             return ("jid-1", "enc-jid-1")
 
-        def repair_job_with_detail_payload(self, _job, detail_payload):
-            captured["detail_payload"] = detail_payload
+        def repair_job_with_detail_result(self, _job, detail_result):
+            captured["detail_result"] = detail_result
             return SimpleNamespace(
                 description_repaired=True,
                 company_reassigned=False,
@@ -422,9 +426,28 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def fetch_job_detail(self, job_id: str, *, encrypted_job_id: str | None = None):
+        async def fetch_job_detail(
+            self, job_id: str, *, encrypted_job_id: str | None = None
+        ):
             captured["fetch_call"] = (job_id, encrypted_job_id)
-            return {"jobId": job_id, "jobDesc": "<p>detail</p>"}
+            raw_response = {"code": 0, "data": {"jobId": job_id}}
+            return identity_module.OfferTodayDetailFetchResult(
+                identity=identity_module.OfferTodayDetailIdentity(
+                    job_id=job_id,
+                    encrypted_job_id=encrypted_job_id,
+                ),
+                classification=policy_module.classify_offertoday_response(
+                    raw_response,
+                    operation="detail",
+                    expected_job_id=job_id,
+                ),
+                raw_response=raw_response,
+                parsed_detail={"job_id": job_id, "encrypted_job_id": ""},
+                canonical_detail={
+                    "job_id": job_id,
+                    "encrypted_job_id": encrypted_job_id,
+                },
+            )
 
     monkeypatch.setattr(repair_module, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(repair_module, "OfferTodayJobRepairService", _FakeService)
@@ -440,18 +463,19 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
         "resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER
     }
     assert captured["fetch_call"] == ("jid-1", "enc-jid-1")
+    assert captured["detail_result"].identity.encrypted_job_id == "enc-jid-1"
     assert result["live_repaired_descriptions"] == 1
 
 
 @pytest.mark.asyncio
 async def test_repair_jobs_marks_listing_failed_for_unavailable_detail(monkeypatch):
-    scraper_module = importlib.import_module("app.scraper.offertoday_browser_detail_scraper")
-    unavailable_error_cls = getattr(scraper_module, "OfferTodayDetailUnavailableError", None)
-    assert unavailable_error_cls is not None
-
     repair_module = importlib.import_module("backend.scripts.repair_offertoday_jobs")
+    identity_module = importlib.import_module("app.sources.offertoday.detail_identity")
+    policy_module = importlib.import_module("app.sources.offertoday.response_policy")
 
-    job = SimpleNamespace(source_site="offertoday", source_job_id="jid-1", job_id="jid-1", description="")
+    job = SimpleNamespace(
+        source_site="offertoday", source_job_id="jid-1", job_id="jid-1", description=""
+    )
     listing = SimpleNamespace(
         detail_status="pending",
         detail_error_message=None,
@@ -490,6 +514,20 @@ async def test_repair_jobs_marks_listing_failed_for_unavailable_detail(monkeypat
         def resolve_detail_identifiers(self, _job, _listing):
             return ("jid-1", "enc-jid-1")
 
+        def repair_job_with_detail_result(self, _job, detail_result):
+            listing.detail_status = "failed"
+            listing.detail_error_message = (
+                f"{detail_result.classification.kind.value}:"
+                f"{detail_result.classification.code}"
+            )
+            listing.detail_completed_at = object()
+            return SimpleNamespace(
+                description_repaired=False,
+                company_reassigned=False,
+                listing_attached=False,
+                action=detail_result.classification.kind.value,
+            )
+
     class _FakeScraper:
         def __init__(self, **kwargs) -> None:
             self.kwargs = dict(kwargs)
@@ -500,8 +538,28 @@ async def test_repair_jobs_marks_listing_failed_for_unavailable_detail(monkeypat
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        async def fetch_job_detail(self, job_id: str, *, encrypted_job_id: str | None = None):
-            raise unavailable_error_cls(job_id=job_id, code=2520, message="job unavailable")
+        async def fetch_job_detail(
+            self, job_id: str, *, encrypted_job_id: str | None = None
+        ):
+            raw_response = {
+                "code": 2520,
+                "msg": "job unavailable",
+                "data": None,
+            }
+            return identity_module.OfferTodayDetailFetchResult(
+                identity=identity_module.OfferTodayDetailIdentity(
+                    job_id=job_id,
+                    encrypted_job_id=encrypted_job_id,
+                ),
+                classification=policy_module.classify_offertoday_response(
+                    raw_response,
+                    operation="detail",
+                    expected_job_id=job_id,
+                ),
+                raw_response=raw_response,
+                parsed_detail=None,
+                canonical_detail=None,
+            )
 
     monkeypatch.setattr(repair_module, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(repair_module, "OfferTodayJobRepairService", _FakeService)

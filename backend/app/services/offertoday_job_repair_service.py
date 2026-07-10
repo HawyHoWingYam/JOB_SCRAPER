@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+import json
 from typing import Any
 
 from sqlalchemy import or_
@@ -17,6 +19,11 @@ from app.sources.contracts import (
     build_offertoday_company_data,
     build_offertoday_job_data,
 )
+from app.sources.offertoday.detail_identity import (
+    OfferTodayDetailFetchResult,
+    resolve_offertoday_detail_identity,
+)
+from app.sources.offertoday.response_policy import OfferTodayResponseKind
 
 
 @dataclass(frozen=True)
@@ -46,7 +53,7 @@ class OfferTodayJobRepairService:
         query = (
             self.db.query(Job)
             .options(joinedload(Job.company))
-            .filter(Job.source_site == "offertoday", Job.is_deleted == False)
+            .filter(Job.source_site == "offertoday", Job.is_deleted.is_(False))
             .order_by(Job.updated_at.desc(), Job.created_at.desc())
         )
         if limit is not None:
@@ -65,7 +72,7 @@ class OfferTodayJobRepairService:
         query = (
             self.db.query(Job)
             .options(joinedload(Job.company))
-            .filter(Job.source_site == "offertoday", Job.is_deleted == False)
+            .filter(Job.source_site == "offertoday", Job.is_deleted.is_(False))
             .filter(or_(Job.description.is_(None), Job.description == ""))
             .order_by(Job.updated_at.desc(), Job.created_at.desc())
         )
@@ -77,33 +84,88 @@ class OfferTodayJobRepairService:
         if self.db is None:
             raise ValueError("repair_job requires an active database session")
 
-        listing = self.get_latest_completed_listing(job.source_job_id) or self.get_latest_listing(
+        listing = self.get_latest_completed_listing(
             job.source_job_id
-        )
+        ) or self.get_latest_listing(job.source_job_id)
         canonical = self.build_canonical_job_snapshot(job, listing)
         return self._persist_canonical_job(job, canonical, listing)
 
-    def repair_job_with_detail_payload(
+    def repair_job_with_parsed_detail(
         self,
         job: Job,
-        detail_payload: dict[str, Any],
+        parsed_detail: dict[str, Any],
     ) -> OfferTodayRepairResult:
         if self.db is None:
-            raise ValueError("repair_job_with_detail_payload requires an active database session")
+            raise ValueError(
+                "repair_job_with_parsed_detail requires an active database session"
+            )
 
         listing = self.get_latest_listing(job.source_job_id)
         if listing is not None:
-            listing.detail_payload = dict(detail_payload)
+            listing.detail_payload = deepcopy(parsed_detail)
             listing.detail_status = "completed"
             listing.detail_error_message = None
-            listing.detail_completed_at = datetime.utcnow()
+            listing.detail_completed_at = datetime.now(UTC)
 
         canonical = self.build_canonical_job_snapshot(
             job,
             listing,
-            detail_payload_override=detail_payload,
+            detail_payload_override=parsed_detail,
         )
         return self._persist_canonical_job(job, canonical, listing)
+
+    def repair_job_with_detail_result(
+        self,
+        job: Job,
+        result: OfferTodayDetailFetchResult,
+    ) -> OfferTodayRepairResult:
+        if self.db is None:
+            raise ValueError(
+                "repair_job_with_detail_result requires an active database session"
+            )
+
+        listing = self.get_latest_listing(job.source_job_id)
+        if result.classification.kind is OfferTodayResponseKind.SUCCESS:
+            if result.canonical_detail is None:
+                raise ValueError(
+                    "Successful OfferToday detail result has no canonical_detail"
+                )
+            if listing is not None:
+                listing.detail_payload = deepcopy(result.canonical_detail)
+                listing.detail_status = "completed"
+                listing.detail_error_message = None
+                listing.detail_completed_at = datetime.now(UTC)
+
+            canonical = self.build_canonical_job_snapshot(
+                job,
+                listing,
+                detail_payload_override=result.canonical_detail,
+            )
+            return self._persist_canonical_job(job, canonical, listing)
+
+        if listing is not None:
+            listing.detail_payload = deepcopy(result.raw_response)
+            listing.detail_status = "failed"
+            listing.detail_error_message = json.dumps(
+                {
+                    "code": result.classification.code,
+                    "encrypted_job_id": result.identity.encrypted_job_id,
+                    "job_id": result.identity.job_id,
+                    "kind": result.classification.kind.value,
+                    "message": result.classification.message,
+                    "retryable": result.classification.retryable,
+                    "stop_batch": result.classification.stop_batch,
+                },
+                sort_keys=True,
+            )
+            listing.detail_completed_at = datetime.now(UTC)
+
+        return OfferTodayRepairResult(
+            action=result.classification.kind.value,
+            description_repaired=False,
+            company_reassigned=False,
+            listing_attached=False,
+        )
 
     def _persist_canonical_job(
         self,
@@ -140,7 +202,8 @@ class OfferTodayJobRepairService:
 
         return OfferTodayRepairResult(
             action=action,
-            description_repaired=not before_description and bool(str(repaired_job.description or "").strip()),
+            description_repaired=not before_description
+            and bool(str(repaired_job.description or "").strip()),
             company_reassigned=before_company_id != repaired_job.company_id,
             listing_attached=listing_attached,
         )
@@ -162,7 +225,9 @@ class OfferTodayJobRepairService:
             .first()
         )
 
-    def get_latest_completed_listing(self, source_job_id: str) -> CrawlJobListing | None:
+    def get_latest_completed_listing(
+        self, source_job_id: str
+    ) -> CrawlJobListing | None:
         if self.db is None:
             return None
 
@@ -190,35 +255,11 @@ class OfferTodayJobRepairService:
         listing_payload = getattr(listing, "listing_payload", None)
         if not isinstance(listing_payload, dict):
             listing_payload = {}
-
-        job_raw_data = getattr(job, "raw_data", None)
-        if not isinstance(job_raw_data, dict):
-            job_raw_data = {}
-
-        listing_raw_data = listing_payload.get("raw_data")
-        if not isinstance(listing_raw_data, dict):
-            listing_raw_data = {}
-
-        job_id = str(
-            listing_payload.get("job_id")
-            or listing_payload.get("jobId")
-            or listing_raw_data.get("jobId")
-            or job_raw_data.get("job_id")
-            or job_raw_data.get("jobId")
-            or getattr(job, "source_job_id", None)
-            or getattr(job, "job_id", None)
-            or ""
-        ).strip()
-        encrypted_job_id = str(
-            listing_payload.get("encrypted_job_id")
-            or listing_payload.get("encryptJobId")
-            or listing_raw_data.get("encryptJobId")
-            or job_raw_data.get("encrypted_job_id")
-            or job_raw_data.get("encryptJobId")
-            or job_id
-            or ""
-        ).strip()
-        return job_id, encrypted_job_id
+        identity = resolve_offertoday_detail_identity(
+            source_job_id=getattr(job, "source_job_id", None),
+            listing_payload=listing_payload,
+        )
+        return identity.job_id, identity.encrypted_job_id
 
     def build_canonical_job_snapshot(
         self,
@@ -229,7 +270,7 @@ class OfferTodayJobRepairService:
     ) -> CanonicalScrapedJob:
         payload = {
             "source_site": "offertoday",
-            "encrypted_job_id": str(getattr(job, "source_job_id", None) or getattr(job, "job_id", "") or "").strip(),
+            "job_id": getattr(job, "source_job_id", None),
             "title": getattr(job, "title", "") or "",
             "description_html": getattr(job, "description", "") or "",
             "location": getattr(job, "location", "") or "",

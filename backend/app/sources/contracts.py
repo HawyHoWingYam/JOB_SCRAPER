@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 from datetime import datetime
-from typing import Any
+from typing import Any, Mapping
 
 from app.utils.data_mapper import parse_listing_date, parse_salary_range
 from app.utils.source_identity import (
@@ -35,8 +35,12 @@ def _join_work_types(values: Any) -> str | None:
 
 
 def _build_listing_description(teaser: Any, bullet_points: Any) -> str | None:
-    teaser_text = str(teaser).strip() if isinstance(teaser, str) and teaser.strip() else ""
-    bullets = [str(point).strip() for point in (bullet_points or []) if str(point).strip()]
+    teaser_text = (
+        str(teaser).strip() if isinstance(teaser, str) and teaser.strip() else ""
+    )
+    bullets = [
+        str(point).strip() for point in (bullet_points or []) if str(point).strip()
+    ]
     if teaser_text and bullets:
         return teaser_text + "\n\nHighlights:\n- " + "\n- ".join(bullets)
     if teaser_text:
@@ -129,21 +133,23 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
     """
     from app.sources.offertoday.parsers import build_offertoday_job_url
 
-    raw_job_id = str(
-        parsed_job.get("job_id")
-        or parsed_job.get("jobId")
-        or parsed_job.get("encrypted_job_id")
-        or ""
-    ).strip()
-    encrypted_id = str(
-        parsed_job.get("encrypted_job_id")
-        or parsed_job.get("encryptJobId")
-        or raw_job_id
-        or ""
-    ).strip()
+    raw_job_id = _require_offertoday_identity_field(
+        parsed_job,
+        field_names=("job_id", "jobId"),
+        raw_field_name="jobId",
+        evidence_name="jobId",
+    )
+    encrypted_id = _require_offertoday_identity_field(
+        parsed_job,
+        field_names=("encrypted_job_id", "encryptJobId"),
+        raw_field_name="encryptJobId",
+        evidence_name="encryptJobId",
+    )
 
     # Extract classification from job_functions (available in listing + detail)
-    job_functions = parsed_job.get("job_functions") or parsed_job.get("jobFunctions") or []
+    job_functions = (
+        parsed_job.get("job_functions") or parsed_job.get("jobFunctions") or []
+    )
     source_classification_id = None
     source_classification_name = None
     source_subclassification_id = None
@@ -156,7 +162,11 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
         children = jf.get("children") or []
         if children and isinstance(children, list) and len(children) > 0:
             child = children[0]
-            source_subclassification_id = f"offertoday:{str(child.get('code') or '')}" if child.get("code") else None
+            source_subclassification_id = (
+                f"offertoday:{str(child.get('code') or '')}"
+                if child.get("code")
+                else None
+            )
             source_subclassification_name = str(child.get("name") or "")
 
     return CanonicalScrapedJob(
@@ -199,6 +209,41 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
     )
 
 
+def _require_offertoday_identity_field(
+    parsed_job: Mapping[str, Any],
+    *,
+    field_names: tuple[str, ...],
+    raw_field_name: str,
+    evidence_name: str,
+) -> str:
+    evidence: list[tuple[str, Any]] = [
+        (field_name, parsed_job.get(field_name)) for field_name in field_names
+    ]
+    raw_data = parsed_job.get("raw_data")
+    if isinstance(raw_data, Mapping):
+        evidence.append((f"raw_data.{raw_field_name}", raw_data.get(raw_field_name)))
+
+    valid_values = [
+        (name, value.strip())
+        for name, value in evidence
+        if isinstance(value, str) and value.strip()
+    ]
+    if not valid_values:
+        rendered = ", ".join(f"{name}={value!r}" for name, value in evidence)
+        raise ValueError(
+            f"OfferToday canonical job requires nonblank string {evidence_name}; "
+            f"evidence: {rendered}"
+        )
+
+    distinct_values = {value for _name, value in valid_values}
+    if len(distinct_values) > 1:
+        rendered = ", ".join(f"{name}={value!r}" for name, value in valid_values)
+        raise ValueError(
+            f"Conflicting OfferToday {evidence_name} identity evidence: {rendered}"
+        )
+    return valid_values[0][1]
+
+
 def build_offertoday_company_data(
     canonical_job: CanonicalScrapedJob,
 ) -> dict[str, Any]:
@@ -216,16 +261,20 @@ def build_offertoday_company_data(
     return {
         "source_site": canonical_job.source_site,
         "source_company_id": source_company_id,
-        "company_id": build_compat_company_id(canonical_job.source_site, source_company_id),
+        "company_id": build_compat_company_id(
+            canonical_job.source_site, source_company_id
+        ),
         "name": company_name,
         "industry": canonical_job.raw_data.get("company_industry"),
         "location": canonical_job.location,
         "extra_data": {
             "source_url": canonical_job.source_url,
             "raw_data": canonical_job.raw_data,
-            "source_identity": "fallback_company_name"
-            if str(source_company_id).startswith("fallback:name:")
-            else "source_company_id",
+            "source_identity": (
+                "fallback_company_name"
+                if str(source_company_id).startswith("fallback:name:")
+                else "source_company_id"
+            ),
         },
     }
 
@@ -241,7 +290,9 @@ def build_offertoday_job_data(
     posted_date = _parse_optional_datetime(canonical_job.posted_date)
 
     return {
-        "job_id": build_compat_job_id(canonical_job.source_site, canonical_job.source_job_id),
+        "job_id": build_compat_job_id(
+            canonical_job.source_site, canonical_job.source_job_id
+        ),
         "source_site": canonical_job.source_site,
         "source_job_id": canonical_job.source_job_id,
         "company_id": company_id,
@@ -264,7 +315,9 @@ def build_offertoday_job_data(
 
 def _derive_fallback_source_company_id(*, source_site: str, company_name: str) -> str:
     normalized_company_name = " ".join(str(company_name or "").strip().lower().split())
-    digest = hashlib.sha1(f"{source_site}:{normalized_company_name}".encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha1(
+        f"{source_site}:{normalized_company_name}".encode("utf-8")
+    ).hexdigest()[:16]
     return f"fallback:name:{digest}"
 
 
@@ -290,9 +343,11 @@ def build_ctgoodjobs_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
     return CanonicalScrapedJob(
         source_site="ctgoodjobs",
         source_job_id=source_job_id,
-        source_url=parsed_job.get("url") or f"https://jobs.ctgoodjobs.hk/job/{source_job_id}",
+        source_url=parsed_job.get("url")
+        or f"https://jobs.ctgoodjobs.hk/job/{source_job_id}",
         title=parsed_job.get("title") or "",
-        description=parsed_job.get("description_html") or parsed_job.get("description_text"),
+        description=parsed_job.get("description_html")
+        or parsed_job.get("description_text"),
         company_name=parsed_job.get("company_name"),
         location=parsed_job.get("location"),
         salary_range=parsed_job.get("salary_range"),
