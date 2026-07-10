@@ -853,6 +853,58 @@ async def test_offertoday_browser_detail_scraper_classifies_transport_without_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exception_type",
+    (AssertionError, TypeError, RuntimeError, FileNotFoundError),
+)
+async def test_offertoday_browser_detail_scraper_propagates_unexpected_fetch_errors(
+    monkeypatch,
+    exception_type,
+):
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    unexpected = exception_type("unexpected detail fetch failure")
+    fetch_calls: list[tuple[str, str]] = []
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        fetch_calls.append((job_id, encrypted_job_id))
+        raise unexpected
+
+    classification_calls = 0
+    original_classifier = scraper_module.classify_offertoday_response
+
+    def classify_spy(*args, **kwargs):
+        nonlocal classification_calls
+        classification_calls += 1
+        return original_classifier(*args, **kwargs)
+
+    parse_calls = 0
+
+    def parse_spy(payload: dict):
+        nonlocal parse_calls
+        parse_calls += 1
+        return parse_offertoday_detail_response(payload)
+
+    monkeypatch.setattr(scraper_module, "classify_offertoday_response", classify_spy)
+    monkeypatch.setattr(scraper_module, "parse_offertoday_detail_response", parse_spy)
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    )
+
+    with pytest.raises(exception_type) as raised:
+        await scraper.fetch_job_detail(
+            "jid-1",
+            encrypted_job_id="enc-jid-1",
+        )
+
+    assert raised.value is unexpected
+    assert fetch_calls == [("jid-1", "enc-jid-1")]
+    assert classification_calls == 0
+    assert parse_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_offertoday_browser_detail_scraper_returns_typed_ip_block():
     scraper_module = importlib.import_module(
         "app.scraper.offertoday_browser_detail_scraper"

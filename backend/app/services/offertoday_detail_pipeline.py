@@ -27,6 +27,7 @@ from app.sources.offertoday.parsers import (
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseClassification,
     OfferTodayResponseKind,
+    OfferTodayTransportError,
     classify_offertoday_response,
 )
 
@@ -133,8 +134,16 @@ class OfferTodayDetailPipeline:
                     encrypted_job_id=target.identity.encrypted_job_id,
                 )
                 raw_response = dict(fetched) if isinstance(fetched, dict) else None
-            except Exception as exc:
+            except (OfferTodayTransportError, TimeoutError, ConnectionError) as exc:
                 transport_error = exc
+            except Exception as exc:
+                self._transition_outcome(
+                    target=target,
+                    detail_crawl_job_id=detail_crawl_job_id,
+                    detail_status="failed",
+                    error_message=f"unexpected_fetch_error:{type(exc).__name__}",
+                )
+                raise
 
             latency_seconds = max(float(self.clock()) - started_at, 0.0)
             transport_payload = (

@@ -552,7 +552,11 @@ async def test_terminal_2520_marks_every_group_row_without_retry_or_job():
 @pytest.mark.asyncio
 async def test_transient_transport_retries_three_times_and_only_authoritative_attempts_increment():
     env = _build_pipeline(
-        [RuntimeError("temporary 1"), RuntimeError("temporary 2"), RuntimeError("temporary 3")]
+        [
+            TimeoutError("temporary 1"),
+            TimeoutError("temporary 2"),
+            TimeoutError("temporary 3"),
+        ]
     )
     target = OfferTodayDetailTarget.from_runtime_target(_runtime_target())
 
@@ -604,6 +608,59 @@ async def test_transient_transport_retries_three_times_and_only_authoritative_at
         )
         for event in attempts
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exception_type",
+    (AssertionError, TypeError, RuntimeError, FileNotFoundError),
+)
+async def test_unexpected_fetch_error_fails_group_and_propagates_same_exception(
+    exception_type,
+):
+    unexpected = exception_type(
+        r"sensitive fetch detail C:\private\offertoday-response.json"
+    )
+    env = _build_pipeline([unexpected])
+    target = OfferTodayDetailTarget.from_runtime_target(_runtime_target())
+
+    with pytest.raises(exception_type) as raised:
+        await env.pipeline.process_target(
+            target=target,
+            detail_crawl_job_id="detail-run",
+            fetch_detail=env.fetcher,
+        )
+
+    assert raised.value is unexpected
+    assert env.fetcher.calls == [("100", "enc-100")]
+    assert env.sleeps == []
+    assert _attempt_events(env.store) == []
+    assert {env.store.rows[key]["detail_status"] for key in target.listing_ids} == {
+        "failed"
+    }
+    assert all(
+        env.store.rows[key]["detail_error_message"]
+        == f"unexpected_fetch_error:{exception_type.__name__}"
+        for key in target.listing_ids
+    )
+    assert all(
+        "sensitive fetch detail" not in env.store.rows[key]["detail_error_message"]
+        and "private" not in env.store.rows[key]["detail_error_message"]
+        for key in target.listing_ids
+    )
+    assert all(
+        env.store.rows[key]["last_detail_crawl_job_id"] == "detail-run"
+        for key in target.listing_ids
+    )
+    assert env.store.rows["listing-a"]["detail_attempts"] == 1
+    assert env.store.rows["listing-b"]["detail_attempts"] == 0
+    assert env.store.jobs == {}
+    assert env.store.companies == {}
+    assert env.jobs.calls == []
+    assert env.companies.calls == []
+    assert len(env.sessions.sessions) == 2
+    assert all(session.commits == 1 for session in env.sessions.sessions)
+    assert all(session.closed for session in env.sessions.sessions)
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from app.sources.offertoday.parsers import (
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseClassification,
     OfferTodayResponseKind,
+    OfferTodayTransportError,
     classify_offertoday_response,
 )
 
@@ -142,7 +143,7 @@ class OfferTodayBrowserDetailScraper:
     ) -> OfferTodayResponseClassification:
         try:
             payload = await self._fetch_detail_payload(identity)
-        except Exception as exc:
+        except (OfferTodayTransportError, TimeoutError, ConnectionError) as exc:
             raw_payload = getattr(exc, "payload", None)
             payload = dict(raw_payload) if isinstance(raw_payload, Mapping) else None
             response_url = getattr(exc, "response_url", None)
