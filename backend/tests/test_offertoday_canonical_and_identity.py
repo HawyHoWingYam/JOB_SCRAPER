@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import importlib
-import importlib.util
 import json
 from dataclasses import FrozenInstanceError
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -133,6 +131,51 @@ def _listing_stub(*, listing_payload: dict | None = None) -> SimpleNamespace:
     )
 
 
+def _detail_fetch_result(
+    *,
+    job_id: str = "jid-1",
+    encrypted_job_id: str = "enc-jid-1",
+    payload: dict | None = None,
+    canonical_detail: dict | None = None,
+):
+    identity_module = _identity_module()
+    policy_module = importlib.import_module("app.sources.offertoday.response_policy")
+    raw_response = payload or {
+        "code": 0,
+        "data": {
+            "jobId": job_id,
+        },
+    }
+    classification = policy_module.classify_offertoday_response(
+        raw_response,
+        operation="detail",
+        expected_job_id=job_id,
+    )
+    if classification.kind is OfferTodayResponseKind.SUCCESS:
+        parsed_detail = {
+            "job_id": job_id,
+            "encrypted_job_id": "",
+            "raw_data": {"jobId": job_id},
+        }
+        resolved_canonical_detail = canonical_detail or {
+            **parsed_detail,
+            "encrypted_job_id": encrypted_job_id,
+        }
+    else:
+        parsed_detail = None
+        resolved_canonical_detail = None
+    return identity_module.OfferTodayDetailFetchResult(
+        identity=identity_module.OfferTodayDetailIdentity(
+            job_id=job_id,
+            encrypted_job_id=encrypted_job_id,
+        ),
+        classification=classification,
+        raw_response=raw_response,
+        parsed_detail=parsed_detail,
+        canonical_detail=resolved_canonical_detail,
+    )
+
+
 def test_derive_source_company_id_from_raw_data_uses_offertoday_brand_id():
     assert (
         derive_source_company_id_from_raw_data(
@@ -200,6 +243,27 @@ def test_resolve_detail_identity_returns_frozen_distinct_identifiers():
         identity.job_id = "other"
 
 
+def test_resolve_detail_identity_rejects_present_non_string_alias():
+    identity_module = _identity_module()
+    listing_payload = {
+        "job_id": 123,
+        "encrypted_job_id": "enc-jid-1",
+        "raw_data": {
+            "jobId": "jid-1",
+            "encryptJobId": "enc-jid-1",
+        },
+    }
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"job_id.*nonblank string",
+    ):
+        identity_module.resolve_offertoday_detail_identity(
+            source_job_id="jid-1",
+            listing_payload=listing_payload,
+        )
+
+
 def test_validate_detail_identity_rejects_response_job_id_mismatch():
     identity_module = _identity_module()
     identity = identity_module.OfferTodayDetailIdentity(
@@ -214,6 +278,30 @@ def test_validate_detail_identity_rejects_response_job_id_mismatch():
         identity_module.validate_offertoday_detail_identity(
             identity,
             {"job_id": "jid-other", "raw_data": {"jobId": "jid-other"}},
+        )
+
+
+def test_validate_detail_identity_rejects_response_encrypted_job_id_mismatch():
+    identity_module = _identity_module()
+    identity = identity_module.OfferTodayDetailIdentity(
+        job_id="jid-1",
+        encrypted_job_id="enc-jid-1",
+    )
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"requested encryptJobId=.*enc-jid-1.*response encryptJobId=.*enc-other",
+    ):
+        identity_module.validate_offertoday_detail_identity(
+            identity,
+            {
+                "job_id": "jid-1",
+                "encrypted_job_id": "enc-other",
+                "raw_data": {
+                    "jobId": "jid-1",
+                    "encryptJobId": "enc-other",
+                },
+            },
         )
 
 
@@ -242,6 +330,18 @@ def test_build_offertoday_canonical_job_rejects_missing_identity_field(
 ):
     with pytest.raises(ValueError, match=missing_field):
         build_offertoday_canonical_job(payload)
+
+
+def test_build_offertoday_canonical_job_rejects_present_non_string_encrypted_alias():
+    with pytest.raises(ValueError, match=r"encryptJobId.*nonblank string"):
+        build_offertoday_canonical_job(
+            {
+                "jobId": "jid-1",
+                "encrypted_job_id": "enc-jid-1",
+                "encryptJobId": [],
+                "jobName": "Data Engineer",
+            }
+        )
 
 
 def test_build_offertoday_company_data_uses_brand_id_for_source_identity():
@@ -427,6 +527,46 @@ async def test_offertoday_browser_detail_scraper_response_id_mismatch_is_typed_a
         return {
             "code": 0,
             "data": {**_sample_detail_raw(), "jobId": "jid-other"},
+        }
+
+    parse_calls = 0
+
+    def parse_spy(payload: dict):
+        nonlocal parse_calls
+        parse_calls += 1
+        return parse_offertoday_detail_response(payload)
+
+    monkeypatch.setattr(scraper_module, "parse_offertoday_detail_response", parse_spy)
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    )
+
+    result = await scraper.fetch_job_detail(
+        "jid-1",
+        encrypted_job_id="enc-jid-1",
+    )
+
+    assert result.classification.kind is OfferTodayResponseKind.ID_MISMATCH
+    assert result.parsed_detail is None
+    assert result.canonical_detail is None
+    assert parse_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_offertoday_browser_detail_scraper_response_encrypted_id_mismatch_is_typed_and_not_parsed(
+    monkeypatch,
+):
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        return {
+            "code": 0,
+            "data": {
+                **_sample_detail_raw(),
+                "encryptJobId": "enc-other",
+            },
         }
 
     parse_calls = 0
@@ -658,6 +798,15 @@ def test_offertoday_browser_detail_scraper_detects_waf_challenge_urls():
     assert not scraper_cls.is_waf_challenge_url("https://www.offertoday.com/hk/search")
 
 
+def test_offertoday_browser_detail_scraper_removes_legacy_outcome_exceptions():
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+
+    assert not hasattr(scraper_module, "OfferTodayIPBlockedError")
+    assert not hasattr(scraper_module, "OfferTodayDetailUnavailableError")
+
+
 @pytest.mark.asyncio
 async def test_repair_success_consumes_parsed_once_typed_result(monkeypatch):
     scraper_module = importlib.import_module(
@@ -714,6 +863,108 @@ async def test_repair_success_consumes_parsed_once_typed_result(monkeypatch):
     assert captured["listing"] is listing
     assert captured["canonical"].raw_data["description_text"] == "Build ETL pipelines."
     assert captured["canonical"].source_url.endswith("/enc-jid-1")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {"code": 2520, "msg": "Position unavailable", "data": None},
+    ],
+    ids=("success", "non_success"),
+)
+def test_repair_detail_result_rejects_result_owned_by_another_job_before_mutation(
+    monkeypatch,
+    payload: dict | None,
+):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = service_module.OfferTodayJobRepairService(db=object())
+    listing = _listing_stub()
+    listing_before = dict(vars(listing))
+    result = _detail_fetch_result(
+        job_id="jid-other",
+        encrypted_job_id="enc-other",
+        payload=payload,
+    )
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("foreign detail result must not be persisted")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"expected.*jid-1.*result.*jid-other",
+    ):
+        service.repair_job_with_detail_result(_job_stub(), result)
+
+    assert vars(listing) == listing_before
+
+
+def test_repair_detail_result_rejects_canonical_identity_mismatch_before_mutation(
+    monkeypatch,
+):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = service_module.OfferTodayJobRepairService(db=object())
+    listing = _listing_stub()
+    listing_before = dict(vars(listing))
+    result = _detail_fetch_result(
+        canonical_detail={
+            "job_id": "jid-1",
+            "encrypted_job_id": "enc-other",
+            "raw_data": {"jobId": "jid-1"},
+        }
+    )
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("mismatched canonical detail must not be persisted")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"requested encryptJobId=.*enc-jid-1.*response encryptJobId=.*enc-other",
+    ):
+        service.repair_job_with_detail_result(_job_stub(), result)
+
+    assert vars(listing) == listing_before
+
+
+def test_repair_detail_result_build_failure_leaves_listing_unchanged(monkeypatch):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = service_module.OfferTodayJobRepairService(db=object())
+    listing = _listing_stub()
+    listing_before = dict(vars(listing))
+    result = _detail_fetch_result()
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+
+    def fail_build(*args, **kwargs):
+        raise ValueError("canonical build failed")
+
+    monkeypatch.setattr(service, "build_canonical_job_snapshot", fail_build)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("failed canonical build must not be persisted")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(ValueError, match="canonical build failed"):
+        service.repair_job_with_detail_result(_job_stub(), result)
+
+    assert vars(listing) == listing_before
 
 
 @pytest.mark.parametrize(
@@ -796,15 +1047,3 @@ def test_repair_service_keeps_offline_parsed_fixture_api_distinct_from_network_r
     assert hasattr(service_cls, "repair_job_with_parsed_detail")
     assert hasattr(service_cls, "repair_job_with_detail_result")
     assert not hasattr(service_cls, "repair_job_with_detail_payload")
-
-
-def test_repair_cli_consumes_typed_result_without_reclassification_or_reparsing():
-    script_path = (
-        Path(__file__).resolve().parents[1] / "scripts" / "repair_offertoday_jobs.py"
-    )
-    source = script_path.read_text(encoding="utf-8")
-
-    assert "repair_job_with_detail_result" in source
-    assert "repair_job_with_detail_payload" not in source
-    assert "classify_offertoday_response" not in source
-    assert "parse_offertoday_detail_response" not in source

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, overload
 
 from app.sources.offertoday.response_policy import OfferTodayResponseClassification
 
@@ -25,13 +25,36 @@ class OfferTodayDetailFetchResult:
     canonical_detail: dict[str, Any] | None
 
 
-def _read_identity_field(
+@overload
+def read_offertoday_identity_evidence(
     payload: Mapping[str, Any],
     *,
     field_names: tuple[str, ...],
     raw_field_name: str,
     evidence_name: str,
-) -> str:
+    required: Literal[True] = True,
+) -> str: ...
+
+
+@overload
+def read_offertoday_identity_evidence(
+    payload: Mapping[str, Any],
+    *,
+    field_names: tuple[str, ...],
+    raw_field_name: str,
+    evidence_name: str,
+    required: Literal[False],
+) -> str | None: ...
+
+
+def read_offertoday_identity_evidence(
+    payload: Mapping[str, Any],
+    *,
+    field_names: tuple[str, ...],
+    raw_field_name: str,
+    evidence_name: str,
+    required: bool = True,
+) -> str | None:
     evidence: list[tuple[str, Any]] = [
         (field_name, payload.get(field_name)) for field_name in field_names
     ]
@@ -39,12 +62,20 @@ def _read_identity_field(
     if isinstance(raw_data, Mapping):
         evidence.append((f"raw_data.{raw_field_name}", raw_data.get(raw_field_name)))
 
-    valid_values = [
-        (name, value.strip())
-        for name, value in evidence
-        if isinstance(value, str) and value.strip()
-    ]
+    valid_values: list[tuple[str, str]] = []
+    for name, value in evidence:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if not isinstance(value, str):
+            raise OfferTodayIdentityError(
+                f"OfferToday identity alias {name} must be a nonblank string; "
+                f"got {value!r}"
+            )
+        valid_values.append((name, value.strip()))
+
     if not valid_values:
+        if not required:
+            return None
         rendered = ", ".join(f"{name}={value!r}" for name, value in evidence)
         raise OfferTodayIdentityError(
             f"Missing nonblank string {evidence_name}; evidence: {rendered}"
@@ -81,13 +112,13 @@ def resolve_offertoday_detail_identity(
             f"Missing OfferToday listing identity payload; got {type(listing_payload).__name__}"
         )
 
-    job_id = _read_identity_field(
+    job_id = read_offertoday_identity_evidence(
         listing_payload,
         field_names=("job_id", "jobId"),
         raw_field_name="jobId",
         evidence_name="jobId",
     )
-    encrypted_job_id = _read_identity_field(
+    encrypted_job_id = read_offertoday_identity_evidence(
         listing_payload,
         field_names=("encrypted_job_id", "encryptJobId"),
         raw_field_name="encryptJobId",
@@ -112,7 +143,7 @@ def validate_offertoday_detail_identity(
         raise OfferTodayIdentityError(
             f"Missing OfferToday detail identity payload; got {type(detail_payload).__name__}"
         )
-    response_job_id = _read_identity_field(
+    response_job_id = read_offertoday_identity_evidence(
         detail_payload,
         field_names=("job_id", "jobId"),
         raw_field_name="jobId",
@@ -122,4 +153,21 @@ def validate_offertoday_detail_identity(
         raise OfferTodayIdentityError(
             "OfferToday detail response identity mismatch: "
             f"requested jobId={identity.job_id!r}, response jobId={response_job_id!r}"
+        )
+
+    response_encrypted_job_id = read_offertoday_identity_evidence(
+        detail_payload,
+        field_names=("encrypted_job_id", "encryptJobId"),
+        raw_field_name="encryptJobId",
+        evidence_name="encryptJobId",
+        required=False,
+    )
+    if (
+        response_encrypted_job_id is not None
+        and response_encrypted_job_id != identity.encrypted_job_id
+    ):
+        raise OfferTodayIdentityError(
+            "OfferToday detail response identity mismatch: "
+            f"requested encryptJobId={identity.encrypted_job_id!r}, "
+            f"response encryptJobId={response_encrypted_job_id!r}"
         )

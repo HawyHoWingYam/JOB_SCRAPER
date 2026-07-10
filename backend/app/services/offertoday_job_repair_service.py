@@ -21,7 +21,9 @@ from app.sources.contracts import (
 )
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailFetchResult,
+    OfferTodayIdentityError,
     resolve_offertoday_detail_identity,
+    validate_offertoday_detail_identity,
 )
 from app.sources.offertoday.response_policy import OfferTodayResponseKind
 
@@ -125,22 +127,52 @@ class OfferTodayJobRepairService:
             )
 
         listing = self.get_latest_listing(job.source_job_id)
+        listing_payload = getattr(listing, "listing_payload", None)
+        if not isinstance(listing_payload, dict):
+            listing_payload = {}
+        expected_identity = resolve_offertoday_detail_identity(
+            source_job_id=getattr(job, "source_job_id", None),
+            listing_payload=listing_payload,
+        )
+        if result.identity != expected_identity:
+            raise OfferTodayIdentityError(
+                "OfferToday detail result ownership mismatch: "
+                f"expected jobId={expected_identity.job_id!r}, "
+                f"encryptJobId={expected_identity.encrypted_job_id!r}; "
+                f"result jobId={result.identity.job_id!r}, "
+                f"encryptJobId={result.identity.encrypted_job_id!r}"
+            )
+
         if result.classification.kind is OfferTodayResponseKind.SUCCESS:
             if result.canonical_detail is None:
                 raise ValueError(
                     "Successful OfferToday detail result has no canonical_detail"
                 )
-            if listing is not None:
-                listing.detail_payload = deepcopy(result.canonical_detail)
-                listing.detail_status = "completed"
-                listing.detail_error_message = None
-                listing.detail_completed_at = datetime.now(UTC)
+
+            validate_offertoday_detail_identity(
+                expected_identity,
+                result.canonical_detail,
+            )
+            canonical_identity = resolve_offertoday_detail_identity(
+                source_job_id=expected_identity.job_id,
+                listing_payload=result.canonical_detail,
+            )
+            if canonical_identity != expected_identity:
+                raise OfferTodayIdentityError(
+                    "OfferToday canonical detail identity mismatch: "
+                    f"expected {expected_identity!r}, got {canonical_identity!r}"
+                )
 
             canonical = self.build_canonical_job_snapshot(
                 job,
                 listing,
                 detail_payload_override=result.canonical_detail,
             )
+            if listing is not None:
+                listing.detail_payload = deepcopy(result.canonical_detail)
+                listing.detail_status = "completed"
+                listing.detail_error_message = None
+                listing.detail_completed_at = datetime.now(UTC)
             return self._persist_canonical_job(job, canonical, listing)
 
         if listing is not None:

@@ -431,7 +431,7 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
         ):
             captured["fetch_call"] = (job_id, encrypted_job_id)
             raw_response = {"code": 0, "data": {"jobId": job_id}}
-            return identity_module.OfferTodayDetailFetchResult(
+            detail_result = identity_module.OfferTodayDetailFetchResult(
                 identity=identity_module.OfferTodayDetailIdentity(
                     job_id=job_id,
                     encrypted_job_id=encrypted_job_id,
@@ -448,6 +448,8 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
                     "encrypted_job_id": encrypted_job_id,
                 },
             )
+            captured["scraper_detail_result"] = detail_result
+            return detail_result
 
     monkeypatch.setattr(repair_module, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(repair_module, "OfferTodayJobRepairService", _FakeService)
@@ -463,7 +465,7 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
         "resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER
     }
     assert captured["fetch_call"] == ("jid-1", "enc-jid-1")
-    assert captured["detail_result"].identity.encrypted_job_id == "enc-jid-1"
+    assert captured["detail_result"] is captured["scraper_detail_result"]
     assert result["live_repaired_descriptions"] == 1
 
 

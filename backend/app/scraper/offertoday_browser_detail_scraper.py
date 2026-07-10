@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any, Mapping, Protocol
 
 from app.scraper.manual_action import RESUME_STRATEGY_FRESH_PROFILE
@@ -29,28 +30,6 @@ class DetailJsonFetcher(Protocol):
 
 
 _WAF_CHALLENGE_PATH = "/web/passport/cm/verify"
-
-
-class OfferTodayIPBlockedError(RuntimeError):
-    def __init__(self, *, job_id: str, code: int) -> None:
-        super().__init__(
-            f"OfferToday detail fetch blocked for job_id={job_id} code={code}"
-        )
-        self.job_id = job_id
-        self.code = code
-
-
-class OfferTodayDetailUnavailableError(RuntimeError):
-    def __init__(self, *, job_id: str, code: int, message: str | None = None) -> None:
-        resolved_message = (
-            str(message or "").strip() or "OfferToday detail fetch failed"
-        )
-        super().__init__(
-            f"OfferToday detail unavailable for job_id={job_id} code={code}: {resolved_message}"
-        )
-        self.job_id = job_id
-        self.code = code
-        self.message = resolved_message
 
 
 class OfferTodayBrowserDetailScraper:
@@ -185,6 +164,26 @@ class OfferTodayBrowserDetailScraper:
             return OfferTodayDetailFetchResult(
                 identity=identity,
                 classification=classification,
+                raw_response=raw_response,
+                parsed_detail=None,
+                canonical_detail=None,
+            )
+
+        try:
+            validate_offertoday_detail_identity(
+                identity,
+                classification.data or {},
+            )
+        except OfferTodayIdentityError as exc:
+            return OfferTodayDetailFetchResult(
+                identity=identity,
+                classification=replace(
+                    classification,
+                    kind=OfferTodayResponseKind.ID_MISMATCH,
+                    message=str(exc),
+                    retryable=False,
+                    stop_batch=True,
+                ),
                 raw_response=raw_response,
                 parsed_detail=None,
                 canonical_detail=None,

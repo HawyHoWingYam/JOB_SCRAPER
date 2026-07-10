@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any
 
+from app.sources.offertoday.detail_identity import read_offertoday_identity_evidence
 from app.utils.data_mapper import parse_listing_date, parse_salary_range
 from app.utils.source_identity import (
     build_compat_company_id,
@@ -133,13 +134,13 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
     """
     from app.sources.offertoday.parsers import build_offertoday_job_url
 
-    raw_job_id = _require_offertoday_identity_field(
+    raw_job_id = read_offertoday_identity_evidence(
         parsed_job,
         field_names=("job_id", "jobId"),
         raw_field_name="jobId",
         evidence_name="jobId",
     )
-    encrypted_id = _require_offertoday_identity_field(
+    encrypted_id = read_offertoday_identity_evidence(
         parsed_job,
         field_names=("encrypted_job_id", "encryptJobId"),
         raw_field_name="encryptJobId",
@@ -207,41 +208,6 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
         ),
         raw_data=dict(parsed_job),
     )
-
-
-def _require_offertoday_identity_field(
-    parsed_job: Mapping[str, Any],
-    *,
-    field_names: tuple[str, ...],
-    raw_field_name: str,
-    evidence_name: str,
-) -> str:
-    evidence: list[tuple[str, Any]] = [
-        (field_name, parsed_job.get(field_name)) for field_name in field_names
-    ]
-    raw_data = parsed_job.get("raw_data")
-    if isinstance(raw_data, Mapping):
-        evidence.append((f"raw_data.{raw_field_name}", raw_data.get(raw_field_name)))
-
-    valid_values = [
-        (name, value.strip())
-        for name, value in evidence
-        if isinstance(value, str) and value.strip()
-    ]
-    if not valid_values:
-        rendered = ", ".join(f"{name}={value!r}" for name, value in evidence)
-        raise ValueError(
-            f"OfferToday canonical job requires nonblank string {evidence_name}; "
-            f"evidence: {rendered}"
-        )
-
-    distinct_values = {value for _name, value in valid_values}
-    if len(distinct_values) > 1:
-        rendered = ", ".join(f"{name}={value!r}" for name, value in valid_values)
-        raise ValueError(
-            f"Conflicting OfferToday {evidence_name} identity evidence: {rendered}"
-        )
-    return valid_values[0][1]
 
 
 def build_offertoday_company_data(
