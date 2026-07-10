@@ -807,6 +807,108 @@ def test_offertoday_browser_detail_scraper_removes_legacy_outcome_exceptions():
     assert not hasattr(scraper_module, "OfferTodayDetailUnavailableError")
 
 
+def test_offline_parsed_repair_rejects_foreign_full_identity_before_mutation(
+    monkeypatch,
+):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = service_module.OfferTodayJobRepairService(db=object())
+    listing = _listing_stub()
+    listing_before = dict(vars(listing))
+    parsed_detail = parse_offertoday_detail_response(
+        {
+            "code": 0,
+            "data": {
+                **_sample_detail_raw(),
+                "jobId": "jid-other",
+                "encryptJobId": "enc-other",
+            },
+        }
+    )
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("foreign offline detail must not be persisted")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"requested jobId=.*jid-1.*response jobId=.*jid-other",
+    ):
+        service.repair_job_with_parsed_detail(_job_stub(), parsed_detail)
+
+    assert vars(listing) == listing_before
+
+
+def test_offline_parsed_repair_rejects_conflicting_encrypted_identity_before_mutation(
+    monkeypatch,
+):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = service_module.OfferTodayJobRepairService(db=object())
+    listing = _listing_stub()
+    listing_before = dict(vars(listing))
+    parsed_detail = parse_offertoday_detail_response(
+        {
+            "code": 0,
+            "data": {
+                **_sample_detail_raw(),
+                "encryptJobId": "enc-other",
+            },
+        }
+    )
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("mismatched offline detail must not be persisted")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"requested encryptJobId=.*enc-jid-1.*response encryptJobId=.*enc-other",
+    ):
+        service.repair_job_with_parsed_detail(_job_stub(), parsed_detail)
+
+    assert vars(listing) == listing_before
+
+
+def test_offline_parsed_repair_build_failure_leaves_listing_unchanged(monkeypatch):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = service_module.OfferTodayJobRepairService(db=object())
+    listing = _listing_stub()
+    listing_before = dict(vars(listing))
+    parsed_detail = parse_offertoday_detail_response(
+        {"code": 0, "data": _sample_detail_raw()}
+    )
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+
+    def fail_build(*args, **kwargs):
+        raise ValueError("offline canonical build failed")
+
+    monkeypatch.setattr(service, "build_canonical_job_snapshot", fail_build)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("failed offline build must not be persisted")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(ValueError, match="offline canonical build failed"):
+        service.repair_job_with_parsed_detail(_job_stub(), parsed_detail)
+
+    assert vars(listing) == listing_before
+
+
 @pytest.mark.asyncio
 async def test_repair_success_consumes_parsed_once_typed_result(monkeypatch):
     scraper_module = importlib.import_module(

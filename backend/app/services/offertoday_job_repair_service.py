@@ -103,17 +103,31 @@ class OfferTodayJobRepairService:
             )
 
         listing = self.get_latest_listing(job.source_job_id)
+        listing_payload = getattr(listing, "listing_payload", None)
+        if not isinstance(listing_payload, dict):
+            listing_payload = {}
+        expected_identity = resolve_offertoday_detail_identity(
+            source_job_id=getattr(job, "source_job_id", None),
+            listing_payload=listing_payload,
+        )
+        validate_offertoday_detail_identity(expected_identity, parsed_detail)
+
+        canonical_detail = {
+            **parsed_detail,
+            "job_id": expected_identity.job_id,
+            "encrypted_job_id": expected_identity.encrypted_job_id,
+        }
+
+        canonical = self.build_canonical_job_snapshot(
+            job,
+            listing,
+            detail_payload_override=canonical_detail,
+        )
         if listing is not None:
             listing.detail_payload = deepcopy(parsed_detail)
             listing.detail_status = "completed"
             listing.detail_error_message = None
             listing.detail_completed_at = datetime.now(UTC)
-
-        canonical = self.build_canonical_job_snapshot(
-            job,
-            listing,
-            detail_payload_override=parsed_detail,
-        )
         return self._persist_canonical_job(job, canonical, listing)
 
     def repair_job_with_detail_result(
