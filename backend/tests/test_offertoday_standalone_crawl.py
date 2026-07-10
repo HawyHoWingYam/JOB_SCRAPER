@@ -311,6 +311,7 @@ class _FakeCrawlRuntime:
         self.detail_load_result = detail_load_result
         self.trace = trace
         self.metrics = dict(metrics or {})
+        self.metric_merges = []
 
     def stage_listing_batch(self, **kwargs):
         self.stage_calls.append(dict(kwargs))
@@ -371,6 +372,18 @@ class _FakeCrawlRuntime:
         self.metrics.update(dict(kwargs.get("metrics") or {}))
         if self.trace is not None:
             self.trace.append("completed")
+
+    def merge_metrics(self, **kwargs):
+        patch = dict(kwargs["metrics_patch"])
+        self.metrics.update(patch)
+        self.metric_merges.append(
+            {
+                "patch": patch,
+                "snapshot": dict(self.metrics),
+            }
+        )
+        if self.trace is not None:
+            self.trace.append("merge_metrics")
 
 
 @pytest.mark.asyncio
@@ -1051,6 +1064,10 @@ async def test_load_time_identity_conflict_enters_identity_audit_without_fetch_o
     crawl_runtime = _FakeCrawlRuntime(
         detail_load_result=load_result,
         trace=trace,
+        metrics={
+            "detail_selected_rows": 2,
+            "detail_duplicate_rows": 1,
+        },
     )
     pipeline = _FakeDetailPipeline(trace=trace)
 
@@ -1066,6 +1083,7 @@ async def test_load_time_identity_conflict_enters_identity_audit_without_fetch_o
         "preflight",
         "load_detail_targets",
         "crawl.detail_cohort_frozen",
+        "merge_metrics",
         "manual_action_required",
     ]
     assert pipeline.targets == []
@@ -1077,6 +1095,15 @@ async def test_load_time_identity_conflict_enters_identity_audit_without_fetch_o
         "identity_conflict_evidence": [evidence],
     }
     assert result.stop_batch is True
+    paused_metrics = crawl_runtime.metric_merges[-1]["snapshot"]
+    assert paused_metrics["detail_selected_rows"] == 2
+    assert paused_metrics["detail_duplicate_rows"] == 1
+    assert paused_metrics["detail_processed_targets"] == 0
+    assert paused_metrics["detail_outcomes"] == {}
+    assert paused_metrics["jobs_created"] == 0
+    assert paused_metrics["jobs_updated"] == 0
+    assert paused_metrics["jobs_reconciled"] == 0
+    assert paused_metrics["jobs_saved"] == 0
 
 
 @pytest.mark.asyncio
@@ -1170,3 +1197,72 @@ async def test_detail_phase_passes_duplicate_listing_ids_and_preserves_task7_met
     assert result.jobs_created == 4
     assert result.jobs_updated == 7
     assert result.jobs_reconciled == 2
+
+
+@pytest.mark.asyncio
+async def test_detail_checkpoint_and_later_stop_merge_current_metrics_without_erasing_task7():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+    trace = []
+    targets = [
+        _detail_runtime_target(f"job-{index}")
+        for index in range(11)
+    ]
+    load_result = _detail_load_result(
+        targets,
+        reconciled_source_job_ids=("reconciled-1", "reconciled-2"),
+        selected_rows=14,
+        duplicate_rows=1,
+    )
+    task7_metrics = {
+        "detail_selected_rows": 14,
+        "detail_reconciled_rows": 2,
+        "detail_duplicate_rows": 1,
+        "detail_distinct_selected_ids": 13,
+    }
+    crawl_runtime = _FakeCrawlRuntime(metrics=task7_metrics, trace=trace)
+    outcomes = [
+        _detail_process_result(
+            "success",
+            job_action="created" if index < 6 else "updated",
+            company_action="created" if index < 2 else "updated",
+        )
+        for index in range(10)
+    ] + [_detail_process_result("ip_blocked", stop_batch=True)]
+    pipeline = _FakeDetailPipeline(outcomes, trace=trace)
+
+    result = await crawl_module._run_detail_phase(
+        args=_default_listing_args(crawl_phase="full"),
+        browser_runtime=_FakeListingBrowserRuntime(),
+        crawl_runtime=crawl_runtime,
+        crawl_job_id="detail-run",
+        detail_load_result=load_result,
+        pipeline=pipeline,
+    )
+
+    assert result.stop_batch is True
+    assert crawl_runtime.completed_calls == []
+    assert len(crawl_runtime.metric_merges) == 2
+    checkpoint_metrics = crawl_runtime.metric_merges[0]["snapshot"]
+    stopped_metrics = crawl_runtime.metric_merges[1]["snapshot"]
+    for metric_name, value in task7_metrics.items():
+        assert checkpoint_metrics[metric_name] == value
+        assert stopped_metrics[metric_name] == value
+    assert checkpoint_metrics["jobs_created"] == 6
+    assert checkpoint_metrics["jobs_updated"] == 4
+    assert checkpoint_metrics["jobs_reconciled"] == 2
+    assert checkpoint_metrics["companies_created"] == 2
+    assert checkpoint_metrics["companies_updated"] == 8
+    assert checkpoint_metrics["terminal_unavailable"] == 0
+    assert checkpoint_metrics["persist_failure"] == 0
+    assert checkpoint_metrics["jobs_saved"] == 10
+    assert checkpoint_metrics["items_emitted"] == 10
+    assert checkpoint_metrics["detail_processed_targets"] == 10
+    assert checkpoint_metrics["detail_outcomes"] == {"success": 10}
+    assert stopped_metrics["detail_processed_targets"] == 11
+    assert stopped_metrics["detail_outcomes"] == {
+        "success": 10,
+        "ip_blocked": 1,
+    }
+    assert stopped_metrics["jobs_saved"] == 10
+    assert trace.index("merge_metrics") < trace.index("crawl.detail_progress")
+    assert trace[-2:] == ["merge_metrics", "manual_action_required"]

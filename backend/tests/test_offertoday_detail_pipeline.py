@@ -87,6 +87,10 @@ class _ListingRepository:
         "identity_conflict",
     }
 
+    def __init__(self, *, fail_detail_completed_after: int | None = None) -> None:
+        self.fail_detail_completed_after = fail_detail_completed_after
+        self.completed_before_failure: list[str] = []
+
     @staticmethod
     def _row(db: _TransactionalSession, listing_id: str) -> dict[str, Any]:
         return db.working.rows[str(listing_id)]
@@ -124,6 +128,13 @@ class _ListingRepository:
         row["detail_payload"] = deepcopy(detail_payload)
         row["published_job_id"] = published_job_id
         row["detail_error_message"] = None
+        self.completed_before_failure.append(str(listing_id))
+        if (
+            self.fail_detail_completed_after is not None
+            and len(self.completed_before_failure)
+            == self.fail_detail_completed_after
+        ):
+            raise RuntimeError("injected group completion transition failure")
         if auto_commit:
             db.commit()
         return SimpleNamespace(**row)
@@ -365,6 +376,7 @@ def _build_pipeline(
     fail_detail_attempt_once=False,
     fail_detail_persisted_once=False,
     fail_success_commit_once=False,
+    fail_detail_completed_after=None,
 ):
     store = _TransactionalStore(
         rows=deepcopy(
@@ -379,7 +391,9 @@ def _build_pipeline(
         store,
         fail_success_commit_once=fail_success_commit_once,
     )
-    listings = _ListingRepository()
+    listings = _ListingRepository(
+        fail_detail_completed_after=fail_detail_completed_after
+    )
     crawl_jobs = _CrawlJobRepository(
         fail_detail_attempt_once=fail_detail_attempt_once,
         fail_detail_persisted_once=fail_detail_persisted_once
@@ -767,6 +781,40 @@ async def test_success_commit_interruption_publishes_nothing_then_fails_group():
     ]
     assert len(failed_commit_sessions) == 1
     assert failed_commit_sessions[0].rollbacks == 1
+
+
+@pytest.mark.asyncio
+async def test_group_completion_interruption_rolls_back_publish_then_fails_group():
+    raw_response = _success_response()
+    env = _build_pipeline(
+        [raw_response],
+        fail_detail_completed_after=2,
+    )
+    target = OfferTodayDetailTarget.from_runtime_target(_runtime_target())
+
+    result = await env.pipeline.process_target(
+        target=target,
+        detail_crawl_job_id="detail-run",
+        fetch_detail=env.fetcher,
+    )
+
+    assert env.listings.completed_before_failure == ["listing-a", "listing-b"]
+    assert result.outcome is OfferTodayResponseKind.PERSIST_FAILURE
+    assert env.store.jobs == {}
+    assert env.store.companies == {}
+    assert not any(
+        event["event_type"] == "crawl.detail_persisted"
+        for event in env.store.events
+    )
+    assert {env.store.rows[key]["detail_status"] for key in target.listing_ids} == {
+        "failed"
+    }
+    assert all(env.store.rows[key]["published_job_id"] is None for key in target.listing_ids)
+    assert all(
+        env.store.rows[key]["detail_payload"] == raw_response
+        for key in target.listing_ids
+    )
+    assert any(session.rollbacks == 1 for session in env.sessions.sessions)
 
 
 def test_target_uses_authoritative_and_duplicate_ids_and_validates_identity():

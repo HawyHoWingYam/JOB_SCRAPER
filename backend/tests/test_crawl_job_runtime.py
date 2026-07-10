@@ -121,6 +121,54 @@ class _RecordingRuntimeRepository:
         return SimpleNamespace()
 
 
+def test_runtime_merge_metrics_commits_and_closes_short_session():
+    session = _FakeSession()
+    repository = _FakeCrawlJobRepository()
+    runtime = CrawlJobRuntime(
+        lambda: session,
+        crawl_job_repository=repository,
+        crawl_job_listing_repository=_FakeCrawlJobListingRepository(),
+        job_repository=_FakeJobRepository(),
+    )
+
+    runtime.merge_metrics(
+        crawl_job_id="detail-run",
+        metrics_patch={"jobs_created": 3},
+    )
+
+    assert repository.jobs["detail-run"].metrics == {"jobs_created": 3}
+    assert repository.metric_patches == [
+        ("detail-run", {"jobs_created": 3})
+    ]
+    assert session.commits == 1
+    assert session.rollbacks == 0
+    assert session.closed is True
+
+
+def test_runtime_merge_metrics_rolls_back_and_closes_on_repository_failure():
+    class _FailingMetricsRepository(_FakeCrawlJobRepository):
+        def merge_metrics(self, *args, **kwargs):
+            raise RuntimeError("injected metric merge failure")
+
+    session = _FakeSession()
+    runtime = CrawlJobRuntime(
+        lambda: session,
+        crawl_job_repository=_FailingMetricsRepository(),
+        crawl_job_listing_repository=_FakeCrawlJobListingRepository(),
+        job_repository=_FakeJobRepository(),
+    )
+
+    with pytest.raises(RuntimeError, match="metric merge failure"):
+        runtime.merge_metrics(
+            crawl_job_id="detail-run",
+            metrics_patch={"jobs_created": 3},
+        )
+
+    assert session.commits == 0
+    assert session.rollbacks == 1
+    assert session.closed is True
+
+
 class _FakeCrawlJobListingRepository:
     def __init__(
         self,

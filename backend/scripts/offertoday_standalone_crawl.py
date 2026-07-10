@@ -863,6 +863,32 @@ async def _run_detail_phase(
     companies_created = 0
     companies_updated = 0
 
+    def build_metrics_patch() -> dict[str, Any]:
+        jobs_saved = jobs_created + jobs_updated
+        return {
+            "jobs_created": jobs_created,
+            "jobs_updated": jobs_updated,
+            "jobs_reconciled": jobs_reconciled,
+            "companies_created": companies_created,
+            "companies_updated": companies_updated,
+            "terminal_unavailable": int(
+                outcome_counts.get(
+                    OfferTodayResponseKind.TERMINAL_UNAVAILABLE.value,
+                    0,
+                )
+            ),
+            "persist_failure": int(
+                outcome_counts.get(
+                    OfferTodayResponseKind.PERSIST_FAILURE.value,
+                    0,
+                )
+            ),
+            "items_emitted": jobs_saved,
+            "jobs_saved": jobs_saved,
+            "detail_processed_targets": sum(outcome_counts.values()),
+            "detail_outcomes": dict(outcome_counts),
+        }
+
     def build_result(*, stop_batch: bool) -> OfferTodayDetailPhaseResult:
         return OfferTodayDetailPhaseResult(
             detail_load_result=detail_load_result,
@@ -895,6 +921,10 @@ async def _run_detail_phase(
                 for record in detail_load_result.identity_conflict_evidence
             ],
         }
+        crawl_runtime.merge_metrics(
+            crawl_job_id=crawl_job_id,
+            metrics_patch=build_metrics_patch(),
+        )
         crawl_runtime.mark_manual_action_required(
             crawl_job_id=crawl_job_id,
             source_site="offertoday",
@@ -968,6 +998,10 @@ async def _run_detail_phase(
                 },
                 "resume_context": request_payload,
             }
+            crawl_runtime.merge_metrics(
+                crawl_job_id=crawl_job_id,
+                metrics_patch=build_metrics_patch(),
+            )
             crawl_runtime.mark_manual_action_required(
                 crawl_job_id=crawl_job_id,
                 source_site="offertoday",
@@ -981,6 +1015,11 @@ async def _run_detail_phase(
             return build_result(stop_batch=True)
 
         if index % 10 == 0:
+            checkpoint_metrics = build_metrics_patch()
+            crawl_runtime.merge_metrics(
+                crawl_job_id=crawl_job_id,
+                metrics_patch=checkpoint_metrics,
+            )
             crawl_runtime.write_progress_event(
                 crawl_job_id=crawl_job_id,
                 emitted_by="offertoday-crawl",
@@ -988,10 +1027,10 @@ async def _run_detail_phase(
                 payload={
                     "detail_index": index,
                     "detail_total": total_targets,
-                    "outcome_counts": dict(outcome_counts),
-                    "jobs_created": jobs_created,
-                    "jobs_updated": jobs_updated,
-                    "jobs_reconciled": jobs_reconciled,
+                    "outcome_counts": checkpoint_metrics["detail_outcomes"],
+                    "jobs_created": checkpoint_metrics["jobs_created"],
+                    "jobs_updated": checkpoint_metrics["jobs_updated"],
+                    "jobs_reconciled": checkpoint_metrics["jobs_reconciled"],
                     "phase": 2,
                 },
             )
@@ -1008,15 +1047,7 @@ async def _run_detail_phase(
     }
     completed_metrics = {
         **dict(completion_metrics or {}),
-        "jobs_created": phase_result.jobs_created,
-        "jobs_updated": phase_result.jobs_updated,
-        "jobs_reconciled": phase_result.jobs_reconciled,
-        "terminal_unavailable": phase_result.terminal_unavailable,
-        "persist_failure": phase_result.persist_failure,
-        "companies_created": phase_result.companies_created,
-        "companies_updated": phase_result.companies_updated,
-        "items_emitted": phase_result.jobs_saved,
-        "jobs_saved": phase_result.jobs_saved,
+        **build_metrics_patch(),
     }
     crawl_runtime.mark_completed(
         crawl_job_id=crawl_job_id,

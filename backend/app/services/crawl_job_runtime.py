@@ -240,6 +240,27 @@ class CrawlJobRuntime:
         finally:
             db.close()
 
+    def merge_metrics(
+        self,
+        *,
+        crawl_job_id,
+        metrics_patch: dict[str, Any],
+    ) -> None:
+        db = self.session_factory()
+        try:
+            self.crawl_job_repository.merge_metrics(
+                db,
+                crawl_job_id=crawl_job_id,
+                metrics_patch=dict(metrics_patch or {}),
+                auto_commit=False,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     def mark_started(
         self,
         *,
