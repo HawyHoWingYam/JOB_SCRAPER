@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
 import uuid
@@ -22,13 +21,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 logger = logging.getLogger("offertoday-crawl")
 
 BACKEND = str(Path(__file__).resolve().parents[1])
-SCRAPY_PROJECT = str(Path(__file__).resolve().parents[1] / "scrapy_project")
 if BACKEND not in sys.path:
     sys.path.insert(0, BACKEND)
-if SCRAPY_PROJECT not in sys.path:
-    sys.path.insert(0, SCRAPY_PROJECT)
 
-from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, OFFERTODAY_LISTING_BROWSE_URL, OFFERTODAY_LISTING_SEARCH_URL, build_offertoday_listing_payload  # noqa: E402
+from app.sources.offertoday.constants import (  # noqa: E402
+    OFFERTODAY_BASE_URL,
+    OFFERTODAY_LISTING_BROWSE_URL,
+    build_offertoday_listing_payload,
+)
 from app.scraper.manual_action import (  # noqa: E402
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
@@ -47,9 +47,6 @@ from app.sources.offertoday.search_space import (  # noqa: E402
 )
 from app.sources.offertoday.staging import resolve_listing_stage_decision  # noqa: E402
 from app.sources.offertoday.parsers import parse_offertoday_listing_response  # noqa: E402
-from job_scraper_spiders.downloaders.scrapling_adapter import scrapling_fetch  # noqa: E402
-
-OFFERTODAY_DETAIL_URL_TPL = f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/jobDetail?id={{}}&encryptJobId={{}}"
 
 MAX_PAGES_GLOBAL = 9999
 DEFAULT_IT_UNIQUE_JOB_TARGET = 3000
@@ -58,8 +55,6 @@ DEFAULT_IT_UNIQUE_JOB_TARGET = 3000
 _WAF_CHALLENGE_PATH = "/web/passport/cm/verify"
 # How long to wait (seconds) for the user to complete manual WAF verification before giving up.
 _WAF_MANUAL_TIMEOUT_SECONDS = 180
-
-_COMMON_HEADERS = OFFERTODAY_COMMON_HEADERS
 
 _RESUME_STRATEGY_CHOICES = (
     RESUME_STRATEGY_FRESH_PROFILE,
@@ -300,6 +295,9 @@ async def _run_runtime_probe(
         if session_check.is_waf_challenge:
             logger.error("OfferToday runtime check hit a WAF challenge.")
             return 1
+        if not session_check.healthy:
+            logger.error("OfferToday runtime check found an unhealthy browser session.")
+            return 1
         if not smoke_test:
             return 0
 
@@ -330,38 +328,8 @@ async def _fetch_listing_json(
     *,
     listing_url: str | None = None,
 ) -> dict[str, Any]:
-    url = listing_url or OFFERTODAY_LISTING_SEARCH_URL
-    try:
-        if listing_url is None:
-            result = await runtime.fetch_listing_json(payload)
-        else:
-            page = runtime._page
-            if page is None:
-                raise RuntimeError("OfferToday browser runtime was not initialized")
-            js = (
-                f"()=>fetch('{url}',{{method:'POST',"
-                f"headers:{json.dumps(_COMMON_HEADERS, ensure_ascii=False)},"
-                f"body:JSON.stringify({json.dumps(payload, ensure_ascii=False)})"
-                f"}}).then(r=>r.json())"
-            )
-            result = await asyncio.wait_for(page.evaluate(js), timeout=30)
-        return result or {}
-    except Exception as exc:
-        logger.warning("Playwright listing fetch failed; trying Scrapling fallback: %s", exc)
-
-    try:
-        text = await scrapling_fetch(
-            url,
-            method="POST",
-            headers=_COMMON_HEADERS,
-            data=json.dumps(payload, ensure_ascii=False),
-            headless=True,
-            stealth=True,
-        )
-        return json.loads(text) if text else {}
-    except Exception as exc:
-        logger.warning("Scrapling listing fallback failed: %s", exc)
-        return {}
+    result = await runtime.fetch_listing_json(payload, listing_url=listing_url)
+    return dict(result or {})
 
 
 async def _fetch_detail_json_with_identifiers(
@@ -370,33 +338,11 @@ async def _fetch_detail_json_with_identifiers(
     job_id: str,
     encrypted_job_id: str | None = None,
 ) -> dict[str, Any]:
-    resolved_job_id = str(job_id or "").strip()
-    resolved_encrypted_job_id = str(encrypted_job_id or resolved_job_id).strip()
-    detail_url = OFFERTODAY_DETAIL_URL_TPL.format(resolved_job_id, resolved_encrypted_job_id)
-    try:
-        result = await runtime.fetch_detail_json(
-            job_id=resolved_job_id,
-            encrypted_job_id=resolved_encrypted_job_id,
-        )
-        return result or {}
-    except Exception as exc:
-        logger.warning("Playwright detail fetch failed; trying Scrapling fallback: %s", exc)
-
-    try:
-        text = await scrapling_fetch(
-            detail_url,
-            method="GET",
-            headers={
-                "api-language": "zh_HK",
-                "x-requested-with": "XMLHttpRequest",
-            },
-            headless=True,
-            stealth=True,
-        )
-        return json.loads(text) if text else {}
-    except Exception as exc:
-        logger.warning("Scrapling detail fallback failed: %s", exc)
-        return {}
+    result = await runtime.fetch_detail_json(
+        job_id=job_id,
+        encrypted_job_id=encrypted_job_id,
+    )
+    return dict(result or {})
 
 
 def _write_progress_event(db, *, crawl_job_id: str, sequence_no: int, event_type: str, payload: dict) -> None:

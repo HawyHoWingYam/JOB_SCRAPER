@@ -18,7 +18,14 @@ from app.scraper.manual_action import (
 from app.sources.offertoday.constants import (
     OFFERTODAY_BASE_URL,
     OFFERTODAY_COMMON_HEADERS,
+    OFFERTODAY_LISTING_BROWSE_URL,
     OFFERTODAY_LISTING_SEARCH_URL,
+)
+from app.sources.offertoday.detail_identity import resolve_offertoday_detail_identity
+from app.sources.offertoday.response_policy import (
+    OfferTodayResponseKind,
+    OfferTodayTransportError,
+    classify_offertoday_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,6 +43,10 @@ class OfferTodaySessionCheckResult:
     is_waf_challenge: bool
     listing_probe_payload: dict[str, Any] | None
     listing_result_count: int
+    classification: OfferTodayResponseKind
+    api_code: int | None
+    message: str | None
+    healthy: bool
 
 
 class OfferTodayBrowserRuntime:
@@ -116,9 +127,22 @@ class OfferTodayBrowserRuntime:
         self._owns_browser = False
         self._runtime_started = False
 
-    async def fetch_listing_json(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        return await self._fetch_json(
+    async def fetch_listing_json(
+        self,
+        payload: dict[str, Any],
+        *,
+        listing_url: str | None = None,
+    ) -> dict[str, Any] | None:
+        resolved_listing_url = (
+            OFFERTODAY_LISTING_SEARCH_URL if listing_url is None else listing_url
+        )
+        if not isinstance(resolved_listing_url, str) or resolved_listing_url not in (
             OFFERTODAY_LISTING_SEARCH_URL,
+            OFFERTODAY_LISTING_BROWSE_URL,
+        ):
+            raise ValueError(f"Unsupported OfferToday listing URL: {listing_url!r}")
+        return await self._fetch_json(
+            resolved_listing_url,
             method="POST",
             payload=payload,
         )
@@ -129,12 +153,16 @@ class OfferTodayBrowserRuntime:
         job_id: str,
         encrypted_job_id: str | None = None,
     ) -> dict[str, Any] | None:
-        resolved_job_id = str(job_id or "").strip()
-        resolved_encrypted_job_id = str(encrypted_job_id or resolved_job_id).strip()
-        if not resolved_job_id or not resolved_encrypted_job_id:
-            return None
+        identity = resolve_offertoday_detail_identity(
+            source_job_id=job_id,
+            listing_payload={
+                "jobId": job_id,
+                "encryptJobId": encrypted_job_id,
+            },
+        )
         return await self._fetch_json(
-            _OFFERTODAY_DETAIL_URL_TEMPLATE % (resolved_job_id, resolved_encrypted_job_id),
+            _OFFERTODAY_DETAIL_URL_TEMPLATE
+            % (identity.job_id, identity.encrypted_job_id),
             method="GET",
         )
 
@@ -143,17 +171,99 @@ class OfferTodayBrowserRuntime:
         *,
         listing_payload: dict[str, Any] | None = None,
     ) -> OfferTodaySessionCheckResult:
-        probe_payload = await self.fetch_listing_json(
-            listing_payload or {"keyword": "", "page": 1, "pageSize": 1}
-        )
-        result_list = (((probe_payload or {}).get("data") or {}).get("resultList") or [])
-        listing_result_count = len(result_list) if isinstance(result_list, list) else 0
         current_url = str(getattr(self._page, "url", "") or "")
+        probe_payload: dict[str, Any] | None = None
+        transport_error: BaseException | None = None
+        http_status: int | None = None
+        try:
+            probe_payload = await self.fetch_listing_json(
+                listing_payload or {"keyword": "", "page": 1, "pageSize": 1}
+            )
+        except (OfferTodayTransportError, TimeoutError, ConnectionError) as exc:
+            transport_error = exc
+            if isinstance(exc, OfferTodayTransportError):
+                probe_payload = exc.payload
+                http_status = exc.http_status
+                current_url = str(exc.response_url or current_url)
+
+        classification = classify_offertoday_response(
+            probe_payload,
+            operation="listing",
+            current_url=current_url,
+            transport_error=transport_error,
+            http_status=http_status,
+        )
+        healthy = classification.kind is OfferTodayResponseKind.SUCCESS
+        result_list = (
+            (classification.data or {}).get("resultList") or [] if healthy else []
+        )
+        listing_result_count = len(result_list) if isinstance(result_list, list) else 0
         return OfferTodaySessionCheckResult(
             current_url=current_url,
-            is_waf_challenge=self.is_waf_challenge_url(current_url),
+            is_waf_challenge=(
+                classification.kind is OfferTodayResponseKind.WAF_CHALLENGE
+            ),
             listing_probe_payload=probe_payload,
             listing_result_count=listing_result_count,
+            classification=classification.kind,
+            api_code=classification.code,
+            message=classification.message,
+            healthy=healthy,
+        )
+
+    async def require_healthy_session(
+        self,
+        *,
+        listing_payload: dict[str, Any] | None = None,
+    ) -> OfferTodaySessionCheckResult:
+        result = await self.check_session(listing_payload=listing_payload)
+        if result.healthy:
+            return result
+
+        if result.classification in {
+            OfferTodayResponseKind.AUTH_EXPIRED,
+            OfferTodayResponseKind.WAF_CHALLENGE,
+            OfferTodayResponseKind.IP_BLOCKED,
+        }:
+            instructions = {
+                OfferTodayResponseKind.AUTH_EXPIRED: [
+                    "Sign in to OfferToday in the browser profile used by this crawl.",
+                    "Refresh the OfferToday search page, then retry the crawl.",
+                ],
+                OfferTodayResponseKind.WAF_CHALLENGE: [
+                    "Complete the OfferToday verification challenge in the browser.",
+                    "Return to the OfferToday search page, then retry the crawl.",
+                ],
+                OfferTodayResponseKind.IP_BLOCKED: [
+                    "Wait for the OfferToday IP block to clear or use an allowed network.",
+                    "Retry with the authenticated browser session after access is restored.",
+                ],
+            }[result.classification]
+            evidence = (
+                f"classification={result.classification.value}, "
+                f"api_code={result.api_code}"
+            )
+            raise ManualActionRequiredError(
+                source_site="offertoday",
+                stage="browser_session",
+                blocked_url=(result.current_url or f"{OFFERTODAY_BASE_URL}/hk/search"),
+                referer=OFFERTODAY_BASE_URL,
+                message=(
+                    f"OfferToday browser session requires manual action ({evidence}): "
+                    f"{result.message or 'session preflight failed'}"
+                ),
+                resume_context={
+                    "classification": result.classification.value,
+                    "api_code": result.api_code,
+                    "message": result.message,
+                },
+                instructions=instructions,
+            )
+
+        raise RuntimeError(
+            "OfferToday browser session preflight failed: "
+            f"classification={result.classification.value}, "
+            f"api_code={result.api_code}, message={result.message}"
         )
 
     async def run_smoke_test(
@@ -163,19 +273,46 @@ class OfferTodayBrowserRuntime:
         detail_limit: int = 1,
     ) -> dict[str, Any]:
         session_check = await self.check_session(listing_payload=listing_payload)
+        smoke_result: dict[str, Any] = {
+            "listing_ok": session_check.healthy,
+            "listing_count": session_check.listing_result_count,
+            "detail_results": [],
+            "current_url": session_check.current_url,
+            "is_waf_challenge": session_check.is_waf_challenge,
+            "classification": session_check.classification.value,
+            "api_code": session_check.api_code,
+        }
+        if not session_check.healthy:
+            return smoke_result
+
         result_list = (
-            (((session_check.listing_probe_payload or {}).get("data") or {}).get("resultList") or [])
+            (
+                ((session_check.listing_probe_payload or {}).get("data") or {}).get(
+                    "resultList"
+                )
+                or []
+            )
             if isinstance(session_check.listing_probe_payload, dict)
             else []
         )
         detail_results: list[dict[str, Any]] = []
-        for row in result_list[: max(int(detail_limit or 0), 0)]:
+        resolved_detail_limit = max(int(detail_limit or 0), 0)
+        for row in result_list:
+            if len(detail_results) >= resolved_detail_limit:
+                break
             if not isinstance(row, dict):
                 continue
-            job_id = str(row.get("jobId") or "").strip()
-            encrypted_job_id = str(row.get("encryptJobId") or job_id).strip()
-            if not job_id:
+            raw_job_id = row.get("jobId")
+            raw_encrypted_job_id = row.get("encryptJobId")
+            if (
+                not isinstance(raw_job_id, str)
+                or not raw_job_id.strip()
+                or not isinstance(raw_encrypted_job_id, str)
+                or not raw_encrypted_job_id.strip()
+            ):
                 continue
+            job_id = raw_job_id.strip()
+            encrypted_job_id = raw_encrypted_job_id.strip()
             detail_payload = await self.fetch_detail_json(
                 job_id=job_id,
                 encrypted_job_id=encrypted_job_id,
@@ -183,16 +320,15 @@ class OfferTodayBrowserRuntime:
             detail_results.append(
                 {
                     "job_id": job_id,
-                    "code": None if not isinstance(detail_payload, dict) else detail_payload.get("code"),
+                    "code": (
+                        None
+                        if not isinstance(detail_payload, dict)
+                        else detail_payload.get("code")
+                    ),
                 }
             )
-        return {
-            "listing_ok": not session_check.is_waf_challenge,
-            "listing_count": session_check.listing_result_count,
-            "detail_results": detail_results,
-            "current_url": session_check.current_url,
-            "is_waf_challenge": session_check.is_waf_challenge,
-        }
+        smoke_result["detail_results"] = detail_results
+        return smoke_result
 
     async def _launch_fresh_profile(self) -> None:
         if not self.headed:
@@ -316,11 +452,58 @@ class OfferTodayBrowserRuntime:
         script = (
             "async ({ url, options }) => {"
             "  const response = await fetch(url, options);"
-            "  return await response.json();"
+            "  return {"
+            "    httpStatus: response.status,"
+            "    responseUrl: response.url,"
+            "    text: await response.text(),"
+            "  };"
             "}"
         )
-        result = await self._page.evaluate(script, {"url": url, "options": fetch_options})
-        return result if isinstance(result, dict) else None
+        result = await self._page.evaluate(
+            script, {"url": url, "options": fetch_options}
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                "OfferToday browser fetch returned invalid response metadata"
+            )
+
+        http_status = result.get("httpStatus")
+        response_url = result.get("responseUrl")
+        response_text = result.get("text")
+        if type(http_status) is not int:
+            raise RuntimeError(
+                "OfferToday browser fetch returned an invalid HTTP status"
+            )
+        if not isinstance(response_url, str) or not response_url.strip():
+            raise RuntimeError(
+                "OfferToday browser fetch returned an invalid response URL"
+            )
+        if not isinstance(response_text, str):
+            raise RuntimeError(
+                "OfferToday browser fetch returned an invalid response body"
+            )
+
+        try:
+            parsed = json.loads(response_text)
+        except json.JSONDecodeError as exc:
+            raise OfferTodayTransportError(
+                "OfferToday returned a non-JSON response",
+                http_status=http_status,
+                response_url=response_url,
+                payload=None,
+                error_kind="invalid_json",
+            ) from exc
+
+        parsed_payload = parsed if isinstance(parsed, dict) else None
+        if not 200 <= http_status < 300 or self.is_waf_challenge_url(response_url):
+            raise OfferTodayTransportError(
+                f"OfferToday browser fetch failed with HTTP {http_status}",
+                http_status=http_status,
+                response_url=response_url,
+                payload=parsed_payload,
+                error_kind="http",
+            )
+        return parsed_payload
 
     async def _read_csrf_token(self) -> str | None:
         if self._page is None:

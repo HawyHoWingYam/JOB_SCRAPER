@@ -31,6 +31,7 @@ async def test_run_runtime_probe_delegates_smoke_test_to_runtime(monkeypatch):
                 is_waf_challenge=False,
                 listing_probe_payload={"data": {"resultList": [{"jobId": "job-1", "encryptJobId": "enc-1"}]}},
                 listing_result_count=1,
+                healthy=True,
             )
 
         async def run_smoke_test(self, *, listing_payload, detail_limit=1):
@@ -81,6 +82,7 @@ async def test_run_runtime_probe_fails_when_smoke_test_reports_no_detail_success
                 is_waf_challenge=False,
                 listing_probe_payload={"data": {"resultList": []}},
                 listing_result_count=0,
+                healthy=True,
             )
 
         async def run_smoke_test(self, *, listing_payload, detail_limit=1):
@@ -104,6 +106,186 @@ async def test_run_runtime_probe_fails_when_smoke_test_reports_no_detail_success
     )
 
     assert exit_code == 1
+
+
+@pytest.mark.asyncio
+async def test_run_runtime_probe_check_fails_when_session_is_unhealthy(monkeypatch):
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+
+    class _FakeRuntime:
+        def __init__(self, **kwargs) -> None:
+            self._page = SimpleNamespace(url="https://www.offertoday.com/hk/search")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def check_session(self, *, listing_payload):
+            return SimpleNamespace(
+                current_url="https://www.offertoday.com/hk/search",
+                is_waf_challenge=False,
+                listing_result_count=0,
+                healthy=False,
+            )
+
+    monkeypatch.setattr(crawl_module, "OfferTodayBrowserRuntime", _FakeRuntime)
+
+    exit_code = await crawl_module._run_runtime_probe(
+        headed=False,
+        auth_state="",
+        resume_strategy="fresh_profile",
+        category_ids=[],
+        keywords=["data"],
+        smoke_test=False,
+    )
+
+    assert exit_code == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "listing_url",
+    [
+        None,
+        "https://www.offertoday.com/wapi/geek/recommend/list",
+    ],
+)
+async def test_fetch_listing_json_delegates_endpoint_to_authenticated_runtime(
+    monkeypatch,
+    listing_url,
+):
+    crawl_module = importlib.import_module(
+        "backend.scripts.offertoday_standalone_crawl"
+    )
+    omitted = object()
+    calls: list[tuple[object, object]] = []
+
+    class _FakeRuntime:
+        _page = None
+
+        async def fetch_listing_json(self, payload, *, listing_url=omitted):
+            calls.append((payload, listing_url))
+            return {"code": 0, "data": {"resultList": []}}
+
+    async def legacy_fallback(*args, **kwargs):
+        return "{}"
+
+    monkeypatch.setattr(crawl_module, "scrapling_fetch", legacy_fallback, raising=False)
+    payload = {"keyword": "python", "page": 1}
+
+    result = await crawl_module._fetch_listing_json(
+        _FakeRuntime(),
+        payload,
+        listing_url=listing_url,
+    )
+
+    assert result == {"code": 0, "data": {"resultList": []}}
+    assert calls == [(payload, listing_url)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_listing_json_propagates_timeout_without_legacy_fallback(
+    monkeypatch,
+):
+    crawl_module = importlib.import_module(
+        "backend.scripts.offertoday_standalone_crawl"
+    )
+    timeout = TimeoutError("authenticated browser timed out")
+    legacy_calls = 0
+
+    class _FakeRuntime:
+        async def fetch_listing_json(self, payload, *, listing_url=None):
+            raise timeout
+
+    async def legacy_fallback(*args, **kwargs):
+        nonlocal legacy_calls
+        legacy_calls += 1
+        return "{}"
+
+    monkeypatch.setattr(crawl_module, "scrapling_fetch", legacy_fallback, raising=False)
+
+    with pytest.raises(TimeoutError) as exc_info:
+        await crawl_module._fetch_listing_json(
+            _FakeRuntime(),
+            {"keyword": "python", "page": 1},
+        )
+
+    assert exc_info.value is timeout
+    assert legacy_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_listing_json_propagates_typed_transport_evidence(monkeypatch):
+    crawl_module = importlib.import_module(
+        "backend.scripts.offertoday_standalone_crawl"
+    )
+    policy_module = importlib.import_module("app.sources.offertoday.response_policy")
+    transport_error = policy_module.OfferTodayTransportError(
+        "HTTP 503",
+        http_status=503,
+        response_url="https://www.offertoday.com/wapi/geek/recommend/search/list",
+        payload={"message": "unavailable"},
+        error_kind="http",
+    )
+    legacy_calls = 0
+
+    class _FakeRuntime:
+        async def fetch_listing_json(self, payload, *, listing_url=None):
+            raise transport_error
+
+    async def legacy_fallback(*args, **kwargs):
+        nonlocal legacy_calls
+        legacy_calls += 1
+        return "{}"
+
+    monkeypatch.setattr(crawl_module, "scrapling_fetch", legacy_fallback, raising=False)
+
+    with pytest.raises(policy_module.OfferTodayTransportError) as exc_info:
+        await crawl_module._fetch_listing_json(
+            _FakeRuntime(),
+            {"keyword": "python", "page": 1},
+        )
+
+    assert exc_info.value is transport_error
+    assert legacy_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_json_propagates_strict_identity_error_without_fallback(
+    monkeypatch,
+):
+    crawl_module = importlib.import_module(
+        "backend.scripts.offertoday_standalone_crawl"
+    )
+    identity_module = importlib.import_module("app.sources.offertoday.detail_identity")
+    identity_error = identity_module.OfferTodayIdentityError("missing encryptJobId")
+    calls: list[tuple[object, object]] = []
+    legacy_calls = 0
+
+    class _FakeRuntime:
+        async def fetch_detail_json(self, *, job_id, encrypted_job_id=None):
+            calls.append((job_id, encrypted_job_id))
+            raise identity_error
+
+    async def legacy_fallback(*args, **kwargs):
+        nonlocal legacy_calls
+        legacy_calls += 1
+        return "{}"
+
+    monkeypatch.setattr(crawl_module, "scrapling_fetch", legacy_fallback, raising=False)
+
+    with pytest.raises(identity_module.OfferTodayIdentityError) as exc_info:
+        await crawl_module._fetch_detail_json_with_identifiers(
+            _FakeRuntime(),
+            job_id="job-1",
+            encrypted_job_id=None,
+        )
+
+    assert exc_info.value is identity_error
+    assert calls == [("job-1", None)]
+    assert legacy_calls == 0
 
 
 def test_persist_listing_checkpoint_uses_shared_runtime_for_stage_and_progress(caplog):
