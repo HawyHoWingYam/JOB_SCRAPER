@@ -13,6 +13,7 @@ import asyncio
 import logging
 import sys
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -25,8 +26,6 @@ if BACKEND not in sys.path:
     sys.path.insert(0, BACKEND)
 
 from app.sources.offertoday.constants import (  # noqa: E402
-    OFFERTODAY_BASE_URL,
-    OFFERTODAY_LISTING_BROWSE_URL,
     build_offertoday_listing_payload,
 )
 from app.scraper.manual_action import (  # noqa: E402
@@ -41,15 +40,22 @@ from app.scraper.log_events import build_scrape_log_event  # noqa: E402
 from app.services.crawl_job_runtime import CrawlJobRuntime  # noqa: E402
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
 from app.repositories.crawl_job_repository import CrawlJobRepository  # noqa: E402
+from app.sources.offertoday.listing_runner import (  # noqa: E402
+    ListingRetryPolicy,
+    ListingStopPolicy,
+    OfferTodayListingRunner,
+    listing_observation_to_payload,
+)
 from app.sources.offertoday.search_space import (  # noqa: E402
-    build_offertoday_listing_queries,
+    build_offertoday_listing_conditions,
     normalize_offertoday_keywords,
 )
-from app.sources.offertoday.staging import resolve_listing_stage_decision  # noqa: E402
-from app.sources.offertoday.parsers import parse_offertoday_listing_response  # noqa: E402
+from app.sources.offertoday.parsers import (  # noqa: E402
+    build_offertoday_job_url,
+)
 
 MAX_PAGES_GLOBAL = 9999
-DEFAULT_IT_UNIQUE_JOB_TARGET = 3000
+DEFAULT_IT_UNIQUE_JOB_TARGET = 5000
 
 # WAF challenge URL fragment — OfferToday redirects here when it detects unusual traffic.
 _WAF_CHALLENGE_PATH = "/web/passport/cm/verify"
@@ -322,16 +328,6 @@ async def _run_runtime_probe(
         return 0
 
 
-async def _fetch_listing_json(
-    runtime: OfferTodayBrowserRuntime,
-    payload: dict[str, Any],
-    *,
-    listing_url: str | None = None,
-) -> dict[str, Any]:
-    result = await runtime.fetch_listing_json(payload, listing_url=listing_url)
-    return dict(result or {})
-
-
 async def _fetch_detail_json_with_identifiers(
     runtime: OfferTodayBrowserRuntime,
     *,
@@ -358,6 +354,335 @@ def _write_progress_event(db, *, crawl_job_id: str, sequence_no: int, event_type
         created_at=datetime.now(timezone.utc),
     )
     db.add(evt)
+
+
+def _normalize_listing_category_ids(value: Any) -> list[int]:
+    raw_values = str(value or "").split(",") if isinstance(value, str) else value or []
+    normalized: list[int] = []
+    for raw_value in raw_values:
+        text = str(raw_value).strip()
+        if text.isdigit():
+            normalized.append(int(text))
+    return normalized
+
+
+def _normalize_detail_statuses(value: Any) -> list[str]:
+    raw_values = str(value or "").split(",") if isinstance(value, str) else value or []
+    return [str(raw_value).strip() for raw_value in raw_values if str(raw_value).strip()]
+
+
+def _build_listing_staging_payload(
+    parsed_row: dict[str, Any],
+    *,
+    condition,
+    page: int,
+    rank: int,
+) -> dict[str, Any]:
+    normalized_listing = dict(parsed_row or {})
+    job_id = str(normalized_listing.get("job_id") or "").strip()
+    encrypted_job_id = str(
+        normalized_listing.get("encrypted_job_id") or ""
+    ).strip()
+    if not job_id:
+        raise ValueError("OfferToday listing row is missing canonical job_id")
+    if not encrypted_job_id:
+        raise ValueError("OfferToday listing row is missing encrypted_job_id")
+
+    raw_data = normalized_listing.get("raw_data")
+    normalized_listing["raw_data"] = (
+        dict(raw_data) if isinstance(raw_data, dict) else {}
+    )
+    category_id = getattr(condition, "category_id", None)
+    search_family = str(getattr(condition, "search_family", "") or "").strip()
+    keyword = str(getattr(condition, "keyword", "") or "")
+    return {
+        "source_job_id": job_id,
+        "source_url": build_offertoday_job_url(encrypted_job_id),
+        "source_classification_id": (
+            str(category_id) if category_id is not None else None
+        ),
+        "source_classification_name": search_family or None,
+        "listing_page": int(page),
+        "listing_rank": int(rank),
+        "listing_payload": normalized_listing,
+        "search_family": search_family or None,
+        "category_id": str(category_id) if category_id is not None else None,
+        "category_name": search_family or None,
+        "keyword": keyword or None,
+        "page": int(page),
+    }
+
+
+class OfferTodayCrawlStagingSink:
+    def __init__(self, *, crawl_runtime, crawl_job_id, skip_existing: bool) -> None:
+        self.crawl_runtime = crawl_runtime
+        self.crawl_job_id = crawl_job_id
+        self.skip_existing = bool(skip_existing)
+        self.rows_staged = 0
+        self.rows_created = 0
+        self.skipped_existing = 0
+        self.created_source_job_ids: list[str] = []
+        self.preexisting_staged_source_job_ids: list[str] = []
+        self.published_source_job_ids: list[str] = []
+
+    async def stage_page(self, *, condition, page: int, rows) -> None:
+        payloads = [
+            _build_listing_staging_payload(
+                parsed_row,
+                condition=condition,
+                page=page,
+                rank=index,
+            )
+            for index, parsed_row in enumerate(rows, start=1)
+        ]
+        result = self.crawl_runtime.stage_listing_batch(
+            crawl_job_id=self.crawl_job_id,
+            source_site="offertoday",
+            payloads=payloads,
+            skip_existing=self.skip_existing,
+        )
+        self.rows_staged += int(result.rows_staged)
+        self.rows_created += int(result.rows_created)
+        self.skipped_existing += int(result.skipped_existing)
+        self.created_source_job_ids.extend(result.created_source_job_ids)
+        self.preexisting_staged_source_job_ids.extend(
+            result.preexisting_staged_source_job_ids
+        )
+        self.published_source_job_ids.extend(result.published_source_job_ids)
+
+    async def defer_identity_conflict(
+        self,
+        *,
+        job_ids,
+        encrypted_job_ids,
+        reason: str,
+    ) -> None:
+        self.crawl_runtime.defer_listing_identity_conflict(
+            crawl_job_id=self.crawl_job_id,
+            source_job_ids=tuple(job_ids),
+            encrypted_job_ids=tuple(encrypted_job_ids),
+            reason=reason,
+        )
+
+
+class CrawlJobListingObservationSink:
+    def __init__(self, *, crawl_runtime, crawl_job_id) -> None:
+        self.crawl_runtime = crawl_runtime
+        self.crawl_job_id = crawl_job_id
+
+    async def record_page_attempt(self, observation) -> None:
+        self.crawl_runtime.write_progress_event(
+            crawl_job_id=self.crawl_job_id,
+            emitted_by="offertoday-crawl",
+            event_type="crawl.listing_page_attempt",
+            payload=listing_observation_to_payload(observation),
+        )
+
+    async def record_condition_outcome(self, outcome) -> None:
+        suffix = "completed" if outcome.is_complete else "incomplete"
+        self.crawl_runtime.write_progress_event(
+            crawl_job_id=self.crawl_job_id,
+            emitted_by="offertoday-crawl",
+            event_type=f"crawl.listing_condition_{suffix}",
+            payload=listing_observation_to_payload(outcome),
+        )
+
+
+class MemoryListingObservationSink:
+    def __init__(self) -> None:
+        self.page_attempts: list[Any] = []
+        self.condition_outcomes: list[Any] = []
+
+    async def record_page_attempt(self, observation) -> None:
+        self.page_attempts.append(observation)
+
+    async def record_condition_outcome(self, outcome) -> None:
+        self.condition_outcomes.append(outcome)
+
+
+class NoopListingStagingSink:
+    def __init__(self) -> None:
+        self.deferred_conflicts: list[dict[str, Any]] = []
+
+    async def stage_page(self, *, condition, page: int, rows) -> None:
+        return None
+
+    async def defer_identity_conflict(
+        self,
+        *,
+        job_ids,
+        encrypted_job_ids,
+        reason: str,
+    ) -> None:
+        self.deferred_conflicts.append(
+            {
+                "job_ids": tuple(job_ids),
+                "encrypted_job_ids": tuple(encrypted_job_ids),
+                "reason": reason,
+            }
+        )
+
+
+@dataclass(frozen=True)
+class ProductionListingPhaseResult:
+    listing_result: Any
+    staging_sink: OfferTodayCrawlStagingSink
+    observation_sink: CrawlJobListingObservationSink
+    detail_load_result: Any | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.listing_result, name)
+
+    @property
+    def detail_targets(self) -> list[dict[str, Any]]:
+        if self.detail_load_result is None:
+            return []
+        return list(self.detail_load_result.targets)
+
+    @property
+    def rows_created(self) -> int:
+        return self.staging_sink.rows_created
+
+
+def _listing_result_evidence(result) -> dict[str, Any]:
+    return {
+        "stop_reason": str(result.stop_reason),
+        "gap_count": len(result.gaps),
+        "conflict_count": len(result.identity_conflicts),
+        "identity_issue_count": len(result.identity_issues),
+        "pages_observed": sum(
+            int(getattr(outcome, "pages_observed", 0) or 0)
+            for outcome in result.condition_outcomes
+        ),
+        "accepted_job_ids": list(result.accepted_job_ids),
+    }
+
+
+async def _run_listing_phase(
+    args,
+    browser_runtime,
+    crawl_runtime,
+    crawl_job_id,
+    listing_runner=OfferTodayListingRunner,
+) -> ProductionListingPhaseResult:
+    category_ids = _normalize_listing_category_ids(args.category_ids)
+    keywords = normalize_offertoday_keywords(args.keywords)
+    conditions = build_offertoday_listing_conditions(
+        category_ids,
+        keywords=keywords or None,
+        default_to_it=True,
+    )
+    is_default_it_crawl = not keywords and any(
+        condition.search_family in {"it_category", "it_keyword", "it_hybrid"}
+        for condition in conditions
+    )
+    observation_sink = CrawlJobListingObservationSink(
+        crawl_runtime=crawl_runtime,
+        crawl_job_id=crawl_job_id,
+    )
+    staging_sink = OfferTodayCrawlStagingSink(
+        crawl_runtime=crawl_runtime,
+        crawl_job_id=crawl_job_id,
+        skip_existing=bool(args.skip_existing),
+    )
+    runner = (
+        listing_runner(browser_runtime)
+        if isinstance(listing_runner, type)
+        else listing_runner
+    )
+
+    await browser_runtime.require_healthy_session()
+    result = await runner.run(
+        conditions=conditions,
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=min(int(args.max_pages), MAX_PAGES_GLOBAL),
+            unique_job_cap=(
+                DEFAULT_IT_UNIQUE_JOB_TARGET if is_default_it_crawl else None
+            ),
+            require_empty_confirmation=True,
+        ),
+        retry_policy=ListingRetryPolicy(
+            max_attempts_per_page=3,
+            retry_delays_seconds=(1.0, 2.0),
+            page_delay_seconds=1.5,
+        ),
+        observation_sink=observation_sink,
+        staging_sink=staging_sink,
+        session_mode="headed" if args.headed else "headless",
+    )
+    execution = ProductionListingPhaseResult(
+        listing_result=result,
+        staging_sink=staging_sink,
+        observation_sink=observation_sink,
+    )
+    evidence = _listing_result_evidence(result)
+    if not result.is_complete:
+        stop_reason = str(result.stop_reason)
+        manual_session_reasons = {"auth_expired", "waf_challenge", "ip_blocked"}
+        identity_reasons = {"identity_issue", "identity_conflict", "id_mismatch"}
+        if stop_reason in manual_session_reasons | identity_reasons:
+            action_type = (
+                "identity_audit"
+                if stop_reason in identity_reasons
+                else "session_recovery"
+            )
+            manual_payload = {
+                "action_type": action_type,
+                "classification": stop_reason,
+                "evidence": evidence,
+                "resume_context": {
+                    "crawl_phase": "listing",
+                    "crawl_mode": "headed" if args.headed else "headless",
+                    "category_ids": category_ids,
+                    "keywords": keywords,
+                    "max_pages": int(args.max_pages),
+                    "skip_existing": bool(args.skip_existing),
+                    "resume_strategy": str(args.resume_strategy),
+                },
+            }
+            crawl_runtime.mark_manual_action_required(
+                crawl_job_id=crawl_job_id,
+                source_site="offertoday",
+                request_payload=dict(manual_payload["resume_context"]),
+                payload=manual_payload,
+                error_message=(
+                    "OfferToday listing phase requires manual action: "
+                    f"{stop_reason}"
+                ),
+            )
+        else:
+            crawl_runtime.mark_failed(
+                crawl_job_id=crawl_job_id,
+                source_site="offertoday",
+                error_message=f"OfferToday listing phase incomplete: {stop_reason}",
+                payload=evidence,
+            )
+        return execution
+
+    if str(args.crawl_phase or "").strip().lower() == "full":
+        accepted_source_job_ids = list(result.accepted_job_ids)
+        detail_load_result = crawl_runtime.load_detail_targets(
+            source_site="offertoday",
+            request_payload={
+                "crawl_phase": "detail",
+                "crawl_mode": "headed" if args.headed else "headless",
+                "category_ids": category_ids,
+                "source_job_ids": accepted_source_job_ids,
+                "detail_limit": len(accepted_source_job_ids),
+                "detail_statuses": _normalize_detail_statuses(
+                    args.detail_statuses
+                ),
+                "skip_existing": bool(args.skip_existing),
+            },
+            detail_crawl_job_id=crawl_job_id,
+        )
+        execution = ProductionListingPhaseResult(
+            listing_result=result,
+            staging_sink=staging_sink,
+            observation_sink=observation_sink,
+            detail_load_result=detail_load_result,
+        )
+    return execution
 
 
 def _persist_listing_checkpoint(
@@ -453,25 +778,21 @@ async def main() -> None:
         return
 
     page_limit_per_query = min(args.max_pages, MAX_PAGES_GLOBAL)
-    listing_tasks = (
-        build_offertoday_listing_queries(
+    listing_conditions = (
+        build_offertoday_listing_conditions(
             category_ids,
             keywords=keywords or None,
-            max_pages_per_query=page_limit_per_query,
+            default_to_it=True,
         )
         if crawl_phase != "detail"
         else []
     )
     search_families = list(
         dict.fromkeys(
-            task["search_family"]
-            for task in listing_tasks
-            if str(task.get("search_family") or "").strip()
+            condition.search_family
+            for condition in listing_conditions
+            if str(condition.search_family or "").strip()
         )
-    )
-    planned_total_pages = len(listing_tasks)
-    is_default_it_crawl = not keywords and any(
-        family in {"it_category", "it_keyword"} for family in search_families
     )
 
     from app.database import SessionLocal
@@ -520,13 +841,12 @@ async def main() -> None:
     new_jobs_count = 0
     jobs_skipped_existing = 0
     page_count = 0
-    search_family = ""
 
     existing_count = db.query(Job).filter(Job.source_site == "offertoday").count()
     logger.info("Existing OfferToday jobs in DB: %d", existing_count)
     logger.info(
         "OfferToday search space: tasks=%d families=%s max_pages_per_query=%d",
-        len(listing_tasks),
+        len(listing_conditions),
         ", ".join(search_families) or "[none]",
         page_limit_per_query,
     )
@@ -555,201 +875,91 @@ async def main() -> None:
             )
             logger.info("Warmup complete (url=%s)", page.url)
 
-            exhausted_conditions: set[tuple[str, Any, Any]] = set()
-            consecutive_failures = 0
-            for task_index, task in enumerate(listing_tasks):
-                search_family = str(task.get("search_family") or "").strip() or "category_search"
-                category_id = task.get("category_id")
-                keyword = str(task.get("keyword") or "")
-                page_number = int(task.get("page") or 1)
-                condition_key = (search_family, category_id, keyword)
-                if condition_key in exhausted_conditions:
-                    continue
-
-                payload = build_offertoday_listing_payload(
-                    category_id=category_id,
-                    keyword=keyword,
-                    page=page_number,
+            listing_execution: ProductionListingPhaseResult | None = None
+            if crawl_phase != "detail":
+                listing_execution = await _run_listing_phase(
+                    args=args,
+                    browser_runtime=runtime,
+                    crawl_runtime=crawl_runtime,
+                    crawl_job_id=cj_id,
                 )
-                task_listing_url = (
-                    OFFERTODAY_LISTING_BROWSE_URL
-                    if task.get("endpoint") == "browse"
-                    else None
+                listing_result = listing_execution.listing_result
+                seen_ids.update(listing_result.ordered_job_ids)
+                listing_count = int(listing_execution.rows_created)
+                new_jobs_count = int(listing_execution.rows_created)
+                jobs_skipped_existing = int(
+                    listing_execution.staging_sink.skipped_existing
                 )
-                data = await _fetch_listing_json(
-                    runtime,
-                    payload,
-                    listing_url=task_listing_url,
+                page_count = sum(
+                    int(outcome.pages_observed or 0)
+                    for outcome in listing_result.condition_outcomes
                 )
 
-                if not data or data.get("code") != 0:
-                    consecutive_failures += 1
-                    if consecutive_failures >= 3:
-                        await _check_and_handle_waf_challenge(
-                            page, headed=args.headed, crawl_job_id=cj_id, db=db
-                        )
-                        consecutive_failures = 0
-                    continue
-
-                consecutive_failures = 0
-
-                if task_index > 0 and task_index % 50 == 0:
-                    await _check_and_handle_waf_challenge(
-                        page, headed=args.headed, crawl_job_id=cj_id, db=db
+                if not listing_result.is_complete:
+                    logger.warning(
+                        "Listing phase incomplete; stop_reason=%s pages=%d",
+                        listing_result.stop_reason,
+                        page_count,
                     )
+                    return
 
-                result_list = data.get("data", {}).get("resultList", [])
-                if not result_list:
-                    exhausted_conditions.add(condition_key)
-                    continue
-
-                pending_listing_payloads: list[dict[str, Any]] = []
-                for raw_job in result_list:
-                    job_id_str = str(raw_job.get("jobId") or "").strip()
-                    if not job_id_str or job_id_str in seen_ids:
-                        continue
-                    seen_ids.add(job_id_str)
-
-                    parsed_listing = parse_offertoday_listing_response(
-                        {"code": 0, "data": {"resultList": [raw_job]}}
-                    )
-                    enriched_listing = parsed_listing[0] if parsed_listing else dict(raw_job)
-
-                    already_in_db = (
-                        db.query(Job)
-                        .filter(
-                            Job.source_site == "offertoday",
-                            Job.source_job_id == job_id_str,
-                        )
-                        .first()
-                    )
-                    stage_decision = resolve_listing_stage_decision(
-                        already_in_db=already_in_db is not None,
-                        skip_existing=args.skip_existing,
-                    )
-                    if stage_decision.is_new_job:
-                        new_jobs_count += 1
-                    if stage_decision.skipped_existing:
-                        jobs_skipped_existing += 1
-                        continue
-
-                    pending_listing_payloads.append(
-                        {
-                            "source_job_id": job_id_str,
-                            "source_url": f"{OFFERTODAY_BASE_URL}/hk/job/{job_id_str}",
-                            "source_classification_id": str(category_id) if category_id is not None else None,
-                            "listing_page": page_number,
-                            "listing_payload": enriched_listing,
-                        }
-                    )
-
-                page_count += 1
-
-                if args.crawl_job_id:
-                    listing_batch_result = _persist_listing_checkpoint(
-                        crawl_runtime=crawl_runtime,
-                        crawl_job_id=cj_id,
-                        search_family=search_family,
-                        search_families=search_families,
-                        category_id=category_id,
-                        keyword=keyword,
-                        current_page=page_count,
-                        total_pages=planned_total_pages,
-                        pending_listing_payloads=pending_listing_payloads,
-                        jobs_skipped_existing=jobs_skipped_existing,
-                        skip_existing=args.skip_existing,
-                    )
-                    listing_count += listing_batch_result.rows_staged
-                    cj = db.query(CrawlJob).filter(CrawlJob.id == cj_id).first()
-                    if cj:
-                        cj.metrics = {
-                            "pages_processed": page_count,
-                            "current_page": page_count,
-                            "total_pages": planned_total_pages,
-                            "job_ids_collected": len(seen_ids),
-                            "listings_staged": listing_count,
-                            "jobs_skipped_existing": jobs_skipped_existing,
-                            "detail_pending": listing_count,
-                            "detail_completed": 0,
-                            "detail_failed": 0,
-                            "items_emitted": 0,
-                            "jobs_saved": 0,
-                            "search_families": search_families,
-                            "search_family": search_family,
-                        }
-                else:
-                    listing_count += len(pending_listing_payloads)
-
-                if page_count % 5 == 0 or page_count == 1:
-                    if args.crawl_job_id:
-                        cj = db.query(CrawlJob).filter(CrawlJob.id == cj_id).first()
-                        if cj:
-                            cj.metrics = {
-                                "pages_processed": page_count,
-                                "current_page": page_count,
-                                "total_pages": planned_total_pages,
-                                "job_ids_collected": len(seen_ids),
-                                "listings_staged": listing_count,
-                                "jobs_skipped_existing": jobs_skipped_existing,
-                                "detail_pending": listing_count,
-                                "items_emitted": 0,
-                                "jobs_saved": 0,
-                                "search_families": search_families,
-                                "search_family": search_family,
-                            }
-                    db.commit()
-
-                await asyncio.sleep(0.5)
-
-                if is_default_it_crawl and len(seen_ids) >= DEFAULT_IT_UNIQUE_JOB_TARGET:
-                    logger.info(
-                        "Default IT crawl reached unique target (%d); stopping listing phase.",
-                        DEFAULT_IT_UNIQUE_JOB_TARGET,
-                    )
-                    break
-
-                if not data.get("data", {}).get("hasMore"):
-                    exhausted_conditions.add(condition_key)
-
-            if is_default_it_crawl and len(seen_ids) >= DEFAULT_IT_UNIQUE_JOB_TARGET:
-                logger.info("Default IT crawl target reached; skipping remaining listing tasks.")
-
-            detail_target_rows = listing_count
-            detail_selected_rows = len(seen_ids)
-            detail_skipped_existing_rows = jobs_skipped_existing
+            detail_target_rows = 0
+            detail_selected_rows = 0
+            detail_skipped_existing_rows = 0
             detail_targets: list[dict[str, Any]] = []
+            if (
+                crawl_phase == "full"
+                and listing_execution is not None
+                and listing_execution.detail_load_result is not None
+            ):
+                source_listing_crawl_job_id = None
+                detail_load_result = listing_execution.detail_load_result
+                detail_targets = list(detail_load_result.targets)
+                detail_target_rows = int(detail_load_result.target_rows)
+                detail_selected_rows = int(detail_load_result.selected_rows)
+                detail_skipped_existing_rows = int(
+                    detail_load_result.skipped_existing_rows
+                )
+            elif crawl_phase == "detail" and args.crawl_job_id:
+                source_listing_crawl_job_id = (
+                    args.source_listing_crawl_job_id or cj_id
+                )
+                detail_load_result = crawl_runtime.load_detail_targets(
+                    source_site="offertoday",
+                    request_payload={
+                        "crawl_phase": "detail",
+                        "crawl_mode": "headed" if args.headed else "headless",
+                        "source_listing_crawl_job_id": source_listing_crawl_job_id,
+                        "category_ids": category_ids,
+                        "detail_limit": args.detail_limit,
+                        "detail_statuses": _normalize_detail_statuses(
+                            args.detail_statuses
+                        ),
+                        "skip_existing": args.skip_existing,
+                    },
+                    detail_crawl_job_id=cj_id,
+                )
+                detail_targets = list(detail_load_result.targets)
+                detail_target_rows = int(detail_load_result.target_rows)
+                detail_selected_rows = int(detail_load_result.selected_rows)
+                detail_skipped_existing_rows = int(
+                    detail_load_result.skipped_existing_rows
+                )
 
-            if args.crawl_job_id:
-                if crawl_phase in {"full", "detail"}:
-                    detail_load_result = crawl_runtime.load_detail_targets(
-                        source_site="offertoday",
-                        request_payload={
-                            "crawl_phase": "detail",
-                            "crawl_mode": "headed" if args.headed else "headless",
-                            "source_listing_crawl_job_id": args.source_listing_crawl_job_id or cj_id,
-                            "category_ids": category_ids,
-                            "detail_limit": listing_count if crawl_phase == "full" else args.detail_limit,
-                            "detail_statuses": [status.strip() for status in str(args.detail_statuses).split(",") if status.strip()],
-                            "skip_existing": args.skip_existing,
-                        },
-                        detail_crawl_job_id=cj_id,
+            if args.crawl_job_id and crawl_phase in {"full", "detail"}:
+                logger.info(
+                    build_scrape_log_event(
+                        "SCRAPE_DETAIL_TARGETS_LOADED",
+                        source="offertoday",
+                        crawl_job_id=cj_id,
+                        source_listing_crawl_job_id=source_listing_crawl_job_id,
+                        detail_selected_rows=detail_selected_rows,
+                        detail_skipped_existing_rows=detail_skipped_existing_rows,
+                        detail_target_rows=detail_target_rows,
                     )
-                    detail_targets = list(detail_load_result.targets)
-                    detail_target_rows = int(detail_load_result.target_rows)
-                    detail_selected_rows = int(detail_load_result.selected_rows)
-                    detail_skipped_existing_rows = int(detail_load_result.skipped_existing_rows)
-                    logger.info(
-                        build_scrape_log_event(
-                            "SCRAPE_DETAIL_TARGETS_LOADED",
-                            source="offertoday",
-                            crawl_job_id=cj_id,
-                            source_listing_crawl_job_id=args.source_listing_crawl_job_id or cj_id,
-                            detail_selected_rows=detail_selected_rows,
-                            detail_skipped_existing_rows=detail_skipped_existing_rows,
-                            detail_target_rows=detail_target_rows,
-                        )
-                    )
+                )
 
+            if args.crawl_job_id and crawl_phase != "detail":
                 crawl_runtime.write_progress_event(
                     crawl_job_id=cj_id,
                     emitted_by="offertoday-crawl",

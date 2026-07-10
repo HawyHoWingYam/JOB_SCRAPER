@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.crawl_phases import DEFAULT_DETAIL_RETRY_STATUSES
 from app.database import SessionLocal
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.crawl_job_repository import CrawlJobRepository, _UNSET as CRAWL_JOB_REPOSITORY_UNSET
@@ -14,9 +15,18 @@ _UNSET = CRAWL_JOB_REPOSITORY_UNSET
 
 @dataclass(frozen=True)
 class ListingBatchPersistResult:
-    rows_staged: int
+    rows_created: int
+    created_source_job_ids: tuple[str, ...]
+    preexisting_staged_source_job_ids: tuple[str, ...]
+    published_source_job_ids: tuple[str, ...]
     job_ids_seen: int
     skipped_existing: int
+
+    @property
+    def rows_staged(self) -> int:
+        """Compatibility alias for callers that still use the staging-era name."""
+
+        return self.rows_created
 
 
 @dataclass(frozen=True)
@@ -142,47 +152,117 @@ class CrawlJobRuntime:
         try:
             normalized_source = str(source_site).strip().lower()
             batch_payloads = [dict(payload or {}) for payload in payloads]
-            seen_job_ids = self._distinct_source_job_ids(batch_payloads)
+            ordered_job_ids = self._ordered_distinct_source_job_ids(batch_payloads)
+            seen_job_ids = set(ordered_job_ids)
+            is_offertoday = normalized_source == "offertoday"
+            if is_offertoday:
+                self.crawl_job_listing_repository.acquire_offertoday_staging_lock(db)
+
             existing_jobs_by_source_id = (
                 self.job_repository.list_existing_jobs_by_source_ids(
                     db,
                     source_site=normalized_source,
-                    source_job_ids=sorted(seen_job_ids),
+                    source_job_ids=ordered_job_ids,
+                    raise_on_error=is_offertoday,
                 )
-                if skip_existing and seen_job_ids
+                if (is_offertoday or skip_existing) and seen_job_ids
                 else {}
             )
+            published_source_job_ids = tuple(
+                source_job_id
+                for source_job_id in ordered_job_ids
+                if source_job_id in existing_jobs_by_source_id
+            )
+            published_source_job_id_set = set(published_source_job_ids)
+            preexisting_staged_source_job_ids: tuple[str, ...] = ()
+            if is_offertoday and seen_job_ids:
+                staged_source_job_ids = (
+                    self.crawl_job_listing_repository.list_existing_source_job_ids(
+                        db,
+                        source_site=normalized_source,
+                        source_job_ids=ordered_job_ids,
+                    )
+                )
+                preexisting_staged_source_job_ids = tuple(
+                    source_job_id
+                    for source_job_id in ordered_job_ids
+                    if source_job_id in staged_source_job_ids
+                    and source_job_id not in published_source_job_id_set
+                )
+            preexisting_staged_source_job_id_set = set(
+                preexisting_staged_source_job_ids
+            )
             skipped_existing = 0
-            rows_staged = 0
+            rows_created = 0
+            created_source_job_ids: list[str] = []
+            created_source_job_id_set: set[str] = set()
             next_rank = self.crawl_job_listing_repository.get_max_listing_rank_for_crawl_job(
                 db,
                 crawl_job_id=crawl_job_id,
                 source_site=normalized_source,
             )
 
-            for payload in batch_payloads:
+            if is_offertoday:
+                first_payload_by_source_job_id = {
+                    source_job_id: next(
+                        payload
+                        for payload in batch_payloads
+                        if str(payload.get("source_job_id") or "").strip()
+                        == source_job_id
+                    )
+                    for source_job_id in ordered_job_ids
+                }
+                payloads_to_stage = [
+                    first_payload_by_source_job_id[source_job_id]
+                    for source_job_id in ordered_job_ids
+                ]
+            else:
+                payloads_to_stage = batch_payloads
+
+            for payload in payloads_to_stage:
                 source_job_id = str(payload.get("source_job_id") or "").strip()
                 if not source_job_id:
                     continue
-                if skip_existing and source_job_id in existing_jobs_by_source_id:
+                if source_job_id in published_source_job_id_set and (
+                    is_offertoday or skip_existing
+                ):
+                    skipped_existing += 1
+                    continue
+                if (
+                    is_offertoday
+                    and source_job_id in preexisting_staged_source_job_id_set
+                ):
                     skipped_existing += 1
                     continue
 
                 next_rank += 1
-                self.crawl_job_listing_repository.upsert_listing(
-                    db,
-                    crawl_job_id=crawl_job_id,
-                    source_site=normalized_source,
-                    source_job_id=source_job_id,
-                    source_url=str(payload.get("source_url") or "").strip(),
-                    source_classification_id=self._optional_str(payload.get("source_classification_id")),
-                    source_classification_name=self._optional_str(payload.get("source_classification_name")),
-                    listing_page=self._optional_int(payload.get("listing_page")),
-                    listing_rank=self._optional_int(payload.get("listing_rank")) or next_rank,
-                    listing_payload=dict(payload.get("listing_payload") or {}),
-                    auto_commit=False,
+                _listing, persistence_status = (
+                    self.crawl_job_listing_repository.upsert_listing(
+                        db,
+                        crawl_job_id=crawl_job_id,
+                        source_site=normalized_source,
+                        source_job_id=source_job_id,
+                        source_url=str(payload.get("source_url") or "").strip(),
+                        source_classification_id=self._optional_str(
+                            payload.get("source_classification_id")
+                        ),
+                        source_classification_name=self._optional_str(
+                            payload.get("source_classification_name")
+                        ),
+                        listing_page=self._optional_int(payload.get("listing_page")),
+                        listing_rank=self._optional_int(payload.get("listing_rank"))
+                        or next_rank,
+                        listing_payload=dict(payload.get("listing_payload") or {}),
+                        auto_commit=False,
+                    )
                 )
-                rows_staged += 1
+                if (
+                    persistence_status == "created"
+                    and source_job_id not in created_source_job_id_set
+                ):
+                    rows_created += 1
+                    created_source_job_id_set.add(source_job_id)
+                    created_source_job_ids.append(source_job_id)
 
             self._sync_listing_metrics(
                 db,
@@ -190,12 +270,69 @@ class CrawlJobRuntime:
                 source_site=normalized_source,
                 skipped_existing_delta=skipped_existing,
             )
+            if is_offertoday:
+                classification_by_source_job_id = {
+                    source_job_id: (
+                        "published"
+                        if source_job_id in published_source_job_id_set
+                        else "preexisting_staged_unpublished"
+                        if source_job_id in preexisting_staged_source_job_id_set
+                        else "newly_staged"
+                    )
+                    for source_job_id in ordered_job_ids
+                }
+                first_payload_by_source_job_id = {
+                    source_job_id: next(
+                        payload
+                        for payload in batch_payloads
+                        if str(payload.get("source_job_id") or "").strip()
+                        == source_job_id
+                    )
+                    for source_job_id in ordered_job_ids
+                }
+                self.crawl_job_repository.append_event(
+                    db,
+                    crawl_job_id=crawl_job_id,
+                    event_type="crawl.listing_observed",
+                    payload={
+                        "source_site": normalized_source,
+                        "source_job_ids": ordered_job_ids,
+                        "observations": [
+                            self._listing_observation_payload(
+                                source_job_id=source_job_id,
+                                classification=classification_by_source_job_id[
+                                    source_job_id
+                                ],
+                                payload=first_payload_by_source_job_id[source_job_id],
+                            )
+                            for source_job_id in ordered_job_ids
+                        ],
+                        "published_source_job_ids": list(
+                            published_source_job_ids
+                        ),
+                        "preexisting_staged_source_job_ids": list(
+                            preexisting_staged_source_job_ids
+                        ),
+                        "created_source_job_ids": created_source_job_ids,
+                        "rows_created": rows_created,
+                        "job_ids_seen": len(ordered_job_ids),
+                        "skipped_existing": skipped_existing,
+                    },
+                    emitted_by="offertoday-crawl",
+                    auto_commit=False,
+                )
             db.commit()
             return ListingBatchPersistResult(
-                rows_staged=rows_staged,
-                job_ids_seen=len(seen_job_ids),
+                rows_created=rows_created,
+                created_source_job_ids=tuple(created_source_job_ids),
+                preexisting_staged_source_job_ids=preexisting_staged_source_job_ids,
+                published_source_job_ids=published_source_job_ids,
+                job_ids_seen=len(ordered_job_ids),
                 skipped_existing=skipped_existing,
             )
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -210,15 +347,34 @@ class CrawlJobRuntime:
         try:
             normalized_source = str(source_site).strip().lower()
             payload = dict(request_payload or {})
-            source_listing_crawl_job_id = payload.get("source_listing_crawl_job_id")
+            source_job_ids_present = "source_job_ids" in payload
+            source_job_ids = (
+                self._ordered_distinct_values(payload.get("source_job_ids") or [])
+                if source_job_ids_present
+                else None
+            )
+            source_listing_crawl_job_id = (
+                None
+                if source_job_ids_present
+                else payload.get("source_listing_crawl_job_id")
+            )
             detail_limit = max(int(payload.get("detail_limit") or 100), 1)
-            selected_rows = self.crawl_job_listing_repository.list_detail_candidates(
-                db,
-                source_site=normalized_source,
-                source_listing_crawl_job_id=source_listing_crawl_job_id,
-                category_ids=payload.get("category_ids") or [],
-                statuses=payload.get("detail_statuses"),
-                limit=detail_limit,
+            selected_rows = (
+                self.crawl_job_listing_repository.list_detail_candidates(
+                    db,
+                    source_site=normalized_source,
+                    source_listing_crawl_job_id=source_listing_crawl_job_id,
+                    category_ids=(
+                        []
+                        if source_job_ids_present
+                        else payload.get("category_ids") or []
+                    ),
+                    statuses=payload.get("detail_statuses"),
+                    source_job_ids=source_job_ids,
+                    limit=detail_limit,
+                )
+                if source_job_ids is None or source_job_ids
+                else []
             )
             skipped_existing_rows = 0
             existing_jobs_by_source_id = {}
@@ -284,6 +440,59 @@ class CrawlJobRuntime:
                 skipped_existing_rows=skipped_existing_rows,
                 targets=targets,
             )
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def defer_listing_identity_conflict(
+        self,
+        *,
+        crawl_job_id,
+        source_job_ids: list[str] | tuple[str, ...],
+        encrypted_job_ids: list[str] | tuple[str, ...],
+        reason: str,
+    ) -> int:
+        db = self.session_factory()
+        try:
+            normalized_source_job_ids = self._ordered_distinct_values(
+                source_job_ids,
+                max_length=255,
+            )
+            normalized_encrypted_job_ids = self._ordered_distinct_values(
+                encrypted_job_ids,
+                max_length=255,
+            )
+            normalized_reason = str(reason or "").strip()[:500] or "identity_conflict"
+            self.crawl_job_listing_repository.acquire_offertoday_staging_lock(db)
+            rows_deferred = self.crawl_job_listing_repository.defer_identity_conflicts(
+                db,
+                source_site="offertoday",
+                source_job_ids=normalized_source_job_ids,
+                statuses=DEFAULT_DETAIL_RETRY_STATUSES,
+                error_message=normalized_reason,
+                auto_commit=False,
+            )
+            self.crawl_job_repository.append_event(
+                db,
+                crawl_job_id=crawl_job_id,
+                event_type="crawl.listing_identity_conflict",
+                payload={
+                    "source_site": "offertoday",
+                    "source_job_ids": normalized_source_job_ids,
+                    "encrypted_job_ids": normalized_encrypted_job_ids,
+                    "reason": normalized_reason,
+                    "rows_deferred": rows_deferred,
+                },
+                emitted_by="offertoday-crawl",
+                auto_commit=False,
+            )
+            db.commit()
+            return rows_deferred
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -519,10 +728,61 @@ class CrawlJobRuntime:
 
     @staticmethod
     def _distinct_source_job_ids(payloads: list[dict[str, Any]]) -> set[str]:
+        return set(CrawlJobRuntime._ordered_distinct_source_job_ids(payloads))
+
+    @staticmethod
+    def _ordered_distinct_source_job_ids(
+        payloads: list[dict[str, Any]],
+    ) -> list[str]:
+        return CrawlJobRuntime._ordered_distinct_values(
+            payload.get("source_job_id") for payload in payloads
+        )
+
+    @staticmethod
+    def _ordered_distinct_values(
+        values,
+        *,
+        max_length: int | None = None,
+    ) -> list[str]:
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            normalized = str(value or "").strip()
+            if max_length is not None:
+                normalized = normalized[:max_length]
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            ordered.append(normalized)
+        return ordered
+
+    @staticmethod
+    def _listing_observation_payload(
+        *,
+        source_job_id: str,
+        classification: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         return {
-            str(payload.get("source_job_id") or "").strip()
-            for payload in payloads
-            if str(payload.get("source_job_id") or "").strip()
+            "source_job_id": source_job_id,
+            "classification": classification,
+            "search_family": CrawlJobRuntime._optional_str(
+                payload.get("search_family")
+            ),
+            "category_id": CrawlJobRuntime._optional_str(
+                payload.get("category_id")
+                or payload.get("source_classification_id")
+            ),
+            "category_name": CrawlJobRuntime._optional_str(
+                payload.get("category_name")
+                or payload.get("source_classification_name")
+            ),
+            "keyword": CrawlJobRuntime._optional_str(payload.get("keyword")),
+            "page": CrawlJobRuntime._optional_int(
+                payload.get("page")
+                if payload.get("page") is not None
+                else payload.get("listing_page")
+            ),
         }
 
     @staticmethod

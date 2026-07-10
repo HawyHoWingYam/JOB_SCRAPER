@@ -165,6 +165,7 @@ class JobRepository:
         *,
         source_site: str,
         source_job_ids: List[str],
+        raise_on_error: bool = False,
     ) -> dict[str, Job]:
         normalized_source_site = normalize_source_site(source_site)
         normalized_source_job_ids = [str(source_job_id).strip() for source_job_id in source_job_ids if str(source_job_id).strip()]
@@ -188,6 +189,8 @@ class JobRepository:
                 normalized_source_site,
                 e,
             )
+            if raise_on_error:
+                raise
             return {}
 
     def create_job(

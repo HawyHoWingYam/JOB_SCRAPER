@@ -4,7 +4,15 @@ from typing import Iterable, Optional
 
 
 SUPPORTED_CRAWL_PHASES = {"listing", "detail"}
-SUPPORTED_DETAIL_STATUSES = {"pending", "running", "completed", "failed", "skipped", "manual_action_required"}
+SUPPORTED_DETAIL_STATUSES = {
+    "pending",
+    "running",
+    "completed",
+    "failed",
+    "skipped",
+    "manual_action_required",
+    "identity_conflict",
+}
 DEFAULT_DETAIL_RETRY_STATUSES = ("pending", "failed", "manual_action_required")
 
 

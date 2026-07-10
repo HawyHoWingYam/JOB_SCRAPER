@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import case, func
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from app.crawl_phases import resolve_detail_statuses
+from app.crawl_phases import DEFAULT_DETAIL_RETRY_STATUSES, resolve_detail_statuses
 from app.models.crawl_job import CrawlJob
 from app.models.crawl_job_listing import CrawlJobListing
 from app.utils.time import utc_now
@@ -14,6 +14,27 @@ from app.utils.time import utc_now
 
 class CrawlJobListingRepository:
     """Repository for listing-stage staging rows and detail execution state."""
+
+    OFFERTODAY_STAGING_LOCK_KEY = "job_scraper:offertoday:staging"
+
+    def acquire_offertoday_staging_lock(self, db: Session) -> None:
+        """Serialize OfferToday identity checks and inserts within this transaction."""
+
+        try:
+            bind = db.get_bind()
+        except (AttributeError, TypeError):
+            bind = getattr(db, "bind", None)
+        dialect_name = str(getattr(getattr(bind, "dialect", None), "name", ""))
+        if dialect_name != "postgresql":
+            return
+
+        db.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtext(self.OFFERTODAY_STAGING_LOCK_KEY)
+                )
+            )
+        )
 
     def get_by_source_key(
         self,
@@ -163,12 +184,25 @@ class CrawlJobListingRepository:
         source_listing_crawl_job_id=None,
         category_ids: Iterable[str | int] | None = None,
         statuses: Iterable[str] | None = None,
+        source_job_ids: Iterable[str] | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[CrawlJobListing]:
         query = db.query(CrawlJobListing).filter(
             CrawlJobListing.source_site == str(source_site).strip().lower(),
         )
+        normalized_source_job_ids: list[str] | None = None
+        if source_job_ids is not None:
+            normalized_source_job_ids = [
+                str(source_job_id).strip()
+                for source_job_id in source_job_ids
+                if str(source_job_id).strip()
+            ]
+            if not normalized_source_job_ids:
+                return []
+            query = query.filter(
+                CrawlJobListing.source_job_id.in_(normalized_source_job_ids)
+            )
         normalized_statuses = resolve_detail_statuses(
             crawl_phase="detail",
             detail_statuses=statuses,
@@ -194,6 +228,46 @@ class CrawlJobListingRepository:
             .limit(limit)
             .all()
         )
+
+    def defer_identity_conflicts(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+        source_job_ids: Iterable[str],
+        statuses: Iterable[str] = DEFAULT_DETAIL_RETRY_STATUSES,
+        error_message: str,
+        auto_commit: bool = True,
+    ) -> int:
+        normalized_source_job_ids = [
+            str(source_job_id).strip()
+            for source_job_id in source_job_ids
+            if str(source_job_id).strip()
+        ]
+        normalized_statuses = [
+            str(status).strip().lower() for status in statuses if str(status).strip()
+        ]
+        if not normalized_source_job_ids or not normalized_statuses:
+            return 0
+
+        rows = (
+            db.query(CrawlJobListing)
+            .filter(
+                CrawlJobListing.source_site == str(source_site).strip().lower(),
+                CrawlJobListing.source_job_id.in_(normalized_source_job_ids),
+                CrawlJobListing.detail_status.in_(normalized_statuses),
+            )
+            .all()
+        )
+        for listing in rows:
+            listing.detail_status = "identity_conflict"
+            listing.detail_error_message = error_message
+
+        if auto_commit:
+            db.commit()
+        else:
+            db.flush()
+        return len(rows)
 
     def list_listing_batches(
         self,
