@@ -13,7 +13,10 @@ indexes jobs:
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, Literal
+
+from app.scraper.offertoday.category_registry import OFFERTODAY_CATEGORIES_L1
+from app.sources.offertoday.listing_runner import OfferTodayListingCondition
 
 DEFAULT_OFFERTODAY_IT_KEYWORDS: tuple[str, ...] = (
     # --- 通用 ---
@@ -241,7 +244,9 @@ def expand_offertoday_category_ids(
     expanded: list[int] = []
     seen: set[int] = set()
     for category_id in input_ids:
-        category_group = OFFERTODAY_IT_CATEGORY_CODES if category_id == 118000 else (category_id,)
+        category_group = (
+            OFFERTODAY_IT_CATEGORY_CODES if category_id == 118000 else (category_id,)
+        )
         for resolved_category_id in category_group:
             if resolved_category_id in seen:
                 continue
@@ -262,7 +267,98 @@ def _should_include_default_it_keyword_pack(
     if not normalized_category_ids:
         return True
 
-    return any(category_id in _OFFERTODAY_IT_CATEGORY_SET for category_id in normalized_category_ids)
+    return any(
+        category_id in _OFFERTODAY_IT_CATEGORY_SET
+        for category_id in normalized_category_ids
+    )
+
+
+def build_offertoday_listing_conditions(
+    category_ids: Sequence[int] | None,
+    *,
+    keywords: str | Sequence[str] | None = None,
+    default_to_it: bool = True,
+    endpoint: Literal["search", "browse"] = "search",
+    rcd_type: int | None = 7,
+) -> list[OfferTodayListingCondition]:
+    """Build the ordered, page-independent OfferToday listing conditions."""
+    normalized_category_ids = _normalize_category_ids(category_ids)
+    explicit_keywords = normalize_offertoday_keywords(keywords)
+    if explicit_keywords:
+        return [
+            OfferTodayListingCondition(
+                search_family="explicit_keyword",
+                category_id=None,
+                keyword=keyword,
+                endpoint=endpoint,
+                rcd_type=rcd_type,
+            )
+            for keyword in explicit_keywords
+        ]
+
+    conditions = [
+        OfferTodayListingCondition(
+            search_family=(
+                "it_category"
+                if category_id in _OFFERTODAY_IT_CATEGORY_SET
+                else "category_search"
+            ),
+            category_id=category_id,
+            keyword="",
+            endpoint="browse",
+            rcd_type=rcd_type,
+        )
+        for category_id in expand_offertoday_category_ids(
+            normalized_category_ids,
+            default_to_it=default_to_it,
+        )
+    ]
+
+    if not _should_include_default_it_keyword_pack(
+        category_ids=normalized_category_ids,
+        default_to_it=default_to_it,
+    ):
+        return conditions
+
+    conditions.extend(
+        OfferTodayListingCondition(
+            search_family="it_keyword",
+            category_id=None,
+            keyword=keyword,
+            endpoint=endpoint,
+            rcd_type=rcd_type,
+        )
+        for keyword in DEFAULT_OFFERTODAY_IT_KEYWORDS
+    )
+    conditions.extend(
+        OfferTodayListingCondition(
+            search_family="it_hybrid",
+            category_id=118000,
+            keyword=keyword,
+            endpoint=endpoint,
+            rcd_type=rcd_type,
+        )
+        for keyword in DEFAULT_OFFERTODAY_IT_HYBRID_KEYWORDS
+    )
+    return conditions
+
+
+def build_offertoday_census_conditions(
+    *,
+    endpoint: Literal["search", "browse"],
+    rcd_type: int | None,
+) -> list[OfferTodayListingCondition]:
+    """Build one census condition for each canonical top-level category."""
+    return [
+        OfferTodayListingCondition(
+            search_family="census_category",
+            category_id=category.code,
+            keyword="",
+            endpoint=endpoint,
+            rcd_type=rcd_type,
+        )
+        for category in OFFERTODAY_CATEGORIES_L1
+    ]
 
 
 def build_offertoday_listing_queries(
@@ -281,69 +377,21 @@ def build_offertoday_listing_queries(
     if max_pages_per_query < 1:
         raise ValueError("max_pages_per_query must be >= 1")
 
-    normalized_category_ids = _normalize_category_ids(category_ids)
-    expanded_categories = expand_offertoday_category_ids(
-        normalized_category_ids,
+    conditions = build_offertoday_listing_conditions(
+        category_ids,
+        keywords=keywords,
         default_to_it=default_to_it,
     )
     plans: list[dict[str, Any]] = []
-
-    explicit_keywords = normalize_offertoday_keywords(keywords)
-    if explicit_keywords:
-        for keyword in explicit_keywords:
-            for page in range(1, max_pages_per_query + 1):
-                plans.append(
-                    {
-                        "search_family": "explicit_keyword",
-                        "category_id": None,
-                        "keyword": keyword,
-                        "page": page,
-                    }
-                )
-        return plans
-
-    for category_id in expanded_categories:
-        search_family = (
-            "it_category" if category_id in _OFFERTODAY_IT_CATEGORY_SET else "category_search"
-        )
+    for condition in conditions:
         for page in range(1, max_pages_per_query + 1):
-            plans.append(
-                {
-                    "search_family": search_family,
-                    "category_id": category_id,
-                    "keyword": "",
-                    "page": page,
-                    "endpoint": "browse",
-                }
-            )
-
-    if _should_include_default_it_keyword_pack(
-        category_ids=normalized_category_ids,
-        default_to_it=default_to_it,
-    ):
-        for keyword in DEFAULT_OFFERTODAY_IT_KEYWORDS:
-            for page in range(1, max_pages_per_query + 1):
-                plans.append(
-                    {
-                        "search_family": "it_keyword",
-                        "category_id": None,
-                        "keyword": keyword,
-                        "page": page,
-                    }
-                )
-
-    if _should_include_default_it_keyword_pack(
-        category_ids=normalized_category_ids,
-        default_to_it=default_to_it,
-    ):
-        for keyword in DEFAULT_OFFERTODAY_IT_HYBRID_KEYWORDS:
-            for page in range(1, max_pages_per_query + 1):
-                plans.append(
-                    {
-                        "search_family": "it_hybrid",
-                        "category_id": 118000,
-                        "keyword": keyword,
-                        "page": page,
-                    }
-                )
+            plan: dict[str, Any] = {
+                "search_family": condition.search_family,
+                "category_id": condition.category_id,
+                "keyword": condition.keyword,
+                "page": page,
+            }
+            if condition.search_family in {"it_category", "category_search"}:
+                plan["endpoint"] = condition.endpoint
+            plans.append(plan)
     return plans

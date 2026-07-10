@@ -25,24 +25,30 @@ def build_offertoday_listing_payload(
     category_id: int | None,
     keyword: str,
     page: int,
+    rcd_type: int | None = 7,
 ) -> dict[str, Any]:
     """Build the canonical OfferToday listing/search API payload."""
     payload: dict[str, Any] = {
         "keyword": keyword,
-        "rcdType": 7,
-        "pageSize": 50,
-        "page": page,
-        "salaryType": 0,
-        "employmentTypes": [],
-        "publishTime": "",
-        "experiences": [],
-        "educationLevels": [],
-        "benefits": [],
-        "industries": [],
-        "subDistrictCodes": [],
-        "needShowDistance": False,
-        "searchSource": None,
     }
+    if rcd_type is not None:
+        payload["rcdType"] = rcd_type
+    payload.update(
+        {
+            "pageSize": 50,
+            "page": page,
+            "salaryType": 0,
+            "employmentTypes": [],
+            "publishTime": "",
+            "experiences": [],
+            "educationLevels": [],
+            "benefits": [],
+            "industries": [],
+            "subDistrictCodes": [],
+            "needShowDistance": False,
+            "searchSource": None,
+        }
+    )
     if category_id is not None:
         payload["jobFunctionCodes"] = [category_id]
     return payload
