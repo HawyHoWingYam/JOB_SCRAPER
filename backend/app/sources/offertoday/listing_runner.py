@@ -169,6 +169,8 @@ class ListingRunResult:
 class _ListingRowIdentityAnalysis:
     evidence: ListingRowEvidence
     issue: ListingIdentityIssue | None
+    job_id_issue_reason: str | None
+    encrypted_job_id_issue_reason: str | None
 
 
 class OfferTodayListingTransport(Protocol):
@@ -331,6 +333,8 @@ def _analyze_listing_row(
             if issue_reason is not None
             else None
         ),
+        job_id_issue_reason=job_issue_reason,
+        encrypted_job_id_issue_reason=encrypted_issue_reason,
     )
 
 
@@ -729,11 +733,13 @@ class OfferTodayListingRunner:
                         has_more=has_more,
                         row_count=len(raw_rows),
                         missing_job_id_count=sum(
-                            issue.reason == "missing_job_id" for issue in page_issues
+                            analysis.job_id_issue_reason == "missing_job_id"
+                            for analysis in row_analyses
                         ),
                         missing_encrypted_job_id_count=sum(
-                            issue.reason == "missing_encrypted_job_id"
-                            for issue in page_issues
+                            analysis.encrypted_job_id_issue_reason
+                            == "missing_encrypted_job_id"
+                            for analysis in row_analyses
                         ),
                         id_pairs=tuple(page_pairs),
                         rows=row_evidence,

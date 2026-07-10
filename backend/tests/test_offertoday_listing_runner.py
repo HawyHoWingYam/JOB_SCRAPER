@@ -618,6 +618,50 @@ async def test_non_string_raw_identity_values_are_rejected_before_staging(
         assert result.ordered_job_ids == ("j-valid",)
 
 
+@pytest.mark.parametrize(
+    (
+        "job_id",
+        "encrypted_job_id",
+        "expected_issue_reason",
+        "expected_missing_job_count",
+        "expected_missing_encrypted_count",
+    ),
+    [
+        (None, None, "missing_job_id", 1, 1),
+        (["bad"], None, "invalid_job_id", 0, 1),
+        (None, {"bad": 1}, "missing_job_id", 1, 0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_combined_identity_fields_keep_independent_missing_counts(
+    job_id: object,
+    encrypted_job_id: object,
+    expected_issue_reason: str,
+    expected_missing_job_count: int,
+    expected_missing_encrypted_count: int,
+) -> None:
+    transport = ScriptedTransport(
+        _listing_response(
+            [_listing_row(job_id, encrypted_job_id)],
+            has_more=True,
+        )
+    )
+
+    result, observations, staging, _sleep = await _run(transport, max_pages=1)
+
+    assert result.stop_reason == "identity_issue"
+    assert result.accepted_job_ids == ()
+    assert result.id_pairs == ()
+    assert len(result.identity_issues) == 1
+    assert result.identity_issues[0].reason == expected_issue_reason
+    observation = observations.observations[0]
+    assert observation.missing_job_id_count == expected_missing_job_count
+    assert (
+        observation.missing_encrypted_job_id_count == expected_missing_encrypted_count
+    )
+    assert staging.staged_pages == []
+
+
 @pytest.mark.asyncio
 async def test_known_canonical_missing_encrypted_id_is_deferred() -> None:
     transport = ScriptedTransport(
