@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy.exc import SQLAlchemyError
+
 BACKEND = str(Path(__file__).resolve().parents[1])
 if BACKEND not in sys.path:
     sys.path.insert(0, BACKEND)
@@ -127,74 +129,95 @@ def main(
             _print_json(asdict(result))
             return EXIT_OK if result.valid else EXIT_EVIDENCE_FAILURE
 
-    research_repository = repository or OfferTodayResearchRepository()
-    db = session_factory()
     try:
-        staged = research_repository.list_staged_snapshots(db)
-        published = research_repository.list_published_snapshots(db)
-        recent_runs = research_repository.list_recent_crawl_jobs(db)
-
-        snapshot = None
-        inventory = None
         if args.command == "baseline":
             run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
-            snapshot = build_baseline_snapshot(listings=staged, jobs=published)
-            inventory = build_run_start_inventory(listings=staged, jobs=published)
-            events = [
-                {
-                    "sequence_no": 1,
-                    "event_type": "research.baseline",
-                    "payload": {
-                        "snapshot": asdict(snapshot),
-                        "run_start_inventory": inventory.to_dict(),
-                        "recent_crawl_jobs": [
-                            asdict(item) for item in recent_runs
-                        ],
-                    },
-                }
-            ]
-            metadata = {
-                "experiment": "foundation-baseline",
-                "data_hash": snapshot.data_hash,
-            }
-            valid = True
+            crawl_job_id = None
         else:
             crawl_job_id = UUID(args.crawl_job_id)
-            crawl_job = research_repository.get_crawl_job(db, crawl_job_id)
-            if crawl_job is None:
-                raise ValueError(f"Crawl job not found: {crawl_job_id}")
-            db_events = research_repository.list_research_events(db, crawl_job_id)
-            events = _ordered_events(db_events)
             run_id = str(crawl_job_id)
-            metadata = {
-                "experiment": (
-                    "conservation"
-                    if args.command == "conservation"
-                    else "export-run"
-                ),
-                "crawl_job_id": run_id,
-            }
-            valid = True
-            if args.command == "conservation":
-                report = replay_research_conservation(
-                    crawl_job=crawl_job,
-                    events=events,
+
+        research_repository = repository or OfferTodayResearchRepository()
+        snapshot = None
+        inventory = None
+        db = session_factory()
+        try:
+            if args.command == "baseline":
+                staged = research_repository.list_staged_snapshots(db)
+                published = research_repository.list_published_snapshots(db)
+                recent_runs = research_repository.list_recent_crawl_jobs(db)
+                snapshot = build_baseline_snapshot(
                     listings=staged,
                     jobs=published,
                 )
-                next_sequence_no = max(
-                    (event["sequence_no"] for event in events),
-                    default=0,
-                ) + 1
-                events.append(
-                    {
-                        "sequence_no": next_sequence_no,
-                        "event_type": "research.conservation",
-                        "payload": listing_observation_to_payload(report),
-                    }
+                inventory = build_run_start_inventory(
+                    listings=staged,
+                    jobs=published,
                 )
-                metadata["conservation_valid"] = report.is_valid
-                valid = report.is_valid
+                events = [
+                    {
+                        "sequence_no": 1,
+                        "event_type": "research.baseline",
+                        "payload": {
+                            "snapshot": asdict(snapshot),
+                            "run_start_inventory": inventory.to_dict(),
+                            "recent_crawl_jobs": [
+                                asdict(item) for item in recent_runs
+                            ],
+                        },
+                    }
+                ]
+                metadata = {
+                    "experiment": "foundation-baseline",
+                    "data_hash": snapshot.data_hash,
+                }
+                valid = True
+            else:
+                crawl_job = research_repository.get_crawl_job(
+                    db,
+                    crawl_job_id,
+                )
+                if crawl_job is None:
+                    raise ValueError(f"Crawl job not found: {crawl_job_id}")
+                db_events = research_repository.list_research_events(
+                    db,
+                    crawl_job_id,
+                )
+                events = _ordered_events(db_events)
+                metadata = {
+                    "experiment": (
+                        "conservation"
+                        if args.command == "conservation"
+                        else "export-run"
+                    ),
+                    "crawl_job_id": run_id,
+                }
+                valid = True
+                if args.command == "conservation":
+                    staged = research_repository.list_staged_snapshots(db)
+                    published = research_repository.list_published_snapshots(db)
+                    report = replay_research_conservation(
+                        crawl_job=crawl_job,
+                        events=events,
+                        listings=staged,
+                        jobs=published,
+                    )
+                    next_sequence_no = max(
+                        (event["sequence_no"] for event in events),
+                        default=0,
+                    ) + 1
+                    events.append(
+                        {
+                            "sequence_no": next_sequence_no,
+                            "event_type": "research.conservation",
+                            "payload": listing_observation_to_payload(report),
+                        }
+                    )
+                    metadata["conservation_valid"] = report.is_valid
+                    valid = report.is_valid
+                recent_runs = research_repository.list_recent_crawl_jobs(db)
+        finally:
+            db.close()
 
         latest_run = recent_runs[0] if recent_runs else None
         runtime_context = {
@@ -226,11 +249,15 @@ def main(
             output["inventory_data_hash"] = inventory.data_hash
         _print_json(output)
         return EXIT_OK if valid else EXIT_EVIDENCE_FAILURE
+    except SQLAlchemyError:
+        _print_json(
+            {"error": "database operation failed"},
+            stream=sys.stderr,
+        )
+        return EXIT_EVIDENCE_FAILURE
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         _print_json({"error": str(exc)}, stream=sys.stderr)
         return EXIT_EVIDENCE_FAILURE
-    finally:
-        db.close()
 
 
 if __name__ == "__main__":

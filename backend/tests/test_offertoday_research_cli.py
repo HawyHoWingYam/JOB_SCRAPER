@@ -13,6 +13,7 @@ from unittest.mock import Mock
 from uuid import UUID
 
 import pytest
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 import scripts.offertoday_research as research_cli
 from app.sources.offertoday.research.artifacts import (
@@ -39,10 +40,11 @@ FIXED_TIME = datetime(2026, 7, 10, tzinfo=UTC)
 
 
 class ReadOnlyFakeSession:
-    def __init__(self) -> None:
+    def __init__(self, *, close_error: BaseException | None = None) -> None:
         self.commit_calls = 0
         self.close_calls = 0
         self.write_calls: list[str] = []
+        self.close_error = close_error
 
     def _forbid_write(self, name: str) -> None:
         self.write_calls.append(name)
@@ -66,6 +68,8 @@ class ReadOnlyFakeSession:
 
     def close(self) -> None:
         self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
 
 
 class FakeResearchRepository:
@@ -77,34 +81,42 @@ class FakeResearchRepository:
         recent_runs=(),
         crawl_job=None,
         events=(),
+        failures=None,
     ) -> None:
         self.listings = list(listings)
         self.jobs = list(jobs)
         self.recent_runs = list(recent_runs)
         self.crawl_job = crawl_job
         self.events = list(events)
+        self.failures = dict(failures or {})
         self.calls: list[str] = []
 
+    def _record(self, name: str) -> None:
+        self.calls.append(name)
+        failure = self.failures.get(name)
+        if failure is not None:
+            raise failure
+
     def list_staged_snapshots(self, db):
-        self.calls.append("list_staged_snapshots")
+        self._record("list_staged_snapshots")
         return list(self.listings)
 
     def list_published_snapshots(self, db):
-        self.calls.append("list_published_snapshots")
+        self._record("list_published_snapshots")
         return list(self.jobs)
 
     def list_recent_crawl_jobs(self, db):
-        self.calls.append("list_recent_crawl_jobs")
+        self._record("list_recent_crawl_jobs")
         return list(self.recent_runs)
 
     def get_crawl_job(self, db, crawl_job_id):
-        self.calls.append("get_crawl_job")
+        self._record("get_crawl_job")
         if self.crawl_job is None or self.crawl_job.id != crawl_job_id:
             return None
         return self.crawl_job
 
     def list_research_events(self, db, crawl_job_id):
-        self.calls.append("list_research_events")
+        self._record("list_research_events")
         return list(self.events)
 
 
@@ -120,6 +132,47 @@ def fake_provenance(**kwargs) -> ResearchProvenance:
         excluded_tracked_file_hashes={},
         excluded_untracked_file_hashes={},
     )
+
+
+def provenance_after_close(session: ReadOnlyFakeSession):
+    def provider(**kwargs) -> ResearchProvenance:
+        assert session.close_calls == 1
+        return fake_provenance(**kwargs)
+
+    return Mock(side_effect=provider)
+
+
+def sensitive_operational_error() -> OperationalError:
+    return OperationalError(
+        "SELECT password FROM secrets WHERE dsn = :dsn",
+        {
+            "dsn": "postgresql://admin:dev_password@localhost:5433/jobsdb",
+            "password": "dev_password",
+        },
+        RuntimeError("authentication failed for dev_password"),
+    )
+
+
+def sensitive_sqlalchemy_error() -> SQLAlchemyError:
+    return SQLAlchemyError(
+        "postgresql://admin:dev_password@localhost:5433/jobsdb "
+        "SELECT password FROM secrets params={'password': 'dev_password'}"
+    )
+
+
+def assert_safe_database_failure(capsys) -> None:
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {"error": "database operation failed"}
+    assert "Traceback" not in captured.err
+    for sensitive in (
+        "postgresql://",
+        "dev_password",
+        "SELECT",
+        "params",
+        "dsn",
+    ):
+        assert sensitive not in captured.err
 
 
 def build_fixture_artifact(root: Path) -> Path:
@@ -267,7 +320,7 @@ def test_baseline_is_read_only_and_exports_snapshot_inventory_and_recent_runs(
         recent_runs=[recent],
     )
     browser_factory = Mock(side_effect=AssertionError("browser must not start"))
-    provenance_provider = Mock(side_effect=fake_provenance)
+    provenance_provider = provenance_after_close(session)
 
     exit_code = main(
         [
@@ -341,6 +394,7 @@ def test_conservation_returns_zero_and_appends_serialized_valid_report(
         crawl_job=_crawl_job(),
         events=[_valid_page_event()],
     )
+    provenance_provider = provenance_after_close(session)
 
     exit_code = main(
         [
@@ -352,12 +406,19 @@ def test_conservation_returns_zero_and_appends_serialized_valid_report(
         ],
         session_factory=lambda: session,
         repository=repository,
-        provenance_provider=fake_provenance,
+        provenance_provider=provenance_provider,
     )
 
     assert exit_code == EXIT_OK
     assert session.write_calls == []
     assert session.close_calls == 1
+    assert repository.calls == [
+        "get_crawl_job",
+        "list_research_events",
+        "list_staged_snapshots",
+        "list_published_snapshots",
+        "list_recent_crawl_jobs",
+    ]
     output = _stdout_json(capsys)
     assert output["valid"] is True
     observations = _read_observations(Path(output["artifact"]))
@@ -462,6 +523,7 @@ def test_export_run_orders_and_redacts_events_without_mutating_them(
     ]
     original_payloads = copy.deepcopy([event.payload for event in events])
     repository = FakeResearchRepository(crawl_job=_crawl_job(), events=events)
+    provenance_provider = provenance_after_close(session)
 
     exit_code = main(
         [
@@ -473,12 +535,17 @@ def test_export_run_orders_and_redacts_events_without_mutating_them(
         ],
         session_factory=lambda: session,
         repository=repository,
-        provenance_provider=fake_provenance,
+        provenance_provider=provenance_provider,
     )
 
     assert exit_code == EXIT_OK
     assert session.write_calls == []
     assert session.close_calls == 1
+    assert repository.calls == [
+        "get_crawl_job",
+        "list_research_events",
+        "list_recent_crawl_jobs",
+    ]
     assert [event.payload for event in events] == original_payloads
     output = _stdout_json(capsys)
     observations = _read_observations(Path(output["artifact"]))
@@ -549,42 +616,131 @@ def test_verify_artifact_oserror_is_safe_json_without_opening_a_session(
 
 
 @pytest.mark.parametrize(
-    ("argv", "repository", "error_text"),
+    "argv",
     (
-        (
-            ["export-run", "--crawl-job-id", FIXED_RUN_ID],
-            FakeResearchRepository(),
-            "Crawl job not found",
-        ),
-        (
-            ["export-run", "--crawl-job-id", "not-a-uuid"],
-            FakeResearchRepository(),
-            "badly formed",
-        ),
+        ["baseline", "--run-id", "not-a-uuid"],
+        ["conservation", "--crawl-job-id", "not-a-uuid"],
+        ["export-run", "--crawl-job-id", "not-a-uuid"],
     ),
+    ids=("baseline", "conservation", "export-run"),
 )
-def test_missing_job_and_bad_uuid_return_safe_json_and_close_session(
+def test_bad_uuid_never_opens_a_session_or_queries_repository(
     capsys,
     argv,
-    repository,
-    error_text,
 ):
-    session = ReadOnlyFakeSession()
+    session_factory = Mock(side_effect=AssertionError("session must not open"))
+    repository = FakeResearchRepository()
 
     exit_code = main(
         argv,
-        session_factory=lambda: session,
+        session_factory=session_factory,
         repository=repository,
         provenance_provider=fake_provenance,
     )
 
     assert exit_code == EXIT_EVIDENCE_FAILURE
-    assert session.close_calls == 1
+    assert session_factory.call_count == 0
+    assert repository.calls == []
     captured = capsys.readouterr()
     assert captured.out == ""
     error = json.loads(captured.err)
-    assert error_text in error["error"]
+    assert "badly formed" in error["error"]
     assert set(error) == {"error"}
+
+
+def test_missing_job_queries_only_the_requested_crawl_job(capsys):
+    session = ReadOnlyFakeSession()
+    repository = FakeResearchRepository()
+    provenance_provider = Mock(side_effect=AssertionError("must not export"))
+
+    exit_code = main(
+        ["export-run", "--crawl-job-id", FIXED_RUN_ID],
+        session_factory=lambda: session,
+        repository=repository,
+        provenance_provider=provenance_provider,
+    )
+
+    assert exit_code == EXIT_EVIDENCE_FAILURE
+    assert session.close_calls == 1
+    assert repository.calls == ["get_crawl_job"]
+    assert provenance_provider.call_count == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    error = json.loads(captured.err)
+    assert "Crawl job not found" in error["error"]
+    assert set(error) == {"error"}
+
+
+@pytest.mark.parametrize(
+    "error_factory",
+    (sensitive_operational_error, sensitive_sqlalchemy_error),
+    ids=("operational-error", "sqlalchemy-error"),
+)
+def test_session_factory_database_errors_are_sanitized(
+    capsys,
+    error_factory,
+):
+    session_factory = Mock(side_effect=error_factory())
+    repository = FakeResearchRepository()
+
+    exit_code = main(
+        ["baseline", "--run-id", FIXED_RUN_ID],
+        session_factory=session_factory,
+        repository=repository,
+        provenance_provider=fake_provenance,
+    )
+
+    assert exit_code == EXIT_EVIDENCE_FAILURE
+    assert session_factory.call_count == 1
+    assert repository.calls == []
+    assert_safe_database_failure(capsys)
+
+
+def test_repository_database_error_closes_once_and_is_sanitized(capsys):
+    session = ReadOnlyFakeSession()
+    repository = FakeResearchRepository(
+        failures={"list_staged_snapshots": sensitive_operational_error()}
+    )
+    provenance_provider = Mock(side_effect=AssertionError("must not export"))
+
+    exit_code = main(
+        ["baseline", "--run-id", FIXED_RUN_ID],
+        session_factory=lambda: session,
+        repository=repository,
+        provenance_provider=provenance_provider,
+    )
+
+    assert exit_code == EXIT_EVIDENCE_FAILURE
+    assert session.close_calls == 1
+    assert repository.calls == ["list_staged_snapshots"]
+    assert provenance_provider.call_count == 0
+    assert_safe_database_failure(capsys)
+
+
+def test_close_database_error_prevents_export_and_is_sanitized(tmp_path, capsys):
+    session = ReadOnlyFakeSession(close_error=sensitive_sqlalchemy_error())
+    repository = FakeResearchRepository()
+    provenance_provider = Mock(side_effect=fake_provenance)
+    artifact_root = tmp_path / "artifacts"
+
+    exit_code = main(
+        [
+            "baseline",
+            "--run-id",
+            FIXED_RUN_ID,
+            "--artifact-root",
+            str(artifact_root),
+        ],
+        session_factory=lambda: session,
+        repository=repository,
+        provenance_provider=provenance_provider,
+    )
+
+    assert exit_code == EXIT_EVIDENCE_FAILURE
+    assert session.close_calls == 1
+    assert provenance_provider.call_count == 0
+    assert not artifact_root.exists()
+    assert_safe_database_failure(capsys)
 
 
 def test_oserror_is_safe_json_and_always_closes_session(tmp_path, capsys):
