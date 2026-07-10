@@ -82,6 +82,7 @@ class ListingConservationReport:
     newly_staged_distinct_ids: int
     staging_amplification: float | None
     staging_amplification_violation: bool
+    identity_pair_mismatch_page_keys: tuple[str, ...] = ()
 
     @property
     def is_valid(self) -> bool:
@@ -92,6 +93,7 @@ class ListingConservationReport:
             and not self.unexplained_ids
             and self.unresolved_gaps == 0
             and not self.staging_amplification_violation
+            and not self.identity_pair_mismatch_page_keys
         )
 
 
@@ -156,6 +158,7 @@ def build_listing_conservation_report(
     deferred_identity_conflict_ids: set[str],
     newly_created_staging_rows: int,
     unresolved_gaps: int,
+    identity_pair_mismatch_page_keys: Iterable[str] = (),
 ) -> ListingConservationReport:
     raw_listing_rows = _require_nonnegative_int(
         raw_listing_rows,
@@ -238,6 +241,9 @@ def build_listing_conservation_report(
         newly_staged_distinct_ids=newly_staged_count,
         staging_amplification=staging_amplification,
         staging_amplification_violation=staging_amplification_violation,
+        identity_pair_mismatch_page_keys=tuple(
+            sorted(set(identity_pair_mismatch_page_keys))
+        ),
     )
 
 
@@ -428,6 +434,58 @@ def _page_row_evidence(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     return _mapping_items(payload.get("id_pairs"))
 
 
+def _ordered_valid_identity_pairs(
+    records: Iterable[Mapping[str, Any]],
+) -> tuple[tuple[str, str], ...]:
+    ordered_pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for record in records:
+        job_ids = _canonical_id_set(
+            [
+                record.get("job_id"),
+                record.get("jobId"),
+                record.get("source_job_id"),
+            ]
+        )
+        encrypted_job_ids = _canonical_id_set(
+            [record.get("encrypted_job_id"), record.get("encryptJobId")]
+        )
+        if len(job_ids) != 1 or len(encrypted_job_ids) != 1:
+            continue
+        pair = (next(iter(job_ids)), next(iter(encrypted_job_ids)))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        ordered_pairs.append(pair)
+    return tuple(ordered_pairs)
+
+
+def _find_identity_pair_mismatch_page_keys(
+    replayable_pages: Mapping[tuple[str, int], Mapping[str, Any]],
+) -> tuple[str, ...]:
+    mismatches: list[str] = []
+    for (condition_id, page), payload in replayable_pages.items():
+        if "rows" not in payload or "id_pairs" not in payload:
+            continue
+        row_pairs = _ordered_valid_identity_pairs(
+            _mapping_items(payload.get("rows"))
+        )
+        declared_pairs = _ordered_valid_identity_pairs(
+            _mapping_items(payload.get("id_pairs"))
+        )
+        if row_pairs == declared_pairs:
+            continue
+        mismatches.append(
+            json.dumps(
+                {"condition_id": condition_id, "page": page},
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+    return tuple(sorted(mismatches))
+
+
 def _identity_evidence(
     page_payloads: Iterable[Mapping[str, Any]],
 ) -> tuple[set[str], set[str]]:
@@ -526,7 +584,11 @@ def _listing_observation_evidence(
     return newly_staged_ids, newly_created_rows
 
 
-def _condition_evidence_key(payload: Mapping[str, Any]) -> str:
+def _condition_evidence_key(
+    payload: Mapping[str, Any],
+    *,
+    missing_identity_key: str,
+) -> str:
     condition_id = payload.get("condition_id")
     if isinstance(condition_id, str) and condition_id.strip():
         return f"condition-id:{condition_id.strip()}"
@@ -540,7 +602,7 @@ def _condition_evidence_key(payload: Mapping[str, Any]) -> str:
         )
         digest = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
         return f"condition-json:{digest}"
-    return "missing-condition"
+    return missing_identity_key
 
 
 def _count_final_unresolved_conditions(
@@ -555,7 +617,12 @@ def _count_final_unresolved_conditions(
         event_type = event["event_type"]
         if event_type not in condition_event_types:
             continue
-        condition_key = _condition_evidence_key(event["payload"])
+        condition_key = _condition_evidence_key(
+            event["payload"],
+            missing_identity_key=(
+                f"missing-condition:{event['sequence_no']}:{event['input_order']}"
+            ),
+        )
         incomplete_by_condition[condition_key] = (
             event_type in _INCOMPLETE_CONDITION_EVENT_TYPES
         )
@@ -749,6 +816,9 @@ def replay_research_conservation(
     listing_report: ListingConservationReport | None = None
     if replayable_pages:
         page_payloads = list(replayable_pages.values())
+        identity_pair_mismatch_page_keys = (
+            _find_identity_pair_mismatch_page_keys(replayable_pages)
+        )
         row_evidence = [
             row
             for payload in page_payloads
@@ -844,6 +914,9 @@ def replay_research_conservation(
             newly_created_staging_rows=newly_created_rows,
             unresolved_gaps=(
                 unresolved_condition_gaps + len(mapping_conflict_ids)
+            ),
+            identity_pair_mismatch_page_keys=(
+                identity_pair_mismatch_page_keys
             ),
         )
 

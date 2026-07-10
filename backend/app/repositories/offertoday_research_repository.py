@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
@@ -157,6 +158,13 @@ def _to_crawl_job_evidence_snapshot(row: CrawlJob) -> CrawlJobEvidenceSnapshot:
     )
 
 
+def _detail_payload_is_object_expression(dialect_name: str):
+    json_type = func.json_type if dialect_name == "sqlite" else func.json_typeof
+    return (json_type(CrawlJobListing.detail_payload) == "object").label(
+        "has_detail_payload"
+    )
+
+
 class OfferTodayResearchRepository:
     """Read-only OfferToday evidence queries for offline research reports."""
 
@@ -164,9 +172,24 @@ class OfferTodayResearchRepository:
         self,
         db: Session,
     ) -> list[StagedListingSnapshot]:
+        dialect_name = str(db.get_bind().dialect.name)
+        has_detail_payload = _detail_payload_is_object_expression(dialect_name)
         with db.no_autoflush:
             rows = (
-                db.query(CrawlJobListing)
+                db.query(
+                    CrawlJobListing.id,
+                    CrawlJobListing.source_job_id,
+                    CrawlJobListing.detail_status,
+                    CrawlJobListing.published_job_id,
+                    CrawlJobListing.crawl_job_id,
+                    CrawlJobListing.detail_attempts,
+                    CrawlJobListing.detail_started_at,
+                    CrawlJobListing.updated_at,
+                    CrawlJobListing.listing_payload,
+                    CrawlJobListing.detail_error_message,
+                    CrawlJobListing.last_detail_crawl_job_id,
+                    has_detail_payload,
+                )
                 .filter(CrawlJobListing.source_site == "offertoday")
                 .order_by(
                     CrawlJobListing.created_at.asc(),
@@ -205,7 +228,7 @@ class OfferTodayResearchRepository:
                     if row.last_detail_crawl_job_id
                     else None
                 ),
-                has_detail_payload=isinstance(row.detail_payload, Mapping),
+                has_detail_payload=bool(row.has_detail_payload),
             )
             for row in rows
         ]

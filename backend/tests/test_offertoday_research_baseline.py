@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, event
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 from app.repositories import offertoday_research_repository as research_repository
@@ -460,6 +461,7 @@ class _ReadOnlySession:
         self.responses = list(responses)
         self.queries: list[tuple[object, _ReadOnlyQuery]] = []
         self.write_calls: list[str] = []
+        self.bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
 
     def query(self, *entities):
         if not self.responses:
@@ -468,6 +470,9 @@ class _ReadOnlySession:
         selected = entities[0] if len(entities) == 1 else entities
         self.queries.append((selected, query))
         return query
+
+    def get_bind(self):
+        return self.bind
 
     @property
     def no_autoflush(self):
@@ -517,6 +522,7 @@ def test_repository_maps_complete_staging_evidence_with_stable_read_only_query()
         detail_error_message="persist_failure:RuntimeError",
         last_detail_crawl_job_id=uuid4(),
         detail_payload={},
+        has_detail_payload=True,
     )
     db = _ReadOnlySession([row])
 
@@ -535,13 +541,137 @@ def test_repository_maps_complete_staging_evidence_with_stable_read_only_query()
     assert snapshot.last_detail_crawl_job_id == str(row.last_detail_crawl_job_id)
     assert snapshot.has_detail_payload is True
     model, query = db.queries[0]
-    assert model is CrawlJobListing
+    assert tuple(str(entity) for entity in model[:-1]) == (
+        "CrawlJobListing.id",
+        "CrawlJobListing.source_job_id",
+        "CrawlJobListing.detail_status",
+        "CrawlJobListing.published_job_id",
+        "CrawlJobListing.crawl_job_id",
+        "CrawlJobListing.detail_attempts",
+        "CrawlJobListing.detail_started_at",
+        "CrawlJobListing.updated_at",
+        "CrawlJobListing.listing_payload",
+        "CrawlJobListing.detail_error_message",
+        "CrawlJobListing.last_detail_crawl_job_id",
+    )
+    assert model[-1].name == "has_detail_payload"
     assert "crawl_job_listings.source_site" in _criteria_text(query)
     assert [str(value) for value in query.ordering] == [
         "crawl_job_listings.created_at ASC",
         "crawl_job_listings.id ASC",
     ]
     assert db.write_calls == []
+
+
+def test_staged_snapshot_query_projects_json_object_flag_without_detail_body():
+    engine = create_engine("sqlite://")
+    CrawlJobListing.__table__.create(engine)
+    created_at = datetime(2026, 7, 10, 1, tzinfo=UTC)
+    payloads = [
+        {"jobId": "j-object", "encryptJobId": "enc-object"},
+        {"jobId": "j-null", "encryptJobId": "enc-null"},
+        {"jobId": "j-array", "encryptJobId": "enc-array"},
+        {"jobId": "j-scalar", "encryptJobId": "enc-scalar"},
+    ]
+    rows = [
+        CrawlJobListing(
+            id=uuid4(),
+            crawl_job_id=uuid4(),
+            source_site="offertoday",
+            source_job_id=source_job_id,
+            source_url=f"https://example.test/{source_job_id}",
+            listing_payload=listing_payload,
+            detail_payload=detail_payload,
+            detail_status=("failed" if index == 0 else "pending"),
+            detail_attempts=index,
+            detail_error_message=(
+                "persist_failure:RuntimeError" if index == 0 else None
+            ),
+            created_at=created_at.replace(minute=index),
+            updated_at=created_at.replace(minute=index + 10),
+        )
+        for index, (source_job_id, listing_payload, detail_payload) in enumerate(
+            zip(
+                ("j-object", "j-null", "j-array", "j-scalar"),
+                payloads,
+                ({"description": "body"}, None, ["array"], "scalar"),
+                strict=True,
+            )
+        )
+    ]
+    statements: list[str] = []
+
+    with Session(engine) as db:
+        db.add_all(rows)
+        db.commit()
+        db.add(
+            CrawlJobListing(
+                id=uuid4(),
+                crawl_job_id=uuid4(),
+                source_site="offertoday",
+                source_job_id="pending-write",
+                source_url="https://example.test/pending-write",
+                listing_payload={
+                    "jobId": "pending-write",
+                    "encryptJobId": "enc-pending",
+                },
+                detail_payload={"pending": True},
+                detail_status="pending",
+            )
+        )
+        event.listen(
+            engine,
+            "before_cursor_execute",
+            lambda _conn, _cursor, statement, _parameters, _context, _many: (
+                statements.append(statement)
+            ),
+        )
+
+        snapshots = OfferTodayResearchRepository().list_staged_snapshots(db)
+
+        assert len(db.new) == 1
+
+    assert [snapshot.source_job_id for snapshot in snapshots] == [
+        "j-object",
+        "j-null",
+        "j-array",
+        "j-scalar",
+    ]
+    assert [snapshot.has_detail_payload for snapshot in snapshots] == [
+        True,
+        False,
+        False,
+        False,
+    ]
+    assert snapshots[0].encrypted_job_id == "enc-object"
+    assert snapshots[0].identity_error is None
+    assert snapshots[0].detail_attempts == 0
+    assert snapshots[0].updated_at == created_at.replace(
+        minute=10,
+        tzinfo=None,
+    ).isoformat()
+    assert snapshots[0].detail_error_classification == "persist_failure"
+    assert len(statements) == 1
+    assert statements[0].lstrip().upper().startswith("SELECT")
+    select_clause = statements[0].lower().split(" from ", maxsplit=1)[0]
+    assert "crawl_job_listings.detail_payload as" not in select_clause
+    assert "json_type(crawl_job_listings.detail_payload)" in select_clause
+    engine.dispose()
+
+
+def test_staged_snapshot_postgresql_projection_uses_json_typeof_object_check():
+    expression = research_repository._detail_payload_is_object_expression(
+        "postgresql"
+    )
+
+    compiled = str(
+        expression.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+
+    assert "json_typeof(crawl_job_listings.detail_payload) = 'object'" in compiled
 
 
 def test_repository_published_events_and_crawl_job_helpers_are_read_only():

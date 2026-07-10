@@ -670,6 +670,44 @@ def test_replay_uses_final_condition_outcome_per_canonical_condition(
     assert report.is_valid is (expected_gaps == 0)
 
 
+def test_replay_does_not_cancel_distinct_condition_outcomes_missing_identity():
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "page-condition",
+                "page": 1,
+                "classification": "success",
+                "row_count": 1,
+                "missing_job_id_count": 0,
+                "rows": [{"job_id": "j-1", "encrypted_job_id": "enc-1"}],
+            },
+        },
+        {
+            "sequence_no": 2,
+            "event_type": "research.condition_incomplete",
+            "payload": {"stop_reason": "transport_failure", "is_complete": False},
+        },
+        {
+            "sequence_no": 3,
+            "event_type": "research.condition_completed",
+            "payload": {"stop_reason": "natural_exhaustion", "is_complete": True},
+        },
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=("j-1",)),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.unresolved_gaps == 1
+    assert report.is_valid is False
+
+
 def test_replay_partitions_listing_ids_by_frozen_run_start_priority():
     rows = [
         {"job_id": "j-1", "encrypted_job_id": "enc-1"},
@@ -722,6 +760,96 @@ def test_replay_partitions_listing_ids_by_frozen_run_start_priority():
     }
     assert report.listing.partition_overlap_ids == ()
     assert report.listing.unexplained_ids == ()
+    assert report.is_valid is True
+
+
+@pytest.mark.parametrize(
+    "id_pairs",
+    [
+        [{"job_id": "j-1", "encrypted_job_id": "enc-1"}],
+        [
+            {"job_id": "j-2", "encrypted_job_id": "enc-2"},
+            {"job_id": "j-1", "encrypted_job_id": "enc-1"},
+        ],
+        [
+            {"job_id": "j-1", "encrypted_job_id": "enc-1"},
+            {"job_id": "j-3", "encrypted_job_id": "enc-3"},
+        ],
+        [
+            {"job_id": "j-1", "encrypted_job_id": "enc-other"},
+            {"job_id": "j-2", "encrypted_job_id": "enc-2"},
+        ],
+    ],
+    ids=["count", "order", "job", "encrypted"],
+)
+def test_replay_rejects_mismatched_rows_and_id_pairs_evidence(id_pairs):
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": 1,
+                "classification": "success",
+                "row_count": 2,
+                "missing_job_id_count": 0,
+                "rows": [
+                    {"job_id": "j-1", "encrypted_job_id": "enc-1"},
+                    {"job_id": "j-2", "encrypted_job_id": "enc-2"},
+                ],
+                "id_pairs": id_pairs,
+            },
+        }
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=("j-1", "j-2", "j-3")),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.identity_pair_mismatch_page_keys == (
+        '{"condition_id":"condition-1","page":1}',
+    )
+    assert report.is_valid is False
+
+
+def test_replay_pair_consistency_ignores_rows_with_missing_identity_evidence():
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": 1,
+                "classification": "identity_issue",
+                "row_count": 2,
+                "missing_job_id_count": 0,
+                "rows": [
+                    {"job_id": "j-1", "encrypted_job_id": "enc-1"},
+                    {"job_id": "j-2", "encrypted_job_id": None},
+                ],
+                "id_pairs": [
+                    {"job_id": "j-1", "encrypted_job_id": "enc-1"}
+                ],
+                "identity_issues": [
+                    {"job_id": "j-2", "reason": "missing_encrypted_job_id"}
+                ],
+            },
+        }
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=("j-1",)),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.identity_pair_mismatch_page_keys == ()
     assert report.is_valid is True
 
 
