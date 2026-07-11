@@ -12,6 +12,7 @@ from app.sources.offertoday.research.artifacts import (
 from app.sources.offertoday.research.stage_gate import (
     load_baseline_artifact,
     require_matching_baselines,
+    verify_live_research_run,
 )
 
 
@@ -157,3 +158,181 @@ def test_load_baseline_artifact_rejects_multiple_baseline_events(tmp_path) -> No
 
     with pytest.raises(ValueError, match="exactly one research.baseline"):
         load_baseline_artifact(artifact_dir)
+
+
+def _live_events(
+    *,
+    listing_attempts: int = 1,
+    detail_attempts: int = 20,
+    status: str = "completed",
+    smoke_passed: bool = True,
+) -> list[dict]:
+    events: list[dict] = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.run_started",
+            "payload": {"experiment": "runtime-smoke"},
+        }
+    ]
+    for _ in range(listing_attempts):
+        events.append(
+            {
+                "sequence_no": len(events) + 1,
+                "event_type": "research.page_attempt",
+                "payload": {"page": 1, "attempt": 1},
+            }
+        )
+    events.append(
+        {
+            "sequence_no": len(events) + 1,
+            "event_type": "research.detail_cohort_frozen",
+            "payload": {"count": 20},
+        }
+    )
+    for position in range(1, detail_attempts + 1):
+        events.append(
+            {
+                "sequence_no": len(events) + 1,
+                "event_type": "research.detail_attempt",
+                "payload": {
+                    "target": {"position": position},
+                    "classification": "success",
+                },
+            }
+        )
+    events.append(
+        {
+            "sequence_no": len(events) + 1,
+            "event_type": "research.run_summary",
+            "payload": {
+                "smoke_passed": smoke_passed,
+                "listing_complete": False,
+                "expected_truncation": True,
+                "listing_attempt_count": listing_attempts,
+                "attempted_count": detail_attempts,
+                "frozen_count": 20,
+                "status": status,
+            },
+        }
+    )
+    return events
+
+
+def _export_live(
+    root: Path,
+    *,
+    run_id: str = RUN_ID_1,
+    events: list[dict] | None = None,
+    status: str = "completed",
+    smoke_passed: bool = True,
+    parent_artifact_hash: str = "c" * 64,
+    request_budget: dict[str, int] | None = None,
+) -> Path:
+    return export_research_artifact(
+        root=root,
+        run_id=run_id,
+        metadata={
+            "experiment": "runtime-smoke",
+            "crawl_job_id": run_id,
+            "crawl_job_status": status,
+            "parent_artifact_hash": parent_artifact_hash,
+            "request_budget": request_budget or {"listing": 1, "detail": 20},
+            "smoke_passed": smoke_passed,
+        },
+        events=(
+            _live_events(status=status, smoke_passed=smoke_passed)
+            if events is None
+            else events
+        ),
+        provenance=_provenance(),
+    )
+
+
+def test_verify_live_run_accepts_consistent_completed_smoke(tmp_path) -> None:
+    artifact = _export_live(tmp_path)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is True
+    assert result.issues == ()
+    assert result.experiment == "runtime-smoke"
+    assert result.run_id == RUN_ID_1
+    assert result.to_payload() == {
+        "valid": True,
+        "issues": [],
+        "experiment": "runtime-smoke",
+        "run_id": RUN_ID_1,
+    }
+
+
+def test_verify_live_run_accepts_consistent_failed_partial_smoke(tmp_path) -> None:
+    events = _live_events(
+        listing_attempts=1,
+        detail_attempts=1,
+        status="failed",
+        smoke_passed=False,
+    )
+    artifact = _export_live(
+        tmp_path,
+        events=events,
+        status="failed",
+        smoke_passed=False,
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is True
+    assert result.issues == ()
+
+
+@pytest.mark.parametrize(
+    ("mutate_events", "metadata_changes", "expected_issue"),
+    [
+        (
+            lambda events: [*events, {"sequence_no": 99, "event_type": "research.extra", "payload": {}}],
+            {},
+            "event_after_terminal_summary",
+        ),
+        (
+            lambda events: [*events, events[-1]],
+            {},
+            "terminal_summary_count:2",
+        ),
+        (
+            lambda events: _live_events(listing_attempts=2),
+            {},
+            "listing_request_budget_exceeded:2>1",
+        ),
+        (
+            lambda events: events,
+            {"status": "failed", "smoke_passed": True},
+            "completed_smoke_status_mismatch",
+        ),
+        (
+            lambda events: events,
+            {"parent_artifact_hash": "not-a-hash"},
+            "invalid_parent_artifact_hash",
+        ),
+    ],
+)
+def test_verify_live_run_rejects_inconsistent_evidence(
+    tmp_path,
+    mutate_events,
+    metadata_changes: dict,
+    expected_issue: str,
+) -> None:
+    events = mutate_events(_live_events())
+    artifact = _export_live(
+        tmp_path,
+        events=events,
+        status=metadata_changes.get("status", "completed"),
+        smoke_passed=metadata_changes.get("smoke_passed", True),
+        parent_artifact_hash=metadata_changes.get(
+            "parent_artifact_hash", "c" * 64
+        ),
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert expected_issue in result.issues
