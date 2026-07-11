@@ -229,6 +229,7 @@ class OfferTodayBrowserDetailScraper:
             **parsed_detail,
             "job_id": identity.job_id,
             "encrypted_job_id": identity.encrypted_job_id,
+            "encrypted_job_id_source": identity.encrypted_job_id_source,
         }
         return OfferTodayDetailFetchResult(
             identity=identity,

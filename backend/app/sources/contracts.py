@@ -5,7 +5,9 @@ import hashlib
 from datetime import datetime
 from typing import Any
 
-from app.sources.offertoday.detail_identity import read_offertoday_identity_evidence
+from app.sources.offertoday.detail_identity import (
+    resolve_offertoday_listing_identity,
+)
 from app.utils.data_mapper import parse_listing_date, parse_salary_range
 from app.utils.source_identity import (
     build_compat_company_id,
@@ -134,22 +136,19 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
     """
     from app.sources.offertoday.parsers import build_offertoday_job_url
 
-    raw_job_id = read_offertoday_identity_evidence(
-        parsed_job,
-        field_names=("job_id", "jobId"),
-        raw_field_name="jobId",
-        evidence_name="jobId",
-    )
-    encrypted_id = read_offertoday_identity_evidence(
-        parsed_job,
-        field_names=("encrypted_job_id", "encryptJobId"),
-        raw_field_name="encryptJobId",
-        evidence_name="encryptJobId",
-    )
+    identity = resolve_offertoday_listing_identity(parsed_job)
+    normalized_job = {
+        **dict(parsed_job),
+        "job_id": identity.job_id,
+        "encrypted_job_id": identity.encrypted_job_id,
+        "encrypted_job_id_source": identity.encrypted_job_id_source,
+    }
 
     # Extract classification from job_functions (available in listing + detail)
     job_functions = (
-        parsed_job.get("job_functions") or parsed_job.get("jobFunctions") or []
+        normalized_job.get("job_functions")
+        or normalized_job.get("jobFunctions")
+        or []
     )
     source_classification_id = None
     source_classification_name = None
@@ -172,41 +171,42 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
 
     return CanonicalScrapedJob(
         source_site="offertoday",
-        source_job_id=raw_job_id,
-        source_url=build_offertoday_job_url(encrypted_id),
-        title=parsed_job.get("title") or parsed_job.get("jobName") or "",
+        source_job_id=identity.job_id,
+        source_url=build_offertoday_job_url(identity.encrypted_job_id),
+        title=normalized_job.get("title") or normalized_job.get("jobName") or "",
         description=(
-            parsed_job.get("description_html")
-            or parsed_job.get("description_text")
-            or parsed_job.get("jobDesc")
-            or parsed_job.get("abstract")
+            normalized_job.get("description_html")
+            or normalized_job.get("description_text")
+            or normalized_job.get("jobDesc")
+            or normalized_job.get("abstract")
         ),
         company_name=(
-            parsed_job.get("company_name")
-            or parsed_job.get("companyName")
-            or parsed_job.get("brandName")
+            normalized_job.get("company_name")
+            or normalized_job.get("companyName")
+            or normalized_job.get("brandName")
         ),
         location=(
-            parsed_job.get("location")
-            or parsed_job.get("locationDesc")
-            or parsed_job.get("level3_location")
+            normalized_job.get("location")
+            or normalized_job.get("locationDesc")
+            or normalized_job.get("level3_location")
         ),
-        salary_range=parsed_job.get("salary_range") or parsed_job.get("salaryDesc"),
+        salary_range=normalized_job.get("salary_range")
+        or normalized_job.get("salaryDesc"),
         employment_type=(
-            parsed_job.get("employment_type")
-            or parsed_job.get("jobTypeDesc")
-            or parsed_job.get("employ_type")
+            normalized_job.get("employment_type")
+            or normalized_job.get("jobTypeDesc")
+            or normalized_job.get("employ_type")
         ),
         source_classification_id=source_classification_id or None,
         source_classification_name=source_classification_name or None,
         source_subclassification_id=source_subclassification_id or None,
         source_subclassification_name=source_subclassification_name or None,
         posted_date=(
-            parsed_job.get("posted_desc")
-            or parsed_job.get("postDateDesc")
-            or parsed_job.get("posted_at")
+            normalized_job.get("posted_desc")
+            or normalized_job.get("postDateDesc")
+            or normalized_job.get("posted_at")
         ),
-        raw_data=dict(parsed_job),
+        raw_data=normalized_job,
     )
 
 

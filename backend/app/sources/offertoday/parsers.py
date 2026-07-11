@@ -15,6 +15,10 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from app.sources.offertoday.detail_identity import (
+    OfferTodayIdentityError,
+    resolve_offertoday_listing_identity,
+)
 from app.sources.offertoday.quality import clean_description_text, normalize_tag_terms
 
 OFFERTODOAY_JOB_URL_TEMPLATE = "https://www.offertoday.com/hk/job/{encrypted_job_id}"
@@ -59,6 +63,28 @@ def _optional_sequence(
     return list(value)
 
 
+def _normalized_identity_fields(raw: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        identity = resolve_offertoday_listing_identity(raw)
+    except OfferTodayIdentityError:
+        raw_job_id = raw.get("jobId")
+        raw_encrypted_job_id = raw.get("encryptJobId")
+        return {
+            "job_id": raw_job_id.strip() if isinstance(raw_job_id, str) else "",
+            "encrypted_job_id": (
+                raw_encrypted_job_id.strip()
+                if isinstance(raw_encrypted_job_id, str)
+                else ""
+            ),
+            "encrypted_job_id_source": None,
+        }
+    return {
+        "job_id": identity.job_id,
+        "encrypted_job_id": identity.encrypted_job_id,
+        "encrypted_job_id_source": identity.encrypted_job_id_source,
+    }
+
+
 def parse_offertoday_listing_response(
     response_data: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -73,12 +99,10 @@ def parse_offertoday_listing_response(
 
 def _parse_listing_job(raw: dict[str, Any]) -> dict[str, Any]:
     """Convert a single listing API item into the internal raw dict."""
-    job_id = str(raw.get("jobId") or "").strip()
-    encrypted_job_id = str(raw.get("encryptJobId") or "").strip()
+    identity_fields = _normalized_identity_fields(raw)
     return {
         "source_site": "offertoday",
-        "job_id": job_id,
-        "encrypted_job_id": encrypted_job_id,
+        **identity_fields,
         "title": str(raw.get("jobName") or "").strip(),
         "company_name": str(raw.get("companyName") or "").strip(),
         "location": str(raw.get("locationDesc") or "").strip(),
@@ -107,6 +131,7 @@ def _parse_listing_job(raw: dict[str, Any]) -> dict[str, Any]:
 def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str, Any]:
     """Parse the job detail API response into a dict."""
     data = _optional_object(response_data, "data")
+    identity = resolve_offertoday_listing_identity(data)
     industry = _optional_object(data, "industry")
     employ_type = _optional_object(data, "employType")
     address = _optional_object(data, "addressVO")
@@ -114,15 +139,14 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
     skills = _optional_sequence(data, "skills")
     skill_list = _optional_sequence(data, "skillList")
     keywords = _optional_sequence(data, "keywords")
-    job_id = str(data.get("jobId") or "").strip()
-    encrypted_job_id = str(data.get("encryptJobId") or "").strip()
     description_html = str(data.get("jobDesc") or "").strip()
     description_text = clean_description_text(_strip_html(description_html))
     blocked_terms = {str(value).strip() for value in benefits if str(value).strip()}
     return {
         "source_site": "offertoday",
-        "job_id": job_id,
-        "encrypted_job_id": encrypted_job_id,
+        "job_id": identity.job_id,
+        "encrypted_job_id": identity.encrypted_job_id,
+        "encrypted_job_id_source": identity.encrypted_job_id_source,
         "title": str(data.get("jobName") or "").strip(),
         "description_html": description_html,
         "description_text": description_text,

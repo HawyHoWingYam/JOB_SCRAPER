@@ -133,6 +133,7 @@ class OfferTodayJobRepairService:
             **parsed_detail,
             "job_id": expected_identity.job_id,
             "encrypted_job_id": expected_identity.encrypted_job_id,
+            "encrypted_job_id_source": expected_identity.encrypted_job_id_source,
         }
 
         canonical = self.build_canonical_job_snapshot(

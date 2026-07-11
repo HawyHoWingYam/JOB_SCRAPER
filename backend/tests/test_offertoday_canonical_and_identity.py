@@ -471,20 +471,30 @@ def test_authority_index_keeps_multiple_explicit_routes_conflicting() -> None:
     }
 
 
-def test_listing_parser_preserves_missing_encrypted_id_as_empty():
-    listing = _parsed_listing(_sample_listing_raw_missing_encrypted())
+def test_listing_parser_resolves_missing_encrypted_id_without_mutating_raw_data():
+    raw = _sample_listing_raw_missing_encrypted()
+    before = deepcopy(raw)
+
+    listing = _parsed_listing(raw)
 
     assert listing["job_id"] == "jid-1"
-    assert listing["encrypted_job_id"] == ""
+    assert listing["encrypted_job_id"] == "jid-1"
+    assert listing["encrypted_job_id_source"] == "jobId_fallback"
+    assert listing["raw_data"] == before
+    assert "encryptJobId" not in listing["raw_data"]
 
 
-def test_detail_parser_preserves_missing_encrypted_id_as_empty():
-    parsed = parse_offertoday_detail_response(
-        {"code": 0, "data": _sample_detail_raw_missing_encrypted()}
-    )
+def test_detail_parser_resolves_missing_encrypted_id_without_mutating_raw_data():
+    raw = _sample_detail_raw_missing_encrypted()
+    before = deepcopy(raw)
+
+    parsed = parse_offertoday_detail_response({"code": 0, "data": raw})
 
     assert parsed["job_id"] == "jid-1"
-    assert parsed["encrypted_job_id"] == ""
+    assert parsed["encrypted_job_id"] == "jid-1"
+    assert parsed["encrypted_job_id_source"] == "jobId_fallback"
+    assert parsed["raw_data"] == before
+    assert "encryptJobId" not in parsed["raw_data"]
 
 
 def test_resolve_detail_identity_uses_jobid_fallback_from_listing_evidence() -> None:
@@ -623,11 +633,25 @@ def test_build_offertoday_canonical_job_reads_description_from_raw_detail_shape(
     assert canonical.description == "<p>Build ETL pipelines.</p><p>Apply now.</p>"
 
 
+def test_canonical_builder_accepts_jobid_only_payload_and_uses_fallback_url():
+    raw = _sample_detail_raw_missing_encrypted()
+    before = deepcopy(raw)
+    parsed = parse_offertoday_detail_response({"code": 0, "data": raw})
+
+    canonical = build_offertoday_canonical_job(parsed)
+
+    assert canonical.source_job_id == "jid-1"
+    assert canonical.source_url.endswith("/jid-1")
+    assert canonical.raw_data["encrypted_job_id"] == "jid-1"
+    assert canonical.raw_data["encrypted_job_id_source"] == "jobId_fallback"
+    assert canonical.raw_data["raw_data"] == before
+    assert "encryptJobId" not in canonical.raw_data["raw_data"]
+
+
 @pytest.mark.parametrize(
     ("payload", "missing_field"),
     [
         ({"encryptJobId": "enc-jid-1", "jobName": "Data Engineer"}, "jobId"),
-        ({"jobId": "jid-1", "jobName": "Data Engineer"}, "encryptJobId"),
     ],
 )
 def test_build_offertoday_canonical_job_rejects_missing_identity_field(
@@ -791,10 +815,12 @@ async def test_offertoday_browser_detail_scraper_passes_both_ids_and_builds_type
     assert result.identity.encrypted_job_id == "enc-jid-1"
     assert result.raw_response == response_payload
     assert result.parsed_detail["job_id"] == "jid-1"
-    assert result.parsed_detail["encrypted_job_id"] == ""
+    assert result.parsed_detail["encrypted_job_id"] == "jid-1"
+    assert result.parsed_detail["encrypted_job_id_source"] == "jobId_fallback"
     assert result.parsed_detail["description_text"] == "Build ETL pipelines."
     assert result.canonical_detail["job_id"] == "jid-1"
     assert result.canonical_detail["encrypted_job_id"] == "enc-jid-1"
+    assert result.canonical_detail["encrypted_job_id_source"] == "encryptJobId"
 
     response_payload["data"]["jobName"] = "Mutated after fetch"
     assert result.raw_response["data"]["jobName"] == "Data Engineer"
@@ -1621,6 +1647,7 @@ def test_offline_parsed_repair_persists_canonical_identity_for_cached_round_trip
 
     assert listing.detail_payload["job_id"] == "jid-1"
     assert listing.detail_payload["encrypted_job_id"] == "enc-jid-1"
+    assert listing.detail_payload["encrypted_job_id_source"] == "encryptJobId"
     assert len(persisted_canonical) == 2
     assert all(
         canonical.source_url.endswith("/enc-jid-1") for canonical in persisted_canonical
