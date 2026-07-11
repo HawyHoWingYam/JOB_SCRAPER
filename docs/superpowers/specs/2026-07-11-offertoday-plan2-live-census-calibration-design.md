@@ -48,14 +48,20 @@ The last matching read-only baseline contained:
 
 These values are provenance for Plan 1, not immutable Plan 2 acceptance data. Every live Plan 2 run captures a new quiescent run-start inventory and compares it with its run-end inventory.
 
+## Task 8 Identity Correction Record
+
+The original Task 8 smoke run `fab9d8e1-4c12-4170-a539-c0a6cdbbca93` is failed immutable evidence, not an accepted smoke. It failed because all ten returned listing rows were valid `jobId`-only rows under the corrected identity contract; this invalidates only the assumption that every accepted row must contain two independently observed raw IDs.
+
+Its artifact at `backend/runtime/offertoday-research/fab9d8e1-4c12-4170-a539-c0a6cdbbca93` remains preserved exactly as captured, with manifest SHA-256 `1928423eed6cfd95e4cd2a3af3eb1d62c2ea6d460b122acb0ca0fefcfb4b548b`. The correction changes none of the one-listing and up-to-20-detail request budgets, sequential three-second pacing, zero-retry rule, no-product-write boundary, artifact export and verification requirements, smoke review checkpoint, or Task 9 lock. A replacement Task 8 smoke requires separate explicit user approval.
+
 ## Approved Decisions
 
 1. Keep `backend/scripts/offertoday_research.py` offline-only. Live research gets a separate entry point and never weakens the Plan 1 import/network guard.
-2. Use the shared `OfferTodayBrowserRuntime`, `OfferTodayListingRunner`, response classifier, canonical two-ID contract, research observation service, and artifact exporter. No live command may implement a second pagination or classification loop.
+2. Use the shared `OfferTodayBrowserRuntime`, `OfferTodayListingRunner`, response classifier, provenance-aware identity contract, research observation service, and artifact exporter. No live command may implement a second pagination or classification loop.
 3. Run every live stage explicitly. A successful smoke does not automatically start calibration, pilot, or census work.
 4. Treat the first smoke parameters as a compatibility control, not a selected production recommendation: category `118000`, endpoint `search/list`, `rcdType=7`, page 1, page size 50.
 5. Use fresh headless mode for the first smoke because the current workspace has no storage-state file and no reusable CDP listener. Do not fall back silently to another session mode.
-6. Freeze the first 20 distinct valid `(jobId, encryptJobId)` pairs before the first detail request. Duplicate rows and rows missing either raw string identifier do not consume the limit.
+6. Freeze the first 20 distinct valid `(jobId, resolved_route_id, encrypted_job_id_source)` triples before the first detail request. Duplicate canonical IDs and rows missing a valid canonical `jobId` do not consume the limit; a missing raw `encryptJobId` uses `jobId_fallback` and remains independently counted as an observation.
 7. Fetch the frozen detail cohort sequentially with concurrency 1 and a recorded three-second inter-request delay. The initial smoke never retries a listing or detail request.
 8. Do not write `crawl_job_listings`, Job, Company, repair, or publication state during the smoke. Only the tagged research crawl job, ordered research events, and ignored runtime artifact may be written.
 9. Code `2520` is recorded as `terminal_unavailable` and does not stop the remaining smoke cohort. Auth expiry, WAF, IP block, identity mismatch, and any other batch-stop classification stop immediately.
@@ -137,12 +143,12 @@ For this `runtime-smoke` experiment only, crawl-job status `completed` means the
 
 ### 4. Detail Smoke Adapter
 
-After the listing result is recorded, a pure selector freezes the first 20 first-seen distinct valid identity pairs from `ListingRunResult.id_pairs`, restricted to `ListingRunResult.accepted_job_ids`. The live layer injects `runtime.fetch_detail_json` into `OfferTodayBrowserDetailScraper`, preserving shared response classification, strict identity validation, parser cleanup, and typed `OfferTodayDetailFetchResult` behavior without starting a second browser.
+After the listing result is recorded, a pure selector freezes the first 20 first-seen distinct valid provenance-bearing identities from `ListingRunResult.id_pairs`, restricted to `ListingRunResult.accepted_job_ids`. The live layer injects `runtime.fetch_detail_json` into `OfferTodayBrowserDetailScraper`, preserving shared response classification, strict identity validation, parser cleanup, and typed `OfferTodayDetailFetchResult` behavior without starting a second browser.
 
 For each target, the adapter records:
 
 - zero-based and one-based cohort position;
-- canonical `jobId` and `encryptJobId` hashes plus the non-secret raw identifiers required for replay;
+- canonical `jobId`, resolved route, and `encrypted_job_id_source`, with hashes plus the non-secret identifiers required for replay;
 - request start/end timestamps and latency;
 - response classification and exact API code;
 - whether identity validation passed;
@@ -232,7 +238,7 @@ The detail cohort is frozen before detail request 1. Requests run sequentially w
 Smoke acceptance requires:
 
 - listing classification `success`;
-- at least 20 distinct valid identity pairs on page 1;
+- at least 20 distinct valid provenance-bearing resolved identities on page 1;
 - zero listing identity issues or conflicts;
 - exactly 20 frozen targets;
 - all 20 targets attempted unless a recorded batch-stop outcome occurs;
@@ -351,9 +357,9 @@ Plan 2 must add fixture-driven coverage for:
 - CLI command separation and offline-CLI import guards;
 - stage predecessor and artifact validation;
 - exact smoke condition and request budgets;
-- distinct-before-20 cohort freezing;
-- fewer-than-20 valid pairs;
-- duplicate and missing two-ID rows;
+- distinct-before-20 provenance-aware cohort freezing;
+- fewer-than-20 valid resolved identities;
+- duplicate canonical IDs, `jobId_fallback` rows, and unusable identity rows;
 - sequential detail ordering and pacing;
 - success, 2520, auth, WAF, IP block, transient, invalid payload, and ID mismatch outcomes;
 - batch-stop unattempted accounting;

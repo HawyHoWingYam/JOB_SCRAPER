@@ -19,7 +19,7 @@ Immediate scope:
 - add the live-only research contracts, stage gate, ledger methods, smoke service, and CLI;
 - recapture two matching read-only database baselines;
 - make exactly one listing API attempt for category `118000`, endpoint `search`, `rcdType=7`, page 1;
-- freeze the first 20 accepted distinct `(jobId, encryptJobId)` pairs;
+- freeze the first 20 accepted distinct `(jobId, resolved_route_id, encrypted_job_id_source)` identities;
 - fetch those 20 details sequentially with no retry and a three-second inter-request delay;
 - persist only the tagged crawl job/events and the ignored research artifact;
 - prove staging, Job, and Company state did not change; and
@@ -71,7 +71,13 @@ snapshot_hash=1527469841bf0e70273f439b82dbb854b24fc5f6dbb3661f3f1c9f8d0e5cb06c
 inventory_hash=418d6791e0a20a45ccf5fc274b96640aa130a33d8f062578c63698cd87a6a081
 ```
 
-These counts are historical provenance. Task 8 recaptures two new matching baselines immediately before the live smoke.
+These counts are historical provenance. An authorized replacement Task 8 recaptures two new matching baselines immediately before the live smoke.
+
+## Task 8 Correction Gate
+
+The original Task 8 attempt, run `fab9d8e1-4c12-4170-a539-c0a6cdbbca93`, failed because all ten returned listing rows were valid `jobId`-only rows under the corrected identity contract. It is immutable failed evidence, not an accepted smoke, and its artifact at `backend/runtime/offertoday-research/fab9d8e1-4c12-4170-a539-c0a6cdbbca93` must remain unchanged with manifest SHA-256 `1928423eed6cfd95e4cd2a3af3eb1d62c2ea6d460b122acb0ca0fefcfb4b548b`.
+
+Before any replacement smoke, complete and verify the deterministic correction in `docs/superpowers/plans/2026-07-11-offertoday-jobid-only-identity-compatibility.md`, pass its offline review gates, and then obtain separate explicit user approval for exactly one replacement Task 8 smoke. The existing Task 8 execution steps below describe that replacement only; they are not authorization to run it. Task 8 remains unaccepted and Task 9 remains locked.
 
 ## File Map
 
@@ -441,8 +447,18 @@ def test_freeze_detail_cohort_is_distinct_first_seen_and_accepted_only():
     )
 
     assert freeze_detail_smoke_cohort(result, limit=20) == (
-        DetailSmokeTarget(position=1, job_id="j1", encrypted_job_id="e1"),
-        DetailSmokeTarget(position=2, job_id="j3", encrypted_job_id="e3"),
+        DetailSmokeTarget(
+            position=1,
+            job_id="j1",
+            encrypted_job_id="e1",
+            encrypted_job_id_source="encryptJobId",
+        ),
+        DetailSmokeTarget(
+            position=2,
+            job_id="j3",
+            encrypted_job_id="e3",
+            encrypted_job_id_source="encryptJobId",
+        ),
     )
 ```
 
@@ -454,7 +470,14 @@ Use these exact public dataclasses:
 
 ```python
 import hashlib
+import json
+from dataclasses import dataclass
 from typing import Any
+
+from app.sources.offertoday.detail_identity import (
+    OfferTodayDetailIdentity,
+    OfferTodayEncryptedJobIdSource,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -462,15 +485,38 @@ class DetailSmokeTarget:
     position: int
     job_id: str
     encrypted_job_id: str
+    encrypted_job_id_source: OfferTodayEncryptedJobIdSource = "encryptJobId"
+
+    def __post_init__(self) -> None:
+        if type(self.position) is not int or self.position < 1:
+            raise ValueError("position must be a positive exact integer")
+        OfferTodayDetailIdentity(
+            job_id=self.job_id,
+            encrypted_job_id=self.encrypted_job_id,
+            encrypted_job_id_source=self.encrypted_job_id_source,
+        )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
-            "position": self.position,
+        identity_payload = {
             "job_id": self.job_id,
             "encrypted_job_id": self.encrypted_job_id,
+            "encrypted_job_id_source": self.encrypted_job_id_source,
+        }
+        identity_canonical = json.dumps(
+            identity_payload,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return {
+            "position": self.position,
+            **identity_payload,
             "job_id_hash": hashlib.sha256(self.job_id.encode()).hexdigest(),
             "encrypted_job_id_hash": hashlib.sha256(
                 self.encrypted_job_id.encode()
+            ).hexdigest(),
+            "identity_resolution_hash": hashlib.sha256(
+                identity_canonical.encode()
             ).hexdigest(),
         }
 
@@ -532,10 +578,15 @@ class LiveSmokeExecution:
 Test helpers must construct real runner contracts rather than mocks with a different shape:
 
 ```python
-def pair(job_id: str, encrypted_job_id: str) -> OfferTodayIdentityPair:
+def pair(
+    job_id: str,
+    encrypted_job_id: str,
+    encrypted_job_id_source: OfferTodayEncryptedJobIdSource = "encryptJobId",
+) -> OfferTodayIdentityPair:
     return OfferTodayIdentityPair(
         job_id=job_id,
         encrypted_job_id=encrypted_job_id,
+        encrypted_job_id_source=encrypted_job_id_source,
     )
 
 
@@ -580,7 +631,7 @@ Expected: imports fail for the new modules.
 
 - [ ] **Step 4: Implement pure selection and evaluation**
 
-`build_runtime_smoke_condition()` returns the locked condition. `freeze_detail_smoke_cohort()` iterates `ListingRunResult.id_pairs`, filters by `accepted_job_ids`, deduplicates `job_id`, preserves first-seen order, and stops at the exact limit.
+`build_runtime_smoke_condition()` returns the locked condition. `freeze_detail_smoke_cohort()` iterates `ListingRunResult.id_pairs`, validates and preserves each pair's exact `encrypted_job_id_source`, filters by `accepted_job_ids`, deduplicates `job_id`, preserves first-seen order, and stops at the exact limit.
 
 Add `listing_ready_for_detail_smoke(listing_result, frozen_targets)` and return true only for one successful page-1 attempt, `page_cap`, no gap/identity evidence, and exactly 20 frozen targets. The live service uses this predicate before detail request 1.
 
@@ -889,7 +940,7 @@ Assert the single condition equals `build_runtime_smoke_condition()`, the stagin
 Cover:
 
 - 20 targets run in frozen order;
-- every detail event has deterministic aware start/end timestamps and both identity hashes;
+- every detail event has deterministic aware start/end timestamps, canonical and resolved-route identity hashes, and exact route provenance;
 - exactly 19 sleep calls occur after 20 completed non-stopping attempts;
 - each sleep is `3.0` seconds;
 - no target is retried;
@@ -978,6 +1029,7 @@ async def run_smoke(
             detail_result = await detail_scraper.fetch_job_detail(
                 target.job_id,
                 encrypted_job_id=target.encrypted_job_id,
+                encrypted_job_id_source=target.encrypted_job_id_source,
             )
             latency_ms = int(
                 round(max(0.0, self._clock() - started_at) * 1000)
@@ -1387,6 +1439,8 @@ If no changes were required, do not create an empty commit.
 - Runtime evidence only under ignored `backend/runtime/offertoday-research/`.
 - No source or test edits unless the smoke exposes a reproducible implementation defect.
 
+> **Replacement-only gate:** Do not execute any step in this task until the deterministic compatibility plan is complete and reviewed and the user separately authorizes exactly one replacement smoke. The failed original run remains immutable evidence and does not satisfy Task 8.
+
 - [ ] **Step 1: Confirm the database and browser prerequisites without contacting OfferToday**
 
 ```powershell
@@ -1460,7 +1514,7 @@ if ($LASTEXITCODE -ne 0) { throw "previous baseline artifact invalid" }
 
 Expected: both outputs contain `"valid": true`.
 
-- [ ] **Step 4: Execute exactly one live smoke command**
+- [ ] **Step 4: Execute exactly one replacement live smoke command after authorization**
 
 ```powershell
 $baselineArtifacts = @(
@@ -1656,7 +1710,7 @@ Do not execute Task 9 or any later live command until this report is accepted.
 - Modify: `backend/tests/test_offertoday_listing_runner.py`
 - Create: `backend/tests/test_offertoday_research_calibration.py`
 
-This task starts only after Task 8 exit 0 and smoke review acceptance.
+This task starts only after a separately authorized replacement Task 8 smoke exits 0 and its smoke review is accepted. The original failed run does not satisfy this gate.
 
 - [ ] **Step 1: Write failing page-delay range tests**
 
@@ -2543,4 +2597,4 @@ Do not commit runtime artifacts.
 
 ## Immediate Execution Stop
 
-The current user request is satisfied operationally after Tasks 1–8 produce and verify the one-listing/20-detail smoke and report its result. Tasks 9–15 remain the approved detailed Plan 2 path, but no later live stage begins without review of the Task 8 artifact.
+The original Task 8 attempt did not satisfy the operational smoke gate. Completion now requires the deterministic compatibility correction plus a separately authorized replacement smoke that passes and is reviewed. Tasks 9–15 remain the approved detailed Plan 2 path, but no later live stage begins without acceptance of that replacement Task 8 artifact.

@@ -1,8 +1,9 @@
 # OfferToday `jobId`-Only Identity Compatibility Design
 
 > Date: 2026-07-11
-> Status: Option A approved by the user; written review pending
+> Status: Approved for implementation
 > Scope: Corrective amendment to Plan 2 Task 8 only
+> Implementation plan: `docs/superpowers/plans/2026-07-11-offertoday-jobid-only-identity-compatibility.md`
 
 ## Objective
 

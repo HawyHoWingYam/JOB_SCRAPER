@@ -21,7 +21,7 @@ The accepted target is broad IT coverage. It includes the official OfferToday IT
 - Run research against the existing PostgreSQL database and crawl infrastructure.
 - Tag every research crawl so it can be separated from ordinary product crawls.
 - Preserve all existing crawl and staging history. The research will not delete historical rows. A tagged reconciliation run may make audited status transitions, but broad untracked rewrites are prohibited.
-- Use `jobId` as the canonical business identity and preserve `encryptJobId` as a separate request and public-URL identifier.
+- Use `jobId` as the canonical business identity. Resolve the request and public-URL route from a valid explicit `encryptJobId` when present, otherwise from `jobId`, and preserve the exact `encrypted_job_id_source` provenance.
 - Require a recall proxy of at least 98 percent against the reference set.
 - Require the 95 percent confidence lower bound for sampled IT precision to be at least 90 percent.
 - Require at least 99 percent availability-adjusted detail success against a frozen eligible-ID cohort, with only structured code-2520 terminal outcomes excluded and reported separately.
@@ -112,11 +112,12 @@ Stability means more than process completion. A stable run has:
 ### Canonical Identity
 
 ```text
-jobId        = source_job_id, deduplication key, and Job upsert key
-encryptJobId = detail request identifier and public URL identifier
+jobId                   = source_job_id, deduplication key, and Job upsert key
+resolved_route_id       = valid explicit encryptJobId, otherwise canonical jobId
+encrypted_job_id_source = encryptJobId or jobId_fallback
 ```
 
-The research must measure missing values, one-to-many mappings, mapping changes, and request/response mismatches. It must not silently substitute one identifier for the other when both should be present.
+The research must independently measure missing raw `encryptJobId` observations, explicit one-to-many mappings, mapping changes, provenance upgrades, and request/response mismatches. A valid `jobId`-only row remains usable through `jobId_fallback`; research evidence must never fabricate an upstream `encryptJobId` or erase the exact resolution source.
 
 ## Scope
 
@@ -214,7 +215,8 @@ A page-attempt event records:
 - page number and attempt number;
 - API code and response classification;
 - reported total, `hasMore`, and row count;
-- ordered `(jobId, encryptJobId)` pairs;
+- ordered `(jobId, resolved_route_id, encrypted_job_id_source)` triples;
+- an independent `missing_encrypted_job_id_count` for rows where upstream omitted `encryptJobId`;
 - latency and session mode; and
 - retry and stop reasons.
 
@@ -455,7 +457,7 @@ Exit gate:
 | Query family | category, keyword, hybrid | Recall, precision, marginal yield |
 | Depth | 1, 3, 6, natural exhaustion | Saturation and page gaps |
 | Session | fresh headless, storage state, reusable browser | Auth/WAF rate and longest success streak |
-| Identity | `jobId`, `encryptJobId` mapping | Missing, collision, and mismatch rates |
+| Identity | canonical `jobId`, explicit `encryptJobId`, and `jobId_fallback` routing | Raw-missing, provenance, collision, promotion, and mismatch rates |
 | Detail cohort | official IT, cross-category technical, ambiguous | Success and content completeness |
 | Recovery | timeout, block, restart, commit interruption | State and conservation correctness |
 
@@ -527,7 +529,7 @@ Planned focused coverage:
 - search-space planning and stable query ordering;
 - page retry and unresolved-gap completion;
 - `hasMore` and empty-page behavior;
-- `jobId` and `encryptJobId` mapping;
+- canonical `jobId`, resolved route, and `encrypted_job_id_source` mapping;
 - response-classification matrix;
 - root-category detail expansion;
 - distinct detail selection before limit;
