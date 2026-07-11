@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType, SimpleNamespace
 from uuid import UUID, uuid4
@@ -40,6 +41,7 @@ class FakeCrawlJobRepository:
     def __init__(self) -> None:
         self.created: list[dict] = []
         self.events: list[dict] = []
+        self.runtime_events: list[dict] = []
 
     def create_crawl_job(self, db, **kwargs):
         self.created.append({"db": db, **kwargs})
@@ -48,6 +50,12 @@ class FakeCrawlJobRepository:
     def append_event(self, db, **kwargs):
         self.events.append({"db": db, **kwargs})
         return SimpleNamespace(sequence_no=len(self.events))
+
+    def record_runtime_event(self, db, **kwargs):
+        event = {"db": db, **kwargs}
+        self.runtime_events.append(event)
+        self.events.append(event)
+        return SimpleNamespace(id=kwargs["crawl_job_id"])
 
 
 def research_metadata() -> ResearchMetadata:
@@ -378,6 +386,122 @@ def test_run_summary_uses_shared_recursive_json_serializer() -> None:
     assert event["crawl_job_id"] == crawl_job_id
     assert event["emitted_by"] == "offertoday-research"
     assert event["auto_commit"] is True
+
+
+def test_live_lifecycle_records_ordered_events_and_terminal_smoke_metrics() -> None:
+    db = object()
+    repository = FakeCrawlJobRepository()
+    crawl_job_id = uuid4()
+    service = OfferTodayResearchObservationService(
+        db=db,
+        crawl_job_repository=repository,
+        crawl_job_id=crawl_job_id,
+    )
+
+    service.record_event("research.detail_cohort_frozen", {"count": 20})
+    service.record_detail_attempt({"position": 1, "classification": "success"})
+    service.finish_run(
+        status="completed",
+        summary={
+            "listing_complete": False,
+            "expected_truncation": True,
+            "smoke_passed": True,
+            "frozen_count": 20,
+            "attempted_count": 20,
+            "success_count": 20,
+            "terminal_count": 0,
+            "unattempted_count": 0,
+        },
+    )
+
+    assert [event["event_type"] for event in repository.events] == [
+        "research.detail_cohort_frozen",
+        "research.detail_attempt",
+        "research.run_summary",
+    ]
+    terminal = repository.runtime_events[0]
+    assert terminal["db"] is db
+    assert terminal["crawl_job_id"] == crawl_job_id
+    assert terminal["status"] == "completed"
+    assert terminal["emitted_by"] == "offertoday-research"
+    assert terminal["auto_commit"] is True
+    assert isinstance(terminal["completed_at"], datetime)
+    assert terminal["completed_at"].tzinfo is not None
+    assert terminal["metrics"] == {
+        "smoke_passed": True,
+        "listing_complete": False,
+        "expected_truncation": True,
+        "frozen_count": 20,
+        "attempted_count": 20,
+        "success_count": 20,
+        "terminal_count": 0,
+        "unattempted_count": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        {
+            "smoke_passed": True,
+            "listing_complete": True,
+            "expected_truncation": True,
+        },
+        {
+            "smoke_passed": True,
+            "listing_complete": False,
+            "expected_truncation": False,
+        },
+        {
+            "smoke_passed": False,
+            "listing_complete": False,
+            "expected_truncation": True,
+        },
+    ],
+)
+def test_completed_smoke_requires_exact_accepted_field_combination(summary) -> None:
+    repository = FakeCrawlJobRepository()
+    service = OfferTodayResearchObservationService(
+        db=object(),
+        crawl_job_repository=repository,
+        crawl_job_id=uuid4(),
+    )
+
+    with pytest.raises(ValueError, match="completed smoke"):
+        service.finish_run(status="completed", summary=summary)
+
+    assert repository.runtime_events == []
+
+
+def test_failed_lifecycle_persists_only_type_only_unexpected_error() -> None:
+    repository = FakeCrawlJobRepository()
+    service = OfferTodayResearchObservationService(
+        db=object(),
+        crawl_job_repository=repository,
+        crawl_job_id=uuid4(),
+    )
+    error = TypeError("sensitive request payload")
+
+    service.finish_run(
+        status="failed",
+        summary={"smoke_passed": False},
+        error_message=f"unexpected_live_smoke_error:{type(error).__name__}",
+    )
+
+    persisted = repository.runtime_events[0]["error_message"]
+    assert persisted == "unexpected_live_smoke_error:TypeError"
+    assert str(error) not in persisted
+
+
+def test_record_event_rejects_nonresearch_event_type() -> None:
+    service = OfferTodayResearchObservationService(
+        db=object(),
+        crawl_job_repository=FakeCrawlJobRepository(),
+        crawl_job_id=uuid4(),
+    )
+
+    with pytest.raises(ValueError, match="research event type"):
+        service.record_event("crawl.detail_attempt", {})
 
 
 def test_create_run_rejects_invalid_run_uuid() -> None:

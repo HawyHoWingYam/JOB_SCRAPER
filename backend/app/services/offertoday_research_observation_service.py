@@ -13,6 +13,7 @@ from app.sources.offertoday.research.contracts import (
     ResearchMetadata,
     ResearchRunStartInventory,
 )
+from app.utils.time import utc_now
 
 
 class OfferTodayResearchObservationService:
@@ -73,6 +74,75 @@ class OfferTodayResearchObservationService:
         self._append(
             "research.run_summary",
             listing_observation_to_payload(payload),
+        )
+
+    def record_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        if not event_type.startswith("research."):
+            raise ValueError("research event type must start with 'research.'")
+        self._append(event_type, listing_observation_to_payload(payload))
+
+    def record_detail_attempt(self, payload: dict[str, Any]) -> None:
+        self.record_event("research.detail_attempt", payload)
+
+    def finish_run(
+        self,
+        *,
+        status: str,
+        summary: dict[str, Any],
+        error_message: str | None = None,
+    ) -> None:
+        if self.crawl_job_id is None:
+            raise ValueError("crawl_job_id is required before finishing a run")
+        payload = listing_observation_to_payload(summary)
+        smoke_keys = {
+            "smoke_passed",
+            "listing_complete",
+            "expected_truncation",
+        }
+        if status == "completed" and smoke_keys.intersection(payload):
+            if (
+                payload.get("smoke_passed") is not True
+                or payload.get("listing_complete") is not False
+                or payload.get("expected_truncation") is not True
+            ):
+                raise ValueError(
+                    "completed smoke must record smoke_passed=true, "
+                    "listing_complete=false, and expected_truncation=true"
+                )
+        if error_message is not None and error_message.startswith(
+            "unexpected_live_smoke_error:"
+        ):
+            exception_type = error_message.removeprefix(
+                "unexpected_live_smoke_error:"
+            )
+            if not exception_type.isidentifier():
+                raise ValueError(
+                    "unexpected live smoke errors must persist exception type only"
+                )
+        self.crawl_job_repository.record_runtime_event(
+            self.db,
+            crawl_job_id=self.crawl_job_id,
+            status=status,
+            event_type="research.run_summary",
+            payload=payload,
+            emitted_by="offertoday-research",
+            completed_at=utc_now(),
+            error_message=error_message,
+            metrics={
+                key: payload[key]
+                for key in (
+                    "smoke_passed",
+                    "listing_complete",
+                    "expected_truncation",
+                    "frozen_count",
+                    "attempted_count",
+                    "success_count",
+                    "terminal_count",
+                    "unattempted_count",
+                )
+                if key in payload
+            },
+            auto_commit=True,
         )
 
     def _append(self, event_type: str, payload: dict[str, Any]) -> None:
