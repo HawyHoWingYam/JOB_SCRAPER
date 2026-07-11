@@ -1,0 +1,25 @@
+{
+  "code": 0,
+  "msg": "Success",
+  "data": {
+    "pageSize": 10,
+    "total": 265,
+    "hasMore": true,
+    "resultList": [
+      {
+        "jobId": "RbeDGc1VoBZwKIInWPjDCA==",
+        "jobName": "Product Analyst",
+        "companyName": "Example Technology Limited",
+        "jobFunctions": [
+          {
+            "code": "118000",
+            "name": "Information Technology",
+            "children": [
+              {"code": "118002", "name": "Business/System Analyst", "children": []}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

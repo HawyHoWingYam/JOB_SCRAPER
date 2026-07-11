@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import importlib
 import json
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -34,6 +36,14 @@ from app.utils.source_identity import derive_source_company_id_from_raw_data
 
 def _identity_module():
     return importlib.import_module("app.sources.offertoday.detail_identity")
+
+
+FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "offertoday"
+
+
+def _fixture_row(name: str) -> dict:
+    payload = json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8"))
+    return payload["data"]["resultList"][0]
 
 
 def _sample_listing_raw() -> dict:
@@ -253,6 +263,7 @@ def _detail_fetch_result(
         identity=identity_module.OfferTodayDetailIdentity(
             job_id=job_id,
             encrypted_job_id=encrypted_job_id,
+            encrypted_job_id_source="encryptJobId",
         ),
         classification=classification,
         raw_response=raw_response,
@@ -274,6 +285,192 @@ def test_derive_source_company_id_from_raw_data_uses_offertoday_brand_id():
     )
 
 
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_job_id"),
+    [
+        ("jobid_only_search_page.json", "RbeDGc1VoBZwKIInWPjDCA=="),
+        ("jobid_only_browse_page.json", "lxwa-xaLLtVD4diDhVRUjw=="),
+    ],
+)
+def test_real_jobid_only_listing_identity_resolves_fallback_without_raw_mutation(
+    fixture_name: str,
+    expected_job_id: str,
+) -> None:
+    identity_module = _identity_module()
+    raw = _fixture_row(fixture_name)
+    before = deepcopy(raw)
+
+    identity = identity_module.resolve_offertoday_listing_identity(raw)
+
+    assert identity.job_id == expected_job_id
+    assert identity.encrypted_job_id == expected_job_id
+    assert identity.encrypted_job_id_source == "jobId_fallback"
+    assert raw == before
+    assert "encryptJobId" not in raw
+
+
+def test_explicit_encrypted_identity_remains_distinct_and_preferred() -> None:
+    identity_module = _identity_module()
+
+    identity = identity_module.resolve_offertoday_listing_identity(
+        {"jobId": "jid-1", "encryptJobId": "enc-jid-1"}
+    )
+
+    assert identity.job_id == "jid-1"
+    assert identity.encrypted_job_id == "enc-jid-1"
+    assert identity.encrypted_job_id_source == "encryptJobId"
+
+
+def test_explicit_encrypted_identity_equal_to_jobid_stays_explicit() -> None:
+    identity_module = _identity_module()
+
+    identity = identity_module.resolve_offertoday_listing_identity(
+        {"jobId": "same-token", "encryptJobId": "same-token"}
+    )
+
+    assert identity.encrypted_job_id == "same-token"
+    assert identity.encrypted_job_id_source == "encryptJobId"
+
+
+@pytest.mark.parametrize("missing_value", [None, "", "   "])
+def test_null_or_blank_encrypted_evidence_uses_jobid_fallback(missing_value) -> None:
+    identity_module = _identity_module()
+
+    identity = identity_module.resolve_offertoday_listing_identity(
+        {"jobId": "jid-1", "encryptJobId": missing_value}
+    )
+
+    assert identity.encrypted_job_id == "jid-1"
+    assert identity.encrypted_job_id_source == "jobId_fallback"
+
+
+def test_non_string_explicit_encrypted_evidence_is_a_structured_failure() -> None:
+    identity_module = _identity_module()
+
+    with pytest.raises(identity_module.OfferTodayIdentityError) as exc_info:
+        identity_module.resolve_offertoday_listing_identity(
+            {"jobId": "jid-1", "encryptJobId": ["invalid"]}
+        )
+
+    assert exc_info.value.classification == "invalid_encrypted_job_id_evidence"
+
+
+@pytest.mark.parametrize(
+    ("payload", "classification"),
+    [
+        (
+            {
+                "job_id": "j-normalized",
+                "raw_data": {"jobId": "j-upstream"},
+            },
+            "job_id_alias_conflict",
+        ),
+        (
+            {
+                "jobId": "j-1",
+                "encrypted_job_id": "enc-normalized",
+                "raw_data": {
+                    "jobId": "j-1",
+                    "encryptJobId": "enc-upstream",
+                },
+            },
+            "encrypted_job_id_alias_conflict",
+        ),
+    ],
+)
+def test_conflicting_identity_aliases_are_structured_failures(
+    payload: dict,
+    classification: str,
+) -> None:
+    identity_module = _identity_module()
+
+    with pytest.raises(identity_module.OfferTodayIdentityError) as exc_info:
+        identity_module.resolve_offertoday_listing_identity(payload)
+
+    assert exc_info.value.classification == classification
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {
+            "job_id": "jid-1",
+            "encrypted_job_id": "other",
+            "encrypted_job_id_source": "jobId_fallback",
+        },
+        {
+            "job_id": "jid-1",
+            "encrypted_job_id": "jid-1",
+            "encrypted_job_id_source": "unknown",
+        },
+    ],
+)
+def test_typed_identity_rejects_invalid_source_or_fallback_route(kwargs) -> None:
+    identity_module = _identity_module()
+
+    with pytest.raises(identity_module.OfferTodayIdentityError):
+        identity_module.OfferTodayDetailIdentity(**kwargs)
+
+
+def test_legacy_normalized_jobid_alias_does_not_claim_upstream_encrypted_evidence() -> None:
+    identity_module = _identity_module()
+
+    identity = identity_module.resolve_offertoday_listing_identity(
+        {
+            "job_id": "jid-1",
+            "encrypted_job_id": "jid-1",
+            "raw_data": {"jobId": "jid-1"},
+        }
+    )
+
+    assert identity.encrypted_job_id_source == "jobId_fallback"
+
+
+def test_authority_index_promotes_explicit_and_detects_reverse_collision() -> None:
+    identity_module = _identity_module()
+    fallback = identity_module.OfferTodayDetailIdentity(
+        "j-1", "j-1", "jobId_fallback"
+    )
+    explicit = identity_module.OfferTodayDetailIdentity(
+        "j-1", "enc-shared", "encryptJobId"
+    )
+    reverse = identity_module.OfferTodayDetailIdentity(
+        "j-2", "enc-shared", "encryptJobId"
+    )
+
+    index = identity_module.build_offertoday_identity_authority_index(
+        (fallback, explicit, reverse)
+    )
+
+    assert index.authoritative_identity_by_job["j-1"] == explicit
+    assert index.fallback_job_ids == ("j-1",)
+    assert index.explicit_ids_by_job["j-1"] == ("enc-shared",)
+    assert index.route_to_job_ids["enc-shared"] == ("j-1", "j-2")
+    assert dict(index.conflict_reason_by_job) == {
+        "j-1": "reverse_collision",
+        "j-2": "reverse_collision",
+    }
+
+
+def test_authority_index_keeps_multiple_explicit_routes_conflicting() -> None:
+    identity_module = _identity_module()
+    identities = (
+        identity_module.OfferTodayDetailIdentity(
+            "j-1", "enc-a", "encryptJobId"
+        ),
+        identity_module.OfferTodayDetailIdentity(
+            "j-1", "enc-b", "encryptJobId"
+        ),
+    )
+
+    index = identity_module.build_offertoday_identity_authority_index(identities)
+
+    assert "j-1" not in index.authoritative_identity_by_job
+    assert dict(index.conflict_reason_by_job) == {
+        "j-1": "multiple_explicit_encrypted_ids"
+    }
+
+
 def test_listing_parser_preserves_missing_encrypted_id_as_empty():
     listing = _parsed_listing(_sample_listing_raw_missing_encrypted())
 
@@ -290,14 +487,18 @@ def test_detail_parser_preserves_missing_encrypted_id_as_empty():
     assert parsed["encrypted_job_id"] == ""
 
 
-def test_resolve_detail_identity_requires_encrypted_id_from_listing_evidence():
+def test_resolve_detail_identity_uses_jobid_fallback_from_listing_evidence() -> None:
     identity_module = _identity_module()
+    listing_payload = _parsed_listing(_sample_listing_raw_missing_encrypted())
 
-    with pytest.raises(identity_module.OfferTodayIdentityError, match="encryptJobId"):
-        identity_module.resolve_offertoday_detail_identity(
-            source_job_id="jid-1",
-            listing_payload=_parsed_listing(_sample_listing_raw_missing_encrypted()),
-        )
+    identity = identity_module.resolve_offertoday_detail_identity(
+        source_job_id="jid-1",
+        listing_payload=listing_payload,
+    )
+
+    assert identity.job_id == "jid-1"
+    assert identity.encrypted_job_id == "jid-1"
+    assert identity.encrypted_job_id_source == "jobId_fallback"
 
 
 def test_resolve_detail_identity_rejects_listing_source_job_id_mismatch():
@@ -323,7 +524,11 @@ def test_resolve_detail_identity_returns_frozen_distinct_identifiers():
 
     assert identity.job_id == "jid-1"
     assert identity.encrypted_job_id == "enc-jid-1"
-    assert identity.__slots__ == ("job_id", "encrypted_job_id")
+    assert identity.__slots__ == (
+        "job_id",
+        "encrypted_job_id",
+        "encrypted_job_id_source",
+    )
     with pytest.raises(FrozenInstanceError):
         identity.job_id = "other"
 
@@ -354,6 +559,7 @@ def test_validate_detail_identity_rejects_response_job_id_mismatch():
     identity = identity_module.OfferTodayDetailIdentity(
         job_id="jid-1",
         encrypted_job_id="enc-jid-1",
+        encrypted_job_id_source="encryptJobId",
     )
 
     with pytest.raises(
@@ -371,6 +577,7 @@ def test_validate_detail_identity_rejects_response_encrypted_job_id_mismatch():
     identity = identity_module.OfferTodayDetailIdentity(
         job_id="jid-1",
         encrypted_job_id="enc-jid-1",
+        encrypted_job_id_source="encryptJobId",
     )
 
     with pytest.raises(
@@ -388,6 +595,20 @@ def test_validate_detail_identity_rejects_response_encrypted_job_id_mismatch():
                 },
             },
         )
+
+
+def test_validate_detail_identity_accepts_matching_jobid_without_encrypted_evidence() -> None:
+    identity_module = _identity_module()
+    identity = identity_module.OfferTodayDetailIdentity(
+        "j-1",
+        "enc-1",
+        "encryptJobId",
+    )
+
+    identity_module.validate_offertoday_detail_identity(
+        identity,
+        {"jobId": "j-1"},
+    )
 
 
 def test_build_offertoday_canonical_job_reads_description_from_raw_detail_shape():
@@ -503,20 +724,22 @@ def test_offertoday_job_repair_service_resolves_distinct_detail_identifiers_from
     assert encrypted_job_id == "enc-jid-1"
 
 
-def test_offertoday_job_repair_service_rejects_missing_encrypted_listing_identity():
+def test_repair_service_resolves_missing_encrypted_listing_identity_as_jobid_fallback() -> None:
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    identity_module = _identity_module()
     service = service_module.OfferTodayJobRepairService(db=None)
 
-    with pytest.raises(identity_module.OfferTodayIdentityError, match="encryptJobId"):
-        service.resolve_detail_identifiers(
-            _job_stub(),
-            _listing_stub(
-                listing_payload=_parsed_listing(_sample_listing_raw_missing_encrypted())
-            ),
-        )
+    job_id, route_id = service.resolve_detail_identifiers(
+        _job_stub(),
+        _listing_stub(
+            listing_payload=_parsed_listing(
+                _sample_listing_raw_missing_encrypted()
+            )
+        ),
+    )
+
+    assert (job_id, route_id) == ("jid-1", "jid-1")
 
 
 @pytest.mark.asyncio
@@ -1748,6 +1971,7 @@ def test_repair_non_success_records_evidence_without_merging_job(
     identity = identity_module.OfferTodayDetailIdentity(
         job_id="jid-1",
         encrypted_job_id="enc-jid-1",
+        encrypted_job_id_source="encryptJobId",
     )
     classification = policy_module.classify_offertoday_response(
         payload,

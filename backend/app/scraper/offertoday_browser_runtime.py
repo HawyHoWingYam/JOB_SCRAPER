@@ -21,7 +21,11 @@ from app.sources.offertoday.constants import (
     OFFERTODAY_LISTING_BROWSE_URL,
     OFFERTODAY_LISTING_SEARCH_URL,
 )
-from app.sources.offertoday.detail_identity import resolve_offertoday_detail_identity
+from app.sources.offertoday.detail_identity import (
+    OfferTodayIdentityError,
+    resolve_offertoday_detail_identity,
+    resolve_offertoday_listing_identity,
+)
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseKind,
     OfferTodayTransportError,
@@ -158,6 +162,7 @@ class OfferTodayBrowserRuntime:
             listing_payload={
                 "jobId": job_id,
                 "encryptJobId": encrypted_job_id,
+                "encrypted_job_id_source": "encryptJobId",
             },
         )
         return await self._fetch_json(
@@ -302,24 +307,17 @@ class OfferTodayBrowserRuntime:
                 break
             if not isinstance(row, dict):
                 continue
-            raw_job_id = row.get("jobId")
-            raw_encrypted_job_id = row.get("encryptJobId")
-            if (
-                not isinstance(raw_job_id, str)
-                or not raw_job_id.strip()
-                or not isinstance(raw_encrypted_job_id, str)
-                or not raw_encrypted_job_id.strip()
-            ):
+            try:
+                identity = resolve_offertoday_listing_identity(row)
+            except OfferTodayIdentityError:
                 continue
-            job_id = raw_job_id.strip()
-            encrypted_job_id = raw_encrypted_job_id.strip()
             detail_payload = await self.fetch_detail_json(
-                job_id=job_id,
-                encrypted_job_id=encrypted_job_id,
+                job_id=identity.job_id,
+                encrypted_job_id=identity.encrypted_job_id,
             )
             detail_results.append(
                 {
-                    "job_id": job_id,
+                    "job_id": identity.job_id,
                     "code": (
                         None
                         if not isinstance(detail_payload, dict)

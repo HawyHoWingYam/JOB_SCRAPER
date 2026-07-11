@@ -1,0 +1,25 @@
+{
+  "code": 0,
+  "msg": "Success",
+  "data": {
+    "pageSize": 10,
+    "total": 431,
+    "hasMore": true,
+    "resultList": [
+      {
+        "jobId": "lxwa-xaLLtVD4diDhVRUjw==",
+        "jobName": "Junior Programmer",
+        "companyName": "Example Digital Limited",
+        "jobFunctions": [
+          {
+            "code": "118000",
+            "name": "Information Technology",
+            "children": [
+              {"code": "118006", "name": "Software Development", "children": []}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

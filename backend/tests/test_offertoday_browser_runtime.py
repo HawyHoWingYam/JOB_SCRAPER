@@ -879,7 +879,7 @@ async def test_run_smoke_test_skips_detail_when_session_is_unhealthy(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_run_smoke_test_only_uses_rows_with_two_raw_string_ids(monkeypatch):
+async def test_run_smoke_test_resolves_explicit_and_jobid_fallback_rows(monkeypatch):
     runtime_module = importlib.import_module("app.scraper.offertoday_browser_runtime")
     response_payload = {
         "code": 0,
@@ -913,10 +913,14 @@ async def test_run_smoke_test_only_uses_rows_with_two_raw_string_ids(monkeypatch
     assert result["api_code"] == 0
     assert detail_calls == [
         ("job-1", "encrypted-1"),
+        ("job-2", "job-2"),
+        ("job-3", "job-3"),
         ("job-6", "encrypted-6"),
     ]
     assert result["detail_results"] == [
         {"job_id": "job-1", "code": 0},
+        {"job_id": "job-2", "code": 0},
+        {"job_id": "job-3", "code": 0},
         {"job_id": "job-6", "code": 0},
     ]
 
@@ -948,8 +952,10 @@ async def test_run_smoke_test_applies_detail_limit_after_identity_validation(mon
 
     result = await runtime.run_smoke_test(detail_limit=1)
 
-    assert detail_calls == [("job-2", "encrypted-2")]
-    assert result["detail_results"] == [{"job_id": "job-2", "code": 0}]
+    assert detail_calls == [("missing-encrypted-id", "missing-encrypted-id")]
+    assert result["detail_results"] == [
+        {"job_id": "missing-encrypted-id", "code": 0}
+    ]
 
 
 @pytest.mark.asyncio
