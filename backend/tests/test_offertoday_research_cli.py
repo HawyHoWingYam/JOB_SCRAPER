@@ -22,6 +22,7 @@ from app.sources.offertoday.research.artifacts import (
 )
 from app.sources.offertoday.research.contracts import (
     CrawlJobEvidenceSnapshot,
+    ProductDataSnapshot,
     StagedListingSnapshot,
 )
 from scripts.offertoday_research import (
@@ -104,6 +105,14 @@ class FakeResearchRepository:
     def list_published_snapshots(self, db):
         self._record("list_published_snapshots")
         return list(self.jobs)
+
+    def capture_product_data_snapshot(self, db):
+        self._record("capture_product_data_snapshot")
+        return ProductDataSnapshot.from_table_hashes(
+            staged_rows_hash="a" * 64,
+            published_jobs_hash="b" * 64,
+            companies_hash="c" * 64,
+        )
 
     def list_recent_crawl_jobs(self, db):
         self._record("list_recent_crawl_jobs")
@@ -346,6 +355,7 @@ def test_baseline_is_read_only_and_exports_snapshot_inventory_and_recent_runs(
     assert repository.calls == [
         "list_staged_snapshots",
         "list_published_snapshots",
+        "capture_product_data_snapshot",
         "list_recent_crawl_jobs",
     ]
     provider_kwargs = provenance_provider.call_args.kwargs

@@ -6,13 +6,14 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 from app.repositories import offertoday_research_repository as research_repository
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_listing import CrawlJobListing
+from app.models.company import Company
 from app.models.job import Job
 from app.repositories.offertoday_research_repository import (
     OfferTodayResearchRepository,
@@ -21,10 +22,11 @@ from app.repositories.offertoday_research_repository import (
     extract_snapshot_identity_error,
 )
 from app.sources.offertoday.research.baseline import (
-    build_baseline_snapshot,
+    build_baseline_snapshot as _build_baseline_snapshot,
     build_run_start_inventory,
 )
 from app.sources.offertoday.research.contracts import (
+    ProductDataSnapshot,
     PublishedJobSnapshot,
     StagedListingSnapshot,
 )
@@ -45,6 +47,32 @@ def _listing(
         published_job_id=published_job_id,
         crawl_job_id=crawl_job_id,
         **changes,
+    )
+
+
+def _product_data_snapshot(
+    *,
+    staged_rows_hash: str = "a" * 64,
+    published_jobs_hash: str = "b" * 64,
+    companies_hash: str = "c" * 64,
+) -> ProductDataSnapshot:
+    return ProductDataSnapshot.from_table_hashes(
+        staged_rows_hash=staged_rows_hash,
+        published_jobs_hash=published_jobs_hash,
+        companies_hash=companies_hash,
+    )
+
+
+def build_baseline_snapshot(
+    *,
+    listings: list[StagedListingSnapshot],
+    jobs: list[PublishedJobSnapshot],
+    product_data: ProductDataSnapshot | None = None,
+):
+    return _build_baseline_snapshot(
+        listings=listings,
+        jobs=jobs,
+        product_data=product_data or _product_data_snapshot(),
     )
 
 
@@ -216,6 +244,26 @@ def test_baseline_and_inventory_hashes_are_canonical_and_content_sensitive():
     )
     assert inventory.data_hash == reordered_inventory.data_hash
     assert inventory.data_hash != changed_inventory.data_hash
+
+
+def test_baseline_data_hash_binds_full_product_content_hashes() -> None:
+    listings = [_listing("row-1", "j-1", "completed", "job-1", "run-1")]
+    jobs = [PublishedJobSnapshot("job-1", "j-1", True, True, True)]
+
+    first = build_baseline_snapshot(
+        listings=listings,
+        jobs=jobs,
+        product_data=_product_data_snapshot(),
+    )
+    changed = build_baseline_snapshot(
+        listings=listings,
+        jobs=jobs,
+        product_data=_product_data_snapshot(published_jobs_hash="d" * 64),
+    )
+
+    assert first.staged_rows == changed.staged_rows
+    assert first.published_jobs == changed.published_jobs
+    assert first.data_hash != changed.data_hash
 
 
 def test_baseline_canonicalizes_nonblank_source_ids_and_accounts_invalid_rows():
@@ -784,6 +832,95 @@ def test_published_snapshot_query_projects_once_without_autoflush_or_deferred_lo
             "jobs.description",
         )
     )
+    engine.dispose()
+
+
+def test_product_data_snapshot_detects_same_identity_content_mutations() -> None:
+    engine = create_engine("sqlite://")
+    Company.__table__.create(engine)
+    Job.__table__.create(engine)
+    CrawlJobListing.__table__.create(engine)
+    company_id = uuid4()
+    job_id = uuid4()
+    listing_id = uuid4()
+    crawl_job_id = uuid4()
+
+    with Session(engine) as db:
+        db.add_all(
+            [
+                Company(
+                    id=company_id,
+                    company_id="offertoday:company-1",
+                    source_site="offertoday",
+                    source_company_id="company-1",
+                    name="Company One",
+                    extra_data={"profile": "original"},
+                    is_deleted=False,
+                ),
+                Job(
+                    id=job_id,
+                    job_id="offertoday:j-1",
+                    source_site="offertoday",
+                    source_job_id="j-1",
+                    company_id=company_id,
+                    title="Original title",
+                    description="Original description",
+                    raw_data={"jobId": "j-1", "detail": "original"},
+                    is_deleted=False,
+                ),
+                CrawlJobListing(
+                    id=listing_id,
+                    crawl_job_id=crawl_job_id,
+                    source_site="offertoday",
+                    source_job_id="j-1",
+                    source_url="https://www.offertoday.com/hk/job/j-1",
+                    listing_payload={"jobId": "j-1", "title": "Original title"},
+                    detail_payload={"jobId": "j-1", "description": "Original"},
+                    detail_status="completed",
+                    published_job_id=job_id,
+                ),
+            ]
+        )
+        db.commit()
+        repository = OfferTodayResearchRepository()
+        first = repository.capture_product_data_snapshot(db)
+
+        db.execute(
+            update(Job)
+            .where(Job.id == job_id)
+            .values(title="Changed title")
+        )
+        db.commit()
+        job_changed = repository.capture_product_data_snapshot(db)
+        assert job_changed.staged_rows_hash == first.staged_rows_hash
+        assert job_changed.published_jobs_hash != first.published_jobs_hash
+        assert job_changed.companies_hash == first.companies_hash
+        assert job_changed.data_hash != first.data_hash
+
+        db.execute(
+            update(Company)
+            .where(Company.id == company_id)
+            .values(name="Changed company")
+        )
+        db.commit()
+        company_changed = repository.capture_product_data_snapshot(db)
+        assert company_changed.staged_rows_hash == job_changed.staged_rows_hash
+        assert company_changed.published_jobs_hash == job_changed.published_jobs_hash
+        assert company_changed.companies_hash != job_changed.companies_hash
+        assert company_changed.data_hash != job_changed.data_hash
+
+        db.execute(
+            update(CrawlJobListing)
+            .where(CrawlJobListing.id == listing_id)
+            .values(listing_payload={"jobId": "j-1", "title": "Changed title"})
+        )
+        db.commit()
+        staging_changed = repository.capture_product_data_snapshot(db)
+        assert staging_changed.staged_rows_hash != company_changed.staged_rows_hash
+        assert staging_changed.published_jobs_hash == company_changed.published_jobs_hash
+        assert staging_changed.companies_hash == company_changed.companies_hash
+        assert staging_changed.data_hash != company_changed.data_hash
+
     engine.dispose()
 
 

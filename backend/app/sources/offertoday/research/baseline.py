@@ -8,6 +8,7 @@ from typing import Any
 
 from app.sources.offertoday.research.contracts import (
     BaselineSnapshot,
+    ProductDataSnapshot,
     PublishedJobSnapshot,
     ResearchRunStartInventory,
     StagedListingSnapshot,
@@ -44,6 +45,7 @@ def build_baseline_snapshot(
     *,
     listings: Sequence[StagedListingSnapshot],
     jobs: Sequence[PublishedJobSnapshot],
+    product_data: ProductDataSnapshot,
 ) -> BaselineSnapshot:
     canonical_staged_ids = [
         _canonical_nonblank(row.source_job_id) for row in listings
@@ -152,6 +154,10 @@ def build_baseline_snapshot(
         ),
         "detail_status_rows": dict(sorted(status_counts.items())),
         "detail_error_classifications": dict(sorted(error_counts.items())),
+        "staged_rows_hash": product_data.staged_rows_hash,
+        "published_jobs_hash": product_data.published_jobs_hash,
+        "companies_hash": product_data.companies_hash,
+        "product_data_hash": product_data.data_hash,
     }
     return BaselineSnapshot(**values, data_hash=_content_hash(values))
 

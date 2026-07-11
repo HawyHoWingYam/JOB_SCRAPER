@@ -1219,6 +1219,7 @@ def test_provenance_hashes_default_sources_compose_and_redacts_runtime(tmp_path)
         "backend/app/sources/offertoday/root.py": "ROOT = 1\n",
         "backend/app/sources/offertoday/nested/child.py": "CHILD = 1\n",
         "backend/app/sources/offertoday/README.md": "not a Python source\n",
+        "backend/app/repositories/offertoday_research_repository.py": "REPOSITORY = 1\n",
         "backend/app/scraper/offertoday_browser_runtime.py": "RUNTIME = 1\n",
         "backend/app/scraper/offertoday_browser_detail_scraper.py": "DETAIL = 1\n",
         "backend/app/services/offertoday_detail_pipeline.py": "PIPELINE = 1\n",
@@ -1253,6 +1254,7 @@ def test_provenance_hashes_default_sources_compose_and_redacts_runtime(tmp_path)
     }
     assert tuple(DEFAULT_RELEVANT_SOURCE_PATHS) == (
         "backend/app/sources/offertoday",
+        "backend/app/repositories/offertoday_research_repository.py",
         "backend/app/scraper/offertoday_browser_runtime.py",
         "backend/app/scraper/offertoday_browser_detail_scraper.py",
         "backend/app/services/offertoday_detail_pipeline.py",

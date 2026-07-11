@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -99,6 +101,41 @@ class PublishedJobSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class ProductDataSnapshot:
+    staged_rows_hash: str
+    published_jobs_hash: str
+    companies_hash: str
+    data_hash: str
+
+    @classmethod
+    def from_table_hashes(
+        cls,
+        *,
+        staged_rows_hash: str,
+        published_jobs_hash: str,
+        companies_hash: str,
+    ) -> ProductDataSnapshot:
+        table_hashes = {
+            "companies_hash": companies_hash,
+            "published_jobs_hash": published_jobs_hash,
+            "staged_rows_hash": staged_rows_hash,
+        }
+        for field_name, value in table_hashes.items():
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise ValueError(f"{field_name} must be lowercase SHA-256")
+        canonical = json.dumps(
+            table_hashes,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return cls(
+            **table_hashes,
+            data_hash=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class BaselineSnapshot:
     staged_rows: int
     distinct_staged_ids: int
@@ -117,6 +154,10 @@ class BaselineSnapshot:
     identity_error_classifications: dict[str, int]
     detail_status_rows: dict[str, int]
     detail_error_classifications: dict[str, int]
+    staged_rows_hash: str
+    published_jobs_hash: str
+    companies_hash: str
+    product_data_hash: str
     data_hash: str
 
 

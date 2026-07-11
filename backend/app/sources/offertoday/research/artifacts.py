@@ -66,6 +66,7 @@ _PROVENANCE_SHA256_MAPPINGS = (
 
 DEFAULT_RELEVANT_SOURCE_PATHS = (
     "backend/app/sources/offertoday",
+    "backend/app/repositories/offertoday_research_repository.py",
     "backend/app/scraper/offertoday_browser_runtime.py",
     "backend/app/scraper/offertoday_browser_detail_scraper.py",
     "backend/app/services/offertoday_detail_pipeline.py",

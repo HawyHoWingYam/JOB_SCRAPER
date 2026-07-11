@@ -15,6 +15,7 @@ from app.sources.offertoday.research.conservation import (
     replay_research_conservation,
 )
 from app.sources.offertoday.research.contracts import (
+    ProductDataSnapshot,
     PublishedJobSnapshot,
     StagedListingSnapshot,
 )
@@ -1009,7 +1010,15 @@ def test_duplicate_cross_run_fixture_replays_one_correlated_canonical_outcome():
     listings = [StagedListingSnapshot(**row) for row in payload["listings"]]
     jobs = [PublishedJobSnapshot(**row) for row in payload["jobs"]]
 
-    baseline = build_baseline_snapshot(listings=listings, jobs=jobs)
+    baseline = build_baseline_snapshot(
+        listings=listings,
+        jobs=jobs,
+        product_data=ProductDataSnapshot.from_table_hashes(
+            staged_rows_hash="a" * 64,
+            published_jobs_hash="b" * 64,
+            companies_hash="c" * 64,
+        ),
+    )
     report = replay_research_conservation(
         crawl_job=SimpleNamespace(**payload["crawl_job"]),
         events=payload["events"],

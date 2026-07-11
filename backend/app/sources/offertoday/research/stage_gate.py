@@ -19,6 +19,9 @@ _COUNT_KEYS = (
     "duplicate_staging_rows",
 )
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_UNEXPECTED_ERROR_RE = re.compile(
+    r"unexpected_live_smoke_error:[A-Za-z_][A-Za-z0-9_]*"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +167,16 @@ def require_matching_baselines(
 
 
 _RUNTIME_SMOKE_REQUEST_BUDGET = {"listing": 1, "detail": 20}
+_RUNTIME_SMOKE_PAGE_CONTROL = {
+    "search_family": "runtime_smoke",
+    "category_id": 118000,
+    "keyword": "",
+    "endpoint": "search",
+    "rcd_type": 7,
+    "page": 1,
+    "attempt": 1,
+    "session_mode": "fresh-headless",
+}
 _DETAIL_FAILURE_KINDS = {
     "auth_expired",
     "waf_challenge",
@@ -225,11 +238,35 @@ def _analyze_runtime_smoke_events(
     elif run_started_indexes[0] != 0:
         issues.append("run_started_must_be_first")
 
-    page_events = [
-        event for event in events if event.get("event_type") == "research.page_attempt"
+    page_indexes = [
+        index
+        for index, event in enumerate(events)
+        if event.get("event_type") == "research.page_attempt"
     ]
+    page_events = [events[index] for index in page_indexes]
+    first_listing_failure: str | None = None
+    for page_event in page_events:
+        page_payload = page_event.get("payload")
+        if not isinstance(page_payload, dict) or any(
+            page_payload.get(key) != value
+            for key, value in _RUNTIME_SMOKE_PAGE_CONTROL.items()
+        ):
+            issues.append("invalid_runtime_smoke_page_control")
+        if isinstance(page_payload, dict) and first_listing_failure is None:
+            page_stop_reason = page_payload.get("stop_reason")
+            classification = page_payload.get("classification")
+            if isinstance(page_stop_reason, str) and page_stop_reason not in {
+                "",
+                "page_cap",
+            }:
+                first_listing_failure = f"listing_{page_stop_reason}"
+            elif classification != "success":
+                first_listing_failure = f"listing_{classification}"
     detail_events = [
         event for event in events if event.get("event_type") == "research.detail_attempt"
+    ]
+    run_stopped_events = [
+        event for event in events if event.get("event_type") == "research.run_stopped"
     ]
     cohort_indexes = [
         index
@@ -277,6 +314,8 @@ def _analyze_runtime_smoke_events(
 
     if cohort_indexes:
         cohort_index = cohort_indexes[0]
+        if any(page_index >= cohort_index for page_index in page_indexes):
+            issues.append("page_attempt_after_cohort_freeze")
         if any(
             index <= cohort_index
             for index, event in enumerate(events)
@@ -287,6 +326,7 @@ def _analyze_runtime_smoke_events(
     success_count = 0
     terminal_count = 0
     failure_count = 0
+    first_failure: str | None = None
     first_hard_stop: str | None = None
     batch_stopped = False
     for attempt_index, event in enumerate(detail_events):
@@ -327,15 +367,22 @@ def _analyze_runtime_smoke_events(
                     "has_description",
                 )
             ):
-                issues.append("incomplete_success_detail_evidence")
+                failure_count += 1
+                if first_failure is None:
+                    first_failure = "incomplete_success_detail"
         elif classification == "terminal_unavailable":
             terminal_count += 1
             if payload.get("api_code") != 2520:
                 issues.append("terminal_unavailable_code_mismatch")
+                failure_count += 1
+                if first_failure is None:
+                    first_failure = "invalid_terminal_unavailable"
             if stop_batch:
                 issues.append("terminal_unavailable_stopped_batch")
         elif classification in _DETAIL_FAILURE_KINDS:
             failure_count += 1
+            if first_failure is None:
+                first_failure = classification
             if classification in _DETAIL_HARD_STOP_KINDS:
                 if stop_batch is not True:
                     issues.append("hard_stop_missing_stop_batch")
@@ -347,6 +394,14 @@ def _analyze_runtime_smoke_events(
         if stop_batch:
             batch_stopped = True
 
+    if (
+        first_failure is None
+        and detail_events
+        and len(detail_events) < frozen_count
+        and not batch_stopped
+    ):
+        first_failure = "unattempted_without_batch_stop"
+
     return {
         "listing_attempt_count": len(page_events),
         "detail_attempt_count": len(detail_events),
@@ -356,13 +411,18 @@ def _analyze_runtime_smoke_events(
         "failure_count": failure_count,
         "unattempted_count": max(0, frozen_count - len(detail_events)),
         "first_hard_stop": first_hard_stop,
+        "first_failure": first_failure,
+        "first_listing_failure": first_listing_failure,
         "page_events": page_events,
+        "run_stopped_events": run_stopped_events,
     }
 
 
 def _completed_no_write_evidence_is_valid(summary: dict[str, Any]) -> bool:
     snapshot_start = summary.get("run_start_snapshot_hash")
     snapshot_end = summary.get("run_end_snapshot_hash")
+    product_start = summary.get("run_start_product_data_hash")
+    product_end = summary.get("run_end_product_data_hash")
     inventory_start = summary.get("run_start_inventory_hash")
     inventory_end = summary.get("run_end_inventory_hash")
     return (
@@ -370,6 +430,9 @@ def _completed_no_write_evidence_is_valid(summary: dict[str, Any]) -> bool:
         and isinstance(snapshot_start, str)
         and _SHA256_RE.fullmatch(snapshot_start) is not None
         and snapshot_start == snapshot_end
+        and isinstance(product_start, str)
+        and _SHA256_RE.fullmatch(product_start) is not None
+        and product_start == product_end
         and isinstance(inventory_start, str)
         and _SHA256_RE.fullmatch(inventory_start) is not None
         and inventory_start == inventory_end
@@ -499,7 +562,10 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
         completed_smoke = (
             manifest_status == "completed" or manifest_smoke_passed is True
         )
+        run_stopped_events = smoke_evidence["run_stopped_events"]
         if completed_smoke:
+            if run_stopped_events:
+                issues.append("completed_smoke_has_run_stopped")
             page_events = smoke_evidence["page_events"]
             page_payload = (
                 page_events[0].get("payload")
@@ -526,6 +592,38 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
                 issues.append("completed_smoke_status_mismatch")
         elif manifest_status != "failed":
             issues.append("invalid_failed_smoke_status")
+        else:
+            if len(run_stopped_events) != 1:
+                issues.append(f"run_stopped_count:{len(run_stopped_events)}")
+            else:
+                stopped_payload = run_stopped_events[0].get("payload")
+                stopped_reason = (
+                    stopped_payload.get("reason")
+                    if isinstance(stopped_payload, dict)
+                    else None
+                )
+                if (
+                    not isinstance(stopped_reason, str)
+                    or not stopped_reason.strip()
+                    or summary.get("stop_reason") != stopped_reason
+                ):
+                    issues.append("run_stopped_summary_reason_mismatch")
+                if str(stopped_reason or "").startswith(
+                    "unexpected_live_smoke_error:"
+                ) and _UNEXPECTED_ERROR_RE.fullmatch(stopped_reason) is None:
+                    issues.append("invalid_unexpected_failure_reason")
+            first_failure = smoke_evidence["first_failure"]
+            if (
+                first_failure is not None
+                and summary.get("stop_reason") != first_failure
+            ):
+                issues.append("detail_failure_reason_mismatch")
+            first_listing_failure = smoke_evidence["first_listing_failure"]
+            if (
+                first_listing_failure is not None
+                and summary.get("stop_reason") != first_listing_failure
+            ):
+                issues.append("listing_failure_reason_mismatch")
         hard_stop = smoke_evidence["first_hard_stop"]
         if hard_stop is not None and summary.get("stop_reason") != hard_stop:
             issues.append("hard_stop_reason_mismatch")

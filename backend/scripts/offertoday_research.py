@@ -145,10 +145,12 @@ def main(
             if args.command == "baseline":
                 staged = research_repository.list_staged_snapshots(db)
                 published = research_repository.list_published_snapshots(db)
+                product_data = research_repository.capture_product_data_snapshot(db)
                 recent_runs = research_repository.list_recent_crawl_jobs(db)
                 snapshot = build_baseline_snapshot(
                     listings=staged,
                     jobs=published,
+                    product_data=product_data,
                 )
                 inventory = build_run_start_inventory(
                     listings=staged,

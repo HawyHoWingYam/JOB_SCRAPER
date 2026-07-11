@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from copy import deepcopy
+from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.company import Company
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.job import Job
@@ -17,6 +23,7 @@ from app.sources.offertoday.detail_identity import (
 )
 from app.sources.offertoday.research.contracts import (
     CrawlJobEvidenceSnapshot,
+    ProductDataSnapshot,
     PublishedJobSnapshot,
     StagedListingSnapshot,
 )
@@ -146,6 +153,45 @@ def _copy_json_mapping(value: Any) -> dict[str, Any]:
     return deepcopy(dict(value))
 
 
+def _canonical_database_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (date, datetime, time)):
+        return value.isoformat()
+    if isinstance(value, (Decimal, UUID)):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, Mapping):
+        return {
+            str(key): _canonical_database_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_canonical_database_value(item) for item in value]
+    raise TypeError(f"unsupported product snapshot value: {type(value).__name__}")
+
+
+def _hash_table_rows(rows: list[Any], columns: tuple[Any, ...]) -> str:
+    payload = {
+        "columns": [str(column.name) for column in columns],
+        "rows": [
+            [
+                _canonical_database_value(row._mapping[column])
+                for column in columns
+            ]
+            for row in rows
+        ],
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _to_crawl_job_evidence_snapshot(row: CrawlJob) -> CrawlJobEvidenceSnapshot:
     return CrawlJobEvidenceSnapshot(
         crawl_job_id=str(row.id),
@@ -262,6 +308,46 @@ class OfferTodayResearchRepository:
             )
             for row in rows
         ]
+
+    def capture_product_data_snapshot(
+        self,
+        db: Session,
+    ) -> ProductDataSnapshot:
+        staging_columns = tuple(CrawlJobListing.__table__.columns)
+        job_columns = tuple(Job.__table__.columns)
+        company_columns = tuple(Company.__table__.columns)
+        referenced_company_ids = select(Job.company_id).where(
+            Job.source_site == "offertoday"
+        )
+        with db.no_autoflush:
+            staged_rows = (
+                db.query(*staging_columns)
+                .filter(CrawlJobListing.source_site == "offertoday")
+                .order_by(CrawlJobListing.id.asc())
+                .all()
+            )
+            published_jobs = (
+                db.query(*job_columns)
+                .filter(Job.source_site == "offertoday")
+                .order_by(Job.id.asc())
+                .all()
+            )
+            companies = (
+                db.query(*company_columns)
+                .filter(
+                    or_(
+                        Company.source_site == "offertoday",
+                        Company.id.in_(referenced_company_ids),
+                    )
+                )
+                .order_by(Company.id.asc())
+                .all()
+            )
+        return ProductDataSnapshot.from_table_hashes(
+            staged_rows_hash=_hash_table_rows(staged_rows, staging_columns),
+            published_jobs_hash=_hash_table_rows(published_jobs, job_columns),
+            companies_hash=_hash_table_rows(companies, company_columns),
+        )
 
     def list_research_events(
         self,

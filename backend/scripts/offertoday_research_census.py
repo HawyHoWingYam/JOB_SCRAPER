@@ -128,8 +128,13 @@ def _ordered_events(events: list[Any]) -> list[dict[str, Any]]:
 def _capture_snapshot(repository, db):
     listings = repository.list_staged_snapshots(db)
     jobs = repository.list_published_snapshots(db)
+    product_data = repository.capture_product_data_snapshot(db)
     return (
-        build_baseline_snapshot(listings=listings, jobs=jobs),
+        build_baseline_snapshot(
+            listings=listings,
+            jobs=jobs,
+            product_data=product_data,
+        ),
         build_run_start_inventory(listings=listings, jobs=jobs),
     )
 
@@ -278,6 +283,8 @@ def _build_summary(
         "product_data_unchanged": product_data_unchanged,
         "run_start_snapshot_hash": start_snapshot.data_hash,
         "run_end_snapshot_hash": end_snapshot.data_hash,
+        "run_start_product_data_hash": start_snapshot.product_data_hash,
+        "run_end_product_data_hash": end_snapshot.product_data_hash,
         "run_start_inventory_hash": start_inventory.data_hash,
         "run_end_inventory_hash": end_inventory.data_hash,
     }

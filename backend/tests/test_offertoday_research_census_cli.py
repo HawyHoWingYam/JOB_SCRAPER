@@ -32,7 +32,10 @@ from app.sources.offertoday.research.live_contracts import (
     DetailSmokeTarget,
     LiveSmokeExecution,
 )
-from app.sources.offertoday.research.contracts import StagedListingSnapshot
+from app.sources.offertoday.research.contracts import (
+    ProductDataSnapshot,
+    StagedListingSnapshot,
+)
 from app.sources.offertoday.research.smoke import (
     build_runtime_smoke_condition,
     evaluate_smoke,
@@ -65,7 +68,15 @@ def baseline_artifact(
     listings: list[StagedListingSnapshot] | None = None,
 ) -> Path:
     baseline_listings = listings or []
-    snapshot = build_baseline_snapshot(listings=baseline_listings, jobs=[])
+    snapshot = build_baseline_snapshot(
+        listings=baseline_listings,
+        jobs=[],
+        product_data=ProductDataSnapshot.from_table_hashes(
+            staged_rows_hash="a" * 64,
+            published_jobs_hash="b" * 64,
+            companies_hash="c" * 64,
+        ),
+    )
     inventory = build_run_start_inventory(listings=baseline_listings, jobs=[])
     return export_research_artifact(
         root=root,
@@ -201,14 +212,17 @@ class FakeRepository:
         state,
         *,
         drift: bool = False,
+        product_drift: bool = False,
         end_snapshot_error: BaseException | None = None,
         event_load_errors: list[BaseException] | None = None,
     ) -> None:
         self.state = state
         self.drift = drift
+        self.product_drift = product_drift
         self.end_snapshot_error = end_snapshot_error
         self.event_load_errors = list(event_load_errors or [])
         self.staged_reads = 0
+        self.product_reads = 0
 
     def list_staged_snapshots(self, db):
         self.staged_reads += 1
@@ -224,6 +238,19 @@ class FakeRepository:
     def list_published_snapshots(self, db):
         self.state.log.append("published_snapshot")
         return []
+
+    def capture_product_data_snapshot(self, db):
+        self.product_reads += 1
+        self.state.log.append(f"product_snapshot_{self.product_reads}")
+        return ProductDataSnapshot.from_table_hashes(
+            staged_rows_hash="a" * 64,
+            published_jobs_hash=(
+                "d" * 64
+                if self.product_drift and self.product_reads > 1
+                else "b" * 64
+            ),
+            companies_hash="c" * 64,
+        )
 
     def list_research_events(self, db, crawl_job_id):
         self.state.log.append("load_events")
@@ -306,7 +333,17 @@ class FakeLiveService:
         assert observation_service.crawl_job_id == UUID(RUN_ID)
         observation_service.record_event(
             "research.page_attempt",
-            {"page": 1, "attempt": 1, "classification": "success"},
+            {
+                "search_family": "runtime_smoke",
+                "category_id": 118000,
+                "keyword": "",
+                "endpoint": "search",
+                "rcd_type": 7,
+                "page": 1,
+                "attempt": 1,
+                "classification": "success",
+                "session_mode": "fresh-headless",
+            },
         )
         if isinstance(self.result, BaseException):
             raise self.result
@@ -329,6 +366,7 @@ def invoke_smoke(
     *,
     result: LiveSmokeExecution | BaseException | None = None,
     drift: bool = False,
+    product_drift: bool = False,
     end_snapshot_error: BaseException | None = None,
     event_load_errors: list[BaseException] | None = None,
     artifact_verifier=verify_research_artifact,
@@ -342,6 +380,7 @@ def invoke_smoke(
     repository = FakeRepository(
         state,
         drift=drift,
+        product_drift=product_drift,
         end_snapshot_error=end_snapshot_error,
         event_load_errors=event_load_errors,
     )
@@ -472,9 +511,19 @@ def test_verify_run_is_network_and_database_free(tmp_path) -> None:
     events = [
         {"sequence_no": 1, "event_type": "research.run_started", "payload": {}},
         {
-            "sequence_no": 2,
-            "event_type": "research.page_attempt",
-            "payload": {"page": 1, "attempt": 1, "classification": "success"},
+                "sequence_no": 2,
+                "event_type": "research.page_attempt",
+                "payload": {
+                    "search_family": "runtime_smoke",
+                    "category_id": 118000,
+                    "keyword": "",
+                    "endpoint": "search",
+                    "rcd_type": 7,
+                    "page": 1,
+                    "attempt": 1,
+                    "classification": "success",
+                    "session_mode": "fresh-headless",
+                },
         },
         {
             "sequence_no": 3,
@@ -527,9 +576,11 @@ def test_verify_run_is_network_and_database_free(tmp_path) -> None:
                 "unattempted_count": 0,
                 "stop_reason": None,
                 "product_data_unchanged": True,
-                "run_start_snapshot_hash": "d" * 64,
-                "run_end_snapshot_hash": "d" * 64,
-                "run_start_inventory_hash": "e" * 64,
+                    "run_start_snapshot_hash": "d" * 64,
+                    "run_end_snapshot_hash": "d" * 64,
+                    "run_start_product_data_hash": "f" * 64,
+                    "run_end_product_data_hash": "f" * 64,
+                    "run_start_inventory_hash": "e" * 64,
                 "run_end_inventory_hash": "e" * 64,
             },
         }
@@ -627,6 +678,22 @@ def test_product_data_drift_is_an_evidence_failure(tmp_path) -> None:
     assert exit_code == census_cli.EXIT_EVIDENCE_FAILURE
     assert state.finished[0]["status"] == "failed"
     assert state.finished[0]["summary"]["product_data_unchanged"] is False
+    assert verify_research_artifact(artifact).valid is True
+
+
+def test_product_content_drift_is_an_evidence_failure(tmp_path) -> None:
+    exit_code, state, _session, artifact = invoke_smoke(
+        tmp_path,
+        product_drift=True,
+    )
+
+    assert exit_code == census_cli.EXIT_EVIDENCE_FAILURE
+    assert state.finished[0]["status"] == "failed"
+    assert state.finished[0]["summary"]["product_data_unchanged"] is False
+    assert (
+        state.finished[0]["summary"]["run_start_product_data_hash"]
+        != state.finished[0]["summary"]["run_end_product_data_hash"]
+    )
     assert verify_research_artifact(artifact).valid is True
 
 

@@ -193,6 +193,7 @@ def _live_events(
     detail_attempts: int = 20,
     status: str = "completed",
     smoke_passed: bool = True,
+    failure_reason: str | None = None,
 ) -> list[dict]:
     targets = [
         {
@@ -219,10 +220,25 @@ def _live_events(
                 "sequence_no": len(events) + 1,
                 "event_type": "research.page_attempt",
                 "payload": {
+                    "search_family": "runtime_smoke",
+                    "category_id": 118000,
+                    "keyword": "",
+                    "endpoint": "search",
+                    "rcd_type": 7,
                     "page": 1,
                     "attempt": 1,
                     "classification": "success",
+                    "session_mode": "fresh-headless",
                 },
+            }
+        )
+    if not smoke_passed:
+        failure_reason = failure_reason or "unattempted_without_batch_stop"
+        events.append(
+            {
+                "sequence_no": len(events) + 1,
+                "event_type": "research.run_stopped",
+                "payload": {"reason": failure_reason},
             }
         )
     events.append(
@@ -264,10 +280,12 @@ def _live_events(
                 "success_count": detail_attempts,
                 "terminal_count": 0,
                 "unattempted_count": 20 - detail_attempts,
-                "stop_reason": None if smoke_passed else "fixture_failure",
+                "stop_reason": None if smoke_passed else failure_reason,
                 "product_data_unchanged": True,
                 "run_start_snapshot_hash": "d" * 64,
                 "run_end_snapshot_hash": "d" * 64,
+                "run_start_product_data_hash": "f" * 64,
+                "run_end_product_data_hash": "f" * 64,
                 "run_start_inventory_hash": "e" * 64,
                 "run_end_inventory_hash": "e" * 64,
                 "status": status,
@@ -446,6 +464,50 @@ def test_verify_live_run_rejects_detail_target_order_mismatch(tmp_path) -> None:
     assert "detail_attempt_target_order_mismatch" in result.issues
 
 
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("search_family", "default_it"),
+        ("category_id", 112000),
+        ("keyword", "developer"),
+        ("endpoint", "browse"),
+        ("rcd_type", None),
+        ("session_mode", "reuse-open-browser"),
+    ],
+)
+def test_verify_live_run_binds_exact_runtime_smoke_page_controls(
+    tmp_path,
+    field_name: str,
+    invalid_value,
+) -> None:
+    events = _live_events()
+    page_event = next(
+        event
+        for event in events
+        if event["event_type"] == "research.page_attempt"
+    )
+    page_event["payload"][field_name] = invalid_value
+    artifact = _export_live(tmp_path, events=events)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "invalid_runtime_smoke_page_control" in result.issues
+
+
+def test_verify_live_run_requires_page_attempt_before_cohort_freeze(tmp_path) -> None:
+    events = _live_events()
+    events[1], events[2] = events[2], events[1]
+    for sequence_no, event in enumerate(events, start=1):
+        event["sequence_no"] = sequence_no
+    artifact = _export_live(tmp_path, events=events)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "page_attempt_after_cohort_freeze" in result.issues
+
+
 def test_verify_live_run_accepts_2520_then_continued_cohort(tmp_path) -> None:
     events = _live_events()
     seventh = [
@@ -544,3 +606,138 @@ def test_verify_live_run_rejects_summary_counter_mismatch(tmp_path) -> None:
 
     assert result.valid is False
     assert "success_count_mismatch" in result.issues
+
+
+def test_verify_live_run_rejects_completed_product_content_hash_drift(
+    tmp_path,
+) -> None:
+    events = _live_events()
+    events[-1]["payload"]["run_end_product_data_hash"] = "a" * 64
+    artifact = _export_live(tmp_path, events=events)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "completed_smoke_status_mismatch" in result.issues
+
+
+@pytest.mark.parametrize("classification", ["transient_transport", "invalid_payload"])
+def test_verify_live_run_rejects_unrelated_detail_failure_reason(
+    tmp_path,
+    classification: str,
+) -> None:
+    events = _live_events(
+        status="failed",
+        smoke_passed=False,
+        failure_reason="auth_expired",
+    )
+    first_detail = next(
+        event
+        for event in events
+        if event["event_type"] == "research.detail_attempt"
+    )
+    first_detail["payload"].update(
+        {
+            "classification": classification,
+            "api_code": None,
+            "identity_valid": False,
+            "parsed": False,
+            "has_title": False,
+            "has_company": False,
+            "has_description": False,
+            "stop_batch": False,
+        }
+    )
+    events[-1]["payload"]["success_count"] = 19
+    artifact = _export_live(
+        tmp_path,
+        events=events,
+        status="failed",
+        smoke_passed=False,
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "detail_failure_reason_mismatch" in result.issues
+
+
+def test_verify_live_run_rejects_run_stopped_summary_reason_mismatch(tmp_path) -> None:
+    events = _live_events(
+        detail_attempts=1,
+        status="failed",
+        smoke_passed=False,
+    )
+    events[-1]["payload"]["stop_reason"] = "invalid_payload"
+    artifact = _export_live(
+        tmp_path,
+        events=events,
+        status="failed",
+        smoke_passed=False,
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "run_stopped_summary_reason_mismatch" in result.issues
+
+
+def test_verify_live_run_rejects_unrelated_listing_failure_reason(tmp_path) -> None:
+    events = _live_events(
+        detail_attempts=0,
+        status="failed",
+        smoke_passed=False,
+        failure_reason="invalid_payload",
+    )
+    page_event = next(
+        event
+        for event in events
+        if event["event_type"] == "research.page_attempt"
+    )
+    page_event["payload"].update(
+        {
+            "classification": "auth_expired",
+            "api_code": 1002,
+            "stop_reason": "auth_expired",
+        }
+    )
+    cohort_event = next(
+        event
+        for event in events
+        if event["event_type"] == "research.detail_cohort_frozen"
+    )
+    cohort_event["payload"] = {"count": 0, "targets": []}
+    events[-1]["payload"].update({"frozen_count": 0, "unattempted_count": 0})
+    artifact = _export_live(
+        tmp_path,
+        events=events,
+        status="failed",
+        smoke_passed=False,
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "listing_failure_reason_mismatch" in result.issues
+
+
+def test_verify_live_run_rejects_unsanitized_unexpected_failure_reason(
+    tmp_path,
+) -> None:
+    events = _live_events(
+        detail_attempts=0,
+        status="failed",
+        smoke_passed=False,
+        failure_reason="unexpected_live_smoke_error:TypeError:sensitive",
+    )
+    artifact = _export_live(
+        tmp_path,
+        events=events,
+        status="failed",
+        smoke_passed=False,
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "invalid_unexpected_failure_reason" in result.issues
