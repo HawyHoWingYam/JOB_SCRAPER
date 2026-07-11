@@ -70,6 +70,7 @@ def _export(
     snapshot_hash: str = SNAPSHOT_HASH,
     inventory_hash: str = INVENTORY_HASH,
     count_changes: dict[str, int] | None = None,
+    metadata: dict | None = None,
 ) -> Path:
     if events is None:
         events = [
@@ -82,7 +83,11 @@ def _export(
     return export_research_artifact(
         root=root,
         run_id=run_id,
-        metadata={"experiment": "foundation-baseline"},
+        metadata=(
+            {"experiment": "foundation-baseline", "data_hash": snapshot_hash}
+            if metadata is None
+            else metadata
+        ),
         events=events,
         provenance=_provenance(),
     )
@@ -160,6 +165,28 @@ def test_load_baseline_artifact_rejects_multiple_baseline_events(tmp_path) -> No
         load_baseline_artifact(artifact_dir)
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"experiment": "runtime-smoke", "data_hash": SNAPSHOT_HASH},
+        {"experiment": "foundation-baseline", "data_hash": "f" * 64},
+        {},
+    ],
+)
+def test_load_baseline_artifact_binds_foundation_metadata_to_snapshot(
+    tmp_path,
+    metadata: dict,
+) -> None:
+    artifact_dir = _export(
+        tmp_path,
+        run_id=RUN_ID_1,
+        metadata=metadata,
+    )
+
+    with pytest.raises(ValueError, match="foundation-baseline metadata"):
+        load_baseline_artifact(artifact_dir)
+
+
 def _live_events(
     *,
     listing_attempts: int = 1,
@@ -167,6 +194,18 @@ def _live_events(
     status: str = "completed",
     smoke_passed: bool = True,
 ) -> list[dict]:
+    targets = [
+        {
+            "position": position,
+            "job_id": f"j{position}",
+            "encrypted_job_id": f"e{position}",
+            "job_id_hash": hashlib.sha256(f"j{position}".encode()).hexdigest(),
+            "encrypted_job_id_hash": hashlib.sha256(
+                f"e{position}".encode()
+            ).hexdigest(),
+        }
+        for position in range(1, 21)
+    ]
     events: list[dict] = [
         {
             "sequence_no": 1,
@@ -179,14 +218,18 @@ def _live_events(
             {
                 "sequence_no": len(events) + 1,
                 "event_type": "research.page_attempt",
-                "payload": {"page": 1, "attempt": 1},
+                "payload": {
+                    "page": 1,
+                    "attempt": 1,
+                    "classification": "success",
+                },
             }
         )
     events.append(
         {
             "sequence_no": len(events) + 1,
             "event_type": "research.detail_cohort_frozen",
-            "payload": {"count": 20},
+            "payload": {"count": 20, "targets": targets},
         }
     )
     for position in range(1, detail_attempts + 1):
@@ -195,8 +238,15 @@ def _live_events(
                 "sequence_no": len(events) + 1,
                 "event_type": "research.detail_attempt",
                 "payload": {
-                    "target": {"position": position},
+                    "target": targets[position - 1],
                     "classification": "success",
+                    "api_code": 0,
+                    "identity_valid": True,
+                    "parsed": True,
+                    "has_title": True,
+                    "has_company": True,
+                    "has_description": True,
+                    "stop_batch": False,
                 },
             }
         )
@@ -211,6 +261,15 @@ def _live_events(
                 "listing_attempt_count": listing_attempts,
                 "attempted_count": detail_attempts,
                 "frozen_count": 20,
+                "success_count": detail_attempts,
+                "terminal_count": 0,
+                "unattempted_count": 20 - detail_attempts,
+                "stop_reason": None if smoke_passed else "fixture_failure",
+                "product_data_unchanged": True,
+                "run_start_snapshot_hash": "d" * 64,
+                "run_end_snapshot_hash": "d" * 64,
+                "run_start_inventory_hash": "e" * 64,
+                "run_end_inventory_hash": "e" * 64,
                 "status": status,
             },
         }
@@ -336,3 +395,152 @@ def test_verify_live_run_rejects_inconsistent_evidence(
 
     assert result.valid is False
     assert expected_issue in result.issues
+
+
+@pytest.mark.parametrize(
+    "request_budget",
+    [
+        {"listing": 2, "detail": 20},
+        {"listing": 1, "detail": 19},
+        {"listing": 1, "detail": 20, "extra": 0},
+    ],
+)
+def test_verify_live_run_requires_exact_locked_smoke_budget(
+    tmp_path,
+    request_budget: dict[str, int],
+) -> None:
+    artifact = _export_live(tmp_path, request_budget=request_budget)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "invalid_runtime_smoke_request_budget" in result.issues
+
+
+def test_verify_live_run_rejects_empty_terminal_summary(tmp_path) -> None:
+    events = _live_events()
+    events[-1]["payload"] = {}
+    artifact = _export_live(tmp_path, events=events)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "invalid_terminal_summary_payload" in result.issues
+
+
+def test_verify_live_run_rejects_detail_target_order_mismatch(tmp_path) -> None:
+    events = _live_events()
+    first_detail = next(
+        event
+        for event in events
+        if event["event_type"] == "research.detail_attempt"
+    )
+    first_detail["payload"]["target"] = dict(
+        events[2]["payload"]["targets"][1]
+    )
+    artifact = _export_live(tmp_path, events=events)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "detail_attempt_target_order_mismatch" in result.issues
+
+
+def test_verify_live_run_accepts_2520_then_continued_cohort(tmp_path) -> None:
+    events = _live_events()
+    seventh = [
+        event
+        for event in events
+        if event["event_type"] == "research.detail_attempt"
+    ][6]
+    seventh["payload"].update(
+        {
+            "classification": "terminal_unavailable",
+            "api_code": 2520,
+            "identity_valid": False,
+            "parsed": False,
+            "has_title": False,
+            "has_company": False,
+            "has_description": False,
+            "stop_batch": False,
+        }
+    )
+    events[-1]["payload"].update({"success_count": 19, "terminal_count": 1})
+    artifact = _export_live(tmp_path, events=events)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is True
+    assert result.issues == ()
+
+
+def test_verify_live_run_rejects_terminal_unavailable_without_code_2520(
+    tmp_path,
+) -> None:
+    events = _live_events()
+    detail = next(
+        event
+        for event in events
+        if event["event_type"] == "research.detail_attempt"
+    )
+    detail["payload"].update(
+        {"classification": "terminal_unavailable", "api_code": 0}
+    )
+    events[-1]["payload"].update({"success_count": 19, "terminal_count": 1})
+    artifact = _export_live(tmp_path, events=events)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "terminal_unavailable_code_mismatch" in result.issues
+
+
+def test_verify_live_run_rejects_attempt_after_batch_stop(tmp_path) -> None:
+    events = _live_events(status="failed", smoke_passed=False)
+    first_detail = next(
+        event
+        for event in events
+        if event["event_type"] == "research.detail_attempt"
+    )
+    first_detail["payload"].update(
+        {
+            "classification": "auth_expired",
+            "api_code": 1002,
+            "identity_valid": False,
+            "parsed": False,
+            "has_title": False,
+            "has_company": False,
+            "has_description": False,
+            "stop_batch": True,
+        }
+    )
+    events[-1]["payload"].update(
+        {
+            "success_count": 19,
+            "terminal_count": 0,
+            "unattempted_count": 0,
+            "stop_reason": "auth_expired",
+        }
+    )
+    artifact = _export_live(
+        tmp_path,
+        events=events,
+        status="failed",
+        smoke_passed=False,
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "detail_attempt_after_batch_stop" in result.issues
+
+
+def test_verify_live_run_rejects_summary_counter_mismatch(tmp_path) -> None:
+    events = _live_events()
+    events[-1]["payload"]["success_count"] = 19
+    artifact = _export_live(tmp_path, events=events)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "success_count_mismatch" in result.issues

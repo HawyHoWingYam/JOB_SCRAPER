@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -70,7 +70,10 @@ def baseline_artifact(
     return export_research_artifact(
         root=root,
         run_id=run_id,
-        metadata={"experiment": "foundation-baseline"},
+        metadata={
+            "experiment": "foundation-baseline",
+            "data_hash": snapshot.data_hash,
+        },
         events=[
             {
                 "sequence_no": 1,
@@ -135,13 +138,18 @@ def execution(
     *,
     detail_classification: str = "success",
     target_count: int = 20,
+    listing_stop_reason: str | None = None,
 ) -> LiveSmokeExecution:
     result = listing_result(target_count)
-    targets = tuple(
-        DetailSmokeTarget(index, f"j{index}", f"e{index}")
-        for index in range(1, target_count + 1)
-    )
-    if target_count < 20:
+    if listing_stop_reason is not None:
+        result = replace(result, stop_reason=listing_stop_reason)
+        targets: tuple[DetailSmokeTarget, ...] = ()
+    else:
+        targets = tuple(
+            DetailSmokeTarget(index, f"j{index}", f"e{index}")
+            for index in range(1, target_count + 1)
+        )
+    if target_count < 20 or listing_stop_reason is not None:
         observations: tuple[DetailSmokeObservation, ...] = ()
     else:
         attempted_targets = targets if detail_classification == "success" else targets[:1]
@@ -188,14 +196,25 @@ class FakeSession:
 
 
 class FakeRepository:
-    def __init__(self, state, *, drift: bool = False) -> None:
+    def __init__(
+        self,
+        state,
+        *,
+        drift: bool = False,
+        end_snapshot_error: BaseException | None = None,
+        event_load_errors: list[BaseException] | None = None,
+    ) -> None:
         self.state = state
         self.drift = drift
+        self.end_snapshot_error = end_snapshot_error
+        self.event_load_errors = list(event_load_errors or [])
         self.staged_reads = 0
 
     def list_staged_snapshots(self, db):
         self.staged_reads += 1
         self.state.log.append(f"staged_snapshot_{self.staged_reads}")
+        if self.end_snapshot_error is not None and self.staged_reads > 1:
+            raise self.end_snapshot_error
         if self.drift and self.staged_reads > 1:
             from app.sources.offertoday.research.contracts import StagedListingSnapshot
 
@@ -208,6 +227,8 @@ class FakeRepository:
 
     def list_research_events(self, db, crawl_job_id):
         self.state.log.append("load_events")
+        if self.event_load_errors:
+            raise self.event_load_errors.pop(0)
         assert str(crawl_job_id) == RUN_ID
         return list(self.state.events)
 
@@ -218,6 +239,7 @@ class State:
         self.events: list[SimpleNamespace] = []
         self.finished: list[dict] = []
         self.runtime_kwargs: list[dict] = []
+        self.finish_errors: list[BaseException] = []
 
     def append_event(self, event_type: str, payload: dict) -> None:
         self.events.append(
@@ -250,6 +272,8 @@ class FakeObservationService:
 
     def finish_run(self, **kwargs) -> None:
         self.state.log.append("finish_run")
+        if self.state.finish_errors:
+            raise self.state.finish_errors.pop(0)
         self.state.finished.append(kwargs)
         self.state.append_event("research.run_summary", kwargs["summary"])
 
@@ -281,13 +305,19 @@ class FakeLiveService:
         self.state.log.append("network")
         assert observation_service.crawl_job_id == UUID(RUN_ID)
         observation_service.record_event(
-            "research.page_attempt", {"page": 1, "attempt": 1}
+            "research.page_attempt",
+            {"page": 1, "attempt": 1, "classification": "success"},
         )
         if isinstance(self.result, BaseException):
             raise self.result
         observation_service.record_event(
             "research.detail_cohort_frozen",
-            {"count": len(self.result.frozen_targets)},
+            {
+                "count": len(self.result.frozen_targets),
+                "targets": [
+                    target.to_payload() for target in self.result.frozen_targets
+                ],
+            },
         )
         for item in self.result.detail_observations:
             observation_service.record_detail_attempt(item.to_payload())
@@ -299,14 +329,22 @@ def invoke_smoke(
     *,
     result: LiveSmokeExecution | BaseException | None = None,
     drift: bool = False,
+    end_snapshot_error: BaseException | None = None,
+    event_load_errors: list[BaseException] | None = None,
     artifact_verifier=verify_research_artifact,
+    state: State | None = None,
 ):
-    state = State()
+    state = state or State()
     baselines = tmp_path / "baselines"
     first = baseline_artifact(baselines, BASELINE_RUN_1)
     second = baseline_artifact(baselines, BASELINE_RUN_2)
     session = FakeSession(state.log)
-    repository = FakeRepository(state, drift=drift)
+    repository = FakeRepository(
+        state,
+        drift=drift,
+        end_snapshot_error=end_snapshot_error,
+        event_load_errors=event_load_errors,
+    )
 
     def exporter(**kwargs):
         state.log.append("artifact_export")
@@ -433,18 +471,42 @@ def test_current_database_drift_from_matching_baselines_stops_before_browser(
 def test_verify_run_is_network_and_database_free(tmp_path) -> None:
     events = [
         {"sequence_no": 1, "event_type": "research.run_started", "payload": {}},
-        {"sequence_no": 2, "event_type": "research.page_attempt", "payload": {}},
+        {
+            "sequence_no": 2,
+            "event_type": "research.page_attempt",
+            "payload": {"page": 1, "attempt": 1, "classification": "success"},
+        },
         {
             "sequence_no": 3,
             "event_type": "research.detail_cohort_frozen",
-            "payload": {"count": 20},
+            "payload": {
+                "count": 20,
+                "targets": [
+                    DetailSmokeTarget(position, f"j{position}", f"e{position}").to_payload()
+                    for position in range(1, 21)
+                ],
+            },
         },
     ]
     events.extend(
         {
             "sequence_no": position + 3,
             "event_type": "research.detail_attempt",
-            "payload": {"target": {"position": position}},
+            "payload": {
+                "target": DetailSmokeTarget(
+                    position,
+                    f"j{position}",
+                    f"e{position}",
+                ).to_payload(),
+                "classification": "success",
+                "api_code": 0,
+                "identity_valid": True,
+                "parsed": True,
+                "has_title": True,
+                "has_company": True,
+                "has_description": True,
+                "stop_batch": False,
+            },
         }
         for position in range(1, 21)
     )
@@ -460,6 +522,15 @@ def test_verify_run_is_network_and_database_free(tmp_path) -> None:
                 "listing_attempt_count": 1,
                 "attempted_count": 20,
                 "frozen_count": 20,
+                "success_count": 20,
+                "terminal_count": 0,
+                "unattempted_count": 0,
+                "stop_reason": None,
+                "product_data_unchanged": True,
+                "run_start_snapshot_hash": "d" * 64,
+                "run_end_snapshot_hash": "d" * 64,
+                "run_start_inventory_hash": "e" * 64,
+                "run_end_inventory_hash": "e" * 64,
             },
         }
     )
@@ -532,6 +603,24 @@ def test_smoke_maps_incomplete_and_hard_stop_exit_codes(
     assert verify_research_artifact(artifact).valid is True
 
 
+@pytest.mark.parametrize(
+    "listing_stop_reason",
+    ["auth_expired", "waf_challenge", "ip_blocked", "id_mismatch"],
+)
+def test_smoke_maps_listing_hard_stops_to_exit_four(
+    tmp_path,
+    listing_stop_reason: str,
+) -> None:
+    result = execution(listing_stop_reason=listing_stop_reason)
+    assert result.decision.stop_reason == f"listing_{listing_stop_reason}"
+
+    exit_code, state, _session, artifact = invoke_smoke(tmp_path, result=result)
+
+    assert exit_code == census_cli.EXIT_HARD_STOP
+    assert state.finished[0]["status"] == "failed"
+    assert verify_research_artifact(artifact).valid is True
+
+
 def test_product_data_drift_is_an_evidence_failure(tmp_path) -> None:
     exit_code, state, _session, artifact = invoke_smoke(tmp_path, drift=True)
 
@@ -567,6 +656,64 @@ def test_unexpected_base_exception_exports_partial_evidence_then_reraises_same_o
     assert exc_info.value is error
     artifact = tmp_path / "runs" / RUN_ID
     assert verify_research_artifact(artifact).valid is True
+
+
+def test_run_end_snapshot_exception_finalizes_type_only_partial_evidence(
+    tmp_path,
+) -> None:
+    error = RuntimeError("sensitive database details")
+    state = State()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        invoke_smoke(
+            tmp_path,
+            end_snapshot_error=error,
+            state=state,
+        )
+
+    assert exc_info.value is error
+    assert state.log.index("browser_close") < state.log.index("finish_run")
+    assert state.finished[-1]["status"] == "failed"
+    assert (
+        state.finished[-1]["error_message"]
+        == "unexpected_live_smoke_error:RuntimeError"
+    )
+    assert "sensitive database details" not in str(state.finished[-1])
+    artifact = tmp_path / "runs" / RUN_ID
+    verification = census_cli.verify_live_research_run(artifact)
+    assert verification.valid is True, verification.issues
+
+
+@pytest.mark.parametrize("failure_point", ["finish", "event_load"])
+def test_post_browser_finalization_failure_retries_type_only_failed_summary(
+    tmp_path,
+    failure_point: str,
+) -> None:
+    error = RuntimeError(f"sensitive {failure_point} details")
+    state = State()
+    if failure_point == "finish":
+        state.finish_errors.append(error)
+        event_load_errors = None
+    else:
+        event_load_errors = [error]
+
+    with pytest.raises(RuntimeError) as exc_info:
+        invoke_smoke(
+            tmp_path,
+            event_load_errors=event_load_errors,
+            state=state,
+        )
+
+    assert exc_info.value is error
+    assert state.finished[-1]["status"] == "failed"
+    assert (
+        state.finished[-1]["error_message"]
+        == "unexpected_live_smoke_error:RuntimeError"
+    )
+    assert f"sensitive {failure_point} details" not in str(state.finished[-1])
+    artifact = tmp_path / "runs" / RUN_ID
+    verification = census_cli.verify_live_research_run(artifact)
+    assert verification.valid is True, verification.issues
 
 
 def test_help_dispatches_and_offline_cli_does_not_import_live_browser_modules() -> None:

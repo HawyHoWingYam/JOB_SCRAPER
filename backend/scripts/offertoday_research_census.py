@@ -66,6 +66,10 @@ _HARD_STOP_REASONS = {
     "waf_challenge",
     "ip_blocked",
     "id_mismatch",
+    "listing_auth_expired",
+    "listing_waf_challenge",
+    "listing_ip_blocked",
+    "listing_id_mismatch",
 }
 
 
@@ -283,6 +287,113 @@ def _unexpected_error_message(error: BaseException) -> str:
     return f"unexpected_live_smoke_error:{type(error).__name__}"
 
 
+def _summary_event(
+    events_before_summary: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "sequence_no": len(events_before_summary) + 1,
+        "event_type": "research.run_summary",
+        "payload": listing_observation_to_payload(summary),
+        "emitted_by": "offertoday-research",
+        "created_at": utc_now().isoformat(),
+    }
+
+
+def _best_effort_finalize_unexpected_failure(
+    *,
+    db,
+    repository,
+    observation_service,
+    run_id: str,
+    error: BaseException,
+    start_snapshot,
+    start_inventory,
+    end_snapshot,
+    end_inventory,
+    fallback_events: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    error_message = _unexpected_error_message(error)
+    product_data_evidence_complete = end_snapshot is not None and end_inventory is not None
+    if not product_data_evidence_complete:
+        try:
+            end_snapshot, end_inventory = _capture_snapshot(repository, db)
+            product_data_evidence_complete = True
+        except BaseException as snapshot_error:
+            error.add_note(
+                "run-end evidence capture also failed: "
+                f"{type(snapshot_error).__name__}"
+            )
+            end_snapshot = start_snapshot
+            end_inventory = start_inventory
+
+    try:
+        current_events = _ordered_events(
+            repository.list_research_events(db, UUID(run_id))
+        )
+    except BaseException as event_error:
+        error.add_note(
+            "partial event loading also failed: " f"{type(event_error).__name__}"
+        )
+        current_events = list(fallback_events)
+
+    has_terminal_summary = any(
+        event.get("event_type") == "research.run_summary"
+        for event in current_events
+    )
+    if not has_terminal_summary:
+        try:
+            observation_service.record_event(
+                "research.run_stopped",
+                {"reason": error_message},
+            )
+            current_events = _ordered_events(
+                repository.list_research_events(db, UUID(run_id))
+            )
+        except BaseException as stop_error:
+            error.add_note(
+                "failure stop event persistence also failed: "
+                f"{type(stop_error).__name__}"
+            )
+
+    summary = _build_summary(
+        status="failed",
+        start_snapshot=start_snapshot,
+        start_inventory=start_inventory,
+        end_snapshot=end_snapshot,
+        end_inventory=end_inventory,
+        execution=None,
+        events_before_summary=current_events,
+        failure_reason=error_message,
+    )
+    if not product_data_evidence_complete:
+        summary["product_data_unchanged"] = False
+
+    if not has_terminal_summary:
+        try:
+            observation_service.finish_run(
+                status="failed",
+                summary=summary,
+                error_message=error_message,
+            )
+            current_events = [*current_events, _summary_event(current_events, summary)]
+        except BaseException as finish_error:
+            error.add_note(
+                "type-only failure finalization also failed: "
+                f"{type(finish_error).__name__}"
+            )
+            try:
+                current_events = _ordered_events(
+                    repository.list_research_events(db, UUID(run_id))
+                )
+            except BaseException as reload_error:
+                error.add_note(
+                    "failure event reload also failed: "
+                    f"{type(reload_error).__name__}"
+                )
+    return summary, current_events
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -329,6 +440,7 @@ def main(
     end_inventory = None
     execution = None
     events: list[dict[str, Any]] = []
+    events_before_summary: list[dict[str, Any]] = []
     terminal_status = "failed"
     summary: dict[str, Any] = {}
     exit_code = EXIT_EVIDENCE_FAILURE
@@ -436,21 +548,42 @@ def main(
                 else None
             ),
         )
-        events = _ordered_events(
-            research_repository.list_research_events(db, UUID(run_id))
-        )
+        events = [*events_before_summary, _summary_event(events_before_summary, summary)]
     except BaseException as exc:
         if observation_service is None and isinstance(
             exc,
             (OSError, SQLAlchemyError, ValueError),
         ):
             pre_run_error = exc
-        elif original_error is None:
-            original_error = exc
         else:
-            original_error.add_note(
-                f"live smoke finalization also failed: {type(exc).__name__}"
-            )
+            if original_error is None:
+                original_error = exc
+            if (
+                observation_service is not None
+                and start_snapshot is not None
+                and start_inventory is not None
+                and db is not None
+            ):
+                try:
+                    summary, events = _best_effort_finalize_unexpected_failure(
+                        db=db,
+                        repository=research_repository,
+                        observation_service=observation_service,
+                        run_id=run_id,
+                        error=original_error,
+                        start_snapshot=start_snapshot,
+                        start_inventory=start_inventory,
+                        end_snapshot=end_snapshot,
+                        end_inventory=end_inventory,
+                        fallback_events=events_before_summary,
+                    )
+                    terminal_status = "failed"
+                    exit_code = EXIT_EVIDENCE_FAILURE
+                except BaseException as finalization_exc:
+                    original_error.add_note(
+                        "best-effort failure finalization also failed: "
+                        f"{type(finalization_exc).__name__}"
+                    )
     finally:
         if db is not None:
             try:
