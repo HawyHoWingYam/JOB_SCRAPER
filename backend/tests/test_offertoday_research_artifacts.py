@@ -1223,9 +1223,12 @@ def test_provenance_hashes_default_sources_compose_and_redacts_runtime(tmp_path)
         "backend/app/scraper/offertoday_browser_detail_scraper.py": "DETAIL = 1\n",
         "backend/app/services/offertoday_detail_pipeline.py": "PIPELINE = 1\n",
         "backend/app/services/crawl_job_runtime.py": "CRAWL = 1\n",
+        "backend/app/services/offertoday_research_live_service.py": "LIVE = 1\n",
+        "backend/app/services/offertoday_research_staging_service.py": "STAGING = 1\n",
         "backend/scripts/offertoday_standalone_crawl.py": "STANDALONE = 1\n",
         "backend/scripts/offertoday_coverage_audit.py": "AUDIT = 1\n",
         "backend/scripts/offertoday_research.py": "RESEARCH = 1\n",
+        "backend/scripts/offertoday_research_census.py": "CENSUS = 1\n",
         "docker-compose.yml": "services: {}\n",
         "docker-compose.dev.yml": "services: {}\n",
     }
@@ -1254,9 +1257,12 @@ def test_provenance_hashes_default_sources_compose_and_redacts_runtime(tmp_path)
         "backend/app/scraper/offertoday_browser_detail_scraper.py",
         "backend/app/services/offertoday_detail_pipeline.py",
         "backend/app/services/crawl_job_runtime.py",
+        "backend/app/services/offertoday_research_live_service.py",
+        "backend/app/services/offertoday_research_staging_service.py",
         "backend/scripts/offertoday_standalone_crawl.py",
         "backend/scripts/offertoday_coverage_audit.py",
         "backend/scripts/offertoday_research.py",
+        "backend/scripts/offertoday_research_census.py",
     )
     assert provenance.source_hashes == {
         path: file_sha256(repo / path) for path in sorted(expected_source_paths)

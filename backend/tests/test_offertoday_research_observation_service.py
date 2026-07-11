@@ -131,6 +131,76 @@ def test_research_metadata_request_payload_is_exact() -> None:
     }
 
 
+def test_plan2_metadata_adds_parent_and_exact_request_budget() -> None:
+    metadata = ResearchMetadata(
+        run_id="22222222-2222-2222-2222-222222222222",
+        experiment="runtime-smoke",
+        variant="search-rcdtype-7-fresh-headless",
+        planner_version="def456",
+        plan=2,
+        parent_artifact_hash="a" * 64,
+        request_budget={"listing": 1, "detail": 20},
+    )
+
+    assert metadata.to_request_payload()["research"] == {
+        "run_id": metadata.run_id,
+        "experiment": "runtime-smoke",
+        "variant": "search-rcdtype-7-fresh-headless",
+        "planner_version": "def456",
+        "plan": 2,
+        "parent_artifact_hash": "a" * 64,
+        "request_budget": {"detail": 20, "listing": 1},
+    }
+
+
+@pytest.mark.parametrize("plan", [True, 0, -1, 1.5])
+def test_research_metadata_rejects_invalid_plan(plan) -> None:
+    with pytest.raises(ValueError, match="positive exact integer"):
+        ResearchMetadata(
+            run_id=str(RUN_ID),
+            experiment="runtime-smoke",
+            variant="fixture",
+            planner_version="test-sha",
+            plan=plan,
+        )
+
+
+@pytest.mark.parametrize("parent_hash", ["A" * 64, "a" * 63, "not-a-hash"])
+def test_research_metadata_rejects_invalid_parent_artifact_hash(
+    parent_hash: str,
+) -> None:
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
+        ResearchMetadata(
+            run_id=str(RUN_ID),
+            experiment="runtime-smoke",
+            variant="fixture",
+            planner_version="test-sha",
+            parent_artifact_hash=parent_hash,
+        )
+
+
+@pytest.mark.parametrize(
+    "request_budget",
+    [
+        {"": 1},
+        {"   ": 1},
+        {1: 1},
+        {"listing": True},
+        {"listing": -1},
+        {"listing": 1.5},
+    ],
+)
+def test_research_metadata_rejects_invalid_request_budget(request_budget) -> None:
+    with pytest.raises(ValueError, match="request budget"):
+        ResearchMetadata(
+            run_id=str(RUN_ID),
+            experiment="runtime-smoke",
+            variant="fixture",
+            planner_version="test-sha",
+            request_budget=request_budget,
+        )
+
+
 def test_run_start_inventory_converts_id_tuples_to_lists() -> None:
     assert run_start_inventory().to_dict() == {
         "published_job_ids": ["j-published-1", "j-published-2"],

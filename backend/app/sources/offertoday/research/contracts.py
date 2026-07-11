@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 
@@ -10,16 +11,46 @@ class ResearchMetadata:
     experiment: str
     variant: str
     planner_version: str
+    plan: int | None = None
+    parent_artifact_hash: str | None = None
+    request_budget: dict[str, int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.plan is not None and (type(self.plan) is not int or self.plan < 1):
+            raise ValueError("plan must be a positive exact integer")
+        if self.parent_artifact_hash is not None and not re.fullmatch(
+            r"[0-9a-f]{64}",
+            self.parent_artifact_hash,
+        ):
+            raise ValueError("parent_artifact_hash must be lowercase SHA-256")
+        if self.request_budget is not None:
+            for key, value in self.request_budget.items():
+                if not isinstance(key, str) or not key.strip():
+                    raise ValueError(
+                        "request budget keys must be nonblank strings"
+                    )
+                if type(value) is not int or value < 0:
+                    raise ValueError(
+                        "request budget values must be non-negative exact integers"
+                    )
 
     def to_request_payload(self) -> dict[str, Any]:
-        return {
-            "research": {
-                "run_id": self.run_id,
-                "experiment": self.experiment,
-                "variant": self.variant,
-                "planner_version": self.planner_version,
-            }
+        research: dict[str, Any] = {
+            "run_id": self.run_id,
+            "experiment": self.experiment,
+            "variant": self.variant,
+            "planner_version": self.planner_version,
         }
+        if self.plan is not None:
+            research["plan"] = int(self.plan)
+        if self.parent_artifact_hash is not None:
+            research["parent_artifact_hash"] = self.parent_artifact_hash
+        if self.request_budget is not None:
+            research["request_budget"] = {
+                str(key): int(value)
+                for key, value in sorted(self.request_budget.items())
+            }
+        return {"research": research}
 
 
 @dataclass(frozen=True, slots=True)

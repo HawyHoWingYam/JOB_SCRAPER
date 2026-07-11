@@ -70,9 +70,12 @@ DEFAULT_RELEVANT_SOURCE_PATHS = (
     "backend/app/scraper/offertoday_browser_detail_scraper.py",
     "backend/app/services/offertoday_detail_pipeline.py",
     "backend/app/services/crawl_job_runtime.py",
+    "backend/app/services/offertoday_research_live_service.py",
+    "backend/app/services/offertoday_research_staging_service.py",
     "backend/scripts/offertoday_standalone_crawl.py",
     "backend/scripts/offertoday_coverage_audit.py",
     "backend/scripts/offertoday_research.py",
+    "backend/scripts/offertoday_research_census.py",
 )
 
 _UNTRACKED_ROOTS = (
