@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
@@ -17,6 +18,7 @@ from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.job import Job
 from app.sources.offertoday.detail_identity import (
+    OfferTodayEncryptedJobIdSource,
     OfferTodayIdentityError,
     read_offertoday_identity_evidence,
     resolve_offertoday_detail_identity,
@@ -29,7 +31,7 @@ from app.sources.offertoday.research.contracts import (
 )
 
 
-def extract_snapshot_encrypted_job_id(
+def extract_snapshot_observed_encrypted_job_id(
     listing_payload: Mapping[str, Any] | Any,
 ) -> str | None:
     if not isinstance(listing_payload, Mapping):
@@ -37,7 +39,7 @@ def extract_snapshot_encrypted_job_id(
     try:
         return read_offertoday_identity_evidence(
             listing_payload,
-            field_names=("encrypted_job_id", "encryptJobId"),
+            field_names=("encryptJobId",),
             raw_field_name="encryptJobId",
             evidence_name="encryptJobId",
             required=False,
@@ -46,41 +48,54 @@ def extract_snapshot_encrypted_job_id(
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class _SnapshotIdentityProjection:
+    encrypted_job_id: str | None
+    encrypted_job_id_source: OfferTodayEncryptedJobIdSource | None
+    observed_encrypted_job_id: str | None
+    identity_error: str | None
+    identity_error_classification: str | None
+
+
+def _project_snapshot_identity(
+    *,
+    source_job_id: Any,
+    listing_payload: Mapping[str, Any] | Any,
+) -> _SnapshotIdentityProjection:
+    observed_encrypted_job_id = extract_snapshot_observed_encrypted_job_id(
+        listing_payload
+    )
+    try:
+        identity = resolve_offertoday_detail_identity(
+            source_job_id=source_job_id,
+            listing_payload=listing_payload,
+        )
+    except OfferTodayIdentityError as exc:
+        return _SnapshotIdentityProjection(
+            encrypted_job_id=None,
+            encrypted_job_id_source=None,
+            observed_encrypted_job_id=observed_encrypted_job_id,
+            identity_error=str(exc),
+            identity_error_classification=exc.classification,
+        )
+    return _SnapshotIdentityProjection(
+        encrypted_job_id=identity.encrypted_job_id,
+        encrypted_job_id_source=identity.encrypted_job_id_source,
+        observed_encrypted_job_id=observed_encrypted_job_id,
+        identity_error=None,
+        identity_error_classification=None,
+    )
+
+
 def extract_snapshot_identity_error(
     *,
     source_job_id: Any,
     listing_payload: Mapping[str, Any] | Any,
 ) -> str | None:
-    try:
-        resolve_offertoday_detail_identity(
-            source_job_id=source_job_id,
-            listing_payload=listing_payload,
-        )
-    except OfferTodayIdentityError as exc:
-        return str(exc)
-    return None
-
-
-def _identity_alias_values(
-    payload: Mapping[str, Any],
-    *,
-    field_names: tuple[str, ...],
-    raw_field_name: str,
-) -> tuple[set[str], bool]:
-    values = [payload.get(field_name) for field_name in field_names]
-    raw_data = payload.get("raw_data")
-    if isinstance(raw_data, Mapping):
-        values.append(raw_data.get(raw_field_name))
-    valid_values: set[str] = set()
-    invalid_value = False
-    for value in values:
-        if value is None or (isinstance(value, str) and not value.strip()):
-            continue
-        if not isinstance(value, str):
-            invalid_value = True
-            continue
-        valid_values.add(value.strip())
-    return valid_values, invalid_value
+    return _project_snapshot_identity(
+        source_job_id=source_job_id,
+        listing_payload=listing_payload,
+    ).identity_error
 
 
 def classify_snapshot_identity_error(
@@ -88,38 +103,10 @@ def classify_snapshot_identity_error(
     source_job_id: Any,
     listing_payload: Mapping[str, Any] | Any,
 ) -> str | None:
-    if not isinstance(source_job_id, str) or not source_job_id.strip():
-        return "invalid_source_job_id"
-    canonical_source_job_id = source_job_id.strip()
-    if not isinstance(listing_payload, Mapping):
-        return "missing_listing_payload"
-
-    job_ids, invalid_job_id = _identity_alias_values(
-        listing_payload,
-        field_names=("job_id", "jobId"),
-        raw_field_name="jobId",
-    )
-    if invalid_job_id:
-        return "invalid_job_id_evidence"
-    if not job_ids:
-        return "missing_job_id"
-    if len(job_ids) > 1:
-        return "job_id_alias_conflict"
-    if next(iter(job_ids)) != canonical_source_job_id:
-        return "source_job_id_mismatch"
-
-    encrypted_job_ids, invalid_encrypted_job_id = _identity_alias_values(
-        listing_payload,
-        field_names=("encrypted_job_id", "encryptJobId"),
-        raw_field_name="encryptJobId",
-    )
-    if invalid_encrypted_job_id:
-        return "invalid_encrypted_job_id_evidence"
-    if not encrypted_job_ids:
-        return "missing_encrypted_job_id"
-    if len(encrypted_job_ids) > 1:
-        return "encrypted_job_id_alias_conflict"
-    return None
+    return _project_snapshot_identity(
+        source_job_id=source_job_id,
+        listing_payload=listing_payload,
+    ).identity_error_classification
 
 
 def classify_persisted_detail_error(row: Any) -> str | None:
@@ -211,6 +198,39 @@ def _detail_payload_is_object_expression(dialect_name: str):
     )
 
 
+def _to_staged_listing_snapshot(row: Any) -> StagedListingSnapshot:
+    identity = _project_snapshot_identity(
+        source_job_id=row.source_job_id,
+        listing_payload=row.listing_payload,
+    )
+    return StagedListingSnapshot(
+        row_id=str(row.id),
+        source_job_id=str(row.source_job_id),
+        detail_status=str(row.detail_status),
+        published_job_id=(
+            str(row.published_job_id) if row.published_job_id else None
+        ),
+        crawl_job_id=str(row.crawl_job_id),
+        detail_attempts=int(row.detail_attempts or 0),
+        detail_started_at=_isoformat(row.detail_started_at),
+        updated_at=_isoformat(row.updated_at),
+        encrypted_job_id=identity.encrypted_job_id,
+        encrypted_job_id_source=identity.encrypted_job_id_source,
+        observed_encrypted_job_id=identity.observed_encrypted_job_id,
+        identity_error=identity.identity_error,
+        identity_error_classification=(
+            identity.identity_error_classification
+        ),
+        detail_error_classification=classify_persisted_detail_error(row),
+        last_detail_crawl_job_id=(
+            str(row.last_detail_crawl_job_id)
+            if row.last_detail_crawl_job_id
+            else None
+        ),
+        has_detail_payload=bool(row.has_detail_payload),
+    )
+
+
 class OfferTodayResearchRepository:
     """Read-only OfferToday evidence queries for offline research reports."""
 
@@ -243,41 +263,7 @@ class OfferTodayResearchRepository:
                 )
                 .all()
             )
-        return [
-            StagedListingSnapshot(
-                row_id=str(row.id),
-                source_job_id=str(row.source_job_id),
-                detail_status=str(row.detail_status),
-                published_job_id=(
-                    str(row.published_job_id) if row.published_job_id else None
-                ),
-                crawl_job_id=str(row.crawl_job_id),
-                detail_attempts=int(row.detail_attempts or 0),
-                detail_started_at=_isoformat(row.detail_started_at),
-                updated_at=_isoformat(row.updated_at),
-                encrypted_job_id=extract_snapshot_encrypted_job_id(
-                    row.listing_payload
-                ),
-                identity_error=extract_snapshot_identity_error(
-                    source_job_id=row.source_job_id,
-                    listing_payload=row.listing_payload,
-                ),
-                identity_error_classification=classify_snapshot_identity_error(
-                    source_job_id=row.source_job_id,
-                    listing_payload=row.listing_payload,
-                ),
-                detail_error_classification=classify_persisted_detail_error(
-                    row
-                ),
-                last_detail_crawl_job_id=(
-                    str(row.last_detail_crawl_job_id)
-                    if row.last_detail_crawl_job_id
-                    else None
-                ),
-                has_detail_payload=bool(row.has_detail_payload),
-            )
-            for row in rows
-        ]
+        return [_to_staged_listing_snapshot(row) for row in rows]
 
     def list_published_snapshots(
         self,

@@ -31,6 +31,10 @@ BASELINE_COUNTS = {
     "distinct_staged_unpublished_ids": 40,
     "pending_rows": 25,
     "duplicate_staging_rows": 20,
+    "missing_encrypted_job_id_rows": 10,
+    "observed_encrypted_job_id_rows": 70,
+    "job_id_fallback_rows": 10,
+    "unusable_identity_rows": 0,
 }
 
 
@@ -153,6 +157,22 @@ def test_matching_baselines_reject_same_run_twice(tmp_path) -> None:
     ("second_options", "message"),
     [
         ({"count_changes": {"staged_rows": 101}}, "count evidence"),
+        (
+            {"count_changes": {"missing_encrypted_job_id_rows": 11}},
+            "count evidence",
+        ),
+        (
+            {"count_changes": {"observed_encrypted_job_id_rows": 69}},
+            "count evidence",
+        ),
+        (
+            {"count_changes": {"job_id_fallback_rows": 11}},
+            "count evidence",
+        ),
+        (
+            {"count_changes": {"unusable_identity_rows": 1}},
+            "count evidence",
+        ),
         ({"snapshot_hash": "c" * 64}, "snapshot hashes"),
         ({"inventory_hash": "d" * 64}, "inventory hashes"),
     ],

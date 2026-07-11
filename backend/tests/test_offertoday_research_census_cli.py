@@ -632,6 +632,63 @@ def test_current_database_drift_from_matching_baselines_stops_before_browser(
     assert "browser_open" not in state.log
 
 
+def test_job_id_fallback_rows_drift_stops_before_browser_or_live_dependencies(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+    baseline_snapshot = build_baseline_snapshot(
+        listings=[],
+        jobs=[],
+        product_data=ProductDataSnapshot.from_table_hashes(
+            staged_rows_hash="a" * 64,
+            published_jobs_hash="b" * 64,
+            companies_hash="c" * 64,
+        ),
+    )
+    inventory = build_run_start_inventory(listings=[], jobs=[])
+    drifted_snapshot = replace(
+        baseline_snapshot,
+        job_id_fallback_rows=1,
+    )
+    monkeypatch.setattr(
+        census_cli,
+        "_capture_snapshot",
+        lambda _repository, _db: (drifted_snapshot, inventory),
+    )
+    state = State()
+    session = FakeSession(state.log)
+
+    result = census_cli.main(
+        [
+            "smoke",
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: session,
+        repository=FakeRepository(state),
+        runtime_factory=lambda **kwargs: FakeRuntime(state, **kwargs),
+        service_factory=lambda: FakeLiveService(state, execution()),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+
+    assert state.runtime_kwargs == []
+    assert "browser_open" not in state.log
+    assert "network" not in state.log
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+
+
 def test_verify_run_is_network_and_database_free(tmp_path) -> None:
     events = [
         {"sequence_no": 1, "event_type": "research.run_started", "payload": {}},

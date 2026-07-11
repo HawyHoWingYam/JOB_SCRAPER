@@ -6,6 +6,10 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.sources.offertoday.detail_identity import (
+    OfferTodayEncryptedJobIdSource,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ResearchMetadata:
@@ -80,6 +84,8 @@ class StagedListingSnapshot:
     detail_started_at: str | None = None
     updated_at: str | None = None
     encrypted_job_id: str | None = None
+    encrypted_job_id_source: OfferTodayEncryptedJobIdSource | None = None
+    observed_encrypted_job_id: str | None = None
     identity_error: str | None = None
     identity_error_classification: str | None = None
     detail_error_classification: str | None = None
@@ -149,6 +155,9 @@ class BaselineSnapshot:
     published_partial_jobs: int
     duplicate_staging_rows: int
     missing_encrypted_job_id_rows: int
+    observed_encrypted_job_id_rows: int
+    job_id_fallback_rows: int
+    unusable_identity_rows: int
     identity_mapping_conflict_ids: tuple[str, ...]
     identity_evidence_conflict_ids: tuple[str, ...]
     identity_error_classifications: dict[str, int]

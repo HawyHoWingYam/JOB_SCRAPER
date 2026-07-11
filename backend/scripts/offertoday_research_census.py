@@ -150,6 +150,10 @@ def _snapshot_counts(snapshot) -> tuple[tuple[str, int], ...]:
             "distinct_staged_unpublished_ids",
             "pending_rows",
             "duplicate_staging_rows",
+            "missing_encrypted_job_id_rows",
+            "observed_encrypted_job_id_rows",
+            "job_id_fallback_rows",
+            "unusable_identity_rows",
         )
     )
 

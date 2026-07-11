@@ -18,7 +18,6 @@ from app.models.job import Job
 from app.repositories.offertoday_research_repository import (
     OfferTodayResearchRepository,
     classify_persisted_detail_error,
-    extract_snapshot_encrypted_job_id,
     extract_snapshot_identity_error,
 )
 from app.sources.offertoday.research.baseline import (
@@ -32,6 +31,9 @@ from app.sources.offertoday.research.contracts import (
 )
 
 
+_UNSET = object()
+
+
 def _listing(
     row_id: str,
     source_job_id: str,
@@ -39,14 +41,63 @@ def _listing(
     published_job_id: str | None,
     crawl_job_id: str,
     **changes,
-) -> StagedListingSnapshot:
-    return StagedListingSnapshot(
+) -> SimpleNamespace:
+    identity_error_classification = changes.get(
+        "identity_error_classification"
+    )
+    encrypted_job_id = changes.pop("encrypted_job_id", _UNSET)
+    encrypted_job_id_source = changes.pop(
+        "encrypted_job_id_source",
+        _UNSET,
+    )
+    observed_encrypted_job_id = changes.pop(
+        "observed_encrypted_job_id",
+        _UNSET,
+    )
+    if encrypted_job_id is _UNSET:
+        encrypted_job_id = (
+            None if identity_error_classification else source_job_id.strip()
+        )
+    if encrypted_job_id_source is _UNSET:
+        canonical_source_job_id = source_job_id.strip()
+        canonical_route_id = (
+            encrypted_job_id.strip()
+            if isinstance(encrypted_job_id, str)
+            else None
+        )
+        if identity_error_classification or not canonical_route_id:
+            encrypted_job_id_source = None
+        elif canonical_route_id == canonical_source_job_id:
+            encrypted_job_id_source = "jobId_fallback"
+        else:
+            encrypted_job_id_source = "encryptJobId"
+    if observed_encrypted_job_id is _UNSET:
+        observed_encrypted_job_id = (
+            encrypted_job_id
+            if encrypted_job_id_source == "encryptJobId"
+            else None
+        )
+    values = {
+        "detail_attempts": 0,
+        "detail_started_at": None,
+        "updated_at": None,
+        "identity_error": None,
+        "identity_error_classification": None,
+        "detail_error_classification": None,
+        "last_detail_crawl_job_id": None,
+        "has_detail_payload": False,
+        **changes,
+    }
+    return SimpleNamespace(
         row_id=row_id,
         source_job_id=source_job_id,
         detail_status=detail_status,
         published_job_id=published_job_id,
         crawl_job_id=crawl_job_id,
-        **changes,
+        encrypted_job_id=encrypted_job_id,
+        encrypted_job_id_source=encrypted_job_id_source,
+        observed_encrypted_job_id=observed_encrypted_job_id,
+        **values,
     )
 
 
@@ -343,6 +394,118 @@ def test_baseline_counts_whitespace_encrypted_id_as_missing_in_canonical_hash():
     assert snapshot.data_hash != changed.data_hash
 
 
+def test_baseline_separates_job_id_fallback_from_observed_encrypted_identity():
+    snapshot = build_baseline_snapshot(
+        listings=[_listing("row-1", "j-1", "pending", None, "run-1")],
+        jobs=[],
+    )
+
+    assert snapshot.missing_encrypted_job_id_rows == 1
+    assert snapshot.observed_encrypted_job_id_rows == 0
+    assert snapshot.job_id_fallback_rows == 1
+    assert snapshot.unusable_identity_rows == 0
+    assert snapshot.identity_mapping_conflict_ids == ()
+    assert snapshot.identity_evidence_conflict_ids == ()
+    assert snapshot.identity_error_classifications == {}
+
+
+def test_baseline_promotes_explicit_identity_over_job_id_fallback_without_conflict():
+    snapshot = build_baseline_snapshot(
+        listings=[
+            _listing("fallback", "j-1", "pending", None, "run-1"),
+            _listing(
+                "explicit",
+                "j-1",
+                "pending",
+                None,
+                "run-2",
+                encrypted_job_id="enc-1",
+            ),
+        ],
+        jobs=[],
+    )
+
+    assert snapshot.missing_encrypted_job_id_rows == 1
+    assert snapshot.observed_encrypted_job_id_rows == 1
+    assert snapshot.job_id_fallback_rows == 1
+    assert snapshot.unusable_identity_rows == 0
+    assert snapshot.identity_mapping_conflict_ids == ()
+
+
+def test_baseline_rejects_two_explicit_routes_for_one_job_id():
+    snapshot = build_baseline_snapshot(
+        listings=[
+            _listing(
+                "first",
+                "j-1",
+                "pending",
+                None,
+                "run-1",
+                encrypted_job_id="enc-a",
+            ),
+            _listing(
+                "second",
+                "j-1",
+                "pending",
+                None,
+                "run-2",
+                encrypted_job_id="enc-b",
+            ),
+        ],
+        jobs=[],
+    )
+
+    assert snapshot.identity_mapping_conflict_ids == ("j-1",)
+
+
+def test_baseline_rejects_authoritative_route_shared_by_two_job_ids():
+    snapshot = build_baseline_snapshot(
+        listings=[
+            _listing(
+                "first",
+                "j-1",
+                "pending",
+                None,
+                "run-1",
+                encrypted_job_id="enc-shared",
+            ),
+            _listing(
+                "second",
+                "j-2",
+                "pending",
+                None,
+                "run-1",
+                encrypted_job_id="enc-shared",
+            ),
+        ],
+        jobs=[],
+    )
+
+    assert snapshot.identity_mapping_conflict_ids == ("j-1", "j-2")
+
+
+def test_baseline_treats_declared_source_conflict_as_evidence_conflict():
+    snapshot = build_baseline_snapshot(
+        listings=[
+            _listing(
+                "row-1",
+                "j-1",
+                "pending",
+                None,
+                "run-1",
+                identity_error_classification=(
+                    "encrypted_job_id_source_conflict"
+                ),
+            )
+        ],
+        jobs=[],
+    )
+
+    assert snapshot.identity_evidence_conflict_ids == ("j-1",)
+    assert snapshot.identity_mapping_conflict_ids == ("j-1",)
+    assert snapshot.unusable_identity_rows == 1
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
@@ -355,14 +518,18 @@ def test_baseline_counts_whitespace_encrypted_id_as_missing_in_canonical_hash():
         ),
         ({"raw_data": {"jobId": "j-2", "encryptJobId": "enc-raw"}}, "enc-raw"),
         ({"jobId": "j-3", "encryptJobId": "enc-top"}, "enc-top"),
+        ({"job_id": "j-4", "encrypted_job_id": "enc-normalized"}, None),
         ({"job_id": "j-4", "raw_data": {"jobId": "j-4"}}, None),
     ],
 )
-def test_extract_snapshot_encrypted_id_preserves_evidence_without_job_id_substitution(
+def test_extract_snapshot_observed_encrypted_id_uses_only_upstream_evidence(
     payload,
     expected,
 ):
-    assert extract_snapshot_encrypted_job_id(payload) == expected
+    assert (
+        research_repository.extract_snapshot_observed_encrypted_job_id(payload)
+        == expected
+    )
 
 
 def test_snapshot_identity_error_is_separate_from_persisted_error_classification():
@@ -381,22 +548,27 @@ def test_snapshot_identity_error_is_separate_from_persisted_error_classification
     assert extract_snapshot_identity_error(
         source_job_id="j-1", listing_payload=valid
     ) is None
-    assert "Missing" in extract_snapshot_identity_error(
+    assert extract_snapshot_identity_error(
         source_job_id="j-1", listing_payload=missing_encrypted
-    )
+    ) is None
     assert "Conflicting encryptJobId" in extract_snapshot_identity_error(
         source_job_id="j-1", listing_payload=mismatched
     )
-    assert extract_snapshot_encrypted_job_id(mismatched) is None
+    assert (
+        research_repository.extract_snapshot_observed_encrypted_job_id(
+            mismatched
+        )
+        == "enc-b"
+    )
 
     persist_failure = SimpleNamespace(
         detail_status="failed",
         detail_error_message="persist_failure:RuntimeError",
     )
     assert classify_persisted_detail_error(persist_failure) == "persist_failure"
-    assert "persist_failure" not in extract_snapshot_identity_error(
+    assert extract_snapshot_identity_error(
         source_job_id="j-1", listing_payload=missing_encrypted
-    )
+    ) is None
 
 
 def test_structured_identity_errors_distinguish_alias_conflict_from_missing():
@@ -420,7 +592,7 @@ def test_structured_identity_errors_distinguish_alias_conflict_from_missing():
     )
 
     assert conflict_classification == "encrypted_job_id_alias_conflict"
-    assert missing_classification == "missing_encrypted_job_id"
+    assert missing_classification is None
 
     snapshot = build_baseline_snapshot(
         listings=[
@@ -448,7 +620,6 @@ def test_structured_identity_errors_distinguish_alias_conflict_from_missing():
     assert snapshot.identity_mapping_conflict_ids == ("j-1",)
     assert snapshot.identity_error_classifications == {
         "encrypted_job_id_alias_conflict": 1,
-        "missing_encrypted_job_id": 1,
     }
 
 
@@ -584,6 +755,8 @@ def test_repository_maps_complete_staging_evidence_with_stable_read_only_query()
     assert snapshot.detail_started_at == created_at.isoformat()
     assert snapshot.updated_at == updated_at.isoformat()
     assert snapshot.encrypted_job_id == "enc-1"
+    assert snapshot.encrypted_job_id_source == "encryptJobId"
+    assert snapshot.observed_encrypted_job_id == "enc-1"
     assert snapshot.identity_error is None
     assert snapshot.detail_error_classification == "persist_failure"
     assert snapshot.last_detail_crawl_job_id == str(row.last_detail_crawl_job_id)
@@ -609,6 +782,100 @@ def test_repository_maps_complete_staging_evidence_with_stable_read_only_query()
         "crawl_job_listings.id ASC",
     ]
     assert db.write_calls == []
+
+
+def test_repository_snapshot_resolves_job_only_payload_as_usable_fallback():
+    row = SimpleNamespace(
+        id=uuid4(),
+        source_job_id="j-1",
+        detail_status="pending",
+        published_job_id=None,
+        crawl_job_id=uuid4(),
+        detail_attempts=0,
+        detail_started_at=None,
+        updated_at=None,
+        listing_payload={
+            "job_id": "j-1",
+            "raw_data": {"jobId": "j-1"},
+        },
+        detail_error_message=None,
+        last_detail_crawl_job_id=None,
+        has_detail_payload=False,
+    )
+    db = _ReadOnlySession([row])
+
+    snapshot = OfferTodayResearchRepository().list_staged_snapshots(db)[0]
+    baseline = build_baseline_snapshot(listings=[snapshot], jobs=[])
+
+    assert snapshot.encrypted_job_id == "j-1"
+    assert snapshot.encrypted_job_id_source == "jobId_fallback"
+    assert snapshot.observed_encrypted_job_id is None
+    assert snapshot.identity_error is None
+    assert snapshot.identity_error_classification is None
+    assert baseline.missing_encrypted_job_id_rows == 1
+    assert baseline.observed_encrypted_job_id_rows == 0
+    assert baseline.job_id_fallback_rows == 1
+    assert baseline.unusable_identity_rows == 0
+    assert baseline.identity_mapping_conflict_ids == ()
+    assert db.write_calls == []
+
+
+def test_snapshot_projection_retains_observation_when_normalized_alias_conflicts():
+    projection = research_repository._project_snapshot_identity(
+        source_job_id="j-1",
+        listing_payload={
+            "job_id": "j-1",
+            "encrypted_job_id": "enc-normalized",
+            "raw_data": {"jobId": "j-1", "encryptJobId": "enc-raw"},
+        },
+    )
+
+    assert projection.encrypted_job_id is None
+    assert projection.encrypted_job_id_source is None
+    assert projection.observed_encrypted_job_id == "enc-raw"
+    assert projection.identity_error is not None
+    assert (
+        projection.identity_error_classification
+        == "encrypted_job_id_alias_conflict"
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"job_id": "j-1", "raw_data": {"jobId": "j-1"}},
+        {
+            "job_id": "j-1",
+            "encrypted_job_id": "enc-normalized",
+            "raw_data": {"jobId": "j-1", "encryptJobId": "enc-raw"},
+        },
+    ],
+    ids=["success", "identity-error"],
+)
+def test_snapshot_projection_calls_shared_resolver_exactly_once(
+    monkeypatch,
+    payload,
+):
+    calls = 0
+    original = research_repository.resolve_offertoday_detail_identity
+
+    def counted_resolver(**kwargs):
+        nonlocal calls
+        calls += 1
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        research_repository,
+        "resolve_offertoday_detail_identity",
+        counted_resolver,
+    )
+
+    research_repository._project_snapshot_identity(
+        source_job_id="j-1",
+        listing_payload=payload,
+    )
+
+    assert calls == 1
 
 
 def test_staged_snapshot_query_projects_json_object_flag_without_detail_body():

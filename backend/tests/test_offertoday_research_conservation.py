@@ -22,12 +22,18 @@ from app.sources.offertoday.research.contracts import (
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "offertoday_research"
+_UNSET = object()
 
 
-def _response_identity_hash(job_id: str, encrypted_job_id: str) -> str:
+def _response_identity_hash(
+    job_id: str,
+    encrypted_job_id: str,
+    encrypted_job_id_source: str,
+) -> str:
     canonical = json.dumps(
         {
             "encrypted_job_id": encrypted_job_id,
+            "encrypted_job_id_source": encrypted_job_id_source,
             "job_id": job_id,
         },
         ensure_ascii=False,
@@ -45,15 +51,51 @@ def _staged(
     crawl_job_id: str,
     detail_attempts: int = 0,
     **changes,
-) -> StagedListingSnapshot:
-    return StagedListingSnapshot(
+) -> SimpleNamespace:
+    encrypted_job_id = changes.pop("encrypted_job_id", _UNSET)
+    encrypted_job_id_source = changes.pop(
+        "encrypted_job_id_source",
+        _UNSET,
+    )
+    observed_encrypted_job_id = changes.pop(
+        "observed_encrypted_job_id",
+        _UNSET,
+    )
+    if encrypted_job_id is _UNSET:
+        encrypted_job_id = source_job_id
+    if encrypted_job_id_source is _UNSET:
+        encrypted_job_id_source = (
+            "jobId_fallback"
+            if encrypted_job_id == source_job_id
+            else "encryptJobId"
+        )
+    if observed_encrypted_job_id is _UNSET:
+        observed_encrypted_job_id = (
+            encrypted_job_id
+            if encrypted_job_id_source == "encryptJobId"
+            else None
+        )
+    values = {
+        "detail_started_at": None,
+        "updated_at": None,
+        "identity_error": None,
+        "identity_error_classification": None,
+        "detail_error_classification": None,
+        "last_detail_crawl_job_id": None,
+        "has_detail_payload": False,
+        **changes,
+    }
+    return SimpleNamespace(
         row_id=row_id,
         source_job_id=source_job_id,
         detail_status=detail_status,
         published_job_id=published_job_id,
         crawl_job_id=crawl_job_id,
         detail_attempts=detail_attempts,
-        **changes,
+        encrypted_job_id=encrypted_job_id,
+        encrypted_job_id_source=encrypted_job_id_source,
+        observed_encrypted_job_id=observed_encrypted_job_id,
+        **values,
     )
 
 
@@ -854,6 +896,610 @@ def test_replay_pair_consistency_ignores_rows_with_missing_identity_evidence():
     assert report.is_valid is True
 
 
+def test_replay_identity_pair_promotes_within_page_fallback_to_explicit_authority():
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": 1,
+                "classification": "success",
+                "row_count": 2,
+                "missing_job_id_count": 0,
+                "rows": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "j-1",
+                        "encrypted_job_id_source": "jobId_fallback",
+                        "observed_encrypted_job_id": None,
+                    },
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-1",
+                        "encrypted_job_id_source": "encryptJobId",
+                        "observed_encrypted_job_id": "enc-1",
+                    },
+                ],
+                "id_pairs": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-1",
+                        "encrypted_job_id_source": "encryptJobId",
+                    }
+                ],
+            },
+        }
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=("j-1",)),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.identity_pair_mismatch_page_keys == ()
+    assert report.listing.unresolved_gaps == 0
+    assert report.is_valid is True
+
+
+@pytest.mark.parametrize(
+    "declared_pair",
+    [
+        {
+            "job_id": "j-1",
+            "encrypted_job_id": "j-1",
+            "encrypted_job_id_source": "jobId_fallback",
+        },
+        {
+            "job_id": "j-1",
+            "encrypted_job_id": "j-1",
+            "encrypted_job_id_source": "encryptJobId",
+        },
+    ],
+    ids=["declared-source-downgrade", "declared-route-mismatch"],
+)
+def test_replay_identity_pair_rejects_tampered_declared_source_or_route(
+    declared_pair,
+):
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": 1,
+                "classification": "success",
+                "row_count": 2,
+                "missing_job_id_count": 0,
+                "rows": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "j-1",
+                        "encrypted_job_id_source": "jobId_fallback",
+                        "observed_encrypted_job_id": None,
+                    },
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-1",
+                        "encrypted_job_id_source": "encryptJobId",
+                        "observed_encrypted_job_id": "enc-1",
+                    },
+                ],
+                "id_pairs": [declared_pair],
+            },
+        }
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=("j-1",)),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.identity_pair_mismatch_page_keys == (
+        '{"condition_id":"condition-1","page":1}',
+    )
+    assert report.is_valid is False
+
+
+def test_replay_identity_pair_no_downgrade_keeps_prior_explicit_authority():
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": 1,
+                "classification": "success",
+                "row_count": 1,
+                "missing_job_id_count": 0,
+                "rows": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-1",
+                        "encrypted_job_id_source": "encryptJobId",
+                    }
+                ],
+                "id_pairs": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-1",
+                        "encrypted_job_id_source": "encryptJobId",
+                    }
+                ],
+            },
+        },
+        {
+            "sequence_no": 2,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": 2,
+                "classification": "success",
+                "row_count": 1,
+                "missing_job_id_count": 0,
+                "rows": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "j-1",
+                        "encrypted_job_id_source": "jobId_fallback",
+                    }
+                ],
+                "id_pairs": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-1",
+                        "encrypted_job_id_source": "encryptJobId",
+                    }
+                ],
+            },
+        },
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=("j-1",)),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.identity_pair_mismatch_page_keys == ()
+    assert report.listing.unresolved_gaps == 0
+    assert report.is_valid is True
+
+
+def test_replay_identity_pair_no_downgrade_rejects_declared_fallback():
+    events = [
+        {
+            "sequence_no": sequence_no,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": sequence_no,
+                "classification": "success",
+                "row_count": 1,
+                "missing_job_id_count": 0,
+                "rows": [row],
+                "id_pairs": [pair],
+            },
+        }
+        for sequence_no, row, pair in (
+            (
+                1,
+                {
+                    "job_id": "j-1",
+                    "encrypted_job_id": "enc-1",
+                    "encrypted_job_id_source": "encryptJobId",
+                },
+                {
+                    "job_id": "j-1",
+                    "encrypted_job_id": "enc-1",
+                    "encrypted_job_id_source": "encryptJobId",
+                },
+            ),
+            (
+                2,
+                {
+                    "job_id": "j-1",
+                    "encrypted_job_id": "j-1",
+                    "encrypted_job_id_source": "jobId_fallback",
+                },
+                {
+                    "job_id": "j-1",
+                    "encrypted_job_id": "j-1",
+                    "encrypted_job_id_source": "jobId_fallback",
+                },
+            ),
+        )
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=("j-1",)),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.identity_pair_mismatch_page_keys == (
+        '{"condition_id":"condition-1","page":2}',
+    )
+    assert report.is_valid is False
+
+
+def test_replay_identity_pair_dirty_page_does_not_commit_peer_authority():
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": 1,
+                "classification": "identity_issue",
+                "row_count": 2,
+                "missing_job_id_count": 0,
+                "rows": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-a",
+                        "encrypted_job_id_source": "encryptJobId",
+                    },
+                    {
+                        "job_id": "j-bad",
+                        "encrypted_job_id": None,
+                    },
+                ],
+                "id_pairs": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-a",
+                        "encrypted_job_id_source": "encryptJobId",
+                    }
+                ],
+                "identity_issues": [
+                    {
+                        "job_id": "j-bad",
+                        "reason": "missing_encrypted_job_id",
+                    }
+                ],
+            },
+        },
+        {
+            "sequence_no": 2,
+            "event_type": "research.page_attempt",
+            "payload": {
+                "condition_id": "condition-1",
+                "page": 2,
+                "classification": "success",
+                "row_count": 1,
+                "missing_job_id_count": 0,
+                "rows": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-b",
+                        "encrypted_job_id_source": "encryptJobId",
+                    }
+                ],
+                "id_pairs": [
+                    {
+                        "job_id": "j-1",
+                        "encrypted_job_id": "enc-b",
+                        "encrypted_job_id_source": "encryptJobId",
+                    }
+                ],
+            },
+        },
+    ]
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=("j-1",)),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.identity_pair_mismatch_page_keys == ()
+    assert report.listing.unresolved_gaps == 0
+    assert report.listing.distinct_ids.right_parts == {
+        "already_published": 1,
+        "preexisting_staged_unpublished": 0,
+        "newly_staged": 0,
+        "deferred_identity_conflict": 1,
+    }
+    assert report.is_valid is True
+
+
+def _attempt_owned_persisted_scenario(
+    *,
+    local_route: str,
+    local_source: str,
+    attempt_route: str,
+    attempt_source: str,
+    source_job_id: str = "j-1",
+) -> tuple[list[SimpleNamespace], list[PublishedJobSnapshot], list[dict]]:
+    listings = [
+        _staged(
+            "row-1",
+            source_job_id,
+            "completed",
+            "job-1",
+            "listing-run",
+            1,
+            encrypted_job_id=local_route,
+            encrypted_job_id_source=local_source,
+            observed_encrypted_job_id=(
+                local_route if local_source == "encryptJobId" else None
+            ),
+            last_detail_crawl_job_id="detail-run",
+            has_detail_payload=True,
+        )
+    ]
+    jobs = [
+        PublishedJobSnapshot("job-1", source_job_id, True, True, True)
+    ]
+    events = [
+        {
+            "sequence_no": 1,
+            "event_type": "crawl.detail_cohort_frozen",
+            "payload": {
+                "fetch_cohort_source_job_ids": [source_job_id],
+                "reconciled_source_job_ids": [],
+            },
+        },
+        {
+            "sequence_no": 2,
+            "event_type": "crawl.detail_attempt",
+            "payload": {
+                "detail_crawl_job_id": "detail-run",
+                "source_job_id": source_job_id,
+                "classification": "success",
+                "encrypted_job_id": attempt_route,
+                "encrypted_job_id_source": attempt_source,
+            },
+        },
+        {
+            "sequence_no": 3,
+            "event_type": "crawl.detail_persisted",
+            "payload": {
+                "detail_crawl_job_id": "detail-run",
+                "source_job_id": source_job_id,
+                "listing_ids": ["row-1"],
+                "published_job_id": "job-1",
+                "encrypted_job_id": attempt_route,
+                "encrypted_job_id_source": attempt_source,
+                "response_identity_hash": _response_identity_hash(
+                    source_job_id,
+                    attempt_route,
+                    attempt_source,
+                ),
+            },
+        },
+    ]
+    return listings, jobs, events
+
+
+@pytest.mark.parametrize(
+    ("event_index", "source_job_id", "invalid_source_job_id"),
+    [
+        (1, "j-1", " j-1 "),
+        (1, "1", 1),
+        (2, "j-1", " j-1 "),
+        (2, "1", 1),
+    ],
+    ids=[
+        "attempt-whitespace",
+        "attempt-non-string",
+        "persisted-whitespace",
+        "persisted-non-string",
+    ],
+)
+def test_attempt_and_persisted_evidence_require_exact_source_job_id(
+    event_index,
+    source_job_id,
+    invalid_source_job_id,
+):
+    listings, jobs, events = _attempt_owned_persisted_scenario(
+        local_route="enc-1",
+        local_source="encryptJobId",
+        attempt_route="enc-1",
+        attempt_source="encryptJobId",
+        source_job_id=source_job_id,
+    )
+    events[event_index]["payload"]["source_job_id"] = invalid_source_job_id
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(crawl_job_id="detail-run"),
+        events=events,
+        listings=listings,
+        jobs=jobs,
+    )
+
+    assert report.detail is not None
+    assert report.detail.persisted_evidence_mismatch_ids == (source_job_id,)
+    assert report.is_valid is False
+
+
+def test_attempt_owned_persisted_evidence_accepts_explicit_attempt_over_local_fallback():
+    listings, jobs, events = _attempt_owned_persisted_scenario(
+        local_route="j-1",
+        local_source="jobId_fallback",
+        attempt_route="enc-1",
+        attempt_source="encryptJobId",
+    )
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(crawl_job_id="detail-run"),
+        events=events,
+        listings=listings,
+        jobs=jobs,
+    )
+
+    assert report.detail is not None
+    assert report.detail.outcomes["completed"] == 1
+    assert report.detail.persisted_evidence_mismatch_ids == ()
+    assert report.is_valid is True
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("encrypted_job_id", "enc-other"),
+        ("encrypted_job_id_source", "jobId_fallback"),
+    ],
+)
+def test_attempt_owned_persisted_evidence_rejects_tampered_attempt_identity(
+    field_name,
+    value,
+):
+    listings, jobs, events = _attempt_owned_persisted_scenario(
+        local_route="j-1",
+        local_source="jobId_fallback",
+        attempt_route="enc-1",
+        attempt_source="encryptJobId",
+    )
+    events[1]["payload"][field_name] = value
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(crawl_job_id="detail-run"),
+        events=events,
+        listings=listings,
+        jobs=jobs,
+    )
+
+    assert report.detail is not None
+    assert report.detail.persisted_evidence_mismatch_ids == ("j-1",)
+    assert report.is_valid is False
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("encrypted_job_id", "enc-other"),
+        ("encrypted_job_id_source", "jobId_fallback"),
+    ],
+)
+def test_persisted_evidence_rejects_tampered_route_or_source(
+    field_name,
+    value,
+):
+    listings, jobs, events = _attempt_owned_persisted_scenario(
+        local_route="j-1",
+        local_source="jobId_fallback",
+        attempt_route="enc-1",
+        attempt_source="encryptJobId",
+    )
+    events[2]["payload"][field_name] = value
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(crawl_job_id="detail-run"),
+        events=events,
+        listings=listings,
+        jobs=jobs,
+    )
+
+    assert report.detail is not None
+    assert report.detail.persisted_evidence_mismatch_ids == ("j-1",)
+    assert report.is_valid is False
+
+
+def test_attempt_owned_persisted_evidence_accepts_fallback_triple_and_hash():
+    listings, jobs, events = _attempt_owned_persisted_scenario(
+        local_route="j-1",
+        local_source="jobId_fallback",
+        attempt_route="j-1",
+        attempt_source="jobId_fallback",
+    )
+
+    assert events[2]["payload"]["response_identity_hash"] == (
+        "7d289db2bd3fbadc01634d078903ac1a6dc0cbd5847be97085c0cc24b47bcd94"
+    )
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(crawl_job_id="detail-run"),
+        events=events,
+        listings=listings,
+        jobs=jobs,
+    )
+
+    assert report.detail is not None
+    assert report.detail.persisted_evidence_mismatch_ids == ()
+    assert report.is_valid is True
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("classification", "retryable_failed"),
+        ("detail_crawl_job_id", "other-run"),
+        ("encrypted_job_id", ""),
+        ("encrypted_job_id_source", "normalized_alias"),
+    ],
+)
+def test_attempt_owned_persisted_evidence_requires_unique_matching_success(
+    field_name,
+    value,
+):
+    listings, jobs, events = _attempt_owned_persisted_scenario(
+        local_route="enc-1",
+        local_source="encryptJobId",
+        attempt_route="enc-1",
+        attempt_source="encryptJobId",
+    )
+    events[1]["payload"][field_name] = value
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(crawl_job_id="detail-run"),
+        events=events,
+        listings=listings,
+        jobs=jobs,
+    )
+
+    assert report.detail is not None
+    assert report.detail.persisted_evidence_mismatch_ids == ("j-1",)
+    assert report.is_valid is False
+
+
+def test_attempt_owned_persisted_evidence_rejects_multiple_success_triples():
+    listings, jobs, events = _attempt_owned_persisted_scenario(
+        local_route="enc-1",
+        local_source="encryptJobId",
+        attempt_route="enc-1",
+        attempt_source="encryptJobId",
+    )
+    events.insert(
+        2,
+        {
+            "sequence_no": 3,
+            "event_type": "crawl.detail_attempt",
+            "payload": {
+                "detail_crawl_job_id": "detail-run",
+                "source_job_id": "j-1",
+                "classification": "success",
+                "encrypted_job_id": "enc-other",
+                "encrypted_job_id_source": "encryptJobId",
+            },
+        },
+    )
+    events[-1]["sequence_no"] = 4
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(crawl_job_id="detail-run"),
+        events=events,
+        listings=listings,
+        jobs=jobs,
+    )
+
+    assert report.detail is not None
+    assert report.detail.persisted_evidence_mismatch_ids == ("j-1",)
+    assert report.is_valid is False
+
+
 def test_replay_keeps_reconciled_ids_outside_frozen_fetch_conservation():
     listings = [
         _staged(
@@ -883,17 +1529,31 @@ def test_replay_keeps_reconciled_ids_outside_frozen_fetch_conservation():
                 "reconciled_source_job_ids": ["j-reconciled"],
             },
         },
+        {
+            "sequence_no": 2,
+            "event_type": "crawl.detail_attempt",
+            "payload": {
+                "detail_crawl_job_id": "detail-run",
+                "source_job_id": "j-fetch",
+                "classification": "success",
+                "encrypted_job_id": "enc-fetch",
+                "encrypted_job_id_source": "encryptJobId",
+            },
+        },
         SimpleNamespace(
-            sequence_no=2,
+            sequence_no=3,
             event_type="crawl.detail_persisted",
             payload={
                 "detail_crawl_job_id": "detail-run",
                 "source_job_id": "j-fetch",
                 "listing_ids": ["row-fetch"],
                 "published_job_id": "job-fetch",
+                "encrypted_job_id": "enc-fetch",
+                "encrypted_job_id_source": "encryptJobId",
                 "response_identity_hash": _response_identity_hash(
                     "j-fetch",
                     "enc-fetch",
+                    "encryptJobId",
                 ),
             },
         ),

@@ -6,6 +6,11 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Any
 
+from app.sources.offertoday.detail_identity import (
+    OfferTodayDetailIdentity,
+    OfferTodayIdentityError,
+    build_offertoday_identity_authority_index,
+)
 from app.sources.offertoday.research.contracts import (
     BaselineSnapshot,
     ProductDataSnapshot,
@@ -18,6 +23,7 @@ from app.sources.offertoday.research.contracts import (
 _IDENTITY_EVIDENCE_CONFLICT_CLASSIFICATIONS = frozenset(
     {
         "encrypted_job_id_alias_conflict",
+        "encrypted_job_id_source_conflict",
         "job_id_alias_conflict",
         "source_job_id_mismatch",
     }
@@ -73,19 +79,31 @@ def build_baseline_snapshot(
         if _canonical_nonblank(row.source_job_id) in published_ids
     ]
 
-    encrypted_ids_by_job_id: dict[str, set[str]] = {}
-    job_ids_by_encrypted_id: dict[str, set[str]] = {}
+    resolved_identities: list[OfferTodayDetailIdentity] = []
     for row in listings:
         source_job_id = _canonical_nonblank(row.source_job_id)
         encrypted_job_id = _canonical_nonblank(row.encrypted_job_id)
-        if source_job_id is None or encrypted_job_id is None:
+        encrypted_job_id_source = row.encrypted_job_id_source
+        if (
+            source_job_id is None
+            or encrypted_job_id is None
+            or encrypted_job_id_source
+            not in ("encryptJobId", "jobId_fallback")
+        ):
             continue
-        encrypted_ids_by_job_id.setdefault(source_job_id, set()).add(
-            encrypted_job_id
-        )
-        job_ids_by_encrypted_id.setdefault(encrypted_job_id, set()).add(
-            source_job_id
-        )
+        try:
+            resolved_identities.append(
+                OfferTodayDetailIdentity(
+                    job_id=source_job_id,
+                    encrypted_job_id=encrypted_job_id,
+                    encrypted_job_id_source=encrypted_job_id_source,
+                )
+            )
+        except OfferTodayIdentityError:
+            continue
+    identity_authority = build_offertoday_identity_authority_index(
+        resolved_identities
+    )
 
     status_counts = Counter(row.detail_status for row in listings)
     error_counts = Counter(
@@ -105,16 +123,8 @@ def build_baseline_snapshot(
         in _IDENTITY_EVIDENCE_CONFLICT_CLASSIFICATIONS
         and (source_job_id := _canonical_nonblank(row.source_job_id)) is not None
     }
-    identity_mapping_conflict_ids = {
-        job_id
-        for job_id, encrypted_ids in encrypted_ids_by_job_id.items()
-        if len(encrypted_ids) > 1
-    }
-    identity_mapping_conflict_ids.update(
-        job_id
-        for job_ids in job_ids_by_encrypted_id.values()
-        if len(job_ids) > 1
-        for job_id in job_ids
+    identity_mapping_conflict_ids = set(
+        identity_authority.conflict_reason_by_job
     )
     identity_mapping_conflict_ids.update(identity_evidence_conflict_ids)
 
@@ -140,8 +150,24 @@ def build_baseline_snapshot(
         "published_partial_jobs": sum(not job.is_complete for job in jobs),
         "duplicate_staging_rows": len(valid_staged_ids) - len(staged_ids),
         "missing_encrypted_job_id_rows": sum(
-            _canonical_nonblank(row.encrypted_job_id) is None
+            _canonical_nonblank(row.observed_encrypted_job_id) is None
+            and row.identity_error_classification
+            not in {
+                "invalid_encrypted_job_id_evidence",
+                "encrypted_job_id_alias_conflict",
+            }
             for row in listings
+        ),
+        "observed_encrypted_job_id_rows": sum(
+            _canonical_nonblank(row.observed_encrypted_job_id) is not None
+            for row in listings
+        ),
+        "job_id_fallback_rows": sum(
+            row.encrypted_job_id_source == "jobId_fallback"
+            for row in listings
+        ),
+        "unusable_identity_rows": sum(
+            row.identity_error_classification is not None for row in listings
         ),
         "identity_mapping_conflict_ids": tuple(
             sorted(identity_mapping_conflict_ids)

@@ -7,6 +7,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from app.sources.offertoday.detail_identity import (
+    OfferTodayDetailIdentity,
+    OfferTodayEncryptedJobIdSource,
+    OfferTodayIdentityError,
+    build_offertoday_identity_authority_index,
+    resolve_offertoday_listing_identity,
+)
 from app.sources.offertoday.research.contracts import (
     PublishedJobSnapshot,
     StagedListingSnapshot,
@@ -434,55 +441,132 @@ def _page_row_evidence(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     return _mapping_items(payload.get("id_pairs"))
 
 
-def _ordered_valid_identity_pairs(
+def _resolve_identity_record(
+    record: Mapping[str, Any],
+) -> OfferTodayDetailIdentity | None:
+    payload = dict(record)
+    source_job_id = payload.get("source_job_id")
+    if "job_id" not in payload and "jobId" not in payload:
+        payload["job_id"] = source_job_id
+    try:
+        return resolve_offertoday_listing_identity(
+            payload,
+            source_job_id=source_job_id,
+        )
+    except OfferTodayIdentityError:
+        return None
+
+
+def _ordered_authoritative_identity_triples(
     records: Iterable[Mapping[str, Any]],
-) -> tuple[tuple[str, str], ...]:
-    ordered_pairs: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+) -> tuple[tuple[str, str, OfferTodayEncryptedJobIdSource], ...]:
+    identities: list[OfferTodayDetailIdentity] = []
+    ordered_job_ids: list[str] = []
+    seen_job_ids: set[str] = set()
     for record in records:
-        job_ids = _canonical_id_set(
-            [
-                record.get("job_id"),
-                record.get("jobId"),
-                record.get("source_job_id"),
+        identity = _resolve_identity_record(record)
+        if identity is None:
+            continue
+        identities.append(identity)
+        if identity.job_id not in seen_job_ids:
+            seen_job_ids.add(identity.job_id)
+            ordered_job_ids.append(identity.job_id)
+    authority = build_offertoday_identity_authority_index(identities)
+    return tuple(
+        (
+            identity.job_id,
+            identity.encrypted_job_id,
+            identity.encrypted_job_id_source,
+        )
+        for job_id in ordered_job_ids
+        if job_id not in authority.conflict_reason_by_job
+        and (
+            identity := authority.authoritative_identity_by_job.get(job_id)
+        )
+        is not None
+    )
+
+
+def _record_job_ids(record: Mapping[str, Any]) -> set[str]:
+    return _canonical_id_set(
+        [
+            record.get("job_id"),
+            record.get("jobId"),
+            record.get("source_job_id"),
+        ]
+    )
+
+
+def _page_rejected_identity_ids(
+    payload: Mapping[str, Any],
+) -> tuple[set[str], bool]:
+    issues = _mapping_items(payload.get("identity_issues"))
+    conflicts = _mapping_items(payload.get("identity_conflicts"))
+    rejected_ids: set[str] = set()
+    for issue in issues:
+        rejected_ids.update(_record_job_ids(issue))
+    for conflict in conflicts:
+        conflict_ids = conflict.get("job_ids")
+        if not isinstance(conflict_ids, (list, tuple, set)):
+            conflict_ids = conflict.get("source_job_ids")
+        if not isinstance(conflict_ids, (list, tuple, set)):
+            conflict_ids = [
+                conflict.get("job_id"),
+                conflict.get("source_job_id"),
             ]
-        )
-        encrypted_job_ids = _canonical_id_set(
-            [record.get("encrypted_job_id"), record.get("encryptJobId")]
-        )
-        if len(job_ids) != 1 or len(encrypted_job_ids) != 1:
-            continue
-        pair = (next(iter(job_ids)), next(iter(encrypted_job_ids)))
-        if pair in seen:
-            continue
-        seen.add(pair)
-        ordered_pairs.append(pair)
-    return tuple(ordered_pairs)
+        rejected_ids.update(_canonical_id_set(conflict_ids))
+    return rejected_ids, bool(issues or conflicts)
 
 
 def _find_identity_pair_mismatch_page_keys(
     replayable_pages: Mapping[tuple[str, int], Mapping[str, Any]],
 ) -> tuple[str, ...]:
     mismatches: list[str] = []
+    accumulated_row_records: list[dict[str, Any]] = []
     for (condition_id, page), payload in replayable_pages.items():
-        if "rows" not in payload or "id_pairs" not in payload:
-            continue
-        row_pairs = _ordered_valid_identity_pairs(
-            _mapping_items(payload.get("rows"))
+        rejected_ids, page_has_rejections = _page_rejected_identity_ids(
+            payload
         )
-        declared_pairs = _ordered_valid_identity_pairs(
+        page_rows = _mapping_items(payload.get("rows"))
+        accepted_page_rows = [
+            row
+            for row in page_rows
+            if not (_record_job_ids(row) & rejected_ids)
+        ]
+        candidate_records = [
+            *accumulated_row_records,
+            *accepted_page_rows,
+        ]
+        observed_page_job_ids = {
+            identity.job_id
+            for row in accepted_page_rows
+            if (identity := _resolve_identity_record(row)) is not None
+        }
+        expected_triples = tuple(
+            triple
+            for triple in _ordered_authoritative_identity_triples(
+                candidate_records
+            )
+            if triple[0] in observed_page_job_ids
+        )
+        declared_triples = _ordered_authoritative_identity_triples(
             _mapping_items(payload.get("id_pairs"))
         )
-        if row_pairs == declared_pairs:
-            continue
-        mismatches.append(
-            json.dumps(
-                {"condition_id": condition_id, "page": page},
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
+        if (
+            "rows" in payload
+            and "id_pairs" in payload
+            and expected_triples != declared_triples
+        ):
+            mismatches.append(
+                json.dumps(
+                    {"condition_id": condition_id, "page": page},
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
             )
-        )
+        if not page_has_rejections:
+            accumulated_row_records = candidate_records
     return tuple(sorted(mismatches))
 
 
@@ -490,57 +574,30 @@ def _identity_evidence(
     page_payloads: Iterable[Mapping[str, Any]],
 ) -> tuple[set[str], set[str]]:
     deferred_ids: set[str] = set()
-    encrypted_ids_by_job_id: dict[str, set[str]] = {}
-    job_ids_by_encrypted_id: dict[str, set[str]] = {}
+    identities: list[OfferTodayDetailIdentity] = []
 
     for payload in page_payloads:
-        for issue in _mapping_items(payload.get("identity_issues")):
-            deferred_ids.update(
-                _canonical_id_set(
-                    [issue.get("job_id"), issue.get("source_job_id")]
-                )
-            )
-        for conflict in _mapping_items(payload.get("identity_conflicts")):
-            conflict_ids = conflict.get("job_ids")
-            if not isinstance(conflict_ids, (list, tuple, set)):
-                conflict_ids = conflict.get("source_job_ids")
-            if not isinstance(conflict_ids, (list, tuple, set)):
-                conflict_ids = [conflict.get("job_id")]
-            deferred_ids.update(_canonical_id_set(conflict_ids))
+        rejected_ids, page_has_rejections = _page_rejected_identity_ids(
+            payload
+        )
+        deferred_ids.update(rejected_ids)
+        if page_has_rejections:
+            continue
 
         identity_records = [
             *_mapping_items(payload.get("id_pairs")),
             *_mapping_items(payload.get("rows")),
         ]
         for record in identity_records:
-            job_ids = _canonical_id_set(
-                [record.get("job_id"), record.get("source_job_id")]
-            )
-            encrypted_ids = _canonical_id_set(
-                [
-                    record.get("encrypted_job_id"),
-                    record.get("encryptJobId"),
-                ]
-            )
-            for job_id in job_ids:
-                encrypted_ids_by_job_id.setdefault(job_id, set()).update(
-                    encrypted_ids
-                )
-            for encrypted_id in encrypted_ids:
-                job_ids_by_encrypted_id.setdefault(encrypted_id, set()).update(
-                    job_ids
-                )
+            if _record_job_ids(record) & rejected_ids:
+                continue
+            identity = _resolve_identity_record(record)
+            if identity is not None:
+                identities.append(identity)
 
-    mapping_conflict_ids = {
-        job_id
-        for job_id, encrypted_ids in encrypted_ids_by_job_id.items()
-        if len(encrypted_ids) > 1
-    }
-    mapping_conflict_ids.update(
-        job_id
-        for job_ids in job_ids_by_encrypted_id.values()
-        if len(job_ids) > 1
-        for job_id in job_ids
+    authority = build_offertoday_identity_authority_index(identities)
+    mapping_conflict_ids = set(
+        authority.conflict_reason_by_job
     )
     deferred_ids.update(mapping_conflict_ids)
     return deferred_ids, mapping_conflict_ids
@@ -656,10 +713,12 @@ def _expected_response_identity_hash(
     *,
     source_job_id: str,
     encrypted_job_id: str,
+    encrypted_job_id_source: OfferTodayEncryptedJobIdSource,
 ) -> str:
     canonical_json = json.dumps(
         {
             "encrypted_job_id": encrypted_job_id,
+            "encrypted_job_id_source": encrypted_job_id_source,
             "job_id": source_job_id,
         },
         ensure_ascii=False,
@@ -669,10 +728,104 @@ def _expected_response_identity_hash(
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
+def _exact_eligible_source_job_id(
+    value: Any,
+    eligible_ids: set[str],
+) -> str | None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or value not in eligible_ids
+    ):
+        return None
+    return value
+
+
+def _normalized_source_job_id_for_mismatch(
+    value: Any,
+    candidate_ids: set[str],
+) -> str | None:
+    normalized_ids = _canonical_id_set([value]) & candidate_ids
+    if len(normalized_ids) != 1:
+        return None
+    return next(iter(normalized_ids))
+
+
+def _successful_attempt_identity_by_source_id(
+    *,
+    events: Sequence[Mapping[str, Any]],
+    detail_crawl_job_id: str,
+    eligible_ids: set[str],
+) -> dict[str, OfferTodayDetailIdentity]:
+    identities_by_source_id: dict[
+        str,
+        set[tuple[str, str, OfferTodayEncryptedJobIdSource]],
+    ] = {}
+    invalid_source_ids: set[str] = set()
+    for event in events:
+        if event["event_type"] != "crawl.detail_attempt":
+            continue
+        payload = event["payload"]
+        if str(payload.get("classification") or "").strip().lower() != "success":
+            continue
+        if (
+            str(payload.get("detail_crawl_job_id") or "")
+            != detail_crawl_job_id
+        ):
+            continue
+        raw_source_job_id = payload.get("source_job_id")
+        source_job_id = _exact_eligible_source_job_id(
+            raw_source_job_id,
+            eligible_ids,
+        )
+        if source_job_id is None:
+            normalized_source_job_id = (
+                _normalized_source_job_id_for_mismatch(
+                    raw_source_job_id,
+                    eligible_ids,
+                )
+            )
+            if normalized_source_job_id is not None:
+                invalid_source_ids.add(normalized_source_job_id)
+            continue
+        encrypted_job_id = payload.get("encrypted_job_id")
+        encrypted_job_id_source = payload.get("encrypted_job_id_source")
+        try:
+            identity = OfferTodayDetailIdentity(
+                job_id=source_job_id,
+                encrypted_job_id=encrypted_job_id,
+                encrypted_job_id_source=encrypted_job_id_source,
+            )
+        except OfferTodayIdentityError:
+            invalid_source_ids.add(source_job_id)
+            continue
+        identities_by_source_id.setdefault(source_job_id, set()).add(
+            (
+                identity.job_id,
+                identity.encrypted_job_id,
+                identity.encrypted_job_id_source,
+            )
+        )
+
+    resolved: dict[str, OfferTodayDetailIdentity] = {}
+    for source_job_id, triples in identities_by_source_id.items():
+        if source_job_id in invalid_source_ids or len(triples) != 1:
+            continue
+        job_id, encrypted_job_id, encrypted_job_id_source = next(iter(triples))
+        resolved[source_job_id] = OfferTodayDetailIdentity(
+            job_id=job_id,
+            encrypted_job_id=encrypted_job_id,
+            encrypted_job_id_source=encrypted_job_id_source,
+        )
+    return resolved
+
+
 def _expected_persisted_evidence_by_source_id(
     *,
     detail_crawl_job_id: str,
     eligible_ids: set[str],
+    attempt_identity_by_source_id: Mapping[str, OfferTodayDetailIdentity],
     listings: Sequence[StagedListingSnapshot],
     jobs: Sequence[PublishedJobSnapshot],
 ) -> dict[str, dict[str, Any]]:
@@ -698,18 +851,13 @@ def _expected_persisted_evidence_by_source_id(
         published_job_ids = _canonical_id_set(
             row.published_job_id for row in rows
         )
-        encrypted_job_ids = _canonical_id_set(
-            row.encrypted_job_id for row in rows
-        )
         if (
             len(listing_ids) != len(rows)
             or len(published_job_ids) != 1
-            or len(encrypted_job_ids) != 1
             or not all(row.has_detail_payload for row in rows)
         ):
             continue
         published_job_id = next(iter(published_job_ids))
-        encrypted_job_id = next(iter(encrypted_job_ids))
         published_job = jobs_by_id.get(published_job_id)
         if (
             published_job is None
@@ -718,13 +866,31 @@ def _expected_persisted_evidence_by_source_id(
             != {source_job_id}
         ):
             continue
+        attempt_identity = attempt_identity_by_source_id.get(source_job_id)
         expected[source_job_id] = {
             "detail_crawl_job_id": detail_crawl_job_id,
             "listing_ids": listing_ids,
             "published_job_id": published_job_id,
-            "response_identity_hash": _expected_response_identity_hash(
-                source_job_id=source_job_id,
-                encrypted_job_id=encrypted_job_id,
+            "encrypted_job_id": (
+                attempt_identity.encrypted_job_id
+                if attempt_identity is not None
+                else None
+            ),
+            "encrypted_job_id_source": (
+                attempt_identity.encrypted_job_id_source
+                if attempt_identity is not None
+                else None
+            ),
+            "response_identity_hash": (
+                _expected_response_identity_hash(
+                    source_job_id=source_job_id,
+                    encrypted_job_id=attempt_identity.encrypted_job_id,
+                    encrypted_job_id_source=(
+                        attempt_identity.encrypted_job_id_source
+                    ),
+                )
+                if attempt_identity is not None
+                else None
             ),
         }
     return expected
@@ -738,23 +904,47 @@ def _validate_persisted_events(
     listings: Sequence[StagedListingSnapshot],
     jobs: Sequence[PublishedJobSnapshot],
 ) -> tuple[set[str], set[str]]:
+    attempt_identity_by_source_id = (
+        _successful_attempt_identity_by_source_id(
+            events=events,
+            detail_crawl_job_id=detail_crawl_job_id,
+            eligible_ids=eligible_ids,
+        )
+    )
     expected_by_source_id = _expected_persisted_evidence_by_source_id(
         detail_crawl_job_id=detail_crawl_job_id,
         eligible_ids=eligible_ids,
+        attempt_identity_by_source_id=attempt_identity_by_source_id,
         listings=listings,
         jobs=jobs,
     )
     valid_ids: set[str] = set()
-    mismatch_ids: set[str] = set()
+    mismatch_ids: set[str] = {
+        source_job_id
+        for source_job_id, expected in expected_by_source_id.items()
+        if expected["encrypted_job_id"] is None
+        or expected["encrypted_job_id_source"] is None
+    }
     for event in events:
         if event["event_type"] != "crawl.detail_persisted":
             continue
         payload = event["payload"]
-        source_ids = _canonical_id_set([payload.get("source_job_id")])
-        if len(source_ids) != 1:
-            mismatch_ids.add("<missing_source_job_id>")
+        raw_source_job_id = payload.get("source_job_id")
+        source_job_id = _exact_eligible_source_job_id(
+            raw_source_job_id,
+            eligible_ids,
+        )
+        if source_job_id is None:
+            normalized_source_job_id = (
+                _normalized_source_job_id_for_mismatch(
+                    raw_source_job_id,
+                    set(expected_by_source_id),
+                )
+            )
+            mismatch_ids.add(
+                normalized_source_job_id or "<missing_source_job_id>"
+            )
             continue
-        source_job_id = next(iter(source_ids))
         expected = expected_by_source_id.get(source_job_id)
         raw_listing_ids = payload.get("listing_ids")
         listing_ids = (
@@ -775,6 +965,10 @@ def _validate_persisted_events(
             and listing_ids == expected["listing_ids"]
             and str(payload.get("published_job_id") or "").strip()
             == expected["published_job_id"]
+            and payload.get("encrypted_job_id")
+            == expected["encrypted_job_id"]
+            and payload.get("encrypted_job_id_source")
+            == expected["encrypted_job_id_source"]
             and str(payload.get("response_identity_hash") or "").strip()
             == expected["response_identity_hash"]
         )
@@ -782,6 +976,7 @@ def _validate_persisted_events(
             valid_ids.add(source_job_id)
         else:
             mismatch_ids.add(source_job_id)
+    mismatch_ids.update(set(expected_by_source_id) - valid_ids)
     return valid_ids, mismatch_ids
 
 
