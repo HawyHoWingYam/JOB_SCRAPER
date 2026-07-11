@@ -542,7 +542,8 @@ def test_product_data_drift_is_an_evidence_failure(tmp_path) -> None:
 
 
 def test_artifact_verification_failure_maps_to_exit_five(tmp_path) -> None:
-    invalid = lambda _path: ArtifactVerificationResult(False, (), ("manifest.json",))
+    def invalid(_path):
+        return ArtifactVerificationResult(False, (), ("manifest.json",))
 
     exit_code, _state, _session, _artifact = invoke_smoke(
         tmp_path,
