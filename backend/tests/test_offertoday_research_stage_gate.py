@@ -232,15 +232,6 @@ def _live_events(
                 },
             }
         )
-    if not smoke_passed:
-        failure_reason = failure_reason or "unattempted_without_batch_stop"
-        events.append(
-            {
-                "sequence_no": len(events) + 1,
-                "event_type": "research.run_stopped",
-                "payload": {"reason": failure_reason},
-            }
-        )
     events.append(
         {
             "sequence_no": len(events) + 1,
@@ -264,6 +255,15 @@ def _live_events(
                     "has_description": True,
                     "stop_batch": False,
                 },
+            }
+        )
+    if not smoke_passed:
+        failure_reason = failure_reason or "unattempted_without_batch_stop"
+        events.append(
+            {
+                "sequence_no": len(events) + 1,
+                "event_type": "research.run_stopped",
+                "payload": {"reason": failure_reason},
             }
         )
     events.append(
@@ -741,3 +741,70 @@ def test_verify_live_run_rejects_unsanitized_unexpected_failure_reason(
 
     assert result.valid is False
     assert "invalid_unexpected_failure_reason" in result.issues
+
+
+def test_verify_live_run_rejects_request_evidence_after_run_stopped(
+    tmp_path,
+) -> None:
+    events = _live_events(
+        detail_attempts=1,
+        status="failed",
+        smoke_passed=False,
+    )
+    stopped_event = next(
+        event for event in events if event["event_type"] == "research.run_stopped"
+    )
+    events.remove(stopped_event)
+    events.insert(2, stopped_event)
+    for sequence_no, event in enumerate(events, start=1):
+        event["sequence_no"] = sequence_no
+    artifact = _export_live(
+        tmp_path,
+        events=events,
+        status="failed",
+        smoke_passed=False,
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "request_evidence_after_run_stopped" in result.issues
+
+
+def test_verify_live_run_accepts_terminal_exception_after_nonhard_detail_failure(
+    tmp_path,
+) -> None:
+    reason = "unexpected_live_smoke_error:RuntimeError"
+    events = _live_events(
+        status="failed",
+        smoke_passed=False,
+        failure_reason=reason,
+    )
+    first_detail = next(
+        event
+        for event in events
+        if event["event_type"] == "research.detail_attempt"
+    )
+    first_detail["payload"].update(
+        {
+            "classification": "transient_transport",
+            "api_code": None,
+            "identity_valid": False,
+            "parsed": False,
+            "has_title": False,
+            "has_company": False,
+            "has_description": False,
+            "stop_batch": False,
+        }
+    )
+    events[-1]["payload"]["success_count"] = 19
+    artifact = _export_live(
+        tmp_path,
+        events=events,
+        status="failed",
+        smoke_passed=False,
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is True, result.issues

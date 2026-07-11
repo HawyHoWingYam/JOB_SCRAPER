@@ -265,9 +265,12 @@ def _analyze_runtime_smoke_events(
     detail_events = [
         event for event in events if event.get("event_type") == "research.detail_attempt"
     ]
-    run_stopped_events = [
-        event for event in events if event.get("event_type") == "research.run_stopped"
+    run_stopped_indexes = [
+        index
+        for index, event in enumerate(events)
+        if event.get("event_type") == "research.run_stopped"
     ]
+    run_stopped_events = [events[index] for index in run_stopped_indexes]
     cohort_indexes = [
         index
         for index, event in enumerate(events)
@@ -322,6 +325,21 @@ def _analyze_runtime_smoke_events(
             if event.get("event_type") == "research.detail_attempt"
         ):
             issues.append("detail_attempt_before_cohort_freeze")
+
+    request_evidence_indexes = [
+        index
+        for index, event in enumerate(events)
+        if event.get("event_type")
+        in {
+            "research.page_attempt",
+            "research.detail_cohort_frozen",
+            "research.detail_attempt",
+        }
+    ]
+    if run_stopped_indexes and any(
+        index > run_stopped_indexes[0] for index in request_evidence_indexes
+    ):
+        issues.append("request_evidence_after_run_stopped")
 
     success_count = 0
     terminal_count = 0
@@ -593,6 +611,7 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
         elif manifest_status != "failed":
             issues.append("invalid_failed_smoke_status")
         else:
+            terminal_unexpected = False
             if len(run_stopped_events) != 1:
                 issues.append(f"run_stopped_count:{len(run_stopped_events)}")
             else:
@@ -612,20 +631,36 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
                     "unexpected_live_smoke_error:"
                 ) and _UNEXPECTED_ERROR_RE.fullmatch(stopped_reason) is None:
                     issues.append("invalid_unexpected_failure_reason")
+                terminal_unexpected = (
+                    isinstance(stopped_reason, str)
+                    and _UNEXPECTED_ERROR_RE.fullmatch(stopped_reason) is not None
+                )
             first_failure = smoke_evidence["first_failure"]
             if (
+                not terminal_unexpected
+                and
                 first_failure is not None
                 and summary.get("stop_reason") != first_failure
             ):
                 issues.append("detail_failure_reason_mismatch")
             first_listing_failure = smoke_evidence["first_listing_failure"]
             if (
+                not terminal_unexpected
+                and
                 first_listing_failure is not None
                 and summary.get("stop_reason") != first_listing_failure
             ):
                 issues.append("listing_failure_reason_mismatch")
         hard_stop = smoke_evidence["first_hard_stop"]
-        if hard_stop is not None and summary.get("stop_reason") != hard_stop:
+        if (
+            hard_stop is not None
+            and not (
+                isinstance(summary.get("stop_reason"), str)
+                and _UNEXPECTED_ERROR_RE.fullmatch(summary["stop_reason"])
+                is not None
+            )
+            and summary.get("stop_reason") != hard_stop
+        ):
             issues.append("hard_stop_reason_mismatch")
 
     return LiveRunVerification(
