@@ -935,6 +935,8 @@ class CrawlJobRuntime:
         *,
         detail_crawl_job_id,
         source_job_id: str,
+        encrypted_job_id: str,
+        encrypted_job_id_source: str,
         listing_ids,
         published_job_id,
         response_identity_hash: str,
@@ -946,6 +948,8 @@ class CrawlJobRuntime:
             payload={
                 "detail_crawl_job_id": str(detail_crawl_job_id),
                 "source_job_id": str(source_job_id),
+                "encrypted_job_id": str(encrypted_job_id),
+                "encrypted_job_id_source": str(encrypted_job_id_source),
                 "listing_ids": [str(listing_id) for listing_id in listing_ids],
                 "published_job_id": str(published_job_id),
                 "response_identity_hash": str(response_identity_hash),

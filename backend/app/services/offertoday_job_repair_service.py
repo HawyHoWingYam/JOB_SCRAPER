@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
+from types import MappingProxyType
 from typing import Any
 
 from sqlalchemy import and_, exists, or_
@@ -12,6 +14,8 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.job import Job
 from app.repositories.company_repository import CompanyRepository
+from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
+from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.job_repository import JobRepository
 from app.sources.contracts import (
     CanonicalScrapedJob,
@@ -21,7 +25,10 @@ from app.sources.contracts import (
 )
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailFetchResult,
+    OfferTodayDetailIdentity,
+    OfferTodayIdentityAuthorityIndex,
     OfferTodayIdentityError,
+    build_offertoday_identity_authority_index,
     resolve_offertoday_detail_identity,
     validate_offertoday_detail_identity,
 )
@@ -32,6 +39,18 @@ _AUTO_REPAIR_BLOCKING_DETAIL_STATUSES = (
     "terminal_unavailable",
     "identity_conflict",
 )
+
+
+def _with_canonical_identity(
+    payload: Mapping[str, Any],
+    identity: OfferTodayDetailIdentity,
+) -> dict[str, Any]:
+    return {
+        **deepcopy(dict(payload)),
+        "job_id": identity.job_id,
+        "encrypted_job_id": identity.encrypted_job_id,
+        "encrypted_job_id_source": identity.encrypted_job_id_source,
+    }
 
 
 @dataclass(frozen=True)
@@ -49,10 +68,24 @@ class OfferTodayJobRepairService:
         *,
         company_repository: CompanyRepository | None = None,
         job_repository: JobRepository | None = None,
+        crawl_job_listing_repository: CrawlJobListingRepository | None = None,
+        crawl_job_repository: CrawlJobRepository | None = None,
     ) -> None:
         self.db = db
         self.company_repository = company_repository or CompanyRepository()
         self.job_repository = job_repository or JobRepository()
+        self.crawl_job_listing_repository = crawl_job_listing_repository
+        if self.crawl_job_listing_repository is None and db is not None:
+            self.crawl_job_listing_repository = CrawlJobListingRepository()
+        self.crawl_job_repository = crawl_job_repository
+        if self.crawl_job_repository is None and db is not None:
+            self.crawl_job_repository = CrawlJobRepository()
+        self._cached_identity_authority_index: (
+            OfferTodayIdentityAuthorityIndex | None
+        ) = None
+        self._cached_identity_error_by_job: Mapping[str, OfferTodayIdentityError] = (
+            MappingProxyType({})
+        )
 
     def list_candidate_jobs(self, *, limit: int | None = None) -> list[Job]:
         if self.db is None:
@@ -106,7 +139,20 @@ class OfferTodayJobRepairService:
         listing = self.get_latest_completed_listing(
             job.source_job_id
         ) or self.get_latest_listing(job.source_job_id)
-        canonical = self.build_canonical_job_snapshot(job, listing)
+        identity = self.resolve_detail_identity(job, listing)
+        detail_payload = getattr(listing, "detail_payload", None)
+        listing_payload = getattr(listing, "listing_payload", None)
+        repair_payload = (
+            detail_payload
+            if isinstance(detail_payload, Mapping)
+            else listing_payload if isinstance(listing_payload, Mapping) else {}
+        )
+        canonical_detail = _with_canonical_identity(repair_payload, identity)
+        canonical = self.build_canonical_job_snapshot(
+            job,
+            listing,
+            detail_payload_override=canonical_detail,
+        )
         return self._persist_canonical_job(job, canonical, listing)
 
     def repair_job_with_parsed_detail(
@@ -120,21 +166,9 @@ class OfferTodayJobRepairService:
             )
 
         listing = self.get_latest_listing(job.source_job_id)
-        listing_payload = getattr(listing, "listing_payload", None)
-        if not isinstance(listing_payload, dict):
-            listing_payload = {}
-        expected_identity = resolve_offertoday_detail_identity(
-            source_job_id=getattr(job, "source_job_id", None),
-            listing_payload=listing_payload,
-        )
+        expected_identity = self.resolve_detail_identity(job, listing)
         validate_offertoday_detail_identity(expected_identity, parsed_detail)
-
-        canonical_detail = {
-            **parsed_detail,
-            "job_id": expected_identity.job_id,
-            "encrypted_job_id": expected_identity.encrypted_job_id,
-            "encrypted_job_id_source": expected_identity.encrypted_job_id_source,
-        }
+        canonical_detail = _with_canonical_identity(parsed_detail, expected_identity)
 
         canonical = self.build_canonical_job_snapshot(
             job,
@@ -160,20 +194,16 @@ class OfferTodayJobRepairService:
             )
 
         listing = self.get_latest_listing(job.source_job_id)
-        listing_payload = getattr(listing, "listing_payload", None)
-        if not isinstance(listing_payload, dict):
-            listing_payload = {}
-        expected_identity = resolve_offertoday_detail_identity(
-            source_job_id=getattr(job, "source_job_id", None),
-            listing_payload=listing_payload,
-        )
+        expected_identity = self.resolve_detail_identity(job, listing)
         if result.identity != expected_identity:
             raise OfferTodayIdentityError(
                 "OfferToday detail result ownership mismatch: "
                 f"expected jobId={expected_identity.job_id!r}, "
-                f"encryptJobId={expected_identity.encrypted_job_id!r}; "
+                f"encryptJobId={expected_identity.encrypted_job_id!r}, "
+                f"source={expected_identity.encrypted_job_id_source!r}; "
                 f"result jobId={result.identity.job_id!r}, "
-                f"encryptJobId={result.identity.encrypted_job_id!r}"
+                f"encryptJobId={result.identity.encrypted_job_id!r}, "
+                f"source={result.identity.encrypted_job_id_source!r}"
             )
 
         if result.classification.kind is OfferTodayResponseKind.SUCCESS:
@@ -186,24 +216,19 @@ class OfferTodayJobRepairService:
                 expected_identity,
                 result.canonical_detail,
             )
-            canonical_identity = resolve_offertoday_detail_identity(
-                source_job_id=expected_identity.job_id,
-                listing_payload=result.canonical_detail,
+            canonical_detail = _with_canonical_identity(
+                result.canonical_detail,
+                expected_identity,
             )
-            if canonical_identity != expected_identity:
-                raise OfferTodayIdentityError(
-                    "OfferToday canonical detail identity mismatch: "
-                    f"expected {expected_identity!r}, got {canonical_identity!r}"
-                )
 
             canonical = self.build_canonical_job_snapshot(
                 job,
                 listing,
-                detail_payload_override=result.canonical_detail,
+                detail_payload_override=canonical_detail,
             )
             repair_result = self._persist_canonical_job(job, canonical, listing)
             if listing is not None:
-                listing.detail_payload = deepcopy(result.canonical_detail)
+                listing.detail_payload = deepcopy(canonical_detail)
                 listing.detail_status = "completed"
                 listing.detail_error_message = None
                 listing.detail_completed_at = datetime.now(UTC)
@@ -222,6 +247,7 @@ class OfferTodayJobRepairService:
             {
                 "code": result.classification.code,
                 "encrypted_job_id": result.identity.encrypted_job_id,
+                "encrypted_job_id_source": (result.identity.encrypted_job_id_source),
                 "job_id": result.identity.job_id,
                 "kind": result.classification.kind.value,
                 "message": result.classification.message,
@@ -343,18 +369,103 @@ class OfferTodayJobRepairService:
             .first()
         )
 
+    def _identity_authority_index(self) -> OfferTodayIdentityAuthorityIndex:
+        if self._cached_identity_authority_index is not None:
+            return self._cached_identity_authority_index
+        if self.db is None:
+            raise ValueError(
+                "identity authority audit requires an active database session"
+            )
+        if (
+            self.crawl_job_listing_repository is None
+            or self.crawl_job_repository is None
+        ):
+            raise RuntimeError("identity authority repositories are unavailable")
+
+        identities: list[OfferTodayDetailIdentity] = []
+        identity_error_by_job: dict[str, OfferTodayIdentityError] = {}
+
+        def add_evidence(
+            source_job_id: Any,
+            payload: Mapping[str, Any],
+        ) -> None:
+            canonical_source_job_id = str(source_job_id or "").strip()
+            try:
+                identities.append(
+                    resolve_offertoday_detail_identity(
+                        source_job_id=canonical_source_job_id,
+                        listing_payload=payload,
+                    )
+                )
+            except OfferTodayIdentityError as exc:
+                if canonical_source_job_id:
+                    identity_error_by_job.setdefault(canonical_source_job_id, exc)
+
+        for row in self.crawl_job_listing_repository.list_offertoday_identity_history(
+            self.db
+        ):
+            listing_payload = getattr(row, "listing_payload", None)
+            add_evidence(
+                getattr(row, "source_job_id", None),
+                dict(listing_payload) if isinstance(listing_payload, Mapping) else {},
+            )
+        observations = (
+            self.crawl_job_repository.list_offertoday_listing_identity_observations(
+                self.db
+            )
+        )
+        for observation in observations:
+            if not isinstance(observation, Mapping):
+                continue
+            add_evidence(
+                observation.get("source_job_id"),
+                observation,
+            )
+
+        self._cached_identity_error_by_job = MappingProxyType(
+            dict(identity_error_by_job)
+        )
+        self._cached_identity_authority_index = (
+            build_offertoday_identity_authority_index(tuple(identities))
+        )
+        return self._cached_identity_authority_index
+
+    def resolve_detail_identity(
+        self,
+        job: Job | Any,
+        listing: CrawlJobListing | Any | None = None,
+    ) -> OfferTodayDetailIdentity:
+        listing_payload = getattr(listing, "listing_payload", None)
+        listing_identity = resolve_offertoday_detail_identity(
+            source_job_id=getattr(job, "source_job_id", None),
+            listing_payload=(
+                dict(listing_payload) if isinstance(listing_payload, Mapping) else {}
+            ),
+        )
+        if self.db is None:
+            return listing_identity
+
+        index = self._identity_authority_index()
+        identity_error = self._cached_identity_error_by_job.get(listing_identity.job_id)
+        if identity_error is not None:
+            raise identity_error
+        conflict_reason = index.conflict_reason_by_job.get(listing_identity.job_id)
+        if conflict_reason is not None:
+            raise OfferTodayIdentityError(
+                f"OfferToday repair identity conflict: {conflict_reason}",
+                classification=conflict_reason,
+            )
+        return index.authoritative_identity_by_job.get(
+            listing_identity.job_id,
+            listing_identity,
+        )
+
     def resolve_detail_identifiers(
         self,
         job: Job | Any,
         listing: CrawlJobListing | Any | None = None,
     ) -> tuple[str, str]:
-        listing_payload = getattr(listing, "listing_payload", None)
-        if not isinstance(listing_payload, dict):
-            listing_payload = {}
-        identity = resolve_offertoday_detail_identity(
-            source_job_id=getattr(job, "source_job_id", None),
-            listing_payload=listing_payload,
-        )
+        identity = self.resolve_detail_identity(job, listing)
         return identity.job_id, identity.encrypted_job_id
 
     def build_canonical_job_snapshot(

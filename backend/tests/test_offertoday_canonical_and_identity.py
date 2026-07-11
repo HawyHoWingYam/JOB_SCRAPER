@@ -149,6 +149,71 @@ def _listing_stub(*, listing_payload: dict | None = None) -> SimpleNamespace:
     )
 
 
+class _FakeIdentityHistoryRepository:
+    def __init__(self, rows=()) -> None:
+        self.rows = list(rows)
+        self.calls = 0
+
+    def list_offertoday_identity_history(self, db):
+        self.calls += 1
+        return list(self.rows)
+
+
+class _FakeIdentityObservationRepository:
+    def __init__(self, observations=()) -> None:
+        self.observations = [deepcopy(item) for item in observations]
+        self.calls = 0
+
+    def list_offertoday_listing_identity_observations(self, db):
+        self.calls += 1
+        return deepcopy(self.observations)
+
+
+def _repair_service(
+    service_module,
+    *,
+    db,
+    identity_history=(),
+    identity_observations=(),
+    **kwargs,
+):
+    return service_module.OfferTodayJobRepairService(
+        db=db,
+        crawl_job_listing_repository=_FakeIdentityHistoryRepository(
+            identity_history
+        ),
+        crawl_job_repository=_FakeIdentityObservationRepository(
+            identity_observations
+        ),
+        **kwargs,
+    )
+
+
+def _fallback_listing_payload(job_id: str = "jid-1") -> dict:
+    return {
+        "job_id": job_id,
+        "encrypted_job_id": job_id,
+        "encrypted_job_id_source": "jobId_fallback",
+        "raw_data": {"jobId": job_id},
+    }
+
+
+def _identity_history_row(job_id: str, payload: dict) -> SimpleNamespace:
+    return SimpleNamespace(
+        source_job_id=job_id,
+        listing_payload=deepcopy(payload),
+    )
+
+
+def _explicit_identity_observation(job_id: str, route_id: str) -> dict:
+    return {
+        "source_job_id": job_id,
+        "job_id": job_id,
+        "encrypted_job_id": route_id,
+        "encrypted_job_id_source": "encryptJobId",
+    }
+
+
 def _repair_database() -> Session:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(
@@ -230,6 +295,7 @@ def _detail_fetch_result(
     *,
     job_id: str = "jid-1",
     encrypted_job_id: str = "enc-jid-1",
+    encrypted_job_id_source: str = "encryptJobId",
     payload: dict | None = None,
     canonical_detail: dict | None = None,
 ):
@@ -255,6 +321,7 @@ def _detail_fetch_result(
         resolved_canonical_detail = canonical_detail or {
             **parsed_detail,
             "encrypted_job_id": encrypted_job_id,
+            "encrypted_job_id_source": encrypted_job_id_source,
         }
     else:
         parsed_detail = None
@@ -263,7 +330,7 @@ def _detail_fetch_result(
         identity=identity_module.OfferTodayDetailIdentity(
             job_id=job_id,
             encrypted_job_id=encrypted_job_id,
-            encrypted_job_id_source="encryptJobId",
+            encrypted_job_id_source=encrypted_job_id_source,
         ),
         classification=classification,
         raw_response=raw_response,
@@ -766,6 +833,229 @@ def test_repair_service_resolves_missing_encrypted_listing_identity_as_jobid_fal
     assert (job_id, route_id) == ("jid-1", "jid-1")
 
 
+def test_repair_fallback_db_none_does_not_construct_authority_repositories(
+    monkeypatch,
+):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+
+    def fail_repository_construction():
+        raise AssertionError("db=None must not construct authority repositories")
+
+    monkeypatch.setattr(
+        service_module,
+        "CrawlJobListingRepository",
+        fail_repository_construction,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "CrawlJobRepository",
+        fail_repository_construction,
+    )
+
+    service = service_module.OfferTodayJobRepairService(db=None)
+    identity = service.resolve_detail_identity(
+        _job_stub(),
+        _listing_stub(listing_payload=_fallback_listing_payload()),
+    )
+
+    assert identity.encrypted_job_id_source == "jobId_fallback"
+    assert service.crawl_job_listing_repository is None
+    assert service.crawl_job_repository is None
+
+
+def test_repair_authority_promotes_durable_explicit_event_without_listing_mutation():
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    fallback_payload = _fallback_listing_payload()
+    listing = _listing_stub(listing_payload=fallback_payload)
+    listing_before = deepcopy(listing.listing_payload)
+    history_repository = _FakeIdentityHistoryRepository(
+        [_identity_history_row("jid-1", fallback_payload)]
+    )
+    event_repository = _FakeIdentityObservationRepository(
+        [_explicit_identity_observation("jid-1", "enc-jid-1")]
+    )
+    service = service_module.OfferTodayJobRepairService(
+        db=object(),
+        crawl_job_listing_repository=history_repository,
+        crawl_job_repository=event_repository,
+    )
+
+    identity = service.resolve_detail_identity(_job_stub(), listing)
+    identifiers = service.resolve_detail_identifiers(_job_stub(), listing)
+
+    assert identity.job_id == "jid-1"
+    assert identity.encrypted_job_id == "enc-jid-1"
+    assert identity.encrypted_job_id_source == "encryptJobId"
+    assert identifiers == ("jid-1", "enc-jid-1")
+    assert listing.listing_payload == listing_before
+    assert history_repository.calls == 1
+    assert event_repository.calls == 1
+
+
+def test_repair_authority_malformed_evidence_isolated_while_valid_jobs_collide():
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    history_repository = _FakeIdentityHistoryRepository(
+        [
+            _identity_history_row(
+                "jid-bad",
+                {
+                    "raw_data": {
+                        "jobId": "jid-bad",
+                        "encryptJobId": ["invalid"],
+                    }
+                },
+            )
+        ]
+    )
+    event_repository = _FakeIdentityObservationRepository(
+        [
+            _explicit_identity_observation("jid-1", "enc-shared"),
+            _explicit_identity_observation("jid-2", "enc-shared"),
+            _explicit_identity_observation("jid-ok", "enc-ok"),
+        ]
+    )
+    service = service_module.OfferTodayJobRepairService(
+        db=object(),
+        crawl_job_listing_repository=history_repository,
+        crawl_job_repository=event_repository,
+    )
+
+    with pytest.raises(identity_module.OfferTodayIdentityError) as malformed:
+        service.resolve_detail_identity(
+            SimpleNamespace(source_job_id="jid-bad"),
+            _listing_stub(
+                listing_payload=_fallback_listing_payload("jid-bad")
+            ),
+        )
+    assert malformed.value.classification == "invalid_encrypted_job_id_evidence"
+
+    unrelated = service.resolve_detail_identity(
+        SimpleNamespace(source_job_id="jid-ok"),
+        _listing_stub(listing_payload=_fallback_listing_payload("jid-ok")),
+    )
+    assert unrelated.encrypted_job_id == "enc-ok"
+
+    with pytest.raises(identity_module.OfferTodayIdentityError) as collision:
+        service.resolve_detail_identity(
+            SimpleNamespace(source_job_id="jid-1"),
+            _listing_stub(listing_payload=_fallback_listing_payload("jid-1")),
+        )
+    assert collision.value.classification == "reverse_collision"
+    assert history_repository.calls == 1
+    assert event_repository.calls == 1
+
+
+def test_repair_authority_global_history_and_events_are_cached_once_for_two_jobs():
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    history_repository = _FakeIdentityHistoryRepository(
+        [
+            _identity_history_row("jid-1", _fallback_listing_payload("jid-1")),
+            _identity_history_row("jid-2", _fallback_listing_payload("jid-2")),
+        ]
+    )
+    event_repository = _FakeIdentityObservationRepository(
+        [
+            _explicit_identity_observation("jid-1", "enc-jid-1"),
+            _explicit_identity_observation("jid-2", "enc-jid-2"),
+        ]
+    )
+    service = service_module.OfferTodayJobRepairService(
+        db=object(),
+        crawl_job_listing_repository=history_repository,
+        crawl_job_repository=event_repository,
+    )
+
+    resolved = []
+    for job_id in ("jid-1", "jid-2"):
+        job = SimpleNamespace(source_job_id=job_id)
+        listing = _listing_stub(
+            listing_payload=_fallback_listing_payload(job_id)
+        )
+        resolved.append(service.resolve_detail_identity(job, listing))
+
+    assert [identity.encrypted_job_id for identity in resolved] == [
+        "enc-jid-1",
+        "enc-jid-2",
+    ]
+    assert history_repository.calls == 1
+    assert event_repository.calls == 1
+
+
+def test_repair_authority_two_explicit_routes_raise_before_write(monkeypatch):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    listing = _listing_stub(listing_payload=_fallback_listing_payload())
+    service = _repair_service(
+        service_module,
+        db=object(),
+        identity_history=[
+            _identity_history_row("jid-1", _fallback_listing_payload()),
+        ],
+        identity_observations=[
+            _explicit_identity_observation("jid-1", "enc-a"),
+            _explicit_identity_observation("jid-1", "enc-b"),
+        ],
+    )
+    monkeypatch.setattr(service, "get_latest_completed_listing", lambda _id: listing)
+    monkeypatch.setattr(service, "get_latest_listing", lambda _id: listing)
+    write_calls = []
+    monkeypatch.setattr(
+        service,
+        "_persist_canonical_job",
+        lambda *args, **kwargs: write_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(identity_module.OfferTodayIdentityError) as exc_info:
+        service.repair_job(_job_stub())
+
+    assert exc_info.value.classification == "multiple_explicit_encrypted_ids"
+    assert write_calls == []
+
+
+def test_repair_reverse_collision_raises_before_write(monkeypatch):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    listing = _listing_stub(listing_payload=_fallback_listing_payload())
+    service = _repair_service(
+        service_module,
+        db=object(),
+        identity_history=[
+            _identity_history_row("jid-1", _fallback_listing_payload()),
+        ],
+        identity_observations=[
+            _explicit_identity_observation("jid-1", "enc-shared"),
+            _explicit_identity_observation("jid-2", "enc-shared"),
+        ],
+    )
+    monkeypatch.setattr(service, "get_latest_completed_listing", lambda _id: listing)
+    monkeypatch.setattr(service, "get_latest_listing", lambda _id: listing)
+    write_calls = []
+    monkeypatch.setattr(
+        service,
+        "_persist_canonical_job",
+        lambda *args, **kwargs: write_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(identity_module.OfferTodayIdentityError) as exc_info:
+        service.repair_job(_job_stub())
+
+    assert exc_info.value.classification == "reverse_collision"
+    assert write_calls == []
+
+
 @pytest.mark.asyncio
 async def test_offertoday_browser_detail_scraper_passes_both_ids_and_builds_typed_success(
     monkeypatch,
@@ -824,6 +1114,66 @@ async def test_offertoday_browser_detail_scraper_passes_both_ids_and_builds_type
 
     response_payload["data"]["jobName"] = "Mutated after fetch"
     assert result.raw_response["data"]["jobName"] == "Data Engineer"
+
+
+@pytest.mark.asyncio
+async def test_browser_detail_scraper_jobid_fallback_uses_same_tokens_and_preserves_source():
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    calls: list[tuple[str, str]] = []
+    raw_response = {
+        "code": 0,
+        "data": _sample_detail_raw_missing_encrypted(),
+    }
+    raw_before = deepcopy(raw_response)
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        calls.append((job_id, encrypted_job_id))
+        return raw_response
+
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    )
+    result = await scraper.fetch_job_detail(
+        "jid-1",
+        encrypted_job_id="jid-1",
+        encrypted_job_id_source="jobId_fallback",
+    )
+
+    assert calls == [("jid-1", "jid-1")]
+    assert result.identity.encrypted_job_id_source == "jobId_fallback"
+    assert result.canonical_detail["encrypted_job_id_source"] == "jobId_fallback"
+    assert result.raw_response == raw_before
+    assert "encryptJobId" not in result.raw_response["data"]
+
+
+@pytest.mark.asyncio
+async def test_browser_detail_scraper_keeps_explicit_target_when_response_omits_encrypted_id():
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    raw_response = {"code": 0, "data": _sample_detail_raw_missing_encrypted()}
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        assert (job_id, encrypted_job_id) == ("jid-1", "enc-jid-1")
+        return raw_response
+
+    scraper = scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    )
+    result = await scraper.fetch_job_detail(
+        "jid-1",
+        encrypted_job_id="enc-jid-1",
+        encrypted_job_id_source="encryptJobId",
+    )
+
+    assert result.identity.encrypted_job_id == "enc-jid-1"
+    assert result.identity.encrypted_job_id_source == "encryptJobId"
+    assert result.canonical_detail["encrypted_job_id"] == "enc-jid-1"
+    assert result.canonical_detail["encrypted_job_id_source"] == "encryptJobId"
+    assert result.canonical_detail["raw_data"] == raw_response["data"]
+    assert "encryptJobId" not in result.canonical_detail["raw_data"]
 
 
 @pytest.mark.asyncio
@@ -1487,7 +1837,7 @@ def test_offline_parsed_repair_rejects_foreign_full_identity_before_mutation(
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     listing_before = dict(vars(listing))
     parsed_detail = parse_offertoday_detail_response(
@@ -1524,7 +1874,7 @@ def test_offline_parsed_repair_rejects_conflicting_encrypted_identity_before_mut
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     listing_before = dict(vars(listing))
     parsed_detail = parse_offertoday_detail_response(
@@ -1557,7 +1907,7 @@ def test_offline_parsed_repair_build_failure_leaves_listing_unchanged(monkeypatc
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     listing_before = dict(vars(listing))
     parsed_detail = parse_offertoday_detail_response(
@@ -1586,7 +1936,7 @@ def test_offline_parsed_repair_persist_failure_leaves_listing_unchanged(monkeypa
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     listing_before = dict(vars(listing))
     parsed_detail = parse_offertoday_detail_response(
@@ -1612,12 +1962,13 @@ def test_offline_parsed_repair_persists_canonical_identity_for_cached_round_trip
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     job = _job_stub()
     parsed_detail = parse_offertoday_detail_response(
         {"code": 0, "data": _sample_detail_raw_missing_encrypted()}
     )
+    raw_before = deepcopy(parsed_detail["raw_data"])
     expected_repair_result = service_module.OfferTodayRepairResult(
         action="updated",
         description_repaired=True,
@@ -1649,10 +2000,162 @@ def test_offline_parsed_repair_persists_canonical_identity_for_cached_round_trip
     assert listing.detail_payload["job_id"] == "jid-1"
     assert listing.detail_payload["encrypted_job_id"] == "enc-jid-1"
     assert listing.detail_payload["encrypted_job_id_source"] == "encryptJobId"
+    assert listing.detail_payload["raw_data"] == raw_before
+    assert "encryptJobId" not in listing.detail_payload["raw_data"]
     assert len(persisted_canonical) == 2
     assert all(
         canonical.source_url.endswith("/enc-jid-1") for canonical in persisted_canonical
     )
+
+
+def test_offline_parsed_repair_fallback_round_trip_preserves_source_and_raw(
+    monkeypatch,
+):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = _repair_service(service_module, db=object())
+    listing = _listing_stub(listing_payload=_fallback_listing_payload())
+    parsed_detail = parse_offertoday_detail_response(
+        {"code": 0, "data": _sample_detail_raw_missing_encrypted()}
+    )
+    raw_before = deepcopy(parsed_detail["raw_data"])
+    expected_result = service_module.OfferTodayRepairResult(
+        action="updated",
+        description_repaired=True,
+        company_reassigned=False,
+        listing_attached=False,
+    )
+    persisted_canonical = []
+    monkeypatch.setattr(service, "get_latest_listing", lambda _id: listing)
+
+    def fake_persist(job, canonical, persisted_listing):
+        persisted_canonical.append(canonical)
+        assert persisted_listing is listing
+        return expected_result
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fake_persist)
+
+    assert service.repair_job_with_parsed_detail(_job_stub(), parsed_detail) is expected_result
+
+    assert listing.detail_payload["job_id"] == "jid-1"
+    assert listing.detail_payload["encrypted_job_id"] == "jid-1"
+    assert listing.detail_payload["encrypted_job_id_source"] == "jobId_fallback"
+    assert listing.detail_payload["raw_data"] == raw_before
+    assert "encryptJobId" not in listing.detail_payload["raw_data"]
+    assert persisted_canonical[0].source_url.endswith("/jid-1")
+
+
+def test_repair_authority_promotes_cached_and_offline_parsed_repair_route(
+    monkeypatch,
+):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    listing = _listing_stub(listing_payload=_fallback_listing_payload())
+    parsed_detail = parse_offertoday_detail_response(
+        {"code": 0, "data": _sample_detail_raw_missing_encrypted()}
+    )
+    listing.detail_status = "completed"
+    listing.detail_payload = deepcopy(parsed_detail)
+    listing_before = deepcopy(vars(listing))
+    raw_before = deepcopy(parsed_detail["raw_data"])
+    service = _repair_service(
+        service_module,
+        db=object(),
+        identity_history=[
+            _identity_history_row("jid-1", _fallback_listing_payload()),
+        ],
+        identity_observations=[
+            _explicit_identity_observation("jid-1", "enc-promoted"),
+        ],
+    )
+    expected_result = service_module.OfferTodayRepairResult(
+        action="updated",
+        description_repaired=True,
+        company_reassigned=False,
+        listing_attached=False,
+    )
+    persisted_canonical = []
+    monkeypatch.setattr(service, "get_latest_listing", lambda _id: listing)
+    monkeypatch.setattr(service, "get_latest_completed_listing", lambda _id: listing)
+
+    def fake_persist(job, canonical, persisted_listing):
+        persisted_canonical.append(canonical)
+        assert persisted_listing is listing
+        return expected_result
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fake_persist)
+
+    assert service.repair_job(_job_stub()) is expected_result
+    assert vars(listing) == listing_before
+    assert persisted_canonical[-1].source_url.endswith("/enc-promoted")
+
+    assert service.repair_job_with_parsed_detail(_job_stub(), parsed_detail) is expected_result
+    assert listing.detail_payload["job_id"] == "jid-1"
+    assert listing.detail_payload["encrypted_job_id"] == "enc-promoted"
+    assert listing.detail_payload["encrypted_job_id_source"] == "encryptJobId"
+    assert listing.detail_payload["raw_data"] == raw_before
+    assert "encryptJobId" not in listing.detail_payload["raw_data"]
+    assert persisted_canonical[-1].source_url.endswith("/enc-promoted")
+
+
+def test_repair_authority_promotes_typed_detail_result_route_and_preserves_raw(
+    monkeypatch,
+):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    listing = _listing_stub(listing_payload=_fallback_listing_payload())
+    response_data = _sample_detail_raw_missing_encrypted()
+    parsed_detail = parse_offertoday_detail_response(
+        {"code": 0, "data": response_data}
+    )
+    canonical_detail = {
+        **parsed_detail,
+        "job_id": "jid-1",
+        "encrypted_job_id": "enc-promoted",
+        "encrypted_job_id_source": "encryptJobId",
+    }
+    result = _detail_fetch_result(
+        encrypted_job_id="enc-promoted",
+        encrypted_job_id_source="encryptJobId",
+        payload={"code": 0, "data": response_data},
+        canonical_detail=canonical_detail,
+    )
+    service = _repair_service(
+        service_module,
+        db=object(),
+        identity_history=[
+            _identity_history_row("jid-1", _fallback_listing_payload()),
+        ],
+        identity_observations=[
+            _explicit_identity_observation("jid-1", "enc-promoted"),
+        ],
+    )
+    expected_result = service_module.OfferTodayRepairResult(
+        action="updated",
+        description_repaired=True,
+        company_reassigned=False,
+        listing_attached=False,
+    )
+    persisted_canonical = []
+    monkeypatch.setattr(service, "get_latest_listing", lambda _id: listing)
+
+    def fake_persist(job, canonical, persisted_listing):
+        persisted_canonical.append(canonical)
+        return expected_result
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fake_persist)
+
+    assert service.repair_job_with_detail_result(_job_stub(), result) is expected_result
+
+    assert listing.detail_payload["job_id"] == "jid-1"
+    assert listing.detail_payload["encrypted_job_id"] == "enc-promoted"
+    assert listing.detail_payload["encrypted_job_id_source"] == "encryptJobId"
+    assert listing.detail_payload["raw_data"] == response_data
+    assert "encryptJobId" not in listing.detail_payload["raw_data"]
+    assert persisted_canonical[-1].source_url.endswith("/enc-promoted")
 
 
 @pytest.mark.asyncio
@@ -1700,7 +2203,7 @@ async def test_terminal_detail_is_classified_once_not_parsed_and_marks_all_canon
 
     latest = _listing_stub()
     historical = _listing_stub()
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: latest)
     monkeypatch.setattr(
         service,
@@ -1759,7 +2262,7 @@ async def test_repair_success_consumes_parsed_once_typed_result(monkeypatch):
         encrypted_job_id="enc-jid-1",
     )
 
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     captured: dict[str, object] = {}
     expected_repair_result = service_module.OfferTodayRepairResult(
@@ -1830,8 +2333,9 @@ async def test_repair_success_updates_job_description_with_one_parse_across_scra
         db.add_all([company, job, listing])
         db.commit()
 
-        repair_result = service_module.OfferTodayJobRepairService(
-            db
+        repair_result = _repair_service(
+            service_module,
+            db=db,
         ).repair_job_with_detail_result(job, fetch_result)
         db.flush()
         db.refresh(job)
@@ -1862,7 +2366,7 @@ def test_repair_detail_result_rejects_result_owned_by_another_job_before_mutatio
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     listing_before = dict(vars(listing))
     result = _detail_fetch_result(
@@ -1887,6 +2391,45 @@ def test_repair_detail_result_rejects_result_owned_by_another_job_before_mutatio
     assert vars(listing) == listing_before
 
 
+def test_repair_detail_result_rejects_same_route_provenance_mismatch_before_mutation(
+    monkeypatch,
+):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    listing = _listing_stub(listing_payload=_fallback_listing_payload())
+    listing_before = deepcopy(vars(listing))
+    service = _repair_service(
+        service_module,
+        db=object(),
+        identity_history=[
+            _identity_history_row("jid-1", _fallback_listing_payload()),
+        ],
+        identity_observations=[
+            _explicit_identity_observation("jid-1", "jid-1"),
+        ],
+    )
+    result = _detail_fetch_result(
+        encrypted_job_id="jid-1",
+        encrypted_job_id_source="jobId_fallback",
+    )
+    monkeypatch.setattr(service, "get_latest_listing", lambda _id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("provenance mismatch must fail before persistence")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"expected.*source='encryptJobId'.*result.*source='jobId_fallback'",
+    ):
+        service.repair_job_with_detail_result(_job_stub(), result)
+
+    assert vars(listing) == listing_before
+
+
 def test_repair_detail_result_rejects_canonical_identity_mismatch_before_mutation(
     monkeypatch,
 ):
@@ -1894,7 +2437,7 @@ def test_repair_detail_result_rejects_canonical_identity_mismatch_before_mutatio
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     listing_before = dict(vars(listing))
     result = _detail_fetch_result(
@@ -1925,7 +2468,7 @@ def test_repair_detail_result_build_failure_leaves_listing_unchanged(monkeypatch
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     listing_before = dict(vars(listing))
     result = _detail_fetch_result()
@@ -1952,7 +2495,7 @@ def test_repair_detail_result_persist_failure_leaves_listing_unchanged(monkeypat
     service_module = importlib.import_module(
         "app.services.offertoday_job_repair_service"
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     listing_before = dict(vars(listing))
     result = _detail_fetch_result()
@@ -2013,7 +2556,7 @@ def test_repair_non_success_records_evidence_without_merging_job(
         parsed_detail=None,
         canonical_detail=None,
     )
-    service = service_module.OfferTodayJobRepairService(db=object())
+    service = _repair_service(service_module, db=object())
     listing = _listing_stub()
     job = _job_stub()
     job_before = dict(vars(job))
@@ -2042,6 +2585,7 @@ def test_repair_non_success_records_evidence_without_merging_job(
     assert evidence == {
         "code": classification.code,
         "encrypted_job_id": "enc-jid-1",
+        "encrypted_job_id_source": "encryptJobId",
         "job_id": "jid-1",
         "kind": expected_kind.value,
         "message": classification.message,

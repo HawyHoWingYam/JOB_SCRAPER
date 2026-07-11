@@ -1163,9 +1163,13 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
             captured["latest_listing_for"] = source_job_id
             return None
 
-        def resolve_detail_identifiers(self, _job, listing):
+        def resolve_detail_identity(self, _job, listing):
             captured["resolved_listing"] = listing
-            return ("jid-1", "enc-jid-1")
+            return identity_module.OfferTodayDetailIdentity(
+                job_id="jid-1",
+                encrypted_job_id="enc-jid-1",
+                encrypted_job_id_source="encryptJobId",
+            )
 
         def repair_job_with_detail_result(self, _job, detail_result):
             captured["detail_result"] = detail_result
@@ -1187,14 +1191,23 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
             return None
 
         async def fetch_job_detail(
-            self, job_id: str, *, encrypted_job_id: str | None = None
+            self,
+            job_id: str,
+            *,
+            encrypted_job_id: str | None = None,
+            encrypted_job_id_source: str | None = None,
         ):
-            captured["fetch_call"] = (job_id, encrypted_job_id)
+            captured["fetch_call"] = (
+                job_id,
+                encrypted_job_id,
+                encrypted_job_id_source,
+            )
             raw_response = {"code": 0, "data": {"jobId": job_id}}
             detail_result = identity_module.OfferTodayDetailFetchResult(
                 identity=identity_module.OfferTodayDetailIdentity(
                     job_id=job_id,
                     encrypted_job_id=encrypted_job_id,
+                    encrypted_job_id_source=encrypted_job_id_source,
                 ),
                 classification=policy_module.classify_offertoday_response(
                     raw_response,
@@ -1206,6 +1219,7 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
                 canonical_detail={
                     "job_id": job_id,
                     "encrypted_job_id": encrypted_job_id,
+                    "encrypted_job_id_source": encrypted_job_id_source,
                 },
             )
             captured["scraper_detail_result"] = detail_result
@@ -1224,7 +1238,11 @@ async def test_repair_jobs_passes_resume_strategy_to_browser_scraper(monkeypatch
     assert captured["scraper_kwargs"]["request_payload"] == {
         "resume_strategy": RESUME_STRATEGY_REUSE_OPEN_BROWSER
     }
-    assert captured["fetch_call"] == ("jid-1", "enc-jid-1")
+    assert captured["fetch_call"] == (
+        "jid-1",
+        "enc-jid-1",
+        "encryptJobId",
+    )
     assert captured["detail_result"] is captured["scraper_detail_result"]
     assert result["live_repaired_descriptions"] == 1
 
@@ -1260,7 +1278,7 @@ async def test_repair_jobs_records_terminal_detail_without_generic_failure_and_c
         )
         for job in jobs
     }
-    fetch_calls: list[str] = []
+    fetch_calls: list[tuple[str, str, str]] = []
     consumed_results: list[object] = []
 
     class _FakeSession:
@@ -1291,8 +1309,18 @@ async def test_repair_jobs_records_terminal_detail_without_generic_failure_and_c
         def get_latest_listing(self, source_job_id: str):
             return listings[source_job_id]
 
-        def resolve_detail_identifiers(self, _job, _listing):
-            return (_job.source_job_id, f"enc-{_job.source_job_id}")
+        def resolve_detail_identity(self, _job, _listing):
+            if _job.source_job_id == "jid-terminal":
+                return identity_module.OfferTodayDetailIdentity(
+                    job_id=_job.source_job_id,
+                    encrypted_job_id=_job.source_job_id,
+                    encrypted_job_id_source="jobId_fallback",
+                )
+            return identity_module.OfferTodayDetailIdentity(
+                job_id=_job.source_job_id,
+                encrypted_job_id=f"enc-{_job.source_job_id}",
+                encrypted_job_id_source="encryptJobId",
+            )
 
         def repair_job_with_detail_result(self, target_job, detail_result):
             consumed_results.append(detail_result)
@@ -1331,9 +1359,15 @@ async def test_repair_jobs_records_terminal_detail_without_generic_failure_and_c
             return None
 
         async def fetch_job_detail(
-            self, job_id: str, *, encrypted_job_id: str | None = None
+            self,
+            job_id: str,
+            *,
+            encrypted_job_id: str | None = None,
+            encrypted_job_id_source: str | None = None,
         ):
-            fetch_calls.append(job_id)
+            fetch_calls.append(
+                (job_id, encrypted_job_id, encrypted_job_id_source)
+            )
             if job_id == "jid-terminal":
                 raw_response = {
                     "code": 2520,
@@ -1348,11 +1382,13 @@ async def test_repair_jobs_records_terminal_detail_without_generic_failure_and_c
                 canonical_detail = {
                     "job_id": job_id,
                     "encrypted_job_id": encrypted_job_id,
+                    "encrypted_job_id_source": encrypted_job_id_source,
                 }
             return identity_module.OfferTodayDetailFetchResult(
                 identity=identity_module.OfferTodayDetailIdentity(
                     job_id=job_id,
                     encrypted_job_id=encrypted_job_id,
+                    encrypted_job_id_source=encrypted_job_id_source,
                 ),
                 classification=policy_module.classify_offertoday_response(
                     raw_response,
@@ -1375,7 +1411,10 @@ async def test_repair_jobs_records_terminal_detail_without_generic_failure_and_c
     )
 
     terminal_listing = listings["jid-terminal"]
-    assert fetch_calls == ["jid-terminal", "jid-success"]
+    assert fetch_calls == [
+        ("jid-terminal", "jid-terminal", "jobId_fallback"),
+        ("jid-success", "enc-jid-success", "encryptJobId"),
+    ]
     assert len(consumed_results) == 2
     assert all(
         isinstance(result, identity_module.OfferTodayDetailFetchResult)

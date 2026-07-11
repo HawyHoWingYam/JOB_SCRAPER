@@ -75,16 +75,17 @@ async def repair_jobs(
                     for job in live_candidates:
                         listing = service.get_latest_listing(job.source_job_id)
                         try:
-                            job_id, encrypted_job_id = (
-                                service.resolve_detail_identifiers(
-                                    job,
-                                    listing,
-                                )
+                            identity = service.resolve_detail_identity(
+                                job,
+                                listing,
                             )
                             await pause_before_detail_request()
                             detail_result = await scraper.fetch_job_detail(
-                                job_id,
-                                encrypted_job_id=encrypted_job_id,
+                                identity.job_id,
+                                encrypted_job_id=identity.encrypted_job_id,
+                                encrypted_job_id_source=(
+                                    identity.encrypted_job_id_source
+                                ),
                             )
                         except OfferTodayIdentityError as exc:
                             live_fetch_failed += 1

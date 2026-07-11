@@ -353,6 +353,28 @@ def _runtime_target(
     }
 
 
+def _fallback_runtime_target(source_job_id="100"):
+    target = _runtime_target(source_job_id)
+    target["listing_payload"] = {
+        "job_id": source_job_id,
+        "encrypted_job_id": source_job_id,
+        "encrypted_job_id_source": "jobId_fallback",
+        "title": "Listing title",
+        "company_name": "Listing company",
+        "listing_only_marker": "do-not-copy-to-detail-payload",
+        "raw_data": {
+            "jobId": source_job_id,
+            "brandId": "listing-brand",
+        },
+    }
+    target["identity"] = OfferTodayDetailIdentity(
+        job_id=source_job_id,
+        encrypted_job_id=source_job_id,
+        encrypted_job_id_source="jobId_fallback",
+    )
+    return target
+
+
 def _success_response(source_job_id="100", *, include_encrypted=True):
     data = {
         "jobId": source_job_id,
@@ -456,7 +478,7 @@ def test_detail_fetcher_is_a_per_call_dependency_not_constructor_state():
 
 
 @pytest.mark.asyncio
-async def test_success_persists_job_and_completes_canonical_group_atomically():
+async def test_success_persists_authority_and_completes_canonical_group_atomically():
     env = _build_pipeline([_success_response()])
     target = OfferTodayDetailTarget.from_runtime_target(_runtime_target())
 
@@ -493,6 +515,8 @@ async def test_success_persists_job_and_completes_canonical_group_atomically():
     payload = persisted[0]["payload"]
     assert payload["listing_ids"] == ["listing-a", "listing-b"]
     assert payload["source_job_id"] == "100"
+    assert payload["encrypted_job_id"] == "enc-100"
+    assert payload["encrypted_job_id_source"] == "encryptJobId"
     assert payload["published_job_id"] == "job:100"
     success_sessions = [
         session
@@ -503,13 +527,99 @@ async def test_success_persists_job_and_completes_canonical_group_atomically():
     assert success_sessions[0].commits == 1
     expected_hash = hashlib.sha256(
         json.dumps(
-            {"encrypted_job_id": "enc-100", "job_id": "100"},
+            {
+                "encrypted_job_id": "enc-100",
+                "encrypted_job_id_source": "encryptJobId",
+                "job_id": "100",
+            },
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
     assert payload["response_identity_hash"] == expected_hash
+
+
+@pytest.mark.asyncio
+async def test_fallback_target_persists_request_owned_identity_and_exact_response_raw():
+    raw_response = _success_response(include_encrypted=False)
+    env = _build_pipeline([raw_response])
+    target = OfferTodayDetailTarget.from_runtime_target(_fallback_runtime_target())
+
+    result = await env.pipeline.process_target(
+        target=target,
+        detail_crawl_job_id="detail-run",
+        fetch_detail=env.fetcher,
+    )
+
+    assert result.outcome is OfferTodayResponseKind.SUCCESS
+    assert env.fetcher.calls == [("100", "100")]
+    stored_detail = env.store.rows["listing-a"]["detail_payload"]
+    assert stored_detail["job_id"] == "100"
+    assert stored_detail["encrypted_job_id"] == "100"
+    assert stored_detail["encrypted_job_id_source"] == "jobId_fallback"
+    assert stored_detail["raw_data"] == raw_response["data"]
+    assert "encryptJobId" not in stored_detail["raw_data"]
+    assert "listing_only_marker" not in stored_detail
+    assert set(env.store.companies) == {"listing-brand"}
+
+    attempt_event = _attempt_events(env.store)[0]
+    assert attempt_event["payload"]["detail_crawl_job_id"] == "detail-run"
+    assert attempt_event["payload"]["encrypted_job_id_source"] == (
+        "jobId_fallback"
+    )
+    persisted_event = next(
+        event
+        for event in env.store.events
+        if event["event_type"] == "crawl.detail_persisted"
+    )
+    assert persisted_event["payload"]["encrypted_job_id"] == "100"
+    assert persisted_event["payload"]["encrypted_job_id_source"] == (
+        "jobId_fallback"
+    )
+    expected_hash = hashlib.sha256(
+        json.dumps(
+            {
+                "encrypted_job_id": "100",
+                "encrypted_job_id_source": "jobId_fallback",
+                "job_id": "100",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert persisted_event["payload"]["response_identity_hash"] == expected_hash
+
+
+@pytest.mark.asyncio
+async def test_pipeline_promotes_explicit_target_and_persists_untouched_response_raw():
+    runtime_target = _fallback_runtime_target()
+    runtime_target["identity"] = OfferTodayDetailIdentity(
+        job_id="100",
+        encrypted_job_id="enc-100",
+        encrypted_job_id_source="encryptJobId",
+    )
+    listing_before = deepcopy(runtime_target["listing_payload"])
+    raw_response = _success_response(include_encrypted=False)
+    env = _build_pipeline([raw_response])
+
+    result = await env.pipeline.process_target(
+        target=OfferTodayDetailTarget.from_runtime_target(runtime_target),
+        detail_crawl_job_id="detail-run",
+        fetch_detail=env.fetcher,
+    )
+
+    assert result.outcome is OfferTodayResponseKind.SUCCESS
+    assert env.fetcher.calls == [("100", "enc-100")]
+    stored_detail = env.store.rows["listing-a"]["detail_payload"]
+    assert stored_detail["job_id"] == "100"
+    assert stored_detail["encrypted_job_id"] == "enc-100"
+    assert stored_detail["encrypted_job_id_source"] == "encryptJobId"
+    assert stored_detail["raw_data"] == raw_response["data"]
+    assert "encryptJobId" not in stored_detail["raw_data"]
+    assert "listing_only_marker" not in stored_detail
+    assert runtime_target["listing_payload"] == listing_before
 
 
 @pytest.mark.asyncio
@@ -582,8 +692,10 @@ async def test_transient_transport_retries_three_times_and_only_authoritative_at
     ]
     assert all(event["payload"]["latency_ms"] >= 0 for event in attempts)
     expected_event_keys = {
+        "detail_crawl_job_id",
         "source_job_id",
         "encrypted_job_id",
+        "encrypted_job_id_source",
         "attempt",
         "classification",
         "api_code",

@@ -131,7 +131,7 @@ class OfferTodayDetailPipeline:
         fetch_detail: DetailFetcher,
     ) -> OfferTodayDetailProcessResult:
         prepared_payload: dict[str, Any] | None = None
-        parsed_detail_payload: dict[str, Any] | None = None
+        persisted_detail_payload: dict[str, Any] | None = None
         canonical_job = None
         classification: OfferTodayResponseClassification | None = None
 
@@ -188,14 +188,17 @@ class OfferTodayDetailPipeline:
                     parsed_detail = parse_offertoday_detail_response(
                         classification.raw_payload or {}
                     )
-                    parsed_detail_payload = parsed_detail
                     validate_offertoday_detail_identity(
                         target.identity,
                         parsed_detail,
                     )
-                    prepared_payload = self._build_canonical_payload(
+                    persisted_detail_payload = self._build_persisted_detail_payload(
                         target=target,
                         parsed_detail=parsed_detail,
+                    )
+                    prepared_payload = self._build_canonical_payload(
+                        target=target,
+                        persisted_detail=persisted_detail_payload,
                     )
                     canonical_job = build_offertoday_canonical_job(prepared_payload)
                     self._validate_required_canonical_fields(canonical_job)
@@ -295,14 +298,14 @@ class OfferTodayDetailPipeline:
 
         if (
             prepared_payload is None
-            or parsed_detail_payload is None
+            or persisted_detail_payload is None
             or canonical_job is None
         ):
             raise RuntimeError("Successful OfferToday detail classification has no canonical payload")
         return self._persist_success(
             target=target,
             detail_crawl_job_id=detail_crawl_job_id,
-            detail_payload=parsed_detail_payload,
+            detail_payload=persisted_detail_payload,
             failure_detail_payload=classification.raw_payload,
             canonical_job=canonical_job,
         )
@@ -364,8 +367,12 @@ class OfferTodayDetailPipeline:
             event_type="crawl.detail_attempt",
             emitted_by="offertoday-detail-pipeline",
             payload={
+                "detail_crawl_job_id": str(detail_crawl_job_id),
                 "source_job_id": target.identity.job_id,
                 "encrypted_job_id": target.identity.encrypted_job_id,
+                "encrypted_job_id_source": (
+                    target.identity.encrypted_job_id_source
+                ),
                 "attempt": int(attempt),
                 "classification": classification.kind.value,
                 "api_code": classification.code,
@@ -377,33 +384,36 @@ class OfferTodayDetailPipeline:
         )
 
     @staticmethod
-    def _build_canonical_payload(
+    def _build_persisted_detail_payload(
         *,
         target: OfferTodayDetailTarget,
         parsed_detail: dict[str, Any],
     ) -> dict[str, Any]:
-        listing_raw = dict(target.listing_payload.get("raw_data") or {})
-        detail_raw = dict(parsed_detail.get("raw_data") or {})
-        merged = {
-            **deepcopy(target.listing_payload),
+        detail_raw = deepcopy(dict(parsed_detail.get("raw_data") or {}))
+        return {
             **deepcopy(parsed_detail),
+            "job_id": target.identity.job_id,
+            "encrypted_job_id": target.identity.encrypted_job_id,
+            "encrypted_job_id_source": target.identity.encrypted_job_id_source,
+            "canonical_job_url": build_offertoday_job_url(
+                target.identity.encrypted_job_id
+            ),
+            "raw_data": detail_raw,
         }
-        merged["job_id"] = target.identity.job_id
-        merged["encrypted_job_id"] = target.identity.encrypted_job_id
-        merged["encrypted_job_id_source"] = target.identity.encrypted_job_id_source
-        merged["jobId"] = target.identity.job_id
-        merged["encryptJobId"] = target.identity.encrypted_job_id
-        merged["canonical_job_url"] = build_offertoday_job_url(
-            target.identity.encrypted_job_id
-        )
-        merged["raw_data"] = {
-            **listing_raw,
-            **detail_raw,
-            "jobId": target.identity.job_id,
-            "encryptJobId": target.identity.encrypted_job_id,
-            "canonical_job_url": merged["canonical_job_url"],
+
+    @staticmethod
+    def _build_canonical_payload(
+        *,
+        target: OfferTodayDetailTarget,
+        persisted_detail: dict[str, Any],
+    ) -> dict[str, Any]:
+        listing_raw = deepcopy(dict(target.listing_payload.get("raw_data") or {}))
+        detail_raw = deepcopy(dict(persisted_detail.get("raw_data") or {}))
+        return {
+            **deepcopy(target.listing_payload),
+            **deepcopy(persisted_detail),
+            "raw_data": {**listing_raw, **detail_raw},
         }
-        return merged
 
     @staticmethod
     def _validate_required_canonical_fields(canonical_job) -> None:
@@ -461,6 +471,8 @@ class OfferTodayDetailPipeline:
                 db,
                 detail_crawl_job_id=detail_crawl_job_id,
                 source_job_id=target.identity.job_id,
+                encrypted_job_id=target.identity.encrypted_job_id,
+                encrypted_job_id_source=target.identity.encrypted_job_id_source,
                 listing_ids=target.listing_ids,
                 published_job_id=published_job.id,
                 response_identity_hash=self._response_identity_hash(target.identity),
@@ -496,6 +508,7 @@ class OfferTodayDetailPipeline:
         canonical_json = json.dumps(
             {
                 "encrypted_job_id": identity.encrypted_job_id,
+                "encrypted_job_id_source": identity.encrypted_job_id_source,
                 "job_id": identity.job_id,
             },
             ensure_ascii=False,
