@@ -4,6 +4,10 @@ from dataclasses import replace
 
 import pytest
 
+from app.sources.offertoday.detail_identity import (
+    OfferTodayEncryptedJobIdSource,
+    OfferTodayIdentityError,
+)
 from app.sources.offertoday.listing_runner import (
     ListingGap,
     ListingIdentityConflict,
@@ -26,10 +30,15 @@ from app.sources.offertoday.research.smoke import (
 from app.sources.offertoday.response_policy import OfferTodayResponseKind
 
 
-def pair(job_id: str, encrypted_job_id: str) -> OfferTodayIdentityPair:
+def pair(
+    job_id: str,
+    encrypted_job_id: str,
+    source: OfferTodayEncryptedJobIdSource = "encryptJobId",
+) -> OfferTodayIdentityPair:
     return OfferTodayIdentityPair(
         job_id=job_id,
         encrypted_job_id=encrypted_job_id,
+        encrypted_job_id_source=source,
     )
 
 
@@ -51,6 +60,7 @@ def page_observation(**changes) -> ListingPageObservation:
         "row_count": 20,
         "missing_job_id_count": 0,
         "missing_encrypted_job_id_count": 0,
+        "job_id_fallback_count": 0,
         "id_pairs": (),
         "rows": (),
         "identity_issues": (),
@@ -153,8 +163,6 @@ def test_freeze_detail_cohort_is_distinct_first_seen_and_accepted_only() -> None
             pair("j1", "e1"),
             pair("j2", "e2"),
             pair("j1", "e1-duplicate"),
-            pair("", "missing-job"),
-            pair("j-missing-encrypted", ""),
             pair("j3", "e3"),
         ),
     )
@@ -165,6 +173,34 @@ def test_freeze_detail_cohort_is_distinct_first_seen_and_accepted_only() -> None
     )
 
 
+@pytest.mark.parametrize(
+    ("malformed_pair", "classification"),
+    (
+        (pair("", "missing-job"), "missing_job_id"),
+        (pair("j-missing-encrypted", ""), "missing_encrypted_job_id"),
+        (
+            pair("j-fallback", "different-route", "jobId_fallback"),
+            "encrypted_job_id_source_conflict",
+        ),
+    ),
+    ids=("blank-job-id", "blank-encrypted-job-id", "fallback-route-mismatch"),
+)
+def test_freeze_detail_cohort_rejects_malformed_identity_pairs(
+    malformed_pair: OfferTodayIdentityPair,
+    classification: str,
+) -> None:
+    result = listing_result(
+        ordered_job_ids=("j1",),
+        accepted_job_ids=("j1",),
+        id_pairs=(pair("j1", "e1"), malformed_pair),
+    )
+
+    with pytest.raises(OfferTodayIdentityError) as exc_info:
+        freeze_detail_smoke_cohort(result, limit=20)
+
+    assert exc_info.value.classification == classification
+
+
 def test_freeze_detail_cohort_returns_all_available_when_fewer_than_limit() -> None:
     result = listing_result(
         ordered_job_ids=("j1", "j2"),
@@ -173,6 +209,28 @@ def test_freeze_detail_cohort_returns_all_available_when_fewer_than_limit() -> N
     )
 
     assert freeze_detail_smoke_cohort(result, limit=20) == (target(1), target(2))
+
+
+def test_freeze_detail_cohort_preserves_jobid_fallback_provenance() -> None:
+    result = listing_result(
+        ordered_job_ids=("j1",),
+        accepted_job_ids=("j1",),
+        id_pairs=(pair("j1", "j1", "jobId_fallback"),),
+    )
+
+    frozen = freeze_detail_smoke_cohort(result, limit=1)
+
+    assert frozen == (
+        DetailSmokeTarget(
+            position=1,
+            job_id="j1",
+            encrypted_job_id="j1",
+            encrypted_job_id_source="jobId_fallback",
+        ),
+    )
+    payload = frozen[0].to_payload()
+    assert payload["encrypted_job_id_source"] == "jobId_fallback"
+    assert len(payload["identity_resolution_hash"]) == 64
 
 
 @pytest.mark.parametrize("limit", [True, 0, -1])
@@ -368,5 +426,7 @@ def test_detail_target_payload_contains_raw_ids_and_deterministic_hashes() -> No
     assert payload["position"] == 1
     assert payload["job_id"] == "j1"
     assert payload["encrypted_job_id"] == "e1"
+    assert payload["encrypted_job_id_source"] == "encryptJobId"
     assert len(payload["job_id_hash"]) == 64
     assert len(payload["encrypted_job_id_hash"]) == 64
+    assert len(payload["identity_resolution_hash"]) == 64

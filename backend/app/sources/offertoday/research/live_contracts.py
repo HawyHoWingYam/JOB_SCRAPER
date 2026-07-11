@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
+from app.sources.offertoday.detail_identity import (
+    OfferTodayDetailIdentity,
+    OfferTodayEncryptedJobIdSource,
+)
 from app.sources.offertoday.listing_runner import ListingRunResult
 
 
@@ -12,26 +17,38 @@ class DetailSmokeTarget:
     position: int
     job_id: str
     encrypted_job_id: str
+    encrypted_job_id_source: OfferTodayEncryptedJobIdSource = "encryptJobId"
 
     def __post_init__(self) -> None:
         if type(self.position) is not int or self.position < 1:
             raise ValueError("position must be a positive exact integer")
-        if not isinstance(self.job_id, str) or not self.job_id.strip():
-            raise ValueError("job_id must be a nonblank string")
-        if (
-            not isinstance(self.encrypted_job_id, str)
-            or not self.encrypted_job_id.strip()
-        ):
-            raise ValueError("encrypted_job_id must be a nonblank string")
+        OfferTodayDetailIdentity(
+            job_id=self.job_id,
+            encrypted_job_id=self.encrypted_job_id,
+            encrypted_job_id_source=self.encrypted_job_id_source,
+        )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
-            "position": self.position,
+        identity_payload = {
             "job_id": self.job_id,
             "encrypted_job_id": self.encrypted_job_id,
+            "encrypted_job_id_source": self.encrypted_job_id_source,
+        }
+        identity_canonical = json.dumps(
+            identity_payload,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return {
+            "position": self.position,
+            **identity_payload,
             "job_id_hash": hashlib.sha256(self.job_id.encode()).hexdigest(),
             "encrypted_job_id_hash": hashlib.sha256(
                 self.encrypted_job_id.encode()
+            ).hexdigest(),
+            "identity_resolution_hash": hashlib.sha256(
+                identity_canonical.encode()
             ).hexdigest(),
         }
 

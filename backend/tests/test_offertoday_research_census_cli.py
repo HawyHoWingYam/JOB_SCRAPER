@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -14,8 +15,10 @@ import pytest
 import scripts.offertoday_research_census as census_cli
 from app.sources.offertoday.listing_runner import (
     ListingPageObservation,
+    ListingRowEvidence,
     ListingRunResult,
     OfferTodayIdentityPair,
+    listing_observation_to_payload,
 )
 from app.sources.offertoday.research.artifacts import (
     ArtifactVerificationResult,
@@ -102,8 +105,21 @@ def baseline_artifact(
 def listing_result(count: int = 20) -> ListingRunResult:
     condition = build_runtime_smoke_condition()
     pairs = tuple(
-        OfferTodayIdentityPair(f"j{index}", f"e{index}")
+        OfferTodayIdentityPair(f"j{index}", f"e{index}", "encryptJobId")
         for index in range(1, count + 1)
+    )
+    rows = tuple(
+        ListingRowEvidence(
+            job_id=pair.job_id,
+            encrypted_job_id=pair.encrypted_job_id,
+            encrypted_job_id_source=pair.encrypted_job_id_source,
+            observed_encrypted_job_id=pair.encrypted_job_id,
+            title=f"Title {pair.job_id}",
+            job_function_codes=("118000",),
+            title_language="en",
+            api_language="zh_HK",
+        )
+        for pair in pairs
     )
     observation = ListingPageObservation(
         condition_id=condition.condition_id,
@@ -122,8 +138,9 @@ def listing_result(count: int = 20) -> ListingRunResult:
         row_count=count,
         missing_job_id_count=0,
         missing_encrypted_job_id_count=0,
+        job_id_fallback_count=0,
         id_pairs=pairs,
-        rows=(),
+        rows=rows,
         identity_issues=(),
         identity_conflicts=(),
         latency_ms=50,
@@ -153,7 +170,31 @@ def execution(
 ) -> LiveSmokeExecution:
     result = listing_result(target_count)
     if listing_stop_reason is not None:
-        result = replace(result, stop_reason=listing_stop_reason)
+        hard_stop_observation = replace(
+            result.observations[0],
+            classification=listing_stop_reason,
+            api_code=(1002 if listing_stop_reason == "auth_expired" else None),
+            reported_total=None,
+            has_more=None,
+            row_count=0,
+            missing_job_id_count=0,
+            missing_encrypted_job_id_count=0,
+            job_id_fallback_count=0,
+            id_pairs=(),
+            rows=(),
+            identity_issues=(),
+            identity_conflicts=(),
+            retry_reason=None,
+            stop_reason=listing_stop_reason,
+        )
+        result = replace(
+            result,
+            ordered_job_ids=(),
+            accepted_job_ids=(),
+            id_pairs=(),
+            observations=(hard_stop_observation,),
+            stop_reason=listing_stop_reason,
+        )
         targets: tuple[DetailSmokeTarget, ...] = ()
     else:
         targets = tuple(
@@ -194,6 +235,94 @@ def execution(
         would_stage_rows=0,
         stage_calls=0,
     )
+
+
+def _summary_state():
+    product_data = ProductDataSnapshot.from_table_hashes(
+        staged_rows_hash="a" * 64,
+        published_jobs_hash="b" * 64,
+        companies_hash="c" * 64,
+    )
+    snapshot = build_baseline_snapshot(
+        listings=[],
+        jobs=[],
+        product_data=product_data,
+    )
+    inventory = build_run_start_inventory(listings=[], jobs=[])
+    return snapshot, inventory
+
+
+def test_build_summary_uses_execution_listing_identity_counts() -> None:
+    run = execution()
+    page = replace(
+        run.listing_result.observations[0],
+        missing_encrypted_job_id_count=20,
+        job_id_fallback_count=20,
+    )
+    run = replace(
+        run,
+        listing_result=replace(run.listing_result, observations=(page,)),
+    )
+    snapshot, inventory = _summary_state()
+
+    summary = census_cli._build_summary(
+        status="completed",
+        start_snapshot=snapshot,
+        start_inventory=inventory,
+        end_snapshot=snapshot,
+        end_inventory=inventory,
+        execution=run,
+        events_before_summary=[],
+        failure_reason=None,
+    )
+
+    assert summary["missing_encrypted_job_id_count"] == 20
+    assert summary["job_id_fallback_count"] == 20
+
+
+def test_build_summary_preserves_persisted_page_counts_after_unexpected_error() -> None:
+    snapshot, inventory = _summary_state()
+    events = [
+        {
+            "event_type": "research.page_attempt",
+            "payload": {
+                "missing_encrypted_job_id_count": 4,
+                "job_id_fallback_count": 3,
+            },
+        }
+    ]
+
+    summary = census_cli._build_summary(
+        status="failed",
+        start_snapshot=snapshot,
+        start_inventory=inventory,
+        end_snapshot=snapshot,
+        end_inventory=inventory,
+        execution=None,
+        events_before_summary=events,
+        failure_reason="unexpected_live_smoke_error:RuntimeError",
+    )
+
+    assert summary["missing_encrypted_job_id_count"] == 4
+    assert summary["job_id_fallback_count"] == 3
+
+
+def test_build_summary_records_zero_identity_counts_before_listing() -> None:
+    snapshot, inventory = _summary_state()
+
+    summary = census_cli._build_summary(
+        status="failed",
+        start_snapshot=snapshot,
+        start_inventory=inventory,
+        end_snapshot=snapshot,
+        end_inventory=inventory,
+        execution=None,
+        events_before_summary=[],
+        failure_reason="unexpected_live_smoke_error:RuntimeError",
+    )
+
+    assert summary["missing_encrypted_job_id_count"] == 0
+    assert summary["job_id_fallback_count"] == 0
 
 
 class FakeSession:
@@ -333,17 +462,13 @@ class FakeLiveService:
         assert observation_service.crawl_job_id == UUID(RUN_ID)
         observation_service.record_event(
             "research.page_attempt",
-            {
-                "search_family": "runtime_smoke",
-                "category_id": 118000,
-                "keyword": "",
-                "endpoint": "search",
-                "rcd_type": 7,
-                "page": 1,
-                "attempt": 1,
-                "classification": "success",
-                "session_mode": "fresh-headless",
-            },
+            listing_observation_to_payload(
+                (
+                    self.result.listing_result
+                    if isinstance(self.result, LiveSmokeExecution)
+                    else listing_result()
+                ).observations[0]
+            ),
         )
         if isinstance(self.result, BaseException):
             raise self.result
@@ -511,19 +636,11 @@ def test_verify_run_is_network_and_database_free(tmp_path) -> None:
     events = [
         {"sequence_no": 1, "event_type": "research.run_started", "payload": {}},
         {
-                "sequence_no": 2,
-                "event_type": "research.page_attempt",
-                "payload": {
-                    "search_family": "runtime_smoke",
-                    "category_id": 118000,
-                    "keyword": "",
-                    "endpoint": "search",
-                    "rcd_type": 7,
-                    "page": 1,
-                    "attempt": 1,
-                    "classification": "success",
-                    "session_mode": "fresh-headless",
-                },
+            "sequence_no": 2,
+            "event_type": "research.page_attempt",
+            "payload": listing_observation_to_payload(
+                listing_result().observations[0]
+            ),
         },
         {
             "sequence_no": 3,
@@ -574,6 +691,8 @@ def test_verify_run_is_network_and_database_free(tmp_path) -> None:
                 "success_count": 20,
                 "terminal_count": 0,
                 "unattempted_count": 0,
+                "missing_encrypted_job_id_count": 0,
+                "job_id_fallback_count": 0,
                 "stop_reason": None,
                 "product_data_unchanged": True,
                     "run_start_snapshot_hash": "d" * 64,
@@ -613,8 +732,9 @@ def test_verify_run_is_network_and_database_free(tmp_path) -> None:
     assert result == census_cli.EXIT_OK
 
 
-def test_successful_smoke_lifecycle_and_artifact(tmp_path) -> None:
+def test_successful_smoke_lifecycle_and_artifact(tmp_path, capsys) -> None:
     exit_code, state, session, artifact = invoke_smoke(tmp_path)
+    output = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
 
     assert exit_code == census_cli.EXIT_OK
     assert session.closed is True
@@ -627,6 +747,10 @@ def test_successful_smoke_lifecycle_and_artifact(tmp_path) -> None:
     assert state.finished[0]["summary"]["smoke_passed"] is True
     assert state.finished[0]["summary"]["listing_complete"] is False
     assert state.finished[0]["summary"]["expected_truncation"] is True
+    assert state.finished[0]["summary"]["missing_encrypted_job_id_count"] == 0
+    assert state.finished[0]["summary"]["job_id_fallback_count"] == 0
+    assert output["missing_encrypted_job_id_count"] == 0
+    assert output["job_id_fallback_count"] == 0
     assert state.finished[0]["summary"]["run_start_snapshot_hash"] == state.finished[0]["summary"]["run_end_snapshot_hash"]
     assert state.finished[0]["summary"]["run_start_inventory_hash"] == state.finished[0]["summary"]["run_end_inventory_hash"]
     assert verify_research_artifact(artifact).valid is True

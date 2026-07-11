@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.sources.offertoday.detail_identity import OfferTodayDetailIdentity
 from app.sources.offertoday.listing_runner import (
     ListingRunResult,
     OfferTodayListingCondition,
@@ -41,27 +42,28 @@ def freeze_detail_smoke_cohort(
     if type(limit) is not int or limit < 1:
         raise ValueError("limit must be a positive exact integer")
 
+    validated_identities = tuple(
+        OfferTodayDetailIdentity(
+            job_id=identity.job_id,
+            encrypted_job_id=identity.encrypted_job_id,
+            encrypted_job_id_source=identity.encrypted_job_id_source,
+        )
+        for identity in listing_result.id_pairs
+    )
     accepted_job_ids = set(listing_result.accepted_job_ids)
     seen_job_ids: set[str] = set()
     targets: list[DetailSmokeTarget] = []
-    for identity in listing_result.id_pairs:
+    for identity in validated_identities:
         job_id = identity.job_id
-        encrypted_job_id = identity.encrypted_job_id
-        if (
-            not isinstance(job_id, str)
-            or not job_id.strip()
-            or not isinstance(encrypted_job_id, str)
-            or not encrypted_job_id.strip()
-            or job_id not in accepted_job_ids
-            or job_id in seen_job_ids
-        ):
+        if job_id not in accepted_job_ids or job_id in seen_job_ids:
             continue
         seen_job_ids.add(job_id)
         targets.append(
             DetailSmokeTarget(
                 position=len(targets) + 1,
                 job_id=job_id,
-                encrypted_job_id=encrypted_job_id,
+                encrypted_job_id=identity.encrypted_job_id,
+                encrypted_job_id_source=identity.encrypted_job_id_source,
             )
         )
         if len(targets) == limit:

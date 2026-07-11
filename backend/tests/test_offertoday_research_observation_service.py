@@ -93,11 +93,14 @@ def listing_observation() -> ListingPageObservation:
         row_count=1,
         missing_job_id_count=0,
         missing_encrypted_job_id_count=0,
-        id_pairs=(OfferTodayIdentityPair("j-1", "enc-1"),),
+        job_id_fallback_count=0,
+        id_pairs=(OfferTodayIdentityPair("j-1", "enc-1", "encryptJobId"),),
         rows=(
             ListingRowEvidence(
                 job_id="j-1",
                 encrypted_job_id="enc-1",
+                encrypted_job_id_source="encryptJobId",
+                observed_encrypted_job_id="enc-1",
                 title="Data Engineer",
                 job_function_codes=("118000", "118005"),
                 title_language="en",
@@ -297,11 +300,20 @@ async def test_observation_sink_writes_ordered_minimal_events() -> None:
         "row_count": 1,
         "missing_job_id_count": 0,
         "missing_encrypted_job_id_count": 0,
-        "id_pairs": [{"job_id": "j-1", "encrypted_job_id": "enc-1"}],
+        "job_id_fallback_count": 0,
+        "id_pairs": [
+            {
+                "job_id": "j-1",
+                "encrypted_job_id": "enc-1",
+                "encrypted_job_id_source": "encryptJobId",
+            }
+        ],
         "rows": [
             {
                 "job_id": "j-1",
                 "encrypted_job_id": "enc-1",
+                "encrypted_job_id_source": "encryptJobId",
+                "observed_encrypted_job_id": "enc-1",
                 "title": "Data Engineer",
                 "job_function_codes": ["118000", "118005"],
                 "title_language": "en",
@@ -411,6 +423,7 @@ def test_live_lifecycle_records_ordered_events_and_terminal_smoke_metrics() -> N
             "success_count": 20,
             "terminal_count": 0,
             "unattempted_count": 0,
+            "job_id_fallback_count": 7,
         },
     )
 
@@ -436,6 +449,7 @@ def test_live_lifecycle_records_ordered_events_and_terminal_smoke_metrics() -> N
         "success_count": 20,
         "terminal_count": 0,
         "unattempted_count": 0,
+        "job_id_fallback_count": 7,
     }
 
 

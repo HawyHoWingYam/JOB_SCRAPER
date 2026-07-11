@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
+from app.sources.offertoday.detail_identity import (
+    OfferTodayEncryptedJobIdSource,
+)
 from app.sources.offertoday.research.artifacts import (
     ResearchProvenance,
     export_research_artifact,
@@ -28,6 +32,24 @@ BASELINE_COUNTS = {
     "pending_rows": 25,
     "duplicate_staging_rows": 20,
 }
+
+
+def _identity_resolution_hash(
+    job_id: str,
+    encrypted_job_id: str,
+    source: OfferTodayEncryptedJobIdSource,
+) -> str:
+    canonical = json.dumps(
+        {
+            "job_id": job_id,
+            "encrypted_job_id": encrypted_job_id,
+            "encrypted_job_id_source": source,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _provenance() -> ResearchProvenance:
@@ -194,19 +216,29 @@ def _live_events(
     status: str = "completed",
     smoke_passed: bool = True,
     failure_reason: str | None = None,
+    identity_source: OfferTodayEncryptedJobIdSource = "encryptJobId",
 ) -> list[dict]:
-    targets = [
-        {
-            "position": position,
-            "job_id": f"j{position}",
-            "encrypted_job_id": f"e{position}",
-            "job_id_hash": hashlib.sha256(f"j{position}".encode()).hexdigest(),
-            "encrypted_job_id_hash": hashlib.sha256(
-                f"e{position}".encode()
-            ).hexdigest(),
-        }
-        for position in range(1, 21)
-    ]
+    targets = []
+    for position in range(1, 21):
+        job_id = f"j{position}"
+        route_id = job_id if identity_source == "jobId_fallback" else f"e{position}"
+        targets.append(
+            {
+                "position": position,
+                "job_id": job_id,
+                "encrypted_job_id": route_id,
+                "encrypted_job_id_source": identity_source,
+                "job_id_hash": hashlib.sha256(job_id.encode()).hexdigest(),
+                "encrypted_job_id_hash": hashlib.sha256(
+                    route_id.encode()
+                ).hexdigest(),
+                "identity_resolution_hash": _identity_resolution_hash(
+                    job_id,
+                    route_id,
+                    identity_source,
+                ),
+            }
+        )
     events: list[dict] = [
         {
             "sequence_no": 1,
@@ -229,6 +261,37 @@ def _live_events(
                     "attempt": 1,
                     "classification": "success",
                     "session_mode": "fresh-headless",
+                    "row_count": 20,
+                    "missing_job_id_count": 0,
+                    "missing_encrypted_job_id_count": (
+                        20 if identity_source == "jobId_fallback" else 0
+                    ),
+                    "job_id_fallback_count": (
+                        20 if identity_source == "jobId_fallback" else 0
+                    ),
+                    "id_pairs": [
+                        {
+                            "job_id": target["job_id"],
+                            "encrypted_job_id": target["encrypted_job_id"],
+                            "encrypted_job_id_source": identity_source,
+                        }
+                        for target in targets
+                    ],
+                    "rows": [
+                        {
+                            "job_id": target["job_id"],
+                            "encrypted_job_id": target["encrypted_job_id"],
+                            "encrypted_job_id_source": identity_source,
+                            "observed_encrypted_job_id": (
+                                None
+                                if identity_source == "jobId_fallback"
+                                else target["encrypted_job_id"]
+                            ),
+                        }
+                        for target in targets
+                    ],
+                    "identity_issues": [],
+                    "identity_conflicts": [],
                 },
             }
         )
@@ -280,6 +343,16 @@ def _live_events(
                 "success_count": detail_attempts,
                 "terminal_count": 0,
                 "unattempted_count": 20 - detail_attempts,
+                "missing_encrypted_job_id_count": (
+                    20 * listing_attempts
+                    if identity_source == "jobId_fallback"
+                    else 0
+                ),
+                "job_id_fallback_count": (
+                    20 * listing_attempts
+                    if identity_source == "jobId_fallback"
+                    else 0
+                ),
                 "stop_reason": None if smoke_passed else failure_reason,
                 "product_data_unchanged": True,
                 "run_start_snapshot_hash": "d" * 64,
@@ -340,6 +413,95 @@ def test_verify_live_run_accepts_consistent_completed_smoke(tmp_path) -> None:
         "experiment": "runtime-smoke",
         "run_id": RUN_ID_1,
     }
+
+
+def test_verify_live_run_accepts_consistent_completed_fallback_smoke(
+    tmp_path,
+) -> None:
+    artifact = _export_live(
+        tmp_path,
+        events=_live_events(identity_source="jobId_fallback"),
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is True, result.issues
+
+
+def test_verify_live_run_rejects_tampered_summary_missing_encrypted_id_count(
+    tmp_path,
+) -> None:
+    events = _live_events(identity_source="jobId_fallback")
+    events[-1]["payload"]["missing_encrypted_job_id_count"] = 19
+    artifact = _export_live(tmp_path, events=events)
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "missing_encrypted_job_id_count_mismatch" in result.issues
+
+
+@pytest.mark.parametrize(
+    ("tamper_kind", "expected_issue"),
+    [
+        ("target_source", "detail_cohort_identity_mismatch"),
+        ("target_resolution_hash", "invalid_detail_identity_resolution_hash"),
+        ("page_row_source", "page_identity_authority_mismatch"),
+        ("page_pair_source", "page_identity_authority_mismatch"),
+        ("page_missing_count", "missing_encrypted_job_id_count_mismatch"),
+        ("page_fallback_count", "job_id_fallback_count_mismatch"),
+        ("summary_fallback_count", "job_id_fallback_count_mismatch"),
+    ],
+)
+def test_verify_live_run_rejects_tampered_fallback_identity_evidence(
+    tmp_path,
+    tamper_kind: str,
+    expected_issue: str,
+) -> None:
+    events = _live_events(identity_source="jobId_fallback")
+    page = next(
+        event["payload"]
+        for event in events
+        if event["event_type"] == "research.page_attempt"
+    )
+    cohort = next(
+        event["payload"]
+        for event in events
+        if event["event_type"] == "research.detail_cohort_frozen"
+    )
+    summary = events[-1]["payload"]
+
+    if tamper_kind == "target_source":
+        target = cohort["targets"][0]
+        target["encrypted_job_id_source"] = "encryptJobId"
+        target["identity_resolution_hash"] = _identity_resolution_hash(
+            target["job_id"],
+            target["encrypted_job_id"],
+            "encryptJobId",
+        )
+    elif tamper_kind == "target_resolution_hash":
+        cohort["targets"][0]["identity_resolution_hash"] = "0" * 64
+    elif tamper_kind == "page_row_source":
+        page["rows"][0]["encrypted_job_id_source"] = "encryptJobId"
+        page["rows"][0]["observed_encrypted_job_id"] = page["rows"][0][
+            "encrypted_job_id"
+        ]
+    elif tamper_kind == "page_pair_source":
+        page["id_pairs"][0]["encrypted_job_id_source"] = "encryptJobId"
+    elif tamper_kind == "page_missing_count":
+        page["missing_encrypted_job_id_count"] = 19
+    elif tamper_kind == "page_fallback_count":
+        page["job_id_fallback_count"] = 19
+    elif tamper_kind == "summary_fallback_count":
+        summary["job_id_fallback_count"] = 19
+    else:  # pragma: no cover - parameter contract
+        raise AssertionError(tamper_kind)
+
+    artifact = _export_live(tmp_path, events=events)
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert expected_issue in result.issues
 
 
 def test_verify_live_run_accepts_consistent_failed_partial_smoke(tmp_path) -> None:
@@ -804,6 +966,21 @@ def test_verify_live_run_accepts_terminal_exception_after_nonhard_detail_failure
         status="failed",
         smoke_passed=False,
     )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is True, result.issues
+
+
+def test_verify_live_run_keeps_immutable_failed_identity_smoke_valid() -> None:
+    artifact = Path(
+        "backend/runtime/offertoday-research/"
+        "fab9d8e1-4c12-4170-a539-c0a6cdbbca93"
+    )
+    if not (artifact / "manifest.json").is_file():
+        pytest.skip(
+            "immutable failed identity smoke artifact is unavailable in this checkout"
+        )
 
     result = verify_live_research_run(artifact)
 

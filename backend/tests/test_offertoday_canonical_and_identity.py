@@ -932,26 +932,27 @@ async def test_detail_fetch_result_isolates_nested_evidence_representations():
 
 
 @pytest.mark.asyncio
-async def test_offertoday_browser_detail_scraper_missing_encrypted_id_makes_zero_fetch_calls():
+async def test_browser_detail_scraper_omitted_route_uses_jobid_fallback():
     scraper_module = importlib.import_module(
         "app.scraper.offertoday_browser_detail_scraper"
     )
-    identity_module = _identity_module()
-    calls = 0
+    calls: list[tuple[str, str]] = []
 
     async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
-        nonlocal calls
-        calls += 1
-        return {"code": 0, "data": _sample_detail_raw()}
+        calls.append((job_id, encrypted_job_id))
+        return {
+            "code": 0,
+            "data": _sample_detail_raw_missing_encrypted(),
+        }
 
     scraper = scraper_module.OfferTodayBrowserDetailScraper(
         detail_json_fetcher=fake_fetcher
     )
 
-    with pytest.raises(identity_module.OfferTodayIdentityError, match="encryptJobId"):
-        await scraper.fetch_job_detail("jid-1")
+    result = await scraper.fetch_job_detail("jid-1")
 
-    assert calls == 0
+    assert calls == [("jid-1", "jid-1")]
+    assert result.identity.encrypted_job_id_source == "jobId_fallback"
 
 
 @pytest.mark.asyncio

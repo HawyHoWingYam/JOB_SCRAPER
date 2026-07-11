@@ -9,7 +9,9 @@ from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailFetchResult,
     OfferTodayDetailIdentity,
+    OfferTodayEncryptedJobIdSource,
     OfferTodayIdentityError,
+    resolve_offertoday_listing_identity,
     validate_offertoday_detail_identity,
 )
 from app.sources.offertoday.parsers import (
@@ -100,10 +102,12 @@ class OfferTodayBrowserDetailScraper:
         job_id: str,
         *,
         encrypted_job_id: str | None = None,
+        encrypted_job_id_source: OfferTodayEncryptedJobIdSource | None = None,
     ) -> OfferTodayDetailFetchResult:
         identity = self._build_request_identity(
             job_id=job_id,
             encrypted_job_id=encrypted_job_id,
+            encrypted_job_id_source=encrypted_job_id_source,
         )
         classification = await self._fetch_and_classify(identity)
 
@@ -123,19 +127,15 @@ class OfferTodayBrowserDetailScraper:
         *,
         job_id: Any,
         encrypted_job_id: Any,
+        encrypted_job_id_source: OfferTodayEncryptedJobIdSource | None = None,
     ) -> OfferTodayDetailIdentity:
-        if not isinstance(job_id, str) or not job_id.strip():
-            raise OfferTodayIdentityError(
-                f"Missing nonblank string jobId; got {job_id!r}"
-            )
-        if not isinstance(encrypted_job_id, str) or not encrypted_job_id.strip():
-            raise OfferTodayIdentityError(
-                f"Missing nonblank string encryptJobId; got {encrypted_job_id!r}"
-            )
-        return OfferTodayDetailIdentity(
-            job_id=job_id.strip(),
-            encrypted_job_id=encrypted_job_id.strip(),
-        )
+        payload: dict[str, Any] = {
+            "jobId": job_id,
+            "encrypted_job_id": encrypted_job_id,
+        }
+        if encrypted_job_id_source is not None:
+            payload["encrypted_job_id_source"] = encrypted_job_id_source
+        return resolve_offertoday_listing_identity(payload)
 
     async def _fetch_and_classify(
         self,

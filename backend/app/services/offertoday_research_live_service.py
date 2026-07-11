@@ -16,7 +16,10 @@ from app.services.offertoday_research_observation_service import (
 from app.services.offertoday_research_staging_service import (
     ResearchNoopListingStagingSink,
 )
-from app.sources.offertoday.detail_identity import OfferTodayDetailFetchResult
+from app.sources.offertoday.detail_identity import (
+    OfferTodayDetailFetchResult,
+    OfferTodayDetailIdentity,
+)
 from app.sources.offertoday.listing_runner import (
     ListingRetryPolicy,
     ListingStopPolicy,
@@ -97,6 +100,7 @@ class OfferTodayResearchLiveService:
                 detail_result = await detail_scraper.fetch_job_detail(
                     target.job_id,
                     encrypted_job_id=target.encrypted_job_id,
+                    encrypted_job_id_source=target.encrypted_job_id_source,
                 )
                 latency_ms = int(
                     round(max(0.0, self._clock() - started_at) * 1000)
@@ -140,6 +144,11 @@ def detail_result_to_observation(
 ) -> DetailSmokeObservation:
     canonical: dict[str, Any] = result.canonical_detail or {}
     classification = result.classification
+    expected_identity = OfferTodayDetailIdentity(
+        job_id=target.job_id,
+        encrypted_job_id=target.encrypted_job_id,
+        encrypted_job_id_source=target.encrypted_job_id_source,
+    )
     return DetailSmokeObservation(
         target=target,
         classification=classification.kind.value,
@@ -150,6 +159,7 @@ def detail_result_to_observation(
         identity_valid=(
             classification.kind is OfferTodayResponseKind.SUCCESS
             and result.canonical_detail is not None
+            and result.identity == expected_identity
         ),
         parsed=result.parsed_detail is not None,
         has_title=bool(str(canonical.get("title") or "").strip()),

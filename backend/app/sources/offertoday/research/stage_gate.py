@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.sources.offertoday.detail_identity import (
+    OfferTodayDetailIdentity,
+    OfferTodayEncryptedJobIdSource,
+    OfferTodayIdentityError,
+    build_offertoday_identity_authority_index,
+    resolve_offertoday_listing_identity,
+)
 from app.sources.offertoday.research.artifacts import verify_research_artifact
 
 
@@ -199,13 +206,15 @@ def _canonical_smoke_target(
     *,
     expected_position: int,
     issues: list[str],
-) -> tuple[int, str, str] | None:
+    allow_missing_resolution_hash: bool = False,
+) -> tuple[int, str, str, OfferTodayEncryptedJobIdSource] | None:
     if not isinstance(payload, dict):
         issues.append("invalid_detail_target_payload")
         return None
     position = payload.get("position")
     job_id = payload.get("job_id")
     encrypted_job_id = payload.get("encrypted_job_id")
+    encrypted_job_id_source = payload.get("encrypted_job_id_source")
     if type(position) is not int or position != expected_position:
         issues.append("invalid_detail_target_position")
         return None
@@ -215,18 +224,212 @@ def _canonical_smoke_target(
     if not isinstance(encrypted_job_id, str) or not encrypted_job_id.strip():
         issues.append("invalid_detail_target_encrypted_job_id")
         return None
-    expected_job_hash = hashlib.sha256(job_id.encode()).hexdigest()
-    expected_encrypted_hash = hashlib.sha256(encrypted_job_id.encode()).hexdigest()
+    if encrypted_job_id_source not in ("encryptJobId", "jobId_fallback"):
+        issues.append("detail_cohort_identity_mismatch")
+        return None
+    try:
+        identity = resolve_offertoday_listing_identity(payload)
+    except OfferTodayIdentityError:
+        issues.append("detail_cohort_identity_mismatch")
+        return None
+    if identity.encrypted_job_id_source != encrypted_job_id_source:
+        issues.append("detail_cohort_identity_mismatch")
+        return None
+
+    expected_job_hash = hashlib.sha256(identity.job_id.encode()).hexdigest()
+    expected_encrypted_hash = hashlib.sha256(
+        identity.encrypted_job_id.encode()
+    ).hexdigest()
     if payload.get("job_id_hash") != expected_job_hash:
         issues.append("detail_target_job_id_hash_mismatch")
     if payload.get("encrypted_job_id_hash") != expected_encrypted_hash:
         issues.append("detail_target_encrypted_job_id_hash_mismatch")
-    return position, job_id, encrypted_job_id
+    identity_canonical = json.dumps(
+        {
+            "job_id": identity.job_id,
+            "encrypted_job_id": identity.encrypted_job_id,
+            "encrypted_job_id_source": identity.encrypted_job_id_source,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    expected_resolution_hash = hashlib.sha256(
+        identity_canonical.encode()
+    ).hexdigest()
+    if not (
+        allow_missing_resolution_hash
+        and "identity_resolution_hash" not in payload
+    ) and payload.get("identity_resolution_hash") != expected_resolution_hash:
+        issues.append("invalid_detail_identity_resolution_hash")
+    return (
+        position,
+        identity.job_id,
+        identity.encrypted_job_id,
+        identity.encrypted_job_id_source,
+    )
+
+
+def _canonical_page_identity_pair(payload: Any) -> OfferTodayDetailIdentity | None:
+    if not isinstance(payload, dict):
+        return None
+    job_id = payload.get("job_id")
+    encrypted_job_id = payload.get("encrypted_job_id")
+    encrypted_job_id_source = payload.get("encrypted_job_id_source")
+    if (
+        not isinstance(job_id, str)
+        or not job_id.strip()
+        or not isinstance(encrypted_job_id, str)
+        or not encrypted_job_id.strip()
+        or encrypted_job_id_source not in ("encryptJobId", "jobId_fallback")
+    ):
+        return None
+    try:
+        identity = resolve_offertoday_listing_identity(payload)
+    except OfferTodayIdentityError:
+        return None
+    if identity.encrypted_job_id_source != encrypted_job_id_source:
+        return None
+    return identity
+
+
+def _canonical_page_row(payload: Any) -> OfferTodayDetailIdentity | None:
+    if not isinstance(payload, dict) or "observed_encrypted_job_id" not in payload:
+        return None
+    identity = _canonical_page_identity_pair(payload)
+    if identity is None:
+        return None
+    observed_encrypted_job_id = payload.get("observed_encrypted_job_id")
+    if identity.encrypted_job_id_source == "jobId_fallback":
+        if observed_encrypted_job_id is not None:
+            return None
+    elif (
+        not isinstance(observed_encrypted_job_id, str)
+        or not observed_encrypted_job_id.strip()
+        or observed_encrypted_job_id != payload.get("encrypted_job_id")
+    ):
+        return None
+    return identity
+
+
+def _canonical_page_authority(
+    payload: dict[str, Any],
+    issues: list[str],
+) -> tuple[list[OfferTodayDetailIdentity], int, int]:
+    serialized_pairs = payload.get("id_pairs")
+    rows = payload.get("rows")
+    identity_evidence_valid = True
+    if not isinstance(serialized_pairs, list):
+        identity_evidence_valid = False
+        serialized_pairs = []
+    if not isinstance(rows, list):
+        identity_evidence_valid = False
+        rows = []
+
+    canonical_pairs: list[OfferTodayDetailIdentity] = []
+    for pair in serialized_pairs:
+        canonical = _canonical_page_identity_pair(pair)
+        if canonical is None:
+            identity_evidence_valid = False
+        else:
+            canonical_pairs.append(canonical)
+
+    canonical_rows: list[OfferTodayDetailIdentity] = []
+    for row in rows:
+        canonical = _canonical_page_row(row)
+        if canonical is None:
+            identity_evidence_valid = False
+        else:
+            canonical_rows.append(canonical)
+
+    raw_missing_count = sum(
+        isinstance(row, dict) and row.get("observed_encrypted_job_id") is None
+        for row in rows
+    )
+    fallback_count = sum(
+        isinstance(row, dict)
+        and row.get("encrypted_job_id_source") == "jobId_fallback"
+        for row in rows
+    )
+    if payload.get("classification") == "success":
+        declared_missing_count = payload.get("missing_encrypted_job_id_count")
+        if (
+            type(declared_missing_count) is not int
+            or declared_missing_count < 0
+            or declared_missing_count != raw_missing_count
+        ):
+            issues.append("missing_encrypted_job_id_count_mismatch")
+        declared_fallback_count = payload.get("job_id_fallback_count")
+        if (
+            type(declared_fallback_count) is not int
+            or declared_fallback_count < 0
+            or declared_fallback_count != fallback_count
+        ):
+            issues.append("job_id_fallback_count_mismatch")
+
+    authority_index = build_offertoday_identity_authority_index(canonical_rows)
+    first_seen_job_ids: list[str] = []
+    seen_job_ids: set[str] = set()
+    for identity in canonical_rows:
+        if identity.job_id not in seen_job_ids:
+            seen_job_ids.add(identity.job_id)
+            first_seen_job_ids.append(identity.job_id)
+    authoritative_rows = [
+        authority_index.authoritative_identity_by_job[job_id]
+        for job_id in first_seen_job_ids
+        if job_id in authority_index.authoritative_identity_by_job
+        and job_id not in authority_index.conflict_reason_by_job
+    ]
+    canonical_pair_triples = [
+        (
+            identity.job_id,
+            identity.encrypted_job_id,
+            identity.encrypted_job_id_source,
+        )
+        for identity in canonical_pairs
+    ]
+    authoritative_row_triples = [
+        (
+            identity.job_id,
+            identity.encrypted_job_id,
+            identity.encrypted_job_id_source,
+        )
+        for identity in authoritative_rows
+    ]
+    if (
+        not identity_evidence_valid
+        or canonical_pair_triples != authoritative_row_triples
+        or (
+            payload.get("classification") == "success"
+            and bool(authority_index.conflict_reason_by_job)
+        )
+    ):
+        issues.append("page_identity_authority_mismatch")
+    return authoritative_rows, raw_missing_count, fallback_count
+
+
+def _is_legacy_failed_identity_page(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    identity_issues = payload.get("identity_issues")
+    return (
+        payload.get("classification") == "identity_issue"
+        and payload.get("id_pairs") == []
+        and isinstance(identity_issues, list)
+        and bool(identity_issues)
+        and all(
+            isinstance(issue, dict)
+            and issue.get("reason") == "missing_encrypted_job_id"
+            for issue in identity_issues
+        )
+    )
 
 
 def _analyze_runtime_smoke_events(
     events: list[dict[str, Any]],
     issues: list[str],
+    *,
+    allow_legacy_failed_identity_evidence: bool,
 ) -> dict[str, Any]:
     run_started_indexes = [
         index
@@ -244,6 +447,19 @@ def _analyze_runtime_smoke_events(
         if event.get("event_type") == "research.page_attempt"
     ]
     page_events = [events[index] for index in page_indexes]
+    legacy_failed_identity_evidence = (
+        allow_legacy_failed_identity_evidence
+        and len(page_events) == 1
+        and _is_legacy_failed_identity_page(page_events[0].get("payload"))
+    )
+    authoritative_page_triples: list[
+        tuple[str, str, OfferTodayEncryptedJobIdSource]
+    ] = []
+    seen_authoritative_page_triples: set[
+        tuple[str, str, OfferTodayEncryptedJobIdSource]
+    ] = set()
+    page_missing_encrypted_job_id_count = 0
+    page_job_id_fallback_count = 0
     first_listing_failure: str | None = None
     for page_event in page_events:
         page_payload = page_event.get("payload")
@@ -252,6 +468,21 @@ def _analyze_runtime_smoke_events(
             for key, value in _RUNTIME_SMOKE_PAGE_CONTROL.items()
         ):
             issues.append("invalid_runtime_smoke_page_control")
+        if isinstance(page_payload, dict) and not legacy_failed_identity_evidence:
+            page_authority, raw_missing_count, fallback_count = (
+                _canonical_page_authority(page_payload, issues)
+            )
+            page_missing_encrypted_job_id_count += raw_missing_count
+            page_job_id_fallback_count += fallback_count
+            for identity in page_authority:
+                triple = (
+                    identity.job_id,
+                    identity.encrypted_job_id,
+                    identity.encrypted_job_id_source,
+                )
+                if triple not in seen_authoritative_page_triples:
+                    seen_authoritative_page_triples.add(triple)
+                    authoritative_page_triples.append(triple)
         if isinstance(page_payload, dict) and first_listing_failure is None:
             page_stop_reason = page_payload.get("stop_reason")
             classification = page_payload.get("classification")
@@ -279,7 +510,9 @@ def _analyze_runtime_smoke_events(
     if len(cohort_indexes) > 1:
         issues.append(f"detail_cohort_event_count:{len(cohort_indexes)}")
 
-    frozen_targets: list[tuple[int, str, str]] = []
+    frozen_targets: list[
+        tuple[int, str, str, OfferTodayEncryptedJobIdSource]
+    ] = []
     frozen_count = 0
     if cohort_indexes:
         cohort_event = events[cohort_indexes[0]]
@@ -305,6 +538,9 @@ def _analyze_runtime_smoke_events(
                     target,
                     expected_position=position,
                     issues=issues,
+                    allow_missing_resolution_hash=(
+                        legacy_failed_identity_evidence
+                    ),
                 )
                 if canonical is not None:
                     frozen_targets.append(canonical)
@@ -314,6 +550,16 @@ def _analyze_runtime_smoke_events(
                 issues.append("duplicate_frozen_encrypted_job_id")
     elif detail_events:
         issues.append("detail_attempt_without_frozen_cohort")
+
+    expected_frozen_targets = [
+        (position, job_id, encrypted_job_id, encrypted_job_id_source)
+        for position, (job_id, encrypted_job_id, encrypted_job_id_source) in enumerate(
+            authoritative_page_triples[:20],
+            start=1,
+        )
+    ]
+    if frozen_targets != expected_frozen_targets:
+        issues.append("detail_cohort_identity_mismatch")
 
     if cohort_indexes:
         cohort_index = cohort_indexes[0]
@@ -358,6 +604,7 @@ def _analyze_runtime_smoke_events(
             payload.get("target"),
             expected_position=attempt_index + 1,
             issues=issues,
+            allow_missing_resolution_hash=legacy_failed_identity_evidence,
         )
         if (
             canonical is None
@@ -432,6 +679,11 @@ def _analyze_runtime_smoke_events(
         "first_failure": first_failure,
         "first_listing_failure": first_listing_failure,
         "page_events": page_events,
+        "page_missing_encrypted_job_id_count": (
+            page_missing_encrypted_job_id_count
+        ),
+        "page_job_id_fallback_count": page_job_id_fallback_count,
+        "legacy_failed_identity_evidence": legacy_failed_identity_evidence,
         "run_stopped_events": run_stopped_events,
     }
 
@@ -534,7 +786,15 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     if summary_indexes and summary_indexes[-1] != len(normalized_events) - 1:
         issues.append("event_after_terminal_summary")
 
-    smoke_evidence = _analyze_runtime_smoke_events(normalized_events, issues)
+    manifest_status = metadata.get("crawl_job_status")
+    manifest_smoke_passed = metadata.get("smoke_passed")
+    smoke_evidence = _analyze_runtime_smoke_events(
+        normalized_events,
+        issues,
+        allow_legacy_failed_identity_evidence=(
+            manifest_status == "failed" and manifest_smoke_passed is False
+        ),
+    )
     listing_attempt_count = smoke_evidence["listing_attempt_count"]
     detail_attempt_count = smoke_evidence["detail_attempt_count"]
     if listing_attempt_count > listing_budget:
@@ -567,10 +827,27 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
         ):
             if summary.get(field_name) != smoke_evidence[field_name]:
                 issues.append(f"{field_name}_mismatch")
-        manifest_status = metadata.get("crawl_job_status")
+        if not smoke_evidence["legacy_failed_identity_evidence"]:
+            summary_missing_count = summary.get(
+                "missing_encrypted_job_id_count"
+            )
+            if (
+                type(summary_missing_count) is not int
+                or summary_missing_count < 0
+                or summary_missing_count
+                != smoke_evidence["page_missing_encrypted_job_id_count"]
+            ):
+                issues.append("missing_encrypted_job_id_count_mismatch")
+            summary_fallback_count = summary.get("job_id_fallback_count")
+            if (
+                type(summary_fallback_count) is not int
+                or summary_fallback_count < 0
+                or summary_fallback_count
+                != smoke_evidence["page_job_id_fallback_count"]
+            ):
+                issues.append("job_id_fallback_count_mismatch")
         if summary.get("status") != manifest_status:
             issues.append("crawl_job_status_summary_mismatch")
-        manifest_smoke_passed = metadata.get("smoke_passed")
         summary_smoke_passed = summary.get("smoke_passed")
         if type(manifest_smoke_passed) is not bool:
             issues.append("invalid_manifest_smoke_passed")

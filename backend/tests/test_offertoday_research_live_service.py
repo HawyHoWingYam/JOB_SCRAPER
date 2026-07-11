@@ -14,6 +14,7 @@ from app.services.offertoday_research_staging_service import (
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailFetchResult,
     OfferTodayDetailIdentity,
+    OfferTodayEncryptedJobIdSource,
 )
 from app.sources.offertoday.listing_runner import (
     ListingPageObservation,
@@ -30,9 +31,19 @@ from app.sources.offertoday.response_policy import (
 )
 
 
-def listing_result(count: int = 20) -> ListingRunResult:
+def listing_result(
+    count: int = 20,
+    *,
+    identity_source: OfferTodayEncryptedJobIdSource = "encryptJobId",
+) -> ListingRunResult:
     identities = tuple(
-        OfferTodayIdentityPair(job_id=f"j{index}", encrypted_job_id=f"e{index}")
+        OfferTodayIdentityPair(
+            job_id=f"j{index}",
+            encrypted_job_id=(
+                f"j{index}" if identity_source == "jobId_fallback" else f"e{index}"
+            ),
+            encrypted_job_id_source=identity_source,
+        )
         for index in range(1, count + 1)
     )
     condition = build_runtime_smoke_condition()
@@ -53,6 +64,7 @@ def listing_result(count: int = 20) -> ListingRunResult:
         row_count=count,
         missing_job_id_count=0,
         missing_encrypted_job_id_count=0,
+        job_id_fallback_count=(count if identity_source == "jobId_fallback" else 0),
         id_pairs=identities,
         rows=(),
         identity_issues=(),
@@ -80,6 +92,7 @@ def detail_result(
     job_id: str,
     encrypted_job_id: str,
     *,
+    encrypted_job_id_source: OfferTodayEncryptedJobIdSource = "encryptJobId",
     kind: OfferTodayResponseKind = OfferTodayResponseKind.SUCCESS,
 ) -> OfferTodayDetailFetchResult:
     code_by_kind = {
@@ -106,6 +119,7 @@ def detail_result(
         identity=OfferTodayDetailIdentity(
             job_id=job_id,
             encrypted_job_id=encrypted_job_id,
+            encrypted_job_id_source=encrypted_job_id_source,
         ),
         classification=classification,
         raw_response=classification.raw_payload,
@@ -114,6 +128,7 @@ def detail_result(
             {
                 "job_id": job_id,
                 "encrypted_job_id": encrypted_job_id,
+                "encrypted_job_id_source": encrypted_job_id_source,
                 "title": f"Title {job_id}",
                 "company_name": "Company",
                 "description_text": "Description",
@@ -170,16 +185,23 @@ class RunnerFactory:
 class FakeDetailScraper:
     def __init__(self, result_provider) -> None:
         self.result_provider = result_provider
-        self.calls: list[tuple[str, str | None]] = []
+        self.calls: list[
+            tuple[str, str | None, OfferTodayEncryptedJobIdSource | None]
+        ] = []
 
     async def fetch_job_detail(
         self,
         job_id: str,
         *,
         encrypted_job_id: str | None = None,
+        encrypted_job_id_source: OfferTodayEncryptedJobIdSource | None = None,
     ) -> OfferTodayDetailFetchResult:
-        self.calls.append((job_id, encrypted_job_id))
-        result = self.result_provider(job_id, encrypted_job_id)
+        self.calls.append((job_id, encrypted_job_id, encrypted_job_id_source))
+        result = self.result_provider(
+            job_id,
+            encrypted_job_id,
+            encrypted_job_id_source,
+        )
         if isinstance(result, BaseException):
             raise result
         return result
@@ -190,7 +212,15 @@ class DetailScraperFactory:
         self.kwargs: list[dict] = []
         self.scraper = FakeDetailScraper(
             result_provider
-            or (lambda job_id, encrypted_job_id: detail_result(job_id, encrypted_job_id))
+            or (
+                lambda job_id, encrypted_job_id, encrypted_job_id_source: detail_result(
+                    job_id,
+                    encrypted_job_id,
+                    encrypted_job_id_source=(
+                        encrypted_job_id_source or "encryptJobId"
+                    ),
+                )
+            )
         )
 
     def __call__(self, **kwargs) -> FakeDetailScraper:
@@ -288,7 +318,10 @@ async def test_run_smoke_fetches_twenty_in_order_with_nineteen_delays() -> None:
         observation_service=observation_service,
     )
 
-    expected_calls = [(f"j{index}", f"e{index}") for index in range(1, 21)]
+    expected_calls = [
+        (f"j{index}", f"e{index}", "encryptJobId")
+        for index in range(1, 21)
+    ]
     assert detail_factory.scraper.calls == expected_calls
     assert sleeps == [3.0] * 19
     assert execution.decision.smoke_passed is True
@@ -302,8 +335,10 @@ async def test_run_smoke_fetches_twenty_in_order_with_nineteen_delays() -> None:
     assert first["target"]["position"] == 1
     assert first["target"]["job_id"] == "j1"
     assert first["target"]["encrypted_job_id"] == "e1"
+    assert first["target"]["encrypted_job_id_source"] == "encryptJobId"
     assert len(first["target"]["job_id_hash"]) == 64
     assert len(first["target"]["encrypted_job_id_hash"]) == 64
+    assert len(first["target"]["identity_resolution_hash"]) == 64
     assert first["started_at"].endswith("+00:00")
     assert first["completed_at"].endswith("+00:00")
     assert first["latency_ms"] == 1000
@@ -316,11 +351,43 @@ async def test_run_smoke_fetches_twenty_in_order_with_nineteen_delays() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_smoke_passes_jobid_fallback_provenance_to_detail_scraper() -> None:
+    detail_factory = DetailScraperFactory()
+    now, clock = deterministic_clocks()
+    service = OfferTodayResearchLiveService(
+        runner_factory=RunnerFactory(
+            listing_result(identity_source="jobId_fallback")
+        ),
+        detail_scraper_factory=detail_factory,
+        sleep=lambda _seconds: _completed_awaitable(),
+        now=now,
+        clock=clock,
+    )
+
+    execution = await service.run_smoke(
+        runtime=FakeRuntime(),
+        observation_service=FakeObservationService(),
+    )
+
+    assert detail_factory.scraper.calls[0] == (
+        "j1",
+        "j1",
+        "jobId_fallback",
+    )
+    assert execution.decision.smoke_passed is True
+
+
+@pytest.mark.asyncio
 async def test_terminal_unavailable_continues_without_retry_or_replacement() -> None:
-    def result_provider(job_id: str, encrypted_job_id: str):
+    def result_provider(
+        job_id: str,
+        encrypted_job_id: str,
+        encrypted_job_id_source: OfferTodayEncryptedJobIdSource,
+    ):
         return detail_result(
             job_id,
             encrypted_job_id,
+            encrypted_job_id_source=encrypted_job_id_source,
             kind=(
                 OfferTodayResponseKind.TERMINAL_UNAVAILABLE
                 if job_id == "j7"
@@ -345,7 +412,7 @@ async def test_terminal_unavailable_continues_without_retry_or_replacement() -> 
     )
 
     assert len(detail_factory.scraper.calls) == 20
-    assert detail_factory.scraper.calls.count(("j7", "e7")) == 1
+    assert detail_factory.scraper.calls.count(("j7", "e7", "encryptJobId")) == 1
     assert execution.decision.smoke_passed is True
     assert execution.decision.terminal_count == 1
     assert execution.decision.success_count == 19
@@ -364,8 +431,17 @@ async def test_terminal_unavailable_continues_without_retry_or_replacement() -> 
 async def test_batch_stop_stops_after_first_target_and_accounts_unattempted(
     kind: OfferTodayResponseKind,
 ) -> None:
-    def result_provider(job_id: str, encrypted_job_id: str):
-        return detail_result(job_id, encrypted_job_id, kind=kind)
+    def result_provider(
+        job_id: str,
+        encrypted_job_id: str,
+        encrypted_job_id_source: OfferTodayEncryptedJobIdSource,
+    ):
+        return detail_result(
+            job_id,
+            encrypted_job_id,
+            encrypted_job_id_source=encrypted_job_id_source,
+            kind=kind,
+        )
 
     detail_factory = DetailScraperFactory(result_provider)
     sleeps: list[float] = []
@@ -387,7 +463,7 @@ async def test_batch_stop_stops_after_first_target_and_accounts_unattempted(
         observation_service=FakeObservationService(),
     )
 
-    assert detail_factory.scraper.calls == [("j1", "e1")]
+    assert detail_factory.scraper.calls == [("j1", "e1", "encryptJobId")]
     assert sleeps == []
     assert execution.decision.smoke_passed is False
     assert execution.decision.stop_reason == kind.value
@@ -423,7 +499,7 @@ async def test_fewer_than_twenty_targets_makes_zero_detail_calls() -> None:
 async def test_unexpected_detail_exception_propagates_without_retry() -> None:
     error = TypeError("sensitive detail failure")
     detail_factory = DetailScraperFactory(
-        lambda _job_id, _encrypted_job_id: error
+        lambda _job_id, _encrypted_job_id, _encrypted_job_id_source: error
     )
     now, clock = deterministic_clocks()
     service = OfferTodayResearchLiveService(
@@ -441,7 +517,7 @@ async def test_unexpected_detail_exception_propagates_without_retry() -> None:
         )
 
     assert exc_info.value is error
-    assert detail_factory.scraper.calls == [("j1", "e1")]
+    assert detail_factory.scraper.calls == [("j1", "e1", "encryptJobId")]
 
 
 def test_detail_result_conversion_preserves_classification_and_content_flags() -> None:
@@ -464,3 +540,26 @@ def test_detail_result_conversion_preserves_classification_and_content_flags() -
     assert observation.has_company is True
     assert observation.has_description is True
     assert observation.stop_batch is False
+
+
+def test_detail_result_conversion_rejects_same_ids_with_different_provenance() -> None:
+    item = DetailSmokeTarget(
+        position=1,
+        job_id="j1",
+        encrypted_job_id="j1",
+        encrypted_job_id_source="jobId_fallback",
+    )
+
+    observation = detail_result_to_observation(
+        target=item,
+        result=detail_result(
+            "j1",
+            "j1",
+            encrypted_job_id_source="encryptJobId",
+        ),
+        started_at="2026-07-11T00:00:00+00:00",
+        completed_at="2026-07-11T00:00:01+00:00",
+        latency_ms=1000,
+    )
+
+    assert observation.identity_valid is False

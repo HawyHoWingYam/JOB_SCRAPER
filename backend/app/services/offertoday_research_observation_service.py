@@ -139,6 +139,7 @@ class OfferTodayResearchObservationService:
                     "success_count",
                     "terminal_count",
                     "unattempted_count",
+                    "job_id_fallback_count",
                 )
                 if key in payload
             },

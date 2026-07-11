@@ -212,6 +212,38 @@ def _event_counts(events: list[dict[str, Any]]) -> tuple[int, int, int]:
     return listing_attempts, detail_attempts, frozen_count
 
 
+def _listing_identity_counts(
+    *,
+    execution,
+    events_before_summary: list[dict[str, Any]],
+) -> tuple[int, int]:
+    if execution is not None:
+        page_payloads = [
+            listing_observation_to_payload(observation)
+            for observation in execution.listing_result.observations
+        ]
+    else:
+        page_payloads = [
+            event["payload"]
+            for event in events_before_summary
+            if event.get("event_type") == "research.page_attempt"
+            and isinstance(event.get("payload"), dict)
+        ]
+
+    def total(field_name: str) -> int:
+        values = [payload.get(field_name, 0) for payload in page_payloads]
+        if any(type(value) is not int or value < 0 for value in values):
+            raise ValueError(
+                f"research page {field_name} must be a non-negative exact integer"
+            )
+        return sum(values)
+
+    return (
+        total("missing_encrypted_job_id_count"),
+        total("job_id_fallback_count"),
+    )
+
+
 def _build_summary(
     *,
     status: str,
@@ -225,6 +257,12 @@ def _build_summary(
 ) -> dict[str, Any]:
     listing_attempts, detail_attempts, event_frozen_count = _event_counts(
         events_before_summary
+    )
+    missing_encrypted_job_id_count, job_id_fallback_count = (
+        _listing_identity_counts(
+            execution=execution,
+            events_before_summary=events_before_summary,
+        )
     )
     product_data_unchanged = (
         start_snapshot.data_hash == end_snapshot.data_hash
@@ -275,6 +313,8 @@ def _build_summary(
         "success_count": success_count,
         "terminal_count": terminal_count,
         "unattempted_count": unattempted_count,
+        "missing_encrypted_job_id_count": missing_encrypted_job_id_count,
+        "job_id_fallback_count": job_id_fallback_count,
         "listing_attempt_count": listing_attempts,
         "listing_stop_reason": listing_stop_reason,
         "stop_reason": failure_reason,
@@ -659,6 +699,12 @@ def main(
             "run_id": run_id,
             "exit_code": exit_code,
             "smoke_passed": bool(summary.get("smoke_passed")),
+            "missing_encrypted_job_id_count": int(
+                summary.get("missing_encrypted_job_id_count", 0)
+            ),
+            "job_id_fallback_count": int(
+                summary.get("job_id_fallback_count", 0)
+            ),
         }
     )
     return exit_code
