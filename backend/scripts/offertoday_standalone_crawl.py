@@ -43,6 +43,9 @@ from app.services.offertoday_detail_pipeline import (  # noqa: E402
 )
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
 from app.repositories.crawl_job_repository import CrawlJobRepository  # noqa: E402
+from app.sources.offertoday.detail_identity import (  # noqa: E402
+    resolve_offertoday_detail_identity,
+)
 from app.sources.offertoday.listing_runner import (  # noqa: E402
     ListingRetryPolicy,
     ListingStopPolicy,
@@ -463,14 +466,15 @@ def _build_listing_staging_payload(
     rank: int,
 ) -> dict[str, Any]:
     normalized_listing = dict(parsed_row or {})
-    job_id = str(normalized_listing.get("job_id") or "").strip()
-    encrypted_job_id = str(
-        normalized_listing.get("encrypted_job_id") or ""
-    ).strip()
-    if not job_id:
-        raise ValueError("OfferToday listing row is missing canonical job_id")
-    if not encrypted_job_id:
-        raise ValueError("OfferToday listing row is missing encrypted_job_id")
+    identity = resolve_offertoday_detail_identity(
+        source_job_id=normalized_listing.get("job_id"),
+        listing_payload=normalized_listing,
+    )
+    normalized_listing["job_id"] = identity.job_id
+    normalized_listing["encrypted_job_id"] = identity.encrypted_job_id
+    normalized_listing["encrypted_job_id_source"] = (
+        identity.encrypted_job_id_source
+    )
 
     raw_data = normalized_listing.get("raw_data")
     normalized_listing["raw_data"] = (
@@ -480,8 +484,8 @@ def _build_listing_staging_payload(
     search_family = str(getattr(condition, "search_family", "") or "").strip()
     keyword = str(getattr(condition, "keyword", "") or "")
     return {
-        "source_job_id": job_id,
-        "source_url": build_offertoday_job_url(encrypted_job_id),
+        "source_job_id": identity.job_id,
+        "source_url": build_offertoday_job_url(identity.encrypted_job_id),
         "source_classification_id": (
             str(category_id) if category_id is not None else None
         ),

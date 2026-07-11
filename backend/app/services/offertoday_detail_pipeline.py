@@ -16,6 +16,7 @@ from app.sources.contracts import (
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailIdentity,
     OfferTodayIdentityError,
+    build_offertoday_identity_authority_index,
     resolve_offertoday_detail_identity,
     validate_offertoday_detail_identity,
 )
@@ -58,15 +59,29 @@ class OfferTodayDetailTarget:
         target: dict[str, Any],
     ) -> OfferTodayDetailTarget:
         listing_payload = deepcopy(dict(target.get("listing_payload") or {}))
-        identity = resolve_offertoday_detail_identity(
+        listing_identity = resolve_offertoday_detail_identity(
             source_job_id=target.get("source_job_id"),
             listing_payload=listing_payload,
         )
         supplied_identity = target.get("identity")
-        if supplied_identity is not None and supplied_identity != identity:
-            raise ValueError(
-                "OfferToday runtime target identity does not match canonical listing identity"
+        if supplied_identity is None:
+            identity = listing_identity
+        elif not isinstance(supplied_identity, OfferTodayDetailIdentity):
+            raise ValueError("OfferToday runtime target identity must be typed")
+        else:
+            authority_index = build_offertoday_identity_authority_index(
+                (listing_identity, supplied_identity)
             )
+            if authority_index.conflict_reason_by_job:
+                raise ValueError("OfferToday runtime target identity is conflicting")
+            identity = authority_index.authoritative_identity_by_job[
+                listing_identity.job_id
+            ]
+            if identity != supplied_identity:
+                raise ValueError(
+                    "OfferToday runtime target identity does not match "
+                    "authoritative identity"
+                )
         return cls(
             listing_id=target["listing_id"],
             duplicate_listing_ids=tuple(target.get("duplicate_listing_ids") or ()),
@@ -375,6 +390,7 @@ class OfferTodayDetailPipeline:
         }
         merged["job_id"] = target.identity.job_id
         merged["encrypted_job_id"] = target.identity.encrypted_job_id
+        merged["encrypted_job_id_source"] = target.identity.encrypted_job_id_source
         merged["jobId"] = target.identity.job_id
         merged["encryptJobId"] = target.identity.encrypted_job_id
         merged["canonical_job_url"] = build_offertoday_job_url(

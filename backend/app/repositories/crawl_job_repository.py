@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import and_, desc, func, or_
@@ -223,6 +224,38 @@ class CrawlJobRepository:
         if limit is not None:
             return query.order_by(CrawlJobEvent.sequence_no.asc()).limit(limit).all()
         return query.order_by(CrawlJobEvent.sequence_no.asc()).all()
+
+    def list_offertoday_listing_identity_observations(
+        self,
+        db: Session,
+    ) -> list[dict[str, Any]]:
+        events = (
+            db.query(CrawlJobEvent)
+            .join(CrawlJob, CrawlJob.id == CrawlJobEvent.crawl_job_id)
+            .filter(
+                CrawlJob.source_site == "offertoday",
+                CrawlJobEvent.event_type == "crawl.listing_observed",
+            )
+            .order_by(CrawlJobEvent.created_at.asc(), CrawlJobEvent.id.asc())
+            .all()
+        )
+        observations: list[dict[str, Any]] = []
+        for event in events:
+            payload = event.payload if isinstance(event.payload, Mapping) else {}
+            values = payload.get("observations")
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if not isinstance(value, Mapping):
+                    continue
+                if not {
+                    "job_id",
+                    "encrypted_job_id",
+                    "encrypted_job_id_source",
+                }.issubset(value):
+                    continue
+                observations.append(dict(value))
+        return observations
 
     def count_events(
         self,

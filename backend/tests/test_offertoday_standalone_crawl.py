@@ -598,17 +598,39 @@ def test_build_listing_staging_payload_uses_canonical_id_and_encrypted_public_ur
     assert payload["source_classification_name"] == "it_category"
     assert payload["listing_page"] == 3
     assert payload["listing_rank"] == 7
+    assert payload["listing_payload"]["encrypted_job_id_source"] == "encryptJobId"
     assert payload["listing_payload"]["raw_data"] == raw_data
     assert payload["search_family"] == "it_category"
     assert payload["keyword"] == "python"
 
-    with pytest.raises(ValueError, match="encrypted_job_id"):
-        crawl_module._build_listing_staging_payload(
-            {"job_id": "canonical-1", "encrypted_job_id": "", "raw_data": {}},
-            condition=condition,
-            page=1,
-            rank=1,
-        )
+
+def test_listing_staging_payload_accepts_jobid_fallback_without_raw_fabrication():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+    parsed = {
+        "job_id": "j-fallback",
+        "encrypted_job_id": "j-fallback",
+        "encrypted_job_id_source": "jobId_fallback",
+        "title": "Fallback fixture",
+        "raw_data": {"jobId": "j-fallback"},
+    }
+
+    payload = crawl_module._build_listing_staging_payload(
+        parsed,
+        condition=SimpleNamespace(
+            category_id=118000,
+            search_family="it_category",
+            keyword="",
+        ),
+        page=1,
+        rank=1,
+    )
+
+    assert payload["source_job_id"] == "j-fallback"
+    assert payload["source_url"].endswith("/j-fallback")
+    assert payload["listing_payload"]["encrypted_job_id_source"] == (
+        "jobId_fallback"
+    )
+    assert payload["listing_payload"]["raw_data"] == {"jobId": "j-fallback"}
 
 
 @pytest.mark.asyncio

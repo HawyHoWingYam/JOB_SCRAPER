@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -13,7 +14,9 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 from app.crawl_phases import DEFAULT_DETAIL_RETRY_STATUSES, SUPPORTED_DETAIL_STATUSES
+from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_listing import CrawlJobListing
+from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.job_repository import JobRepository
 from app.services.crawl_job_runtime import CrawlJobRuntime, ListingBatchPersistResult
@@ -87,6 +90,7 @@ class _FakeCrawlJobRepository:
         self.jobs: dict[str, SimpleNamespace] = {}
         self.metric_patches: list[tuple[str, dict]] = []
         self.events: list[dict] = []
+        self.identity_observations: list[dict] = []
         self.trace = trace
         self.fail_event = fail_event
 
@@ -110,6 +114,9 @@ class _FakeCrawlJobRepository:
             raise RuntimeError("event write failed")
         self.events.append(dict(kwargs))
         return SimpleNamespace()
+
+    def list_offertoday_listing_identity_observations(self, _db):
+        return deepcopy(self.identity_observations)
 
 
 class _RecordingRuntimeRepository:
@@ -174,9 +181,13 @@ class _FakeCrawlJobListingRepository:
         self,
         listings: list[_FakeListing] | None = None,
         *,
+        identity_history: list[_FakeListing] | None = None,
         trace: list[str] | None = None,
     ) -> None:
         self.listings: list[_FakeListing] = list(listings or [])
+        self.identity_history: list[_FakeListing] = list(
+            self.listings if identity_history is None else identity_history
+        )
         self.trace = trace
         self.upsert_calls: list[dict] = []
         self.candidate_calls: list[dict] = []
@@ -360,7 +371,11 @@ class _FakeCrawlJobListingRepository:
     def list_offertoday_identity_history(self, _db):
         self.list_identity_history_calls += 1
         return sorted(
-            (listing for listing in self.listings if listing.source_site == "offertoday"),
+            (
+                listing
+                for listing in self.identity_history
+                if listing.source_site == "offertoday"
+            ),
             key=lambda listing: (listing.created_at, listing.id),
         )
 
@@ -824,7 +839,7 @@ def test_listing_batch_result_reports_true_created_rows_with_compatibility_alias
     assert result.skipped_existing == 2
 
 
-def test_offertoday_stage_batch_locks_then_partitions_global_canonical_ids_and_records_event():
+def test_offertoday_stage_batch_preserves_every_fallback_and_explicit_observation():
     trace: list[str] = []
     session = _FakeSession(trace)
     crawl_job_id = "current-crawl"
@@ -848,6 +863,21 @@ def test_offertoday_stage_batch_locks_then_partitions_global_canonical_ids_and_r
         crawl_job_listing_repository=listing_repository,
         job_repository=job_repository,
     )
+    fallback_payload = _offertoday_stage_payload(
+        "upgrade-1",
+        encrypted_job_id="upgrade-1",
+    )
+    fallback_payload["listing_payload"] = {
+        "job_id": "upgrade-1",
+        "encrypted_job_id": "upgrade-1",
+        "encrypted_job_id_source": "jobId_fallback",
+        "raw_data": {"jobId": "upgrade-1"},
+    }
+    explicit_payload = _offertoday_stage_payload(
+        "upgrade-1",
+        encrypted_job_id="enc-upgrade-1",
+    )
+    explicit_payload["listing_payload"]["encrypted_job_id_source"] = "encryptJobId"
 
     result = runtime.stage_listing_batch(
         crawl_job_id=crawl_job_id,
@@ -857,6 +887,8 @@ def test_offertoday_stage_batch_locks_then_partitions_global_canonical_ids_and_r
             _offertoday_stage_payload("staged-1", page=2),
             _offertoday_stage_payload("new-1", page=3),
             _offertoday_stage_payload("new-1", keyword="duplicate", page=4),
+            fallback_payload,
+            explicit_payload,
         ],
         skip_existing=False,
     )
@@ -864,14 +896,15 @@ def test_offertoday_stage_batch_locks_then_partitions_global_canonical_ids_and_r
     assert trace[:3] == ["lock", "published_lookup", "staged_lookup"]
     assert trace.count("lock") == 1
     assert trace.count("upsert:new-1:created") == 1
+    assert trace.count("upsert:upgrade-1:created") == 1
     assert trace[-3:] == ["merge_metrics", "append_event", "commit"]
     assert job_repository.raise_on_error_calls == [True]
     assert result == ListingBatchPersistResult(
-        rows_created=1,
-        created_source_job_ids=("new-1",),
+        rows_created=2,
+        created_source_job_ids=("new-1", "upgrade-1"),
         preexisting_staged_source_job_ids=("staged-1",),
         published_source_job_ids=("published-1",),
-        job_ids_seen=3,
+        job_ids_seen=4,
         skipped_existing=2,
     )
     assert historical.source_url.endswith("old-encrypted-id")
@@ -882,10 +915,18 @@ def test_offertoday_stage_batch_locks_then_partitions_global_canonical_ids_and_r
             "event_type": "crawl.listing_observed",
             "payload": {
                 "source_site": "offertoday",
-                "source_job_ids": ["published-1", "staged-1", "new-1"],
+                "source_job_ids": [
+                    "published-1",
+                    "staged-1",
+                    "new-1",
+                    "upgrade-1",
+                ],
                 "observations": [
                     {
                         "source_job_id": "published-1",
+                        "job_id": "published-1",
+                        "encrypted_job_id": "enc-published-1",
+                        "encrypted_job_id_source": "encryptJobId",
                         "classification": "published",
                         "search_family": "it_category",
                         "category_id": "101",
@@ -895,6 +936,9 @@ def test_offertoday_stage_batch_locks_then_partitions_global_canonical_ids_and_r
                     },
                     {
                         "source_job_id": "staged-1",
+                        "job_id": "staged-1",
+                        "encrypted_job_id": "enc-staged-1",
+                        "encrypted_job_id_source": "encryptJobId",
                         "classification": "preexisting_staged_unpublished",
                         "search_family": "it_category",
                         "category_id": "101",
@@ -904,6 +948,9 @@ def test_offertoday_stage_batch_locks_then_partitions_global_canonical_ids_and_r
                     },
                     {
                         "source_job_id": "new-1",
+                        "job_id": "new-1",
+                        "encrypted_job_id": "enc-new-1",
+                        "encrypted_job_id_source": "encryptJobId",
                         "classification": "newly_staged",
                         "search_family": "it_category",
                         "category_id": "101",
@@ -911,12 +958,48 @@ def test_offertoday_stage_batch_locks_then_partitions_global_canonical_ids_and_r
                         "keyword": "python",
                         "page": 3,
                     },
+                    {
+                        "source_job_id": "new-1",
+                        "job_id": "new-1",
+                        "encrypted_job_id": "enc-new-1",
+                        "encrypted_job_id_source": "encryptJobId",
+                        "classification": "newly_staged",
+                        "search_family": "it_category",
+                        "category_id": "101",
+                        "category_name": "Information Technology",
+                        "keyword": "duplicate",
+                        "page": 4,
+                    },
+                    {
+                        "source_job_id": "upgrade-1",
+                        "job_id": "upgrade-1",
+                        "encrypted_job_id": "upgrade-1",
+                        "encrypted_job_id_source": "jobId_fallback",
+                        "classification": "newly_staged",
+                        "search_family": "it_category",
+                        "category_id": "101",
+                        "category_name": "Information Technology",
+                        "keyword": "python",
+                        "page": 1,
+                    },
+                    {
+                        "source_job_id": "upgrade-1",
+                        "job_id": "upgrade-1",
+                        "encrypted_job_id": "enc-upgrade-1",
+                        "encrypted_job_id_source": "encryptJobId",
+                        "classification": "newly_staged",
+                        "search_family": "it_category",
+                        "category_id": "101",
+                        "category_name": "Information Technology",
+                        "keyword": "python",
+                        "page": 1,
+                    },
                 ],
                 "published_source_job_ids": ["published-1"],
                 "preexisting_staged_source_job_ids": ["staged-1"],
-                "created_source_job_ids": ["new-1"],
-                "rows_created": 1,
-                "job_ids_seen": 3,
+                "created_source_job_ids": ["new-1", "upgrade-1"],
+                "rows_created": 2,
+                "job_ids_seen": 4,
                 "skipped_existing": 2,
             },
             "emitted_by": "offertoday-crawl",
@@ -1387,10 +1470,14 @@ def _detail_runtime(
     rows: list[_FakeListing],
     *,
     jobs: list[SimpleNamespace] | None = None,
+    identity_history: list[_FakeListing] | None = None,
     fail_event: bool = False,
 ):
     session = _FakeSession()
-    listing_repository = _FakeCrawlJobListingRepository(rows)
+    listing_repository = _FakeCrawlJobListingRepository(
+        rows,
+        identity_history=identity_history,
+    )
     crawl_job_repository = _FakeCrawlJobRepository(fail_event=fail_event)
     runtime = CrawlJobRuntime(
         lambda: session,
@@ -1410,6 +1497,145 @@ def _expected_cohort_hash(source_job_ids: tuple[str, ...]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def test_jobid_only_history_resolves_without_mutation_or_identity_conflict():
+    payload = {
+        "job_id": "j-1",
+        "encrypted_job_id": "j-1",
+        "encrypted_job_id_source": "jobId_fallback",
+        "raw_data": {"jobId": "j-1"},
+    }
+    row = _detail_listing("row-1", "j-1", listing_payload=payload, rank=1)
+    before = deepcopy(row.listing_payload)
+    runtime, repository, _crawl_jobs, _session = _detail_runtime([row])
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.identity_conflict_ids == ()
+    assert result.targets[0]["identity"].job_id == "j-1"
+    assert result.targets[0]["identity"].encrypted_job_id == "j-1"
+    assert result.targets[0]["identity"].encrypted_job_id_source == (
+        "jobId_fallback"
+    )
+    assert row.listing_payload == before
+    assert repository.identity_conflict_listing_ids == []
+
+
+def test_one_explicit_history_mapping_promotes_fallback_authority():
+    fallback = _detail_listing(
+        "fallback",
+        "j-1",
+        listing_payload={
+            "job_id": "j-1",
+            "encrypted_job_id": "j-1",
+            "encrypted_job_id_source": "jobId_fallback",
+            "raw_data": {"jobId": "j-1"},
+        },
+        rank=1,
+    )
+    explicit = _detail_listing(
+        "explicit",
+        "j-1",
+        listing_payload={
+            "job_id": "j-1",
+            "encrypted_job_id": "enc-1",
+            "encrypted_job_id_source": "encryptJobId",
+            "raw_data": {"jobId": "j-1", "encryptJobId": "enc-1"},
+        },
+        rank=2,
+    )
+    runtime, _repository, _crawl_jobs, _session = _detail_runtime(
+        [fallback, explicit]
+    )
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.identity_conflict_ids == ()
+    assert result.targets[0]["identity"].encrypted_job_id == "enc-1"
+    assert result.targets[0]["identity"].encrypted_job_id_source == "encryptJobId"
+
+
+def test_unselected_invalid_history_does_not_block_unrelated_target():
+    valid = _detail_listing(
+        "valid",
+        "j-1",
+        listing_payload={
+            "job_id": "j-1",
+            "encrypted_job_id": "j-1",
+            "encrypted_job_id_source": "jobId_fallback",
+            "raw_data": {"jobId": "j-1"},
+        },
+        rank=1,
+    )
+    unrelated_invalid = _detail_listing(
+        "invalid",
+        "j-other",
+        listing_payload={"raw_data": {"jobId": "j-other", "encryptJobId": []}},
+        rank=2,
+    )
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(
+        [valid],
+        identity_history=[valid, unrelated_invalid],
+    )
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.identity_conflict_ids == ()
+    assert result.targets[0]["source_job_id"] == "j-1"
+    assert repository.identity_conflict_listing_ids == []
+
+
+def test_skipped_explicit_observation_promotes_fallback_without_rewriting_row():
+    fallback_payload = {
+        "job_id": "j-1",
+        "encrypted_job_id": "j-1",
+        "encrypted_job_id_source": "jobId_fallback",
+        "raw_data": {"jobId": "j-1"},
+    }
+    fallback = _detail_listing(
+        "fallback",
+        "j-1",
+        listing_payload=fallback_payload,
+        rank=1,
+    )
+    before = deepcopy(fallback.listing_payload)
+    runtime, _repository, crawl_jobs, _session = _detail_runtime([fallback])
+    crawl_jobs.identity_observations = [
+        {
+            "source_job_id": "j-1",
+            "job_id": "j-1",
+            "encrypted_job_id": "enc-1",
+            "encrypted_job_id_source": "encryptJobId",
+        }
+    ]
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.identity_conflict_ids == ()
+    assert result.targets[0]["identity"].encrypted_job_id == "enc-1"
+    assert result.targets[0]["identity"].encrypted_job_id_source == "encryptJobId"
+    assert fallback.listing_payload == before
+    assert any(
+        event["event_type"] == "crawl.detail_identity_provenance_upgraded"
+        for event in crawl_jobs.events
+    )
 
 
 def test_detail_limit_applies_after_grouping_duplicate_rows():
@@ -1644,7 +1870,7 @@ def test_changed_encrypted_id_defers_every_selected_duplicate():
         "source_job_id": "j-1",
         "encrypted_job_ids": ["enc-a", "enc-b"],
         "reverse_peer_job_ids": [],
-        "reason": "missing_or_changed_encrypted_id",
+        "reason": "multiple_explicit_encrypted_ids",
     }
     assert result.targets == []
     assert result.fetch_cohort_source_job_ids == ()
@@ -1660,7 +1886,7 @@ def test_changed_encrypted_id_defers_every_selected_duplicate():
     assert crawl_jobs.events[-1]["payload"] == {"conflicts": [expected_evidence]}
 
 
-def test_same_encrypted_id_for_two_canonical_ids_defers_both_groups():
+def test_reverse_collision_same_encrypted_id_for_two_canonical_ids_defers_both_groups():
     rows = [
         _detail_listing("row-1", "j-1", encrypted_job_id="enc-shared", rank=1),
         _detail_listing("row-2", "j-2", encrypted_job_id="enc-shared", rank=2),
@@ -1726,7 +1952,74 @@ def test_completed_history_mapping_change_defers_new_pending_row():
     assert rows[1].detail_status == "identity_conflict"
 
 
-def test_any_identity_conflict_suppresses_otherwise_valid_batch_targets():
+def test_malformed_group_does_not_suppress_valid_promoted_fallback_group():
+    bad = _detail_listing(
+        "bad",
+        "j-bad",
+        listing_payload={"encrypted_job_id": ""},
+        rank=1,
+    )
+    good_fallback = _detail_listing(
+        "good-fallback",
+        "j-good",
+        listing_payload={
+            "job_id": "j-good",
+            "encrypted_job_id": "j-good",
+            "encrypted_job_id_source": "jobId_fallback",
+            "raw_data": {"jobId": "j-good"},
+        },
+        rank=2,
+    )
+    good_explicit = _detail_listing(
+        "good-explicit",
+        "j-good",
+        listing_payload={
+            "job_id": "j-good",
+            "encrypted_job_id": "enc-good",
+            "encrypted_job_id_source": "encryptJobId",
+            "raw_data": {"jobId": "j-good", "encryptJobId": "enc-good"},
+        },
+        rank=3,
+    )
+    rows = [bad, good_fallback, good_explicit]
+    before = [deepcopy(row.listing_payload) for row in rows]
+    runtime, repository, crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    expected_evidence = {
+        "source_job_id": "j-bad",
+        "encrypted_job_ids": [],
+        "reverse_peer_job_ids": [],
+        "reason": "unusable_identity_evidence",
+    }
+    assert result.identity_conflict_ids == ("j-bad",)
+    assert result.identity_conflict_evidence == (expected_evidence,)
+    assert repository.identity_conflict_listing_ids == ["bad"]
+    assert [target["source_job_id"] for target in result.targets] == ["j-good"]
+    assert result.targets[0]["identity"].encrypted_job_id == "enc-good"
+    assert result.targets[0]["identity"].encrypted_job_id_source == "encryptJobId"
+    assert result.fetch_cohort_source_job_ids == ("j-good",)
+    assert result.selected_rows == 3
+    assert result.distinct_selected_ids == 2
+    assert result.duplicate_rows == 1
+    assert result.target_rows == 1
+    assert bad.detail_status == "identity_conflict"
+    assert good_fallback.detail_status == "pending"
+    assert good_explicit.detail_status == "pending"
+    assert [row.listing_payload for row in rows] == before
+    assert crawl_jobs.events[-2]["event_type"] == "crawl.detail_identity_conflict"
+    assert crawl_jobs.events[-2]["payload"] == {"conflicts": [expected_evidence]}
+    assert crawl_jobs.events[-1]["event_type"] == (
+        "crawl.detail_identity_provenance_upgraded"
+    )
+
+
+def test_identity_conflict_does_not_suppress_otherwise_valid_batch_targets():
     rows = [
         _detail_listing("bad-a", "j-bad", encrypted_job_id="enc-a", rank=1),
         _detail_listing("bad-b", "j-bad", encrypted_job_id="enc-b", rank=2),
@@ -1740,9 +2033,12 @@ def test_any_identity_conflict_suppresses_otherwise_valid_batch_targets():
         detail_crawl_job_id="detail-run-1",
     )
 
-    assert result.targets == []
+    assert [target["source_job_id"] for target in result.targets] == ["j-valid"]
+    assert result.fetch_cohort_source_job_ids == ("j-valid",)
     assert result.identity_conflict_ids == ("j-bad",)
     assert repository.identity_conflict_listing_ids == ["bad-a", "bad-b"]
+    assert rows[0].detail_status == "identity_conflict"
+    assert rows[1].detail_status == "identity_conflict"
     assert rows[2].detail_status == "pending"
 
 
@@ -1750,7 +2046,7 @@ def test_missing_identity_is_durable_conflict_and_event_failure_rolls_back():
     row = _detail_listing(
         "bad",
         "j-bad",
-        listing_payload={"job_id": "j-bad", "encrypted_job_id": ""},
+        listing_payload={"encrypted_job_id": ""},
         rank=1,
     )
     runtime, _repository, _crawl_jobs, session = _detail_runtime(
@@ -1879,6 +2175,73 @@ def test_repository_lists_all_offertoday_identity_history_in_creation_order():
 
     assert [row.source_job_id for row in history] == ["earlier", "later"]
     assert [row.detail_status for row in history] == ["failed", "completed"]
+
+
+def test_crawl_job_repository_lists_offertoday_identity_observations_in_order():
+    engine = create_engine("sqlite://")
+    CrawlJob.__table__.create(engine)
+    CrawlJobEvent.__table__.create(engine)
+    offertoday_id = uuid4()
+    jobsdb_id = uuid4()
+    with Session(engine) as db:
+        db.add_all(
+            [
+                CrawlJob(
+                    id=offertoday_id,
+                    source_site="offertoday",
+                    trigger_type="manual",
+                    status="completed",
+                    request_payload={},
+                ),
+                CrawlJob(
+                    id=jobsdb_id,
+                    source_site="jobsdb",
+                    trigger_type="manual",
+                    status="completed",
+                    request_payload={},
+                ),
+            ]
+        )
+        db.flush()
+        db.add_all(
+            [
+                CrawlJobEvent(
+                    crawl_job_id=offertoday_id,
+                    sequence_no=1,
+                    event_type="crawl.listing_observed",
+                    payload={
+                        "observations": [
+                            {
+                                "source_job_id": "j-1",
+                                "job_id": "j-1",
+                                "encrypted_job_id": "j-1",
+                                "encrypted_job_id_source": "jobId_fallback",
+                            }
+                        ]
+                    },
+                ),
+                CrawlJobEvent(
+                    crawl_job_id=jobsdb_id,
+                    sequence_no=1,
+                    event_type="crawl.listing_observed",
+                    payload={"observations": [{"source_job_id": "ignore"}]},
+                ),
+            ]
+        )
+        db.commit()
+
+        observations = (
+            CrawlJobRepository().list_offertoday_listing_identity_observations(db)
+        )
+
+    assert observations == [
+        {
+            "source_job_id": "j-1",
+            "job_id": "j-1",
+            "encrypted_job_id": "j-1",
+            "encrypted_job_id_source": "jobId_fallback",
+        }
+    ]
 
 
 def test_repository_identity_conflict_transition_participates_in_caller_transaction():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,7 @@ from app.sources.offertoday.completeness import is_complete_offertoday_job
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailIdentity,
     OfferTodayIdentityError,
+    build_offertoday_identity_authority_index,
     resolve_offertoday_detail_identity,
 )
 from app.sources.offertoday.search_space import (
@@ -78,128 +80,148 @@ def _group_detail_rows(selected_rows: list[Any]) -> dict[str, list[Any]]:
 def _audit_offertoday_detail_identities(
     *,
     identity_history: list[Any],
+    identity_observations: list[dict[str, Any]],
     selected_rows: list[Any],
     groups: dict[str, list[Any]],
 ) -> tuple[
     dict[Any, OfferTodayDetailIdentity],
+    dict[str, OfferTodayDetailIdentity],
     dict[str, set[str]],
     dict[str, set[str]],
-    set[str],
+    dict[str, str],
+    tuple[dict[str, str], ...],
 ]:
     selected_row_ids = {row.id for row in selected_rows}
     resolved_identity_by_row_id: dict[Any, OfferTodayDetailIdentity] = {}
-    historical_encrypted_ids_by_job: dict[str, set[str]] = {}
-    encrypted_to_job_ids: dict[str, set[str]] = {}
-    completed_encrypted_ids_by_job: dict[str, set[str]] = {}
-    unresolved_history_job_ids: set[str] = set()
+    all_identities: list[OfferTodayDetailIdentity] = []
+    unusable_job_ids: set[str] = set()
+
+    def add_identity(identity: OfferTodayDetailIdentity) -> None:
+        all_identities.append(identity)
 
     for history_row in identity_history:
-        historical_source_job_id = str(
+        source_job_id = str(
             getattr(history_row, "source_job_id", "") or ""
         ).strip()
+        history_payload = getattr(history_row, "listing_payload", None)
         try:
             identity = resolve_offertoday_detail_identity(
-                source_job_id=historical_source_job_id,
-                listing_payload=dict(
-                    getattr(history_row, "listing_payload", None) or {}
+                source_job_id=source_job_id,
+                listing_payload=(
+                    dict(history_payload)
+                    if isinstance(history_payload, Mapping)
+                    else {}
                 ),
             )
         except OfferTodayIdentityError:
-            if historical_source_job_id:
-                unresolved_history_job_ids.add(historical_source_job_id)
+            if source_job_id:
+                unusable_job_ids.add(source_job_id)
             continue
-
-        historical_encrypted_ids_by_job.setdefault(identity.job_id, set()).add(
-            identity.encrypted_job_id
-        )
-        encrypted_to_job_ids.setdefault(identity.encrypted_job_id, set()).add(
-            identity.job_id
-        )
-        if getattr(history_row, "detail_status", None) == "completed":
-            completed_encrypted_ids_by_job.setdefault(identity.job_id, set()).add(
-                identity.encrypted_job_id
-            )
+        add_identity(identity)
         if history_row.id in selected_row_ids:
             resolved_identity_by_row_id[history_row.id] = identity
 
-    identity_conflict_ids: set[str] = set()
+    for observation in identity_observations:
+        source_job_id = str(observation.get("source_job_id") or "").strip()
+        try:
+            identity = resolve_offertoday_detail_identity(
+                source_job_id=source_job_id,
+                listing_payload=observation,
+            )
+        except OfferTodayIdentityError:
+            if source_job_id:
+                unusable_job_ids.add(source_job_id)
+            continue
+        add_identity(identity)
+
+    authority_index = build_offertoday_identity_authority_index(
+        tuple(all_identities)
+    )
+    authoritative_identity_by_job = dict(
+        authority_index.authoritative_identity_by_job
+    )
+    explicit_ids_by_job = {
+        job_id: set(route_ids)
+        for job_id, route_ids in authority_index.explicit_ids_by_job.items()
+    }
+    route_to_job_ids = {
+        route_id: set(job_ids)
+        for route_id, job_ids in authority_index.route_to_job_ids.items()
+    }
+
+    conflict_reason_by_job: dict[str, str] = {}
     for source_job_id, rows in groups.items():
-        historical_encrypted_ids = historical_encrypted_ids_by_job.get(
-            source_job_id,
-            set(),
-        )
         selected_identities = [
             resolved_identity_by_row_id.get(row.id) for row in rows
         ]
+        if source_job_id in authority_index.conflict_reason_by_job:
+            conflict_reason_by_job[source_job_id] = (
+                authority_index.conflict_reason_by_job[source_job_id]
+            )
+            continue
         if (
-            source_job_id in unresolved_history_job_ids
-            or len(historical_encrypted_ids) != 1
+            source_job_id in unusable_job_ids
             or any(identity is None for identity in selected_identities)
+            or source_job_id not in authoritative_identity_by_job
         ):
-            identity_conflict_ids.add(source_job_id)
+            conflict_reason_by_job[source_job_id] = "unusable_identity_evidence"
             continue
+        authority = authoritative_identity_by_job[source_job_id]
+        if len(route_to_job_ids.get(authority.encrypted_job_id, set())) > 1:
+            conflict_reason_by_job[source_job_id] = "reverse_collision"
 
-        selected_encrypted_ids = {
-            identity.encrypted_job_id
-            for identity in selected_identities
-            if identity is not None
+    provenance_upgrades = tuple(
+        {
+            "source_job_id": source_job_id,
+            "encrypted_job_id": authoritative_identity_by_job[
+                source_job_id
+            ].encrypted_job_id,
+            "from_source": "jobId_fallback",
+            "to_source": "encryptJobId",
         }
-        completed_encrypted_ids = completed_encrypted_ids_by_job.get(
-            source_job_id,
-            set(),
-        )
-        if completed_encrypted_ids and not selected_encrypted_ids.issubset(
-            completed_encrypted_ids
-        ):
-            identity_conflict_ids.add(source_job_id)
-            continue
-
-        if any(
-            len(encrypted_to_job_ids.get(encrypted_job_id, set())) > 1
-            for encrypted_job_id in historical_encrypted_ids
-        ):
-            identity_conflict_ids.add(source_job_id)
+        for source_job_id in groups
+        if source_job_id not in conflict_reason_by_job
+        and source_job_id in authority_index.fallback_job_ids
+        and authoritative_identity_by_job[source_job_id].encrypted_job_id_source
+        == "encryptJobId"
+    )
 
     return (
         resolved_identity_by_row_id,
-        historical_encrypted_ids_by_job,
-        encrypted_to_job_ids,
-        identity_conflict_ids,
+        authoritative_identity_by_job,
+        explicit_ids_by_job,
+        route_to_job_ids,
+        conflict_reason_by_job,
+        provenance_upgrades,
     )
 
 
 def _build_identity_conflict_evidence(
     *,
-    identity_conflict_ids: set[str],
-    historical_encrypted_ids_by_job: dict[str, set[str]],
-    encrypted_to_job_ids: dict[str, set[str]],
+    conflict_reason_by_job: dict[str, str],
+    explicit_ids_by_job: dict[str, set[str]],
+    authoritative_identity_by_job: dict[str, OfferTodayDetailIdentity],
+    route_to_job_ids: dict[str, set[str]],
 ) -> list[dict[str, Any]]:
     evidence_records: list[dict[str, Any]] = []
-    for source_job_id in sorted(identity_conflict_ids):
-        encrypted_job_ids = sorted(
-            historical_encrypted_ids_by_job.get(source_job_id, set())
-        )
-        reverse_peer_job_ids = sorted(
-            {
-                peer_job_id
-                for encrypted_job_id in encrypted_job_ids
-                for peer_job_id in encrypted_to_job_ids.get(
-                    encrypted_job_id,
-                    set(),
-                )
-                if peer_job_id != source_job_id
-            }
+    for source_job_id in sorted(conflict_reason_by_job):
+        authority = authoritative_identity_by_job.get(source_job_id)
+        reverse_peer_job_ids = (
+            sorted(
+                route_to_job_ids.get(authority.encrypted_job_id, set())
+                - {source_job_id}
+            )
+            if authority is not None
+            else []
         )
         evidence_records.append(
             {
                 "source_job_id": source_job_id,
-                "encrypted_job_ids": encrypted_job_ids,
-                "reverse_peer_job_ids": reverse_peer_job_ids,
-                "reason": (
-                    "reverse_collision"
-                    if reverse_peer_job_ids
-                    else "missing_or_changed_encrypted_id"
+                "encrypted_job_ids": sorted(
+                    explicit_ids_by_job.get(source_job_id, set())
                 ),
+                "reverse_peer_job_ids": reverse_peer_job_ids,
+                "reason": conflict_reason_by_job[source_job_id],
             }
         )
     return evidence_records
@@ -474,15 +496,6 @@ class CrawlJobRuntime:
                     )
                     for source_job_id in ordered_job_ids
                 }
-                first_payload_by_source_job_id = {
-                    source_job_id: next(
-                        payload
-                        for payload in batch_payloads
-                        if str(payload.get("source_job_id") or "").strip()
-                        == source_job_id
-                    )
-                    for source_job_id in ordered_job_ids
-                }
                 self.crawl_job_repository.append_event(
                     db,
                     crawl_job_id=crawl_job_id,
@@ -493,12 +506,15 @@ class CrawlJobRuntime:
                         "observations": [
                             self._listing_observation_payload(
                                 source_job_id=source_job_id,
-                                classification=classification_by_source_job_id[
-                                    source_job_id
-                                ],
-                                payload=first_payload_by_source_job_id[source_job_id],
+                                classification=classification_by_source_job_id[source_job_id],
+                                payload=input_payload,
                             )
-                            for source_job_id in ordered_job_ids
+                            for input_payload in batch_payloads
+                            if (
+                                source_job_id := str(
+                                    input_payload.get("source_job_id") or ""
+                                ).strip()
+                            )
                         ],
                         "published_source_job_ids": list(
                             published_source_job_ids
@@ -578,28 +594,40 @@ class CrawlJobRuntime:
             resolved_identity_by_row_id: dict[
                 Any, OfferTodayDetailIdentity
             ] = {}
-            identity_conflict_ids: set[str] = set()
-            historical_encrypted_ids_by_job: dict[str, set[str]] = {}
-            encrypted_to_job_ids: dict[str, set[str]] = {}
+            authoritative_identity_by_job: dict[
+                str, OfferTodayDetailIdentity
+            ] = {}
+            explicit_ids_by_job: dict[str, set[str]] = {}
+            route_to_job_ids: dict[str, set[str]] = {}
+            conflict_reason_by_job: dict[str, str] = {}
+            provenance_upgrades: tuple[dict[str, str], ...] = ()
             if normalized_source == "offertoday" and selected_rows:
                 (
                     resolved_identity_by_row_id,
-                    historical_encrypted_ids_by_job,
-                    encrypted_to_job_ids,
-                    identity_conflict_ids,
+                    authoritative_identity_by_job,
+                    explicit_ids_by_job,
+                    route_to_job_ids,
+                    conflict_reason_by_job,
+                    provenance_upgrades,
                 ) = _audit_offertoday_detail_identities(
                     identity_history=self.crawl_job_listing_repository.list_offertoday_identity_history(
+                        db
+                    ),
+                    identity_observations=self.crawl_job_repository.list_offertoday_listing_identity_observations(
                         db
                     ),
                     selected_rows=selected_rows,
                     groups=groups,
                 )
 
+            identity_conflict_ids = set(conflict_reason_by_job)
+            conflict_evidence: list[dict[str, Any]] = []
             if identity_conflict_ids:
                 conflict_evidence = _build_identity_conflict_evidence(
-                    identity_conflict_ids=identity_conflict_ids,
-                    historical_encrypted_ids_by_job=historical_encrypted_ids_by_job,
-                    encrypted_to_job_ids=encrypted_to_job_ids,
+                    conflict_reason_by_job=conflict_reason_by_job,
+                    explicit_ids_by_job=explicit_ids_by_job,
+                    authoritative_identity_by_job=authoritative_identity_by_job,
+                    route_to_job_ids=route_to_job_ids,
                 )
                 evidence_by_source_job_id = {
                     evidence["source_job_id"]: evidence
@@ -627,48 +655,32 @@ class CrawlJobRuntime:
                     emitted_by="crawl-runtime",
                     auto_commit=False,
                 )
-                if source_listing_crawl_job_id is not None:
-                    self._sync_listing_metrics(
-                        db,
-                        crawl_job_id=source_listing_crawl_job_id,
-                        source_site=normalized_source,
-                        skipped_existing_delta=0,
-                    )
-                self._sync_detail_run_metrics(
+
+            eligible_groups = {
+                source_job_id: rows
+                for source_job_id, rows in groups.items()
+                if source_job_id not in identity_conflict_ids
+            }
+
+            if provenance_upgrades:
+                self.crawl_job_repository.append_event(
                     db,
-                    detail_crawl_job_id=detail_crawl_job_id,
-                    source_site=normalized_source,
-                    selected_rows=len(selected_rows),
-                    skipped_existing_rows=0,
-                    target_rows=0,
-                    distinct_selected_ids=len(groups),
-                    reconciled_rows=0,
-                    duplicate_rows=len(selected_rows) - len(groups),
-                )
-                db.commit()
-                return DetailTargetLoadResult(
-                    target_rows=0,
-                    selected_rows=len(selected_rows),
-                    skipped_existing_rows=0,
-                    distinct_selected_ids=len(groups),
-                    reconciled_rows=0,
-                    duplicate_rows=len(selected_rows) - len(groups),
-                    fetch_cohort_source_job_ids=(),
-                    fetch_cohort_hash=_canonical_id_hash(()),
-                    reconciled_source_job_ids=(),
-                    identity_conflict_ids=tuple(sorted(identity_conflict_ids)),
-                    identity_conflict_evidence=tuple(conflict_evidence),
-                    reconciliation_records=(),
-                    targets=[],
+                    crawl_job_id=detail_crawl_job_id,
+                    event_type="crawl.detail_identity_provenance_upgraded",
+                    payload={
+                        "upgrades": [dict(item) for item in provenance_upgrades]
+                    },
+                    emitted_by="crawl-runtime",
+                    auto_commit=False,
                 )
 
             existing_jobs_by_source_id = (
                 self.job_repository.list_existing_jobs_by_source_ids(
                     db,
                     source_site=normalized_source,
-                    source_job_ids=list(groups),
+                    source_job_ids=list(eligible_groups),
                 )
-                if payload.get("skip_existing") and groups
+                if payload.get("skip_existing") and eligible_groups
                 else {}
             )
             targets: list[dict[str, Any]] = []
@@ -676,7 +688,7 @@ class CrawlJobRuntime:
             reconciled_source_job_ids: list[str] = []
             reconciliation_records: list[dict[str, Any]] = []
 
-            for source_job_id, rows in groups.items():
+            for source_job_id, rows in eligible_groups.items():
                 existing_job = existing_jobs_by_source_id.get(source_job_id)
                 should_reconcile = existing_job is not None and (
                     normalized_source != "offertoday"
@@ -730,7 +742,7 @@ class CrawlJobRuntime:
                             getattr(authoritative, "detail_payload", None) or {}
                         ),
                         "identity": (
-                            resolved_identity_by_row_id[authoritative.id]
+                            authoritative_identity_by_job[source_job_id]
                             if normalized_source == "offertoday"
                             else None
                         ),
@@ -782,8 +794,8 @@ class CrawlJobRuntime:
                     fetch_cohort_source_job_ids
                 ),
                 reconciled_source_job_ids=tuple(reconciled_source_job_ids),
-                identity_conflict_ids=(),
-                identity_conflict_evidence=(),
+                identity_conflict_ids=tuple(sorted(identity_conflict_ids)),
+                identity_conflict_evidence=tuple(conflict_evidence),
                 reconciliation_records=tuple(reconciliation_records),
                 targets=targets,
             )
@@ -1242,8 +1254,20 @@ class CrawlJobRuntime:
         classification: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        listing_payload = payload.get("listing_payload")
+        identity = resolve_offertoday_detail_identity(
+            source_job_id=source_job_id,
+            listing_payload=(
+                dict(listing_payload)
+                if isinstance(listing_payload, Mapping)
+                else {}
+            ),
+        )
         return {
             "source_job_id": source_job_id,
+            "job_id": identity.job_id,
+            "encrypted_job_id": identity.encrypted_job_id,
+            "encrypted_job_id_source": identity.encrypted_job_id_source,
             "classification": classification,
             "search_family": CrawlJobRuntime._optional_str(
                 payload.get("search_family")

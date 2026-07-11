@@ -1007,6 +1007,28 @@ def test_target_uses_authoritative_and_duplicate_ids_and_validates_identity():
         OfferTodayDetailTarget.from_runtime_target(invalid)
 
 
+def test_target_accepts_explicit_authority_over_fallback_listing_without_rewrite():
+    runtime_target = _runtime_target("100")
+    runtime_target["listing_payload"] = {
+        "job_id": "100",
+        "encrypted_job_id": "100",
+        "encrypted_job_id_source": "jobId_fallback",
+        "raw_data": {"jobId": "100"},
+    }
+    runtime_target["identity"] = OfferTodayDetailIdentity(
+        job_id="100",
+        encrypted_job_id="enc-100",
+        encrypted_job_id_source="encryptJobId",
+    )
+    before = deepcopy(runtime_target["listing_payload"])
+
+    target = OfferTodayDetailTarget.from_runtime_target(runtime_target)
+
+    assert target.identity.encrypted_job_id == "enc-100"
+    assert target.identity.encrypted_job_id_source == "encryptJobId"
+    assert runtime_target["listing_payload"] == before
+
+
 @pytest.mark.asyncio
 async def test_process_target_accepts_keyword_only_per_call_detail_fetcher():
     env = _build_pipeline([_success_response()])
