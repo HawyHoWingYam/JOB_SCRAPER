@@ -659,10 +659,12 @@ async def test_staging_sink_uses_rows_created_and_defers_global_identity_conflic
 
 
 def _sample_listing_observation():
-    pair = OfferTodayIdentityPair("job-1", "enc-1")
+    pair = OfferTodayIdentityPair("job-1", "enc-1", "encryptJobId")
     row = ListingRowEvidence(
         job_id="job-1",
         encrypted_job_id="enc-1",
+        encrypted_job_id_source="encryptJobId",
+        observed_encrypted_job_id="enc-1",
         title="Data Engineer",
         job_function_codes=("118001",),
         title_language="en",
@@ -685,6 +687,7 @@ def _sample_listing_observation():
         row_count=1,
         missing_job_id_count=0,
         missing_encrypted_job_id_count=0,
+        job_id_fallback_count=0,
         id_pairs=(pair,),
         rows=(row,),
         identity_issues=(),

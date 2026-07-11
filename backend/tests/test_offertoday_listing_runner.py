@@ -4,6 +4,7 @@ import hashlib
 import json
 from copy import deepcopy
 from itertools import permutations
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from app.sources.offertoday import listing_runner as runner_module
 from app.sources.offertoday.listing_runner import (
     ListingRetryPolicy,
     ListingStopPolicy,
+    OfferTodayIdentityPair,
     OfferTodayListingCondition,
     OfferTodayListingRunner,
 )
@@ -24,6 +26,9 @@ from app.sources.offertoday.response_policy import (
     OfferTodayResponseKind,
     OfferTodayTransportError,
 )
+
+
+FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "offertoday"
 
 
 def _listing_row(
@@ -230,6 +235,146 @@ async def _run(
     return result, observation_sink, staging_sink, sleep
 
 
+@pytest.mark.parametrize(
+    ("fixture_name", "endpoint", "expected_job_id"),
+    [
+        ("jobid_only_search_page.json", "search", "RbeDGc1VoBZwKIInWPjDCA=="),
+        ("jobid_only_browse_page.json", "browse", "lxwa-xaLLtVD4diDhVRUjw=="),
+    ],
+)
+@pytest.mark.asyncio
+async def test_real_jobid_only_page_is_accepted_with_observation_and_fallback_counts(
+    fixture_name: str,
+    endpoint: str,
+    expected_job_id: str,
+) -> None:
+    response = json.loads((FIXTURE_ROOT / fixture_name).read_text(encoding="utf-8"))
+    raw_before = deepcopy(response["data"]["resultList"][0])
+    condition = OfferTodayListingCondition(
+        search_family="runtime_smoke",
+        category_id=118000,
+        keyword="",
+        endpoint=endpoint,
+        rcd_type=7,
+    )
+
+    result, observations, staging, _sleep = await _run(
+        ScriptedTransport(response),
+        conditions=[condition],
+        max_pages=1,
+        require_empty_confirmation=False,
+    )
+
+    assert result.stop_reason == "page_cap"
+    assert result.identity_issues == ()
+    assert result.identity_conflicts == ()
+    assert result.accepted_job_ids == (expected_job_id,)
+    assert result.id_pairs[0].job_id == expected_job_id
+    assert result.id_pairs[0].encrypted_job_id == expected_job_id
+    assert result.id_pairs[0].encrypted_job_id_source == "jobId_fallback"
+    page = observations.observations[0]
+    assert page.missing_encrypted_job_id_count == 1
+    assert page.job_id_fallback_count == 1
+    assert page.identity_issues == ()
+    assert staging.staged_pages[0]["rows"][0]["raw_data"] == raw_before
+    assert "encryptJobId" not in staging.staged_pages[0]["rows"][0]["raw_data"]
+
+
+@pytest.mark.asyncio
+async def test_single_explicit_mapping_promotes_prior_fallback_authority() -> None:
+    fallback = _listing_row("j-promote", None)
+    fallback.pop("encryptJobId")
+    transport = ScriptedTransport(
+        _listing_response([fallback], has_more=True),
+        _listing_response([_listing_row("j-promote", "enc-promoted")], has_more=False),
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=2,
+        require_empty_confirmation=False,
+    )
+
+    assert result.identity_conflicts == ()
+    assert result.accepted_job_ids == ("j-promote",)
+    assert result.id_pairs[0].encrypted_job_id == "enc-promoted"
+    assert result.id_pairs[0].encrypted_job_id_source == "encryptJobId"
+    assert observations.observations[0].job_id_fallback_count == 1
+    assert observations.observations[1].job_id_fallback_count == 0
+    assert observations.observations[0].id_pairs == (
+        OfferTodayIdentityPair("j-promote", "j-promote", "jobId_fallback"),
+    )
+    assert observations.observations[1].id_pairs == (
+        OfferTodayIdentityPair("j-promote", "enc-promoted", "encryptJobId"),
+    )
+    assert len(staging.staged_pages) == 2
+    assert [
+        page["rows"][0]["encrypted_job_id_source"]
+        for page in staging.staged_pages
+    ] == ["jobId_fallback", "encryptJobId"]
+
+
+@pytest.mark.asyncio
+async def test_later_fallback_does_not_downgrade_explicit_authority() -> None:
+    later_fallback = _listing_row("j-stable", None)
+    later_fallback.pop("encryptJobId")
+    transport = ScriptedTransport(
+        _listing_response(
+            [_listing_row("j-stable", "enc-stable")],
+            has_more=True,
+        ),
+        _listing_response([later_fallback], has_more=False),
+    )
+
+    result, observations, _staging, _sleep = await _run(
+        transport,
+        max_pages=2,
+        require_empty_confirmation=False,
+    )
+
+    assert observations.observations[0].id_pairs == (
+        OfferTodayIdentityPair("j-stable", "enc-stable", "encryptJobId"),
+    )
+    assert observations.observations[1].rows[0].encrypted_job_id_source == (
+        "jobId_fallback"
+    )
+    assert observations.observations[1].id_pairs == (
+        OfferTodayIdentityPair("j-stable", "enc-stable", "encryptJobId"),
+    )
+    assert result.id_pairs == observations.observations[1].id_pairs
+
+
+@pytest.mark.parametrize("encrypted_value", [None, "   "])
+@pytest.mark.asyncio
+async def test_valid_jobid_with_null_or_blank_encrypted_value_uses_fallback(
+    encrypted_value,
+) -> None:
+    transport = ScriptedTransport(
+        _listing_response(
+            [_listing_row("j-fallback", encrypted_value)],
+            has_more=True,
+        )
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=1,
+        require_empty_confirmation=False,
+    )
+
+    assert result.identity_issues == ()
+    assert result.id_pairs == (
+        OfferTodayIdentityPair(
+            "j-fallback",
+            "j-fallback",
+            "jobId_fallback",
+        ),
+    )
+    assert observations.observations[0].missing_encrypted_job_id_count == 1
+    assert observations.observations[0].job_id_fallback_count == 1
+    assert len(staging.staged_pages) == 1
+
+
 @pytest.mark.asyncio
 async def test_retries_same_page_then_confirms_natural_exhaustion_and_stages_normalized_rows() -> (
     None
@@ -423,7 +568,7 @@ async def test_unique_job_cap_precedes_terminal_completion_when_confirmation_dis
 
 
 @pytest.mark.asyncio
-async def test_same_page_forward_identity_conflict_is_hard_and_stages_nothing() -> None:
+async def test_two_explicit_mappings_remain_a_forward_conflict() -> None:
     transport = ScriptedTransport(
         _listing_response(
             [
@@ -445,23 +590,17 @@ async def test_same_page_forward_identity_conflict_is_hard_and_stages_nothing() 
     conflict = result.identity_conflicts[0]
     assert conflict.job_ids == ("j-conflict",)
     assert conflict.encrypted_job_ids == ("enc-first", "enc-second")
-    assert conflict.reason == "one_job_id_to_multiple_encrypted_ids"
+    assert conflict.reason == "multiple_explicit_encrypted_ids"
     assert observations.observations[0].identity_conflicts == (conflict,)
     assert observations.observations[0].classification == "identity_conflict"
     assert observations.observations[0].stop_reason == "identity_conflict"
-    assert [
-        (pair.job_id, pair.encrypted_job_id)
-        for pair in observations.observations[0].id_pairs
-    ] == [
-        ("j-conflict", "enc-first"),
-        ("j-conflict", "enc-second"),
-    ]
+    assert observations.observations[0].id_pairs == ()
     assert staging.staged_pages == []
     assert staging.deferrals == [
         {
             "job_ids": ("j-conflict",),
             "encrypted_job_ids": ("enc-first", "enc-second"),
-            "reason": "one_job_id_to_multiple_encrypted_ids",
+            "reason": "multiple_explicit_encrypted_ids",
         }
     ]
 
@@ -487,7 +626,7 @@ async def test_later_mapping_change_defers_earlier_staged_canonical_row() -> Non
         {
             "job_ids": ("j-later",),
             "encrypted_job_ids": ("enc-changed", "enc-original"),
-            "reason": "one_job_id_to_multiple_encrypted_ids",
+            "reason": "multiple_explicit_encrypted_ids",
         }
     ]
     assert result.ordered_job_ids == ("j-later",)
@@ -509,22 +648,6 @@ async def test_later_mapping_change_defers_earlier_staged_canonical_row() -> Non
     [
         (None, "enc-orphan", None, "enc-orphan", "missing_job_id", "job_id"),
         ("  ", "enc-blank", None, "enc-blank", "missing_job_id", "job_id"),
-        (
-            "j-unresolved",
-            None,
-            "j-unresolved",
-            None,
-            "missing_encrypted_job_id",
-            "encrypted_job_id",
-        ),
-        (
-            "j-blank",
-            "  ",
-            "j-blank",
-            None,
-            "missing_encrypted_job_id",
-            "encrypted_job_id",
-        ),
     ],
 )
 @pytest.mark.asyncio
@@ -572,14 +695,14 @@ async def test_missing_identity_fields_are_observed_and_never_staged(
 @pytest.mark.parametrize(
     ("field_name", "invalid_value", "expected_reason"),
     [
-        ("jobId", ["bad"], "invalid_job_id"),
-        ("jobId", {"bad": 1}, "invalid_job_id"),
-        ("jobId", True, "invalid_job_id"),
-        ("jobId", 101, "invalid_job_id"),
-        ("encryptJobId", ["bad"], "invalid_encrypted_job_id"),
-        ("encryptJobId", {"bad": 1}, "invalid_encrypted_job_id"),
-        ("encryptJobId", False, "invalid_encrypted_job_id"),
-        ("encryptJobId", 202, "invalid_encrypted_job_id"),
+        ("jobId", ["bad"], "invalid_job_id_evidence"),
+        ("jobId", {"bad": 1}, "invalid_job_id_evidence"),
+        ("jobId", True, "invalid_job_id_evidence"),
+        ("jobId", 101, "invalid_job_id_evidence"),
+        ("encryptJobId", ["bad"], "invalid_encrypted_job_id_evidence"),
+        ("encryptJobId", {"bad": 1}, "invalid_encrypted_job_id_evidence"),
+        ("encryptJobId", False, "invalid_encrypted_job_id_evidence"),
+        ("encryptJobId", 202, "invalid_encrypted_job_id_evidence"),
     ],
 )
 @pytest.mark.asyncio
@@ -629,7 +752,7 @@ async def test_non_string_raw_identity_values_are_rejected_before_staging(
     ),
     [
         (None, None, "missing_job_id", 1, 1),
-        (["bad"], None, "invalid_job_id", 0, 1),
+        (["bad"], None, "invalid_job_id_evidence", 0, 1),
         (None, {"bad": 1}, "missing_job_id", 1, 0),
     ],
 )
@@ -661,35 +784,6 @@ async def test_combined_identity_fields_keep_independent_missing_counts(
         observation.missing_encrypted_job_id_count == expected_missing_encrypted_count
     )
     assert staging.staged_pages == []
-
-
-@pytest.mark.asyncio
-async def test_known_canonical_missing_encrypted_id_is_deferred() -> None:
-    transport = ScriptedTransport(
-        _listing_response(
-            [_listing_row("j-known", "enc-known")],
-            has_more=True,
-        ),
-        _listing_response(
-            [_listing_row("j-known", None)],
-            has_more=True,
-        ),
-    )
-
-    result, _observations, staging, _sleep = await _run(transport)
-
-    assert [page["page"] for page in staging.staged_pages] == [1]
-    assert staging.deferrals == [
-        {
-            "job_ids": ("j-known",),
-            "encrypted_job_ids": ("enc-known",),
-            "reason": "missing_encrypted_job_id",
-        }
-    ]
-    assert result.ordered_job_ids == ("j-known",)
-    assert result.accepted_job_ids == ()
-    assert result.id_pairs == ()
-    assert result.stop_reason == "identity_issue"
 
 
 @pytest.mark.asyncio
@@ -743,7 +837,7 @@ async def test_reverse_identity_conflict_defers_both_canonical_ids_and_stages_no
             (("j-forward", "enc-a"), ("j-forward", "enc-z")),
             ("j-forward",),
             ("enc-a", "enc-z"),
-            "one_job_id_to_multiple_encrypted_ids",
+            "multiple_explicit_encrypted_ids",
         ),
         (
             (("j-z", "enc-reverse"), ("j-a", "enc-reverse")),
@@ -810,7 +904,7 @@ async def test_identity_conflict_and_deferral_evidence_is_permutation_stable(
             ),
             ("j-forward",),
             ("enc-a", "enc-b", "enc-c"),
-            "one_job_id_to_multiple_encrypted_ids",
+            "multiple_explicit_encrypted_ids",
         ),
         (
             (),
@@ -828,7 +922,7 @@ async def test_identity_conflict_and_deferral_evidence_is_permutation_stable(
             (("j-forward", "enc-b"), ("j-forward", "enc-c")),
             ("j-forward",),
             ("enc-a", "enc-b", "enc-c"),
-            "one_job_id_to_multiple_encrypted_ids",
+            "multiple_explicit_encrypted_ids",
         ),
         (
             (("j-a", "enc-reverse"),),
@@ -1057,10 +1151,26 @@ async def test_title_language_evidence_is_deterministic_and_serializer_is_json_s
     assert serialized["run_id"] == "12345678-1234-5678-1234-567812345678"
     assert serialized["markers"] == ["saved", 2]
     assert serialized["observation"]["id_pairs"] == [
-        {"job_id": "j-en", "encrypted_job_id": "enc-en"},
-        {"job_id": "j-zh", "encrypted_job_id": "enc-zh"},
-        {"job_id": "j-mixed", "encrypted_job_id": "enc-mixed"},
-        {"job_id": "j-other", "encrypted_job_id": "enc-other"},
+        {
+            "job_id": "j-en",
+            "encrypted_job_id": "enc-en",
+            "encrypted_job_id_source": "encryptJobId",
+        },
+        {
+            "job_id": "j-zh",
+            "encrypted_job_id": "enc-zh",
+            "encrypted_job_id_source": "encryptJobId",
+        },
+        {
+            "job_id": "j-mixed",
+            "encrypted_job_id": "enc-mixed",
+            "encrypted_job_id_source": "encryptJobId",
+        },
+        {
+            "job_id": "j-other",
+            "encrypted_job_id": "enc-other",
+            "encrypted_job_id_source": "encryptJobId",
+        },
     ]
     assert "raw_data" not in serialized["observation"]["rows"][0]
     assert json.dumps(serialized, sort_keys=True) == json.dumps(
