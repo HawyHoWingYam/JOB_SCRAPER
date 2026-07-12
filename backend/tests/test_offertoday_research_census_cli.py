@@ -12,6 +12,10 @@ from uuid import UUID
 
 import pytest
 import scripts.offertoday_research_census as census_cli
+from app.services.offertoday_research_staging_service import (
+    OfferTodayReconciledListingStagingSink,
+    OfferTodayStagingReconciliation,
+)
 from app.sources.offertoday.listing_runner import (
     ListingConditionOutcome,
     ListingPageObservation,
@@ -33,6 +37,7 @@ from app.sources.offertoday.research.baseline import (
 from app.sources.offertoday.research.calibration import (
     BoundedConditionResult,
     build_calibration_conditions,
+    build_pilot_conditions,
     evaluate_bounded_condition,
     select_calibration_variants,
     summarize_calibration_variants,
@@ -58,6 +63,11 @@ CURRENT_SMOKE_BUDGET = {"listing": 2, "detail": 20}
 CALIBRATION_BUDGET = {
     "listing_logical": 24,
     "listing_attempt_max": 72,
+    "detail": 0,
+}
+PILOT_BUDGET = {
+    "listing_logical": 93,
+    "listing_attempt_max": 279,
     "detail": 0,
 }
 
@@ -472,6 +482,13 @@ def calibration_results() -> tuple[BoundedConditionResult, ...]:
     )
 
 
+def pilot_results() -> tuple[BoundedConditionResult, ...]:
+    return tuple(
+        calibration_result(condition)
+        for condition in build_pilot_conditions("search", None)
+    )
+
+
 def naturally_exhausted_calibration_result(
     condition,
     *,
@@ -693,6 +710,7 @@ class State:
         self.finish_errors: list[BaseException] = []
         self.created_metadata = None
         self.calibration_conditions = None
+        self.staging_sink = None
 
     def append_event(self, event_type: str, payload: dict) -> None:
         self.events.append(
@@ -793,9 +811,12 @@ class FakeCalibrationLiveService:
             | "CalibrationFailureAfter"
             | BaseException
         ),
+        *,
+        stage_first_row: bool = False,
     ) -> None:
         self.state = state
         self.result = result
+        self.stage_first_row = stage_first_row
 
     async def run_bounded_conditions(
         self,
@@ -803,10 +824,25 @@ class FakeCalibrationLiveService:
         runtime,
         observation_service,
         conditions,
+        staging_sink=None,
     ):
         self.state.log.append("network")
         self.state.calibration_conditions = tuple(conditions)
+        self.state.staging_sink = staging_sink
         assert observation_service.crawl_job_id == UUID(RUN_ID)
+        if self.stage_first_row:
+            await staging_sink.stage_page(
+                condition=conditions[0],
+                page=1,
+                rows=[
+                    {
+                        "job_id": "pilot-created",
+                        "encrypted_job_id": "pilot-created",
+                        "encrypted_job_id_source": "jobId_fallback",
+                        "raw_data": {"jobId": "pilot-created"},
+                    }
+                ],
+            )
         if isinstance(self.result, BaseException):
             raise self.result
         bounded_results = (
@@ -832,6 +868,45 @@ class FakeCalibrationLiveService:
         if isinstance(self.result, CalibrationFailureAfter):
             raise self.result.error
         return bounded_results
+
+
+class FakePilotCrawlRuntime:
+    def stage_listing_batch(self, **_kwargs):
+        raise AssertionError("pilot fixture did not provide listing rows to stage")
+
+    def defer_listing_identity_conflict(self, **_kwargs):
+        raise AssertionError("accepted pilot fixture deferred an identity conflict")
+
+
+class CreatingPilotCrawlRuntime:
+    def stage_listing_batch(self, **kwargs):
+        source_job_ids = tuple(
+            payload["source_job_id"] for payload in kwargs["payloads"]
+        )
+        return SimpleNamespace(
+            rows_staged=len(source_job_ids),
+            rows_created=len(source_job_ids),
+            skipped_existing=0,
+            created_source_job_ids=source_job_ids,
+            preexisting_staged_source_job_ids=(),
+            published_source_job_ids=(),
+            job_ids_seen=len(source_job_ids),
+        )
+
+    def defer_listing_identity_conflict(self, **_kwargs):
+        raise AssertionError("accepted pilot fixture deferred an identity conflict")
+
+
+class AmplifiedPilotStagingSink:
+    def __init__(self, **_kwargs) -> None:
+        self.reconciliation = OfferTodayStagingReconciliation(
+            rows_seen=1,
+            rows_created=2,
+            published_source_job_ids=(),
+            preexisting_staged_source_job_ids=(),
+            created_source_job_ids=("only-one-id",),
+            deferred_identity_conflict_ids=(),
+        )
 
 
 class CalibrationFailureAfter:
@@ -960,6 +1035,74 @@ def invoke_calibrate(
     return exit_code, state, session, tmp_path / "runs" / RUN_ID
 
 
+def invoke_pilot(
+    tmp_path: Path,
+    *,
+    result: tuple[BoundedConditionResult, ...] | BaseException | None = None,
+    variant_rank: int = 2,
+    artifact_verifier=verify_research_artifact,
+    staging_sink_factory=OfferTodayReconciledListingStagingSink,
+    crawl_runtime_factory=FakePilotCrawlRuntime,
+    stage_first_row: bool = False,
+    drift: bool = False,
+    end_snapshot_error: BaseException | None = None,
+    state: State | None = None,
+):
+    state = state or State()
+    calibration_exit, _calibration_state, _session, calibration = invoke_calibrate(
+        tmp_path / "calibration"
+    )
+    assert calibration_exit == census_cli.EXIT_OK
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+    session = FakeSession(state.log)
+    repository = FakeRepository(
+        state,
+        drift=drift,
+        end_snapshot_error=end_snapshot_error,
+    )
+
+    def exporter(**kwargs):
+        state.log.append("artifact_export")
+        return export_research_artifact(**kwargs)
+
+    exit_code = census_cli.main(
+        [
+            "pilot",
+            "--calibration-artifact",
+            str(calibration),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--variant-rank",
+            str(variant_rank),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: session,
+        repository=repository,
+        runtime_factory=lambda **kwargs: FakeRuntime(state, **kwargs),
+        service_factory=lambda: FakeCalibrationLiveService(
+            state,
+            result or pilot_results(),
+            stage_first_row=stage_first_row,
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        crawl_runtime_factory=crawl_runtime_factory,
+        staging_sink_factory=staging_sink_factory,
+        provenance_provider=provenance,
+        artifact_exporter=exporter,
+        artifact_verifier=artifact_verifier,
+    )
+    return exit_code, state, session, tmp_path / "runs" / RUN_ID
+
+
 def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     parser = census_cli.build_parser()
     smoke = parser.parse_args(
@@ -982,6 +1125,19 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
             "second",
         ]
     )
+    pilot = parser.parse_args(
+        [
+            "pilot",
+            "--calibration-artifact",
+            "calibration",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+            "--variant-rank",
+            "2",
+        ]
+    )
     verify = parser.parse_args(["verify-run", "--artifact", "run"])
 
     assert smoke.command == "smoke"
@@ -989,6 +1145,10 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     assert calibrate.command == "calibrate"
     assert calibrate.smoke_artifact == Path("smoke")
     assert calibrate.baseline_artifact == [Path("first"), Path("second")]
+    assert pilot.command == "pilot"
+    assert pilot.calibration_artifact == Path("calibration")
+    assert pilot.baseline_artifact == [Path("first"), Path("second")]
+    assert pilot.variant_rank == 2
     assert verify.command == "verify-run"
     with pytest.raises(SystemExit):
         parser.parse_args(
@@ -1015,6 +1175,30 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
                 "--endpoint",
                 "browse",
             ]
+        )
+
+
+def test_pilot_predecessor_selects_only_a_verified_selected_variant(
+    tmp_path,
+) -> None:
+    exit_code, _state, _session, calibration = invoke_calibrate(
+        tmp_path / "calibration"
+    )
+    assert exit_code == census_cli.EXIT_OK
+
+    selected = census_cli._require_accepted_calibration_variant(
+        calibration,
+        variant_rank=2,
+    )
+
+    assert selected.endpoint == "search"
+    assert selected.rcd_type is None
+    assert selected.variant_rank == 2
+    assert len(selected.parent_artifact_hash) == 64
+    with pytest.raises(ValueError, match="selected variant rank"):
+        census_cli._require_accepted_calibration_variant(
+            calibration,
+            variant_rank=3,
         )
 
 
@@ -1518,6 +1702,231 @@ def test_successful_calibration_accepts_natural_exhaustion_below_page_budget(
     assert state.finished[0]["summary"]["calibration_passed"] is True
     assert state.finished[0]["summary"]["listing_logical_count"] == 20
     assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_successful_pilot_lifecycle_uses_ranked_variant_and_31_categories(
+    tmp_path,
+    capsys,
+) -> None:
+    exit_code, state, session, artifact = invoke_pilot(tmp_path, variant_rank=2)
+    output = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+    assert exit_code == census_cli.EXIT_OK
+    assert session.closed is True
+    assert state.runtime_kwargs == [{"headed": False}]
+    assert state.calibration_conditions == build_pilot_conditions("search", None)
+    assert isinstance(state.staging_sink, OfferTodayReconciledListingStagingSink)
+    assert state.created_metadata.experiment == "category-pilot"
+    assert state.created_metadata.request_budget == PILOT_BUDGET
+    summary = state.finished[0]["summary"]
+    assert state.finished[0]["status"] == "completed"
+    assert summary["pilot_passed"] is True
+    assert summary["planned_condition_count"] == 31
+    assert summary["condition_count"] == 31
+    assert summary["accepted_condition_count"] == 31
+    assert summary["planned_listing_logical_count"] == 93
+    assert summary["listing_logical_count"] == 93
+    assert summary["listing_attempt_count"] == 93
+    assert summary["detail_attempt_count"] == 0
+    assert summary["variant_rank"] == 2
+    assert summary["endpoint"] == "search"
+    assert summary["rcd_type"] is None
+    assert summary["reconciliation"] == {
+        "rows_seen": 0,
+        "rows_created": 0,
+        "published_source_job_ids": [],
+        "preexisting_staged_source_job_ids": [],
+        "created_source_job_ids": [],
+        "deferred_identity_conflict_ids": [],
+        "distinct_newly_staged": 0,
+        "staging_amplification_ratio": 0.0,
+        "staging_amplification_within_limit": True,
+    }
+    assert summary["conservation_difference"] == 0
+    assert summary["published_jobs_unchanged"] is True
+    assert summary["companies_unchanged"] is True
+    assert output == {
+        "artifact": str(artifact),
+        "run_id": RUN_ID,
+        "exit_code": census_cli.EXIT_OK,
+        "pilot_passed": True,
+        "request_budget": PILOT_BUDGET,
+        "condition_count": 31,
+        "listing_logical_count": 93,
+        "listing_attempt_count": 93,
+        "detail_attempt_count": 0,
+        "rows_created": 0,
+        "conservation_difference": 0,
+    }
+    manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["metadata"]["experiment"] == "category-pilot"
+    assert manifest["metadata"]["pilot_passed"] is True
+    assert manifest["metadata"]["variant_rank"] == 2
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_successful_pilot_accepts_natural_exhaustion_below_page_budget(
+    tmp_path,
+) -> None:
+    results = tuple(
+        naturally_exhausted_calibration_result(condition)
+        for condition in build_pilot_conditions("search", None)
+    )
+    assert sum(result.pages_observed for result in results) == 62
+
+    exit_code, state, _session, artifact = invoke_pilot(
+        tmp_path,
+        result=results,
+    )
+
+    assert exit_code == census_cli.EXIT_OK
+    assert state.finished[0]["summary"]["pilot_passed"] is True
+    assert state.finished[0]["summary"]["listing_logical_count"] == 62
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_successful_pilot_reconciles_created_rows_with_snapshot_delta(
+    tmp_path,
+) -> None:
+    exit_code, state, _session, artifact = invoke_pilot(
+        tmp_path,
+        crawl_runtime_factory=CreatingPilotCrawlRuntime,
+        stage_first_row=True,
+        drift=True,
+    )
+
+    assert exit_code == census_cli.EXIT_OK
+    summary = state.finished[0]["summary"]
+    assert summary["pilot_passed"] is True
+    assert summary["reconciliation"]["rows_seen"] == 1
+    assert summary["reconciliation"]["rows_created"] == 1
+    assert summary["reconciliation"]["created_source_job_ids"] == ["pilot-created"]
+    assert summary["staged_rows_delta"] == 1
+    assert summary["conservation_difference"] == 0
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_exit", "expected_reason"),
+    (
+        (
+            pilot_results()[:-1],
+            census_cli.EXIT_INCOMPLETE,
+            "pilot_condition_matrix_mismatch",
+        ),
+        (
+            (*pilot_results()[:-1], pilot_results()[0]),
+            census_cli.EXIT_INCOMPLETE,
+            "pilot_condition_matrix_mismatch",
+        ),
+        (
+            (
+                replace(
+                    pilot_results()[0],
+                    accepted=False,
+                    rejection_reason="listing_gap",
+                ),
+            ),
+            census_cli.EXIT_INCOMPLETE,
+            "listing_gap",
+        ),
+        (
+            (
+                calibration_result(
+                    build_pilot_conditions("search", None)[0],
+                    hard_stop="auth_expired",
+                ),
+            ),
+            census_cli.EXIT_HARD_STOP,
+            "auth_expired",
+        ),
+        (
+            (
+                replace(
+                    pilot_results()[0],
+                    accepted=False,
+                    rejection_reason="identity_issue",
+                ),
+            ),
+            census_cli.EXIT_INCOMPLETE,
+            "identity_issue",
+        ),
+    ),
+)
+def test_pilot_rejects_missing_duplicate_gap_hard_stop_or_identity_issue(
+    tmp_path,
+    result: tuple[BoundedConditionResult, ...],
+    expected_exit: int,
+    expected_reason: str,
+) -> None:
+    exit_code, state, _session, artifact = invoke_pilot(
+        tmp_path,
+        result=result,
+    )
+
+    assert exit_code == expected_exit
+    assert state.finished[0]["summary"]["pilot_passed"] is False
+    assert state.finished[0]["summary"]["stop_reason"] == expected_reason
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_pilot_rejects_staging_amplification_as_evidence_failure(tmp_path) -> None:
+    exit_code, state, _session, artifact = invoke_pilot(
+        tmp_path,
+        staging_sink_factory=AmplifiedPilotStagingSink,
+    )
+
+    assert exit_code == census_cli.EXIT_EVIDENCE_FAILURE
+    summary = state.finished[0]["summary"]
+    assert summary["pilot_passed"] is False
+    assert summary["stop_reason"] == "staging_amplification"
+    assert summary["reconciliation"]["staging_amplification_within_limit"] is False
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_pilot_unexpected_error_exports_type_only_partial_artifact(tmp_path) -> None:
+    error = RuntimeError("secret pilot transport text")
+    partial = (pilot_results()[0],)
+
+    with pytest.raises(RuntimeError) as captured:
+        invoke_pilot(
+            tmp_path,
+            result=CalibrationFailureAfter(partial, error),
+        )
+
+    artifact = tmp_path / "runs" / RUN_ID
+    assert captured.value is error
+    assert verify_research_artifact(artifact).valid is True
+    assert census_cli.verify_live_research_run(artifact).valid is True
+    events_text = (artifact / "observations.jsonl").read_text(encoding="utf-8")
+    assert "secret pilot transport text" not in events_text
+    events = [json.loads(line) for line in events_text.splitlines() if line.strip()]
+    summary = events[-1]["payload"]
+    assert summary["status"] == "failed"
+    assert summary["pilot_passed"] is False
+    assert summary["condition_count"] == 1
+    assert summary["listing_logical_count"] == 3
+    assert summary["stop_reason"] == "unexpected_category_pilot_error:RuntimeError"
+
+
+def test_pilot_run_end_snapshot_error_exports_verifiable_partial_artifact(
+    tmp_path,
+) -> None:
+    error = RuntimeError("secret pilot snapshot text")
+
+    with pytest.raises(RuntimeError) as captured:
+        invoke_pilot(tmp_path, end_snapshot_error=error)
+
+    artifact = tmp_path / "runs" / RUN_ID
+    assert captured.value is error
+    assert verify_research_artifact(artifact).valid is True
+    assert census_cli.verify_live_research_run(artifact).valid is True
+    events_text = (artifact / "observations.jsonl").read_text(encoding="utf-8")
+    assert "secret pilot snapshot text" not in events_text
+    summary = json.loads(events_text.splitlines()[-1])["payload"]
+    assert summary["status"] == "failed"
+    assert summary["pilot_passed"] is False
+    assert summary["stop_reason"] == "unexpected_category_pilot_error:RuntimeError"
 
 
 @pytest.mark.parametrize(

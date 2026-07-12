@@ -15,7 +15,10 @@ from app.sources.offertoday.detail_identity import (
     resolve_offertoday_listing_identity,
 )
 from app.sources.offertoday.research.artifacts import verify_research_artifact
-from app.sources.offertoday.research.calibration import build_calibration_conditions
+from app.sources.offertoday.research.calibration import (
+    build_calibration_conditions,
+    build_pilot_conditions,
+)
 from app.sources.offertoday.research.smoke import (
     SMOKE_LISTING_REQUEST_LIMIT,
     runtime_smoke_request_budget,
@@ -41,6 +44,11 @@ _UNEXPECTED_CALIBRATION_ERROR_RE = re.compile(
 _CALIBRATION_REQUEST_BUDGET = {
     "listing_logical": 24,
     "listing_attempt_max": 72,
+    "detail": 0,
+}
+_PILOT_REQUEST_BUDGET = {
+    "listing_logical": 93,
+    "listing_attempt_max": 279,
     "detail": 0,
 }
 
@@ -1285,6 +1293,379 @@ def _verify_calibration_research_run(
     )
 
 
+def _verify_pilot_research_run(artifact_dir: Path) -> LiveRunVerification:
+    verification = verify_research_artifact(artifact_dir)
+    if not verification.valid:
+        artifact_issues = [
+            *(f"missing_artifact_file:{name}" for name in verification.missing_files),
+            *(
+                f"mismatched_artifact_file:{name}"
+                for name in verification.mismatched_files
+            ),
+        ]
+        return LiveRunVerification(
+            valid=False,
+            issues=tuple(artifact_issues or ["invalid_research_artifact"]),
+            experiment=None,
+            run_id=None,
+        )
+
+    try:
+        manifest = json.loads(
+            (artifact_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        events = [
+            json.loads(line)
+            for line in (artifact_dir / "observations.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        return LiveRunVerification(
+            valid=False,
+            issues=(f"invalid_live_run_json:{type(exc).__name__}",),
+            experiment="category-pilot",
+            run_id=None,
+        )
+
+    metadata = manifest.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    run_id_value = manifest.get("run_id")
+    run_id = run_id_value if isinstance(run_id_value, str) else None
+    issues: list[str] = []
+    if metadata.get("experiment") != "category-pilot":
+        issues.append("unsupported_live_experiment")
+    if metadata.get("crawl_job_id") != run_id:
+        issues.append("crawl_job_id_run_id_mismatch")
+    for field_name in ("parent_artifact_hash", "baseline_artifact_hash"):
+        if _SHA256_RE.fullmatch(str(metadata.get(field_name) or "")) is None:
+            issues.append(f"invalid_{field_name}")
+    if not _request_budget_matches(
+        metadata.get("request_budget"),
+        _PILOT_REQUEST_BUDGET,
+    ):
+        issues.append("invalid_pilot_request_budget")
+
+    variant_rank = metadata.get("variant_rank")
+    endpoint = metadata.get("endpoint")
+    rcd_type = metadata.get("rcd_type")
+    if type(variant_rank) is not int or variant_rank < 1:
+        issues.append("invalid_pilot_variant_rank")
+    try:
+        locked_conditions = build_pilot_conditions(endpoint, rcd_type)
+    except (TypeError, ValueError):
+        issues.append("invalid_pilot_variant_controls")
+        locked_conditions = ()
+    calibration_run_id = metadata.get("calibration_run_id")
+    if not isinstance(calibration_run_id, str) or not calibration_run_id.strip():
+        issues.append("invalid_calibration_run_id")
+
+    normalized_events = [event for event in events if isinstance(event, dict)]
+    if len(normalized_events) != len(events):
+        issues.append("non_object_research_event")
+    if [event.get("sequence_no") for event in normalized_events] != list(
+        range(1, len(normalized_events) + 1)
+    ):
+        issues.append("non_contiguous_event_sequence")
+
+    run_started = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.run_started"
+    ]
+    if len(run_started) != 1:
+        issues.append(f"run_started_count:{len(run_started)}")
+    elif normalized_events.index(run_started[0]) != 0:
+        issues.append("run_started_must_be_first")
+    else:
+        payload = run_started[0].get("payload")
+        if not isinstance(payload, dict):
+            issues.append("invalid_run_started_payload")
+        else:
+            if payload.get("experiment") != "category-pilot":
+                issues.append("invalid_pilot_run_started_experiment")
+            if payload.get("session_mode") != "fresh-headless":
+                issues.append("invalid_pilot_session_mode")
+            if payload.get("condition_count") != 31:
+                issues.append("invalid_pilot_condition_budget")
+            if payload.get("variant_rank") != variant_rank:
+                issues.append("pilot_variant_rank_mismatch")
+            if (
+                payload.get("endpoint") != endpoint
+                or payload.get("rcd_type") != rcd_type
+            ):
+                issues.append("pilot_variant_controls_mismatch")
+            if payload.get("calibration_run_id") != calibration_run_id:
+                issues.append("pilot_calibration_run_id_mismatch")
+            if payload.get("parent_artifact_hash") != metadata.get(
+                "parent_artifact_hash"
+            ):
+                issues.append("pilot_parent_hash_mismatch")
+            if payload.get("baseline_artifact_hash") != metadata.get(
+                "baseline_artifact_hash"
+            ):
+                issues.append("pilot_baseline_hash_mismatch")
+            if not _request_budget_matches(
+                payload.get("request_budget"),
+                _PILOT_REQUEST_BUDGET,
+            ):
+                issues.append("invalid_pilot_request_budget")
+
+    summary_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.run_summary"
+    ]
+    if len(summary_events) != 1:
+        issues.append(f"terminal_summary_count:{len(summary_events)}")
+        summary = None
+    else:
+        if normalized_events.index(summary_events[0]) != len(normalized_events) - 1:
+            issues.append("event_after_terminal_summary")
+        summary_value = summary_events[0].get("payload")
+        summary = summary_value if isinstance(summary_value, dict) else None
+        if summary is None:
+            issues.append("invalid_terminal_summary_payload")
+
+    locked_by_id = {
+        condition.condition_id: condition for condition in locked_conditions
+    }
+    page_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.page_attempt"
+    ]
+    if len(page_events) > _PILOT_REQUEST_BUDGET["listing_attempt_max"]:
+        issues.append("pilot_attempt_budget_exceeded")
+    logical_keys: set[tuple[str, int]] = set()
+    attempts_by_page: dict[tuple[str, int], list[int]] = {}
+    attempt_sequences_valid = True
+    for event in page_events:
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            issues.append("invalid_pilot_page_payload")
+            continue
+        condition_id = payload.get("condition_id")
+        page = payload.get("page")
+        attempt = payload.get("attempt")
+        condition = locked_by_id.get(condition_id)
+        if condition is None or any(
+            type(payload.get(key)) is not type(expected) or payload.get(key) != expected
+            for key, expected in _calibration_condition_payload(condition).items()
+        ):
+            issues.append("invalid_pilot_page_condition")
+            continue
+        if type(page) is not int or not 1 <= page <= 3:
+            issues.append("invalid_pilot_page_number")
+            continue
+        if type(attempt) is not int or not 1 <= attempt <= 3:
+            issues.append("invalid_pilot_attempt_number")
+            continue
+        key = (condition_id, page)
+        logical_keys.add(key)
+        attempts_by_page.setdefault(key, []).append(attempt)
+        if payload.get("session_mode") != "fresh-headless":
+            issues.append("invalid_pilot_session_mode")
+    for attempts in attempts_by_page.values():
+        if attempts != list(range(1, len(attempts) + 1)):
+            attempt_sequences_valid = False
+    if len(logical_keys) > _PILOT_REQUEST_BUDGET["listing_logical"]:
+        issues.append("pilot_logical_budget_exceeded")
+
+    condition_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type")
+        in {"research.condition_completed", "research.condition_incomplete"}
+    ]
+    observed_conditions: list[dict[str, Any] | None] = []
+    completed_condition_semantics_valid = True
+    condition_logical_total = 0
+    for event in condition_events:
+        payload = event.get("payload")
+        condition_payload = (
+            payload.get("condition") if isinstance(payload, dict) else None
+        )
+        observed_conditions.append(
+            condition_payload if isinstance(condition_payload, dict) else None
+        )
+        pages_observed = (
+            payload.get("pages_observed") if isinstance(payload, dict) else None
+        )
+        if type(pages_observed) is int:
+            condition_logical_total += pages_observed
+        natural_exhaustion = (
+            isinstance(payload, dict)
+            and payload.get("stop_reason") == "natural_exhaustion"
+            and payload.get("is_complete") is True
+            and event.get("event_type") == "research.condition_completed"
+            and type(pages_observed) is int
+            and 1 <= pages_observed <= 3
+        )
+        page_cap = (
+            isinstance(payload, dict)
+            and payload.get("stop_reason") == "page_cap"
+            and payload.get("is_complete") is False
+            and event.get("event_type") == "research.condition_incomplete"
+            and type(pages_observed) is int
+            and pages_observed == 3
+        )
+        if not natural_exhaustion and not page_cap:
+            completed_condition_semantics_valid = False
+    expected_prefix = [
+        _calibration_condition_payload(condition)
+        for condition in locked_conditions[: len(observed_conditions)]
+    ]
+    condition_sequence_valid = observed_conditions == expected_prefix
+    if len(condition_events) > len(locked_conditions):
+        issues.append("pilot_condition_budget_exceeded")
+
+    detail_attempt_count = sum(
+        event.get("event_type") == "research.detail_attempt"
+        for event in normalized_events
+    )
+    if detail_attempt_count:
+        issues.append("pilot_detail_request_observed")
+    stopped_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.run_stopped"
+    ]
+
+    manifest_status = metadata.get("crawl_job_status")
+    manifest_passed = metadata.get("pilot_passed")
+    if type(manifest_passed) is not bool:
+        issues.append("invalid_manifest_pilot_passed")
+    if summary is not None:
+        if summary.get("status") != manifest_status:
+            issues.append("crawl_job_status_summary_mismatch")
+        if summary.get("pilot_passed") is not manifest_passed:
+            issues.append("pilot_passed_summary_mismatch")
+        if not _request_budget_matches(
+            summary.get("request_budget"),
+            _PILOT_REQUEST_BUDGET,
+        ):
+            issues.append("invalid_pilot_request_budget")
+        expected_counts = {
+            "planned_condition_count": 31,
+            "condition_count": len(condition_events),
+            "planned_listing_logical_count": 93,
+            "listing_logical_count": len(logical_keys),
+            "listing_attempt_count": len(page_events),
+            "detail_attempt_count": detail_attempt_count,
+        }
+        for field_name, expected_value in expected_counts.items():
+            if summary.get(field_name) != expected_value:
+                issues.append(f"{field_name}_mismatch")
+        if (
+            summary.get("variant_rank") != variant_rank
+            or summary.get("endpoint") != endpoint
+            or summary.get("rcd_type") != rcd_type
+            or summary.get("calibration_run_id") != calibration_run_id
+        ):
+            issues.append("pilot_summary_variant_mismatch")
+
+        reconciliation = summary.get("reconciliation")
+        reconciliation_valid = isinstance(reconciliation, dict)
+        if reconciliation_valid:
+            integer_fields = ("rows_seen", "rows_created", "distinct_newly_staged")
+            reconciliation_valid = all(
+                type(reconciliation.get(field_name)) is int
+                and reconciliation[field_name] >= 0
+                for field_name in integer_fields
+            )
+            cohort_fields = (
+                "published_source_job_ids",
+                "preexisting_staged_source_job_ids",
+                "created_source_job_ids",
+                "deferred_identity_conflict_ids",
+            )
+            reconciliation_valid = reconciliation_valid and all(
+                isinstance(reconciliation.get(field_name), list)
+                and all(
+                    isinstance(value, str) and value
+                    for value in reconciliation[field_name]
+                )
+                for field_name in cohort_fields
+            )
+        if reconciliation_valid:
+            created_ids = reconciliation["created_source_job_ids"]
+            distinct_created = len(set(created_ids))
+            rows_created = reconciliation["rows_created"]
+            expected_ratio = (
+                0.0
+                if distinct_created == 0 and rows_created == 0
+                else None if distinct_created == 0 else rows_created / distinct_created
+            )
+            reconciliation_valid = (
+                reconciliation["distinct_newly_staged"] == distinct_created
+                and reconciliation.get("staging_amplification_ratio") == expected_ratio
+                and reconciliation.get("staging_amplification_within_limit")
+                is (expected_ratio is not None and expected_ratio <= 1.01)
+            )
+        if not reconciliation_valid:
+            issues.append("invalid_pilot_reconciliation")
+
+        if manifest_status == "completed" or manifest_passed is True:
+            if not (
+                manifest_status == "completed"
+                and manifest_passed is True
+                and summary.get("pilot_passed") is True
+                and summary.get("stop_reason") is None
+                and len(condition_events) == 31
+                and summary.get("accepted_condition_count") == 31
+                and attempt_sequences_valid
+                and condition_sequence_valid
+                and completed_condition_semantics_valid
+                and 31 <= len(logical_keys) <= 93
+                and len(logical_keys) == condition_logical_total
+                and detail_attempt_count == 0
+                and reconciliation_valid
+                and reconciliation.get("deferred_identity_conflict_ids") == []
+                and reconciliation.get("staging_amplification_within_limit") is True
+                and summary.get("conservation_difference") == 0
+                and summary.get("staged_rows_delta")
+                == reconciliation.get("rows_created")
+                and summary.get("published_jobs_unchanged") is True
+                and summary.get("companies_unchanged") is True
+                and not stopped_events
+            ):
+                issues.append("completed_pilot_status_mismatch")
+        elif manifest_status != "failed" or manifest_passed is not False:
+            issues.append("invalid_failed_pilot_status")
+        else:
+            matrix_rejection = (
+                summary.get("stop_reason") == "pilot_condition_matrix_mismatch"
+            )
+            if not matrix_rejection and not attempt_sequences_valid:
+                issues.append("invalid_pilot_attempt_sequence")
+            if not matrix_rejection and not condition_sequence_valid:
+                issues.append("invalid_pilot_condition_sequence")
+            if len(stopped_events) != 1:
+                issues.append(f"run_stopped_count:{len(stopped_events)}")
+            else:
+                stopped_payload = stopped_events[0].get("payload")
+                stopped_reason = (
+                    stopped_payload.get("reason")
+                    if isinstance(stopped_payload, dict)
+                    else None
+                )
+                if (
+                    not isinstance(stopped_reason, str)
+                    or not stopped_reason.strip()
+                    or summary.get("stop_reason") != stopped_reason
+                ):
+                    issues.append("run_stopped_summary_reason_mismatch")
+
+    return LiveRunVerification(
+        valid=not issues,
+        issues=tuple(issues),
+        experiment="category-pilot",
+        run_id=run_id,
+    )
+
+
 def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     artifact_dir = Path(artifact_dir)
     verification = verify_research_artifact(artifact_dir)
@@ -1332,6 +1713,8 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     run_id = run_id_value if isinstance(run_id_value, str) else None
     if experiment == "listing-calibration":
         return _verify_calibration_research_run(artifact_dir)
+    if experiment == "category-pilot":
+        return _verify_pilot_research_run(artifact_dir)
     issues: list[str] = []
 
     if experiment != "runtime-smoke":

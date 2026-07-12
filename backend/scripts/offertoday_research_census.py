@@ -11,7 +11,7 @@ import hashlib
 import json
 import subprocess
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -29,11 +29,15 @@ from app.repositories.offertoday_research_repository import (  # noqa: E402
 from app.scraper.offertoday_browser_runtime import (  # noqa: E402
     OfferTodayBrowserRuntime,
 )
+from app.services.crawl_job_runtime import CrawlJobRuntime  # noqa: E402
 from app.services.offertoday_research_live_service import (  # noqa: E402
     OfferTodayResearchLiveService,
 )
 from app.services.offertoday_research_observation_service import (  # noqa: E402
     OfferTodayResearchObservationService,
+)
+from app.services.offertoday_research_staging_service import (  # noqa: E402
+    OfferTodayReconciledListingStagingSink,
 )
 from app.sources.offertoday.listing_runner import (  # noqa: E402
     listing_observation_to_payload,
@@ -49,6 +53,7 @@ from app.sources.offertoday.research.baseline import (  # noqa: E402
 )
 from app.sources.offertoday.research.calibration import (  # noqa: E402
     build_calibration_conditions,
+    build_pilot_conditions,
     select_calibration_variants,
     summarize_calibration_variants,
 )
@@ -84,6 +89,20 @@ _CALIBRATION_REQUEST_BUDGET = {
     "listing_attempt_max": 72,
     "detail": 0,
 }
+_PILOT_REQUEST_BUDGET = {
+    "listing_logical": 93,
+    "listing_attempt_max": 279,
+    "detail": 0,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class PilotVariantEvidence:
+    endpoint: str
+    rcd_type: int | None
+    variant_rank: int
+    parent_artifact_hash: str
+    calibration_run_id: str
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -126,6 +145,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(__file__).resolve().parents[2],
     )
+    pilot = commands.add_parser("pilot")
+    pilot.add_argument("--calibration-artifact", type=Path, required=True)
+    pilot.add_argument(
+        "--baseline-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    pilot.add_argument("--variant-rank", type=int, default=1)
+    pilot.add_argument("--run-id", default=None)
+    pilot.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    pilot.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
     verify = commands.add_parser("verify-run")
     verify.add_argument("--artifact", type=Path, required=True)
     return parser
@@ -162,6 +201,70 @@ def _require_accepted_smoke_artifact(artifact_dir: Path) -> dict[str, Any]:
     ):
         raise ValueError("smoke artifact is not an accepted 2/20 predecessor")
     return manifest
+
+
+def _require_accepted_calibration_variant(
+    artifact_dir: Path,
+    *,
+    variant_rank: int,
+) -> PilotVariantEvidence:
+    if type(variant_rank) is not int or variant_rank < 1:
+        raise ValueError("selected variant rank must be a positive exact integer")
+    artifact_dir = Path(artifact_dir)
+    verification = verify_live_research_run(artifact_dir)
+    if not verification.valid:
+        raise ValueError("calibration artifact failed strict verification")
+    manifest_bytes = (artifact_dir / "manifest.json").read_bytes()
+    manifest = json.loads(manifest_bytes)
+    observations = [
+        json.loads(line)
+        for line in (artifact_dir / "observations.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    metadata = manifest.get("metadata")
+    summaries = [
+        event.get("payload")
+        for event in observations
+        if isinstance(event, dict) and event.get("event_type") == "research.run_summary"
+    ]
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("experiment") != "listing-calibration"
+        or metadata.get("crawl_job_status") != "completed"
+        or metadata.get("calibration_passed") is not True
+        or len(summaries) != 1
+        or not isinstance(summaries[0], dict)
+        or summaries[0].get("calibration_passed") is not True
+    ):
+        raise ValueError("calibration artifact is not an accepted predecessor")
+    selection = summaries[0].get("selection")
+    selected_variants = (
+        selection.get("selected_variants") if isinstance(selection, dict) else None
+    )
+    if not isinstance(selected_variants, list) or variant_rank > len(selected_variants):
+        raise ValueError("selected variant rank is not present in calibration artifact")
+    selected = selected_variants[variant_rank - 1]
+    if not isinstance(selected, dict) or selected.get("accepted") is not True:
+        raise ValueError("selected variant rank is not accepted")
+    endpoint = selected.get("endpoint")
+    rcd_type = selected.get("rcd_type")
+    if not isinstance(endpoint, str) or (
+        rcd_type is not None and type(rcd_type) is not int
+    ):
+        raise ValueError("selected calibration variant controls are invalid")
+    build_pilot_conditions(endpoint, rcd_type)
+    calibration_run_id = manifest.get("run_id")
+    if not isinstance(calibration_run_id, str):
+        raise ValueError("calibration artifact is missing run_id")
+    return PilotVariantEvidence(
+        endpoint=endpoint,
+        rcd_type=rcd_type,
+        variant_rank=variant_rank,
+        parent_artifact_hash=hashlib.sha256(manifest_bytes).hexdigest(),
+        calibration_run_id=calibration_run_id,
+    )
 
 
 def _event_dict(event: Any) -> dict[str, Any]:
@@ -270,6 +373,24 @@ async def _execute_calibration_with_runtime(
             runtime=active_runtime,
             observation_service=observation_service,
             conditions=build_calibration_conditions(),
+        )
+
+
+async def _execute_pilot_with_runtime(
+    *,
+    runtime_factory,
+    service,
+    observation_service,
+    conditions,
+    staging_sink,
+):
+    runtime = runtime_factory(headed=False)
+    async with runtime as active_runtime:
+        return await service.run_bounded_conditions(
+            runtime=active_runtime,
+            observation_service=observation_service,
+            conditions=conditions,
+            staging_sink=staging_sink,
         )
 
 
@@ -546,6 +667,116 @@ def _build_calibration_summary(
     }
 
 
+def _pilot_analysis(
+    *,
+    results,
+    conditions,
+    reconciliation,
+) -> tuple[bool, str | None]:
+    if results is None:
+        return False, "pilot_condition_matrix_mismatch"
+    result_conditions = tuple(item.condition for item in results)
+    if result_conditions != tuple(conditions[: len(result_conditions)]):
+        return False, "pilot_condition_matrix_mismatch"
+    rejected = next((item for item in results if not item.accepted), None)
+    if rejected is not None:
+        reason = rejected.rejection_reason or "pilot_condition_rejected"
+        if reason.startswith("batch_stop:"):
+            reason = reason.split(":", 1)[1]
+        return False, reason
+    if len(results) != len(conditions):
+        return False, "pilot_condition_matrix_mismatch"
+    if reconciliation.deferred_identity_conflict_ids:
+        return False, "deferred_identity_conflict"
+    if not reconciliation.staging_amplification_within_limit:
+        return False, "staging_amplification"
+    return True, None
+
+
+def _build_pilot_summary(
+    *,
+    status: str,
+    start_snapshot,
+    start_inventory,
+    end_snapshot,
+    end_inventory,
+    results,
+    conditions,
+    events_before_summary: list[dict[str, Any]],
+    failure_reason: str | None,
+    request_budget: dict[str, int],
+    variant: PilotVariantEvidence,
+    reconciliation,
+) -> dict[str, Any]:
+    logical_count, attempt_count = _calibration_page_counts(
+        results=results,
+        events_before_summary=events_before_summary,
+    )
+    detail_attempt_count = sum(
+        event.get("event_type") == "research.detail_attempt"
+        for event in events_before_summary
+    )
+    condition_count = (
+        len(results)
+        if results is not None
+        else sum(
+            event.get("event_type")
+            in {"research.condition_completed", "research.condition_incomplete"}
+            for event in events_before_summary
+        )
+    )
+    accepted_condition_count = sum(item.accepted for item in (results or ()))
+    pilot_accepted, analysis_failure_reason = _pilot_analysis(
+        results=results,
+        conditions=conditions,
+        reconciliation=reconciliation,
+    )
+    staged_rows_delta = end_snapshot.staged_rows - start_snapshot.staged_rows
+    conservation_difference = staged_rows_delta - reconciliation.rows_created
+    published_jobs_unchanged = (
+        start_snapshot.published_jobs == end_snapshot.published_jobs
+        and start_snapshot.published_jobs_hash == end_snapshot.published_jobs_hash
+    )
+    companies_unchanged = start_snapshot.companies_hash == end_snapshot.companies_hash
+    pilot_passed = (
+        pilot_accepted
+        and status == "completed"
+        and failure_reason is None
+        and detail_attempt_count == 0
+        and conservation_difference == 0
+        and published_jobs_unchanged
+        and companies_unchanged
+    )
+    return {
+        "status": status,
+        "pilot_passed": pilot_passed,
+        "planned_condition_count": len(conditions),
+        "condition_count": condition_count,
+        "accepted_condition_count": accepted_condition_count,
+        "planned_listing_logical_count": request_budget["listing_logical"],
+        "listing_logical_count": logical_count,
+        "listing_attempt_count": attempt_count,
+        "detail_attempt_count": detail_attempt_count,
+        "variant_rank": variant.variant_rank,
+        "endpoint": variant.endpoint,
+        "rcd_type": variant.rcd_type,
+        "calibration_run_id": variant.calibration_run_id,
+        "stop_reason": failure_reason or analysis_failure_reason,
+        "request_budget": dict(request_budget),
+        "reconciliation": reconciliation.to_payload(),
+        "staged_rows_delta": staged_rows_delta,
+        "conservation_difference": conservation_difference,
+        "published_jobs_unchanged": published_jobs_unchanged,
+        "companies_unchanged": companies_unchanged,
+        "run_start_snapshot_hash": start_snapshot.data_hash,
+        "run_end_snapshot_hash": end_snapshot.data_hash,
+        "run_start_product_data_hash": start_snapshot.product_data_hash,
+        "run_end_product_data_hash": end_snapshot.product_data_hash,
+        "run_start_inventory_hash": start_inventory.data_hash,
+        "run_end_inventory_hash": end_inventory.data_hash,
+    }
+
+
 def _unexpected_error_message(
     error: BaseException,
     *,
@@ -554,7 +785,11 @@ def _unexpected_error_message(
     prefix = (
         "unexpected_listing_calibration_error"
         if experiment == "listing-calibration"
-        else "unexpected_live_smoke_error"
+        else (
+            "unexpected_category_pilot_error"
+            if experiment == "category-pilot"
+            else "unexpected_live_smoke_error"
+        )
     )
     return f"{prefix}:{type(error).__name__}"
 
@@ -586,6 +821,9 @@ def _best_effort_finalize_unexpected_failure(
     fallback_events: list[dict[str, Any]],
     request_budget: dict[str, int],
     experiment: str = "runtime-smoke",
+    pilot_variant: PilotVariantEvidence | None = None,
+    pilot_conditions=(),
+    pilot_reconciliation=None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     error_message = _unexpected_error_message(error, experiment=experiment)
     product_data_evidence_complete = (
@@ -631,7 +869,26 @@ def _best_effort_finalize_unexpected_failure(
                 f"{type(stop_error).__name__}"
             )
 
-    if experiment == "listing-calibration":
+    if (
+        experiment == "category-pilot"
+        and pilot_variant is not None
+        and pilot_reconciliation is not None
+    ):
+        summary = _build_pilot_summary(
+            status="failed",
+            start_snapshot=start_snapshot,
+            start_inventory=start_inventory,
+            end_snapshot=end_snapshot,
+            end_inventory=end_inventory,
+            results=None,
+            conditions=pilot_conditions,
+            events_before_summary=current_events,
+            failure_reason=error_message,
+            request_budget=request_budget,
+            variant=pilot_variant,
+            reconciliation=pilot_reconciliation,
+        )
+    elif experiment == "listing-calibration":
         summary = _build_calibration_summary(
             status="failed",
             start_snapshot=start_snapshot,
@@ -691,6 +948,8 @@ def main(
     runtime_factory=OfferTodayBrowserRuntime,
     service_factory=OfferTodayResearchLiveService,
     observation_service_factory=OfferTodayResearchObservationService,
+    crawl_runtime_factory=CrawlJobRuntime,
+    staging_sink_factory=OfferTodayReconciledListingStagingSink,
     provenance_provider=capture_research_provenance,
     artifact_exporter=export_research_artifact,
     artifact_verifier=verify_research_artifact,
@@ -704,7 +963,11 @@ def main(
     request_budget = (
         dict(_CALIBRATION_REQUEST_BUDGET)
         if args.command == "calibrate"
-        else runtime_smoke_request_budget()
+        else (
+            dict(_PILOT_REQUEST_BUDGET)
+            if args.command == "pilot"
+            else runtime_smoke_request_budget()
+        )
     )
     if len(args.baseline_artifact) != 2:
         _print_json(
@@ -715,11 +978,17 @@ def main(
 
     try:
         smoke_artifact_hash = None
+        pilot_variant = None
         if args.command == "calibrate":
             _require_accepted_smoke_artifact(args.smoke_artifact)
             smoke_artifact_hash = hashlib.sha256(
                 (Path(args.smoke_artifact) / "manifest.json").read_bytes()
             ).hexdigest()
+        elif args.command == "pilot":
+            pilot_variant = _require_accepted_calibration_variant(
+                args.calibration_artifact,
+                variant_rank=args.variant_rank,
+            )
         baseline_gate = require_matching_baselines(
             args.baseline_artifact[0],
             args.baseline_artifact[1],
@@ -749,18 +1018,42 @@ def main(
     finalization_error: BaseException | None = None
     artifact_dir: Path | None = None
     is_calibration = args.command == "calibrate"
-    experiment = "listing-calibration" if is_calibration else "runtime-smoke"
+    is_pilot = args.command == "pilot"
+    experiment = (
+        "listing-calibration"
+        if is_calibration
+        else "category-pilot" if is_pilot else "runtime-smoke"
+    )
     variant = (
         "locked-2x2x2-fresh-headless"
         if is_calibration
-        else "search-rcdtype-7-fresh-headless"
+        else (
+            (
+                f"{pilot_variant.endpoint}-rcdtype-"
+                f"{pilot_variant.rcd_type if pilot_variant.rcd_type is not None else 'omitted'}"
+                "-31-category-pilot"
+            )
+            if is_pilot and pilot_variant is not None
+            else "search-rcdtype-7-fresh-headless"
+        )
     )
     parent_artifact_hash = (
         smoke_artifact_hash
         if is_calibration and smoke_artifact_hash is not None
-        else baseline_gate.parent_artifact_hash
+        else (
+            pilot_variant.parent_artifact_hash
+            if is_pilot and pilot_variant is not None
+            else baseline_gate.parent_artifact_hash
+        )
     )
     calibration_results = None
+    pilot_results = None
+    pilot_conditions = (
+        build_pilot_conditions(pilot_variant.endpoint, pilot_variant.rcd_type)
+        if is_pilot and pilot_variant is not None
+        else ()
+    )
+    pilot_staging_sink = None
 
     try:
         db = session_factory()
@@ -790,7 +1083,17 @@ def main(
                 **(
                     {"condition_count": len(build_calibration_conditions())}
                     if is_calibration
-                    else {}
+                    else (
+                        {
+                            "condition_count": len(pilot_conditions),
+                            "variant_rank": pilot_variant.variant_rank,
+                            "endpoint": pilot_variant.endpoint,
+                            "rcd_type": pilot_variant.rcd_type,
+                            "calibration_run_id": pilot_variant.calibration_run_id,
+                        }
+                        if is_pilot and pilot_variant is not None
+                        else {}
+                    )
                 ),
             },
         )
@@ -802,6 +1105,21 @@ def main(
                         runtime_factory=runtime_factory,
                         service=service_factory(),
                         observation_service=observation_service,
+                    )
+                )
+            elif is_pilot:
+                pilot_staging_sink = staging_sink_factory(
+                    crawl_runtime=crawl_runtime_factory(),
+                    crawl_job_id=run_id,
+                    skip_existing=True,
+                )
+                pilot_results = asyncio.run(
+                    _execute_pilot_with_runtime(
+                        runtime_factory=runtime_factory,
+                        service=service_factory(),
+                        observation_service=observation_service,
+                        conditions=pilot_conditions,
+                        staging_sink=pilot_staging_sink,
                     )
                 )
             else:
@@ -829,6 +1147,61 @@ def main(
                 "research.run_stopped",
                 {"reason": failure_reason},
             )
+        elif is_pilot and pilot_staging_sink is not None:
+            pilot_accepted, failure_reason = _pilot_analysis(
+                results=pilot_results,
+                conditions=pilot_conditions,
+                reconciliation=pilot_staging_sink.reconciliation,
+            )
+            conservation_difference = (
+                end_snapshot.staged_rows
+                - start_snapshot.staged_rows
+                - pilot_staging_sink.reconciliation.rows_created
+            )
+            published_jobs_unchanged = (
+                start_snapshot.published_jobs == end_snapshot.published_jobs
+                and start_snapshot.published_jobs_hash
+                == end_snapshot.published_jobs_hash
+            )
+            companies_unchanged = (
+                start_snapshot.companies_hash == end_snapshot.companies_hash
+            )
+            if (
+                pilot_accepted
+                and conservation_difference == 0
+                and published_jobs_unchanged
+                and companies_unchanged
+            ):
+                failure_reason = None
+                terminal_status = "completed"
+                exit_code = EXIT_OK
+            else:
+                if failure_reason is None:
+                    if conservation_difference != 0:
+                        failure_reason = "conservation_difference"
+                    elif not published_jobs_unchanged:
+                        failure_reason = "published_jobs_changed"
+                    else:
+                        failure_reason = "companies_changed"
+                observation_service.record_event(
+                    "research.run_stopped",
+                    {"reason": failure_reason},
+                )
+                exit_code = (
+                    EXIT_EVIDENCE_FAILURE
+                    if failure_reason
+                    in {
+                        "staging_amplification",
+                        "conservation_difference",
+                        "published_jobs_changed",
+                        "companies_changed",
+                    }
+                    else (
+                        EXIT_HARD_STOP
+                        if failure_reason in _HARD_STOP_REASONS
+                        else EXIT_INCOMPLETE
+                    )
+                )
         elif not product_data_unchanged:
             failure_reason = "product_data_changed"
             observation_service.record_event(
@@ -885,7 +1258,22 @@ def main(
         events_before_summary = _ordered_events(
             research_repository.list_research_events(db, UUID(run_id))
         )
-        if is_calibration:
+        if is_pilot and pilot_variant is not None and pilot_staging_sink is not None:
+            summary = _build_pilot_summary(
+                status=terminal_status,
+                start_snapshot=start_snapshot,
+                start_inventory=start_inventory,
+                end_snapshot=end_snapshot,
+                end_inventory=end_inventory,
+                results=pilot_results,
+                conditions=pilot_conditions,
+                events_before_summary=events_before_summary,
+                failure_reason=failure_reason,
+                request_budget=request_budget,
+                variant=pilot_variant,
+                reconciliation=pilot_staging_sink.reconciliation,
+            )
+        elif is_calibration:
             summary = _build_calibration_summary(
                 status=terminal_status,
                 start_snapshot=start_snapshot,
@@ -909,7 +1297,7 @@ def main(
                 failure_reason=failure_reason,
                 request_budget=request_budget,
             )
-        if not product_data_unchanged:
+        if not is_pilot and not product_data_unchanged:
             exit_code = EXIT_EVIDENCE_FAILURE
         observation_service.finish_run(
             status=terminal_status,
@@ -953,6 +1341,13 @@ def main(
                         fallback_events=events_before_summary,
                         request_budget=request_budget,
                         experiment=experiment,
+                        pilot_variant=pilot_variant,
+                        pilot_conditions=pilot_conditions,
+                        pilot_reconciliation=(
+                            pilot_staging_sink.reconciliation
+                            if pilot_staging_sink is not None
+                            else None
+                        ),
                     )
                     terminal_status = "failed"
                     exit_code = EXIT_EVIDENCE_FAILURE
@@ -996,12 +1391,24 @@ def main(
                         "request_budget": dict(request_budget),
                         **(
                             {
-                                "calibration_passed": bool(
-                                    summary.get("calibration_passed")
-                                )
+                                "pilot_passed": bool(summary.get("pilot_passed")),
+                                "variant_rank": pilot_variant.variant_rank,
+                                "endpoint": pilot_variant.endpoint,
+                                "rcd_type": pilot_variant.rcd_type,
+                                "calibration_run_id": (
+                                    pilot_variant.calibration_run_id
+                                ),
                             }
-                            if is_calibration
-                            else {"smoke_passed": bool(summary.get("smoke_passed"))}
+                            if is_pilot and pilot_variant is not None
+                            else (
+                                {
+                                    "calibration_passed": bool(
+                                        summary.get("calibration_passed")
+                                    )
+                                }
+                                if is_calibration
+                                else {"smoke_passed": bool(summary.get("smoke_passed"))}
+                            )
                         ),
                     },
                     events=events,
@@ -1034,7 +1441,23 @@ def main(
         )
         return EXIT_EVIDENCE_FAILURE
 
-    if is_calibration:
+    if is_pilot:
+        reconciliation = summary.get("reconciliation")
+        reconciliation = reconciliation if isinstance(reconciliation, dict) else {}
+        output = {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "exit_code": exit_code,
+            "pilot_passed": bool(summary.get("pilot_passed")),
+            "request_budget": dict(request_budget),
+            "condition_count": int(summary.get("condition_count", 0)),
+            "listing_logical_count": int(summary.get("listing_logical_count", 0)),
+            "listing_attempt_count": int(summary.get("listing_attempt_count", 0)),
+            "detail_attempt_count": int(summary.get("detail_attempt_count", 0)),
+            "rows_created": int(reconciliation.get("rows_created", 0)),
+            "conservation_difference": int(summary.get("conservation_difference", 0)),
+        }
+    elif is_calibration:
         output = {
             "artifact": str(artifact_dir),
             "run_id": run_id,

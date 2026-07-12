@@ -37,15 +37,16 @@ from app.scraper.manual_action import (  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.scraper.log_events import build_scrape_log_event  # noqa: E402
 from app.services.crawl_job_runtime import CrawlJobRuntime  # noqa: E402
+from app.services.offertoday_research_staging_service import (  # noqa: E402
+    OfferTodayReconciledListingStagingSink,
+    build_offertoday_listing_staging_payload,
+)
 from app.services.offertoday_detail_pipeline import (  # noqa: E402
     OfferTodayDetailPipeline,
     OfferTodayDetailTarget,
 )
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
 from app.repositories.crawl_job_repository import CrawlJobRepository  # noqa: E402
-from app.sources.offertoday.detail_identity import (  # noqa: E402
-    resolve_offertoday_detail_identity,
-)
 from app.sources.offertoday.listing_runner import (  # noqa: E402
     ListingRetryPolicy,
     ListingStopPolicy,
@@ -55,9 +56,6 @@ from app.sources.offertoday.listing_runner import (  # noqa: E402
 from app.sources.offertoday.search_space import (  # noqa: E402
     build_offertoday_listing_conditions,
     normalize_offertoday_keywords,
-)
-from app.sources.offertoday.parsers import (  # noqa: E402
-    build_offertoday_job_url,
 )
 from app.sources.offertoday.response_policy import (  # noqa: E402
     OfferTodayResponseKind,
@@ -458,99 +456,8 @@ def _normalize_detail_statuses(value: Any) -> list[str]:
     return [str(raw_value).strip() for raw_value in raw_values if str(raw_value).strip()]
 
 
-def _build_listing_staging_payload(
-    parsed_row: dict[str, Any],
-    *,
-    condition,
-    page: int,
-    rank: int,
-) -> dict[str, Any]:
-    normalized_listing = dict(parsed_row or {})
-    identity = resolve_offertoday_detail_identity(
-        source_job_id=normalized_listing.get("job_id"),
-        listing_payload=normalized_listing,
-    )
-    normalized_listing["job_id"] = identity.job_id
-    normalized_listing["encrypted_job_id"] = identity.encrypted_job_id
-    normalized_listing["encrypted_job_id_source"] = (
-        identity.encrypted_job_id_source
-    )
-
-    raw_data = normalized_listing.get("raw_data")
-    normalized_listing["raw_data"] = (
-        dict(raw_data) if isinstance(raw_data, dict) else {}
-    )
-    category_id = getattr(condition, "category_id", None)
-    search_family = str(getattr(condition, "search_family", "") or "").strip()
-    keyword = str(getattr(condition, "keyword", "") or "")
-    return {
-        "source_job_id": identity.job_id,
-        "source_url": build_offertoday_job_url(identity.encrypted_job_id),
-        "source_classification_id": (
-            str(category_id) if category_id is not None else None
-        ),
-        "source_classification_name": search_family or None,
-        "listing_page": int(page),
-        "listing_rank": int(rank),
-        "listing_payload": normalized_listing,
-        "search_family": search_family or None,
-        "category_id": str(category_id) if category_id is not None else None,
-        "category_name": search_family or None,
-        "keyword": keyword or None,
-        "page": int(page),
-    }
-
-
-class OfferTodayCrawlStagingSink:
-    def __init__(self, *, crawl_runtime, crawl_job_id, skip_existing: bool) -> None:
-        self.crawl_runtime = crawl_runtime
-        self.crawl_job_id = crawl_job_id
-        self.skip_existing = bool(skip_existing)
-        self.rows_staged = 0
-        self.rows_created = 0
-        self.skipped_existing = 0
-        self.created_source_job_ids: list[str] = []
-        self.preexisting_staged_source_job_ids: list[str] = []
-        self.published_source_job_ids: list[str] = []
-
-    async def stage_page(self, *, condition, page: int, rows) -> None:
-        payloads = [
-            _build_listing_staging_payload(
-                parsed_row,
-                condition=condition,
-                page=page,
-                rank=index,
-            )
-            for index, parsed_row in enumerate(rows, start=1)
-        ]
-        result = self.crawl_runtime.stage_listing_batch(
-            crawl_job_id=self.crawl_job_id,
-            source_site="offertoday",
-            payloads=payloads,
-            skip_existing=self.skip_existing,
-        )
-        self.rows_staged += int(result.rows_staged)
-        self.rows_created += int(result.rows_created)
-        self.skipped_existing += int(result.skipped_existing)
-        self.created_source_job_ids.extend(result.created_source_job_ids)
-        self.preexisting_staged_source_job_ids.extend(
-            result.preexisting_staged_source_job_ids
-        )
-        self.published_source_job_ids.extend(result.published_source_job_ids)
-
-    async def defer_identity_conflict(
-        self,
-        *,
-        job_ids,
-        encrypted_job_ids,
-        reason: str,
-    ) -> None:
-        self.crawl_runtime.defer_listing_identity_conflict(
-            crawl_job_id=self.crawl_job_id,
-            source_job_ids=tuple(job_ids),
-            encrypted_job_ids=tuple(encrypted_job_ids),
-            reason=reason,
-        )
+_build_listing_staging_payload = build_offertoday_listing_staging_payload
+OfferTodayCrawlStagingSink = OfferTodayReconciledListingStagingSink
 
 
 class CrawlJobListingObservationSink:

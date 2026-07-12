@@ -403,6 +403,29 @@ async def test_run_bounded_conditions_uses_exact_policy_once_per_condition() -> 
 
 
 @pytest.mark.asyncio
+async def test_run_bounded_conditions_uses_injected_reconciled_staging_sink() -> None:
+    conditions = build_calibration_conditions()[:2]
+    runner_factory = SequenceRunnerFactory(
+        tuple(bounded_listing_result(condition) for condition in conditions)
+    )
+    service = OfferTodayResearchLiveService(runner_factory=runner_factory)
+    staging_sink = object()
+
+    results = await service.run_bounded_conditions(
+        runtime=FakeRuntime(),
+        observation_service=FakeObservationService(),
+        conditions=conditions,
+        staging_sink=staging_sink,
+    )
+
+    assert len(results) == 2
+    assert all(
+        runner.calls[0]["staging_sink"] is staging_sink
+        for runner in runner_factory.runners
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_bounded_conditions_stops_after_first_rejected_result() -> None:
     conditions = build_calibration_conditions()[:3]
     runner_factory = SequenceRunnerFactory(

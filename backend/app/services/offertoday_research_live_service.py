@@ -67,8 +67,11 @@ class OfferTodayResearchLiveService:
         runtime: OfferTodayBrowserRuntime,
         observation_service: OfferTodayResearchObservationService,
         conditions: Sequence[OfferTodayListingCondition],
+        staging_sink: Any | None = None,
     ) -> tuple[BoundedConditionResult, ...]:
-        staging_sink = ResearchNoopListingStagingSink()
+        active_staging_sink = (
+            ResearchNoopListingStagingSink() if staging_sink is None else staging_sink
+        )
         results: list[BoundedConditionResult] = []
         for condition in conditions:
             runner = self._runner_factory(runtime)
@@ -86,7 +89,7 @@ class OfferTodayResearchLiveService:
                     page_delay_range_seconds=(3.0, 5.0),
                 ),
                 observation_sink=observation_service,
-                staging_sink=staging_sink,
+                staging_sink=active_staging_sink,
                 session_mode="fresh-headless",
             )
             bounded_result = evaluate_bounded_condition(
