@@ -582,6 +582,55 @@ async def test_run_census_preserves_first_incomplete_page_cap_as_failure() -> No
 
 
 @pytest.mark.asyncio
+async def test_run_fixed_repeat_uses_only_frozen_three_category_cohort() -> None:
+    candidate = census_candidate()
+    conditions_by_category = {
+        condition.category_id: condition
+        for condition in build_pilot_conditions(
+            candidate.endpoint,
+            candidate.rcd_type,
+        )
+    }
+    expected_conditions = tuple(
+        conditions_by_category[category_id]
+        for category_id in candidate.fixed_repeat_category_ids
+    )
+    expected_result = census_listing_result(candidate)
+    runner_factory = RunnerFactory(expected_result)
+    service = OfferTodayResearchLiveService(runner_factory=runner_factory)
+    observation_service = FakeObservationService()
+    staging_sink = object()
+
+    result = await service.run_fixed_repeat(
+        runtime=FakeRuntime(),
+        observation_service=observation_service,
+        candidate=candidate,
+        staging_sink=staging_sink,
+    )
+
+    assert result is expected_result
+    assert runner_factory.runner.calls == [
+        {
+            "conditions": expected_conditions,
+            "stop_policy": ListingStopPolicy(
+                max_pages_per_condition=500,
+                unique_job_cap=None,
+                require_empty_confirmation=True,
+            ),
+            "retry_policy": ListingRetryPolicy(
+                max_attempts_per_page=3,
+                retry_delays_seconds=(5.0, 15.0),
+                page_delay_seconds=0.0,
+                page_delay_range_seconds=(3.0, 5.0),
+            ),
+            "observation_sink": observation_service,
+            "staging_sink": staging_sink,
+            "session_mode": "fresh-headless",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_run_smoke_uses_exact_listing_budget_and_no_session_preflight() -> None:
     runtime = FakeRuntime()
     runner_factory = RunnerFactory(listing_result())

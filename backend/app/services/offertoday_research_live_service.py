@@ -113,12 +113,55 @@ class OfferTodayResearchLiveService:
         candidate: CensusCandidate,
         staging_sink: Any,
     ) -> ListingRunResult:
-        runner = self._runner_factory(runtime)
-        return await runner.run(
+        return await self._run_candidate_conditions(
+            runtime=runtime,
+            observation_service=observation_service,
+            candidate=candidate,
+            staging_sink=staging_sink,
             conditions=build_pilot_conditions(
                 candidate.endpoint,
                 candidate.rcd_type,
             ),
+        )
+
+    async def run_fixed_repeat(
+        self,
+        *,
+        runtime: OfferTodayBrowserRuntime,
+        observation_service: OfferTodayResearchObservationService,
+        candidate: CensusCandidate,
+        staging_sink: Any,
+    ) -> ListingRunResult:
+        conditions_by_category = {
+            condition.category_id: condition
+            for condition in build_pilot_conditions(
+                candidate.endpoint,
+                candidate.rcd_type,
+            )
+        }
+        return await self._run_candidate_conditions(
+            runtime=runtime,
+            observation_service=observation_service,
+            candidate=candidate,
+            staging_sink=staging_sink,
+            conditions=tuple(
+                conditions_by_category[category_id]
+                for category_id in candidate.fixed_repeat_category_ids
+            ),
+        )
+
+    async def _run_candidate_conditions(
+        self,
+        *,
+        runtime: OfferTodayBrowserRuntime,
+        observation_service: OfferTodayResearchObservationService,
+        candidate: CensusCandidate,
+        staging_sink: Any,
+        conditions: Sequence[OfferTodayListingCondition],
+    ) -> ListingRunResult:
+        runner = self._runner_factory(runtime)
+        return await runner.run(
+            conditions=conditions,
             stop_policy=ListingStopPolicy(
                 max_pages_per_condition=candidate.max_pages_per_condition,
                 unique_job_cap=None,

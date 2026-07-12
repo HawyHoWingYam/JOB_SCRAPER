@@ -12,6 +12,7 @@ import json
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -67,6 +68,10 @@ from app.sources.offertoday.research.live_contracts import CensusCandidate  # no
 from app.sources.offertoday.research.smoke import (  # noqa: E402
     runtime_smoke_request_budget,
 )
+from app.sources.offertoday.research.stability import (  # noqa: E402
+    StabilityRun,
+    compare_stability,
+)
 from app.sources.offertoday.research.stage_gate import (  # noqa: E402
     MatchingBaselineGate,
     require_matching_baselines,
@@ -105,6 +110,12 @@ _CENSUS_REQUEST_BUDGET = {
     "listing_attempt_max": 46_500,
     "detail": 0,
 }
+_FIXED_REPEAT_REQUEST_BUDGET = {
+    "listing_logical": 1_500,
+    "listing_attempt_max": 4_500,
+    "detail": 0,
+}
+_MIN_CENSUS_WINDOW_SECONDS = 6 * 60 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +133,43 @@ class CensusCandidateEvidence:
     candidate_hash: str
     parent_artifact_hash: str
     candidate_run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class StabilityArtifactEvidence:
+    artifact_dir: Path
+    manifest_hash: str
+    experiment: str
+    candidate_hash: str
+    captured_at: datetime
+    run: StabilityRun
+    listing_logical_count: int
+    retry_count: int
+    stop_reason: str | None
+    repeat_index: int | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "artifact": str(self.artifact_dir),
+            "manifest_hash": self.manifest_hash,
+            "experiment": self.experiment,
+            "candidate_hash": self.candidate_hash,
+            "captured_at": self.captured_at.isoformat(),
+            "listing_logical_count": self.listing_logical_count,
+            "retry_count": self.retry_count,
+            "stop_reason": self.stop_reason,
+            "repeat_index": self.repeat_index,
+            **self.run.to_payload(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StabilityInputs:
+    census_runs: tuple[StabilityArtifactEvidence, ...]
+    fixed_repeat_runs: tuple[StabilityArtifactEvidence, ...]
+    candidate_hash: str
+    census_window_span_seconds: float
+    fixed_window_span_seconds: float
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -199,6 +247,55 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("backend/runtime/offertoday-research"),
     )
     census.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    repeat_fixed = commands.add_parser("repeat-fixed")
+    repeat_fixed.add_argument("--candidate-artifact", type=Path, required=True)
+    repeat_fixed.add_argument(
+        "--baseline-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    repeat_fixed.add_argument(
+        "--repeat-index",
+        type=int,
+        choices=(1, 2, 3),
+        required=True,
+    )
+    repeat_fixed.add_argument("--run-id", default=None)
+    repeat_fixed.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    repeat_fixed.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    compare = commands.add_parser("compare")
+    compare.add_argument(
+        "--census-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    compare.add_argument(
+        "--fixed-repeat-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    compare.add_argument("--run-id", default=None)
+    compare.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    compare.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parents[2],
@@ -550,6 +647,342 @@ def _freeze_candidate_command(
     return EXIT_OK
 
 
+def _parse_aware_timestamp(value: Any, field_name: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be an ISO timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an ISO timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field_name} must include a timezone")
+    return parsed
+
+
+def _accepted_stability_artifact(
+    artifact_dir: Path,
+    *,
+    expected_experiment: str,
+) -> StabilityArtifactEvidence:
+    artifact_dir = Path(artifact_dir).resolve(strict=True)
+    verification = verify_live_research_run(artifact_dir)
+    if not verification.valid:
+        raise ValueError(f"{expected_experiment} artifact failed strict verification")
+    manifest_path = artifact_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    metadata = manifest.get("metadata")
+    provenance = manifest.get("provenance")
+    events = _read_jsonl(artifact_dir / "observations.jsonl")
+    summaries = [
+        event.get("payload")
+        for event in events
+        if event.get("event_type") == "research.run_summary"
+    ]
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(provenance, dict)
+        or metadata.get("experiment") != expected_experiment
+        or metadata.get("crawl_job_status") != "completed"
+        or len(summaries) != 1
+        or not isinstance(summaries[0], dict)
+    ):
+        raise ValueError(f"{expected_experiment} artifact is not accepted")
+    summary = summaries[0]
+    passed_field = (
+        "fixed_repeat_passed"
+        if expected_experiment == "fixed-condition-repeat"
+        else "census_passed"
+    )
+    if metadata.get(passed_field) is not True or summary.get(passed_field) is not True:
+        raise ValueError(f"{expected_experiment} artifact is not accepted")
+
+    run_id = manifest.get("run_id")
+    candidate_hash = metadata.get("candidate_hash")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("stability artifact run ID is invalid")
+    if (
+        not isinstance(candidate_hash, str)
+        or len(candidate_hash) != 64
+        or any(character not in "0123456789abcdef" for character in candidate_hash)
+    ):
+        raise ValueError("stability artifact candidate hash is invalid")
+
+    ordered_job_ids: list[str] = []
+    seen_job_ids: set[str] = set()
+    for event in events:
+        if event.get("event_type") != "research.page_attempt":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        for pair in payload.get("id_pairs", ()):
+            job_id = pair.get("job_id") if isinstance(pair, dict) else None
+            if isinstance(job_id, str) and job_id and job_id not in seen_job_ids:
+                seen_job_ids.add(job_id)
+                ordered_job_ids.append(job_id)
+    if summary.get("unique_job_count") != len(seen_job_ids):
+        raise ValueError("stability artifact unique job count is inconsistent")
+
+    listing_requests = summary.get("listing_attempt_count")
+    if type(listing_requests) is not int or listing_requests < 0:
+        raise ValueError("stability artifact listing request count is invalid")
+    listing_logical_count = summary.get("listing_logical_count")
+    if (
+        type(listing_logical_count) is not int
+        or listing_logical_count < 0
+        or listing_logical_count > listing_requests
+    ):
+        raise ValueError("stability artifact logical request count is invalid")
+    stop_reason = summary.get("stop_reason")
+    if stop_reason is not None and (
+        not isinstance(stop_reason, str) or not stop_reason.strip()
+    ):
+        raise ValueError("stability artifact stop reason is invalid")
+    start_events = [
+        event for event in events if event.get("event_type") == "research.run_started"
+    ]
+    summary_events = [
+        event for event in events if event.get("event_type") == "research.run_summary"
+    ]
+    if len(start_events) != 1 or len(summary_events) != 1:
+        raise ValueError("stability artifact lifecycle timestamps are incomplete")
+    started_at = _parse_aware_timestamp(
+        start_events[0].get("created_at"),
+        "stability run start",
+    )
+    completed_at = _parse_aware_timestamp(
+        summary_events[0].get("created_at"),
+        "stability run summary",
+    )
+    duration_seconds = (completed_at - started_at).total_seconds()
+    if duration_seconds < 0:
+        raise ValueError("stability artifact duration is negative")
+
+    def nonnegative_summary_count(field_name: str) -> int:
+        value = summary.get(field_name, 0)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"stability artifact {field_name} is invalid")
+        return value
+
+    repeat_index = metadata.get("repeat_index")
+    if expected_experiment == "fixed-condition-repeat":
+        if type(repeat_index) is not int or repeat_index not in {1, 2, 3}:
+            raise ValueError("fixed repeat index must be 1, 2, or 3")
+    else:
+        repeat_index = None
+    return StabilityArtifactEvidence(
+        artifact_dir=artifact_dir,
+        manifest_hash=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        experiment=expected_experiment,
+        candidate_hash=candidate_hash,
+        captured_at=_parse_aware_timestamp(
+            provenance.get("captured_at"),
+            "stability artifact captured_at",
+        ),
+        run=StabilityRun(
+            run_id=run_id,
+            job_ids=frozenset(ordered_job_ids),
+            listing_requests=listing_requests,
+            duration_seconds=duration_seconds,
+            accepted=True,
+            unresolved_gaps=nonnegative_summary_count("unresolved_gaps"),
+            identity_conflicts=nonnegative_summary_count("identity_conflict_count"),
+            conservation_difference=nonnegative_summary_count(
+                "conservation_difference"
+            ),
+            unclassified_failures=nonnegative_summary_count("unclassified_failures"),
+        ),
+        listing_logical_count=listing_logical_count,
+        retry_count=listing_requests - listing_logical_count,
+        stop_reason=stop_reason,
+        repeat_index=repeat_index,
+    )
+
+
+def _load_stability_inputs(
+    census_artifacts,
+    fixed_repeat_artifacts,
+) -> StabilityInputs:
+    if len(census_artifacts) != 3 or len(fixed_repeat_artifacts) != 3:
+        raise ValueError("compare requires exactly three census and fixed artifacts")
+    census_runs = tuple(
+        sorted(
+            (
+                _accepted_stability_artifact(
+                    path,
+                    expected_experiment="full-census",
+                )
+                for path in census_artifacts
+            ),
+            key=lambda item: (item.captured_at, item.run.run_id),
+        )
+    )
+    fixed_repeat_runs = tuple(
+        sorted(
+            (
+                _accepted_stability_artifact(
+                    path,
+                    expected_experiment="fixed-condition-repeat",
+                )
+                for path in fixed_repeat_artifacts
+            ),
+            key=lambda item: (item.repeat_index, item.run.run_id),
+        )
+    )
+    run_ids = [item.run.run_id for item in (*census_runs, *fixed_repeat_runs)]
+    if len(set(run_ids)) != 6:
+        raise ValueError("compare requires six distinct run IDs")
+    candidate_hashes = {
+        item.candidate_hash for item in (*census_runs, *fixed_repeat_runs)
+    }
+    if len(candidate_hashes) != 1:
+        raise ValueError("compare requires one candidate hash across all artifacts")
+    if tuple(item.repeat_index for item in fixed_repeat_runs) != (1, 2, 3):
+        raise ValueError("compare requires fixed repeat indexes 1, 2, and 3")
+    census_window_span_seconds = (
+        census_runs[-1].captured_at - census_runs[0].captured_at
+    ).total_seconds()
+    if census_window_span_seconds < _MIN_CENSUS_WINDOW_SECONDS:
+        raise ValueError("census artifacts must span at least six hours")
+    return StabilityInputs(
+        census_runs=census_runs,
+        fixed_repeat_runs=fixed_repeat_runs,
+        candidate_hash=next(iter(candidate_hashes)),
+        census_window_span_seconds=census_window_span_seconds,
+        fixed_window_span_seconds=(
+            max(item.captured_at for item in fixed_repeat_runs)
+            - min(item.captured_at for item in fixed_repeat_runs)
+        ).total_seconds(),
+    )
+
+
+def _comparison_run_reference(item: StabilityArtifactEvidence) -> dict[str, Any]:
+    return {
+        "artifact": str(item.artifact_dir),
+        "run_id": item.run.run_id,
+        "manifest_hash": item.manifest_hash,
+        "captured_at": item.captured_at.isoformat(),
+        "repeat_index": item.repeat_index,
+    }
+
+
+def _compare_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    try:
+        inputs = _load_stability_inputs(
+            args.census_artifact,
+            args.fixed_repeat_artifact,
+        )
+        comparison = compare_stability(
+            tuple(item.run for item in inputs.census_runs),
+            tuple(item.run for item in inputs.fixed_repeat_runs),
+        )
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        census_payloads = [item.to_payload() for item in inputs.census_runs]
+        fixed_payloads = [item.to_payload() for item in inputs.fixed_repeat_runs]
+        comparison_payload = comparison.to_payload()
+        summary = {
+            "status": "completed",
+            "comparison_completed": True,
+            "candidate_hash": inputs.candidate_hash,
+            "minimum_census_window_seconds": _MIN_CENSUS_WINDOW_SECONDS,
+            "census_window_span_seconds": inputs.census_window_span_seconds,
+            "fixed_window_span_seconds": inputs.fixed_window_span_seconds,
+            "census_runs": census_payloads,
+            "fixed_repeat_runs": fixed_payloads,
+            **comparison_payload,
+            "plan3_entry_accepted": comparison.decision.accepted,
+            "failing_gates": list(comparison.decision.failing_gates),
+        }
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "compare",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=utc_now().isoformat(),
+        )
+        parent_artifact_hash = inputs.fixed_repeat_runs[-1].manifest_hash
+        started_payload = {
+            "experiment": "census-stability-comparison",
+            "candidate_hash": inputs.candidate_hash,
+            "parent_artifact_hash": parent_artifact_hash,
+            "minimum_census_window_seconds": _MIN_CENSUS_WINDOW_SECONDS,
+            "census_runs": [
+                _comparison_run_reference(item) for item in inputs.census_runs
+            ],
+            "fixed_repeat_runs": [
+                _comparison_run_reference(item) for item in inputs.fixed_repeat_runs
+            ],
+        }
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata={
+                "experiment": "census-stability-comparison",
+                "crawl_job_id": run_id,
+                "crawl_job_status": "completed",
+                "parent_artifact_hash": parent_artifact_hash,
+                "candidate_hash": inputs.candidate_hash,
+                "plan3_entry_accepted": comparison.decision.accepted,
+                "planner_version": planner_version,
+                "census_run_ids": [item.run.run_id for item in inputs.census_runs],
+                "fixed_repeat_run_ids": [
+                    item.run.run_id for item in inputs.fixed_repeat_runs
+                ],
+            },
+            events=[
+                {
+                    "sequence_no": 1,
+                    "event_type": "research.comparison_started",
+                    "payload": started_payload,
+                    "emitted_by": "offertoday-research",
+                    "created_at": utc_now().isoformat(),
+                },
+                {
+                    "sequence_no": 2,
+                    "event_type": "research.run_summary",
+                    "payload": summary,
+                    "emitted_by": "offertoday-research",
+                    "created_at": utc_now().isoformat(),
+                },
+            ],
+            provenance=provenance,
+        )
+        artifact_check = artifact_verifier(artifact_dir)
+        live_check = verify_live_research_run(artifact_dir)
+        if not artifact_check.valid or not live_check.valid:
+            return EXIT_EVIDENCE_FAILURE
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "plan3_entry_accepted": comparison.decision.accepted,
+            "failing_gates": list(comparison.decision.failing_gates),
+            "fixed_cohort_jaccard": comparison.fixed_cohort_jaccard,
+            "unique_count_cv": comparison.unique_count_cv,
+            "union_hash": comparison.union_hash,
+            "census_pairwise": [
+                item.to_payload() for item in comparison.census_pairwise
+            ],
+            "fixed_pairwise": [item.to_payload() for item in comparison.fixed_pairwise],
+        }
+    )
+    return EXIT_OK if comparison.decision.accepted else EXIT_INCOMPLETE
+
+
 def _event_dict(event: Any) -> dict[str, Any]:
     created_at = event.created_at
     return {
@@ -688,6 +1121,24 @@ async def _execute_census_with_runtime(
     runtime = runtime_factory(headed=False)
     async with runtime as active_runtime:
         return await service.run_census(
+            runtime=active_runtime,
+            observation_service=observation_service,
+            candidate=candidate,
+            staging_sink=staging_sink,
+        )
+
+
+async def _execute_fixed_repeat_with_runtime(
+    *,
+    runtime_factory,
+    service,
+    observation_service,
+    candidate,
+    staging_sink,
+):
+    runtime = runtime_factory(headed=False)
+    async with runtime as active_runtime:
+        return await service.run_fixed_repeat(
             runtime=active_runtime,
             observation_service=observation_service,
             candidate=candidate,
@@ -1250,7 +1701,9 @@ def _analyze_census(
     conditions,
     events_before_summary: list[dict[str, Any]],
     reconciliation,
+    request_budget: dict[str, int] | None = None,
 ) -> dict[str, Any]:
+    active_request_budget = request_budget or _CENSUS_REQUEST_BUDGET
     page_payloads = _census_page_payloads(
         result=result,
         events_before_summary=events_before_summary,
@@ -1359,9 +1812,9 @@ def _analyze_census(
         failure_reason = "census_natural_exhaustion_mismatch"
     elif not result.is_complete or result.stop_reason != "natural_exhaustion":
         failure_reason = result.stop_reason or "census_incomplete"
-    elif len(logical_pages) > _CENSUS_REQUEST_BUDGET["listing_logical"]:
+    elif len(logical_pages) >= active_request_budget["listing_logical"]:
         failure_reason = "listing_logical_budget_exceeded"
-    elif len(page_payloads) > _CENSUS_REQUEST_BUDGET["listing_attempt_max"]:
+    elif len(page_payloads) >= active_request_budget["listing_attempt_max"]:
         failure_reason = "listing_attempt_budget_exceeded"
     elif detail_attempt_count:
         failure_reason = "census_detail_request_observed"
@@ -1421,6 +1874,7 @@ def _build_census_summary(
         conditions=conditions,
         events_before_summary=events_before_summary,
         reconciliation=reconciliation,
+        request_budget=request_budget,
     )
     report = analysis.pop("conservation_report")
     staged_rows_delta = end_snapshot.staged_rows - start_snapshot.staged_rows
@@ -1489,6 +1943,17 @@ def _build_census_summary(
     }
 
 
+def _build_fixed_repeat_summary(
+    *,
+    repeat_index: int,
+    **kwargs,
+) -> dict[str, Any]:
+    summary = _build_census_summary(**kwargs)
+    summary["fixed_repeat_passed"] = summary.pop("census_passed")
+    summary["repeat_index"] = repeat_index
+    return summary
+
+
 def _unexpected_error_message(
     error: BaseException,
     *,
@@ -1501,8 +1966,12 @@ def _unexpected_error_message(
             "unexpected_category_pilot_error"
             if experiment == "category-pilot"
             else (
-                "unexpected_full_census_error"
-                if experiment == "full-census"
+                (
+                    "unexpected_fixed_condition_repeat_error"
+                    if experiment == "fixed-condition-repeat"
+                    else "unexpected_full_census_error"
+                )
+                if experiment in {"full-census", "fixed-condition-repeat"}
                 else "unexpected_live_smoke_error"
             )
         )
@@ -1543,6 +2012,7 @@ def _best_effort_finalize_unexpected_failure(
     census_candidate_evidence: CensusCandidateEvidence | None = None,
     census_conditions=(),
     census_reconciliation=None,
+    fixed_repeat_index: int | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     error_message = _unexpected_error_message(error, experiment=experiment)
     product_data_evidence_complete = (
@@ -1589,11 +2059,21 @@ def _best_effort_finalize_unexpected_failure(
             )
 
     if (
-        experiment == "full-census"
+        experiment in {"full-census", "fixed-condition-repeat"}
         and census_candidate_evidence is not None
         and census_reconciliation is not None
     ):
-        summary = _build_census_summary(
+        summary_builder = (
+            _build_fixed_repeat_summary
+            if experiment == "fixed-condition-repeat"
+            else _build_census_summary
+        )
+        summary = summary_builder(
+            **(
+                {"repeat_index": fixed_repeat_index}
+                if experiment == "fixed-condition-repeat"
+                else {}
+            ),
             status="failed",
             start_snapshot=start_snapshot,
             start_inventory=start_inventory,
@@ -1704,6 +2184,13 @@ def main(
             artifact_exporter=artifact_exporter,
             artifact_verifier=artifact_verifier,
         )
+    if args.command == "compare":
+        return _compare_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
 
     request_budget = (
         dict(_CALIBRATION_REQUEST_BUDGET)
@@ -1712,9 +2199,13 @@ def main(
             dict(_PILOT_REQUEST_BUDGET)
             if args.command == "pilot"
             else (
-                dict(_CENSUS_REQUEST_BUDGET)
-                if args.command == "census"
-                else runtime_smoke_request_budget()
+                dict(_FIXED_REPEAT_REQUEST_BUDGET)
+                if args.command == "repeat-fixed"
+                else (
+                    dict(_CENSUS_REQUEST_BUDGET)
+                    if args.command == "census"
+                    else runtime_smoke_request_budget()
+                )
             )
         )
     )
@@ -1739,7 +2230,7 @@ def main(
                 args.calibration_artifact,
                 variant_rank=args.variant_rank,
             )
-        elif args.command == "census":
+        elif args.command in {"census", "repeat-fixed"}:
             candidate_evidence = _require_census_candidate_artifact(
                 args.candidate_artifact
             )
@@ -1774,13 +2265,19 @@ def main(
     is_calibration = args.command == "calibrate"
     is_pilot = args.command == "pilot"
     is_census = args.command == "census"
+    is_fixed_repeat = args.command == "repeat-fixed"
+    is_census_family = is_census or is_fixed_repeat
     experiment = (
         "listing-calibration"
         if is_calibration
         else (
             "category-pilot"
             if is_pilot
-            else "full-census" if is_census else "runtime-smoke"
+            else (
+                "fixed-condition-repeat"
+                if is_fixed_repeat
+                else "full-census" if is_census else "runtime-smoke"
+            )
         )
     )
     variant = (
@@ -1797,9 +2294,9 @@ def main(
                 (
                     f"{candidate_evidence.candidate.endpoint}-rcdtype-"
                     f"{candidate_evidence.candidate.rcd_type if candidate_evidence.candidate.rcd_type is not None else 'omitted'}"
-                    "-31-category-full-census"
+                    f"{'-3-category-fixed-repeat' if is_fixed_repeat else '-31-category-full-census'}"
                 )
-                if is_census and candidate_evidence is not None
+                if is_census_family and candidate_evidence is not None
                 else "search-rcdtype-7-fresh-headless"
             )
         )
@@ -1812,7 +2309,7 @@ def main(
             if is_pilot and pilot_variant is not None
             else (
                 candidate_evidence.parent_artifact_hash
-                if is_census and candidate_evidence is not None
+                if is_census_family and candidate_evidence is not None
                 else baseline_gate.parent_artifact_hash
             )
         )
@@ -1826,14 +2323,23 @@ def main(
     )
     pilot_staging_sink = None
     census_result = None
-    census_conditions = (
-        build_pilot_conditions(
+    census_conditions = ()
+    if is_census_family and candidate_evidence is not None:
+        all_candidate_conditions = build_pilot_conditions(
             candidate_evidence.candidate.endpoint,
             candidate_evidence.candidate.rcd_type,
         )
-        if is_census and candidate_evidence is not None
-        else ()
-    )
+        if is_fixed_repeat:
+            conditions_by_category = {
+                condition.category_id: condition
+                for condition in all_candidate_conditions
+            }
+            census_conditions = tuple(
+                conditions_by_category[category_id]
+                for category_id in candidate_evidence.candidate.fixed_repeat_category_ids
+            )
+        else:
+            census_conditions = all_candidate_conditions
     census_staging_sink = None
 
     try:
@@ -1895,8 +2401,13 @@ def main(
                                 "page_delay_range_seconds": list(
                                     candidate_evidence.candidate.page_delay_range_seconds
                                 ),
+                                **(
+                                    {"repeat_index": args.repeat_index}
+                                    if is_fixed_repeat
+                                    else {}
+                                ),
                             }
-                            if is_census and candidate_evidence is not None
+                            if is_census_family and candidate_evidence is not None
                             else {}
                         )
                     )
@@ -1913,14 +2424,18 @@ def main(
                         observation_service=observation_service,
                     )
                 )
-            elif is_census and candidate_evidence is not None:
+            elif is_census_family and candidate_evidence is not None:
                 census_staging_sink = staging_sink_factory(
                     crawl_runtime=crawl_runtime_factory(),
                     crawl_job_id=run_id,
                     skip_existing=True,
                 )
                 census_result = asyncio.run(
-                    _execute_census_with_runtime(
+                    (
+                        _execute_fixed_repeat_with_runtime
+                        if is_fixed_repeat
+                        else _execute_census_with_runtime
+                    )(
                         runtime_factory=runtime_factory,
                         service=service_factory(),
                         observation_service=observation_service,
@@ -1969,7 +2484,7 @@ def main(
                 {"reason": failure_reason},
             )
         elif (
-            is_census
+            is_census_family
             and candidate_evidence is not None
             and census_staging_sink is not None
         ):
@@ -1981,6 +2496,7 @@ def main(
                 conditions=census_conditions,
                 events_before_summary=census_events,
                 reconciliation=census_staging_sink.reconciliation,
+                request_budget=request_budget,
             )
             database_conservation_difference = (
                 end_snapshot.staged_rows
@@ -2134,11 +2650,17 @@ def main(
             research_repository.list_research_events(db, UUID(run_id))
         )
         if (
-            is_census
+            is_census_family
             and candidate_evidence is not None
             and census_staging_sink is not None
         ):
-            summary = _build_census_summary(
+            summary_builder = (
+                _build_fixed_repeat_summary
+                if is_fixed_repeat
+                else _build_census_summary
+            )
+            summary = summary_builder(
+                **({"repeat_index": args.repeat_index} if is_fixed_repeat else {}),
                 status=terminal_status,
                 start_snapshot=start_snapshot,
                 start_inventory=start_inventory,
@@ -2191,7 +2713,7 @@ def main(
                 failure_reason=failure_reason,
                 request_budget=request_budget,
             )
-        if not is_pilot and not is_census and not product_data_unchanged:
+        if not is_pilot and not is_census_family and not product_data_unchanged:
             exit_code = EXIT_EVIDENCE_FAILURE
         observation_service.finish_run(
             status=terminal_status,
@@ -2248,6 +2770,9 @@ def main(
                             census_staging_sink.reconciliation
                             if census_staging_sink is not None
                             else None
+                        ),
+                        fixed_repeat_index=(
+                            args.repeat_index if is_fixed_repeat else None
                         ),
                     )
                     terminal_status = "failed"
@@ -2310,8 +2835,19 @@ def main(
                                 if is_calibration
                                 else (
                                     {
-                                        "census_passed": bool(
-                                            summary.get("census_passed")
+                                        **(
+                                            {
+                                                "fixed_repeat_passed": bool(
+                                                    summary.get("fixed_repeat_passed")
+                                                ),
+                                                "repeat_index": args.repeat_index,
+                                            }
+                                            if is_fixed_repeat
+                                            else {
+                                                "census_passed": bool(
+                                                    summary.get("census_passed")
+                                                )
+                                            }
                                         ),
                                         "candidate_hash": (
                                             candidate_evidence.candidate_hash
@@ -2326,7 +2862,8 @@ def main(
                                             candidate_evidence.candidate.rcd_type
                                         ),
                                     }
-                                    if is_census and candidate_evidence is not None
+                                    if is_census_family
+                                    and candidate_evidence is not None
                                     else {
                                         "smoke_passed": bool(
                                             summary.get("smoke_passed")
@@ -2366,12 +2903,19 @@ def main(
         )
         return EXIT_EVIDENCE_FAILURE
 
-    if is_census:
+    if is_census_family:
         output = {
             "artifact": str(artifact_dir),
             "run_id": run_id,
             "exit_code": exit_code,
-            "census_passed": bool(summary.get("census_passed")),
+            **(
+                {
+                    "fixed_repeat_passed": bool(summary.get("fixed_repeat_passed")),
+                    "repeat_index": args.repeat_index,
+                }
+                if is_fixed_repeat
+                else {"census_passed": bool(summary.get("census_passed"))}
+            ),
             "request_budget": dict(request_budget),
             "condition_count": int(summary.get("condition_count", 0)),
             "natural_exhaustion_count": int(summary.get("natural_exhaustion_count", 0)),

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from app.sources.offertoday.research.smoke import (
     SMOKE_LISTING_REQUEST_LIMIT,
     runtime_smoke_request_budget,
 )
+from app.sources.offertoday.research.stability import StabilityRun, compare_stability
 
 _COUNT_KEYS = (
     "staged_rows",
@@ -57,9 +59,18 @@ _CENSUS_REQUEST_BUDGET = {
     "listing_attempt_max": 46_500,
     "detail": 0,
 }
+_FIXED_REPEAT_REQUEST_BUDGET = {
+    "listing_logical": 1_500,
+    "listing_attempt_max": 4_500,
+    "detail": 0,
+}
 _UNEXPECTED_CENSUS_ERROR_RE = re.compile(
     r"unexpected_full_census_error:[A-Za-z_][A-Za-z0-9_]*"
 )
+_UNEXPECTED_FIXED_REPEAT_ERROR_RE = re.compile(
+    r"unexpected_fixed_condition_repeat_error:[A-Za-z_][A-Za-z0-9_]*"
+)
+_MIN_CENSUS_WINDOW_SECONDS = 6 * 60 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -1684,7 +1695,17 @@ def _ordered_id_hash(values: list[str]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
+def _verify_census_research_run(
+    artifact_dir: Path,
+    *,
+    fixed_repeat: bool = False,
+) -> LiveRunVerification:
+    experiment = "fixed-condition-repeat" if fixed_repeat else "full-census"
+    request_budget = (
+        _FIXED_REPEAT_REQUEST_BUDGET if fixed_repeat else _CENSUS_REQUEST_BUDGET
+    )
+    passed_field = "fixed_repeat_passed" if fixed_repeat else "census_passed"
+    expected_condition_count = 3 if fixed_repeat else 31
     verification = verify_research_artifact(artifact_dir)
     if not verification.valid:
         artifact_issues = [
@@ -1716,7 +1737,7 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
         return LiveRunVerification(
             valid=False,
             issues=(f"invalid_live_run_json:{type(exc).__name__}",),
-            experiment="full-census",
+            experiment=experiment,
             run_id=None,
         )
 
@@ -1725,7 +1746,7 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
     run_id_value = manifest.get("run_id")
     run_id = run_id_value if isinstance(run_id_value, str) else None
     issues: list[str] = []
-    if metadata.get("experiment") != "full-census":
+    if metadata.get("experiment") != experiment:
         issues.append("unsupported_live_experiment")
     if metadata.get("crawl_job_id") != run_id:
         issues.append("crawl_job_id_run_id_mismatch")
@@ -1738,9 +1759,14 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
     candidate_run_id = metadata.get("candidate_run_id")
     if not isinstance(candidate_run_id, str) or not candidate_run_id.strip():
         issues.append("invalid_candidate_run_id")
+    if fixed_repeat and (
+        type(metadata.get("repeat_index")) is not int
+        or metadata["repeat_index"] not in {1, 2, 3}
+    ):
+        issues.append("invalid_fixed_repeat_index")
     if not _request_budget_matches(
         metadata.get("request_budget"),
-        _CENSUS_REQUEST_BUDGET,
+        request_budget,
     ):
         issues.append("invalid_census_request_budget")
 
@@ -1748,6 +1774,15 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
     rcd_type = metadata.get("rcd_type")
     try:
         locked_conditions = build_pilot_conditions(endpoint, rcd_type)
+        if fixed_repeat:
+            fixed_category_ids = (118000, 112000, 127000)
+            conditions_by_category = {
+                condition.category_id: condition for condition in locked_conditions
+            }
+            locked_conditions = tuple(
+                conditions_by_category[category_id]
+                for category_id in fixed_category_ids
+            )
     except (TypeError, ValueError):
         issues.append("invalid_census_candidate_controls")
         locked_conditions = ()
@@ -1775,7 +1810,7 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
     else:
         payload = run_started[0].get("payload")
         candidate_controls = {
-            "condition_count": 31,
+            "condition_count": expected_condition_count,
             "candidate_hash": candidate_hash,
             "candidate_run_id": candidate_run_id,
             "endpoint": endpoint,
@@ -1785,11 +1820,12 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
             "max_attempts_per_page": 3,
             "retry_delays_seconds": [5.0, 15.0],
             "page_delay_range_seconds": [3.0, 5.0],
+            **({"repeat_index": metadata.get("repeat_index")} if fixed_repeat else {}),
         }
         if not isinstance(payload, dict):
             issues.append("invalid_run_started_payload")
         else:
-            if payload.get("experiment") != "full-census":
+            if payload.get("experiment") != experiment:
                 issues.append("invalid_census_run_started_experiment")
             if payload.get("session_mode") != "fresh-headless":
                 issues.append("invalid_census_session_mode")
@@ -1809,7 +1845,7 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
                 issues.append("census_baseline_hash_mismatch")
             if not _request_budget_matches(
                 payload.get("request_budget"),
-                _CENSUS_REQUEST_BUDGET,
+                request_budget,
             ):
                 issues.append("invalid_census_request_budget")
 
@@ -1874,9 +1910,9 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
     for attempts in attempts_by_page.values():
         if attempts != list(range(1, len(attempts) + 1)):
             attempt_sequences_valid = False
-    if len(logical_keys) > _CENSUS_REQUEST_BUDGET["listing_logical"]:
+    if len(logical_keys) > request_budget["listing_logical"]:
         issues.append("census_logical_budget_exceeded")
-    if len(page_events) > _CENSUS_REQUEST_BUDGET["listing_attempt_max"]:
+    if len(page_events) > request_budget["listing_attempt_max"]:
         issues.append("census_attempt_budget_exceeded")
 
     condition_events = [
@@ -2002,25 +2038,27 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
     ]
 
     manifest_status = metadata.get("crawl_job_status")
-    manifest_passed = metadata.get("census_passed")
+    manifest_passed = metadata.get(passed_field)
     if type(manifest_passed) is not bool:
         issues.append("invalid_manifest_census_passed")
     if summary is not None:
         if summary.get("status") != manifest_status:
             issues.append("crawl_job_status_summary_mismatch")
-        if summary.get("census_passed") is not manifest_passed:
+        if summary.get(passed_field) is not manifest_passed:
             issues.append("census_passed_summary_mismatch")
+        if fixed_repeat and summary.get("repeat_index") != metadata.get("repeat_index"):
+            issues.append("fixed_repeat_index_summary_mismatch")
         if summary.get("candidate_hash") != candidate_hash:
             issues.append("census_candidate_hash_mismatch")
         if summary.get("candidate_run_id") != candidate_run_id:
             issues.append("census_candidate_run_id_mismatch")
         if not _request_budget_matches(
             summary.get("request_budget"),
-            _CENSUS_REQUEST_BUDGET,
+            request_budget,
         ):
             issues.append("invalid_census_request_budget")
         expected_counts = {
-            "planned_condition_count": 31,
+            "planned_condition_count": expected_condition_count,
             "condition_count": len(condition_events),
             "natural_exhaustion_count": sum(
                 event.get("event_type") == "research.condition_completed"
@@ -2097,14 +2135,17 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
             if not (
                 manifest_status == "completed"
                 and manifest_passed is True
-                and summary.get("census_passed") is True
+                and summary.get(passed_field) is True
                 and summary.get("stop_reason") is None
-                and len(condition_events) == 31
+                and len(condition_events) == expected_condition_count
                 and condition_sequence_valid
                 and condition_semantics_valid
                 and page_controls_valid
                 and attempt_sequences_valid
-                and 31 <= len(logical_keys) <= 15_500
+                and expected_condition_count
+                <= len(logical_keys)
+                < request_budget["listing_logical"]
+                and len(page_events) < request_budget["listing_attempt_max"]
                 and len(logical_keys) == condition_logical_total
                 and detail_attempt_count == 0
                 and summary.get("unresolved_gaps") == 0
@@ -2148,8 +2189,19 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
                     issues.append("run_stopped_summary_reason_mismatch")
                 if (
                     isinstance(stopped_reason, str)
-                    and stopped_reason.startswith("unexpected_full_census_error:")
-                    and _UNEXPECTED_CENSUS_ERROR_RE.fullmatch(stopped_reason) is None
+                    and stopped_reason.startswith(
+                        (
+                            "unexpected_fixed_condition_repeat_error:"
+                            if fixed_repeat
+                            else "unexpected_full_census_error:"
+                        )
+                    )
+                    and (
+                        _UNEXPECTED_FIXED_REPEAT_ERROR_RE
+                        if fixed_repeat
+                        else _UNEXPECTED_CENSUS_ERROR_RE
+                    ).fullmatch(stopped_reason)
+                    is None
                 ):
                     issues.append("invalid_unexpected_census_failure_reason")
             if not condition_sequence_valid:
@@ -2160,7 +2212,7 @@ def _verify_census_research_run(artifact_dir: Path) -> LiveRunVerification:
     return LiveRunVerification(
         valid=not issues,
         issues=tuple(issues),
-        experiment="full-census",
+        experiment=experiment,
         run_id=run_id,
     )
 
@@ -2287,6 +2339,290 @@ def _verify_candidate_research_run(artifact_dir: Path) -> LiveRunVerification:
     )
 
 
+def _comparison_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
+def _comparison_run(
+    payload: Any,
+    *,
+    expected_experiment: str,
+    issues: list[str],
+) -> tuple[StabilityRun | None, datetime | None, int | None]:
+    if not isinstance(payload, dict):
+        issues.append("invalid_comparison_run_payload")
+        return None, None, None
+    if payload.get("experiment") != expected_experiment:
+        issues.append("comparison_run_experiment_mismatch")
+    if _SHA256_RE.fullmatch(str(payload.get("manifest_hash") or "")) is None:
+        issues.append("invalid_comparison_run_manifest_hash")
+    if _SHA256_RE.fullmatch(str(payload.get("candidate_hash") or "")) is None:
+        issues.append("invalid_comparison_run_candidate_hash")
+    captured_at = _comparison_timestamp(payload.get("captured_at"))
+    if captured_at is None:
+        issues.append("invalid_comparison_run_captured_at")
+    repeat_index = payload.get("repeat_index")
+    if expected_experiment == "fixed-condition-repeat":
+        if type(repeat_index) is not int or repeat_index not in {1, 2, 3}:
+            issues.append("invalid_comparison_repeat_index")
+            repeat_index = None
+    elif repeat_index is not None:
+        issues.append("unexpected_comparison_repeat_index")
+        repeat_index = None
+    artifact = payload.get("artifact")
+    if not isinstance(artifact, str) or not artifact.strip():
+        issues.append("invalid_comparison_artifact_path")
+    try:
+        run = StabilityRun(
+            run_id=payload.get("run_id"),
+            job_ids=frozenset(payload.get("job_ids", ())),
+            listing_requests=payload.get("listing_requests"),
+            duration_seconds=payload.get("duration_seconds"),
+            accepted=payload.get("accepted"),
+            unresolved_gaps=payload.get("unresolved_gaps"),
+            identity_conflicts=payload.get("identity_conflicts"),
+            conservation_difference=payload.get("conservation_difference"),
+            unclassified_failures=payload.get("unclassified_failures"),
+        )
+    except (TypeError, ValueError):
+        issues.append("invalid_comparison_stability_run")
+        run = None
+    if run is not None:
+        logical_count = payload.get("listing_logical_count")
+        retry_count = payload.get("retry_count")
+        if (
+            type(logical_count) is not int
+            or logical_count < 0
+            or logical_count > run.listing_requests
+            or type(retry_count) is not int
+            or retry_count != run.listing_requests - logical_count
+        ):
+            issues.append("invalid_comparison_retry_evidence")
+        if run.accepted and payload.get("stop_reason") is not None:
+            issues.append("accepted_comparison_input_has_stop_reason")
+    return run, captured_at, repeat_index
+
+
+def _verify_comparison_research_run(artifact_dir: Path) -> LiveRunVerification:
+    verification = verify_research_artifact(artifact_dir)
+    if not verification.valid:
+        artifact_issues = [
+            *(f"missing_artifact_file:{name}" for name in verification.missing_files),
+            *(
+                f"mismatched_artifact_file:{name}"
+                for name in verification.mismatched_files
+            ),
+        ]
+        return LiveRunVerification(
+            valid=False,
+            issues=tuple(artifact_issues or ["invalid_research_artifact"]),
+            experiment="census-stability-comparison",
+            run_id=None,
+        )
+    try:
+        manifest = json.loads(
+            (artifact_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        events = [
+            json.loads(line)
+            for line in (artifact_dir / "observations.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        return LiveRunVerification(
+            valid=False,
+            issues=(f"invalid_live_run_json:{type(exc).__name__}",),
+            experiment="census-stability-comparison",
+            run_id=None,
+        )
+
+    metadata = manifest.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    run_id_value = manifest.get("run_id")
+    run_id = run_id_value if isinstance(run_id_value, str) else None
+    issues: list[str] = []
+    if metadata.get("experiment") != "census-stability-comparison":
+        issues.append("unsupported_live_experiment")
+    if metadata.get("crawl_job_id") != run_id:
+        issues.append("crawl_job_id_run_id_mismatch")
+    if metadata.get("crawl_job_status") != "completed":
+        issues.append("invalid_comparison_status")
+    if _SHA256_RE.fullmatch(str(metadata.get("parent_artifact_hash") or "")) is None:
+        issues.append("invalid_parent_artifact_hash")
+    candidate_hash = metadata.get("candidate_hash")
+    if _SHA256_RE.fullmatch(str(candidate_hash or "")) is None:
+        issues.append("invalid_candidate_hash")
+    if type(metadata.get("plan3_entry_accepted")) is not bool:
+        issues.append("invalid_plan3_entry_decision")
+
+    if [event.get("sequence_no") for event in events if isinstance(event, dict)] != [
+        1,
+        2,
+    ]:
+        issues.append("invalid_comparison_event_sequence")
+    if len(events) != 2 or [event.get("event_type") for event in events] != [
+        "research.comparison_started",
+        "research.run_summary",
+    ]:
+        issues.append("invalid_comparison_lifecycle")
+        started = None
+        summary = None
+    else:
+        started_value = events[0].get("payload")
+        summary_value = events[1].get("payload")
+        started = started_value if isinstance(started_value, dict) else None
+        summary = summary_value if isinstance(summary_value, dict) else None
+        if started is None or summary is None:
+            issues.append("invalid_comparison_event_payload")
+
+    if started is None or summary is None:
+        return LiveRunVerification(
+            valid=False,
+            issues=tuple(issues),
+            experiment="census-stability-comparison",
+            run_id=run_id,
+        )
+    if started.get("experiment") != "census-stability-comparison":
+        issues.append("invalid_comparison_started_experiment")
+    if started.get("candidate_hash") != candidate_hash:
+        issues.append("comparison_candidate_hash_mismatch")
+    if started.get("parent_artifact_hash") != metadata.get("parent_artifact_hash"):
+        issues.append("comparison_parent_hash_mismatch")
+    if started.get("minimum_census_window_seconds") != _MIN_CENSUS_WINDOW_SECONDS:
+        issues.append("invalid_minimum_census_window")
+    if (
+        summary.get("status") != "completed"
+        or summary.get("comparison_completed") is not True
+    ):
+        issues.append("comparison_summary_not_completed")
+    if summary.get("candidate_hash") != candidate_hash:
+        issues.append("comparison_candidate_hash_mismatch")
+
+    census_payloads = summary.get("census_runs")
+    fixed_payloads = summary.get("fixed_repeat_runs")
+    if not isinstance(census_payloads, list) or len(census_payloads) != 3:
+        issues.append("comparison_census_run_count_mismatch")
+        census_payloads = []
+    if not isinstance(fixed_payloads, list) or len(fixed_payloads) != 3:
+        issues.append("comparison_fixed_run_count_mismatch")
+        fixed_payloads = []
+    parsed_census = [
+        _comparison_run(
+            payload,
+            expected_experiment="full-census",
+            issues=issues,
+        )
+        for payload in census_payloads
+    ]
+    parsed_fixed = [
+        _comparison_run(
+            payload,
+            expected_experiment="fixed-condition-repeat",
+            issues=issues,
+        )
+        for payload in fixed_payloads
+    ]
+    runs = [item[0] for item in (*parsed_census, *parsed_fixed)]
+    captured = [item[1] for item in parsed_census]
+    fixed_captured = [item[1] for item in parsed_fixed]
+    repeat_indexes = [item[2] for item in parsed_fixed]
+    if all(run is not None for run in runs):
+        concrete_runs = [run for run in runs if run is not None]
+        if len({run.run_id for run in concrete_runs}) != 6:
+            issues.append("comparison_run_ids_not_distinct")
+        if not all(run.accepted for run in concrete_runs):
+            issues.append("comparison_contains_unaccepted_input")
+    candidate_hashes = {
+        payload.get("candidate_hash")
+        for payload in (*census_payloads, *fixed_payloads)
+        if isinstance(payload, dict)
+    }
+    if candidate_hashes != {candidate_hash}:
+        issues.append("comparison_input_candidate_hash_mismatch")
+    if repeat_indexes != [1, 2, 3]:
+        issues.append("comparison_repeat_index_sequence_mismatch")
+    if all(value is not None for value in captured) and len(captured) == 3:
+        concrete_captured = [value for value in captured if value is not None]
+        span_seconds = (max(concrete_captured) - min(concrete_captured)).total_seconds()
+        if span_seconds < _MIN_CENSUS_WINDOW_SECONDS:
+            issues.append("comparison_census_window_too_short")
+        if summary.get("census_window_span_seconds") != span_seconds:
+            issues.append("comparison_census_window_mismatch")
+    if all(value is not None for value in fixed_captured) and len(fixed_captured) == 3:
+        concrete_fixed_captured = [
+            value for value in fixed_captured if value is not None
+        ]
+        fixed_span_seconds = (
+            max(concrete_fixed_captured) - min(concrete_fixed_captured)
+        ).total_seconds()
+        if summary.get("fixed_window_span_seconds") != fixed_span_seconds:
+            issues.append("comparison_fixed_window_mismatch")
+    if summary.get("minimum_census_window_seconds") != _MIN_CENSUS_WINDOW_SECONDS:
+        issues.append("invalid_minimum_census_window")
+
+    def references(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "artifact": payload.get("artifact"),
+                "run_id": payload.get("run_id"),
+                "manifest_hash": payload.get("manifest_hash"),
+                "captured_at": payload.get("captured_at"),
+                "repeat_index": payload.get("repeat_index"),
+            }
+            for payload in payloads
+        ]
+
+    if started.get("census_runs") != references(census_payloads):
+        issues.append("comparison_census_reference_mismatch")
+    if started.get("fixed_repeat_runs") != references(fixed_payloads):
+        issues.append("comparison_fixed_reference_mismatch")
+    if metadata.get("census_run_ids") != [
+        payload.get("run_id") for payload in census_payloads
+    ]:
+        issues.append("comparison_census_run_ids_mismatch")
+    if metadata.get("fixed_repeat_run_ids") != [
+        payload.get("run_id") for payload in fixed_payloads
+    ]:
+        issues.append("comparison_fixed_run_ids_mismatch")
+    if fixed_payloads and metadata.get("parent_artifact_hash") != fixed_payloads[
+        -1
+    ].get("manifest_hash"):
+        issues.append("comparison_parent_hash_mismatch")
+
+    if all(run is not None for run in runs) and len(runs) == 6:
+        comparison = compare_stability(
+            tuple(run for run in runs[:3] if run is not None),
+            tuple(run for run in runs[3:] if run is not None),
+        )
+        expected_payload = comparison.to_payload()
+        for field_name, expected_value in expected_payload.items():
+            if summary.get(field_name) != expected_value:
+                issues.append(f"comparison_{field_name}_mismatch")
+        if summary.get("plan3_entry_accepted") is not comparison.decision.accepted:
+            issues.append("plan3_entry_decision_mismatch")
+        if summary.get("failing_gates") != list(comparison.decision.failing_gates):
+            issues.append("comparison_failing_gates_mismatch")
+        if metadata.get("plan3_entry_accepted") is not comparison.decision.accepted:
+            issues.append("plan3_entry_decision_mismatch")
+
+    return LiveRunVerification(
+        valid=not issues,
+        issues=tuple(issues),
+        experiment="census-stability-comparison",
+        run_id=run_id,
+    )
+
+
 def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     artifact_dir = Path(artifact_dir)
     verification = verify_research_artifact(artifact_dir)
@@ -2340,6 +2676,10 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
         return _verify_pilot_research_run(artifact_dir)
     if experiment == "full-census":
         return _verify_census_research_run(artifact_dir)
+    if experiment == "fixed-condition-repeat":
+        return _verify_census_research_run(artifact_dir, fixed_repeat=True)
+    if experiment == "census-stability-comparison":
+        return _verify_comparison_research_run(artifact_dir)
     issues: list[str] = []
 
     if experiment != "runtime-smoke":

@@ -60,6 +60,7 @@ from app.sources.offertoday.research.smoke import (
 
 RUN_ID = "33333333-3333-3333-3333-333333333333"
 CANDIDATE_RUN_ID = "44444444-4444-4444-4444-444444444444"
+COMPARISON_RUN_ID = "55555555-5555-5555-5555-555555555555"
 BASELINE_RUN_1 = "11111111-1111-1111-1111-111111111111"
 BASELINE_RUN_2 = "22222222-2222-2222-2222-222222222222"
 CURRENT_SMOKE_BUDGET = {"listing": 2, "detail": 20}
@@ -76,6 +77,11 @@ PILOT_BUDGET = {
 CENSUS_BUDGET = {
     "listing_logical": 15500,
     "listing_attempt_max": 46500,
+    "detail": 0,
+}
+FIXED_REPEAT_BUDGET = {
+    "listing_logical": 1500,
+    "listing_attempt_max": 4500,
     "detail": 0,
 }
 
@@ -651,6 +657,83 @@ def one_condition_census_result() -> ListingRunResult:
     )
 
 
+def fixed_repeat_result() -> ListingRunResult:
+    completed = full_census_result()
+    fixed_category_ids = (118000, 112000, 127000)
+    outcomes_by_category = {
+        outcome.condition.category_id: outcome
+        for outcome in completed.condition_outcomes
+    }
+    observations_by_category: dict[int, list[ListingPageObservation]] = {}
+    pairs_by_job_id = {pair.job_id: pair for pair in completed.id_pairs}
+    for observation in completed.observations:
+        observations_by_category.setdefault(observation.category_id, []).append(
+            observation
+        )
+    outcomes = tuple(
+        outcomes_by_category[category_id] for category_id in fixed_category_ids
+    )
+    observations = tuple(
+        observation
+        for category_id in fixed_category_ids
+        for observation in observations_by_category[category_id]
+    )
+    ordered_job_ids = tuple(
+        f"census-{category_id}" for category_id in fixed_category_ids
+    )
+    return replace(
+        completed,
+        ordered_job_ids=ordered_job_ids,
+        accepted_job_ids=ordered_job_ids,
+        id_pairs=tuple(pairs_by_job_id[job_id] for job_id in ordered_job_ids),
+        observations=observations,
+        condition_outcomes=outcomes,
+    )
+
+
+def fixed_repeat_page_cap_result() -> ListingRunResult:
+    completed = fixed_repeat_result()
+    third_category = 127000
+    retained_observations = tuple(
+        observation
+        for observation in completed.observations
+        if observation.category_id != third_category
+    )
+    third_template = next(
+        observation
+        for observation in completed.observations
+        if observation.category_id == third_category and observation.page == 1
+    )
+    third_observations = tuple(
+        replace(
+            third_template,
+            page=page,
+            request_fingerprint=hashlib.sha256(
+                f"{third_template.condition_id}:{page}".encode()
+            ).hexdigest(),
+            has_more=True,
+            stop_reason="page_cap" if page == 500 else None,
+        )
+        for page in range(1, 501)
+    )
+    outcomes = (
+        *completed.condition_outcomes[:2],
+        replace(
+            completed.condition_outcomes[2],
+            pages_observed=500,
+            stop_reason="page_cap",
+            is_complete=False,
+        ),
+    )
+    return replace(
+        completed,
+        observations=(*retained_observations, *third_observations),
+        condition_outcomes=outcomes,
+        stop_reason="page_cap",
+        is_complete=False,
+    )
+
+
 def ordered_id_hash(values) -> str:
     canonical = json.dumps(
         list(dict.fromkeys(values)),
@@ -1139,6 +1222,21 @@ class FakeCensusLiveService:
             raise self.result.error
         return evidence_result
 
+    async def run_fixed_repeat(
+        self,
+        *,
+        runtime,
+        observation_service,
+        candidate,
+        staging_sink,
+    ) -> ListingRunResult:
+        return await self.run_census(
+            runtime=runtime,
+            observation_service=observation_service,
+            candidate=candidate,
+            staging_sink=staging_sink,
+        )
+
 
 class CensusStagingSink:
     def __init__(self, result: ListingRunResult) -> None:
@@ -1505,6 +1603,158 @@ def invoke_census(
     )
 
 
+def invoke_fixed_repeat(
+    tmp_path: Path,
+    *,
+    repeat_index: int = 1,
+    result: ListingRunResult | CensusFailureAfter | BaseException | None = None,
+):
+    state = State()
+    repeat_result = result or fixed_repeat_result()
+    evidence_result = (
+        repeat_result.result
+        if isinstance(repeat_result, CensusFailureAfter)
+        else repeat_result
+    )
+    if isinstance(evidence_result, BaseException):
+        evidence_result = fixed_repeat_result()
+    candidate_exit, pilot_exit, calls, _pilot, candidate_artifact = (
+        invoke_freeze_candidate(tmp_path / "candidate-evidence")
+    )
+    assert candidate_exit == census_cli.EXIT_OK
+    assert pilot_exit == census_cli.EXIT_OK
+    assert calls == []
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+    session = FakeSession(state.log)
+    repository = FakeRepository(state)
+    staging_sink = CensusStagingSink(evidence_result)
+
+    def exporter(**kwargs):
+        state.log.append("artifact_export")
+        return export_research_artifact(**kwargs)
+
+    exit_code = census_cli.main(
+        [
+            "repeat-fixed",
+            "--candidate-artifact",
+            str(candidate_artifact),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--repeat-index",
+            str(repeat_index),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: session,
+        repository=repository,
+        runtime_factory=lambda **kwargs: FakeRuntime(state, **kwargs),
+        service_factory=lambda: FakeCensusLiveService(state, repeat_result),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        crawl_runtime_factory=FakePilotCrawlRuntime,
+        staging_sink_factory=lambda **_kwargs: staging_sink,
+        provenance_provider=provenance,
+        artifact_exporter=exporter,
+    )
+    return (
+        exit_code,
+        state,
+        session,
+        tmp_path / "runs" / RUN_ID,
+        candidate_artifact,
+        repeat_result,
+    )
+
+
+def clone_stability_artifact(
+    source: Path,
+    root: Path,
+    *,
+    run_id: str,
+    captured_at: str,
+    repeat_index: int | None = None,
+    candidate_hash: str | None = None,
+) -> Path:
+    manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+    metadata = dict(manifest["metadata"])
+    metadata["crawl_job_id"] = run_id
+    events = json.loads(
+        json.dumps(census_cli._read_jsonl(source / "observations.jsonl"))
+    )
+    if repeat_index is not None:
+        metadata["repeat_index"] = repeat_index
+    if candidate_hash is not None:
+        metadata["candidate_hash"] = candidate_hash
+    for event in events:
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if repeat_index is not None and event.get("event_type") in {
+            "research.run_started",
+            "research.run_summary",
+        }:
+            payload["repeat_index"] = repeat_index
+        if candidate_hash is not None and "candidate_hash" in payload:
+            payload["candidate_hash"] = candidate_hash
+    return export_research_artifact(
+        root=root,
+        run_id=run_id,
+        metadata=metadata,
+        events=events,
+        provenance=provenance(captured_at=captured_at),
+    )
+
+
+def stability_input_artifacts(
+    tmp_path: Path,
+    *,
+    census_times: tuple[str, str, str] = (
+        "2026-07-11T00:00:00+00:00",
+        "2026-07-11T06:00:00+00:00",
+        "2026-07-11T06:10:00+00:00",
+    ),
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    census_exit, _state, _session, census_source, _candidate, _result = invoke_census(
+        tmp_path / "census-source"
+    )
+    repeat_exit, _state, _session, repeat_source, _candidate, _result = (
+        invoke_fixed_repeat(tmp_path / "fixed-source")
+    )
+    assert census_exit == census_cli.EXIT_OK
+    assert repeat_exit == census_cli.EXIT_OK
+    census_candidate_hash = json.loads(
+        (census_source / "manifest.json").read_text(encoding="utf-8")
+    )["metadata"]["candidate_hash"]
+    census_artifacts = tuple(
+        clone_stability_artifact(
+            census_source,
+            tmp_path / "census-inputs",
+            run_id=f"10000000-0000-0000-0000-00000000000{index}",
+            captured_at=captured_at,
+        )
+        for index, captured_at in enumerate(census_times, 1)
+    )
+    fixed_artifacts = tuple(
+        clone_stability_artifact(
+            repeat_source,
+            tmp_path / "fixed-inputs",
+            run_id=f"20000000-0000-0000-0000-00000000000{index}",
+            captured_at=f"2026-07-11T06:{20 + index:02d}:00+00:00",
+            repeat_index=index,
+            candidate_hash=census_candidate_hash,
+        )
+        for index in range(1, 4)
+    )
+    return census_artifacts, fixed_artifacts
+
+
 def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     parser = census_cli.build_parser()
     smoke = parser.parse_args(
@@ -1551,6 +1801,36 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
             "second",
         ]
     )
+    repeat_fixed = parser.parse_args(
+        [
+            "repeat-fixed",
+            "--candidate-artifact",
+            "candidate",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+            "--repeat-index",
+            "2",
+        ]
+    )
+    compare = parser.parse_args(
+        [
+            "compare",
+            "--census-artifact",
+            "c1",
+            "--census-artifact",
+            "c2",
+            "--census-artifact",
+            "c3",
+            "--fixed-repeat-artifact",
+            "f1",
+            "--fixed-repeat-artifact",
+            "f2",
+            "--fixed-repeat-artifact",
+            "f3",
+        ]
+    )
     verify = parser.parse_args(["verify-run", "--artifact", "run"])
     freeze = parser.parse_args(["freeze-candidate", "--pilot-artifact", "pilot"])
 
@@ -1566,6 +1846,13 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     assert census.command == "census"
     assert census.candidate_artifact == Path("candidate")
     assert census.baseline_artifact == [Path("first"), Path("second")]
+    assert repeat_fixed.command == "repeat-fixed"
+    assert repeat_fixed.candidate_artifact == Path("candidate")
+    assert repeat_fixed.baseline_artifact == [Path("first"), Path("second")]
+    assert repeat_fixed.repeat_index == 2
+    assert compare.command == "compare"
+    assert compare.census_artifact == [Path("c1"), Path("c2"), Path("c3")]
+    assert compare.fixed_repeat_artifact == [Path("f1"), Path("f2"), Path("f3")]
     assert verify.command == "verify-run"
     assert freeze.command == "freeze-candidate"
     assert freeze.pilot_artifact == Path("pilot")
@@ -1817,6 +2104,197 @@ def test_census_accepts_only_complete_natural_exhaustion_and_hashes_ids(
     assert output["request_budget"] == CENSUS_BUDGET
     assert verify_research_artifact(artifact).valid is True
     assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_repeat_fixed_accepts_only_frozen_three_condition_exhaustion(
+    tmp_path,
+    capsys,
+) -> None:
+    exit_code, state, session, artifact, candidate_artifact, result = (
+        invoke_fixed_repeat(tmp_path, repeat_index=2)
+    )
+    output = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
+    events = census_cli._read_jsonl(artifact / "observations.jsonl")
+    summary = next(
+        event["payload"]
+        for event in events
+        if event["event_type"] == "research.run_summary"
+    )
+    candidate_payload = json.loads(
+        (candidate_artifact / "candidate.json").read_text(encoding="utf-8")
+    )
+
+    assert exit_code == census_cli.EXIT_OK
+    assert session.closed is True
+    assert state.runtime_kwargs == [{"headed": False}]
+    assert summary["fixed_repeat_passed"] is True
+    assert summary["repeat_index"] == 2
+    assert summary["condition_count"] == 3
+    assert summary["natural_exhaustion_count"] == 3
+    assert summary["request_budget"] == FIXED_REPEAT_BUDGET
+    assert summary["candidate_hash"] == candidate_payload["candidate_hash"]
+    assert summary["detail_attempt_count"] == 0
+    assert summary["ordered_job_id_hash"] == ordered_id_hash(result.accepted_job_ids)
+    assert [item["category_id"] for item in summary["condition_outcomes"]] == [
+        118000,
+        112000,
+        127000,
+    ]
+    assert manifest["metadata"]["experiment"] == "fixed-condition-repeat"
+    assert manifest["metadata"]["crawl_job_status"] == "completed"
+    assert manifest["metadata"]["fixed_repeat_passed"] is True
+    assert manifest["metadata"]["repeat_index"] == 2
+    assert output["fixed_repeat_passed"] is True
+    assert output["condition_count"] == 3
+    assert output["natural_exhaustion_count"] == 3
+    assert output["request_budget"] == FIXED_REPEAT_BUDGET
+    assert verify_research_artifact(artifact).valid is True
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_repeat_fixed_page_cap_is_incomplete_and_still_verifies(
+    tmp_path,
+    capsys,
+) -> None:
+    exit_code, _state, _session, artifact, _candidate, _result = invoke_fixed_repeat(
+        tmp_path, result=fixed_repeat_page_cap_result()
+    )
+    output = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    events = census_cli._read_jsonl(artifact / "observations.jsonl")
+    summary = events[-1]["payload"]
+
+    assert exit_code == census_cli.EXIT_INCOMPLETE
+    assert output["fixed_repeat_passed"] is False
+    assert summary["fixed_repeat_passed"] is False
+    assert summary["stop_reason"] == "page_cap"
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_repeat_fixed_unexpected_error_preserves_partial_verified_artifact(
+    tmp_path,
+) -> None:
+    error = RuntimeError("secret upstream text")
+    artifact = tmp_path / "runs" / RUN_ID
+
+    with pytest.raises(RuntimeError) as raised:
+        invoke_fixed_repeat(tmp_path, result=error)
+
+    assert raised.value is error
+    events = census_cli._read_jsonl(artifact / "observations.jsonl")
+    summary = events[-1]["payload"]
+    assert summary["fixed_repeat_passed"] is False
+    assert summary["stop_reason"] == (
+        "unexpected_fixed_condition_repeat_error:RuntimeError"
+    )
+    assert "secret upstream text" not in json.dumps(events)
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_compare_recomputes_six_artifacts_without_live_dependencies(
+    tmp_path,
+    capsys,
+) -> None:
+    census_artifacts, fixed_artifacts = stability_input_artifacts(tmp_path)
+    live_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        live_calls.append("live_dependency")
+        raise AssertionError("compare constructed a live dependency")
+
+    arguments = [
+        "compare",
+        "--run-id",
+        COMPARISON_RUN_ID,
+        "--repo-root",
+        str(Path.cwd()),
+        "--artifact-root",
+        str(tmp_path / "comparison-runs"),
+    ]
+    for artifact in census_artifacts:
+        arguments.extend(("--census-artifact", str(artifact)))
+    for artifact in fixed_artifacts:
+        arguments.extend(("--fixed-repeat-artifact", str(artifact)))
+
+    exit_code = census_cli.main(
+        arguments,
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+
+    output = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    artifact = tmp_path / "comparison-runs" / COMPARISON_RUN_ID
+    manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
+    events = census_cli._read_jsonl(artifact / "observations.jsonl")
+    summary = events[-1]["payload"]
+
+    assert exit_code == census_cli.EXIT_OK
+    assert live_calls == []
+    assert manifest["metadata"]["experiment"] == "census-stability-comparison"
+    assert manifest["metadata"]["plan3_entry_accepted"] is True
+    assert manifest["metadata"]["candidate_hash"] == summary["candidate_hash"]
+    assert summary["comparison_completed"] is True
+    assert summary["census_window_span_seconds"] == 22_200.0
+    assert summary["fixed_window_span_seconds"] == 120.0
+    assert summary["fixed_cohort_jaccard"] == 1.0
+    assert summary["unique_count_cv"] == 0.0
+    assert summary["failing_gates"] == []
+    assert len(summary["census_runs"]) == 3
+    assert len(summary["fixed_repeat_runs"]) == 3
+    assert output["plan3_entry_accepted"] is True
+    assert output["failing_gates"] == []
+    assert verify_research_artifact(artifact).valid is True
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+    tampered_events = json.loads(json.dumps(events))
+    tampered_events[-1]["payload"]["fixed_cohort_jaccard"] = 0.5
+    tampered = export_research_artifact(
+        root=tmp_path / "tampered-comparison",
+        run_id=COMPARISON_RUN_ID,
+        metadata=manifest["metadata"],
+        events=tampered_events,
+        provenance=provenance(),
+    )
+    tampered_check = census_cli.verify_live_research_run(tampered)
+    assert tampered_check.valid is False
+    assert "comparison_fixed_cohort_jaccard_mismatch" in tampered_check.issues
+
+
+def test_compare_rejects_a_single_census_window_before_export(tmp_path) -> None:
+    census_artifacts, fixed_artifacts = stability_input_artifacts(
+        tmp_path,
+        census_times=(
+            "2026-07-11T00:00:00+00:00",
+            "2026-07-11T01:00:00+00:00",
+            "2026-07-11T02:00:00+00:00",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="at least six hours"):
+        census_cli._load_stability_inputs(census_artifacts, fixed_artifacts)
+
+
+def test_compare_rejects_candidate_hash_drift(tmp_path) -> None:
+    census_artifacts, fixed_artifacts = stability_input_artifacts(tmp_path)
+    drifted = clone_stability_artifact(
+        census_artifacts[-1],
+        tmp_path / "candidate-drift",
+        run_id="30000000-0000-0000-0000-000000000001",
+        captured_at="2026-07-11T06:10:00+00:00",
+        candidate_hash="f" * 64,
+    )
+
+    with pytest.raises(ValueError, match="one candidate hash"):
+        census_cli._load_stability_inputs(
+            (*census_artifacts[:-1], drifted),
+            fixed_artifacts,
+        )
 
 
 def test_census_page_cap_is_incomplete_and_preserves_partial_artifact(
