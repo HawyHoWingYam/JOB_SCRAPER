@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Stage-gated live OfferToday Plan 2 research commands."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import subprocess
 import sys
@@ -44,19 +47,21 @@ from app.sources.offertoday.research.baseline import (  # noqa: E402
     build_baseline_snapshot,
     build_run_start_inventory,
 )
-from app.sources.offertoday.research.contracts import (  # noqa: E402
-    ResearchMetadata,
+from app.sources.offertoday.research.calibration import (  # noqa: E402
+    build_calibration_conditions,
+    select_calibration_variants,
+    summarize_calibration_variants,
+)
+from app.sources.offertoday.research.contracts import ResearchMetadata  # noqa: E402
+from app.sources.offertoday.research.smoke import (  # noqa: E402
+    runtime_smoke_request_budget,
 )
 from app.sources.offertoday.research.stage_gate import (  # noqa: E402
     MatchingBaselineGate,
     require_matching_baselines,
     verify_live_research_run,
 )
-from app.sources.offertoday.research.smoke import (  # noqa: E402
-    runtime_smoke_request_budget,
-)
 from app.utils.time import utc_now  # noqa: E402
-
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -73,6 +78,11 @@ _HARD_STOP_REASONS = {
     "listing_waf_challenge",
     "listing_ip_blocked",
     "listing_id_mismatch",
+}
+_CALIBRATION_REQUEST_BUDGET = {
+    "listing_logical": 24,
+    "listing_attempt_max": 72,
+    "detail": 0,
 }
 
 
@@ -97,6 +107,25 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(__file__).resolve().parents[2],
     )
+    calibrate = commands.add_parser("calibrate")
+    calibrate.add_argument("--smoke-artifact", type=Path, required=True)
+    calibrate.add_argument(
+        "--baseline-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    calibrate.add_argument("--run-id", default=None)
+    calibrate.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    calibrate.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
     verify = commands.add_parser("verify-run")
     verify.add_argument("--artifact", type=Path, required=True)
     return parser
@@ -104,6 +133,35 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _print_json(value: dict[str, Any], *, stream=None) -> None:
     print(json.dumps(value, ensure_ascii=True, sort_keys=True), file=stream)
+
+
+def _require_accepted_smoke_artifact(artifact_dir: Path) -> dict[str, Any]:
+    verification = verify_live_research_run(artifact_dir)
+    if not verification.valid:
+        raise ValueError("smoke artifact failed strict verification")
+    manifest_path = Path(artifact_dir) / "manifest.json"
+    observations_path = Path(artifact_dir) / "observations.jsonl"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    summaries = [
+        event.get("payload")
+        for line in observations_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+        and (event := json.loads(line)).get("event_type") == "research.run_summary"
+    ]
+    expected_budget = runtime_smoke_request_budget()
+    metadata = manifest.get("metadata")
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("crawl_job_status") != "completed"
+        or metadata.get("smoke_passed") is not True
+        or metadata.get("request_budget") != expected_budget
+        or len(summaries) != 1
+        or not isinstance(summaries[0], dict)
+        or summaries[0].get("smoke_passed") is not True
+        or summaries[0].get("request_budget") != expected_budget
+    ):
+        raise ValueError("smoke artifact is not an accepted 2/20 predecessor")
+    return manifest
 
 
 def _event_dict(event: Any) -> dict[str, Any]:
@@ -197,6 +255,21 @@ async def _execute_smoke_with_runtime(
         return await service.run_smoke(
             runtime=active_runtime,
             observation_service=observation_service,
+        )
+
+
+async def _execute_calibration_with_runtime(
+    *,
+    runtime_factory,
+    service,
+    observation_service,
+):
+    runtime = runtime_factory(headed=False)
+    async with runtime as active_runtime:
+        return await service.run_bounded_conditions(
+            runtime=active_runtime,
+            observation_service=observation_service,
+            conditions=build_calibration_conditions(),
         )
 
 
@@ -336,8 +409,154 @@ def _build_summary(
     }
 
 
-def _unexpected_error_message(error: BaseException) -> str:
-    return f"unexpected_live_smoke_error:{type(error).__name__}"
+def _calibration_page_counts(
+    *,
+    results,
+    events_before_summary: list[dict[str, Any]],
+) -> tuple[int, int]:
+    if results is not None:
+        page_payloads = [
+            listing_observation_to_payload(observation)
+            for result in results
+            for observation in result.listing_result.observations
+        ]
+    else:
+        page_payloads = [
+            event["payload"]
+            for event in events_before_summary
+            if event.get("event_type") == "research.page_attempt"
+            and isinstance(event.get("payload"), dict)
+        ]
+    logical_pages = {
+        (payload.get("condition_id"), payload.get("page"))
+        for payload in page_payloads
+        if isinstance(payload.get("condition_id"), str)
+        and type(payload.get("page")) is int
+        and payload.get("page") > 0
+    }
+    return len(logical_pages), len(page_payloads)
+
+
+def _calibration_analysis(results) -> tuple[bool, str | None, list[dict], dict | None]:
+    locked_conditions = build_calibration_conditions()
+    variant_summaries = summarize_calibration_variants(results or ())
+    variant_payloads = [asdict(item) for item in variant_summaries]
+    selection_payload = None
+    try:
+        selection_payload = asdict(
+            select_calibration_variants(variant_summaries, limit=2)
+        )
+    except ValueError:
+        pass
+
+    exact_matrix = (
+        results is not None
+        and tuple(item.condition for item in results) == locked_conditions
+    )
+    all_accepted = bool(results) and all(item.accepted for item in results)
+    calibration_passed = exact_matrix and all_accepted and selection_payload is not None
+    if calibration_passed:
+        failure_reason = None
+    else:
+        rejected = next(
+            (
+                item.rejection_reason
+                for item in (results or ())
+                if not item.accepted and item.rejection_reason
+            ),
+            None,
+        )
+        failure_reason = rejected or "calibration_incomplete"
+        if failure_reason.startswith("batch_stop:"):
+            failure_reason = failure_reason.split(":", 1)[1]
+    return (
+        calibration_passed,
+        failure_reason,
+        variant_payloads,
+        selection_payload,
+    )
+
+
+def _build_calibration_summary(
+    *,
+    status: str,
+    start_snapshot,
+    start_inventory,
+    end_snapshot,
+    end_inventory,
+    results,
+    events_before_summary: list[dict[str, Any]],
+    failure_reason: str | None,
+    request_budget: dict[str, int],
+) -> dict[str, Any]:
+    logical_count, attempt_count = _calibration_page_counts(
+        results=results,
+        events_before_summary=events_before_summary,
+    )
+    detail_attempt_count = sum(
+        event.get("event_type") == "research.detail_attempt"
+        for event in events_before_summary
+    )
+    (
+        calibration_passed,
+        analysis_failure_reason,
+        variant_summaries,
+        selection,
+    ) = _calibration_analysis(results)
+    product_data_unchanged = (
+        start_snapshot.data_hash == end_snapshot.data_hash
+        and start_inventory.data_hash == end_inventory.data_hash
+    )
+    calibration_passed = (
+        calibration_passed
+        and status == "completed"
+        and failure_reason is None
+        and product_data_unchanged
+        and detail_attempt_count == 0
+    )
+    condition_count = (
+        len(results)
+        if results is not None
+        else sum(
+            event.get("event_type")
+            in {"research.condition_completed", "research.condition_incomplete"}
+            for event in events_before_summary
+        )
+    )
+    accepted_condition_count = sum(item.accepted for item in (results or ()))
+    return {
+        "status": status,
+        "calibration_passed": calibration_passed,
+        "condition_count": condition_count,
+        "accepted_condition_count": accepted_condition_count,
+        "listing_logical_count": logical_count,
+        "listing_attempt_count": attempt_count,
+        "detail_attempt_count": detail_attempt_count,
+        "stop_reason": failure_reason or analysis_failure_reason,
+        "request_budget": dict(request_budget),
+        "variant_summaries": variant_summaries,
+        "selection": selection,
+        "product_data_unchanged": product_data_unchanged,
+        "run_start_snapshot_hash": start_snapshot.data_hash,
+        "run_end_snapshot_hash": end_snapshot.data_hash,
+        "run_start_product_data_hash": start_snapshot.product_data_hash,
+        "run_end_product_data_hash": end_snapshot.product_data_hash,
+        "run_start_inventory_hash": start_inventory.data_hash,
+        "run_end_inventory_hash": end_inventory.data_hash,
+    }
+
+
+def _unexpected_error_message(
+    error: BaseException,
+    *,
+    experiment: str = "runtime-smoke",
+) -> str:
+    prefix = (
+        "unexpected_listing_calibration_error"
+        if experiment == "listing-calibration"
+        else "unexpected_live_smoke_error"
+    )
+    return f"{prefix}:{type(error).__name__}"
 
 
 def _summary_event(
@@ -366,8 +585,9 @@ def _best_effort_finalize_unexpected_failure(
     end_inventory,
     fallback_events: list[dict[str, Any]],
     request_budget: dict[str, int],
+    experiment: str = "runtime-smoke",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    error_message = _unexpected_error_message(error)
+    error_message = _unexpected_error_message(error, experiment=experiment)
     product_data_evidence_complete = (
         end_snapshot is not None and end_inventory is not None
     )
@@ -411,17 +631,30 @@ def _best_effort_finalize_unexpected_failure(
                 f"{type(stop_error).__name__}"
             )
 
-    summary = _build_summary(
-        status="failed",
-        start_snapshot=start_snapshot,
-        start_inventory=start_inventory,
-        end_snapshot=end_snapshot,
-        end_inventory=end_inventory,
-        execution=None,
-        events_before_summary=current_events,
-        failure_reason=error_message,
-        request_budget=request_budget,
-    )
+    if experiment == "listing-calibration":
+        summary = _build_calibration_summary(
+            status="failed",
+            start_snapshot=start_snapshot,
+            start_inventory=start_inventory,
+            end_snapshot=end_snapshot,
+            end_inventory=end_inventory,
+            results=None,
+            events_before_summary=current_events,
+            failure_reason=error_message,
+            request_budget=request_budget,
+        )
+    else:
+        summary = _build_summary(
+            status="failed",
+            start_snapshot=start_snapshot,
+            start_inventory=start_inventory,
+            end_snapshot=end_snapshot,
+            end_inventory=end_inventory,
+            execution=None,
+            events_before_summary=current_events,
+            failure_reason=error_message,
+            request_budget=request_budget,
+        )
     if not product_data_evidence_complete:
         summary["product_data_unchanged"] = False
 
@@ -468,15 +701,25 @@ def main(
         _print_json(result.to_payload())
         return EXIT_OK if result.valid else EXIT_EVIDENCE_FAILURE
 
-    request_budget = runtime_smoke_request_budget()
+    request_budget = (
+        dict(_CALIBRATION_REQUEST_BUDGET)
+        if args.command == "calibrate"
+        else runtime_smoke_request_budget()
+    )
     if len(args.baseline_artifact) != 2:
         _print_json(
-            {"error": "smoke requires exactly two baseline artifacts"},
+            {"error": (f"{args.command} requires exactly two baseline artifacts")},
             stream=sys.stderr,
         )
         return EXIT_USAGE
 
     try:
+        smoke_artifact_hash = None
+        if args.command == "calibrate":
+            _require_accepted_smoke_artifact(args.smoke_artifact)
+            smoke_artifact_hash = hashlib.sha256(
+                (Path(args.smoke_artifact) / "manifest.json").read_bytes()
+            ).hexdigest()
         baseline_gate = require_matching_baselines(
             args.baseline_artifact[0],
             args.baseline_artifact[1],
@@ -505,6 +748,19 @@ def main(
     pre_run_error: BaseException | None = None
     finalization_error: BaseException | None = None
     artifact_dir: Path | None = None
+    is_calibration = args.command == "calibrate"
+    experiment = "listing-calibration" if is_calibration else "runtime-smoke"
+    variant = (
+        "locked-2x2x2-fresh-headless"
+        if is_calibration
+        else "search-rcdtype-7-fresh-headless"
+    )
+    parent_artifact_hash = (
+        smoke_artifact_hash
+        if is_calibration and smoke_artifact_hash is not None
+        else baseline_gate.parent_artifact_hash
+    )
+    calibration_results = None
 
     try:
         db = session_factory()
@@ -514,11 +770,11 @@ def main(
         observation_service.create_run(
             ResearchMetadata(
                 run_id=run_id,
-                experiment="runtime-smoke",
-                variant="search-rcdtype-7-fresh-headless",
+                experiment=experiment,
+                variant=variant,
                 planner_version=planner_version,
                 plan=2,
-                parent_artifact_hash=baseline_gate.parent_artifact_hash,
+                parent_artifact_hash=parent_artifact_hash,
                 request_budget=dict(request_budget),
             ),
             run_start_inventory=start_inventory,
@@ -526,21 +782,36 @@ def main(
         observation_service.record_event(
             "research.run_started",
             {
-                "experiment": "runtime-smoke",
-                "parent_artifact_hash": baseline_gate.parent_artifact_hash,
+                "experiment": experiment,
+                "parent_artifact_hash": parent_artifact_hash,
+                "baseline_artifact_hash": baseline_gate.parent_artifact_hash,
                 "request_budget": dict(request_budget),
                 "session_mode": "fresh-headless",
+                **(
+                    {"condition_count": len(build_calibration_conditions())}
+                    if is_calibration
+                    else {}
+                ),
             },
         )
 
         try:
-            execution = asyncio.run(
-                _execute_smoke_with_runtime(
-                    runtime_factory=runtime_factory,
-                    service=service_factory(),
-                    observation_service=observation_service,
+            if is_calibration:
+                calibration_results = asyncio.run(
+                    _execute_calibration_with_runtime(
+                        runtime_factory=runtime_factory,
+                        service=service_factory(),
+                        observation_service=observation_service,
+                    )
                 )
-            )
+            else:
+                execution = asyncio.run(
+                    _execute_smoke_with_runtime(
+                        runtime_factory=runtime_factory,
+                        service=service_factory(),
+                        observation_service=observation_service,
+                    )
+                )
         except BaseException as exc:
             original_error = exc
 
@@ -550,7 +821,10 @@ def main(
             and start_inventory.data_hash == end_inventory.data_hash
         )
         if original_error is not None:
-            failure_reason = _unexpected_error_message(original_error)
+            failure_reason = _unexpected_error_message(
+                original_error,
+                experiment=experiment,
+            )
             observation_service.record_event(
                 "research.run_stopped",
                 {"reason": failure_reason},
@@ -561,6 +835,33 @@ def main(
                 "research.run_stopped",
                 {"reason": failure_reason},
             )
+        elif is_calibration:
+            (
+                calibration_passed,
+                failure_reason,
+                variant_summaries,
+                selection,
+            ) = _calibration_analysis(calibration_results)
+            observation_service.record_event(
+                "research.calibration_selection",
+                {
+                    "variant_summaries": variant_summaries,
+                    "selection": selection,
+                },
+            )
+            if calibration_passed:
+                terminal_status = "completed"
+                exit_code = EXIT_OK
+            else:
+                observation_service.record_event(
+                    "research.run_stopped",
+                    {"reason": failure_reason},
+                )
+                exit_code = (
+                    EXIT_HARD_STOP
+                    if failure_reason in _HARD_STOP_REASONS
+                    else EXIT_INCOMPLETE
+                )
         elif execution is not None and execution.decision.smoke_passed:
             failure_reason = None
             terminal_status = "completed"
@@ -584,24 +885,37 @@ def main(
         events_before_summary = _ordered_events(
             research_repository.list_research_events(db, UUID(run_id))
         )
-        summary = _build_summary(
-            status=terminal_status,
-            start_snapshot=start_snapshot,
-            start_inventory=start_inventory,
-            end_snapshot=end_snapshot,
-            end_inventory=end_inventory,
-            execution=execution,
-            events_before_summary=events_before_summary,
-            failure_reason=failure_reason,
-            request_budget=request_budget,
-        )
+        if is_calibration:
+            summary = _build_calibration_summary(
+                status=terminal_status,
+                start_snapshot=start_snapshot,
+                start_inventory=start_inventory,
+                end_snapshot=end_snapshot,
+                end_inventory=end_inventory,
+                results=calibration_results,
+                events_before_summary=events_before_summary,
+                failure_reason=failure_reason,
+                request_budget=request_budget,
+            )
+        else:
+            summary = _build_summary(
+                status=terminal_status,
+                start_snapshot=start_snapshot,
+                start_inventory=start_inventory,
+                end_snapshot=end_snapshot,
+                end_inventory=end_inventory,
+                execution=execution,
+                events_before_summary=events_before_summary,
+                failure_reason=failure_reason,
+                request_budget=request_budget,
+            )
         if not product_data_unchanged:
             exit_code = EXIT_EVIDENCE_FAILURE
         observation_service.finish_run(
             status=terminal_status,
             summary=summary,
             error_message=(
-                _unexpected_error_message(original_error)
+                _unexpected_error_message(original_error, experiment=experiment)
                 if original_error is not None
                 else None
             ),
@@ -638,6 +952,7 @@ def main(
                         end_inventory=end_inventory,
                         fallback_events=events_before_summary,
                         request_budget=request_budget,
+                        experiment=experiment,
                     )
                     terminal_status = "failed"
                     exit_code = EXIT_EVIDENCE_FAILURE
@@ -663,7 +978,7 @@ def main(
                 provenance = provenance_provider(
                     repo_root=repo_root,
                     runtime_context={
-                        "command": "smoke",
+                        "command": args.command,
                         "session_mode": "fresh-headless",
                         "crawl_job_status": terminal_status,
                     },
@@ -673,12 +988,21 @@ def main(
                     root=args.artifact_root,
                     run_id=run_id,
                     metadata={
-                        "experiment": "runtime-smoke",
+                        "experiment": experiment,
                         "crawl_job_id": run_id,
                         "crawl_job_status": terminal_status,
-                        "parent_artifact_hash": baseline_gate.parent_artifact_hash,
+                        "parent_artifact_hash": parent_artifact_hash,
+                        "baseline_artifact_hash": baseline_gate.parent_artifact_hash,
                         "request_budget": dict(request_budget),
-                        "smoke_passed": bool(summary.get("smoke_passed")),
+                        **(
+                            {
+                                "calibration_passed": bool(
+                                    summary.get("calibration_passed")
+                                )
+                            }
+                            if is_calibration
+                            else {"smoke_passed": bool(summary.get("smoke_passed"))}
+                        ),
                     },
                     events=events,
                     provenance=provenance,
@@ -710,8 +1034,20 @@ def main(
         )
         return EXIT_EVIDENCE_FAILURE
 
-    _print_json(
-        {
+    if is_calibration:
+        output = {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "exit_code": exit_code,
+            "calibration_passed": bool(summary.get("calibration_passed")),
+            "request_budget": dict(request_budget),
+            "condition_count": int(summary.get("condition_count", 0)),
+            "listing_logical_count": int(summary.get("listing_logical_count", 0)),
+            "listing_attempt_count": int(summary.get("listing_attempt_count", 0)),
+            "detail_attempt_count": int(summary.get("detail_attempt_count", 0)),
+        }
+    else:
+        output = {
             "artifact": str(artifact_dir),
             "run_id": run_id,
             "exit_code": exit_code,
@@ -722,7 +1058,7 @@ def main(
             ),
             "job_id_fallback_count": int(summary.get("job_id_fallback_count", 0)),
         }
-    )
+    _print_json(output)
     return exit_code
 
 

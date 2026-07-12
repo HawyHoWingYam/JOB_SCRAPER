@@ -4,7 +4,6 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from app.services.offertoday_research_live_service import (
     OfferTodayResearchLiveService,
     detail_result_to_observation,
@@ -18,12 +17,14 @@ from app.sources.offertoday.detail_identity import (
     OfferTodayEncryptedJobIdSource,
 )
 from app.sources.offertoday.listing_runner import (
+    ListingConditionOutcome,
     ListingPageObservation,
     ListingRetryPolicy,
     ListingRunResult,
     ListingStopPolicy,
     OfferTodayIdentityPair,
 )
+from app.sources.offertoday.research.calibration import build_calibration_conditions
 from app.sources.offertoday.research.live_contracts import DetailSmokeTarget
 from app.sources.offertoday.research.smoke import build_runtime_smoke_condition
 from app.sources.offertoday.response_policy import (
@@ -112,6 +113,66 @@ def two_page_listing_result(count: int = 20) -> ListingRunResult:
         stop_reason=result.stop_reason,
     )
     return replace(result, observations=(first_page, second_page))
+
+
+def bounded_listing_result(
+    condition,
+    *,
+    pages_observed: int = 3,
+    stop_reason: str = "page_cap",
+    classification: str = "success",
+) -> ListingRunResult:
+    base = listing_result()
+    if classification == "success":
+        observations = tuple(
+            replace(
+                base.observations[0],
+                condition_id=condition.condition_id,
+                search_family=condition.search_family,
+                category_id=condition.category_id,
+                keyword=condition.keyword,
+                endpoint=condition.endpoint,
+                rcd_type=condition.rcd_type,
+                page=page,
+                request_fingerprint=f"{page:064x}",
+                stop_reason=(stop_reason if page == pages_observed else None),
+            )
+            for page in range(1, pages_observed + 1)
+        )
+    else:
+        observations = (
+            replace(
+                base.observations[0],
+                condition_id=condition.condition_id,
+                search_family=condition.search_family,
+                category_id=condition.category_id,
+                keyword=condition.keyword,
+                endpoint=condition.endpoint,
+                rcd_type=condition.rcd_type,
+                page=1,
+                request_fingerprint="f" * 64,
+                classification=classification,
+                api_code=1002 if classification == "auth_expired" else None,
+                row_count=0,
+                id_pairs=(),
+                stop_reason=stop_reason,
+            ),
+        )
+    is_complete = stop_reason == "natural_exhaustion"
+    return replace(
+        base,
+        observations=observations,
+        condition_outcomes=(
+            ListingConditionOutcome(
+                condition=condition,
+                pages_observed=pages_observed,
+                stop_reason=stop_reason,
+                is_complete=is_complete,
+            ),
+        ),
+        stop_reason=stop_reason,
+        is_complete=is_complete,
+    )
 
 
 def detail_result(
@@ -208,6 +269,22 @@ class RunnerFactory:
         return self.runner
 
 
+class SequenceRunnerFactory:
+    def __init__(self, results: tuple[ListingRunResult, ...]) -> None:
+        self.results = results
+        self.runners: list[FakeRunner] = []
+        self.transports: list[object] = []
+
+    def __call__(self, transport) -> FakeRunner:
+        index = len(self.runners)
+        if index >= len(self.results):
+            raise AssertionError("unexpected bounded runner construction")
+        runner = FakeRunner(self.results[index])
+        self.runners.append(runner)
+        self.transports.append(transport)
+        return runner
+
+
 class FakeDetailScraper:
     def __init__(self, result_provider) -> None:
         self.result_provider = result_provider
@@ -242,9 +319,7 @@ class DetailScraperFactory:
                 lambda job_id, encrypted_job_id, encrypted_job_id_source: detail_result(
                     job_id,
                     encrypted_job_id,
-                    encrypted_job_id_source=(
-                        encrypted_job_id_source or "encryptJobId"
-                    ),
+                    encrypted_job_id_source=(encrypted_job_id_source or "encryptJobId"),
                 )
             )
         )
@@ -273,6 +348,87 @@ def deterministic_clocks():
     )
     clock_values = iter(float(index) for index in range(100))
     return lambda: next(timestamps), lambda: next(clock_values)
+
+
+@pytest.mark.asyncio
+async def test_run_bounded_conditions_uses_exact_policy_once_per_condition() -> None:
+    conditions = build_calibration_conditions()
+    runner_factory = SequenceRunnerFactory(
+        tuple(bounded_listing_result(condition) for condition in conditions)
+    )
+    detail_factory = DetailScraperFactory()
+    service = OfferTodayResearchLiveService(
+        runner_factory=runner_factory,
+        detail_scraper_factory=detail_factory,
+    )
+    runtime = FakeRuntime()
+    observation_service = FakeObservationService()
+
+    results = await service.run_bounded_conditions(
+        runtime=runtime,
+        observation_service=observation_service,
+        conditions=conditions,
+    )
+
+    assert len(results) == 8
+    assert all(result.accepted for result in results)
+    assert runner_factory.transports == [runtime] * 8
+    assert len(runner_factory.runners) == 8
+    for condition, runner in zip(conditions, runner_factory.runners, strict=True):
+        assert runner.calls == [
+            {
+                "conditions": (condition,),
+                "stop_policy": ListingStopPolicy(
+                    max_pages_per_condition=3,
+                    unique_job_cap=None,
+                    require_empty_confirmation=False,
+                ),
+                "retry_policy": ListingRetryPolicy(
+                    max_attempts_per_page=3,
+                    retry_delays_seconds=(5.0, 15.0),
+                    page_delay_seconds=0.0,
+                    page_delay_range_seconds=(3.0, 5.0),
+                ),
+                "observation_sink": observation_service,
+                "staging_sink": runner.calls[0]["staging_sink"],
+                "session_mode": "fresh-headless",
+            }
+        ]
+        assert isinstance(
+            runner.calls[0]["staging_sink"],
+            ResearchNoopListingStagingSink,
+        )
+    assert detail_factory.kwargs == []
+    assert runtime.detail_json_calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_bounded_conditions_stops_after_first_rejected_result() -> None:
+    conditions = build_calibration_conditions()[:3]
+    runner_factory = SequenceRunnerFactory(
+        (
+            bounded_listing_result(conditions[0]),
+            bounded_listing_result(
+                conditions[1],
+                pages_observed=0,
+                stop_reason="auth_expired",
+                classification="auth_expired",
+            ),
+            bounded_listing_result(conditions[2]),
+        )
+    )
+    service = OfferTodayResearchLiveService(runner_factory=runner_factory)
+
+    results = await service.run_bounded_conditions(
+        runtime=FakeRuntime(),
+        observation_service=FakeObservationService(),
+        conditions=conditions,
+    )
+
+    assert len(results) == 2
+    assert results[0].accepted is True
+    assert results[1].accepted is False
+    assert len(runner_factory.runners) == 2
 
 
 @pytest.mark.asyncio
@@ -345,8 +501,7 @@ async def test_run_smoke_fetches_twenty_in_order_with_nineteen_delays() -> None:
     )
 
     expected_calls = [
-        (f"j{index}", f"e{index}", "encryptJobId")
-        for index in range(1, 21)
+        (f"j{index}", f"e{index}", "encryptJobId") for index in range(1, 21)
     ]
     assert detail_factory.scraper.calls == expected_calls
     assert sleeps == [3.0] * 19
@@ -373,7 +528,9 @@ async def test_run_smoke_fetches_twenty_in_order_with_nineteen_delays() -> None:
     factory_kwargs = detail_factory.kwargs[0]
     assert factory_kwargs["headed"] is False
     assert factory_kwargs["detail_json_fetcher"].__self__ is runtime
-    assert factory_kwargs["detail_json_fetcher"].__func__ is FakeRuntime.fetch_detail_json
+    assert (
+        factory_kwargs["detail_json_fetcher"].__func__ is FakeRuntime.fetch_detail_json
+    )
 
 
 @pytest.mark.parametrize(
@@ -421,9 +578,7 @@ async def test_run_smoke_passes_jobid_fallback_provenance_to_detail_scraper() ->
     detail_factory = DetailScraperFactory()
     now, clock = deterministic_clocks()
     service = OfferTodayResearchLiveService(
-        runner_factory=RunnerFactory(
-            listing_result(identity_source="jobId_fallback")
-        ),
+        runner_factory=RunnerFactory(listing_result(identity_source="jobId_fallback")),
         detail_scraper_factory=detail_factory,
         sleep=lambda _seconds: _completed_awaitable(),
         now=now,

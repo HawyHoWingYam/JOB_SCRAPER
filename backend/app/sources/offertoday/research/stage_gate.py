@@ -15,11 +15,11 @@ from app.sources.offertoday.detail_identity import (
     resolve_offertoday_listing_identity,
 )
 from app.sources.offertoday.research.artifacts import verify_research_artifact
+from app.sources.offertoday.research.calibration import build_calibration_conditions
 from app.sources.offertoday.research.smoke import (
     SMOKE_LISTING_REQUEST_LIMIT,
     runtime_smoke_request_budget,
 )
-
 
 _COUNT_KEYS = (
     "staged_rows",
@@ -35,6 +35,14 @@ _COUNT_KEYS = (
 )
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _UNEXPECTED_ERROR_RE = re.compile(r"unexpected_live_smoke_error:[A-Za-z_][A-Za-z0-9_]*")
+_UNEXPECTED_CALIBRATION_ERROR_RE = re.compile(
+    r"unexpected_listing_calibration_error:[A-Za-z_][A-Za-z0-9_]*"
+)
+_CALIBRATION_REQUEST_BUDGET = {
+    "listing_logical": 24,
+    "listing_attempt_max": 72,
+    "detail": 0,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -944,6 +952,312 @@ def _request_budget_limit(
     return value if type(value) is int and value >= 0 else fallback
 
 
+def _calibration_condition_payload(condition: Any) -> dict[str, Any]:
+    return {
+        "search_family": condition.search_family,
+        "category_id": condition.category_id,
+        "keyword": condition.keyword,
+        "endpoint": condition.endpoint,
+        "rcd_type": condition.rcd_type,
+    }
+
+
+def _verify_calibration_research_run(
+    artifact_dir: Path,
+) -> LiveRunVerification:
+    verification = verify_research_artifact(artifact_dir)
+    if not verification.valid:
+        artifact_issues = [
+            *(f"missing_artifact_file:{name}" for name in verification.missing_files),
+            *(
+                f"mismatched_artifact_file:{name}"
+                for name in verification.mismatched_files
+            ),
+        ]
+        return LiveRunVerification(
+            valid=False,
+            issues=tuple(artifact_issues or ["invalid_research_artifact"]),
+            experiment=None,
+            run_id=None,
+        )
+
+    try:
+        manifest = json.loads(
+            (artifact_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        events = [
+            json.loads(line)
+            for line in (artifact_dir / "observations.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        return LiveRunVerification(
+            valid=False,
+            issues=(f"invalid_live_run_json:{type(exc).__name__}",),
+            experiment="listing-calibration",
+            run_id=None,
+        )
+
+    metadata = manifest.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    run_id_value = manifest.get("run_id")
+    run_id = run_id_value if isinstance(run_id_value, str) else None
+    issues: list[str] = []
+    if metadata.get("experiment") != "listing-calibration":
+        issues.append("unsupported_live_experiment")
+    if metadata.get("crawl_job_id") != run_id:
+        issues.append("crawl_job_id_run_id_mismatch")
+    for field_name in ("parent_artifact_hash", "baseline_artifact_hash"):
+        if _SHA256_RE.fullmatch(str(metadata.get(field_name) or "")) is None:
+            issues.append(f"invalid_{field_name}")
+    if not _request_budget_matches(
+        metadata.get("request_budget"),
+        _CALIBRATION_REQUEST_BUDGET,
+    ):
+        issues.append("invalid_calibration_request_budget")
+
+    normalized_events = [event for event in events if isinstance(event, dict)]
+    if len(normalized_events) != len(events):
+        issues.append("non_object_research_event")
+    if [event.get("sequence_no") for event in normalized_events] != list(
+        range(1, len(normalized_events) + 1)
+    ):
+        issues.append("non_contiguous_event_sequence")
+
+    run_started = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.run_started"
+    ]
+    if len(run_started) != 1:
+        issues.append(f"run_started_count:{len(run_started)}")
+    elif normalized_events.index(run_started[0]) != 0:
+        issues.append("run_started_must_be_first")
+    else:
+        payload = run_started[0].get("payload")
+        if not isinstance(payload, dict):
+            issues.append("invalid_run_started_payload")
+        else:
+            if payload.get("experiment") != "listing-calibration":
+                issues.append("invalid_calibration_run_started_experiment")
+            if payload.get("session_mode") != "fresh-headless":
+                issues.append("invalid_calibration_session_mode")
+            if payload.get("condition_count") != 8:
+                issues.append("invalid_calibration_condition_budget")
+            if payload.get("parent_artifact_hash") != metadata.get(
+                "parent_artifact_hash"
+            ):
+                issues.append("calibration_parent_hash_mismatch")
+            if payload.get("baseline_artifact_hash") != metadata.get(
+                "baseline_artifact_hash"
+            ):
+                issues.append("calibration_baseline_hash_mismatch")
+            if not _request_budget_matches(
+                payload.get("request_budget"),
+                _CALIBRATION_REQUEST_BUDGET,
+            ):
+                issues.append("invalid_calibration_request_budget")
+
+    summary_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.run_summary"
+    ]
+    if len(summary_events) != 1:
+        issues.append(f"terminal_summary_count:{len(summary_events)}")
+        summary = None
+    else:
+        if normalized_events.index(summary_events[0]) != len(normalized_events) - 1:
+            issues.append("event_after_terminal_summary")
+        summary_value = summary_events[0].get("payload")
+        summary = summary_value if isinstance(summary_value, dict) else None
+        if summary is None:
+            issues.append("invalid_terminal_summary_payload")
+
+    locked_conditions = build_calibration_conditions()
+    locked_by_id = {
+        condition.condition_id: condition for condition in locked_conditions
+    }
+    page_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.page_attempt"
+    ]
+    if len(page_events) > _CALIBRATION_REQUEST_BUDGET["listing_attempt_max"]:
+        issues.append("calibration_attempt_budget_exceeded")
+    logical_keys: set[tuple[str, int]] = set()
+    attempts_by_page: dict[tuple[str, int], list[int]] = {}
+    for event in page_events:
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            issues.append("invalid_calibration_page_payload")
+            continue
+        condition_id = payload.get("condition_id")
+        page = payload.get("page")
+        attempt = payload.get("attempt")
+        condition = locked_by_id.get(condition_id)
+        if condition is None or any(
+            type(payload.get(key)) is not type(expected) or payload.get(key) != expected
+            for key, expected in _calibration_condition_payload(condition).items()
+        ):
+            issues.append("invalid_calibration_page_condition")
+            continue
+        if type(page) is not int or not 1 <= page <= 3:
+            issues.append("invalid_calibration_page_number")
+            continue
+        if type(attempt) is not int or not 1 <= attempt <= 3:
+            issues.append("invalid_calibration_attempt_number")
+            continue
+        key = (condition_id, page)
+        logical_keys.add(key)
+        attempts_by_page.setdefault(key, []).append(attempt)
+        if payload.get("session_mode") != "fresh-headless":
+            issues.append("invalid_calibration_session_mode")
+    for attempts in attempts_by_page.values():
+        if attempts != list(range(1, len(attempts) + 1)):
+            issues.append("invalid_calibration_attempt_sequence")
+    if len(logical_keys) > _CALIBRATION_REQUEST_BUDGET["listing_logical"]:
+        issues.append("calibration_logical_budget_exceeded")
+
+    condition_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type")
+        in {"research.condition_completed", "research.condition_incomplete"}
+    ]
+    observed_conditions: list[dict[str, Any] | None] = []
+    for event in condition_events:
+        payload = event.get("payload")
+        condition_payload = (
+            payload.get("condition") if isinstance(payload, dict) else None
+        )
+        observed_conditions.append(
+            condition_payload if isinstance(condition_payload, dict) else None
+        )
+    expected_prefix = [
+        _calibration_condition_payload(condition)
+        for condition in locked_conditions[: len(observed_conditions)]
+    ]
+    if observed_conditions != expected_prefix:
+        issues.append("invalid_calibration_condition_sequence")
+    if len(condition_events) > len(locked_conditions):
+        issues.append("calibration_condition_budget_exceeded")
+
+    detail_attempt_count = sum(
+        event.get("event_type") == "research.detail_attempt"
+        for event in normalized_events
+    )
+    if detail_attempt_count:
+        issues.append("calibration_detail_request_observed")
+    selection_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.calibration_selection"
+    ]
+    stopped_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.run_stopped"
+    ]
+
+    manifest_status = metadata.get("crawl_job_status")
+    manifest_passed = metadata.get("calibration_passed")
+    if type(manifest_passed) is not bool:
+        issues.append("invalid_manifest_calibration_passed")
+    if summary is not None:
+        if summary.get("status") != manifest_status:
+            issues.append("crawl_job_status_summary_mismatch")
+        if summary.get("calibration_passed") is not manifest_passed:
+            issues.append("calibration_passed_summary_mismatch")
+        if not _request_budget_matches(
+            summary.get("request_budget"),
+            _CALIBRATION_REQUEST_BUDGET,
+        ):
+            issues.append("invalid_calibration_request_budget")
+        expected_counts = {
+            "condition_count": len(condition_events),
+            "listing_logical_count": len(logical_keys),
+            "listing_attempt_count": len(page_events),
+            "detail_attempt_count": detail_attempt_count,
+        }
+        for field_name, expected_value in expected_counts.items():
+            if summary.get(field_name) != expected_value:
+                issues.append(f"{field_name}_mismatch")
+        if len(selection_events) == 1:
+            selection_payload = selection_events[0].get("payload")
+            if not isinstance(selection_payload, dict):
+                issues.append("invalid_calibration_selection_payload")
+            elif summary.get("variant_summaries") != selection_payload.get(
+                "variant_summaries"
+            ) or summary.get("selection") != selection_payload.get("selection"):
+                issues.append("calibration_selection_summary_mismatch")
+
+        if manifest_status == "completed" or manifest_passed is True:
+            selection = summary.get("selection")
+            selected = (
+                selection.get("selected_variants")
+                if isinstance(selection, dict)
+                else None
+            )
+            if not (
+                manifest_status == "completed"
+                and manifest_passed is True
+                and summary.get("calibration_passed") is True
+                and summary.get("stop_reason") is None
+                and len(page_events) <= 72
+                and len(logical_keys) == 24
+                and len(condition_events) == 8
+                and summary.get("accepted_condition_count") == 8
+                and len(selection_events) == 1
+                and isinstance(summary.get("variant_summaries"), list)
+                and len(summary["variant_summaries"]) == 4
+                and isinstance(selected, list)
+                and 1 <= len(selected) <= 2
+                and all(
+                    isinstance(item, dict) and item.get("accepted") is True
+                    for item in selected
+                )
+                and not stopped_events
+                and _completed_no_write_evidence_is_valid(summary)
+            ):
+                issues.append("completed_calibration_status_mismatch")
+        elif manifest_status != "failed" or manifest_passed is not False:
+            issues.append("invalid_failed_calibration_status")
+        else:
+            if len(stopped_events) != 1:
+                issues.append(f"run_stopped_count:{len(stopped_events)}")
+            else:
+                stopped_payload = stopped_events[0].get("payload")
+                stopped_reason = (
+                    stopped_payload.get("reason")
+                    if isinstance(stopped_payload, dict)
+                    else None
+                )
+                if (
+                    not isinstance(stopped_reason, str)
+                    or not stopped_reason.strip()
+                    or summary.get("stop_reason") != stopped_reason
+                ):
+                    issues.append("run_stopped_summary_reason_mismatch")
+                if (
+                    str(stopped_reason or "").startswith(
+                        "unexpected_listing_calibration_error:"
+                    )
+                    and _UNEXPECTED_CALIBRATION_ERROR_RE.fullmatch(stopped_reason)
+                    is None
+                ):
+                    issues.append("invalid_unexpected_failure_reason")
+
+    return LiveRunVerification(
+        valid=not issues,
+        issues=tuple(issues),
+        experiment="listing-calibration",
+        run_id=run_id,
+    )
+
+
 def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     artifact_dir = Path(artifact_dir)
     verification = verify_research_artifact(artifact_dir)
@@ -989,6 +1303,8 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     experiment = experiment_value if isinstance(experiment_value, str) else None
     run_id_value = manifest.get("run_id")
     run_id = run_id_value if isinstance(run_id_value, str) else None
+    if experiment == "listing-calibration":
+        return _verify_calibration_research_run(artifact_dir)
     issues: list[str] = []
 
     if experiment != "runtime-smoke":

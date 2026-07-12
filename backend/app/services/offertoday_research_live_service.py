@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from typing import Any
 
-from app.scraper.offertoday_browser_detail_scraper import (
-    OfferTodayBrowserDetailScraper,
-)
+from app.scraper.offertoday_browser_detail_scraper import OfferTodayBrowserDetailScraper
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime
 from app.services.offertoday_research_observation_service import (
     OfferTodayResearchObservationService,
@@ -23,7 +21,12 @@ from app.sources.offertoday.detail_identity import (
 from app.sources.offertoday.listing_runner import (
     ListingRetryPolicy,
     ListingStopPolicy,
+    OfferTodayListingCondition,
     OfferTodayListingRunner,
+)
+from app.sources.offertoday.research.calibration import (
+    BoundedConditionResult,
+    evaluate_bounded_condition,
 )
 from app.sources.offertoday.research.live_contracts import (
     DetailSmokeObservation,
@@ -57,6 +60,44 @@ class OfferTodayResearchLiveService:
         self._sleep = sleep
         self._clock = clock
         self._now = now
+
+    async def run_bounded_conditions(
+        self,
+        *,
+        runtime: OfferTodayBrowserRuntime,
+        observation_service: OfferTodayResearchObservationService,
+        conditions: Sequence[OfferTodayListingCondition],
+    ) -> tuple[BoundedConditionResult, ...]:
+        staging_sink = ResearchNoopListingStagingSink()
+        results: list[BoundedConditionResult] = []
+        for condition in conditions:
+            runner = self._runner_factory(runtime)
+            listing_result = await runner.run(
+                conditions=(condition,),
+                stop_policy=ListingStopPolicy(
+                    max_pages_per_condition=3,
+                    unique_job_cap=None,
+                    require_empty_confirmation=False,
+                ),
+                retry_policy=ListingRetryPolicy(
+                    max_attempts_per_page=3,
+                    retry_delays_seconds=(5.0, 15.0),
+                    page_delay_seconds=0.0,
+                    page_delay_range_seconds=(3.0, 5.0),
+                ),
+                observation_sink=observation_service,
+                staging_sink=staging_sink,
+                session_mode="fresh-headless",
+            )
+            bounded_result = evaluate_bounded_condition(
+                condition,
+                listing_result,
+                planned_page_limit=3,
+            )
+            results.append(bounded_result)
+            if not bounded_result.accepted:
+                break
+        return tuple(results)
 
     async def run_smoke(
         self,
@@ -107,9 +148,7 @@ class OfferTodayResearchLiveService:
                     encrypted_job_id=target.encrypted_job_id,
                     encrypted_job_id_source=target.encrypted_job_id_source,
                 )
-                latency_ms = int(
-                    round(max(0.0, self._clock() - started_at) * 1000)
-                )
+                latency_ms = int(round(max(0.0, self._clock() - started_at) * 1000))
                 completed_timestamp = self._now().isoformat()
                 observation = detail_result_to_observation(
                     target=target,
@@ -169,8 +208,6 @@ def detail_result_to_observation(
         parsed=result.parsed_detail is not None,
         has_title=bool(str(canonical.get("title") or "").strip()),
         has_company=bool(str(canonical.get("company_name") or "").strip()),
-        has_description=bool(
-            str(canonical.get("description_text") or "").strip()
-        ),
+        has_description=bool(str(canonical.get("description_text") or "").strip()),
         stop_batch=classification.stop_batch,
     )

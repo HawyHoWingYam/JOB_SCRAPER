@@ -11,9 +11,9 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-
 import scripts.offertoday_research_census as census_cli
 from app.sources.offertoday.listing_runner import (
+    ListingConditionOutcome,
     ListingPageObservation,
     ListingRowEvidence,
     ListingRunResult,
@@ -30,25 +30,36 @@ from app.sources.offertoday.research.baseline import (
     build_baseline_snapshot,
     build_run_start_inventory,
 )
-from app.sources.offertoday.research.live_contracts import (
-    DetailSmokeObservation,
-    DetailSmokeTarget,
-    LiveSmokeExecution,
+from app.sources.offertoday.research.calibration import (
+    BoundedConditionResult,
+    build_calibration_conditions,
+    evaluate_bounded_condition,
+    select_calibration_variants,
+    summarize_calibration_variants,
 )
 from app.sources.offertoday.research.contracts import (
     ProductDataSnapshot,
     StagedListingSnapshot,
+)
+from app.sources.offertoday.research.live_contracts import (
+    DetailSmokeObservation,
+    DetailSmokeTarget,
+    LiveSmokeExecution,
 )
 from app.sources.offertoday.research.smoke import (
     build_runtime_smoke_condition,
     evaluate_smoke,
 )
 
-
 RUN_ID = "33333333-3333-3333-3333-333333333333"
 BASELINE_RUN_1 = "11111111-1111-1111-1111-111111111111"
 BASELINE_RUN_2 = "22222222-2222-2222-2222-222222222222"
 CURRENT_SMOKE_BUDGET = {"listing": 2, "detail": 20}
+CALIBRATION_BUDGET = {
+    "listing_logical": 24,
+    "listing_attempt_max": 72,
+    "detail": 0,
+}
 
 
 def provenance(**kwargs) -> ResearchProvenance:
@@ -99,6 +110,100 @@ def baseline_artifact(
                 },
             }
         ],
+        provenance=provenance(),
+    )
+
+
+def accepted_smoke_artifact(
+    root: Path,
+    *,
+    request_budget: dict[str, int] | None = None,
+    smoke_passed: bool = True,
+) -> Path:
+    smoke_execution = execution()
+    events: list[dict] = [
+        {
+            "sequence_no": 1,
+            "event_type": "research.run_started",
+            "payload": {
+                "experiment": "runtime-smoke",
+                "parent_artifact_hash": "c" * 64,
+                "request_budget": dict(request_budget or CURRENT_SMOKE_BUDGET),
+                "session_mode": "fresh-headless",
+            },
+        }
+    ]
+    events.extend(
+        {
+            "sequence_no": len(events) + 1,
+            "event_type": "research.page_attempt",
+            "payload": listing_observation_to_payload(observation),
+        }
+        for observation in smoke_execution.listing_result.observations
+    )
+    events.append(
+        {
+            "sequence_no": len(events) + 1,
+            "event_type": "research.detail_cohort_frozen",
+            "payload": {
+                "count": len(smoke_execution.frozen_targets),
+                "targets": [
+                    target.to_payload() for target in smoke_execution.frozen_targets
+                ],
+            },
+        }
+    )
+    events.extend(
+        {
+            "sequence_no": len(events) + 1,
+            "event_type": "research.detail_attempt",
+            "payload": item.to_payload(),
+        }
+        for item in smoke_execution.detail_observations
+    )
+    summary = {
+        "status": "completed" if smoke_passed else "failed",
+        "smoke_passed": smoke_passed,
+        "listing_complete": False,
+        "expected_truncation": True,
+        "listing_attempt_count": len(smoke_execution.listing_result.observations),
+        "attempted_count": len(smoke_execution.detail_observations),
+        "frozen_count": len(smoke_execution.frozen_targets),
+        "success_count": smoke_execution.decision.success_count,
+        "terminal_count": smoke_execution.decision.terminal_count,
+        "unattempted_count": smoke_execution.decision.unattempted_count,
+        "missing_encrypted_job_id_count": 0,
+        "job_id_fallback_count": 0,
+        "listing_stop_reason": smoke_execution.listing_result.stop_reason,
+        "stop_reason": None if smoke_passed else "fixture_failure",
+        "request_budget": dict(request_budget or CURRENT_SMOKE_BUDGET),
+        "product_data_unchanged": True,
+        "run_start_snapshot_hash": "d" * 64,
+        "run_end_snapshot_hash": "d" * 64,
+        "run_start_product_data_hash": "f" * 64,
+        "run_end_product_data_hash": "f" * 64,
+        "run_start_inventory_hash": "e" * 64,
+        "run_end_inventory_hash": "e" * 64,
+    }
+    events.append(
+        {
+            "sequence_no": len(events) + 1,
+            "event_type": "research.run_summary",
+            "payload": summary,
+        }
+    )
+    return export_research_artifact(
+        root=root,
+        run_id=RUN_ID,
+        metadata={
+            "experiment": "runtime-smoke",
+            "crawl_job_id": RUN_ID,
+            "crawl_job_status": "completed" if smoke_passed else "failed",
+            "parent_artifact_hash": "c" * 64,
+            "request_budget": dict(request_budget or CURRENT_SMOKE_BUDGET),
+            "smoke_passed": smoke_passed,
+        },
+        events=events,
         provenance=provenance(),
     )
 
@@ -250,6 +355,120 @@ def execution(
         decision=decision,
         would_stage_rows=0,
         stage_calls=0,
+    )
+
+
+def calibration_result(
+    condition,
+    *,
+    hard_stop: str | None = None,
+) -> BoundedConditionResult:
+    route = "none" if condition.rcd_type is None else str(condition.rcd_type)
+    job_ids = tuple(
+        f"{condition.category_id}-{condition.endpoint}-{route}-j{page}"
+        for page in range(1, 4)
+    )
+    pairs = tuple(
+        OfferTodayIdentityPair(job_id, job_id, "jobId_fallback") for job_id in job_ids
+    )
+    if hard_stop is None:
+        observations = tuple(
+            ListingPageObservation(
+                condition_id=condition.condition_id,
+                search_family=condition.search_family,
+                category_id=condition.category_id,
+                keyword=condition.keyword,
+                endpoint=condition.endpoint,
+                rcd_type=condition.rcd_type,
+                page=page,
+                attempt=1,
+                request_fingerprint=f"{page:064x}",
+                classification="success",
+                api_code=0,
+                reported_total=100,
+                has_more=True,
+                row_count=1,
+                missing_job_id_count=0,
+                missing_encrypted_job_id_count=1,
+                job_id_fallback_count=1,
+                id_pairs=(pairs[page - 1],),
+                rows=(),
+                identity_issues=(),
+                identity_conflicts=(),
+                latency_ms=page * 10,
+                session_mode="fresh-headless",
+                retry_reason=None,
+                stop_reason=("page_cap" if page == 3 else None),
+            )
+            for page in range(1, 4)
+        )
+        pages_observed = 3
+        stop_reason = "page_cap"
+        accepted_job_ids = job_ids
+        result_pairs = pairs
+    else:
+        observations = (
+            ListingPageObservation(
+                condition_id=condition.condition_id,
+                search_family=condition.search_family,
+                category_id=condition.category_id,
+                keyword=condition.keyword,
+                endpoint=condition.endpoint,
+                rcd_type=condition.rcd_type,
+                page=1,
+                attempt=1,
+                request_fingerprint="f" * 64,
+                classification=hard_stop,
+                api_code=1002 if hard_stop == "auth_expired" else None,
+                reported_total=None,
+                has_more=None,
+                row_count=0,
+                missing_job_id_count=0,
+                missing_encrypted_job_id_count=0,
+                job_id_fallback_count=0,
+                id_pairs=(),
+                rows=(),
+                identity_issues=(),
+                identity_conflicts=(),
+                latency_ms=10,
+                session_mode="fresh-headless",
+                retry_reason=None,
+                stop_reason=hard_stop,
+            ),
+        )
+        pages_observed = 0
+        stop_reason = hard_stop
+        accepted_job_ids = ()
+        result_pairs = ()
+    listing = ListingRunResult(
+        ordered_job_ids=accepted_job_ids,
+        accepted_job_ids=accepted_job_ids,
+        id_pairs=result_pairs,
+        observations=observations,
+        condition_outcomes=(
+            ListingConditionOutcome(
+                condition=condition,
+                pages_observed=pages_observed,
+                stop_reason=stop_reason,
+                is_complete=False,
+            ),
+        ),
+        identity_conflicts=(),
+        identity_issues=(),
+        gaps=(),
+        stop_reason=stop_reason,
+        is_complete=False,
+    )
+    return evaluate_bounded_condition(
+        condition,
+        listing,
+        planned_page_limit=3,
+    )
+
+
+def calibration_results() -> tuple[BoundedConditionResult, ...]:
+    return tuple(
+        calibration_result(condition) for condition in build_calibration_conditions()
     )
 
 
@@ -434,6 +653,7 @@ class State:
         self.runtime_kwargs: list[dict] = []
         self.finish_errors: list[BaseException] = []
         self.created_metadata = None
+        self.calibration_conditions = None
 
     def append_event(self, event_type: str, payload: dict) -> None:
         self.events.append(
@@ -525,6 +745,66 @@ class FakeLiveService:
         return self.result
 
 
+class FakeCalibrationLiveService:
+    def __init__(
+        self,
+        state: State,
+        result: (
+            tuple[BoundedConditionResult, ...]
+            | "CalibrationFailureAfter"
+            | BaseException
+        ),
+    ) -> None:
+        self.state = state
+        self.result = result
+
+    async def run_bounded_conditions(
+        self,
+        *,
+        runtime,
+        observation_service,
+        conditions,
+    ):
+        self.state.log.append("network")
+        self.state.calibration_conditions = tuple(conditions)
+        assert observation_service.crawl_job_id == UUID(RUN_ID)
+        if isinstance(self.result, BaseException):
+            raise self.result
+        bounded_results = (
+            self.result.results
+            if isinstance(self.result, CalibrationFailureAfter)
+            else self.result
+        )
+        for bounded_result in bounded_results:
+            for observation in bounded_result.listing_result.observations:
+                observation_service.record_event(
+                    "research.page_attempt",
+                    listing_observation_to_payload(observation),
+                )
+            outcome = bounded_result.listing_result.condition_outcomes[0]
+            observation_service.record_event(
+                (
+                    "research.condition_completed"
+                    if outcome.is_complete
+                    else "research.condition_incomplete"
+                ),
+                listing_observation_to_payload(outcome),
+            )
+        if isinstance(self.result, CalibrationFailureAfter):
+            raise self.result.error
+        return bounded_results
+
+
+class CalibrationFailureAfter:
+    def __init__(
+        self,
+        results: tuple[BoundedConditionResult, ...],
+        error: BaseException,
+    ) -> None:
+        self.results = results
+        self.error = error
+
+
 def invoke_smoke(
     tmp_path: Path,
     *,
@@ -579,10 +859,83 @@ def invoke_smoke(
     return exit_code, state, session, tmp_path / "runs" / RUN_ID
 
 
-def test_parser_exposes_only_locked_smoke_inputs_and_offline_verify() -> None:
+def invoke_calibrate(
+    tmp_path: Path,
+    *,
+    result: (
+        tuple[BoundedConditionResult, ...]
+        | CalibrationFailureAfter
+        | BaseException
+        | None
+    ) = None,
+    drift: bool = False,
+    product_drift: bool = False,
+    artifact_verifier=verify_research_artifact,
+    state: State | None = None,
+):
+    state = state or State()
+    smoke = accepted_smoke_artifact(tmp_path / "smoke")
+    assert census_cli.verify_live_research_run(smoke).valid is True
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+    session = FakeSession(state.log)
+    repository = FakeRepository(
+        state,
+        drift=drift,
+        product_drift=product_drift,
+    )
+
+    def exporter(**kwargs):
+        state.log.append("artifact_export")
+        return export_research_artifact(**kwargs)
+
+    exit_code = census_cli.main(
+        [
+            "calibrate",
+            "--smoke-artifact",
+            str(smoke),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: session,
+        repository=repository,
+        runtime_factory=lambda **kwargs: FakeRuntime(state, **kwargs),
+        service_factory=lambda: FakeCalibrationLiveService(
+            state,
+            result or calibration_results(),
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+        artifact_exporter=exporter,
+        artifact_verifier=artifact_verifier,
+    )
+    return exit_code, state, session, tmp_path / "runs" / RUN_ID
+
+
+def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     parser = census_cli.build_parser()
     smoke = parser.parse_args(
         [
+            "smoke",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+        ]
+    )
+    calibrate = parser.parse_args(
+        [
+            "calibrate",
+            "--smoke-artifact",
             "smoke",
             "--baseline-artifact",
             "first",
@@ -594,6 +947,9 @@ def test_parser_exposes_only_locked_smoke_inputs_and_offline_verify() -> None:
 
     assert smoke.command == "smoke"
     assert smoke.baseline_artifact == [Path("first"), Path("second")]
+    assert calibrate.command == "calibrate"
+    assert calibrate.smoke_artifact == Path("smoke")
+    assert calibrate.baseline_artifact == [Path("first"), Path("second")]
     assert verify.command == "verify-run"
     with pytest.raises(SystemExit):
         parser.parse_args(
@@ -607,6 +963,98 @@ def test_parser_exposes_only_locked_smoke_inputs_and_offline_verify() -> None:
                 "1",
             ]
         )
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "calibrate",
+                "--smoke-artifact",
+                "smoke",
+                "--baseline-artifact",
+                "first",
+                "--baseline-artifact",
+                "second",
+                "--endpoint",
+                "browse",
+            ]
+        )
+
+
+def test_calibrate_requires_exactly_two_baselines_before_dependencies(
+    tmp_path,
+    capsys,
+) -> None:
+    smoke = accepted_smoke_artifact(tmp_path / "smoke")
+    baseline = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("calibrate constructed a dependency before validation")
+
+    result = census_cli.main(
+        [
+            "calibrate",
+            "--smoke-artifact",
+            str(smoke),
+            "--baseline-artifact",
+            str(baseline),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_USAGE
+    assert (
+        "calibrate requires exactly two baseline artifacts" in capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    "smoke_kwargs",
+    (
+        {"smoke_passed": False},
+        {"request_budget": {"listing": 1, "detail": 20}},
+    ),
+)
+def test_calibrate_rejects_unaccepted_smoke_before_dependencies(
+    tmp_path,
+    smoke_kwargs,
+) -> None:
+    smoke = accepted_smoke_artifact(tmp_path / "smoke", **smoke_kwargs)
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid predecessor constructed a live dependency")
+
+    result = census_cli.main(
+        [
+            "calibrate",
+            "--smoke-artifact",
+            str(smoke),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
 
 
 def test_smoke_requires_exactly_two_baselines_before_dependencies(tmp_path) -> None:
@@ -918,6 +1366,248 @@ def test_successful_smoke_lifecycle_and_artifact(tmp_path, capsys) -> None:
     assert run_started["payload"]["request_budget"] == CURRENT_SMOKE_BUDGET
     assert run_summary["payload"]["request_budget"] == CURRENT_SMOKE_BUDGET
     assert verify_research_artifact(artifact).valid is True
+
+
+def test_successful_calibration_lifecycle_and_artifact(tmp_path, capsys) -> None:
+    results = calibration_results()
+    expected_summaries = summarize_calibration_variants(results)
+    expected_selection = select_calibration_variants(expected_summaries, limit=2)
+
+    exit_code, state, session, artifact = invoke_calibrate(
+        tmp_path,
+        result=results,
+    )
+    output = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+    assert exit_code == census_cli.EXIT_OK
+    assert session.closed is True
+    assert state.runtime_kwargs == [{"headed": False}]
+    assert state.calibration_conditions == build_calibration_conditions()
+    assert state.log.index("staged_snapshot_1") < state.log.index("browser_open")
+    assert state.log.index("create_run") < state.log.index("network")
+    assert state.log.index("browser_close") < state.log.index("artifact_export")
+    assert state.log.index("db_close") < state.log.index("artifact_export")
+    assert state.created_metadata.experiment == "listing-calibration"
+    assert state.created_metadata.request_budget == CALIBRATION_BUDGET
+    summary = state.finished[0]["summary"]
+    assert state.finished[0]["status"] == "completed"
+    assert summary["calibration_passed"] is True
+    assert summary["condition_count"] == 8
+    assert summary["accepted_condition_count"] == 8
+    assert summary["listing_logical_count"] == 24
+    assert summary["listing_attempt_count"] == 24
+    assert summary["detail_attempt_count"] == 0
+    assert summary["request_budget"] == CALIBRATION_BUDGET
+    assert summary["variant_summaries"] == [asdict(item) for item in expected_summaries]
+    assert summary["selection"] == asdict(expected_selection)
+    assert summary["product_data_unchanged"] is True
+    assert output == {
+        "artifact": str(artifact),
+        "run_id": RUN_ID,
+        "exit_code": census_cli.EXIT_OK,
+        "calibration_passed": True,
+        "request_budget": CALIBRATION_BUDGET,
+        "condition_count": 8,
+        "listing_logical_count": 24,
+        "listing_attempt_count": 24,
+        "detail_attempt_count": 0,
+    }
+    manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
+    events = [
+        json.loads(line)
+        for line in (artifact / "observations.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert manifest["metadata"]["experiment"] == "listing-calibration"
+    assert manifest["metadata"]["calibration_passed"] is True
+    assert manifest["metadata"]["request_budget"] == CALIBRATION_BUDGET
+    assert sum(event["event_type"] == "research.page_attempt" for event in events) == 24
+    assert (
+        sum(
+            event["event_type"]
+            in {
+                "research.condition_completed",
+                "research.condition_incomplete",
+            }
+            for event in events
+        )
+        == 8
+    )
+    assert (
+        sum(event["event_type"] == "research.detail_attempt" for event in events) == 0
+    )
+    expected_selection_event = json.loads(
+        json.dumps(
+            {
+                "variant_summaries": [asdict(item) for item in expected_summaries],
+                "selection": asdict(expected_selection),
+            }
+        )
+    )
+    assert [
+        event
+        for event in events
+        if event["event_type"] == "research.calibration_selection"
+    ][0]["payload"] == expected_selection_event
+    assert verify_research_artifact(artifact).valid is True
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_exit", "expected_reason"),
+    (
+        (
+            (
+                replace(
+                    calibration_results()[0],
+                    accepted=False,
+                    rejection_reason="planned_pages_not_observed",
+                ),
+            ),
+            census_cli.EXIT_INCOMPLETE,
+            "planned_pages_not_observed",
+        ),
+        (
+            (
+                calibration_result(
+                    build_calibration_conditions()[0],
+                    hard_stop="auth_expired",
+                ),
+            ),
+            census_cli.EXIT_HARD_STOP,
+            "auth_expired",
+        ),
+    ),
+)
+def test_calibration_maps_incomplete_and_hard_stop_exit_codes(
+    tmp_path,
+    result: tuple[BoundedConditionResult, ...],
+    expected_exit: int,
+    expected_reason: str,
+) -> None:
+    exit_code, state, _session, artifact = invoke_calibrate(
+        tmp_path,
+        result=result,
+    )
+
+    assert exit_code == expected_exit
+    assert len(state.calibration_conditions) == 8
+    assert state.finished[0]["status"] == "failed"
+    assert state.finished[0]["summary"]["calibration_passed"] is False
+    assert state.finished[0]["summary"]["stop_reason"] == expected_reason
+    assert state.finished[0]["summary"]["condition_count"] == 1
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+@pytest.mark.parametrize(
+    ("drift", "product_drift"),
+    ((True, False), (False, True)),
+)
+def test_calibration_product_data_drift_is_an_evidence_failure(
+    tmp_path,
+    drift: bool,
+    product_drift: bool,
+) -> None:
+    exit_code, state, _session, artifact = invoke_calibrate(
+        tmp_path,
+        drift=drift,
+        product_drift=product_drift,
+    )
+
+    assert exit_code == census_cli.EXIT_EVIDENCE_FAILURE
+    summary = state.finished[0]["summary"]
+    assert summary["calibration_passed"] is False
+    assert summary["product_data_unchanged"] is False
+    assert summary["stop_reason"] == "product_data_changed"
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_calibration_unexpected_error_exports_type_only_partial_artifact(
+    tmp_path,
+) -> None:
+    error = RuntimeError("secret calibration transport text")
+    partial = (calibration_results()[0],)
+
+    with pytest.raises(RuntimeError) as captured:
+        invoke_calibrate(
+            tmp_path,
+            result=CalibrationFailureAfter(partial, error),
+        )
+
+    artifact = tmp_path / "runs" / RUN_ID
+    assert captured.value is error
+    assert verify_research_artifact(artifact).valid is True
+    verification = census_cli.verify_live_research_run(artifact)
+    assert verification.valid is True
+    events_text = (artifact / "observations.jsonl").read_text(encoding="utf-8")
+    assert "secret calibration transport text" not in events_text
+    events = [json.loads(line) for line in events_text.splitlines() if line.strip()]
+    summary = events[-1]["payload"]
+    assert summary["status"] == "failed"
+    assert summary["calibration_passed"] is False
+    assert summary["condition_count"] == 1
+    assert summary["listing_logical_count"] == 3
+    assert summary["listing_attempt_count"] == 3
+    assert summary["stop_reason"] == "unexpected_listing_calibration_error:RuntimeError"
+
+
+def test_calibration_verify_run_is_network_and_database_free(tmp_path) -> None:
+    exit_code, _state, _session, artifact = invoke_calibrate(tmp_path)
+    assert exit_code == census_cli.EXIT_OK
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("verify-run constructed a live dependency")
+
+    result = census_cli.main(
+        ["verify-run", "--artifact", str(artifact)],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_OK
+
+
+def test_calibration_verify_run_rejects_reexported_stop_reason_drift(
+    tmp_path,
+) -> None:
+    hard_stop = calibration_result(
+        build_calibration_conditions()[0],
+        hard_stop="auth_expired",
+    )
+    exit_code, _state, _session, artifact = invoke_calibrate(
+        tmp_path,
+        result=(hard_stop,),
+    )
+    assert exit_code == census_cli.EXIT_HARD_STOP
+    manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
+    events = [
+        json.loads(line)
+        for line in (artifact / "observations.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    stopped = next(
+        event for event in events if event["event_type"] == "research.run_stopped"
+    )
+    stopped["payload"]["reason"] = "auth_expired:secret-upstream-text"
+    reexported = export_research_artifact(
+        root=tmp_path / "reexported",
+        run_id=RUN_ID,
+        metadata=manifest["metadata"],
+        events=events,
+        provenance=provenance(),
+    )
+
+    verification = census_cli.verify_live_research_run(reexported)
+
+    assert verification.valid is False
+    assert "run_stopped_summary_reason_mismatch" in verification.issues
 
 
 @pytest.mark.parametrize(
