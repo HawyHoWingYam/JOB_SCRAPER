@@ -472,6 +472,45 @@ def calibration_results() -> tuple[BoundedConditionResult, ...]:
     )
 
 
+def naturally_exhausted_calibration_result(
+    condition,
+    *,
+    pages_observed: int = 2,
+) -> BoundedConditionResult:
+    bounded = calibration_result(condition)
+    observations = bounded.listing_result.observations[:pages_observed]
+    observations = (
+        *observations[:-1],
+        replace(
+            observations[-1],
+            has_more=False,
+            stop_reason="natural_exhaustion",
+        ),
+    )
+    outcome = ListingConditionOutcome(
+        condition=condition,
+        pages_observed=pages_observed,
+        stop_reason="natural_exhaustion",
+        is_complete=True,
+    )
+    accepted_ids = bounded.listing_result.accepted_job_ids[:pages_observed]
+    listing = replace(
+        bounded.listing_result,
+        ordered_job_ids=accepted_ids,
+        accepted_job_ids=accepted_ids,
+        id_pairs=bounded.listing_result.id_pairs[:pages_observed],
+        observations=observations,
+        condition_outcomes=(outcome,),
+        stop_reason="natural_exhaustion",
+        is_complete=True,
+    )
+    return evaluate_bounded_condition(
+        condition,
+        listing,
+        planned_page_limit=3,
+    )
+
+
 def _summary_state():
     product_data = ProductDataSnapshot.from_table_hashes(
         staged_rows_hash="a" * 64,
@@ -1452,6 +1491,32 @@ def test_successful_calibration_lifecycle_and_artifact(tmp_path, capsys) -> None
         if event["event_type"] == "research.calibration_selection"
     ][0]["payload"] == expected_selection_event
     assert verify_research_artifact(artifact).valid is True
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_successful_calibration_accepts_natural_exhaustion_below_page_budget(
+    tmp_path,
+) -> None:
+    conditions = build_calibration_conditions()
+    results = tuple(
+        (
+            naturally_exhausted_calibration_result(condition)
+            if index < 4
+            else calibration_result(condition)
+        )
+        for index, condition in enumerate(conditions)
+    )
+    assert sum(result.pages_observed for result in results) == 20
+    assert all(result.accepted for result in results)
+
+    exit_code, state, _session, artifact = invoke_calibrate(
+        tmp_path,
+        result=results,
+    )
+
+    assert exit_code == census_cli.EXIT_OK
+    assert state.finished[0]["summary"]["calibration_passed"] is True
+    assert state.finished[0]["summary"]["listing_logical_count"] == 20
     assert census_cli.verify_live_research_run(artifact).valid is True
 
 

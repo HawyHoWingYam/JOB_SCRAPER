@@ -1128,6 +1128,8 @@ def _verify_calibration_research_run(
         in {"research.condition_completed", "research.condition_incomplete"}
     ]
     observed_conditions: list[dict[str, Any] | None] = []
+    completed_condition_semantics_valid = True
+    condition_logical_total = 0
     for event in condition_events:
         payload = event.get("payload")
         condition_payload = (
@@ -1136,6 +1138,29 @@ def _verify_calibration_research_run(
         observed_conditions.append(
             condition_payload if isinstance(condition_payload, dict) else None
         )
+        pages_observed = (
+            payload.get("pages_observed") if isinstance(payload, dict) else None
+        )
+        if type(pages_observed) is int:
+            condition_logical_total += pages_observed
+        natural_exhaustion = (
+            isinstance(payload, dict)
+            and payload.get("stop_reason") == "natural_exhaustion"
+            and payload.get("is_complete") is True
+            and event.get("event_type") == "research.condition_completed"
+            and type(pages_observed) is int
+            and 1 <= pages_observed <= 3
+        )
+        page_cap = (
+            isinstance(payload, dict)
+            and payload.get("stop_reason") == "page_cap"
+            and payload.get("is_complete") is False
+            and event.get("event_type") == "research.condition_incomplete"
+            and pages_observed == 3
+            and type(pages_observed) is int
+        )
+        if not natural_exhaustion and not page_cap:
+            completed_condition_semantics_valid = False
     expected_prefix = [
         _calibration_condition_payload(condition)
         for condition in locked_conditions[: len(observed_conditions)]
@@ -1207,8 +1232,10 @@ def _verify_calibration_research_run(
                 and summary.get("calibration_passed") is True
                 and summary.get("stop_reason") is None
                 and len(page_events) <= 72
-                and len(logical_keys) == 24
+                and 8 <= len(logical_keys) <= 24
+                and len(logical_keys) == condition_logical_total
                 and len(condition_events) == 8
+                and completed_condition_semantics_valid
                 and summary.get("accepted_condition_count") == 8
                 and len(selection_events) == 1
                 and isinstance(summary.get("variant_summaries"), list)
