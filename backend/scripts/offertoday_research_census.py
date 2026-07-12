@@ -52,7 +52,9 @@ from app.sources.offertoday.research.baseline import (  # noqa: E402
     build_run_start_inventory,
 )
 from app.sources.offertoday.research.calibration import (  # noqa: E402
+    CalibrationVariantSummary,
     build_calibration_conditions,
+    build_census_candidate,
     build_pilot_conditions,
     select_calibration_variants,
     summarize_calibration_variants,
@@ -165,6 +167,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(__file__).resolve().parents[2],
     )
+    freeze = commands.add_parser("freeze-candidate")
+    freeze.add_argument("--pilot-artifact", type=Path, required=True)
+    freeze.add_argument("--run-id", default=None)
+    freeze.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    freeze.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
     verify = commands.add_parser("verify-run")
     verify.add_argument("--artifact", type=Path, required=True)
     return parser
@@ -265,6 +280,206 @@ def _require_accepted_calibration_variant(
         parent_artifact_hash=hashlib.sha256(manifest_bytes).hexdigest(),
         calibration_run_id=calibration_run_id,
     )
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _require_accepted_pilot_artifact(
+    artifact_dir: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    artifact_dir = Path(artifact_dir)
+    verification = verify_live_research_run(artifact_dir)
+    if not verification.valid:
+        raise ValueError("pilot artifact failed strict verification")
+    manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
+    summaries = [
+        event.get("payload")
+        for event in _read_jsonl(artifact_dir / "observations.jsonl")
+        if event.get("event_type") == "research.run_summary"
+    ]
+    metadata = manifest.get("metadata")
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("experiment") != "category-pilot"
+        or metadata.get("crawl_job_status") != "completed"
+        or metadata.get("pilot_passed") is not True
+        or len(summaries) != 1
+        or not isinstance(summaries[0], dict)
+        or summaries[0].get("pilot_passed") is not True
+        or summaries[0].get("condition_count") != 31
+        or summaries[0].get("accepted_condition_count") != 31
+    ):
+        raise ValueError("pilot artifact is not an accepted 31-category predecessor")
+    return manifest, summaries[0]
+
+
+def _find_parent_calibration_artifact(
+    pilot_artifact: Path,
+    pilot_manifest: dict[str, Any],
+) -> tuple[Path, dict[str, Any]]:
+    metadata = pilot_manifest.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    expected_hash = metadata.get("parent_artifact_hash")
+    expected_run_id = metadata.get("calibration_run_id")
+    if not isinstance(expected_hash, str) or not isinstance(expected_run_id, str):
+        raise ValueError("pilot artifact is missing calibration lineage")
+
+    matches: dict[Path, dict[str, Any]] = {}
+    search_roots = (pilot_artifact.parent, pilot_artifact.parent.parent)
+    for search_root in search_roots:
+        if not search_root.is_dir():
+            continue
+        for manifest_path in search_root.rglob("manifest.json"):
+            if manifest_path == pilot_artifact / "manifest.json":
+                continue
+            try:
+                if (
+                    hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+                    != expected_hash
+                ):
+                    continue
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                continue
+            if (
+                manifest.get("run_id") == expected_run_id
+                and isinstance(manifest.get("metadata"), dict)
+                and manifest["metadata"].get("experiment") == "listing-calibration"
+            ):
+                matches[manifest_path.parent.resolve()] = manifest
+        if matches:
+            break
+    if len(matches) != 1:
+        raise ValueError("exactly one referenced calibration artifact is required")
+    artifact_dir, manifest = next(iter(matches.items()))
+    verification = verify_live_research_run(artifact_dir)
+    if not verification.valid:
+        raise ValueError("referenced calibration artifact failed strict verification")
+    return artifact_dir, manifest
+
+
+def _calibration_ranked_variants(
+    artifact_dir: Path,
+) -> tuple[CalibrationVariantSummary, ...]:
+    summaries = [
+        event.get("payload")
+        for event in _read_jsonl(artifact_dir / "observations.jsonl")
+        if event.get("event_type") == "research.run_summary"
+    ]
+    selection = summaries[0].get("selection") if len(summaries) == 1 else None
+    ranked_payloads = (
+        selection.get("ranked_variants") if isinstance(selection, dict) else None
+    )
+    if not isinstance(ranked_payloads, list) or not ranked_payloads:
+        raise ValueError("calibration artifact is missing ranked variant evidence")
+    variants: list[CalibrationVariantSummary] = []
+    expected_keys = set(CalibrationVariantSummary.__dataclass_fields__)
+    for payload in ranked_payloads:
+        if not isinstance(payload, dict) or set(payload) != expected_keys:
+            raise ValueError("calibration ranked variant evidence is invalid")
+        variants.append(
+            CalibrationVariantSummary(
+                **{
+                    **payload,
+                    "job_ids": tuple(payload["job_ids"]),
+                    "unique_ids": tuple(payload["unique_ids"]),
+                }
+            )
+        )
+    return tuple(variants)
+
+
+def _freeze_candidate_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    try:
+        pilot_artifact = args.pilot_artifact.resolve(strict=True)
+        pilot_manifest, pilot_summary = _require_accepted_pilot_artifact(pilot_artifact)
+        calibration_artifact, calibration_manifest = _find_parent_calibration_artifact(
+            pilot_artifact, pilot_manifest
+        )
+        endpoint = pilot_summary.get("endpoint")
+        rcd_type = pilot_summary.get("rcd_type")
+        candidate = build_census_candidate(
+            selected_endpoint=endpoint,
+            selected_rcd_type=rcd_type,
+            ranked_variants=_calibration_ranked_variants(calibration_artifact),
+            source_artifact_hash=hashlib.sha256(
+                (pilot_artifact / "manifest.json").read_bytes()
+            ).hexdigest(),
+        )
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "freeze-candidate",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=utc_now().isoformat(),
+        )
+        payload = candidate.to_payload()
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata={
+                "experiment": "census-candidate",
+                "crawl_job_id": run_id,
+                "crawl_job_status": "completed",
+                "candidate_frozen": True,
+                "candidate_hash": candidate.candidate_hash,
+                "endpoint": candidate.endpoint,
+                "rcd_type": candidate.rcd_type,
+                "parent_artifact_hash": candidate.source_artifact_hash,
+                "source_pilot_run_id": pilot_manifest.get("run_id"),
+                "calibration_artifact_hash": hashlib.sha256(
+                    (calibration_artifact / "manifest.json").read_bytes()
+                ).hexdigest(),
+                "calibration_run_id": calibration_manifest.get("run_id"),
+                "planner_version": planner_version,
+            },
+            events=[
+                {
+                    "sequence_no": 1,
+                    "event_type": "research.candidate_frozen",
+                    "payload": payload,
+                    "emitted_by": "offertoday-research",
+                    "created_at": utc_now().isoformat(),
+                }
+            ],
+            provenance=provenance,
+            json_files={"candidate.json": payload},
+        )
+        artifact_check = artifact_verifier(artifact_dir)
+        live_check = verify_live_research_run(artifact_dir)
+        if not artifact_check.valid or not live_check.valid:
+            return EXIT_EVIDENCE_FAILURE
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "candidate_hash": candidate.candidate_hash,
+            "endpoint": candidate.endpoint,
+            "rcd_type": candidate.rcd_type,
+            "run_id": run_id,
+        }
+    )
+    return EXIT_OK
 
 
 def _event_dict(event: Any) -> dict[str, Any]:
@@ -959,6 +1174,13 @@ def main(
         result = verify_live_research_run(args.artifact)
         _print_json(result.to_payload())
         return EXIT_OK if result.valid else EXIT_EVIDENCE_FAILURE
+    if args.command == "freeze-candidate":
+        return _freeze_candidate_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
 
     request_budget = (
         dict(_CALIBRATION_REQUEST_BUDGET)

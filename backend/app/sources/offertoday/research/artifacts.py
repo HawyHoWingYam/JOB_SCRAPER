@@ -12,9 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 from uuid import UUID
-
 
 _SECRET_KEY_PARTS = (
     "api key",
@@ -39,6 +38,7 @@ _SECRET_KEY_PARTS = (
 )
 _REQUIRED_ARTIFACT_FILES = ("observations.jsonl", "working-tree.patch")
 _ARTIFACT_DIRECTORY_FILES = ("manifest.json", *_REQUIRED_ARTIFACT_FILES)
+_JSON_ARTIFACT_FILE_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\.json")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _MANIFEST_KEYS = {
     "artifact_version",
@@ -274,8 +274,7 @@ def _is_valid_v1_manifest(manifest: Any, artifact_dir: Path) -> bool:
     if not isinstance(provenance["runtime_context"], dict):
         return False
     if not all(
-        _is_hash_mapping(provenance[name])
-        for name in _PROVENANCE_SHA256_MAPPINGS
+        _is_hash_mapping(provenance[name]) for name in _PROVENANCE_SHA256_MAPPINGS
     ):
         return False
     if not _is_hash_mapping(
@@ -287,7 +286,18 @@ def _is_valid_v1_manifest(manifest: Any, artifact_dir: Path) -> bool:
     files = manifest["files"]
     return (
         isinstance(files, dict)
-        and set(files) == set(_REQUIRED_ARTIFACT_FILES)
+        and set(_REQUIRED_ARTIFACT_FILES).issubset(files)
+        and all(
+            isinstance(relative_name, str)
+            and (
+                relative_name in _REQUIRED_ARTIFACT_FILES
+                or (
+                    relative_name != "manifest.json"
+                    and _JSON_ARTIFACT_FILE_RE.fullmatch(relative_name) is not None
+                )
+            )
+            for relative_name in files
+        )
         and all(_is_sha256(expected_hash) for expected_hash in files.values())
     )
 
@@ -303,9 +313,7 @@ def _is_path_indirection(path: Path) -> bool:
         return False
     reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
     file_attributes = getattr(path_stat, "st_file_attributes", 0)
-    return stat.S_ISLNK(path_stat.st_mode) or bool(
-        file_attributes & reparse_attribute
-    )
+    return stat.S_ISLNK(path_stat.st_mode) or bool(file_attributes & reparse_attribute)
 
 
 def _normalize_repo_relative_path(relative_path: str) -> str:
@@ -370,7 +378,9 @@ def _read_regular_file(repo_root: Path, relative_path: str) -> bytes:
     try:
         opened_stat = os.fstat(file_descriptor)
         if not stat.S_ISREG(opened_stat.st_mode):
-            raise ValueError(f"repository candidate is not a regular file: {normalized}")
+            raise ValueError(
+                f"repository candidate is not a regular file: {normalized}"
+            )
         path_stat = path.lstat()
         if _is_path_indirection(path):
             raise ValueError(f"filesystem indirection is not allowed: {normalized}")
@@ -378,7 +388,9 @@ def _read_regular_file(repo_root: Path, relative_path: str) -> bytes:
             path_stat.st_dev,
             path_stat.st_ino,
         ):
-            raise ValueError(f"repository candidate changed while reading: {normalized}")
+            raise ValueError(
+                f"repository candidate changed while reading: {normalized}"
+            )
         chunks: list[bytes] = []
         while chunk := os.read(file_descriptor, 1024 * 1024):
             chunks.append(chunk)
@@ -422,6 +434,7 @@ def export_research_artifact(
     metadata: dict[str, Any],
     events: Sequence[dict[str, Any]],
     provenance: ResearchProvenance,
+    json_files: Mapping[str, Any] | None = None,
 ) -> Path:
     try:
         canonical_run_id = str(UUID(str(run_id)))
@@ -439,7 +452,9 @@ def export_research_artifact(
     except FileExistsError as exc:
         if _is_path_indirection(artifact_dir):
             raise ValueError("artifact directory indirection is not allowed") from exc
-        raise FileExistsError(f"research artifact already exists: {canonical_run_id}") from exc
+        raise FileExistsError(
+            f"research artifact already exists: {canonical_run_id}"
+        ) from exc
     if _is_path_indirection(artifact_dir):
         raise ValueError("artifact directory indirection is not allowed")
     resolved_artifact_dir = artifact_dir.resolve(strict=True)
@@ -452,9 +467,23 @@ def export_research_artifact(
         b"\n" if observation_lines else b""
     )
     patch_payload = provenance.working_tree_patch.encode("utf-8")
+    supplemental_payloads: dict[str, bytes] = {}
+    for relative_name, value in (json_files or {}).items():
+        if (
+            not isinstance(relative_name, str)
+            or relative_name == "manifest.json"
+            or relative_name in _REQUIRED_ARTIFACT_FILES
+            or _JSON_ARTIFACT_FILE_RE.fullmatch(relative_name) is None
+        ):
+            raise ValueError(f"unsafe supplemental JSON file name: {relative_name!r}")
+        supplemental_payloads[relative_name] = _canonical_json_bytes(_redact(value))
     files = {
         "observations.jsonl": _sha256(observations_payload),
         "working-tree.patch": _sha256(patch_payload),
+        **{
+            relative_name: _sha256(payload)
+            for relative_name, payload in sorted(supplemental_payloads.items())
+        },
     }
     manifest = {
         "artifact_version": 1,
@@ -463,9 +492,7 @@ def export_research_artifact(
         "provenance": {
             "commit_sha": provenance.commit_sha,
             "source_hashes": dict(sorted(provenance.source_hashes.items())),
-            "compose_file_hashes": dict(
-                sorted(provenance.compose_file_hashes.items())
-            ),
+            "compose_file_hashes": dict(sorted(provenance.compose_file_hashes.items())),
             "captured_at": provenance.captured_at,
             "runtime_context": _redact(provenance.runtime_context),
             "untracked_file_hashes": dict(
@@ -482,6 +509,8 @@ def export_research_artifact(
     }
     _write_atomic(artifact_dir / "observations.jsonl", observations_payload)
     _write_atomic(artifact_dir / "working-tree.patch", patch_payload)
+    for relative_name, payload in supplemental_payloads.items():
+        _write_atomic(artifact_dir / relative_name, payload)
     _write_atomic(artifact_dir / "manifest.json", _canonical_json_bytes(manifest))
     return artifact_dir
 
@@ -496,13 +525,13 @@ def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
             mismatched_files=("manifest.json",),
         )
     manifest_path = artifact_dir / "manifest.json"
-    required_paths = {
+    initial_required_paths = {
         relative_name: artifact_dir / relative_name
         for relative_name in _REQUIRED_ARTIFACT_FILES
     }
-    symlinked = [
+    initial_symlinked = [
         relative_name
-        for relative_name, path in required_paths.items()
+        for relative_name, path in initial_required_paths.items()
         if path.is_symlink()
     ]
     manifest_is_symlink = manifest_path.is_symlink()
@@ -515,53 +544,60 @@ def verify_research_artifact(artifact_dir: Path) -> ArtifactVerificationResult:
             mismatched_files=(),
         )
     effective_names = set(actual_names)
-    effective_names.update(symlinked)
+    effective_names.update(initial_symlinked)
     if manifest_is_symlink:
         effective_names.add("manifest.json")
-    missing = [
+    initial_missing = [
         relative_name
-        for relative_name, path in required_paths.items()
-        if relative_name not in symlinked
+        for relative_name, path in initial_required_paths.items()
+        if relative_name not in initial_symlinked
         and (relative_name not in effective_names or not path.is_file())
     ]
-    unexpected = sorted(actual_names - set(_ARTIFACT_DIRECTORY_FILES))
-    if unexpected:
-        return ArtifactVerificationResult(
-            valid=False,
-            missing_files=tuple(sorted(missing)),
-            mismatched_files=tuple(sorted([*unexpected, *symlinked])),
-        )
     if manifest_is_symlink:
         return ArtifactVerificationResult(
             valid=False,
-            missing_files=tuple(sorted(missing)),
-            mismatched_files=tuple(sorted(["manifest.json", *symlinked])),
+            missing_files=tuple(sorted(initial_missing)),
+            mismatched_files=tuple(sorted(["manifest.json", *initial_symlinked])),
         )
     if not manifest_path.is_file():
         return ArtifactVerificationResult(
             valid=False,
-            missing_files=tuple(sorted(["manifest.json", *missing])),
-            mismatched_files=tuple(sorted(symlinked)),
+            missing_files=tuple(sorted(["manifest.json", *initial_missing])),
+            mismatched_files=tuple(sorted(initial_symlinked)),
         )
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return ArtifactVerificationResult(
             valid=False,
-            missing_files=tuple(sorted(missing)),
-            mismatched_files=tuple(sorted(["manifest.json", *symlinked])),
+            missing_files=tuple(sorted(initial_missing)),
+            mismatched_files=tuple(sorted(["manifest.json", *initial_symlinked])),
         )
     if not _is_valid_v1_manifest(manifest, artifact_dir):
         return ArtifactVerificationResult(
             valid=False,
-            missing_files=tuple(sorted(missing)),
-            mismatched_files=tuple(sorted(["manifest.json", *symlinked])),
+            missing_files=tuple(sorted(initial_missing)),
+            mismatched_files=tuple(sorted(["manifest.json", *initial_symlinked])),
         )
 
-    mismatched = list(symlinked)
     files = manifest["files"]
-    for relative_name in _REQUIRED_ARTIFACT_FILES:
-        path = required_paths[relative_name]
+    declared_paths = {
+        relative_name: artifact_dir / relative_name for relative_name in files
+    }
+    symlinked = [
+        relative_name
+        for relative_name, path in declared_paths.items()
+        if path.is_symlink()
+    ]
+    missing = [
+        relative_name
+        for relative_name, path in declared_paths.items()
+        if relative_name not in symlinked
+        and (relative_name not in effective_names or not path.is_file())
+    ]
+    unexpected = sorted(actual_names - {"manifest.json", *files})
+    mismatched = [*unexpected, *symlinked]
+    for relative_name, path in declared_paths.items():
         if relative_name in missing or relative_name in symlinked:
             continue
         if _sha256(path.read_bytes()) != files[relative_name]:
@@ -618,8 +654,7 @@ def _contains_sensitive_content(text: str) -> bool:
         key = match.group("key").strip().strip("\"'").lower()
         compact_key = re.sub(r"[^a-z0-9]", "", key)
         if not any(
-            part in key
-            or re.sub(r"[^a-z0-9]", "", part) in compact_key
+            part in key or re.sub(r"[^a-z0-9]", "", part) in compact_key
             for part in _SECRET_KEY_PARTS
         ):
             continue

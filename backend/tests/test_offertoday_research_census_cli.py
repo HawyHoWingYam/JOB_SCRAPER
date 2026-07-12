@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -47,6 +48,7 @@ from app.sources.offertoday.research.contracts import (
     StagedListingSnapshot,
 )
 from app.sources.offertoday.research.live_contracts import (
+    CensusCandidate,
     DetailSmokeObservation,
     DetailSmokeTarget,
     LiveSmokeExecution,
@@ -57,6 +59,7 @@ from app.sources.offertoday.research.smoke import (
 )
 
 RUN_ID = "33333333-3333-3333-3333-333333333333"
+CANDIDATE_RUN_ID = "44444444-4444-4444-4444-444444444444"
 BASELINE_RUN_1 = "11111111-1111-1111-1111-111111111111"
 BASELINE_RUN_2 = "22222222-2222-2222-2222-222222222222"
 CURRENT_SMOKE_BUDGET = {"listing": 2, "detail": 20}
@@ -1103,6 +1106,52 @@ def invoke_pilot(
     return exit_code, state, session, tmp_path / "runs" / RUN_ID
 
 
+def invoke_freeze_candidate(
+    tmp_path: Path,
+    *,
+    pilot_result: tuple[BoundedConditionResult, ...] | None = None,
+):
+    pilot_exit, _state, _session, pilot = invoke_pilot(
+        tmp_path / "evidence",
+        result=pilot_result,
+    )
+    calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("live_dependency")
+        raise AssertionError("freeze-candidate constructed a live dependency")
+
+    artifact_root = tmp_path / "candidate-runs"
+    exit_code = census_cli.main(
+        [
+            "freeze-candidate",
+            "--pilot-artifact",
+            str(pilot),
+            "--run-id",
+            CANDIDATE_RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(artifact_root),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    return (
+        exit_code,
+        pilot_exit,
+        calls,
+        pilot,
+        artifact_root / CANDIDATE_RUN_ID,
+    )
+
+
 def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     parser = census_cli.build_parser()
     smoke = parser.parse_args(
@@ -1139,6 +1188,7 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
         ]
     )
     verify = parser.parse_args(["verify-run", "--artifact", "run"])
+    freeze = parser.parse_args(["freeze-candidate", "--pilot-artifact", "pilot"])
 
     assert smoke.command == "smoke"
     assert smoke.baseline_artifact == [Path("first"), Path("second")]
@@ -1150,6 +1200,8 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     assert pilot.baseline_artifact == [Path("first"), Path("second")]
     assert pilot.variant_rank == 2
     assert verify.command == "verify-run"
+    assert freeze.command == "freeze-candidate"
+    assert freeze.pilot_artifact == Path("pilot")
     with pytest.raises(SystemExit):
         parser.parse_args(
             [
@@ -1160,6 +1212,16 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
                 "second",
                 "--detail-limit",
                 "1",
+            ]
+        )
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "freeze-candidate",
+                "--pilot-artifact",
+                "pilot",
+                "--endpoint",
+                "browse",
             ]
         )
     with pytest.raises(SystemExit):
@@ -1176,6 +1238,81 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
                 "browse",
             ]
         )
+
+
+def test_freeze_candidate_is_offline_and_preserves_pilot_selected_controls(
+    tmp_path,
+    capsys,
+) -> None:
+    exit_code, pilot_exit, calls, pilot, artifact = invoke_freeze_candidate(tmp_path)
+    output = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+    assert pilot_exit == census_cli.EXIT_OK
+    assert exit_code == census_cli.EXIT_OK
+    assert calls == []
+    candidate_payload = json.loads(
+        (artifact / "candidate.json").read_text(encoding="utf-8")
+    )
+    candidate = CensusCandidate(
+        endpoint=candidate_payload["endpoint"],
+        rcd_type=candidate_payload["rcd_type"],
+        category_ids=tuple(candidate_payload["category_ids"]),
+        page_size=candidate_payload["page_size"],
+        max_pages_per_condition=candidate_payload["max_pages_per_condition"],
+        require_empty_confirmation=candidate_payload["require_empty_confirmation"],
+        max_attempts_per_page=candidate_payload["max_attempts_per_page"],
+        retry_delays_seconds=tuple(candidate_payload["retry_delays_seconds"]),
+        page_delay_range_seconds=tuple(candidate_payload["page_delay_range_seconds"]),
+        session_mode=candidate_payload["session_mode"],
+        fixed_repeat_category_ids=tuple(candidate_payload["fixed_repeat_category_ids"]),
+        source_artifact_hash=candidate_payload["source_artifact_hash"],
+        rejected_variants=tuple(candidate_payload["rejected_variants"]),
+    )
+    assert candidate_payload["candidate_hash"] == candidate.candidate_hash
+    assert candidate.endpoint == "search"
+    assert candidate.rcd_type is None
+    assert len(candidate.category_ids) == 31
+    assert len(candidate.rejected_variants) == 3
+    assert all(
+        {
+            "accepted",
+            "attempts",
+            "conflicts",
+            "failure_count",
+            "logical_pages",
+            "median_latency_ms",
+            "missing_ids",
+            "rejection_reason",
+        }.issubset(item)
+        for item in candidate.rejected_variants
+    )
+    assert (
+        candidate.source_artifact_hash
+        == hashlib.sha256((pilot / "manifest.json").read_bytes()).hexdigest()
+    )
+    assert output == {
+        "artifact": str(artifact.resolve()),
+        "candidate_hash": candidate.candidate_hash,
+        "endpoint": "search",
+        "rcd_type": None,
+        "run_id": CANDIDATE_RUN_ID,
+    }
+    assert verify_research_artifact(artifact).valid is True
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_freeze_candidate_rejects_an_incomplete_pilot_before_dependencies(
+    tmp_path,
+) -> None:
+    exit_code, pilot_exit, calls, _pilot, artifact = invoke_freeze_candidate(
+        tmp_path,
+        pilot_result=pilot_results()[:-1],
+    )
+
+    assert pilot_exit == census_cli.EXIT_INCOMPLETE
+    assert exit_code == census_cli.EXIT_EVIDENCE_FAILURE
+    assert calls == []
+    assert artifact.exists() is False
 
 
 def test_pilot_predecessor_selects_only_a_verified_selected_variant(

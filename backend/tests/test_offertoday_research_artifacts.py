@@ -7,9 +7,8 @@ import subprocess
 from pathlib import Path
 from uuid import UUID
 
-import pytest
-
 import app.sources.offertoday.research.artifacts as artifacts_module
+import pytest
 from app.sources.offertoday.research.artifacts import (
     DEFAULT_RELEVANT_SOURCE_PATHS,
     ResearchProvenance,
@@ -17,7 +16,6 @@ from app.sources.offertoday.research.artifacts import (
     export_research_artifact,
     verify_research_artifact,
 )
-
 
 RUN_ID = "11111111-1111-1111-1111-111111111111"
 SHA256_A = "a" * 64
@@ -101,9 +99,7 @@ def fixture_provenance(**overrides) -> ResearchProvenance:
             ".env.local": "deleted",
             "backend/app/private.py": SHA256_D,
         },
-        "excluded_untracked_file_hashes": {
-            "backend/tests/private.py": SHA256_E
-        },
+        "excluded_untracked_file_hashes": {"backend/tests/private.py": SHA256_E},
     }
     values.update(overrides)
     return ResearchProvenance(**values)
@@ -117,6 +113,38 @@ def build_fixture_artifact(root: Path) -> Path:
         events=[],
         provenance=fixture_provenance(),
     )
+
+
+def test_export_hashes_and_verifies_declared_json_files(tmp_path) -> None:
+    artifact_dir = export_research_artifact(
+        root=tmp_path,
+        run_id=RUN_ID,
+        metadata={"experiment": "census-candidate"},
+        events=[],
+        provenance=fixture_provenance(),
+        json_files={
+            "candidate.json": {
+                "candidate_hash": SHA256_A,
+                "category_ids": [118000, 112000],
+            }
+        },
+    )
+
+    candidate_path = artifact_dir / "candidate.json"
+    assert (
+        candidate_path.read_bytes()
+        == (
+            '{"candidate_hash":"' + SHA256_A + '","category_ids":[118000,112000]}\n'
+        ).encode()
+    )
+    manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["files"]["candidate.json"] == file_sha256(candidate_path)
+    assert verify_research_artifact(artifact_dir).valid is True
+
+    candidate_path.write_text("{}\n", encoding="utf-8")
+    verification = verify_research_artifact(artifact_dir)
+    assert verification.valid is False
+    assert verification.mismatched_files == ("candidate.json",)
 
 
 def test_export_is_atomic_canonical_hashed_and_recursively_redacted(tmp_path) -> None:
@@ -159,9 +187,7 @@ def test_export_is_atomic_canonical_hashed_and_recursively_redacted(tmp_path) ->
                     "page": 1,
                     "headers": {"csrf-token": "event-secret-value"},
                     "nested": {"safe": "event-safe", "api_token": "event-token"},
-                    "id_pairs": [
-                        {"job_id": "j-1", "encrypted_job_id": "enc-1"}
-                    ],
+                    "id_pairs": [{"job_id": "j-1", "encrypted_job_id": "enc-1"}],
                     "unicode": "Hong Kong \u9999\u6e2f",
                 },
             }
@@ -353,9 +379,7 @@ def test_redaction_does_not_remove_excluded_sensitive_path_hash_keys(tmp_path) -
 
     manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["metadata"] == {"safe": "keep-me"}
-    assert manifest["provenance"]["excluded_tracked_file_hashes"] == (
-        excluded_tracked
-    )
+    assert manifest["provenance"]["excluded_tracked_file_hashes"] == (excluded_tracked)
     assert manifest["provenance"]["excluded_untracked_file_hashes"] == (
         excluded_untracked
     )
@@ -1214,7 +1238,9 @@ def test_provenance_emits_empty_and_no_final_newline_file_patches(tmp_path) -> N
     assert len(empty_lines[1].removeprefix("index 0000000..")) == 7
 
 
-def test_provenance_hashes_default_sources_compose_and_redacts_runtime(tmp_path) -> None:
+def test_provenance_hashes_default_sources_compose_and_redacts_runtime(
+    tmp_path,
+) -> None:
     source_payloads = {
         "backend/app/sources/offertoday/root.py": "ROOT = 1\n",
         "backend/app/sources/offertoday/nested/child.py": "CHILD = 1\n",
@@ -1247,11 +1273,7 @@ def test_provenance_hashes_default_sources_compose_and_redacts_runtime(tmp_path)
         captured_at="2026-07-10T12:34:56+00:00",
     )
 
-    expected_source_paths = {
-        path
-        for path in source_payloads
-        if path.endswith(".py")
-    }
+    expected_source_paths = {path for path in source_payloads if path.endswith(".py")}
     assert tuple(DEFAULT_RELEVANT_SOURCE_PATHS) == (
         "backend/app/sources/offertoday",
         "backend/app/repositories/offertoday_research_repository.py",

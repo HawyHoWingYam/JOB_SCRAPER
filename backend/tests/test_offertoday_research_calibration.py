@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
 
 import pytest
@@ -18,11 +20,13 @@ from app.sources.offertoday.research.calibration import (
     BoundedConditionResult,
     CalibrationVariantSummary,
     build_calibration_conditions,
+    build_census_candidate,
     build_pilot_conditions,
     evaluate_bounded_condition,
     select_calibration_variants,
     summarize_calibration_variants,
 )
+from app.sources.offertoday.research.live_contracts import CensusCandidate
 from app.sources.offertoday.response_policy import OfferTodayResponseKind
 
 
@@ -157,6 +161,132 @@ def _variant(
         job_ids=ids,
         unique_ids=(),
     )
+
+
+def _candidate(**overrides) -> CensusCandidate:
+    values = {
+        "endpoint": "search",
+        "rcd_type": None,
+        "category_ids": tuple(category.code for category in OFFERTODAY_CATEGORIES_L1),
+        "page_size": 50,
+        "max_pages_per_condition": 500,
+        "require_empty_confirmation": True,
+        "max_attempts_per_page": 3,
+        "retry_delays_seconds": (5.0, 15.0),
+        "page_delay_range_seconds": (3.0, 5.0),
+        "session_mode": "fresh-headless",
+        "fixed_repeat_category_ids": (118000, 112000, 127000),
+        "source_artifact_hash": "a" * 64,
+        "rejected_variants": (
+            {
+                "endpoint": "search",
+                "rcd_type": 7,
+                "accepted": True,
+                "failure_count": 0,
+                "missing_ids": 60,
+                "conflicts": 0,
+                "logical_pages": 6,
+                "attempts": 6,
+                "median_latency_ms": 200.0,
+            },
+        ),
+    }
+    values.update(overrides)
+    return CensusCandidate(**values)
+
+
+def test_census_candidate_hashes_sorted_compact_canonical_json() -> None:
+    candidate = _candidate()
+    canonical_payload = {
+        "category_ids": [category.code for category in OFFERTODAY_CATEGORIES_L1],
+        "endpoint": "search",
+        "fixed_repeat_category_ids": [118000, 112000, 127000],
+        "max_attempts_per_page": 3,
+        "max_pages_per_condition": 500,
+        "page_delay_range_seconds": [3.0, 5.0],
+        "page_size": 50,
+        "rcd_type": None,
+        "rejected_variants": [dict(candidate.rejected_variants[0])],
+        "require_empty_confirmation": True,
+        "retry_delays_seconds": [5.0, 15.0],
+        "session_mode": "fresh-headless",
+        "source_artifact_hash": "a" * 64,
+    }
+    expected = hashlib.sha256(
+        json.dumps(
+            canonical_payload,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+
+    assert candidate.candidate_hash == expected
+    assert candidate.to_payload() == {
+        **canonical_payload,
+        "candidate_hash": expected,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("endpoint", "invalid"),
+        ("rcd_type", True),
+        ("category_ids", (118000,)),
+        ("page_size", 49),
+        ("page_size", 50.0),
+        ("max_pages_per_condition", 499),
+        ("max_pages_per_condition", 500.0),
+        ("require_empty_confirmation", False),
+        ("require_empty_confirmation", 1),
+        ("max_attempts_per_page", 2),
+        ("max_attempts_per_page", 3.0),
+        ("retry_delays_seconds", (5.0,)),
+        ("page_delay_range_seconds", (3.0, 4.0)),
+        ("session_mode", "headed"),
+        ("fixed_repeat_category_ids", (118000, 112000)),
+        ("source_artifact_hash", "not-a-hash"),
+    ),
+)
+def test_census_candidate_rejects_controls_outside_the_locked_contract(
+    field_name: str,
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match=field_name):
+        _candidate(**{field_name: value})
+
+
+def test_build_census_candidate_preserves_the_pilot_selected_variant() -> None:
+    ranked = (
+        _variant(
+            "browse",
+            None,
+            logical_pages=2,
+            attempts=2,
+            valid_rows=0,
+            distinct_ids=0,
+            job_ids=(),
+        ),
+        _variant("search", None, distinct_ids=46),
+        _variant("search", 7, accepted=False, failure_count=1),
+    )
+
+    candidate = build_census_candidate(
+        selected_endpoint="search",
+        selected_rcd_type=None,
+        ranked_variants=ranked,
+        source_artifact_hash="b" * 64,
+    )
+
+    assert candidate.endpoint == "search"
+    assert candidate.rcd_type is None
+    assert [item["endpoint"] for item in candidate.rejected_variants] == [
+        "browse",
+        "search",
+    ]
+    assert candidate.rejected_variants[0]["valid_rows"] == 0
+    assert candidate.rejected_variants[1]["failure_count"] == 1
 
 
 @pytest.mark.parametrize(

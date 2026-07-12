@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from statistics import median
 from typing import Sequence
 
@@ -9,6 +9,7 @@ from app.sources.offertoday.listing_runner import (
     ListingRunResult,
     OfferTodayListingCondition,
 )
+from app.sources.offertoday.research.live_contracts import CensusCandidate
 
 _CALIBRATION_CATEGORY_IDS = (118000, 112000)
 _CALIBRATION_ENDPOINTS = ("search", "browse")
@@ -93,6 +94,40 @@ def build_pilot_conditions(
             rcd_type=rcd_type,
         )
         for category in OFFERTODAY_CATEGORIES_L1
+    )
+
+
+def build_census_candidate(
+    *,
+    selected_endpoint: str,
+    selected_rcd_type: int | None,
+    ranked_variants: Sequence[CalibrationVariantSummary],
+    source_artifact_hash: str,
+) -> CensusCandidate:
+    matching = tuple(
+        item
+        for item in ranked_variants
+        if item.endpoint == selected_endpoint and item.rcd_type == selected_rcd_type
+    )
+    if len(matching) != 1 or not matching[0].accepted:
+        raise ValueError("pilot-selected variant must be accepted calibration evidence")
+    rejected_variants = tuple(
+        asdict(item) for item in ranked_variants if item is not matching[0]
+    )
+    return CensusCandidate(
+        endpoint=selected_endpoint,
+        rcd_type=selected_rcd_type,
+        category_ids=tuple(category.code for category in OFFERTODAY_CATEGORIES_L1),
+        page_size=50,
+        max_pages_per_condition=500,
+        require_empty_confirmation=True,
+        max_attempts_per_page=3,
+        retry_delays_seconds=(5.0, 15.0),
+        page_delay_range_seconds=(3.0, 5.0),
+        session_mode="fresh-headless",
+        fixed_repeat_category_ids=(118000, 112000, 127000),
+        source_artifact_hash=source_artifact_hash,
+        rejected_variants=rejected_variants,
     )
 
 

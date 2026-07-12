@@ -19,6 +19,7 @@ from app.sources.offertoday.research.calibration import (
     build_calibration_conditions,
     build_pilot_conditions,
 )
+from app.sources.offertoday.research.live_contracts import CensusCandidate
 from app.sources.offertoday.research.smoke import (
     SMOKE_LISTING_REQUEST_LIMIT,
     runtime_smoke_request_budget,
@@ -1666,6 +1667,128 @@ def _verify_pilot_research_run(artifact_dir: Path) -> LiveRunVerification:
     )
 
 
+def _verify_candidate_research_run(artifact_dir: Path) -> LiveRunVerification:
+    verification = verify_research_artifact(artifact_dir)
+    if not verification.valid:
+        artifact_issues = [
+            *(f"missing_artifact_file:{name}" for name in verification.missing_files),
+            *(
+                f"mismatched_artifact_file:{name}"
+                for name in verification.mismatched_files
+            ),
+        ]
+        return LiveRunVerification(
+            valid=False,
+            issues=tuple(artifact_issues or ["invalid_research_artifact"]),
+            experiment="census-candidate",
+            run_id=None,
+        )
+    try:
+        manifest = json.loads(
+            (artifact_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        candidate_payload = json.loads(
+            (artifact_dir / "candidate.json").read_text(encoding="utf-8")
+        )
+        events = [
+            json.loads(line)
+            for line in (artifact_dir / "observations.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        ]
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        return LiveRunVerification(
+            valid=False,
+            issues=(f"invalid_candidate_json:{type(exc).__name__}",),
+            experiment="census-candidate",
+            run_id=None,
+        )
+
+    metadata = manifest.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    provenance = manifest.get("provenance")
+    provenance = provenance if isinstance(provenance, dict) else {}
+    runtime_context = provenance.get("runtime_context")
+    runtime_context = runtime_context if isinstance(runtime_context, dict) else {}
+    run_id_value = manifest.get("run_id")
+    run_id = run_id_value if isinstance(run_id_value, str) else None
+    issues: list[str] = []
+    try:
+        candidate = CensusCandidate.from_payload(candidate_payload)
+    except (TypeError, ValueError) as exc:
+        candidate = None
+        issues.append(f"invalid_candidate_contract:{type(exc).__name__}")
+
+    if metadata.get("experiment") != "census-candidate":
+        issues.append("unsupported_live_experiment")
+    if metadata.get("crawl_job_id") != run_id:
+        issues.append("crawl_job_id_run_id_mismatch")
+    if metadata.get("crawl_job_status") != "completed":
+        issues.append("invalid_candidate_status")
+    if metadata.get("candidate_frozen") is not True:
+        issues.append("candidate_not_frozen")
+    for field_name in ("parent_artifact_hash", "calibration_artifact_hash"):
+        if _SHA256_RE.fullmatch(str(metadata.get(field_name) or "")) is None:
+            issues.append(f"invalid_{field_name}")
+    if runtime_context.get("command") != "freeze-candidate":
+        issues.append("invalid_candidate_command")
+    if runtime_context.get("session_mode") != "offline":
+        issues.append("invalid_candidate_session_mode")
+
+    if candidate is not None:
+        if metadata.get("candidate_hash") != candidate.candidate_hash:
+            issues.append("candidate_hash_metadata_mismatch")
+        if metadata.get("parent_artifact_hash") != candidate.source_artifact_hash:
+            issues.append("candidate_source_hash_mismatch")
+        if (
+            metadata.get("endpoint") != candidate.endpoint
+            or metadata.get("rcd_type") != candidate.rcd_type
+        ):
+            issues.append("candidate_controls_metadata_mismatch")
+        required_rejection_evidence = {
+            "accepted",
+            "attempts",
+            "conflicts",
+            "failure_count",
+            "logical_pages",
+            "median_latency_ms",
+            "missing_ids",
+            "rejection_reason",
+        }
+        if len(candidate.rejected_variants) != 3 or any(
+            not required_rejection_evidence.issubset(item)
+            for item in candidate.rejected_variants
+        ):
+            issues.append("invalid_candidate_rejection_evidence")
+        if any(
+            item.get("endpoint") == candidate.endpoint
+            and item.get("rcd_type") == candidate.rcd_type
+            for item in candidate.rejected_variants
+        ):
+            issues.append("selected_variant_in_rejection_evidence")
+
+    if len(events) != 1 or not isinstance(events[0], dict):
+        issues.append("invalid_candidate_event_count")
+    else:
+        event = events[0]
+        if event.get("sequence_no") != 1:
+            issues.append("invalid_candidate_event_sequence")
+        if event.get("event_type") != "research.candidate_frozen":
+            issues.append("invalid_candidate_event_type")
+        if event.get("payload") != candidate_payload:
+            issues.append("candidate_event_payload_mismatch")
+        if event.get("emitted_by") != "offertoday-research":
+            issues.append("invalid_candidate_event_emitter")
+
+    return LiveRunVerification(
+        valid=not issues,
+        issues=tuple(issues),
+        experiment="census-candidate",
+        run_id=run_id,
+    )
+
+
 def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     artifact_dir = Path(artifact_dir)
     verification = verify_research_artifact(artifact_dir)
@@ -1711,6 +1834,8 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     experiment = experiment_value if isinstance(experiment_value, str) else None
     run_id_value = manifest.get("run_id")
     run_id = run_id_value if isinstance(run_id_value, str) else None
+    if experiment == "census-candidate":
+        return _verify_candidate_research_run(artifact_dir)
     if experiment == "listing-calibration":
         return _verify_calibration_research_run(artifact_dir)
     if experiment == "category-pilot":
