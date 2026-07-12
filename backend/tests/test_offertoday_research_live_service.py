@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -47,6 +48,7 @@ def listing_result(
         for index in range(1, count + 1)
     )
     condition = build_runtime_smoke_condition()
+    stop_reason = "target_cap" if count >= 20 else "page_cap"
     observation = ListingPageObservation(
         condition_id=condition.condition_id,
         search_family=condition.search_family,
@@ -72,7 +74,7 @@ def listing_result(
         latency_ms=25,
         session_mode="fresh-headless",
         retry_reason=None,
-        stop_reason=None,
+        stop_reason=stop_reason,
     )
     return ListingRunResult(
         ordered_job_ids=tuple(item.job_id for item in identities),
@@ -83,9 +85,33 @@ def listing_result(
         identity_conflicts=(),
         identity_issues=(),
         gaps=(),
-        stop_reason="page_cap",
+        stop_reason=stop_reason,
         is_complete=False,
     )
+
+
+def two_page_listing_result(count: int = 20) -> ListingRunResult:
+    if count <= 10:
+        raise ValueError("two-page fixture requires more than ten identities")
+
+    result = listing_result(count=count)
+    first_page_pairs = result.id_pairs[:10]
+    second_page_pairs = result.id_pairs[10:]
+    first_page = replace(
+        result.observations[0],
+        row_count=len(first_page_pairs),
+        id_pairs=first_page_pairs,
+        stop_reason=None,
+    )
+    second_page = replace(
+        result.observations[0],
+        page=2,
+        request_fingerprint="b" * 64,
+        row_count=len(second_page_pairs),
+        id_pairs=second_page_pairs,
+        stop_reason=result.stop_reason,
+    )
+    return replace(result, observations=(first_page, second_page))
 
 
 def detail_result(
@@ -274,8 +300,8 @@ async def test_run_smoke_uses_exact_listing_budget_and_no_session_preflight() ->
     call = runner_factory.runner.calls[0]
     assert call["conditions"] == (build_runtime_smoke_condition(),)
     assert call["stop_policy"] == ListingStopPolicy(
-        max_pages_per_condition=1,
-        unique_job_cap=None,
+        max_pages_per_condition=2,
+        unique_job_cap=20,
         require_empty_confirmation=False,
     )
     assert call["retry_policy"] == ListingRetryPolicy(
@@ -348,6 +374,46 @@ async def test_run_smoke_fetches_twenty_in_order_with_nineteen_delays() -> None:
     assert factory_kwargs["headed"] is False
     assert factory_kwargs["detail_json_fetcher"].__self__ is runtime
     assert factory_kwargs["detail_json_fetcher"].__func__ is FakeRuntime.fetch_detail_json
+
+
+@pytest.mark.parametrize(
+    "listing_factory",
+    (listing_result, two_page_listing_result),
+    ids=("one-page", "two-page"),
+)
+@pytest.mark.asyncio
+async def test_naturally_exhausted_target_cap_makes_zero_detail_attempts(
+    listing_factory,
+) -> None:
+    listing = listing_factory()
+    observations = (
+        *listing.observations[:-1],
+        replace(listing.observations[-1], has_more=False),
+    )
+    exhausted_listing = replace(listing, observations=observations)
+    detail_factory = DetailScraperFactory()
+    observation_service = FakeObservationService()
+    now, clock = deterministic_clocks()
+    service = OfferTodayResearchLiveService(
+        runner_factory=RunnerFactory(exhausted_listing),
+        detail_scraper_factory=detail_factory,
+        sleep=lambda _seconds: _completed_awaitable(),
+        now=now,
+        clock=clock,
+    )
+
+    execution = await service.run_smoke(
+        runtime=FakeRuntime(),
+        observation_service=observation_service,
+    )
+
+    assert detail_factory.kwargs == []
+    assert detail_factory.scraper.calls == []
+    assert observation_service.detail_attempts == []
+    assert execution.detail_observations == ()
+    assert execution.decision.stop_reason == "listing_target_cap"
+    assert execution.decision.expected_truncation is False
+    assert execution.decision.attempted_count == 0
 
 
 @pytest.mark.asyncio
@@ -472,7 +538,7 @@ async def test_batch_stop_stops_after_first_target_and_accounts_unattempted(
 
 
 @pytest.mark.asyncio
-async def test_fewer_than_twenty_targets_makes_zero_detail_calls() -> None:
+async def test_impossible_one_page_page_cap_makes_zero_detail_calls() -> None:
     detail_factory = DetailScraperFactory()
     observation_service = FakeObservationService()
     now, clock = deterministic_clocks()
@@ -492,7 +558,84 @@ async def test_fewer_than_twenty_targets_makes_zero_detail_calls() -> None:
     assert detail_factory.kwargs == []
     assert detail_factory.scraper.calls == []
     assert observation_service.detail_attempts == []
+    assert execution.detail_observations == ()
+    assert execution.decision.stop_reason == "listing_page_cap"
+    assert execution.decision.expected_truncation is False
+    assert execution.decision.attempted_count == 0
+
+
+@pytest.mark.parametrize(
+    "observation_changes",
+    (
+        ({}, {"has_more": False}),
+        ({}, {"row_count": 0, "id_pairs": ()}),
+        ({"has_more": False}, {}),
+    ),
+    ids=(
+        "final-has-more-false",
+        "final-page-empty",
+        "page-one-has-more-false",
+    ),
+)
+@pytest.mark.asyncio
+async def test_page_cap_terminal_signal_makes_zero_detail_attempts(
+    observation_changes: tuple[dict[str, object], dict[str, object]],
+) -> None:
+    listing = two_page_listing_result(count=19)
+    observations = tuple(
+        replace(observation, **changes)
+        for observation, changes in zip(listing.observations, observation_changes)
+    )
+    invalid_listing = replace(listing, observations=observations)
+    detail_factory = DetailScraperFactory()
+    observation_service = FakeObservationService()
+    now, clock = deterministic_clocks()
+    service = OfferTodayResearchLiveService(
+        runner_factory=RunnerFactory(invalid_listing),
+        detail_scraper_factory=detail_factory,
+        sleep=lambda _seconds: _completed_awaitable(),
+        now=now,
+        clock=clock,
+    )
+
+    execution = await service.run_smoke(
+        runtime=FakeRuntime(),
+        observation_service=observation_service,
+    )
+
+    assert detail_factory.kwargs == []
+    assert detail_factory.scraper.calls == []
+    assert observation_service.detail_attempts == []
+    assert execution.detail_observations == ()
+    assert execution.decision.stop_reason == "listing_page_cap"
+    assert execution.decision.expected_truncation is False
+    assert execution.decision.attempted_count == 0
+
+
+@pytest.mark.asyncio
+async def test_clean_two_page_short_cohort_makes_zero_detail_attempts() -> None:
+    detail_factory = DetailScraperFactory()
+    observation_service = FakeObservationService()
+    now, clock = deterministic_clocks()
+    service = OfferTodayResearchLiveService(
+        runner_factory=RunnerFactory(two_page_listing_result(count=19)),
+        detail_scraper_factory=detail_factory,
+        sleep=lambda _seconds: _completed_awaitable(),
+        now=now,
+        clock=clock,
+    )
+
+    execution = await service.run_smoke(
+        runtime=FakeRuntime(),
+        observation_service=observation_service,
+    )
+
+    assert detail_factory.kwargs == []
+    assert detail_factory.scraper.calls == []
+    assert observation_service.detail_attempts == []
+    assert execution.detail_observations == ()
     assert execution.decision.stop_reason == "insufficient_valid_detail_targets"
+    assert execution.decision.attempted_count == 0
 
 
 @pytest.mark.asyncio

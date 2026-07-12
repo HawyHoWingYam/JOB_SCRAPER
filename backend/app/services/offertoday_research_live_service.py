@@ -31,6 +31,8 @@ from app.sources.offertoday.research.live_contracts import (
     LiveSmokeExecution,
 )
 from app.sources.offertoday.research.smoke import (
+    SMOKE_DETAIL_TARGET_COUNT,
+    SMOKE_LISTING_REQUEST_LIMIT,
     build_runtime_smoke_condition,
     evaluate_smoke,
     freeze_detail_smoke_cohort,
@@ -67,8 +69,8 @@ class OfferTodayResearchLiveService:
         listing_result = await runner.run(
             conditions=(build_runtime_smoke_condition(),),
             stop_policy=ListingStopPolicy(
-                max_pages_per_condition=1,
-                unique_job_cap=None,
+                max_pages_per_condition=SMOKE_LISTING_REQUEST_LIMIT,
+                unique_job_cap=SMOKE_DETAIL_TARGET_COUNT,
                 require_empty_confirmation=False,
             ),
             retry_policy=ListingRetryPolicy(
@@ -80,7 +82,10 @@ class OfferTodayResearchLiveService:
             staging_sink=staging_sink,
             session_mode="fresh-headless",
         )
-        frozen_targets = freeze_detail_smoke_cohort(listing_result, limit=20)
+        frozen_targets = freeze_detail_smoke_cohort(
+            listing_result,
+            limit=SMOKE_DETAIL_TARGET_COUNT,
+        )
         observation_service.record_event(
             "research.detail_cohort_frozen",
             {

@@ -12,6 +12,7 @@ from app.sources.offertoday.research.live_contracts import (
 )
 
 
+SMOKE_LISTING_REQUEST_LIMIT = 2
 SMOKE_DETAIL_TARGET_COUNT = 20
 
 _SMOKE_FAILURE_KINDS = {
@@ -22,6 +23,13 @@ _SMOKE_FAILURE_KINDS = {
     "invalid_payload",
     "id_mismatch",
 }
+
+
+def runtime_smoke_request_budget() -> dict[str, int]:
+    return {
+        "listing": SMOKE_LISTING_REQUEST_LIMIT,
+        "detail": SMOKE_DETAIL_TARGET_COUNT,
+    }
 
 
 def build_runtime_smoke_condition() -> OfferTodayListingCondition:
@@ -71,18 +79,50 @@ def freeze_detail_smoke_cohort(
     return tuple(targets)
 
 
-def _is_expected_listing_truncation(listing_result: ListingRunResult) -> bool:
+def _is_clean_bounded_listing_end(listing_result: ListingRunResult) -> bool:
     listing_attempts = listing_result.observations
+    if not 1 <= len(listing_attempts) <= SMOKE_LISTING_REQUEST_LIMIT:
+        return False
+
+    if tuple(item.page for item in listing_attempts) != tuple(
+        range(1, len(listing_attempts) + 1)
+    ):
+        return False
+
     return (
-        len(listing_attempts) == 1
-        and listing_attempts[0].page == 1
-        and listing_attempts[0].attempt == 1
-        and listing_attempts[0].classification == "success"
-        and listing_result.stop_reason == "page_cap"
+        all(
+            item.attempt == 1
+            and item.classification == "success"
+            and item.search_family == "runtime_smoke"
+            and item.category_id == 118000
+            and item.keyword == ""
+            and item.endpoint == "search"
+            and item.rcd_type == 7
+            and item.session_mode == "fresh-headless"
+            for item in listing_attempts
+        )
+        and all(
+            item.row_count > 0 and item.has_more is not False
+            for item in listing_attempts
+        )
+        and all(item.stop_reason is None for item in listing_attempts[:-1])
+        and listing_attempts[-1].stop_reason == listing_result.stop_reason
+        and listing_result.stop_reason in {"target_cap", "page_cap"}
+        and (
+            listing_result.stop_reason != "page_cap"
+            or len(listing_attempts) == SMOKE_LISTING_REQUEST_LIMIT
+        )
         and listing_result.is_complete is False
         and not listing_result.gaps
         and not listing_result.identity_issues
         and not listing_result.identity_conflicts
+    )
+
+
+def _is_expected_listing_truncation(listing_result: ListingRunResult) -> bool:
+    return (
+        _is_clean_bounded_listing_end(listing_result)
+        and listing_result.stop_reason == "target_cap"
     )
 
 
@@ -128,8 +168,8 @@ def evaluate_smoke(
     if type(required_target_count) is not int or required_target_count < 1:
         raise ValueError("required_target_count must be a positive exact integer")
 
-    expected_truncation = _is_expected_listing_truncation(listing_result)
-    if not expected_truncation:
+    clean_bounded_listing_end = _is_clean_bounded_listing_end(listing_result)
+    if not clean_bounded_listing_end:
         return _failed_decision(
             reason=f"listing_{listing_result.stop_reason}",
             expected_truncation=False,
@@ -140,6 +180,14 @@ def evaluate_smoke(
         return _failed_decision(
             reason="insufficient_valid_detail_targets",
             expected_truncation=True,
+            frozen=frozen_targets,
+            observations=observations,
+        )
+    expected_truncation = _is_expected_listing_truncation(listing_result)
+    if not expected_truncation:
+        return _failed_decision(
+            reason=f"listing_{listing_result.stop_reason}",
+            expected_truncation=False,
             frozen=frozen_targets,
             observations=observations,
         )

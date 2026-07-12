@@ -17,6 +17,7 @@ from app.sources.offertoday.listing_runner import (
     OfferTodayIdentityPair,
     OfferTodayListingCondition,
 )
+from app.sources.offertoday.research import smoke as smoke_module
 from app.sources.offertoday.research.live_contracts import (
     DetailSmokeObservation,
     DetailSmokeTarget,
@@ -83,7 +84,7 @@ def listing_result(
     identity_conflicts: tuple[ListingIdentityConflict, ...] = (),
     identity_issues: tuple[ListingIdentityIssue, ...] = (),
     gaps: tuple[ListingGap, ...] = (),
-    stop_reason: str = "page_cap",
+    stop_reason: str = "target_cap",
     is_complete: bool = False,
 ) -> ListingRunResult:
     default_pairs = tuple(pair(f"j{index}", f"e{index}") for index in range(1, 21))
@@ -94,7 +95,13 @@ def listing_result(
         accepted_job_ids=(chosen_ids if accepted_job_ids is None else accepted_job_ids),
         id_pairs=chosen_pairs,
         observations=(
-            (page_observation(id_pairs=chosen_pairs),)
+            (
+                page_observation(
+                    id_pairs=chosen_pairs,
+                    row_count=len(chosen_pairs),
+                    stop_reason=stop_reason,
+                ),
+            )
             if observations is None
             else observations
         ),
@@ -104,6 +111,38 @@ def listing_result(
         gaps=gaps,
         stop_reason=stop_reason,
         is_complete=is_complete,
+    )
+
+
+def two_page_listing_result(count: int = 20) -> ListingRunResult:
+    if count <= 10:
+        raise ValueError("two-page fixture requires more than ten identities")
+
+    chosen_pairs = tuple(pair(f"j{index}", f"e{index}") for index in range(1, count + 1))
+    first_page_pairs = chosen_pairs[:10]
+    second_page_pairs = chosen_pairs[10:]
+    stop_reason = "target_cap" if count >= 20 else "page_cap"
+    return listing_result(
+        id_pairs=chosen_pairs,
+        observations=(
+            page_observation(
+                page=1,
+                request_fingerprint="a" * 64,
+                reported_total=count,
+                row_count=len(first_page_pairs),
+                id_pairs=first_page_pairs,
+                stop_reason=None,
+            ),
+            page_observation(
+                page=2,
+                request_fingerprint="b" * 64,
+                reported_total=count,
+                row_count=len(second_page_pairs),
+                id_pairs=second_page_pairs,
+                stop_reason=stop_reason,
+            ),
+        ),
+        stop_reason=stop_reason,
     )
 
 
@@ -153,6 +192,17 @@ def test_smoke_condition_is_the_locked_compatibility_control() -> None:
         endpoint="search",
         rcd_type=7,
     )
+
+
+def test_runtime_smoke_request_budget_returns_fresh_exact_values() -> None:
+    first = smoke_module.runtime_smoke_request_budget()
+    first["listing"] = 999
+    first["detail"] = 999
+
+    second = smoke_module.runtime_smoke_request_budget()
+
+    assert second == {"listing": 2, "detail": 20}
+    assert second is not first
 
 
 def test_freeze_detail_cohort_is_distinct_first_seen_and_accepted_only() -> None:
@@ -239,7 +289,7 @@ def test_freeze_detail_cohort_rejects_invalid_limit(limit) -> None:
         freeze_detail_smoke_cohort(listing_result(), limit=limit)
 
 
-def test_listing_ready_requires_one_clean_successful_page_cap() -> None:
+def test_listing_ready_accepts_clean_one_page_target_cap() -> None:
     result = listing_result()
     targets = freeze_detail_smoke_cohort(result, limit=20)
 
@@ -257,6 +307,138 @@ def test_listing_ready_requires_one_clean_successful_page_cap() -> None:
         )
         is False
     )
+
+
+def test_listing_ready_accepts_clean_two_page_target_cap() -> None:
+    result = two_page_listing_result()
+    targets = freeze_detail_smoke_cohort(result, limit=20)
+
+    assert listing_ready_for_detail_smoke(result, targets) is True
+
+
+@pytest.mark.parametrize(
+    "result",
+    (listing_result(), two_page_listing_result()),
+    ids=("one-page", "two-page"),
+)
+def test_naturally_exhausted_target_cap_is_not_expected_listing_truncation(
+    result: ListingRunResult,
+) -> None:
+    observations = (
+        *result.observations[:-1],
+        replace(result.observations[-1], has_more=False),
+    )
+    exhausted_result = replace(result, observations=observations)
+    targets = freeze_detail_smoke_cohort(exhausted_result, limit=20)
+
+    assert listing_ready_for_detail_smoke(exhausted_result, targets) is False
+
+    decision = evaluate_smoke(
+        listing_result=exhausted_result,
+        frozen_targets=targets,
+        observations=(),
+    )
+
+    assert decision.smoke_passed is False
+    assert decision.stop_reason == "listing_target_cap"
+    assert decision.expected_truncation is False
+    assert decision.attempted_count == 0
+
+
+def test_one_page_page_cap_is_not_a_clean_bounded_listing_end() -> None:
+    identities = tuple(pair(f"j{index}", f"e{index}") for index in range(1, 20))
+    result = listing_result(id_pairs=identities, stop_reason="page_cap")
+    targets = freeze_detail_smoke_cohort(result, limit=20)
+
+    assert listing_ready_for_detail_smoke(result, targets) is False
+
+    decision = evaluate_smoke(
+        listing_result=result,
+        frozen_targets=targets,
+        observations=(),
+    )
+
+    assert decision.smoke_passed is False
+    assert decision.stop_reason == "listing_page_cap"
+    assert decision.expected_truncation is False
+    assert decision.attempted_count == 0
+
+
+@pytest.mark.parametrize(
+    "observation_changes",
+    (
+        ({}, {"has_more": False}),
+        ({}, {"row_count": 0, "id_pairs": ()}),
+        ({"has_more": False}, {}),
+    ),
+    ids=(
+        "final-has-more-false",
+        "final-page-empty",
+        "page-one-has-more-false",
+    ),
+)
+def test_page_cap_terminal_signal_is_not_a_clean_bounded_listing_end(
+    observation_changes: tuple[dict[str, object], dict[str, object]],
+) -> None:
+    result = two_page_listing_result(19)
+    observations = tuple(
+        replace(observation, **changes)
+        for observation, changes in zip(result.observations, observation_changes)
+    )
+    invalid_result = replace(result, observations=observations)
+    targets = freeze_detail_smoke_cohort(invalid_result, limit=20)
+
+    assert listing_ready_for_detail_smoke(invalid_result, targets) is False
+
+    decision = evaluate_smoke(
+        listing_result=invalid_result,
+        frozen_targets=targets,
+        observations=(),
+    )
+
+    assert decision.smoke_passed is False
+    assert decision.stop_reason == "listing_page_cap"
+    assert decision.expected_truncation is False
+    assert decision.attempted_count == 0
+
+
+@pytest.mark.parametrize(
+    "observation_changes",
+    (
+        ({"page": 2}, {"page": 3}),
+        ({}, {"page": 1}),
+        ({}, {"attempt": 2}),
+    ),
+    ids=("starts-at-page-two", "duplicate-page-one", "page-two-retry"),
+)
+def test_listing_ready_rejects_invalid_page_attempts(
+    observation_changes: tuple[dict[str, int], dict[str, int]],
+) -> None:
+    result = two_page_listing_result()
+    observations = tuple(
+        replace(observation, **changes)
+        for observation, changes in zip(result.observations, observation_changes)
+    )
+    invalid_result = replace(result, observations=observations)
+    targets = freeze_detail_smoke_cohort(invalid_result, limit=20)
+
+    assert listing_ready_for_detail_smoke(invalid_result, targets) is False
+
+
+def test_evaluate_smoke_two_page_short_cohort_stops_before_details() -> None:
+    result = two_page_listing_result(19)
+    targets = freeze_detail_smoke_cohort(result, limit=20)
+
+    decision = evaluate_smoke(
+        listing_result=result,
+        frozen_targets=targets,
+        observations=(),
+    )
+
+    assert decision.smoke_passed is False
+    assert decision.stop_reason == "insufficient_valid_detail_targets"
+    assert decision.expected_truncation is True
+    assert decision.attempted_count == 0
 
 
 def test_evaluate_smoke_accepts_twenty_successes() -> None:
@@ -305,9 +487,7 @@ def test_evaluate_smoke_rejects_fewer_than_twenty_frozen_targets() -> None:
     targets = frozen_targets(19)
 
     decision = evaluate_smoke(
-        listing_result=listing_result(
-            id_pairs=tuple(pair(item.job_id, item.encrypted_job_id) for item in targets)
-        ),
+        listing_result=listing_result(),
         frozen_targets=targets,
         observations=(),
     )

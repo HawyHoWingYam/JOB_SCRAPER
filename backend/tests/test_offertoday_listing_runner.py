@@ -540,6 +540,47 @@ async def test_unique_job_cap_is_an_explicit_incomplete_target_stop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_two_page_target_cap_collects_twenty_and_never_requests_page_three() -> (
+    None
+):
+    def jobid_only_rows(start: int, stop: int) -> list[dict[str, Any]]:
+        rows = []
+        for number in range(start, stop):
+            row = _listing_row(f"j{number:02d}", None)
+            row.pop("encryptJobId")
+            rows.append(row)
+        return rows
+
+    transport = ScriptedTransport(
+        _listing_response(jobid_only_rows(1, 11), has_more=True, total=21),
+        _listing_response(jobid_only_rows(11, 21), has_more=True, total=21),
+        _listing_response(jobid_only_rows(21, 22), has_more=False, total=21),
+    )
+
+    result, observations, _staging, _sleep = await _run(
+        transport,
+        max_pages=2,
+        max_attempts=1,
+        unique_job_cap=20,
+        require_empty_confirmation=False,
+    )
+
+    expected_ids = tuple(f"j{number:02d}" for number in range(1, 21))
+    assert [request[0]["page"] for request in transport.requests] == [1, 2]
+    assert len(transport.steps) == 1
+    assert result.accepted_job_ids == expected_ids
+    assert tuple(pair.encrypted_job_id_source for pair in result.id_pairs) == (
+        "jobId_fallback",
+    ) * 20
+    assert [item.stop_reason for item in observations.observations] == [
+        None,
+        "target_cap",
+    ]
+    assert result.stop_reason == "target_cap"
+    assert result.is_complete is False
+
+
+@pytest.mark.asyncio
 async def test_unique_job_cap_precedes_terminal_completion_when_confirmation_disabled() -> (
     None
 ):
