@@ -15,11 +15,12 @@
 - This plan authorizes deterministic code, test, documentation, compilation, lint, and offline artifact verification only.
 - Do not make an OfferToday HTTP request while executing Tasks 1-7.
 - Keep `backend/runtime/offertoday-research/fab9d8e1-4c12-4170-a539-c0a6cdbbca93` byte-for-byte unchanged. It remains the immutable failed Task 8 artifact with manifest SHA-256 `1928423eed6cfd95e4cd2a3af3eb1d62c2ea6d460b122acb0ca0fefcfb4b548b`.
+- Keep `backend/runtime/offertoday-research/63b9d32a-5d47-44c9-8904-25a68ee2dee8` byte-for-byte unchanged. It remains the immutable identity-corrected but target-count-incomplete Task 8 artifact with manifest SHA-256 `a009be467c30b538e31be501cc3bbb38a528b56c2fe7268507df572dda7336d3`; it does not satisfy Task 8 and triggered the separate two-page amendment.
 - Do not capture replacement-smoke baselines, run a replacement smoke, or start Plan 2 Tasks 9-15 until the deterministic implementation has passed review and the user separately authorizes exactly one replacement Task 8 smoke.
 - Do not modify `backend/alembic/`, `backend/app/models/`, Compose files, or environment files.
 - Keep auth expiry, WAF/IP block, transport, pacing, retry, batch-stop, and terminal code `2520` behavior unchanged; identity fallback must not reclassify those outcomes.
 - The worktree is already dirty. In particular, preserve unrelated hunks in `backend/app/scraper/offertoday_browser_runtime.py`, `backend/scripts/offertoday_standalone_crawl.py`, and `backend/tests/test_offertoday_browser_runtime.py`.
-- The failed smoke returned 10 rows even though the locked request asked for page size 50, while the existing Task 8 acceptance gate still requires at least 20 distinct targets from one listing request. This identity correction does not silently weaken that separately approved gate. Before any replacement smoke, report that the unchanged gate will stop with `insufficient_valid_detail_targets` and zero detail requests if OfferToday again returns only 10 rows; accepting all available rows or allowing another listing request requires a separate user-approved amendment.
+- Historical pre-amendment evidence: the first failed smoke returned 10 rows even though the locked request asked for page size 50, while the then-current Task 8 acceptance gate required at least 20 distinct targets from one listing request. This identity correction did not silently weaken that separately approved gate. The later identity-corrected run `63b9d32a-5d47-44c9-8904-25a68ee2dee8` again returned 10 usable targets, stopped with `insufficient_valid_detail_targets`, and made zero detail requests; that target-count-incomplete evidence triggered the separately approved two-page amendment. This bullet records the superseded contract and does not reinstate it.
 
 ## File Map
 
@@ -47,7 +48,7 @@
 - Modify `backend/app/services/offertoday_research_live_service.py`: pass and record provenance through the no-write detail loop.
 - Modify `backend/app/services/offertoday_research_observation_service.py`: persist the aggregate fallback counter in durable smoke metrics.
 - Modify `backend/app/sources/offertoday/research/stage_gate.py`: verify fallback counts, baseline identity counters, target provenance, frozen order, and strict replay without constructing live dependencies.
-- Modify `backend/scripts/offertoday_research_census.py`: include new fallback counters in summaries while retaining the exact `listing=1/detail=20` budget.
+- Modify `backend/scripts/offertoday_research_census.py`: include new fallback counters in summaries while using the current replacement-smoke `listing=2/detail=20` budget; retain legacy `listing=1/detail=20` only for strict offline replay of failed artifacts.
 - Modify `backend/tests/test_offertoday_research_smoke.py`, `backend/tests/test_offertoday_research_live_service.py`, `backend/tests/test_offertoday_research_stage_gate.py`, and `backend/tests/test_offertoday_research_census_cli.py`: cover provenance serialization and offline replay.
 
 ### Production staging, targeting, and detail/repair propagation
@@ -1847,7 +1848,7 @@ python -m pytest -q `
   backend/tests/test_offertoday_canonical_and_identity.py
 ```
 
-Expected: all tests pass; completed fallback artifacts replay strictly offline, tampered source/count evidence fails, and the locked one-listing/20-detail budget is unchanged.
+Expected: all tests pass; completed fallback artifacts replay strictly offline, tampered source/count evidence fails, the current two-listing/20-detail budget is enforced, and legacy one-listing/20-detail compatibility is limited to fail-only offline replay.
 
 - [ ] **Step 8: Verify the immutable failed artifact offline**
 
@@ -3331,7 +3332,7 @@ Report:
 - compile/Ruff/offline replay results;
 - forbidden-range and dirty-worktree results;
 - confirmation that no OfferToday request occurred; and
-- the proposed one replacement Task 8 smoke budget: one listing request, at most 20 detail requests, no retries, same browser, zero product writes.
+- the proposed one replacement Task 8 smoke budget: at most two ordered listing requests, at most 20 detail requests, no retries, same browser, zero product writes.
 
 Do not capture replacement baselines or execute the replacement smoke in this task. Wait for explicit user authorization.
 
@@ -3353,7 +3354,7 @@ Do not capture replacement baselines or execute the replacement smoke in this ta
 | Repair preserves provenance | Offline and typed network result round-trip tests |
 | Artifact provenance is replayable | Target source/hash, page fallback count, tamper tests, offline `verify-run` |
 | Smoke remains bounded and no-write | Existing stage gate, lifecycle, no-op sink, DB hash, and request budget tests |
-| Failed Task 8 evidence remains immutable | Exact artifact manifest hash before/after offline verification |
+| Both failed Task 8 artifacts remain immutable and unaccepted | Exact artifact manifest hashes before/after offline verification; neither run satisfies Task 8 |
 | Later Plan 2 stages remain locked | Documentation amendment, source-range review, and explicit stop before live work |
 
 ## Commit Sequence

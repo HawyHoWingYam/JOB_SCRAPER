@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the stage-gated Plan 2 live research path, run one production-equivalent listing request plus a frozen 20-detail diagnostic smoke, then use verified evidence to calibrate and execute three reproducible 31-category listing censuses without changing production defaults.
+**Goal:** Build the stage-gated Plan 2 live research path, run at most two ordered production-equivalent listing requests plus a frozen 20-detail diagnostic smoke, then use verified evidence to calibrate and execute three reproducible 31-category listing censuses without changing production defaults.
 
 **Architecture:** Keep the Plan 1 CLI offline-only and add a separate live research entry point backed by pure contracts, the shared `OfferTodayListingRunner`, the shared browser/detail classifiers, the existing crawl-job research ledger, and immutable artifacts. Tasks 1–8 are the immediate smoke deliverable; Tasks 9–15 remain hard-gated behind an accepted smoke and implement calibration, pilot, candidate freeze, full censuses, and stability comparison.
 
@@ -18,8 +18,8 @@ Immediate scope:
 
 - add the live-only research contracts, stage gate, ledger methods, smoke service, and CLI;
 - recapture two matching read-only database baselines;
-- make exactly one listing API attempt for category `118000`, endpoint `search`, `rcdType=7`, page 1;
-- freeze the first 20 accepted distinct `(jobId, resolved_route_id, encrypted_job_id_source)` identities;
+- make at most two ordered listing API attempts for category `118000`, endpoint `search`, `rcdType=7`, page 1 followed only when needed by page 2;
+- stop at `target_cap` and freeze the first 20 accepted distinct `(jobId, resolved_route_id, encrypted_job_id_source)` identities across the bounded result;
 - fetch those 20 details sequentially with no retry and a three-second inter-request delay;
 - persist only the tagged crawl job/events and the ignored research artifact;
 - prove staging, Job, and Company state did not change; and
@@ -75,9 +75,11 @@ These counts are historical provenance. An authorized replacement Task 8 recaptu
 
 ## Task 8 Correction Gate
 
-The original Task 8 attempt, run `fab9d8e1-4c12-4170-a539-c0a6cdbbca93`, failed because all ten returned listing rows were valid `jobId`-only rows under the corrected identity contract. It is immutable failed evidence, not an accepted smoke, and its artifact at `backend/runtime/offertoday-research/fab9d8e1-4c12-4170-a539-c0a6cdbbca93` must remain unchanged with manifest SHA-256 `1928423eed6cfd95e4cd2a3af3eb1d62c2ea6d460b122acb0ca0fefcfb4b548b`.
+Historical failed-run evidence from the first authorized Task 8 smoke: run `fab9d8e1-4c12-4170-a539-c0a6cdbbca93` made one listing request and failed because all ten returned listing rows were valid `jobId`-only rows under the corrected identity contract. It is immutable failed evidence, not an accepted smoke, and its artifact at `backend/runtime/offertoday-research/fab9d8e1-4c12-4170-a539-c0a6cdbbca93` must remain unchanged with manifest SHA-256 `1928423eed6cfd95e4cd2a3af3eb1d62c2ea6d460b122acb0ca0fefcfb4b548b`.
 
-Before any replacement smoke, complete and verify the deterministic correction in `docs/superpowers/plans/2026-07-11-offertoday-jobid-only-identity-compatibility.md`, pass its offline review gates, and then obtain separate explicit user approval for exactly one replacement Task 8 smoke. The existing Task 8 execution steps below describe that replacement only; they are not authorization to run it. Task 8 remains unaccepted and Task 9 remains locked.
+Historical failed-run evidence from the identity-corrected replacement smoke: run `63b9d32a-5d47-44c9-8904-25a68ee2dee8` made one listing request, accepted 10 valid `jobId_fallback` identities without an identity issue or conflict, froze 10 targets, made zero detail requests, and exited `3` with `insufficient_valid_detail_targets`. It is target-count-incomplete evidence, not an accepted smoke, and its artifact at `backend/runtime/offertoday-research/63b9d32a-5d47-44c9-8904-25a68ee2dee8` must remain unchanged with manifest SHA-256 `a009be467c30b538e31be501cc3bbb38a528b56c2fe7268507df572dda7336d3`. This run triggered the two-page amendment.
+
+Neither failed artifact satisfies Task 8. Before another replacement smoke, complete and verify the deterministic correction in `docs/superpowers/plans/2026-07-11-offertoday-jobid-only-identity-compatibility.md` and the two-page amendment in `docs/superpowers/plans/2026-07-12-offertoday-two-page-task8-smoke.md`, pass the full offline review gate, and then obtain separate explicit user approval for exactly one replacement Task 8 smoke. The existing Task 8 execution steps below describe that replacement only; they are not authorization to run it. Task 8 remains unaccepted and Task 9 remains locked.
 
 ## File Map
 
@@ -117,14 +119,14 @@ Before any replacement smoke, complete and verify the deterministic correction i
 ## Fixed Contracts
 
 ```text
-Smoke listing budget       = 1 API attempt
+Smoke listing budget       = 2 logical API requests maximum
 Smoke detail budget        = 20 API attempts
 Smoke detail concurrency   = 1
 Smoke detail retry         = 0
 Smoke inter-request delay  = 3.0 seconds
-Smoke condition            = category 118000, endpoint search, rcdType 7, page 1
+Smoke condition            = category 118000, endpoint search, rcdType 7, page 1 then optional page 2
 Smoke persistence          = crawl_job + research events + artifact only
-Smoke runner completion    = preserve page_cap/incomplete when the page has more data
+Smoke runner completion    = target_cap at 20 distinct canonical IDs; page_cap after page 2 is incomplete
 Smoke experiment decision  = separate smoke_passed boolean
 ```
 
@@ -171,7 +173,7 @@ def test_plan2_metadata_adds_parent_and_exact_request_budget():
         planner_version="def456",
         plan=2,
         parent_artifact_hash="a" * 64,
-        request_budget={"listing": 1, "detail": 20},
+        request_budget={"listing": 2, "detail": 20},
     )
 
     assert metadata.to_request_payload()["research"] == {
@@ -181,7 +183,7 @@ def test_plan2_metadata_adds_parent_and_exact_request_budget():
         "planner_version": "def456",
         "plan": 2,
         "parent_artifact_hash": "a" * 64,
-        "request_budget": {"listing": 1, "detail": 20},
+        "request_budget": {"listing": 2, "detail": 20},
     }
 ```
 
@@ -575,7 +577,7 @@ class LiveSmokeExecution:
     stage_calls: int
 ```
 
-Test helpers must construct real runner contracts rather than mocks with a different shape:
+Test helpers must construct real runner contracts rather than mocks with a different shape. Add a real `page_observation()` helper, make the default accepted fixture a one-page `target_cap`, and add a two-page fixture that splits first-seen canonical identities across ordered pages 1 and 2:
 
 ```python
 def pair(
@@ -600,12 +602,12 @@ def listing_result(
         ordered_job_ids=ordered_job_ids,
         accepted_job_ids=accepted_job_ids,
         id_pairs=id_pairs,
-        observations=(),
+        observations=(page_observation(stop_reason="target_cap"),),
         condition_outcomes=(),
         identity_conflicts=(),
         identity_issues=(),
         gaps=(),
-        stop_reason="page_cap",
+        stop_reason="target_cap",
         is_complete=False,
     )
 ```
@@ -614,7 +616,9 @@ Cases:
 
 - 20 success observations pass;
 - 19 success plus one `terminal_unavailable` pass;
-- fewer than 20 frozen targets fail with `insufficient_valid_detail_targets`;
+- a one-page or ordered two-page `target_cap` with 20 first-seen distinct canonical IDs is listing-ready;
+- fewer than 20 frozen targets after page 2 fail with `insufficient_valid_detail_targets` and zero detail attempts;
+- page 3, retries, duplicate/out-of-order pages, or a page attempt after cohort freeze fail evidence validation;
 - auth, WAF, IP block, transport, invalid payload, or ID mismatch fails;
 - a batch stop permits later unattempted targets but still fails;
 - an unattempted target without a batch stop fails;
@@ -633,7 +637,7 @@ Expected: imports fail for the new modules.
 
 `build_runtime_smoke_condition()` returns the locked condition. `freeze_detail_smoke_cohort()` iterates `ListingRunResult.id_pairs`, validates and preserves each pair's exact `encrypted_job_id_source`, filters by `accepted_job_ids`, deduplicates `job_id`, preserves first-seen order, and stops at the exact limit.
 
-Add `listing_ready_for_detail_smoke(listing_result, frozen_targets)` and return true only for one successful page-1 attempt, `page_cap`, no gap/identity evidence, and exactly 20 frozen targets. The live service uses this predicate before detail request 1.
+Add `_is_clean_bounded_listing_end()` for one or two successful ordered attempts beginning at page 1, with no retries, gaps, identity issues, or conflicts. Add `_is_expected_listing_truncation()` to require `target_cap`, then make `listing_ready_for_detail_smoke(listing_result, frozen_targets)` additionally require exactly 20 frozen targets. The live service uses this predicate before detail request 1.
 
 Implement the evaluator with these forbidden nonterminal outcomes:
 
@@ -648,7 +652,7 @@ _SMOKE_FAILURE_KINDS = {
 }
 ```
 
-Only `success` and `terminal_unavailable` are acceptable. A success requires identity, parser, title, company, and description flags all true. Preserve the listing runner's `page_cap` and `is_complete=False`; set `expected_truncation=True` only for a successful page-1 `page_cap` with no gap/identity evidence.
+Only `success` and `terminal_unavailable` are acceptable. A success requires identity, parser, title, company, and description flags all true. Preserve the listing runner's bounded result and `is_complete=False`; set `expected_truncation=True` only for a clean one- or two-page `target_cap` with no gap/identity evidence. A clean two-page `page_cap` with fewer than 20 targets remains bounded incomplete evidence and fails before any detail attempt.
 
 Implement the decision in this order so a later count error cannot hide a listing or hard-stop failure:
 
@@ -660,19 +664,8 @@ def evaluate_smoke(
     observations: tuple[DetailSmokeObservation, ...],
     required_target_count: int = 20,
 ) -> SmokeDecision:
-    listing_attempts = listing_result.observations
-    expected_truncation = (
-        len(listing_attempts) == 1
-        and listing_attempts[0].page == 1
-        and listing_attempts[0].attempt == 1
-        and listing_attempts[0].classification == "success"
-        and listing_result.stop_reason == "page_cap"
-        and listing_result.is_complete is False
-        and not listing_result.gaps
-        and not listing_result.identity_issues
-        and not listing_result.identity_conflicts
-    )
-    if not expected_truncation:
+    clean_bounded_listing_end = _is_clean_bounded_listing_end(listing_result)
+    if not clean_bounded_listing_end:
         return _failed_decision(
             reason=f"listing_{listing_result.stop_reason}",
             expected_truncation=False,
@@ -683,6 +676,14 @@ def evaluate_smoke(
         return _failed_decision(
             reason="insufficient_valid_detail_targets",
             expected_truncation=True,
+            frozen=frozen_targets,
+            observations=observations,
+        )
+    expected_truncation = _is_expected_listing_truncation(listing_result)
+    if not expected_truncation:
+        return _failed_decision(
+            reason=f"listing_{listing_result.stop_reason}",
+            expected_truncation=False,
             frozen=frozen_targets,
             observations=observations,
         )
@@ -909,7 +910,7 @@ git commit -m "feat(offertoday): record live research smoke lifecycle"
 
 ---
 
-### Task 5: Orchestrate One Listing and the Frozen 20-Detail Cohort
+### Task 5: Orchestrate At Most Two Ordered Listings and the Frozen 20-Detail Cohort
 
 **Files:**
 - Create: `backend/app/services/offertoday_research_live_service.py`
@@ -921,8 +922,8 @@ Use an injected runtime and runner factory. Assert the service calls the runner 
 
 ```python
 ListingStopPolicy(
-    max_pages_per_condition=1,
-    unique_job_cap=None,
+    max_pages_per_condition=2,
+    unique_job_cap=20,
     require_empty_confirmation=False,
 )
 
@@ -946,7 +947,9 @@ Cover:
 - no target is retried;
 - code 2520 proceeds to the next target;
 - auth/WAF/IP/ID mismatch stops and marks later targets unattempted;
-- fewer than 20 listing targets triggers zero detail calls;
+- page 1 with 20 accepted canonical IDs stops at `target_cap` without requesting page 2;
+- page 1 followed by page 2 can freeze the first 20 accepted canonical IDs in cross-page order and never requests page 3;
+- fewer than 20 listing targets after page 2 triggers zero detail calls and `insufficient_valid_detail_targets`;
 - unexpected `TypeError` propagates after no retry and no extra detail call; and
 - the injected `OfferTodayBrowserDetailScraper` uses `runtime.fetch_detail_json`, so no second browser starts.
 
@@ -996,8 +999,8 @@ async def run_smoke(
     listing_result = await runner.run(
         conditions=(build_runtime_smoke_condition(),),
         stop_policy=ListingStopPolicy(
-            max_pages_per_condition=1,
-            unique_job_cap=None,
+            max_pages_per_condition=2,
+            unique_job_cap=20,
             require_empty_confirmation=False,
         ),
         retry_policy=ListingRetryPolicy(
@@ -1153,7 +1156,7 @@ Tests must assert:
 - `--help` dispatches in a subprocess; and
 - the live script imports browser modules only after backend bootstrap.
 
-For `verify-run`, assert browser/runtime factories are never constructed. It must verify the manifest, require exactly one terminal `research.run_summary`, reject events after the summary, check request counts against metadata budgets, and check status/summary consistency.
+For `verify-run`, assert browser/runtime factories are never constructed. It must verify the manifest, require exactly one terminal `research.run_summary`, reject events after the summary, check request counts against the listing `2` / detail `20` metadata budget, require page 1 followed optionally by page 2 with attempt number 1, reject page 3 or any page attempt after cohort freeze, and check status/summary consistency.
 
 - [ ] **Step 2: Write failing lifecycle tests**
 
@@ -1300,7 +1303,7 @@ The live artifact metadata must include:
     "crawl_job_id": run_id,
     "crawl_job_status": terminal_status,
     "parent_artifact_hash": baseline_gate.parent_artifact_hash,
-    "request_budget": {"listing": 1, "detail": 20},
+    "request_budget": {"listing": 2, "detail": 20},
     "smoke_passed": decision.smoke_passed if decision is not None else False,
 }
 ```
@@ -1412,7 +1415,9 @@ Expected: no migration/model/Compose/env output; unrelated dirty files remain.
 Request a spec review against the approved Plan 2 design, fix every gap, and re-review. Then request a code-quality review, fix every Critical/Important issue, and re-review. The review must explicitly confirm:
 
 - offline CLI remains offline;
-- exactly one listing and at most 20 details;
+- at most two ordered listing requests, page 1 followed optionally by page 2, and at most 20 details;
+- `target_cap` with 20 first-seen distinct canonical IDs before detail request 1;
+- page 3, retries, and page attempts after cohort freeze are rejected;
 - no retries in the smoke;
 - no smoke staging/Job/Company writes;
 - same-browser detail fetching;
@@ -1433,13 +1438,13 @@ If no changes were required, do not create an empty commit.
 
 ---
 
-### Task 8: Capture Fresh Baselines and Execute the One-Listing/20-Detail Smoke
+### Task 8: Capture Fresh Baselines and Execute the At-Most-Two-Listing/20-Detail Smoke
 
 **Files:**
 - Runtime evidence only under ignored `backend/runtime/offertoday-research/`.
 - No source or test edits unless the smoke exposes a reproducible implementation defect.
 
-> **Replacement-only gate:** Do not execute any step in this task until the deterministic compatibility plan is complete and reviewed and the user separately authorizes exactly one replacement smoke. The failed original run remains immutable evidence and does not satisfy Task 8.
+> **Replacement-only gate:** Do not execute any step in this task until the deterministic identity-compatibility and two-page amendment plans are complete and reviewed and the user separately authorizes exactly one replacement smoke. Both failed runs, `fab9d8e1-4c12-4170-a539-c0a6cdbbca93` and `63b9d32a-5d47-44c9-8904-25a68ee2dee8`, remain immutable evidence; neither satisfies Task 8. Task 9 remains locked.
 
 - [ ] **Step 1: Confirm the database and browser prerequisites without contacting OfferToday**
 
@@ -1557,7 +1562,7 @@ try {
 if (-not (Test-Path -LiteralPath (Join-Path $smokeArtifact 'manifest.json'))) {
     throw "smoke did not export its required partial artifact"
 }
-python backend/scripts/offertoday_research.py verify-artifact --artifact $smokeArtifact
+python backend/scripts/offertoday_research_census.py verify-run --artifact $smokeArtifact
 if ($LASTEXITCODE -ne 0) { throw "smoke artifact invalid" }
 [pscustomobject]@{
     RunId = $smokeRunId
@@ -1597,7 +1602,7 @@ $smokeArtifact = Get-ChildItem 'backend/runtime/offertoday-research' -Directory 
     Sort-Object CapturedAt -Descending |
     Select-Object -First 1
 if ($null -eq $smokeArtifact) { throw "runtime-smoke artifact not found" }
-python backend/scripts/offertoday_research.py verify-artifact --artifact $smokeArtifact.Path
+python backend/scripts/offertoday_research_census.py verify-run --artifact $smokeArtifact.Path
 ```
 
 Expected: `valid=true`. An invalid artifact is an evidence failure regardless of API outcome.
@@ -1624,14 +1629,26 @@ if ($null -eq $smokeArtifact) { throw "runtime-smoke artifact not found" }
 $events = Get-Content (Join-Path $smokeArtifact.Path 'observations.jsonl') | ForEach-Object { $_ | ConvertFrom-Json }
 $pageAttempts = @($events | Where-Object { $_.event_type -eq 'research.page_attempt' })
 $detailAttempts = @($events | Where-Object { $_.event_type -eq 'research.detail_attempt' })
+$cohortFreezes = @($events | Where-Object { $_.event_type -eq 'research.detail_cohort_frozen' })
 $summaries = @($events | Where-Object { $_.event_type -eq 'research.run_summary' })
+$manifest = Get-Content -Raw (Join-Path $smokeArtifact.Path 'manifest.json') | ConvertFrom-Json
 
-if ($pageAttempts.Count -ne 1) { throw "smoke must contain exactly one listing attempt" }
+if ($pageAttempts.Count -lt 1 -or $pageAttempts.Count -gt 2) { throw "smoke must contain one or two listing attempts" }
+if ($pageAttempts[0].payload.page -ne 1) { throw "smoke listing attempts must start at page 1" }
+if ($pageAttempts.Count -eq 2 -and $pageAttempts[1].payload.page -ne 2) { throw "second listing attempt must be page 2" }
+if (@($pageAttempts | Where-Object { $_.payload.attempt -ne 1 }).Count -ne 0) { throw "smoke listing retries are forbidden" }
+if ($cohortFreezes.Count -ne 1) { throw "smoke must contain exactly one cohort freeze" }
+if (@($pageAttempts | Where-Object { $_.sequence_no -gt $cohortFreezes[0].sequence_no }).Count -ne 0) { throw "listing attempt occurred after cohort freeze" }
 if ($detailAttempts.Count -gt 20) { throw "smoke exceeded the 20-detail budget" }
 if ($summaries.Count -ne 1) { throw "smoke must contain exactly one run summary" }
+if ($manifest.metadata.request_budget.listing -ne 2 -or $manifest.metadata.request_budget.detail -ne 20) { throw "manifest smoke budget must be listing 2/detail 20" }
+if ($summaries[0].payload.request_budget.listing -ne 2 -or $summaries[0].payload.request_budget.detail -ne 20) { throw "summary smoke budget must be listing 2/detail 20" }
+if ($summaries[0].payload.stop_reason -eq 'insufficient_valid_detail_targets') {
+    if ($pageAttempts.Count -ne 2 -or $detailAttempts.Count -ne 0) { throw "short two-page cohort must make zero detail attempts" }
+}
 ```
 
-For exit 0, additionally require 20 detail attempts, `smoke_passed=true`, `listing_complete=false`, `expected_truncation=true`, and zero nonterminal failure classifications.
+For exit 0, additionally require 20 first-seen distinct canonical frozen targets, final listing stop reason `target_cap`, 20 detail attempts, `smoke_passed=true`, `listing_complete=false`, `expected_truncation=true`, and zero nonterminal failure classifications. Any page 3, retry, out-of-order page, or page attempt after cohort freeze is an evidence failure.
 
 - [ ] **Step 7: Prove the smoke made no product-data writes**
 
@@ -1691,7 +1708,8 @@ Expected: both post-smoke baselines match each other and the smoke's run-end has
 Report:
 
 - run ID and artifact path;
-- listing classification, API code, row/valid-ID counts, and latency;
+- ordered listing pages, classifications, API codes, row/valid-ID counts, final `target_cap`, and latency;
+- listing `2` / detail `20` declared budget and observed request counts;
 - frozen, attempted, success, terminal, failed, and unattempted detail counts;
 - every non-success classification by target position;
 - run-start/run-end database hashes;
@@ -1710,7 +1728,7 @@ Do not execute Task 9 or any later live command until this report is accepted.
 - Modify: `backend/tests/test_offertoday_listing_runner.py`
 - Create: `backend/tests/test_offertoday_research_calibration.py`
 
-This task starts only after a separately authorized replacement Task 8 smoke exits 0 and its smoke review is accepted. The original failed run does not satisfy this gate.
+This task starts only after a separately authorized replacement Task 8 smoke exits 0 and its smoke review is accepted. Neither immutable failed run, `fab9d8e1-4c12-4170-a539-c0a6cdbbca93` nor `63b9d32a-5d47-44c9-8904-25a68ee2dee8`, satisfies this gate. Task 9 remains locked until then.
 
 - [ ] **Step 1: Write failing page-delay range tests**
 
@@ -2580,13 +2598,17 @@ Do not commit runtime artifacts.
 | Claim | Required evidence |
 |---|---|
 | Offline Plan 1 CLI remains offline | Import-guard and subprocess tests |
-| Live smoke is exactly bounded | One page attempt, at most 20 detail events, no retries |
-| Twenty targets are canonical and distinct | Accepted-ID first-seen cohort fixture |
+| Live smoke is exactly bounded | Listing `2` / detail `20` budget; page 1 then optional page 2; no page 3 or retries |
+| Twenty targets are canonical and distinct | First-seen accepted canonical-ID cohort across the bounded result, ending at `target_cap` |
+| Short bounded listing makes no details | Fewer than 20 distinct canonical IDs after page 2 exits `3` with zero detail events |
+| Cohort freeze ends listing evidence | Strict replay rejects every page attempt after `research.detail_cohort_frozen` |
 | Smoke uses one browser | Injected runtime fetcher and lifecycle test |
 | Code 2520 is terminal but does not stop the cohort | Detail-loop fixture |
 | Auth/WAF/IP/ID mismatch stops later targets | Batch-stop/unattempted fixtures |
 | Unexpected exceptions are not mislabeled | Same-object propagation and type-only persistence tests |
 | Smoke cannot write product data | No-op sink, run-start/end hashes, independent baselines |
+| Both failed Task 8 artifacts remain immutable and unaccepted | Offline strict replay plus exact before/after manifest hashes for both run IDs |
+| Task 9 remains locked | Separate live authorization and accepted replacement-smoke review gate |
 | Bounded pilot is not called complete | Preserved `page_cap` and separate bounded acceptance |
 | Endpoint/`rcdType` choice is evidence-backed | Calibration artifact and deterministic ranking |
 | Every category is covered | Exact ordered 31-category fixtures |
@@ -2597,4 +2619,4 @@ Do not commit runtime artifacts.
 
 ## Immediate Execution Stop
 
-The original Task 8 attempt did not satisfy the operational smoke gate. Completion now requires the deterministic compatibility correction plus a separately authorized replacement smoke that passes and is reviewed. Tasks 9–15 remain the approved detailed Plan 2 path, but no later live stage begins without acceptance of that replacement Task 8 artifact.
+Neither the original Task 8 attempt `fab9d8e1-4c12-4170-a539-c0a6cdbbca93` nor the identity-corrected but target-count-incomplete attempt `63b9d32a-5d47-44c9-8904-25a68ee2dee8` satisfies the operational smoke gate. Both artifacts remain immutable. Completion now requires the deterministic two-page correction plus a separately authorized replacement smoke that passes and is reviewed. Task 9 remains locked, and no Task 9–15 live stage begins without acceptance of that replacement Task 8 artifact.

@@ -23,6 +23,8 @@ This design amends the identity-specific requirements in:
 
 It supersedes only the assumption that every accepted listing row must contain two independently observed raw strings, `jobId` and `encryptJobId`. All other Task 8 request budgets, no-write guarantees, artifact requirements, review gates, and Task 9 sequencing remain unchanged.
 
+The later two-page Task 8 amendment changes only the future listing budget to at most two ordered listing requests. Every identity resolution, provenance, authority, detail ownership, raw-evidence, and strictness requirement in this design remains unchanged.
+
 ## Triggering Evidence
 
 ### Bounded Research Smoke
@@ -37,6 +39,12 @@ The single authorized Task 8 smoke produced:
 - no detail requests because the current runner classified every row as `missing_encrypted_job_id`.
 
 Artifact verification passed and the manifest hash is `1928423eed6cfd95e4cd2a3af3eb1d62c2ea6d460b122acb0ca0fefcfb4b548b`.
+
+### Identity-Corrected Target-Count Evidence
+
+Historical failed-run evidence from the separately authorized identity-corrected smoke: run `63b9d32a-5d47-44c9-8904-25a68ee2dee8` made one listing request, accepted 10 valid `jobId_fallback` identities without identity issues or conflicts, froze 10 targets, made zero detail requests, and exited `3` with `insufficient_valid_detail_targets`. Its artifact remains immutable with manifest SHA-256 `a009be467c30b538e31be501cc3bbb38a528b56c2fe7268507df572dda7336d3`.
+
+That run proves the identity correction while remaining target-count-incomplete, so it does not satisfy Task 8. It triggered the separate two-page amendment; it does not weaken or replace any identity requirement in this design.
 
 ### Independent Browse Evidence
 
@@ -286,13 +294,13 @@ Any deterministic failure must be resolved before asking for live authorization.
 
 ## Replacement Smoke Gate
 
-The correction does not reuse or erase the failed smoke. Run `fab9d8e1-4c12-4170-a539-c0a6cdbbca93` remains immutable evidence of the invalid strict assumption.
+The correction does not reuse or erase either failed smoke. Run `fab9d8e1-4c12-4170-a539-c0a6cdbbca93` remains immutable evidence of the invalid strict assumption, while run `63b9d32a-5d47-44c9-8904-25a68ee2dee8` remains identity-corrected but target-count-incomplete evidence. Neither satisfies Task 8.
 
 After implementation, deterministic verification, and review:
 
 1. report the exact code and document commits;
 2. report all test and static-check evidence;
-3. request explicit permission for exactly one replacement Task 8 smoke;
+3. request explicit permission for exactly one replacement Task 8 smoke bounded to at most two ordered listing requests and up to 20 detail requests;
 4. capture two new matching baselines immediately before that smoke; and
 5. do not begin Task 9 unless the replacement smoke report is accepted.
 

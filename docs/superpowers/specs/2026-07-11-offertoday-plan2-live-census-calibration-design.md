@@ -7,7 +7,7 @@
 
 Use the measurement foundation completed in Plan 1 to calibrate a safe live OfferToday listing transport, select evidence-backed endpoint and `rcdType` controls, and produce three reproducible full-site listing censuses across all 31 top-level categories.
 
-Plan 2 begins with one deliberately bounded runtime smoke. At the user's direction, that smoke includes one listing request and up to 20 sequential detail requests. Those detail requests validate session, transport, response classification, canonical identity, and parser behavior only. They do not persist Jobs or staging rows and do not count as the 100/500 detail canaries reserved for Plan 4.
+Plan 2 begins with one deliberately bounded runtime smoke. At the user's direction, that smoke includes at most two ordered listing requests, page 1 followed only when needed by page 2, and up to 20 sequential detail requests. Those detail requests validate session, transport, response classification, canonical identity, and parser behavior only. They do not persist Jobs or staging rows and do not count as the 100/500 detail canaries reserved for Plan 4.
 
 ## Relationship to the Approved Research Design
 
@@ -48,18 +48,22 @@ The last matching read-only baseline contained:
 
 These values are provenance for Plan 1, not immutable Plan 2 acceptance data. Every live Plan 2 run captures a new quiescent run-start inventory and compares it with its run-end inventory.
 
-## Task 8 Identity Correction Record
+## Task 8 Corrective Amendment Record
 
-The original Task 8 smoke run `fab9d8e1-4c12-4170-a539-c0a6cdbbca93` is failed immutable evidence, not an accepted smoke. It failed because all ten returned listing rows were valid `jobId`-only rows under the corrected identity contract; this invalidates only the assumption that every accepted row must contain two independently observed raw IDs.
+Historical failed-run evidence from the first authorized Task 8 smoke: run `fab9d8e1-4c12-4170-a539-c0a6cdbbca93` made one listing request and failed because all ten returned listing rows were valid `jobId`-only rows under the corrected identity contract. It is failed immutable evidence, not an accepted smoke, and it invalidates only the assumption that every accepted row must contain two independently observed raw IDs.
 
-Its artifact at `backend/runtime/offertoday-research/fab9d8e1-4c12-4170-a539-c0a6cdbbca93` remains preserved exactly as captured, with manifest SHA-256 `1928423eed6cfd95e4cd2a3af3eb1d62c2ea6d460b122acb0ca0fefcfb4b548b`. The correction changes none of the one-listing and up-to-20-detail request budgets, sequential three-second pacing, zero-retry rule, no-product-write boundary, artifact export and verification requirements, smoke review checkpoint, or Task 9 lock. A replacement Task 8 smoke requires separate explicit user approval.
+Its artifact at `backend/runtime/offertoday-research/fab9d8e1-4c12-4170-a539-c0a6cdbbca93` remains preserved exactly as captured, with manifest SHA-256 `1928423eed6cfd95e4cd2a3af3eb1d62c2ea6d460b122acb0ca0fefcfb4b548b`.
+
+Historical failed-run evidence from the identity-corrected replacement smoke: run `63b9d32a-5d47-44c9-8904-25a68ee2dee8` made one listing request, accepted 10 valid `jobId_fallback` identities without an identity issue or conflict, froze 10 targets, made zero detail requests, and exited `3` with `insufficient_valid_detail_targets`. Its artifact at `backend/runtime/offertoday-research/63b9d32a-5d47-44c9-8904-25a68ee2dee8` remains preserved exactly as captured, with manifest SHA-256 `a009be467c30b538e31be501cc3bbb38a528b56c2fe7268507df572dda7336d3`. This identity-corrected but target-count-incomplete result triggered the two-page Task 8 amendment.
+
+Neither failed artifact satisfies Task 8. The current corrective contract changes only the listing side of the request budget to at most two ordered requests while retaining up to 20 details, sequential three-second pacing, zero retries, the no-product-write boundary, artifact export and verification, and the smoke review checkpoint. Another live Task 8 smoke requires separate explicit user approval, and Task 9 remains locked.
 
 ## Approved Decisions
 
 1. Keep `backend/scripts/offertoday_research.py` offline-only. Live research gets a separate entry point and never weakens the Plan 1 import/network guard.
 2. Use the shared `OfferTodayBrowserRuntime`, `OfferTodayListingRunner`, response classifier, provenance-aware identity contract, research observation service, and artifact exporter. No live command may implement a second pagination or classification loop.
 3. Run every live stage explicitly. A successful smoke does not automatically start calibration, pilot, or census work.
-4. Treat the first smoke parameters as a compatibility control, not a selected production recommendation: category `118000`, endpoint `search/list`, `rcdType=7`, page 1, page size 50.
+4. Treat the first smoke parameters as a compatibility control, not a selected production recommendation: category `118000`, endpoint `search/list`, `rcdType=7`, page 1 followed only when required by page 2, page size 50.
 5. Use fresh headless mode for the first smoke because the current workspace has no storage-state file and no reusable CDP listener. Do not fall back silently to another session mode.
 6. Freeze the first 20 distinct valid `(jobId, resolved_route_id, encrypted_job_id_source)` triples before the first detail request. Duplicate canonical IDs and rows missing a valid canonical `jobId` do not consume the limit; a missing raw `encryptJobId` uses `jobId_fallback` and remains independently counted as an observation.
 7. Fetch the frozen detail cohort sequentially with concurrency 1 and a recorded three-second inter-request delay. The initial smoke never retries a listing or detail request.
@@ -74,7 +78,7 @@ Its artifact at `backend/runtime/offertoday-research/fab9d8e1-4c12-4170-a539-c0a
 ### In Scope
 
 - A live-only Plan 2 research CLI with explicit `smoke`, `calibrate`, `pilot`, `census`, `compare`, and `verify-run` commands.
-- One listing plus 20-detail smoke using one browser session.
+- At most two ordered listing requests plus a 20-detail smoke using one browser session.
 - Explicit session, endpoint, `rcdType`, paging, retry, and pacing metadata.
 - Saved-response replay for every live command.
 - Research crawl-job events and reproducible JSON/JSONL artifacts for successful, failed, stopped, and partial runs.
@@ -120,7 +124,7 @@ Every command requires explicit input artifacts from the preceding stage and ver
 
 ### 3. Shared Browser and Listing Semantics
 
-The live orchestrator opens one `OfferTodayBrowserRuntime` for a stage and injects it into `OfferTodayListingRunner`. It does not perform a separate preflight API request before the smoke listing request; that first classified listing response is the smoke session-health evidence. This preserves the one-listing-request budget.
+The live orchestrator opens one `OfferTodayBrowserRuntime` for a stage and injects it into `OfferTodayListingRunner`. It does not perform a separate preflight API request before the page-1 smoke listing request; that first classified listing response is the smoke session-health evidence. This preserves the at-most-two-listing-request budget.
 
 The smoke listing runner uses:
 
@@ -128,8 +132,8 @@ The smoke listing runner uses:
 conditions                  = one category 118000 condition
 endpoint                    = search
 rcdType                     = 7 compatibility control
-max_pages_per_condition     = 1
-unique_job_cap              = none
+max_pages_per_condition     = 2
+unique_job_cap              = 20
 require_empty_confirmation  = false
 max_attempts_per_page       = 1
 page_delay_seconds          = 0
@@ -137,7 +141,7 @@ staging sink                = no-op evidence sink
 session mode                = fresh-headless
 ```
 
-A non-empty successful first page normally ends as `page_cap` and `is_complete=false`. That is expected truncation for a smoke, not natural-exhaustion evidence. The smoke evaluator records a separate `smoke_passed` decision and never rewrites the runner result.
+A clean listing phase requests page 1 first and page 2 only when page 1 succeeds, does not signal exhaustion, and leaves the accepted distinct canonical-ID count below 20. It stops at `target_cap` as soon as 20 first-seen distinct canonical IDs are available, remains `is_complete=false`, and never requests page 3. A clean two-page `page_cap` with fewer than 20 targets is bounded incomplete evidence: it exits `3` with `insufficient_valid_detail_targets` and makes zero detail requests.
 
 For this `runtime-smoke` experiment only, crawl-job status `completed` means the bounded experiment executed and its smoke gate passed; it does not mean the listing condition naturally exhausted. The run summary must therefore persist `listing_complete=false`, `expected_truncation=true`, and `smoke_passed=true` together. Census experiments may never use this exception: a census with `page_cap` remains incomplete or failed.
 
@@ -173,7 +177,7 @@ Every live stage creates a tagged `crawl_job` before the first network request:
     "planner_version": "git-sha",
     "parent_artifact_hash": "plan-1-or-prior-stage-hash",
     "request_budget": {
-      "listing": 1,
+      "listing": 2,
       "detail": 20
     }
   }
@@ -188,6 +192,8 @@ Ordered events include:
 - `research.detail_attempt`;
 - `research.run_stopped` when applicable; and
 - `research.run_summary`.
+
+Strict evidence validation requires one or two ordered listing page attempts beginning at page 1, attempt number 1 for every page, a current request budget of listing `2` and detail `20`, and a frozen cohort containing the first 20 authoritative canonical IDs across the bounded result. Page 3, any listing retry, or any page attempt after `research.detail_cohort_frozen` is an evidence failure.
 
 The artifact exporter runs in `finally`, so a browser exception, hard stop, Ctrl-C, or evidence-validation failure still produces partial observations, provenance, and a content-hash manifest. Artifact verification is mandatory before the command exits successfully.
 
@@ -221,14 +227,14 @@ Before each live stage:
 
 Any mismatch stops before opening a browser.
 
-### Stage 1: One Listing Plus 20 Details
+### Stage 1: At Most Two Ordered Listings Plus 20 Details
 
 Request budget:
 
 | Request | Maximum |
 |---|---:|
 | Search-page navigation | 1 |
-| Listing API | 1 |
+| Listing API | 2 |
 | Detail API | 20 |
 | Listing retries | 0 |
 | Detail retries | 0 |
@@ -237,8 +243,9 @@ The detail cohort is frozen before detail request 1. Requests run sequentially w
 
 Smoke acceptance requires:
 
-- listing classification `success`;
-- at least 20 distinct valid provenance-bearing resolved identities on page 1;
+- one or two ordered listing attempts, page 1 followed optionally by page 2, each with attempt number 1 and classification `success`;
+- at least 20 first-seen distinct valid provenance-bearing resolved identities across the bounded listing result;
+- listing stop reason `target_cap` at the 20-ID cap;
 - zero listing identity issues or conflicts;
 - exactly 20 frozen targets;
 - all 20 targets attempted unless a recorded batch-stop outcome occurs;
@@ -247,6 +254,8 @@ Smoke acceptance requires:
 - zero auth, WAF, IP-block, transient, invalid-payload, or ID-mismatch outcomes;
 - zero database staging/Job/Company delta; and
 - a verified artifact.
+
+If page 2 ends with fewer than 20 valid distinct canonical IDs, the command exits `3` with `insufficient_valid_detail_targets` and makes zero detail requests. Page 3, any listing retry, or any page attempt after cohort freeze fails evidence validation.
 
 The diagnostic availability-adjusted success rate is reported, but it is not a production acceptance statistic.
 
@@ -357,8 +366,10 @@ Plan 2 must add fixture-driven coverage for:
 - CLI command separation and offline-CLI import guards;
 - stage predecessor and artifact validation;
 - exact smoke condition and request budgets;
-- distinct-before-20 provenance-aware cohort freezing;
-- fewer-than-20 valid resolved identities;
+- ordered page 1 followed optionally by page 2, with page 3 and retry rejection;
+- first-seen distinct-before-20 provenance-aware cohort freezing across the bounded result;
+- fewer-than-20 valid resolved identities after page 2 with zero detail requests;
+- `target_cap` acceptance at exactly 20 canonical IDs;
 - duplicate canonical IDs, `jobId_fallback` rows, and unusable identity rows;
 - sequential detail ordering and pacing;
 - success, 2520, auth, WAF, IP block, transient, invalid payload, and ID mismatch outcomes;
@@ -377,7 +388,7 @@ All network tests use saved responses or injected transports. Deterministic test
 ### Live Verification Order
 
 1. verify Plan 1 artifacts and recapture the baseline;
-2. run the one-listing/20-detail smoke once;
+2. run the at-most-two-listing/20-detail smoke once after separate authorization;
 3. verify its artifact and database no-write invariant;
 4. stop for review if any smoke gate fails;
 5. run calibration only after an accepted smoke;
@@ -392,7 +403,7 @@ No later stage starts automatically.
 Plan 2 is complete only when:
 
 1. the live CLI and pure research services pass all deterministic tests;
-2. the one-listing/20-detail smoke meets its diagnostic gate and produces a verified artifact;
+2. the at-most-two-listing/20-detail smoke meets its diagnostic gate with 20 first-seen canonical IDs and `target_cap`, then produces a verified artifact;
 3. endpoint and `rcdType` selection is backed by saved live evidence;
 4. the 31-category pilot has every planned page observed without a hidden gap;
 5. three full censuses naturally exhaust all conditions;
@@ -406,7 +417,7 @@ Plan 2 is complete only when:
 
 - Plan 2 live-research design and implementation plan;
 - live-only stage-gated research CLI;
-- verified one-listing/20-detail smoke artifact;
+- verified at-most-two-listing/20-detail smoke artifact;
 - endpoint and `rcdType` calibration report;
 - 31-category pilot report;
 - frozen census candidate contract;
