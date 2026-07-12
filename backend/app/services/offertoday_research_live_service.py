@@ -20,15 +20,18 @@ from app.sources.offertoday.detail_identity import (
 )
 from app.sources.offertoday.listing_runner import (
     ListingRetryPolicy,
+    ListingRunResult,
     ListingStopPolicy,
     OfferTodayListingCondition,
     OfferTodayListingRunner,
 )
 from app.sources.offertoday.research.calibration import (
     BoundedConditionResult,
+    build_pilot_conditions,
     evaluate_bounded_condition,
 )
 from app.sources.offertoday.research.live_contracts import (
+    CensusCandidate,
     DetailSmokeObservation,
     DetailSmokeTarget,
     LiveSmokeExecution,
@@ -101,6 +104,36 @@ class OfferTodayResearchLiveService:
             if not bounded_result.accepted:
                 break
         return tuple(results)
+
+    async def run_census(
+        self,
+        *,
+        runtime: OfferTodayBrowserRuntime,
+        observation_service: OfferTodayResearchObservationService,
+        candidate: CensusCandidate,
+        staging_sink: Any,
+    ) -> ListingRunResult:
+        runner = self._runner_factory(runtime)
+        return await runner.run(
+            conditions=build_pilot_conditions(
+                candidate.endpoint,
+                candidate.rcd_type,
+            ),
+            stop_policy=ListingStopPolicy(
+                max_pages_per_condition=candidate.max_pages_per_condition,
+                unique_job_cap=None,
+                require_empty_confirmation=candidate.require_empty_confirmation,
+            ),
+            retry_policy=ListingRetryPolicy(
+                max_attempts_per_page=candidate.max_attempts_per_page,
+                retry_delays_seconds=candidate.retry_delays_seconds,
+                page_delay_seconds=0.0,
+                page_delay_range_seconds=candidate.page_delay_range_seconds,
+            ),
+            observation_sink=observation_service,
+            staging_sink=staging_sink,
+            session_mode=candidate.session_mode,
+        )
 
     async def run_smoke(
         self,

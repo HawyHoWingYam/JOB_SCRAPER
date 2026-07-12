@@ -24,8 +24,14 @@ from app.sources.offertoday.listing_runner import (
     ListingStopPolicy,
     OfferTodayIdentityPair,
 )
-from app.sources.offertoday.research.calibration import build_calibration_conditions
-from app.sources.offertoday.research.live_contracts import DetailSmokeTarget
+from app.sources.offertoday.research.calibration import (
+    build_calibration_conditions,
+    build_pilot_conditions,
+)
+from app.sources.offertoday.research.live_contracts import (
+    CensusCandidate,
+    DetailSmokeTarget,
+)
 from app.sources.offertoday.research.smoke import build_runtime_smoke_condition
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseClassification,
@@ -172,6 +178,60 @@ def bounded_listing_result(
         ),
         stop_reason=stop_reason,
         is_complete=is_complete,
+    )
+
+
+def census_candidate() -> CensusCandidate:
+    conditions = build_pilot_conditions("search", None)
+    return CensusCandidate(
+        endpoint="search",
+        rcd_type=None,
+        category_ids=tuple(condition.category_id for condition in conditions),
+        page_size=50,
+        max_pages_per_condition=500,
+        require_empty_confirmation=True,
+        max_attempts_per_page=3,
+        retry_delays_seconds=(5.0, 15.0),
+        page_delay_range_seconds=(3.0, 5.0),
+        session_mode="fresh-headless",
+        fixed_repeat_category_ids=(118000, 112000, 127000),
+        source_artifact_hash="a" * 64,
+        rejected_variants=(),
+    )
+
+
+def census_listing_result(
+    candidate: CensusCandidate,
+    *,
+    incomplete_index: int | None = None,
+) -> ListingRunResult:
+    conditions = build_pilot_conditions(candidate.endpoint, candidate.rcd_type)
+    outcome_count = (
+        len(conditions) if incomplete_index is None else incomplete_index + 1
+    )
+    outcomes = tuple(
+        ListingConditionOutcome(
+            condition=condition,
+            pages_observed=2,
+            stop_reason=(
+                "page_cap"
+                if incomplete_index is not None and index == incomplete_index
+                else "natural_exhaustion"
+            ),
+            is_complete=not (
+                incomplete_index is not None and index == incomplete_index
+            ),
+        )
+        for index, condition in enumerate(conditions[:outcome_count])
+    )
+    base = listing_result()
+    return replace(
+        base,
+        condition_outcomes=outcomes,
+        stop_reason=(
+            "page_cap" if incomplete_index is not None else "natural_exhaustion"
+        ),
+        is_complete=incomplete_index is None,
     )
 
 
@@ -452,6 +512,73 @@ async def test_run_bounded_conditions_stops_after_first_rejected_result() -> Non
     assert results[0].accepted is True
     assert results[1].accepted is False
     assert len(runner_factory.runners) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_census_uses_one_shared_runner_with_frozen_controls() -> None:
+    candidate = census_candidate()
+    expected_conditions = build_pilot_conditions(
+        candidate.endpoint,
+        candidate.rcd_type,
+    )
+    expected_result = census_listing_result(candidate)
+    runner_factory = RunnerFactory(expected_result)
+    service = OfferTodayResearchLiveService(runner_factory=runner_factory)
+    runtime = FakeRuntime()
+    observation_service = FakeObservationService()
+    staging_sink = object()
+
+    result = await service.run_census(
+        runtime=runtime,
+        observation_service=observation_service,
+        candidate=candidate,
+        staging_sink=staging_sink,
+    )
+
+    assert result is expected_result
+    assert runner_factory.transports == [runtime]
+    assert runner_factory.runner.calls == [
+        {
+            "conditions": expected_conditions,
+            "stop_policy": ListingStopPolicy(
+                max_pages_per_condition=500,
+                unique_job_cap=None,
+                require_empty_confirmation=True,
+            ),
+            "retry_policy": ListingRetryPolicy(
+                max_attempts_per_page=3,
+                retry_delays_seconds=(5.0, 15.0),
+                page_delay_seconds=0.0,
+                page_delay_range_seconds=(3.0, 5.0),
+            ),
+            "observation_sink": observation_service,
+            "staging_sink": staging_sink,
+            "session_mode": "fresh-headless",
+        }
+    ]
+    assert runtime.detail_json_calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_census_preserves_first_incomplete_page_cap_as_failure() -> None:
+    candidate = census_candidate()
+    partial_result = census_listing_result(candidate, incomplete_index=1)
+    runner_factory = RunnerFactory(partial_result)
+    service = OfferTodayResearchLiveService(runner_factory=runner_factory)
+
+    result = await service.run_census(
+        runtime=FakeRuntime(),
+        observation_service=FakeObservationService(),
+        candidate=candidate,
+        staging_sink=object(),
+    )
+
+    assert len(result.condition_outcomes) == 2
+    assert result.condition_outcomes[-1].stop_reason == "page_cap"
+    assert result.condition_outcomes[-1].is_complete is False
+    assert result.stop_reason == "page_cap"
+    assert result.is_complete is False
+    assert len(runner_factory.runner.calls) == 1
 
 
 @pytest.mark.asyncio

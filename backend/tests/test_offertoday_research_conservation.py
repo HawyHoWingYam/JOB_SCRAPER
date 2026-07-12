@@ -6,8 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from app.sources.offertoday.research.baseline import build_baseline_snapshot
+from app.sources.offertoday.research.calibration import build_pilot_conditions
 from app.sources.offertoday.research.conservation import (
     ResearchConservationReport,
     build_detail_conservation_report,
@@ -19,7 +19,6 @@ from app.sources.offertoday.research.contracts import (
     PublishedJobSnapshot,
     StagedListingSnapshot,
 )
-
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "offertoday_research"
 _UNSET = object()
@@ -65,15 +64,11 @@ def _staged(
         encrypted_job_id = source_job_id
     if encrypted_job_id_source is _UNSET:
         encrypted_job_id_source = (
-            "jobId_fallback"
-            if encrypted_job_id == source_job_id
-            else "encryptJobId"
+            "jobId_fallback" if encrypted_job_id == source_job_id else "encryptJobId"
         )
     if observed_encrypted_job_id is _UNSET:
         observed_encrypted_job_id = (
-            encrypted_job_id
-            if encrypted_job_id_source == "encryptJobId"
-            else None
+            encrypted_job_id if encrypted_job_id_source == "encryptJobId" else None
         )
     values = {
         "detail_started_at": None,
@@ -445,7 +440,13 @@ def test_missing_eligible_and_unknown_status_are_reported_and_invalid():
     [
         (
             [
-                ("high-attempt", "manual_action_required", 2, "2026-01-01", "2026-01-01"),
+                (
+                    "high-attempt",
+                    "manual_action_required",
+                    2,
+                    "2026-01-01",
+                    "2026-01-01",
+                ),
                 ("low-attempt", "failed", 1, "2026-12-01", "2026-12-01"),
             ],
             "manual_action_required",
@@ -522,9 +523,7 @@ def test_completed_row_must_link_to_same_canonical_published_job():
                 has_detail_payload=True,
             )
         ],
-        jobs=[
-            PublishedJobSnapshot("job-other", "j-other", True, True, True)
-        ],
+        jobs=[PublishedJobSnapshot("job-other", "j-other", True, True, True)],
     )
 
     assert report.outcomes["retryable_failed"] == 1
@@ -534,13 +533,18 @@ def test_completed_row_must_link_to_same_canonical_published_job():
 
 def test_research_report_requires_at_least_one_valid_subreport():
     assert ResearchConservationReport(listing=None, detail=None).is_valid is False
-    assert ResearchConservationReport(
-        listing=_valid_listing_conservation(),
-        detail=None,
-    ).is_valid is True
+    assert (
+        ResearchConservationReport(
+            listing=_valid_listing_conservation(),
+            detail=None,
+        ).is_valid
+        is True
+    )
 
 
-def _crawl_job(*, crawl_job_id="crawl-run", status="completed", published=(), staged=()):
+def _crawl_job(
+    *, crawl_job_id="crawl-run", status="completed", published=(), staged=()
+):
     return SimpleNamespace(
         id=crawl_job_id,
         status=status,
@@ -647,6 +651,73 @@ def test_replay_derives_created_rows_only_when_rows_created_key_is_absent():
     assert report.listing is not None
     assert report.listing.newly_created_staging_rows == 1
     assert report.listing.newly_staged_distinct_ids == 1
+    assert report.is_valid is True
+
+
+def test_full_census_31_condition_listing_evidence_conserves_exactly():
+    conditions = build_pilot_conditions("search", None)
+    source_job_ids = tuple(
+        f"census-{condition.category_id}" for condition in conditions
+    )
+    events: list[dict] = []
+    for condition, source_job_id in zip(
+        conditions,
+        source_job_ids,
+        strict=True,
+    ):
+        events.extend(
+            (
+                {
+                    "sequence_no": len(events) + 1,
+                    "event_type": "research.page_attempt",
+                    "payload": {
+                        "condition_id": condition.condition_id,
+                        "page": 1,
+                        "classification": "success",
+                        "row_count": 1,
+                        "missing_job_id_count": 0,
+                        "rows": [
+                            {
+                                "job_id": source_job_id,
+                                "encrypted_job_id": source_job_id,
+                                "encrypted_job_id_source": "jobId_fallback",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "sequence_no": len(events) + 2,
+                    "event_type": "research.condition_completed",
+                    "payload": {
+                        "condition": {
+                            "search_family": condition.search_family,
+                            "category_id": condition.category_id,
+                            "keyword": condition.keyword,
+                            "endpoint": condition.endpoint,
+                            "rcd_type": condition.rcd_type,
+                        },
+                        "pages_observed": 2,
+                        "stop_reason": "natural_exhaustion",
+                        "is_complete": True,
+                    },
+                },
+            )
+        )
+
+    report = replay_research_conservation(
+        crawl_job=_crawl_job(published=source_job_ids),
+        events=events,
+        listings=[],
+        jobs=[],
+    )
+
+    assert report.listing is not None
+    assert report.listing.raw_rows.difference == 0
+    assert report.listing.distinct_ids.difference == 0
+    assert report.listing.unresolved_gaps == 0
+    assert report.listing.partition_overlap_ids == ()
+    assert report.listing.unexplained_ids == ()
+    assert report.listing.staging_amplification_violation is False
     assert report.is_valid is True
 
 
@@ -874,9 +945,7 @@ def test_replay_pair_consistency_ignores_rows_with_missing_identity_evidence():
                     {"job_id": "j-1", "encrypted_job_id": "enc-1"},
                     {"job_id": "j-2", "encrypted_job_id": None},
                 ],
-                "id_pairs": [
-                    {"job_id": "j-1", "encrypted_job_id": "enc-1"}
-                ],
+                "id_pairs": [{"job_id": "j-1", "encrypted_job_id": "enc-1"}],
                 "identity_issues": [
                     {"job_id": "j-2", "reason": "missing_encrypted_job_id"}
                 ],
@@ -1241,9 +1310,7 @@ def _attempt_owned_persisted_scenario(
             has_detail_payload=True,
         )
     ]
-    jobs = [
-        PublishedJobSnapshot("job-1", source_job_id, True, True, True)
-    ]
+    jobs = [PublishedJobSnapshot("job-1", source_job_id, True, True, True)]
     events = [
         {
             "sequence_no": 1,
@@ -1516,9 +1583,7 @@ def test_replay_keeps_reconciled_ids_outside_frozen_fetch_conservation():
     ]
     jobs = [
         PublishedJobSnapshot("job-fetch", "j-fetch", True, True, True),
-        PublishedJobSnapshot(
-            "job-reconciled", "j-reconciled", True, True, True
-        ),
+        PublishedJobSnapshot("job-reconciled", "j-reconciled", True, True, True),
     ]
     events = [
         {
@@ -1725,9 +1790,7 @@ def test_duplicate_cross_run_replay_rejects_uncorrelated_persisted_event(
     report = replay_research_conservation(
         crawl_job=SimpleNamespace(**payload["crawl_job"]),
         events=payload["events"],
-        listings=[
-            StagedListingSnapshot(**row) for row in payload["listings"]
-        ],
+        listings=[StagedListingSnapshot(**row) for row in payload["listings"]],
         jobs=[PublishedJobSnapshot(**row) for row in payload["jobs"]],
     )
 

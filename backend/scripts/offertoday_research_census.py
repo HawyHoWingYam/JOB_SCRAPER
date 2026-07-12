@@ -59,7 +59,11 @@ from app.sources.offertoday.research.calibration import (  # noqa: E402
     select_calibration_variants,
     summarize_calibration_variants,
 )
+from app.sources.offertoday.research.conservation import (  # noqa: E402
+    build_listing_conservation_report,
+)
 from app.sources.offertoday.research.contracts import ResearchMetadata  # noqa: E402
+from app.sources.offertoday.research.live_contracts import CensusCandidate  # noqa: E402
 from app.sources.offertoday.research.smoke import (  # noqa: E402
     runtime_smoke_request_budget,
 )
@@ -96,6 +100,11 @@ _PILOT_REQUEST_BUDGET = {
     "listing_attempt_max": 279,
     "detail": 0,
 }
+_CENSUS_REQUEST_BUDGET = {
+    "listing_logical": 15_500,
+    "listing_attempt_max": 46_500,
+    "detail": 0,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +114,14 @@ class PilotVariantEvidence:
     variant_rank: int
     parent_artifact_hash: str
     calibration_run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CensusCandidateEvidence:
+    candidate: CensusCandidate
+    candidate_hash: str
+    parent_artifact_hash: str
+    candidate_run_id: str
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,6 +180,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("backend/runtime/offertoday-research"),
     )
     pilot.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    census = commands.add_parser("census")
+    census.add_argument("--candidate-artifact", type=Path, required=True)
+    census.add_argument(
+        "--baseline-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    census.add_argument("--run-id", default=None)
+    census.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    census.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parents[2],
@@ -317,6 +353,38 @@ def _require_accepted_pilot_artifact(
     ):
         raise ValueError("pilot artifact is not an accepted 31-category predecessor")
     return manifest, summaries[0]
+
+
+def _require_census_candidate_artifact(
+    artifact_dir: Path,
+) -> CensusCandidateEvidence:
+    artifact_dir = Path(artifact_dir).resolve(strict=True)
+    verification = verify_live_research_run(artifact_dir)
+    if not verification.valid:
+        raise ValueError("candidate artifact failed strict verification")
+    manifest_path = artifact_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    metadata = manifest.get("metadata")
+    candidate = CensusCandidate.from_payload(
+        json.loads((artifact_dir / "candidate.json").read_text(encoding="utf-8"))
+    )
+    run_id = manifest.get("run_id")
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("experiment") != "census-candidate"
+        or metadata.get("crawl_job_status") != "completed"
+        or metadata.get("candidate_frozen") is not True
+        or metadata.get("candidate_hash") != candidate.candidate_hash
+        or not isinstance(run_id, str)
+        or metadata.get("crawl_job_id") != run_id
+    ):
+        raise ValueError("candidate artifact is not a frozen census predecessor")
+    return CensusCandidateEvidence(
+        candidate=candidate,
+        candidate_hash=candidate.candidate_hash,
+        parent_artifact_hash=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        candidate_run_id=run_id,
+    )
 
 
 def _find_parent_calibration_artifact(
@@ -605,6 +673,24 @@ async def _execute_pilot_with_runtime(
             runtime=active_runtime,
             observation_service=observation_service,
             conditions=conditions,
+            staging_sink=staging_sink,
+        )
+
+
+async def _execute_census_with_runtime(
+    *,
+    runtime_factory,
+    service,
+    observation_service,
+    candidate,
+    staging_sink,
+):
+    runtime = runtime_factory(headed=False)
+    async with runtime as active_runtime:
+        return await service.run_census(
+            runtime=active_runtime,
+            observation_service=observation_service,
+            candidate=candidate,
             staging_sink=staging_sink,
         )
 
@@ -992,6 +1078,417 @@ def _build_pilot_summary(
     }
 
 
+def _ordered_id_hash(values) -> str:
+    canonical = json.dumps(
+        list(dict.fromkeys(str(value) for value in values)),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _census_page_payloads(
+    *,
+    result,
+    events_before_summary: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if result is not None:
+        return [
+            listing_observation_to_payload(observation)
+            for observation in result.observations
+        ]
+    return [
+        event["payload"]
+        for event in events_before_summary
+        if event.get("event_type") == "research.page_attempt"
+        and isinstance(event.get("payload"), dict)
+    ]
+
+
+def _census_condition_summaries(
+    *,
+    result,
+    conditions,
+    events_before_summary: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    accepted_ids = set(result.accepted_job_ids) if result is not None else None
+    ids_by_condition: dict[str, list[str]] = {}
+    for payload in _census_page_payloads(
+        result=result,
+        events_before_summary=events_before_summary,
+    ):
+        condition_id = payload.get("condition_id")
+        if not isinstance(condition_id, str):
+            continue
+        condition_ids = ids_by_condition.setdefault(condition_id, [])
+        seen = set(condition_ids)
+        for pair in payload.get("id_pairs", ()):
+            if not isinstance(pair, dict):
+                continue
+            job_id = str(pair.get("job_id") or "")
+            if (
+                job_id
+                and (accepted_ids is None or job_id in accepted_ids)
+                and job_id not in seen
+            ):
+                condition_ids.append(job_id)
+                seen.add(job_id)
+    if result is not None:
+        outcome_evidence = tuple(
+            (
+                outcome.condition,
+                outcome.pages_observed,
+                outcome.stop_reason,
+                outcome.is_complete,
+            )
+            for outcome in result.condition_outcomes
+        )
+    else:
+        outcome_evidence = tuple(
+            (
+                conditions[index],
+                payload.get("pages_observed"),
+                payload.get("stop_reason"),
+                payload.get("is_complete"),
+            )
+            for index, event in enumerate(
+                event
+                for event in events_before_summary
+                if event.get("event_type")
+                in {"research.condition_completed", "research.condition_incomplete"}
+            )
+            if index < len(conditions)
+            and isinstance((payload := event.get("payload")), dict)
+        )
+    return [
+        {
+            "condition_id": condition.condition_id,
+            "category_id": condition.category_id,
+            "endpoint": condition.endpoint,
+            "rcd_type": condition.rcd_type,
+            "pages_observed": pages_observed,
+            "stop_reason": stop_reason,
+            "is_complete": is_complete,
+            "ordered_job_count": len(ids_by_condition.get(condition.condition_id, ())),
+            "ordered_job_id_hash": _ordered_id_hash(
+                ids_by_condition.get(condition.condition_id, ())
+            ),
+        }
+        for condition, pages_observed, stop_reason, is_complete in outcome_evidence
+    ]
+
+
+def _census_conservation_report(
+    *,
+    result,
+    events_before_summary: list[dict[str, Any]],
+    reconciliation,
+):
+    page_payloads = _census_page_payloads(
+        result=result,
+        events_before_summary=events_before_summary,
+    )
+    if result is not None:
+        valid_ids = set(result.accepted_job_ids)
+        unresolved_gaps = len(result.gaps)
+    else:
+        valid_ids = {
+            str(pair.get("job_id") or pair.get("source_job_id"))
+            for payload in page_payloads
+            for pair in payload.get("id_pairs", ())
+            if isinstance(pair, dict)
+            and str(pair.get("job_id") or pair.get("source_job_id") or "")
+        }
+        unresolved_gaps = sum(
+            event.get("event_type") == "research.condition_incomplete"
+            for event in events_before_summary
+        )
+    raw_listing_rows = sum(
+        payload.get("row_count", 0)
+        for payload in page_payloads
+        if type(payload.get("row_count", 0)) is int and payload.get("row_count", 0) >= 0
+    )
+    rows_missing_job_id = sum(
+        payload.get("missing_job_id_count", 0)
+        for payload in page_payloads
+        if type(payload.get("missing_job_id_count", 0)) is int
+        and payload.get("missing_job_id_count", 0) >= 0
+    )
+    return build_listing_conservation_report(
+        raw_listing_rows=raw_listing_rows,
+        rows_missing_job_id=rows_missing_job_id,
+        rows_containing_job_id=max(raw_listing_rows - rows_missing_job_id, 0),
+        valid_distinct_job_ids=valid_ids,
+        already_published_ids=set(reconciliation.published_source_job_ids),
+        preexisting_staged_unpublished_ids=set(
+            reconciliation.preexisting_staged_source_job_ids
+        ),
+        newly_staged_ids=set(reconciliation.created_source_job_ids),
+        deferred_identity_conflict_ids=set(
+            reconciliation.deferred_identity_conflict_ids
+        ),
+        newly_created_staging_rows=reconciliation.rows_created,
+        unresolved_gaps=unresolved_gaps,
+    )
+
+
+def _census_conservation_difference(report) -> int:
+    return (
+        abs(report.raw_rows.difference)
+        + abs(report.distinct_ids.difference)
+        + len(report.partition_overlap_ids)
+        + len(report.unexplained_ids)
+        + report.unresolved_gaps
+        + len(report.identity_pair_mismatch_page_keys)
+        + int(report.staging_amplification_violation)
+    )
+
+
+def _analyze_census(
+    *,
+    result,
+    conditions,
+    events_before_summary: list[dict[str, Any]],
+    reconciliation,
+) -> dict[str, Any]:
+    page_payloads = _census_page_payloads(
+        result=result,
+        events_before_summary=events_before_summary,
+    )
+    logical_pages = {
+        (payload.get("condition_id"), payload.get("page"))
+        for payload in page_payloads
+        if isinstance(payload.get("condition_id"), str)
+        and type(payload.get("page")) is int
+        and payload.get("page") > 0
+    }
+    detail_attempt_count = sum(
+        event.get("event_type") == "research.detail_attempt"
+        for event in events_before_summary
+    )
+    report = _census_conservation_report(
+        result=result,
+        events_before_summary=events_before_summary,
+        reconciliation=reconciliation,
+    )
+    conservation_difference = _census_conservation_difference(report)
+    expected_conditions = tuple(conditions)
+    condition_event_payloads = [
+        event.get("payload")
+        for event in events_before_summary
+        if event.get("event_type")
+        in {"research.condition_completed", "research.condition_incomplete"}
+        and isinstance(event.get("payload"), dict)
+    ]
+    if result is not None:
+        outcomes = tuple(result.condition_outcomes)
+        actual_conditions = tuple(outcome.condition for outcome in outcomes)
+        condition_prefix_matches = (
+            actual_conditions == expected_conditions[: len(actual_conditions)]
+        )
+        incomplete_reason = next(
+            (
+                outcome.stop_reason or "condition_incomplete"
+                for outcome in outcomes
+                if not outcome.is_complete
+            ),
+            None,
+        )
+        natural_exhaustion_count = sum(
+            outcome.is_complete and outcome.stop_reason == "natural_exhaustion"
+            for outcome in outcomes
+        )
+        condition_count = len(outcomes)
+        identity_issue_count = len(result.identity_issues)
+        identity_conflict_count = len(result.identity_conflicts)
+        ordered_job_ids = tuple(result.accepted_job_ids)
+    else:
+        actual_condition_payloads = tuple(
+            payload.get("condition") for payload in condition_event_payloads
+        )
+        expected_condition_payloads = tuple(
+            listing_observation_to_payload(condition)
+            for condition in expected_conditions[: len(actual_condition_payloads)]
+        )
+        condition_prefix_matches = (
+            actual_condition_payloads == expected_condition_payloads
+        )
+        incomplete_reason = next(
+            (
+                payload.get("stop_reason") or "condition_incomplete"
+                for payload in condition_event_payloads
+                if payload.get("is_complete") is False
+            ),
+            None,
+        )
+        natural_exhaustion_count = sum(
+            payload.get("is_complete") is True
+            and payload.get("stop_reason") == "natural_exhaustion"
+            for payload in condition_event_payloads
+        )
+        condition_count = len(condition_event_payloads)
+        identity_issue_count = sum(
+            len(payload.get("identity_issues", ()))
+            for payload in page_payloads
+            if isinstance(payload.get("identity_issues", ()), list)
+        )
+        identity_conflict_count = sum(
+            len(payload.get("identity_conflicts", ()))
+            for payload in page_payloads
+            if isinstance(payload.get("identity_conflicts", ()), list)
+        )
+        ordered_job_ids_list: list[str] = []
+        seen_job_ids: set[str] = set()
+        for payload in page_payloads:
+            for pair in payload.get("id_pairs", ()):
+                job_id = pair.get("job_id") if isinstance(pair, dict) else None
+                if isinstance(job_id, str) and job_id and job_id not in seen_job_ids:
+                    seen_job_ids.add(job_id)
+                    ordered_job_ids_list.append(job_id)
+        ordered_job_ids = tuple(ordered_job_ids_list)
+    unresolved_gaps = len(result.gaps) if result is not None else report.unresolved_gaps
+    if result is None:
+        failure_reason = "census_execution_missing"
+    elif not condition_prefix_matches:
+        failure_reason = "census_condition_matrix_mismatch"
+    elif incomplete_reason is not None:
+        failure_reason = incomplete_reason
+    elif condition_count != len(expected_conditions):
+        failure_reason = "census_condition_matrix_mismatch"
+    elif natural_exhaustion_count != len(expected_conditions):
+        failure_reason = "census_natural_exhaustion_mismatch"
+    elif not result.is_complete or result.stop_reason != "natural_exhaustion":
+        failure_reason = result.stop_reason or "census_incomplete"
+    elif len(logical_pages) > _CENSUS_REQUEST_BUDGET["listing_logical"]:
+        failure_reason = "listing_logical_budget_exceeded"
+    elif len(page_payloads) > _CENSUS_REQUEST_BUDGET["listing_attempt_max"]:
+        failure_reason = "listing_attempt_budget_exceeded"
+    elif detail_attempt_count:
+        failure_reason = "census_detail_request_observed"
+    elif unresolved_gaps:
+        failure_reason = "unresolved_gaps"
+    elif identity_issue_count:
+        failure_reason = "identity_issue"
+    elif identity_conflict_count or reconciliation.deferred_identity_conflict_ids:
+        failure_reason = "identity_conflict"
+    elif not reconciliation.staging_amplification_within_limit:
+        failure_reason = "staging_amplification"
+    elif conservation_difference:
+        failure_reason = "conservation_difference"
+    else:
+        failure_reason = None
+    return {
+        "accepted": failure_reason is None,
+        "failure_reason": failure_reason,
+        "listing_logical_count": len(logical_pages),
+        "listing_attempt_count": len(page_payloads),
+        "detail_attempt_count": detail_attempt_count,
+        "condition_count": condition_count,
+        "natural_exhaustion_count": natural_exhaustion_count,
+        "unresolved_gaps": unresolved_gaps,
+        "identity_issue_count": identity_issue_count,
+        "identity_conflict_count": identity_conflict_count,
+        "conservation_difference": conservation_difference,
+        "conservation_report": report,
+        "condition_outcomes": _census_condition_summaries(
+            result=result,
+            conditions=expected_conditions,
+            events_before_summary=events_before_summary,
+        ),
+        "ordered_job_ids": tuple(ordered_job_ids),
+        "ordered_job_id_hash": _ordered_id_hash(ordered_job_ids),
+        "unique_job_count": len(set(ordered_job_ids)),
+    }
+
+
+def _build_census_summary(
+    *,
+    status: str,
+    start_snapshot,
+    start_inventory,
+    end_snapshot,
+    end_inventory,
+    result,
+    conditions,
+    events_before_summary: list[dict[str, Any]],
+    failure_reason: str | None,
+    request_budget: dict[str, int],
+    candidate_evidence: CensusCandidateEvidence,
+    reconciliation,
+) -> dict[str, Any]:
+    analysis = _analyze_census(
+        result=result,
+        conditions=conditions,
+        events_before_summary=events_before_summary,
+        reconciliation=reconciliation,
+    )
+    report = analysis.pop("conservation_report")
+    staged_rows_delta = end_snapshot.staged_rows - start_snapshot.staged_rows
+    database_conservation_difference = staged_rows_delta - reconciliation.rows_created
+    published_jobs_unchanged = (
+        start_snapshot.published_jobs == end_snapshot.published_jobs
+        and start_snapshot.published_jobs_hash == end_snapshot.published_jobs_hash
+    )
+    companies_unchanged = start_snapshot.companies_hash == end_snapshot.companies_hash
+    total_conservation_difference = analysis["conservation_difference"] + abs(
+        database_conservation_difference
+    )
+    census_passed = (
+        analysis["accepted"]
+        and status == "completed"
+        and failure_reason is None
+        and total_conservation_difference == 0
+        and published_jobs_unchanged
+        and companies_unchanged
+    )
+    return {
+        "status": status,
+        "census_passed": census_passed,
+        "candidate_hash": candidate_evidence.candidate_hash,
+        "candidate_run_id": candidate_evidence.candidate_run_id,
+        "planned_condition_count": len(conditions),
+        "condition_count": analysis["condition_count"],
+        "natural_exhaustion_count": analysis["natural_exhaustion_count"],
+        "listing_logical_count": analysis["listing_logical_count"],
+        "listing_attempt_count": analysis["listing_attempt_count"],
+        "detail_attempt_count": analysis["detail_attempt_count"],
+        "unresolved_gaps": analysis["unresolved_gaps"],
+        "identity_issue_count": analysis["identity_issue_count"],
+        "identity_conflict_count": analysis["identity_conflict_count"],
+        "conservation_difference": total_conservation_difference,
+        "listing_conservation_difference": analysis["conservation_difference"],
+        "database_conservation_difference": database_conservation_difference,
+        "conservation": {
+            "raw_rows_difference": report.raw_rows.difference,
+            "distinct_ids_difference": report.distinct_ids.difference,
+            "partition_overlap_ids": list(report.partition_overlap_ids),
+            "unexplained_ids": list(report.unexplained_ids),
+            "identity_pair_mismatch_page_keys": list(
+                report.identity_pair_mismatch_page_keys
+            ),
+        },
+        "staging_amplification_ratio": (reconciliation.staging_amplification_ratio),
+        "staging_amplification_within_limit": (
+            reconciliation.staging_amplification_within_limit
+        ),
+        "reconciliation": reconciliation.to_payload(),
+        "staged_rows_delta": staged_rows_delta,
+        "published_jobs_unchanged": published_jobs_unchanged,
+        "companies_unchanged": companies_unchanged,
+        "ordered_job_id_hash": analysis["ordered_job_id_hash"],
+        "unique_job_count": analysis["unique_job_count"],
+        "condition_outcomes": analysis["condition_outcomes"],
+        "stop_reason": failure_reason or analysis["failure_reason"],
+        "request_budget": dict(request_budget),
+        "run_start_snapshot_hash": start_snapshot.data_hash,
+        "run_end_snapshot_hash": end_snapshot.data_hash,
+        "run_start_product_data_hash": start_snapshot.product_data_hash,
+        "run_end_product_data_hash": end_snapshot.product_data_hash,
+        "run_start_inventory_hash": start_inventory.data_hash,
+        "run_end_inventory_hash": end_inventory.data_hash,
+    }
+
+
 def _unexpected_error_message(
     error: BaseException,
     *,
@@ -1003,7 +1500,11 @@ def _unexpected_error_message(
         else (
             "unexpected_category_pilot_error"
             if experiment == "category-pilot"
-            else "unexpected_live_smoke_error"
+            else (
+                "unexpected_full_census_error"
+                if experiment == "full-census"
+                else "unexpected_live_smoke_error"
+            )
         )
     )
     return f"{prefix}:{type(error).__name__}"
@@ -1039,6 +1540,9 @@ def _best_effort_finalize_unexpected_failure(
     pilot_variant: PilotVariantEvidence | None = None,
     pilot_conditions=(),
     pilot_reconciliation=None,
+    census_candidate_evidence: CensusCandidateEvidence | None = None,
+    census_conditions=(),
+    census_reconciliation=None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     error_message = _unexpected_error_message(error, experiment=experiment)
     product_data_evidence_complete = (
@@ -1085,6 +1589,25 @@ def _best_effort_finalize_unexpected_failure(
             )
 
     if (
+        experiment == "full-census"
+        and census_candidate_evidence is not None
+        and census_reconciliation is not None
+    ):
+        summary = _build_census_summary(
+            status="failed",
+            start_snapshot=start_snapshot,
+            start_inventory=start_inventory,
+            end_snapshot=end_snapshot,
+            end_inventory=end_inventory,
+            result=None,
+            conditions=census_conditions,
+            events_before_summary=current_events,
+            failure_reason=error_message,
+            request_budget=request_budget,
+            candidate_evidence=census_candidate_evidence,
+            reconciliation=census_reconciliation,
+        )
+    elif (
         experiment == "category-pilot"
         and pilot_variant is not None
         and pilot_reconciliation is not None
@@ -1188,7 +1711,11 @@ def main(
         else (
             dict(_PILOT_REQUEST_BUDGET)
             if args.command == "pilot"
-            else runtime_smoke_request_budget()
+            else (
+                dict(_CENSUS_REQUEST_BUDGET)
+                if args.command == "census"
+                else runtime_smoke_request_budget()
+            )
         )
     )
     if len(args.baseline_artifact) != 2:
@@ -1201,6 +1728,7 @@ def main(
     try:
         smoke_artifact_hash = None
         pilot_variant = None
+        candidate_evidence = None
         if args.command == "calibrate":
             _require_accepted_smoke_artifact(args.smoke_artifact)
             smoke_artifact_hash = hashlib.sha256(
@@ -1210,6 +1738,10 @@ def main(
             pilot_variant = _require_accepted_calibration_variant(
                 args.calibration_artifact,
                 variant_rank=args.variant_rank,
+            )
+        elif args.command == "census":
+            candidate_evidence = _require_census_candidate_artifact(
+                args.candidate_artifact
             )
         baseline_gate = require_matching_baselines(
             args.baseline_artifact[0],
@@ -1241,10 +1773,15 @@ def main(
     artifact_dir: Path | None = None
     is_calibration = args.command == "calibrate"
     is_pilot = args.command == "pilot"
+    is_census = args.command == "census"
     experiment = (
         "listing-calibration"
         if is_calibration
-        else "category-pilot" if is_pilot else "runtime-smoke"
+        else (
+            "category-pilot"
+            if is_pilot
+            else "full-census" if is_census else "runtime-smoke"
+        )
     )
     variant = (
         "locked-2x2x2-fresh-headless"
@@ -1256,7 +1793,15 @@ def main(
                 "-31-category-pilot"
             )
             if is_pilot and pilot_variant is not None
-            else "search-rcdtype-7-fresh-headless"
+            else (
+                (
+                    f"{candidate_evidence.candidate.endpoint}-rcdtype-"
+                    f"{candidate_evidence.candidate.rcd_type if candidate_evidence.candidate.rcd_type is not None else 'omitted'}"
+                    "-31-category-full-census"
+                )
+                if is_census and candidate_evidence is not None
+                else "search-rcdtype-7-fresh-headless"
+            )
         )
     )
     parent_artifact_hash = (
@@ -1265,7 +1810,11 @@ def main(
         else (
             pilot_variant.parent_artifact_hash
             if is_pilot and pilot_variant is not None
-            else baseline_gate.parent_artifact_hash
+            else (
+                candidate_evidence.parent_artifact_hash
+                if is_census and candidate_evidence is not None
+                else baseline_gate.parent_artifact_hash
+            )
         )
     )
     calibration_results = None
@@ -1276,6 +1825,16 @@ def main(
         else ()
     )
     pilot_staging_sink = None
+    census_result = None
+    census_conditions = (
+        build_pilot_conditions(
+            candidate_evidence.candidate.endpoint,
+            candidate_evidence.candidate.rcd_type,
+        )
+        if is_census and candidate_evidence is not None
+        else ()
+    )
+    census_staging_sink = None
 
     try:
         db = session_factory()
@@ -1314,7 +1873,32 @@ def main(
                             "calibration_run_id": pilot_variant.calibration_run_id,
                         }
                         if is_pilot and pilot_variant is not None
-                        else {}
+                        else (
+                            {
+                                "condition_count": len(census_conditions),
+                                "candidate_hash": candidate_evidence.candidate_hash,
+                                "candidate_run_id": candidate_evidence.candidate_run_id,
+                                "endpoint": candidate_evidence.candidate.endpoint,
+                                "rcd_type": candidate_evidence.candidate.rcd_type,
+                                "max_pages_per_condition": (
+                                    candidate_evidence.candidate.max_pages_per_condition
+                                ),
+                                "require_empty_confirmation": (
+                                    candidate_evidence.candidate.require_empty_confirmation
+                                ),
+                                "max_attempts_per_page": (
+                                    candidate_evidence.candidate.max_attempts_per_page
+                                ),
+                                "retry_delays_seconds": list(
+                                    candidate_evidence.candidate.retry_delays_seconds
+                                ),
+                                "page_delay_range_seconds": list(
+                                    candidate_evidence.candidate.page_delay_range_seconds
+                                ),
+                            }
+                            if is_census and candidate_evidence is not None
+                            else {}
+                        )
                     )
                 ),
             },
@@ -1327,6 +1911,21 @@ def main(
                         runtime_factory=runtime_factory,
                         service=service_factory(),
                         observation_service=observation_service,
+                    )
+                )
+            elif is_census and candidate_evidence is not None:
+                census_staging_sink = staging_sink_factory(
+                    crawl_runtime=crawl_runtime_factory(),
+                    crawl_job_id=run_id,
+                    skip_existing=True,
+                )
+                census_result = asyncio.run(
+                    _execute_census_with_runtime(
+                        runtime_factory=runtime_factory,
+                        service=service_factory(),
+                        observation_service=observation_service,
+                        candidate=candidate_evidence.candidate,
+                        staging_sink=census_staging_sink,
                     )
                 )
             elif is_pilot:
@@ -1369,6 +1968,60 @@ def main(
                 "research.run_stopped",
                 {"reason": failure_reason},
             )
+        elif (
+            is_census
+            and candidate_evidence is not None
+            and census_staging_sink is not None
+        ):
+            census_events = _ordered_events(
+                research_repository.list_research_events(db, UUID(run_id))
+            )
+            census_analysis = _analyze_census(
+                result=census_result,
+                conditions=census_conditions,
+                events_before_summary=census_events,
+                reconciliation=census_staging_sink.reconciliation,
+            )
+            database_conservation_difference = (
+                end_snapshot.staged_rows
+                - start_snapshot.staged_rows
+                - census_staging_sink.reconciliation.rows_created
+            )
+            published_jobs_unchanged = (
+                start_snapshot.published_jobs == end_snapshot.published_jobs
+                and start_snapshot.published_jobs_hash
+                == end_snapshot.published_jobs_hash
+            )
+            companies_unchanged = (
+                start_snapshot.companies_hash == end_snapshot.companies_hash
+            )
+            failure_reason = census_analysis["failure_reason"]
+            if failure_reason is None and database_conservation_difference != 0:
+                failure_reason = "conservation_difference"
+            if failure_reason is None and not published_jobs_unchanged:
+                failure_reason = "published_jobs_changed"
+            if failure_reason is None and not companies_unchanged:
+                failure_reason = "companies_changed"
+            if failure_reason is None:
+                terminal_status = "completed"
+                exit_code = EXIT_OK
+            else:
+                observation_service.record_event(
+                    "research.run_stopped",
+                    {"reason": failure_reason},
+                )
+                if failure_reason in _HARD_STOP_REASONS:
+                    exit_code = EXIT_HARD_STOP
+                elif failure_reason in {
+                    "page_cap",
+                    "condition_incomplete",
+                    "census_condition_matrix_mismatch",
+                    "census_natural_exhaustion_mismatch",
+                    "census_incomplete",
+                }:
+                    exit_code = EXIT_INCOMPLETE
+                else:
+                    exit_code = EXIT_EVIDENCE_FAILURE
         elif is_pilot and pilot_staging_sink is not None:
             pilot_accepted, failure_reason = _pilot_analysis(
                 results=pilot_results,
@@ -1480,7 +2133,26 @@ def main(
         events_before_summary = _ordered_events(
             research_repository.list_research_events(db, UUID(run_id))
         )
-        if is_pilot and pilot_variant is not None and pilot_staging_sink is not None:
+        if (
+            is_census
+            and candidate_evidence is not None
+            and census_staging_sink is not None
+        ):
+            summary = _build_census_summary(
+                status=terminal_status,
+                start_snapshot=start_snapshot,
+                start_inventory=start_inventory,
+                end_snapshot=end_snapshot,
+                end_inventory=end_inventory,
+                result=census_result,
+                conditions=census_conditions,
+                events_before_summary=events_before_summary,
+                failure_reason=failure_reason,
+                request_budget=request_budget,
+                candidate_evidence=candidate_evidence,
+                reconciliation=census_staging_sink.reconciliation,
+            )
+        elif is_pilot and pilot_variant is not None and pilot_staging_sink is not None:
             summary = _build_pilot_summary(
                 status=terminal_status,
                 start_snapshot=start_snapshot,
@@ -1519,7 +2191,7 @@ def main(
                 failure_reason=failure_reason,
                 request_budget=request_budget,
             )
-        if not is_pilot and not product_data_unchanged:
+        if not is_pilot and not is_census and not product_data_unchanged:
             exit_code = EXIT_EVIDENCE_FAILURE
         observation_service.finish_run(
             status=terminal_status,
@@ -1568,6 +2240,13 @@ def main(
                         pilot_reconciliation=(
                             pilot_staging_sink.reconciliation
                             if pilot_staging_sink is not None
+                            else None
+                        ),
+                        census_candidate_evidence=candidate_evidence,
+                        census_conditions=census_conditions,
+                        census_reconciliation=(
+                            census_staging_sink.reconciliation
+                            if census_staging_sink is not None
                             else None
                         ),
                     )
@@ -1629,7 +2308,31 @@ def main(
                                     )
                                 }
                                 if is_calibration
-                                else {"smoke_passed": bool(summary.get("smoke_passed"))}
+                                else (
+                                    {
+                                        "census_passed": bool(
+                                            summary.get("census_passed")
+                                        ),
+                                        "candidate_hash": (
+                                            candidate_evidence.candidate_hash
+                                        ),
+                                        "candidate_run_id": (
+                                            candidate_evidence.candidate_run_id
+                                        ),
+                                        "endpoint": (
+                                            candidate_evidence.candidate.endpoint
+                                        ),
+                                        "rcd_type": (
+                                            candidate_evidence.candidate.rcd_type
+                                        ),
+                                    }
+                                    if is_census and candidate_evidence is not None
+                                    else {
+                                        "smoke_passed": bool(
+                                            summary.get("smoke_passed")
+                                        )
+                                    }
+                                )
                             )
                         ),
                     },
@@ -1663,7 +2366,22 @@ def main(
         )
         return EXIT_EVIDENCE_FAILURE
 
-    if is_pilot:
+    if is_census:
+        output = {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "exit_code": exit_code,
+            "census_passed": bool(summary.get("census_passed")),
+            "request_budget": dict(request_budget),
+            "condition_count": int(summary.get("condition_count", 0)),
+            "natural_exhaustion_count": int(summary.get("natural_exhaustion_count", 0)),
+            "listing_logical_count": int(summary.get("listing_logical_count", 0)),
+            "listing_attempt_count": int(summary.get("listing_attempt_count", 0)),
+            "detail_attempt_count": int(summary.get("detail_attempt_count", 0)),
+            "unique_job_count": int(summary.get("unique_job_count", 0)),
+            "conservation_difference": int(summary.get("conservation_difference", 0)),
+        }
+    elif is_pilot:
         reconciliation = summary.get("reconciliation")
         reconciliation = reconciliation if isinstance(reconciliation, dict) else {}
         output = {
