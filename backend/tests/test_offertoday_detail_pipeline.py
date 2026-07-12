@@ -593,6 +593,29 @@ async def test_fallback_target_persists_request_owned_identity_and_exact_respons
 
 
 @pytest.mark.asyncio
+async def test_fallback_target_accepts_matching_explicit_response_identity():
+    raw_response = _success_response()
+    raw_response["data"]["encryptJobId"] = "100"
+    env = _build_pipeline([raw_response])
+    target = OfferTodayDetailTarget.from_runtime_target(_fallback_runtime_target())
+
+    result = await env.pipeline.process_target(
+        target=target,
+        detail_crawl_job_id="detail-run",
+        fetch_detail=env.fetcher,
+    )
+
+    assert result.outcome is OfferTodayResponseKind.SUCCESS
+    assert env.fetcher.calls == [("100", "100")]
+    stored_detail = env.store.rows["listing-a"]["detail_payload"]
+    assert stored_detail["encrypted_job_id_source"] == "jobId_fallback"
+    assert stored_detail["raw_data"] == raw_response["data"]
+    published_raw = env.store.jobs["100"]["raw_data"]
+    assert published_raw["encrypted_job_id_source"] == "jobId_fallback"
+    assert published_raw["raw_data"]["encryptJobId"] == "100"
+
+
+@pytest.mark.asyncio
 async def test_pipeline_promotes_explicit_target_and_persists_untouched_response_raw():
     runtime_target = _fallback_runtime_target()
     runtime_target["identity"] = OfferTodayDetailIdentity(
@@ -1172,7 +1195,7 @@ async def test_canonical_key_error_becomes_invalid_payload_without_persistence(
         fromlist=["build_offertoday_canonical_job"],
     )
 
-    def raise_missing_key(_payload):
+    def raise_missing_key(_payload, *, identity):
         raise KeyError("required canonical field")
 
     monkeypatch.setattr(

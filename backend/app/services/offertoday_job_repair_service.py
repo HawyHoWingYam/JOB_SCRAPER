@@ -152,6 +152,7 @@ class OfferTodayJobRepairService:
             job,
             listing,
             detail_payload_override=canonical_detail,
+            identity=identity,
         )
         return self._persist_canonical_job(job, canonical, listing)
 
@@ -174,6 +175,7 @@ class OfferTodayJobRepairService:
             job,
             listing,
             detail_payload_override=canonical_detail,
+            identity=expected_identity,
         )
         repair_result = self._persist_canonical_job(job, canonical, listing)
         if listing is not None:
@@ -211,20 +213,22 @@ class OfferTodayJobRepairService:
                 raise ValueError(
                     "Successful OfferToday detail result has no canonical_detail"
                 )
+            if result.parsed_detail is None:
+                raise ValueError(
+                    "Successful OfferToday detail result has no parsed_detail"
+                )
 
             validate_offertoday_detail_identity(
                 expected_identity,
-                result.canonical_detail,
+                result.parsed_detail,
             )
-            canonical_detail = _with_canonical_identity(
-                result.canonical_detail,
-                expected_identity,
-            )
+            canonical_detail = deepcopy(result.canonical_detail)
 
             canonical = self.build_canonical_job_snapshot(
                 job,
                 listing,
                 detail_payload_override=canonical_detail,
+                identity=expected_identity,
             )
             repair_result = self._persist_canonical_job(job, canonical, listing)
             if listing is not None:
@@ -474,6 +478,7 @@ class OfferTodayJobRepairService:
         listing: CrawlJobListing | Any | None = None,
         *,
         detail_payload_override: dict[str, Any] | None = None,
+        identity: OfferTodayDetailIdentity | None = None,
     ) -> CanonicalScrapedJob:
         payload = {
             "source_site": "offertoday",
@@ -504,4 +509,4 @@ class OfferTodayJobRepairService:
         elif isinstance(getattr(job, "raw_data", None), dict):
             payload.update(dict(job.raw_data))
 
-        return build_offertoday_canonical_job(payload)
+        return build_offertoday_canonical_job(payload, identity=identity)

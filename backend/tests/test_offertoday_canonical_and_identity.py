@@ -1830,6 +1830,112 @@ def test_offertoday_browser_detail_scraper_removes_legacy_outcome_exceptions():
     assert not hasattr(scraper_module, "OfferTodayDetailUnavailableError")
 
 
+def test_cached_repair_rejects_mismatched_raw_response_identity_before_persistence(
+    monkeypatch,
+):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = _repair_service(service_module, db=object())
+    listing = _listing_stub(listing_payload=_fallback_listing_payload())
+    listing.detail_status = "completed"
+    listing.detail_payload = {
+        **_fallback_listing_payload(),
+        "raw_data": {
+            "jobId": "jid-1",
+            "encryptJobId": "enc-other",
+        },
+    }
+
+    monkeypatch.setattr(service, "get_latest_completed_listing", lambda _id: listing)
+    monkeypatch.setattr(service, "get_latest_listing", lambda _id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("mismatched cached detail must not be persisted")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"requested encryptJobId=.*jid-1.*response encryptJobId=.*enc-other",
+    ):
+        service.repair_job(_job_stub())
+
+
+def test_cached_repair_accepts_normalized_fallback_with_empty_raw_data(
+    monkeypatch,
+):
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = _repair_service(service_module, db=object())
+    listing = _listing_stub(listing_payload=_fallback_listing_payload())
+    listing.detail_status = "completed"
+    listing.detail_payload = {
+        **_fallback_listing_payload(),
+        "raw_data": {},
+    }
+    expected_result = service_module.OfferTodayRepairResult(
+        action="updated",
+        description_repaired=False,
+        company_reassigned=False,
+        listing_attached=False,
+    )
+    captured = {}
+
+    monkeypatch.setattr(service, "get_latest_completed_listing", lambda _id: listing)
+    monkeypatch.setattr(service, "get_latest_listing", lambda _id: listing)
+
+    def fake_persist(job, canonical, persisted_listing):
+        captured["canonical"] = canonical
+        captured["listing"] = persisted_listing
+        return expected_result
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fake_persist)
+
+    assert service.repair_job(_job_stub()) is expected_result
+    assert captured["listing"] is listing
+    assert captured["canonical"].raw_data["encrypted_job_id_source"] == (
+        "jobId_fallback"
+    )
+    assert captured["canonical"].raw_data["raw_data"] == {}
+
+
+def test_cached_repair_rejects_invalid_top_level_encrypted_alias_before_persistence(
+    monkeypatch,
+):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = _repair_service(service_module, db=object())
+    listing = _listing_stub(listing_payload=_fallback_listing_payload())
+    listing.detail_status = "completed"
+    listing.detail_payload = {
+        **_fallback_listing_payload(),
+        "encryptJobId": [],
+        "raw_data": {
+            "jobId": "jid-1",
+            "encryptJobId": "jid-1",
+        },
+    }
+
+    monkeypatch.setattr(service, "get_latest_completed_listing", lambda _id: listing)
+    monkeypatch.setattr(service, "get_latest_listing", lambda _id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("invalid cached identity evidence must not be persisted")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"encryptJobId.*nonblank string",
+    ):
+        service.repair_job(_job_stub())
+
+
 def test_offline_parsed_repair_rejects_foreign_full_identity_before_mutation(
     monkeypatch,
 ):
@@ -2350,6 +2456,63 @@ async def test_repair_success_updates_job_description_with_one_parse_across_scra
         db.close()
 
 
+@pytest.mark.asyncio
+async def test_repair_fallback_result_accepts_matching_explicit_response_identity():
+    scraper_module = importlib.import_module(
+        "app.scraper.offertoday_browser_detail_scraper"
+    )
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    response_data = {
+        **_sample_detail_raw(),
+        "encryptJobId": "jid-1",
+    }
+
+    async def fake_fetcher(*, job_id: str, encrypted_job_id: str):
+        assert (job_id, encrypted_job_id) == ("jid-1", "jid-1")
+        return {"code": 0, "data": response_data}
+
+    fetch_result = await scraper_module.OfferTodayBrowserDetailScraper(
+        detail_json_fetcher=fake_fetcher
+    ).fetch_job_detail(
+        "jid-1",
+        encrypted_job_id="jid-1",
+        encrypted_job_id_source="jobId_fallback",
+    )
+
+    db = _repair_database()
+    try:
+        company = _database_company()
+        job = _database_job("jid-1", company_id=company.id)
+        listing = _database_listing(
+            "jid-1",
+            listing_payload=_fallback_listing_payload(),
+        )
+        db.add_all([company, job, listing])
+        db.commit()
+
+        repair_result = _repair_service(
+            service_module,
+            db=db,
+        ).repair_job_with_detail_result(job, fetch_result)
+        db.flush()
+        db.refresh(job)
+        db.refresh(listing)
+
+        assert repair_result.description_repaired is True
+        assert "Build ETL pipelines." in job.description
+        assert job.raw_data["encrypted_job_id_source"] == "jobId_fallback"
+        assert job.raw_data["raw_data"]["encryptJobId"] == "jid-1"
+        assert listing.detail_status == "completed"
+        assert listing.detail_payload["encrypted_job_id_source"] == "jobId_fallback"
+        assert listing.detail_payload["raw_data"] == response_data
+        assert listing.published_job_id == job.id
+        assert db.query(Company).filter(Company.name == "Alpha Ltd").one()
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -2458,6 +2621,44 @@ def test_repair_detail_result_rejects_canonical_identity_mismatch_before_mutatio
     with pytest.raises(
         identity_module.OfferTodayIdentityError,
         match=r"requested encryptJobId=.*enc-jid-1.*response encryptJobId=.*enc-other",
+    ):
+        service.repair_job_with_detail_result(_job_stub(), result)
+
+    assert vars(listing) == listing_before
+
+
+def test_repair_detail_result_rejects_foreign_canonical_raw_identity_before_mutation(
+    monkeypatch,
+):
+    identity_module = _identity_module()
+    service_module = importlib.import_module(
+        "app.services.offertoday_job_repair_service"
+    )
+    service = _repair_service(service_module, db=object())
+    listing = _listing_stub()
+    listing_before = dict(vars(listing))
+    result = _detail_fetch_result(
+        canonical_detail={
+            "job_id": "jid-1",
+            "encrypted_job_id": "enc-jid-1",
+            "encrypted_job_id_source": "encryptJobId",
+            "raw_data": {
+                "jobId": "jid-other",
+                "encryptJobId": "enc-other",
+            },
+        }
+    )
+
+    monkeypatch.setattr(service, "get_latest_listing", lambda source_job_id: listing)
+
+    def fail_persist(*args, **kwargs):
+        raise AssertionError("foreign canonical raw identity must not be persisted")
+
+    monkeypatch.setattr(service, "_persist_canonical_job", fail_persist)
+
+    with pytest.raises(
+        identity_module.OfferTodayIdentityError,
+        match=r"requested jobId=.*jid-1.*response jobId=.*jid-other",
     ):
         service.repair_job_with_detail_result(_job_stub(), result)
 

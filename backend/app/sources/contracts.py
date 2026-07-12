@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 import hashlib
 from datetime import datetime
 from typing import Any
 
 from app.sources.offertoday.detail_identity import (
+    OfferTodayDetailIdentity,
+    OfferTodayIdentityError,
     resolve_offertoday_listing_identity,
+    validate_offertoday_detail_identity,
 )
 from app.utils.data_mapper import parse_listing_date, parse_salary_range
 from app.utils.source_identity import (
@@ -128,7 +132,59 @@ def build_jobsdb_listing_canonical_job(
     )
 
 
-def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrapedJob:
+def _resolve_offertoday_canonical_identity(
+    parsed_job: dict[str, Any],
+    identity: OfferTodayDetailIdentity | None,
+) -> OfferTodayDetailIdentity:
+    if identity is None:
+        return resolve_offertoday_listing_identity(parsed_job)
+
+    owned_identity_payload = {
+        field_name: parsed_job[field_name]
+        for field_name in (
+            "job_id",
+            "encrypted_job_id",
+            "encrypted_job_id_source",
+        )
+        if field_name in parsed_job
+    }
+    payload_identity = resolve_offertoday_listing_identity(owned_identity_payload)
+    if payload_identity != identity:
+        raise OfferTodayIdentityError(
+            "OfferToday canonical identity ownership mismatch: "
+            f"requested jobId={identity.job_id!r}, "
+            f"requested encryptJobId={identity.encrypted_job_id!r}, "
+            f"requested source={identity.encrypted_job_id_source!r}; "
+            f"response jobId={payload_identity.job_id!r}, "
+            f"response encryptJobId={payload_identity.encrypted_job_id!r}, "
+            f"response source={payload_identity.encrypted_job_id_source!r}",
+            classification="canonical_identity_mismatch",
+        )
+
+    raw_data = parsed_job.get("raw_data")
+    has_response_identity_evidence = any(
+        field_name in parsed_job for field_name in ("jobId", "encryptJobId")
+    ) or (
+        isinstance(raw_data, Mapping)
+        and any(field_name in raw_data for field_name in ("jobId", "encryptJobId"))
+    )
+    if has_response_identity_evidence:
+        response_identity_payload = {
+            field_name: parsed_job[field_name]
+            for field_name in ("jobId", "encryptJobId")
+            if field_name in parsed_job
+        }
+        if isinstance(raw_data, Mapping):
+            response_identity_payload["raw_data"] = raw_data
+        validate_offertoday_detail_identity(identity, response_identity_payload)
+    return identity
+
+
+def build_offertoday_canonical_job(
+    parsed_job: dict[str, Any],
+    *,
+    identity: OfferTodayDetailIdentity | None = None,
+) -> CanonicalScrapedJob:
     """Build a CanonicalScrapedJob from an OfferToday parsed job dict.
 
     Supports both listing and detail response formats.
@@ -136,7 +192,7 @@ def build_offertoday_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
     """
     from app.sources.offertoday.parsers import build_offertoday_job_url
 
-    identity = resolve_offertoday_listing_identity(parsed_job)
+    identity = _resolve_offertoday_canonical_identity(parsed_job, identity)
     normalized_job = {
         **dict(parsed_job),
         "job_id": identity.job_id,

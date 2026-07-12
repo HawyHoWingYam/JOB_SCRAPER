@@ -200,7 +200,10 @@ class OfferTodayDetailPipeline:
                         target=target,
                         persisted_detail=persisted_detail_payload,
                     )
-                    canonical_job = build_offertoday_canonical_job(prepared_payload)
+                    canonical_job = build_offertoday_canonical_job(
+                        prepared_payload,
+                        identity=target.identity,
+                    )
                     self._validate_required_canonical_fields(canonical_job)
                 except OfferTodayIdentityError as exc:
                     classification = self._reclassify(
