@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
+import random
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
@@ -78,10 +80,26 @@ class ListingRetryPolicy:
     max_attempts_per_page: int = 3
     retry_delays_seconds: tuple[float, ...] = (1.0, 2.0)
     page_delay_seconds: float = 0.0
+    page_delay_range_seconds: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         if self.max_attempts_per_page < 1:
             raise ValueError("max_attempts_per_page must be >= 1")
+        if self.page_delay_range_seconds is not None:
+            lower, upper = self.page_delay_range_seconds
+            if (
+                type(lower) not in (int, float)
+                or type(upper) not in (int, float)
+                or not math.isfinite(lower)
+                or not math.isfinite(upper)
+                or lower < 0
+                or upper < 0
+                or lower > upper
+            ):
+                raise ValueError(
+                    "page_delay_range_seconds must contain finite non-negative "
+                    "values with lower <= upper"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,10 +404,12 @@ class OfferTodayListingRunner:
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.perf_counter,
+        uniform: Callable[[float, float], float] = random.uniform,
     ) -> None:
         self._transport = transport
         self._sleep = sleep
         self._clock = clock
+        self._uniform = uniform
 
     async def run(
         self,
@@ -848,8 +868,12 @@ class OfferTodayListingRunner:
                 if not page_succeeded:  # pragma: no cover - retry loop invariant
                     raise AssertionError("page loop ended without an outcome")
                 page += 1
-                if retry_policy.page_delay_seconds > 0:
-                    await self._sleep(retry_policy.page_delay_seconds)
+                page_delay = retry_policy.page_delay_seconds
+                if retry_policy.page_delay_range_seconds is not None:
+                    lower, upper = retry_policy.page_delay_range_seconds
+                    page_delay = self._uniform(lower, upper)
+                if page_delay > 0:
+                    await self._sleep(page_delay)
 
             outcome = ListingConditionOutcome(
                 condition=condition,

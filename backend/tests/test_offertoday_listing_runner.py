@@ -235,6 +235,145 @@ async def _run(
     return result, observation_sink, staging_sink, sleep
 
 
+@pytest.mark.asyncio
+async def test_page_delay_range_uses_uniform_for_each_successful_transition() -> None:
+    transport = ScriptedTransport(
+        _listing_response([_listing_row("j1", "e1")], has_more=True, total=3),
+        _listing_response([_listing_row("j2", "e2")], has_more=True, total=3),
+        _listing_response([_listing_row("j3", "e3")], has_more=False, total=3),
+    )
+    observation_sink = MemoryObservationSink()
+    staging_sink = MemoryStagingSink()
+    sleep = NoWaitSleep()
+    uniform_calls: list[tuple[float, float]] = []
+
+    def uniform(lower: float, upper: float) -> float:
+        uniform_calls.append((lower, upper))
+        return 4.25
+
+    runner = OfferTodayListingRunner(
+        transport,
+        sleep=sleep,
+        clock=DeterministicClock(),
+        uniform=uniform,
+    )
+
+    result = await runner.run(
+        conditions=[_condition()],
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=3,
+            require_empty_confirmation=False,
+        ),
+        retry_policy=ListingRetryPolicy(
+            max_attempts_per_page=3,
+            retry_delays_seconds=(5.0, 15.0),
+            page_delay_seconds=0.0,
+            page_delay_range_seconds=(3.0, 5.0),
+        ),
+        observation_sink=observation_sink,
+        staging_sink=staging_sink,
+        session_mode="saved-session",
+    )
+
+    assert result.is_complete is True
+    assert [request[0]["page"] for request in transport.requests] == [1, 2, 3]
+    assert uniform_calls == [(3.0, 5.0), (3.0, 5.0)]
+    assert sleep.delays == [4.25, 4.25]
+
+
+@pytest.mark.asyncio
+async def test_page_delay_range_does_not_randomize_retry_delays() -> None:
+    transport = ScriptedTransport(
+        {"code": 7001, "msg": "Temporary upstream error", "data": {}},
+        {"code": 7001, "msg": "Temporary upstream error", "data": {}},
+        _listing_response([_listing_row("j1", "e1")], has_more=True, total=2),
+        _listing_response([_listing_row("j2", "e2")], has_more=False, total=2),
+    )
+    observation_sink = MemoryObservationSink()
+    staging_sink = MemoryStagingSink()
+    sleep = NoWaitSleep()
+    runner = OfferTodayListingRunner(
+        transport,
+        sleep=sleep,
+        clock=DeterministicClock(),
+        uniform=lambda lower, upper: 4.25,
+    )
+
+    result = await runner.run(
+        conditions=[_condition()],
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=2,
+            require_empty_confirmation=False,
+        ),
+        retry_policy=ListingRetryPolicy(
+            max_attempts_per_page=3,
+            retry_delays_seconds=(5.0, 15.0),
+            page_delay_seconds=0.0,
+            page_delay_range_seconds=(3.0, 5.0),
+        ),
+        observation_sink=observation_sink,
+        staging_sink=staging_sink,
+        session_mode="saved-session",
+    )
+
+    assert result.is_complete is True
+    assert [request[0]["page"] for request in transport.requests] == [1, 1, 1, 2]
+    assert sleep.delays == [5.0, 15.0, 4.25]
+
+
+@pytest.mark.asyncio
+async def test_policy_without_page_delay_range_keeps_fixed_transition_delay() -> None:
+    transport = ScriptedTransport(
+        _listing_response([_listing_row("j1", "e1")], has_more=True, total=2),
+        _listing_response([_listing_row("j2", "e2")], has_more=False, total=2),
+    )
+    observation_sink = MemoryObservationSink()
+    staging_sink = MemoryStagingSink()
+    sleep = NoWaitSleep()
+
+    def unexpected_uniform(_lower: float, _upper: float) -> float:
+        raise AssertionError("uniform must not run without a delay range")
+
+    runner = OfferTodayListingRunner(
+        transport,
+        sleep=sleep,
+        clock=DeterministicClock(),
+        uniform=unexpected_uniform,
+    )
+
+    result = await runner.run(
+        conditions=[_condition()],
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=2,
+            require_empty_confirmation=False,
+        ),
+        retry_policy=ListingRetryPolicy(page_delay_seconds=1.75),
+        observation_sink=observation_sink,
+        staging_sink=staging_sink,
+        session_mode="saved-session",
+    )
+
+    assert result.is_complete is True
+    assert sleep.delays == [1.75]
+
+
+@pytest.mark.parametrize(
+    "delay_range",
+    (
+        (-1.0, 3.0),
+        (3.0, -1.0),
+        (5.0, 3.0),
+        (float("nan"), 3.0),
+        (3.0, float("inf")),
+    ),
+)
+def test_page_delay_range_rejects_negative_reversed_or_non_finite_values(
+    delay_range: tuple[float, float],
+) -> None:
+    with pytest.raises(ValueError, match="page_delay_range_seconds"):
+        ListingRetryPolicy(page_delay_range_seconds=delay_range)
+
+
 @pytest.mark.parametrize(
     ("fixture_name", "endpoint", "expected_job_id"),
     [
