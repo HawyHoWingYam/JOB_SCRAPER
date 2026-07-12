@@ -15,6 +15,10 @@ from app.sources.offertoday.detail_identity import (
     resolve_offertoday_listing_identity,
 )
 from app.sources.offertoday.research.artifacts import verify_research_artifact
+from app.sources.offertoday.research.smoke import (
+    SMOKE_LISTING_REQUEST_LIMIT,
+    runtime_smoke_request_budget,
+)
 
 
 _COUNT_KEYS = (
@@ -30,9 +34,7 @@ _COUNT_KEYS = (
     "unusable_identity_rows",
 )
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
-_UNEXPECTED_ERROR_RE = re.compile(
-    r"unexpected_live_smoke_error:[A-Za-z_][A-Za-z0-9_]*"
-)
+_UNEXPECTED_ERROR_RE = re.compile(r"unexpected_live_smoke_error:[A-Za-z_][A-Za-z0-9_]*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,8 +107,7 @@ def load_baseline_artifact(artifact_dir: Path) -> BaselineArtifactEvidence:
     baseline_events = [
         event
         for event in observations
-        if isinstance(event, dict)
-        and event.get("event_type") == "research.baseline"
+        if isinstance(event, dict) and event.get("event_type") == "research.baseline"
     ]
     if len(baseline_events) != 1:
         raise ValueError(
@@ -177,15 +178,13 @@ def require_matching_baselines(
     return MatchingBaselineGate(first=first, second=second)
 
 
-_RUNTIME_SMOKE_REQUEST_BUDGET = {"listing": 1, "detail": 20}
+_LEGACY_RUNTIME_SMOKE_REQUEST_BUDGET = {"listing": 1, "detail": 20}
 _RUNTIME_SMOKE_PAGE_CONTROL = {
     "search_family": "runtime_smoke",
     "category_id": 118000,
     "keyword": "",
     "endpoint": "search",
     "rcd_type": 7,
-    "page": 1,
-    "attempt": 1,
     "session_mode": "fresh-headless",
 }
 _DETAIL_FAILURE_KINDS = {
@@ -203,6 +202,68 @@ _DETAIL_HARD_STOP_KINDS = {
     "ip_blocked",
     "id_mismatch",
 }
+_NATURAL_EXHAUSTION_STOP_REASON = "natural_exhaustion"
+
+
+def _runtime_smoke_common_page_control_is_valid(payload: Any) -> bool:
+    return isinstance(payload, dict) and all(
+        type(payload.get(key)) is type(expected_value)
+        and payload.get(key) == expected_value
+        for key, expected_value in _RUNTIME_SMOKE_PAGE_CONTROL.items()
+    )
+
+
+def _runtime_smoke_page_scalar_types_are_valid(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    api_code = payload.get("api_code")
+    has_more = payload.get("has_more")
+    return (api_code is None or type(api_code) is int) and (
+        has_more is None or type(has_more) is bool
+    )
+
+
+def _runtime_smoke_success_control_values_are_valid(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    api_code = payload.get("api_code")
+    return api_code is None or (type(api_code) is int and api_code == 0)
+
+
+def _runtime_smoke_terminal_semantics_are_valid(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    has_more = payload.get("has_more")
+    natural_exhaustion = payload.get("stop_reason") == _NATURAL_EXHAUSTION_STOP_REASON
+    if natural_exhaustion:
+        rows = payload.get("rows")
+        return (isinstance(rows, list) and not rows) or has_more is False
+    return has_more is not False
+
+
+def _runtime_smoke_success_page_controls_are_valid(payload: Any) -> bool:
+    return (
+        _runtime_smoke_common_page_control_is_valid(payload)
+        and _runtime_smoke_page_scalar_types_are_valid(payload)
+        and _runtime_smoke_success_control_values_are_valid(payload)
+        and _runtime_smoke_terminal_semantics_are_valid(payload)
+    )
+
+
+def _runtime_smoke_success_row_count_is_valid(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    rows = payload.get("rows")
+    row_count = payload.get("row_count")
+    return (
+        isinstance(rows, list)
+        and type(row_count) is int
+        and row_count == len(rows)
+        and (
+            row_count > 0
+            or payload.get("stop_reason") == _NATURAL_EXHAUSTION_STOP_REASON
+        )
+    )
 
 
 def _canonical_smoke_target(
@@ -258,13 +319,13 @@ def _canonical_smoke_target(
         separators=(",", ":"),
         sort_keys=True,
     )
-    expected_resolution_hash = hashlib.sha256(
-        identity_canonical.encode()
-    ).hexdigest()
-    if not (
-        allow_missing_resolution_hash
-        and "identity_resolution_hash" not in payload
-    ) and payload.get("identity_resolution_hash") != expected_resolution_hash:
+    expected_resolution_hash = hashlib.sha256(identity_canonical.encode()).hexdigest()
+    if (
+        not (
+            allow_missing_resolution_hash and "identity_resolution_hash" not in payload
+        )
+        and payload.get("identity_resolution_hash") != expected_resolution_hash
+    ):
         issues.append("invalid_detail_identity_resolution_hash")
     return (
         position,
@@ -318,8 +379,14 @@ def _canonical_page_row(payload: Any) -> OfferTodayDetailIdentity | None:
 
 def _canonical_page_authority(
     payload: dict[str, Any],
+    prior_committed_rows: list[OfferTodayDetailIdentity],
     issues: list[str],
-) -> tuple[list[OfferTodayDetailIdentity], int, int]:
+) -> tuple[
+    list[OfferTodayDetailIdentity],
+    list[OfferTodayDetailIdentity],
+    int,
+    int,
+]:
     serialized_pairs = payload.get("id_pairs")
     rows = payload.get("rows")
     identity_evidence_valid = True
@@ -351,11 +418,18 @@ def _canonical_page_authority(
         for row in rows
     )
     fallback_count = sum(
-        isinstance(row, dict)
-        and row.get("encrypted_job_id_source") == "jobId_fallback"
+        isinstance(row, dict) and row.get("encrypted_job_id_source") == "jobId_fallback"
         for row in rows
     )
     if payload.get("classification") == "success":
+        declared_missing_job_id_count = payload.get("missing_job_id_count")
+        if not _runtime_smoke_success_row_count_is_valid(payload):
+            identity_evidence_valid = False
+        if (
+            type(declared_missing_job_id_count) is not int
+            or declared_missing_job_id_count != 0
+        ):
+            identity_evidence_valid = False
         declared_missing_count = payload.get("missing_encrypted_job_id_count")
         if (
             type(declared_missing_count) is not int
@@ -363,6 +437,7 @@ def _canonical_page_authority(
             or declared_missing_count != raw_missing_count
         ):
             issues.append("missing_encrypted_job_id_count_mismatch")
+            identity_evidence_valid = False
         declared_fallback_count = payload.get("job_id_fallback_count")
         if (
             type(declared_fallback_count) is not int
@@ -370,8 +445,16 @@ def _canonical_page_authority(
             or declared_fallback_count != fallback_count
         ):
             issues.append("job_id_fallback_count_mismatch")
+            identity_evidence_valid = False
 
-    authority_index = build_offertoday_identity_authority_index(canonical_rows)
+        identity_issues = payload.get("identity_issues")
+        identity_conflicts = payload.get("identity_conflicts")
+        if identity_issues != [] or identity_conflicts != []:
+            identity_evidence_valid = False
+
+    authority_index = build_offertoday_identity_authority_index(
+        [*prior_committed_rows, *canonical_rows]
+    )
     first_seen_job_ids: list[str] = []
     seen_job_ids: set[str] = set()
     for identity in canonical_rows:
@@ -400,16 +483,18 @@ def _canonical_page_authority(
         )
         for identity in authoritative_rows
     ]
-    if (
+    if payload.get("classification") == "success" and (
         not identity_evidence_valid
         or canonical_pair_triples != authoritative_row_triples
-        or (
-            payload.get("classification") == "success"
-            and bool(authority_index.conflict_reason_by_job)
-        )
+        or bool(authority_index.conflict_reason_by_job)
     ):
         issues.append("page_identity_authority_mismatch")
-    return authoritative_rows, raw_missing_count, fallback_count
+    return (
+        authoritative_rows,
+        canonical_rows,
+        raw_missing_count,
+        fallback_count,
+    )
 
 
 def _is_legacy_failed_identity_page(payload: Any) -> bool:
@@ -434,6 +519,7 @@ def _analyze_runtime_smoke_events(
     issues: list[str],
     *,
     allow_legacy_failed_identity_evidence: bool,
+    detail_budget: int,
 ) -> dict[str, Any]:
     run_started_indexes = [
         index
@@ -456,49 +542,171 @@ def _analyze_runtime_smoke_events(
         and len(page_events) == 1
         and _is_legacy_failed_identity_page(page_events[0].get("payload"))
     )
-    authoritative_page_triples: list[
-        tuple[str, str, OfferTodayEncryptedJobIdSource]
-    ] = []
-    seen_authoritative_page_triples: set[
-        tuple[str, str, OfferTodayEncryptedJobIdSource]
-    ] = set()
+    page_payloads = [event.get("payload") for event in page_events]
+    observed_pages = [
+        (
+            payload.get("page")
+            if isinstance(payload, dict) and type(payload.get("page")) is int
+            else None
+        )
+        for payload in page_payloads
+    ]
+    if observed_pages != list(range(1, len(page_events) + 1)):
+        issues.append("invalid_runtime_smoke_page_sequence")
+    if any(
+        not isinstance(payload, dict)
+        or type(payload.get("attempt")) is not int
+        or payload.get("attempt") != 1
+        for payload in page_payloads
+    ):
+        issues.append("invalid_runtime_smoke_listing_attempt")
+
+    committed_rows: list[OfferTodayDetailIdentity] = []
+    first_seen_job_ids: list[str] = []
+    seen_job_ids: set[str] = set()
+    clean_page_flags: list[bool] = []
+    accumulated_authority_counts: list[int] = []
     page_missing_encrypted_job_id_count = 0
     page_job_id_fallback_count = 0
     first_listing_failure: str | None = None
-    for page_event in page_events:
-        page_payload = page_event.get("payload")
-        if not isinstance(page_payload, dict) or any(
-            page_payload.get(key) != value
-            for key, value in _RUNTIME_SMOKE_PAGE_CONTROL.items()
+    for page_index, page_payload in enumerate(page_payloads):
+        common_control_valid = _runtime_smoke_common_page_control_is_valid(page_payload)
+        successful_page = (
+            isinstance(page_payload, dict)
+            and page_payload.get("classification") == "success"
+        )
+        scalar_types_valid = _runtime_smoke_page_scalar_types_are_valid(page_payload)
+        success_control_values_valid = (
+            not successful_page
+            or _runtime_smoke_success_control_values_are_valid(page_payload)
+        )
+        if (
+            not common_control_valid
+            or not scalar_types_valid
+            or not success_control_values_valid
         ):
             issues.append("invalid_runtime_smoke_page_control")
+        page_issues: list[str] = []
+        current_canonical_rows: list[OfferTodayDetailIdentity] = []
         if isinstance(page_payload, dict) and not legacy_failed_identity_evidence:
-            page_authority, raw_missing_count, fallback_count = (
-                _canonical_page_authority(page_payload, issues)
+            (
+                _page_authority,
+                current_canonical_rows,
+                raw_missing_count,
+                fallback_count,
+            ) = _canonical_page_authority(
+                page_payload,
+                committed_rows,
+                page_issues,
             )
             page_missing_encrypted_job_id_count += raw_missing_count
             page_job_id_fallback_count += fallback_count
-            for identity in page_authority:
-                triple = (
-                    identity.job_id,
-                    identity.encrypted_job_id,
-                    identity.encrypted_job_id_source,
-                )
-                if triple not in seen_authoritative_page_triples:
-                    seen_authoritative_page_triples.add(triple)
-                    authoritative_page_triples.append(triple)
+        terminal_semantics_valid = (
+            not successful_page
+            or _runtime_smoke_terminal_semantics_are_valid(page_payload)
+        )
+        if not terminal_semantics_valid:
+            page_issues.append("invalid_runtime_smoke_page_terminal_signal")
+        issues.extend(page_issues)
+
+        expected_page = page_index + 1
+        page_sequence_valid = (
+            isinstance(page_payload, dict)
+            and type(page_payload.get("page")) is int
+            and page_payload.get("page") == expected_page
+        )
+        page_attempt_valid = (
+            isinstance(page_payload, dict)
+            and type(page_payload.get("attempt")) is int
+            and page_payload.get("attempt") == 1
+        )
+        page_entry_valid = True
+        if page_index == 1:
+            first_page = page_payloads[0]
+            page_entry_valid = (
+                isinstance(first_page, dict)
+                and clean_page_flags[0]
+                and first_page.get("stop_reason") is None
+                and _runtime_smoke_success_page_controls_are_valid(first_page)
+                and type(first_page.get("row_count")) is int
+                and first_page.get("row_count") > 0
+                and first_page.get("identity_issues") == []
+                and first_page.get("identity_conflicts") == []
+                and accumulated_authority_counts[0] < detail_budget
+            )
+            if not page_entry_valid:
+                issues.append("invalid_runtime_smoke_page_two_entry")
+        elif page_index >= SMOKE_LISTING_REQUEST_LIMIT:
+            page_entry_valid = False
+        clean_page = (
+            isinstance(page_payload, dict)
+            and page_payload.get("classification") == "success"
+            and common_control_valid
+            and page_sequence_valid
+            and page_attempt_valid
+            and page_entry_valid
+            and not page_issues
+            and _runtime_smoke_success_page_controls_are_valid(page_payload)
+            and _runtime_smoke_success_row_count_is_valid(page_payload)
+            and page_payload.get("stop_reason")
+            in (None, "page_cap", "target_cap", _NATURAL_EXHAUSTION_STOP_REASON)
+            and page_payload.get("identity_issues") == []
+            and page_payload.get("identity_conflicts") == []
+            and (
+                bool(current_canonical_rows)
+                or page_payload.get("stop_reason") == _NATURAL_EXHAUSTION_STOP_REASON
+            )
+        )
+        clean_page_flags.append(clean_page)
+        if clean_page:
+            committed_rows.extend(current_canonical_rows)
+            for identity in current_canonical_rows:
+                if identity.job_id not in seen_job_ids:
+                    seen_job_ids.add(identity.job_id)
+                    first_seen_job_ids.append(identity.job_id)
+
+        accumulated_index = build_offertoday_identity_authority_index(committed_rows)
+        accumulated_authority_counts.append(
+            sum(
+                job_id in accumulated_index.authoritative_identity_by_job
+                and job_id not in accumulated_index.conflict_reason_by_job
+                for job_id in first_seen_job_ids
+            )
+        )
         if isinstance(page_payload, dict) and first_listing_failure is None:
             page_stop_reason = page_payload.get("stop_reason")
             classification = page_payload.get("classification")
             if isinstance(page_stop_reason, str) and page_stop_reason not in {
                 "",
                 "page_cap",
+                "target_cap",
             }:
                 first_listing_failure = f"listing_{page_stop_reason}"
             elif classification != "success":
                 first_listing_failure = f"listing_{classification}"
+
+    final_authority_index = build_offertoday_identity_authority_index(committed_rows)
+    authoritative_page_triples: list[
+        tuple[str, str, OfferTodayEncryptedJobIdSource]
+    ] = []
+    for job_id in first_seen_job_ids:
+        if (
+            job_id not in final_authority_index.authoritative_identity_by_job
+            or job_id in final_authority_index.conflict_reason_by_job
+        ):
+            continue
+        identity = final_authority_index.authoritative_identity_by_job[job_id]
+        authoritative_page_triples.append(
+            (
+                identity.job_id,
+                identity.encrypted_job_id,
+                identity.encrypted_job_id_source,
+            )
+        )
     detail_events = [
-        event for event in events if event.get("event_type") == "research.detail_attempt"
+        event
+        for event in events
+        if event.get("event_type") == "research.detail_attempt"
     ]
     run_stopped_indexes = [
         index
@@ -514,9 +722,7 @@ def _analyze_runtime_smoke_events(
     if len(cohort_indexes) > 1:
         issues.append(f"detail_cohort_event_count:{len(cohort_indexes)}")
 
-    frozen_targets: list[
-        tuple[int, str, str, OfferTodayEncryptedJobIdSource]
-    ] = []
+    frozen_targets: list[tuple[int, str, str, OfferTodayEncryptedJobIdSource]] = []
     frozen_count = 0
     if cohort_indexes:
         cohort_event = events[cohort_indexes[0]]
@@ -535,16 +741,14 @@ def _analyze_runtime_smoke_events(
                 targets = []
             if frozen_count != len(targets):
                 issues.append("detail_cohort_count_mismatch")
-            if frozen_count > 20:
+            if frozen_count > detail_budget:
                 issues.append("detail_cohort_budget_exceeded")
             for position, target in enumerate(targets, start=1):
                 canonical = _canonical_smoke_target(
                     target,
                     expected_position=position,
                     issues=issues,
-                    allow_missing_resolution_hash=(
-                        legacy_failed_identity_evidence
-                    ),
+                    allow_missing_resolution_hash=(legacy_failed_identity_evidence),
                 )
                 if canonical is not None:
                     frozen_targets.append(canonical)
@@ -558,7 +762,7 @@ def _analyze_runtime_smoke_events(
     expected_frozen_targets = [
         (position, job_id, encrypted_job_id, encrypted_job_id_source)
         for position, (job_id, encrypted_job_id, encrypted_job_id_source) in enumerate(
-            authoritative_page_triples[:20],
+            authoritative_page_triples[:detail_budget],
             start=1,
         )
     ]
@@ -663,9 +867,16 @@ def _analyze_runtime_smoke_events(
         if stop_batch:
             batch_stopped = True
 
+    detail_ready_for_attempts = (
+        bool(page_payloads)
+        and clean_page_flags == [True] * len(page_payloads)
+        and isinstance(page_payloads[-1], dict)
+        and page_payloads[-1].get("stop_reason") == "target_cap"
+        and frozen_count == detail_budget
+    )
     if (
         first_failure is None
-        and detail_events
+        and detail_ready_for_attempts
         and len(detail_events) < frozen_count
         and not batch_stopped
     ):
@@ -683,9 +894,8 @@ def _analyze_runtime_smoke_events(
         "first_failure": first_failure,
         "first_listing_failure": first_listing_failure,
         "page_events": page_events,
-        "page_missing_encrypted_job_id_count": (
-            page_missing_encrypted_job_id_count
-        ),
+        "clean_page_flags": clean_page_flags,
+        "page_missing_encrypted_job_id_count": (page_missing_encrypted_job_id_count),
         "page_job_id_fallback_count": page_job_id_fallback_count,
         "legacy_failed_identity_evidence": legacy_failed_identity_evidence,
         "run_stopped_events": run_stopped_events,
@@ -711,6 +921,27 @@ def _completed_no_write_evidence_is_valid(summary: dict[str, Any]) -> bool:
         and _SHA256_RE.fullmatch(inventory_start) is not None
         and inventory_start == inventory_end
     )
+
+
+def _request_budget_matches(value: Any, expected: dict[str, int]) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == set(expected)
+        and all(
+            type(value.get(key)) is int and value.get(key) == expected_value
+            for key, expected_value in expected.items()
+        )
+    )
+
+
+def _request_budget_limit(
+    request_budget: dict[str, int],
+    key: str,
+    *,
+    fallback: int,
+) -> int:
+    value = request_budget.get(key)
+    return value if type(value) is int and value >= 0 else fallback
 
 
 def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
@@ -767,11 +998,39 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     if _SHA256_RE.fullmatch(str(metadata.get("parent_artifact_hash") or "")) is None:
         issues.append("invalid_parent_artifact_hash")
 
+    manifest_status = metadata.get("crawl_job_status")
+    manifest_smoke_passed = metadata.get("smoke_passed")
     request_budget = metadata.get("request_budget")
-    if request_budget != _RUNTIME_SMOKE_REQUEST_BUDGET:
+    current_request_budget = runtime_smoke_request_budget()
+    current_budget_matches = _request_budget_matches(
+        request_budget,
+        current_request_budget,
+    )
+    legacy_budget_allowed = (
+        _request_budget_matches(
+            request_budget,
+            _LEGACY_RUNTIME_SMOKE_REQUEST_BUDGET,
+        )
+        and manifest_status == "failed"
+        and manifest_smoke_passed is False
+    )
+    if not current_budget_matches and not legacy_budget_allowed:
         issues.append("invalid_runtime_smoke_request_budget")
-    listing_budget = 1
-    detail_budget = 20
+    effective_request_budget = (
+        dict(_LEGACY_RUNTIME_SMOKE_REQUEST_BUDGET)
+        if legacy_budget_allowed
+        else dict(current_request_budget)
+    )
+    listing_budget = _request_budget_limit(
+        effective_request_budget,
+        "listing",
+        fallback=SMOKE_LISTING_REQUEST_LIMIT,
+    )
+    detail_budget = _request_budget_limit(
+        effective_request_budget,
+        "detail",
+        fallback=_LEGACY_RUNTIME_SMOKE_REQUEST_BUDGET["detail"],
+    )
 
     normalized_events = [event for event in events if isinstance(event, dict)]
     if len(normalized_events) != len(events):
@@ -790,14 +1049,28 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     if summary_indexes and summary_indexes[-1] != len(normalized_events) - 1:
         issues.append("event_after_terminal_summary")
 
-    manifest_status = metadata.get("crawl_job_status")
-    manifest_smoke_passed = metadata.get("smoke_passed")
+    run_started_events = [
+        event
+        for event in normalized_events
+        if event.get("event_type") == "research.run_started"
+    ]
+    if len(run_started_events) == 1:
+        run_started_payload = run_started_events[0].get("payload")
+        run_started_budget = (
+            run_started_payload.get("request_budget")
+            if isinstance(run_started_payload, dict)
+            else None
+        )
+        if not _request_budget_matches(
+            run_started_budget,
+            effective_request_budget,
+        ):
+            issues.append("invalid_runtime_smoke_request_budget")
     smoke_evidence = _analyze_runtime_smoke_events(
         normalized_events,
         issues,
-        allow_legacy_failed_identity_evidence=(
-            manifest_status == "failed" and manifest_smoke_passed is False
-        ),
+        allow_legacy_failed_identity_evidence=legacy_budget_allowed,
+        detail_budget=detail_budget,
     )
     listing_attempt_count = smoke_evidence["listing_attempt_count"]
     detail_attempt_count = smoke_evidence["detail_attempt_count"]
@@ -819,6 +1092,14 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
             issues.append("invalid_terminal_summary_payload")
 
     if summary is not None:
+        summary_budget_is_legacy_omission = (
+            legacy_budget_allowed and "request_budget" not in summary
+        )
+        if not summary_budget_is_legacy_omission and not _request_budget_matches(
+            summary.get("request_budget"),
+            effective_request_budget,
+        ):
+            issues.append("invalid_runtime_smoke_request_budget")
         if summary.get("listing_attempt_count") != listing_attempt_count:
             issues.append("listing_attempt_count_mismatch")
         if summary.get("attempted_count") != detail_attempt_count:
@@ -832,9 +1113,7 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
             if summary.get(field_name) != smoke_evidence[field_name]:
                 issues.append(f"{field_name}_mismatch")
         if not smoke_evidence["legacy_failed_identity_evidence"]:
-            summary_missing_count = summary.get(
-                "missing_encrypted_job_id_count"
-            )
+            summary_missing_count = summary.get("missing_encrypted_job_id_count")
             if (
                 type(summary_missing_count) is not int
                 or summary_missing_count < 0
@@ -866,25 +1145,50 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
             if run_stopped_events:
                 issues.append("completed_smoke_has_run_stopped")
             page_events = smoke_evidence["page_events"]
-            page_payload = (
-                page_events[0].get("payload")
-                if len(page_events) == 1
-                and isinstance(page_events[0].get("payload"), dict)
-                else {}
+            page_payloads = [event.get("payload") for event in page_events]
+            completed_pages_valid = (
+                1 <= len(page_payloads) <= SMOKE_LISTING_REQUEST_LIMIT
+                and all(isinstance(payload, dict) for payload in page_payloads)
+                and all(
+                    _runtime_smoke_success_page_controls_are_valid(payload)
+                    for payload in page_payloads
+                    if isinstance(payload, dict)
+                )
+                and all(
+                    payload.get("page") == position
+                    and type(payload.get("page")) is int
+                    and payload.get("attempt") == 1
+                    and type(payload.get("attempt")) is int
+                    and payload.get("classification") == "success"
+                    and _runtime_smoke_success_row_count_is_valid(payload)
+                    and payload.get("row_count") > 0
+                    and payload.get("identity_issues") == []
+                    and payload.get("identity_conflicts") == []
+                    for position, payload in enumerate(page_payloads, start=1)
+                    if isinstance(payload, dict)
+                )
+                and all(
+                    payload.get("stop_reason") is None
+                    for payload in page_payloads[:-1]
+                    if isinstance(payload, dict)
+                )
+                and isinstance(page_payloads[-1], dict)
+                and page_payloads[-1].get("stop_reason") == "target_cap"
+                and smoke_evidence["clean_page_flags"] == [True] * len(page_payloads)
             )
             if not (
                 manifest_status == "completed"
                 and manifest_smoke_passed is True
                 and summary_smoke_passed is True
+                and current_budget_matches
                 and summary.get("listing_complete") is False
                 and summary.get("expected_truncation") is True
-                and listing_attempt_count == 1
-                and detail_attempt_count == 20
-                and smoke_evidence["frozen_count"] == 20
+                and listing_attempt_count in (1, 2)
+                and detail_attempt_count == detail_budget
+                and smoke_evidence["frozen_count"] == detail_budget
                 and smoke_evidence["failure_count"] == 0
-                and page_payload.get("page") == 1
-                and page_payload.get("attempt") == 1
-                and page_payload.get("classification") == "success"
+                and completed_pages_valid
+                and summary.get("listing_stop_reason") == "target_cap"
                 and summary.get("stop_reason") is None
                 and _completed_no_write_evidence_is_valid(summary)
             ):
@@ -908,27 +1212,91 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
                     or summary.get("stop_reason") != stopped_reason
                 ):
                     issues.append("run_stopped_summary_reason_mismatch")
-                if str(stopped_reason or "").startswith(
-                    "unexpected_live_smoke_error:"
-                ) and _UNEXPECTED_ERROR_RE.fullmatch(stopped_reason) is None:
+                if (
+                    str(stopped_reason or "").startswith("unexpected_live_smoke_error:")
+                    and _UNEXPECTED_ERROR_RE.fullmatch(stopped_reason) is None
+                ):
                     issues.append("invalid_unexpected_failure_reason")
                 terminal_unexpected = (
                     isinstance(stopped_reason, str)
                     and _UNEXPECTED_ERROR_RE.fullmatch(stopped_reason) is not None
                 )
+            failed_page_payloads = [
+                event.get("payload") for event in smoke_evidence["page_events"]
+            ]
+            clean_natural_exhaustion_observed = (
+                bool(failed_page_payloads)
+                and smoke_evidence["clean_page_flags"]
+                == [True] * len(failed_page_payloads)
+                and isinstance(failed_page_payloads[-1], dict)
+                and failed_page_payloads[-1].get("stop_reason")
+                == _NATURAL_EXHAUSTION_STOP_REASON
+            )
+            if (
+                not terminal_unexpected
+                and clean_natural_exhaustion_observed
+                and not (
+                    smoke_evidence["frozen_count"] < detail_budget
+                    and detail_attempt_count == 0
+                    and summary.get("stop_reason") == "listing_natural_exhaustion"
+                    and summary.get("listing_stop_reason")
+                    == _NATURAL_EXHAUSTION_STOP_REASON
+                    and summary.get("listing_complete") is True
+                    and summary.get("expected_truncation") is False
+                )
+            ):
+                issues.append("failed_smoke_status_mismatch")
+            clean_page_cap_observed = (
+                bool(failed_page_payloads)
+                and smoke_evidence["clean_page_flags"]
+                == [True] * len(failed_page_payloads)
+                and isinstance(failed_page_payloads[-1], dict)
+                and failed_page_payloads[-1].get("stop_reason") == "page_cap"
+            )
+            if (
+                not terminal_unexpected
+                and clean_page_cap_observed
+                and not (
+                    listing_attempt_count == listing_budget
+                    and smoke_evidence["frozen_count"] < detail_budget
+                    and detail_attempt_count == 0
+                    and summary.get("stop_reason")
+                    == "insufficient_valid_detail_targets"
+                    and summary.get("listing_stop_reason") == "page_cap"
+                    and summary.get("listing_complete") is False
+                    and summary.get("expected_truncation") is True
+                )
+            ):
+                issues.append("failed_smoke_status_mismatch")
+            clean_target_cap_observed = (
+                bool(failed_page_payloads)
+                and smoke_evidence["clean_page_flags"]
+                == [True] * len(failed_page_payloads)
+                and isinstance(failed_page_payloads[-1], dict)
+                and failed_page_payloads[-1].get("stop_reason") == "target_cap"
+            )
+            if (
+                not terminal_unexpected
+                and clean_target_cap_observed
+                and not (
+                    smoke_evidence["frozen_count"] == detail_budget
+                    and summary.get("listing_stop_reason") == "target_cap"
+                    and summary.get("listing_complete") is False
+                    and summary.get("expected_truncation") is True
+                )
+            ):
+                issues.append("failed_smoke_status_mismatch")
             first_failure = smoke_evidence["first_failure"]
             if (
                 not terminal_unexpected
-                and
-                first_failure is not None
+                and first_failure is not None
                 and summary.get("stop_reason") != first_failure
             ):
                 issues.append("detail_failure_reason_mismatch")
             first_listing_failure = smoke_evidence["first_listing_failure"]
             if (
                 not terminal_unexpected
-                and
-                first_listing_failure is not None
+                and first_listing_failure is not None
                 and summary.get("stop_reason") != first_listing_failure
             ):
                 issues.append("listing_failure_reason_mismatch")
@@ -937,8 +1305,7 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
             hard_stop is not None
             and not (
                 isinstance(summary.get("stop_reason"), str)
-                and _UNEXPECTED_ERROR_RE.fullmatch(summary["stop_reason"])
-                is not None
+                and _UNEXPECTED_ERROR_RE.fullmatch(summary["stop_reason"]) is not None
             )
             and summary.get("stop_reason") != hard_stop
         ):

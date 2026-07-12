@@ -52,6 +52,9 @@ from app.sources.offertoday.research.stage_gate import (  # noqa: E402
     require_matching_baselines,
     verify_live_research_run,
 )
+from app.sources.offertoday.research.smoke import (  # noqa: E402
+    runtime_smoke_request_budget,
+)
 from app.utils.time import utc_now  # noqa: E402
 
 
@@ -258,15 +261,14 @@ def _build_summary(
     execution,
     events_before_summary: list[dict[str, Any]],
     failure_reason: str | None,
+    request_budget: dict[str, int],
 ) -> dict[str, Any]:
     listing_attempts, detail_attempts, event_frozen_count = _event_counts(
         events_before_summary
     )
-    missing_encrypted_job_id_count, job_id_fallback_count = (
-        _listing_identity_counts(
-            execution=execution,
-            events_before_summary=events_before_summary,
-        )
+    missing_encrypted_job_id_count, job_id_fallback_count = _listing_identity_counts(
+        execution=execution,
+        events_before_summary=events_before_summary,
     )
     product_data_unchanged = (
         start_snapshot.data_hash == end_snapshot.data_hash
@@ -284,8 +286,7 @@ def _build_summary(
             and isinstance(event.get("payload"), dict)
         )
         terminal_count = sum(
-            event.get("payload", {}).get("classification")
-            == "terminal_unavailable"
+            event.get("payload", {}).get("classification") == "terminal_unavailable"
             for event in events_before_summary
             if event.get("event_type") == "research.detail_attempt"
             and isinstance(event.get("payload"), dict)
@@ -322,6 +323,7 @@ def _build_summary(
         "listing_attempt_count": listing_attempts,
         "listing_stop_reason": listing_stop_reason,
         "stop_reason": failure_reason,
+        "request_budget": dict(request_budget),
         "would_stage_rows": would_stage_rows,
         "stage_calls": stage_calls,
         "product_data_unchanged": product_data_unchanged,
@@ -363,9 +365,12 @@ def _best_effort_finalize_unexpected_failure(
     end_snapshot,
     end_inventory,
     fallback_events: list[dict[str, Any]],
+    request_budget: dict[str, int],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     error_message = _unexpected_error_message(error)
-    product_data_evidence_complete = end_snapshot is not None and end_inventory is not None
+    product_data_evidence_complete = (
+        end_snapshot is not None and end_inventory is not None
+    )
     if not product_data_evidence_complete:
         try:
             end_snapshot, end_inventory = _capture_snapshot(repository, db)
@@ -389,8 +394,7 @@ def _best_effort_finalize_unexpected_failure(
         current_events = list(fallback_events)
 
     has_terminal_summary = any(
-        event.get("event_type") == "research.run_summary"
-        for event in current_events
+        event.get("event_type") == "research.run_summary" for event in current_events
     )
     if not has_terminal_summary:
         try:
@@ -416,6 +420,7 @@ def _best_effort_finalize_unexpected_failure(
         execution=None,
         events_before_summary=current_events,
         failure_reason=error_message,
+        request_budget=request_budget,
     )
     if not product_data_evidence_complete:
         summary["product_data_unchanged"] = False
@@ -463,6 +468,7 @@ def main(
         _print_json(result.to_payload())
         return EXIT_OK if result.valid else EXIT_EVIDENCE_FAILURE
 
+    request_budget = runtime_smoke_request_budget()
     if len(args.baseline_artifact) != 2:
         _print_json(
             {"error": "smoke requires exactly two baseline artifacts"},
@@ -513,7 +519,7 @@ def main(
                 planner_version=planner_version,
                 plan=2,
                 parent_artifact_hash=baseline_gate.parent_artifact_hash,
-                request_budget={"listing": 1, "detail": 20},
+                request_budget=dict(request_budget),
             ),
             run_start_inventory=start_inventory,
         )
@@ -522,7 +528,7 @@ def main(
             {
                 "experiment": "runtime-smoke",
                 "parent_artifact_hash": baseline_gate.parent_artifact_hash,
-                "request_budget": {"listing": 1, "detail": 20},
+                "request_budget": dict(request_budget),
                 "session_mode": "fresh-headless",
             },
         )
@@ -587,6 +593,7 @@ def main(
             execution=execution,
             events_before_summary=events_before_summary,
             failure_reason=failure_reason,
+            request_budget=request_budget,
         )
         if not product_data_unchanged:
             exit_code = EXIT_EVIDENCE_FAILURE
@@ -599,7 +606,10 @@ def main(
                 else None
             ),
         )
-        events = [*events_before_summary, _summary_event(events_before_summary, summary)]
+        events = [
+            *events_before_summary,
+            _summary_event(events_before_summary, summary),
+        ]
     except BaseException as exc:
         if observation_service is None and isinstance(
             exc,
@@ -627,6 +637,7 @@ def main(
                         end_snapshot=end_snapshot,
                         end_inventory=end_inventory,
                         fallback_events=events_before_summary,
+                        request_budget=request_budget,
                     )
                     terminal_status = "failed"
                     exit_code = EXIT_EVIDENCE_FAILURE
@@ -666,7 +677,7 @@ def main(
                         "crawl_job_id": run_id,
                         "crawl_job_status": terminal_status,
                         "parent_artifact_hash": baseline_gate.parent_artifact_hash,
-                        "request_budget": {"listing": 1, "detail": 20},
+                        "request_budget": dict(request_budget),
                         "smoke_passed": bool(summary.get("smoke_passed")),
                     },
                     events=events,
@@ -692,7 +703,9 @@ def main(
         raise original_error
     if finalization_error is not None:
         _print_json(
-            {"error": f"artifact finalization failed:{type(finalization_error).__name__}"},
+            {
+                "error": f"artifact finalization failed:{type(finalization_error).__name__}"
+            },
             stream=sys.stderr,
         )
         return EXIT_EVIDENCE_FAILURE
@@ -703,12 +716,11 @@ def main(
             "run_id": run_id,
             "exit_code": exit_code,
             "smoke_passed": bool(summary.get("smoke_passed")),
+            "request_budget": dict(request_budget),
             "missing_encrypted_job_id_count": int(
                 summary.get("missing_encrypted_job_id_count", 0)
             ),
-            "job_id_fallback_count": int(
-                summary.get("job_id_fallback_count", 0)
-            ),
+            "job_id_fallback_count": int(summary.get("job_id_fallback_count", 0)),
         }
     )
     return exit_code
