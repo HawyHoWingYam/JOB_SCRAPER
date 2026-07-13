@@ -1,0 +1,28 @@
+{
+  "id": "offertoday-completeness-stability",
+  "name": "offertoday-completeness-stability",
+  "title": "OfferToday completeness and stability implementation",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "KarasHawy",
+  "assignee": "KarasHawy",
+  "createdAt": "2026-07-13",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-13-offertoday-phase-ab-cursor-bakeoff"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
