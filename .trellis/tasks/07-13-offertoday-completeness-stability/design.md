@@ -35,4 +35,4 @@ Rows never reach a staging sink before response-contract, identity, gap, and con
 
 ## Rollout and Rollback
 
-Each phase produces immutable evidence and an explicit accepted/rejected decision. Rejection stops subsequent live work without changing production. Final adoption retains a documented rollback to the previous production policy without deleting artifacts or rewriting crawl history.
+Each phase produces immutable evidence and an explicit accepted/rejected decision. A user-deferred issue remains visible but does not block later task creation, planning, or deterministic implementation; it is never rewritten as acceptance. Live execution and writes are authorized by the task that owns them. Final adoption retains a documented rollback to the previous production policy without deleting artifacts or rewriting crawl history.

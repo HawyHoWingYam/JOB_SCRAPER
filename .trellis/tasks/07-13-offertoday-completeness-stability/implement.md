@@ -3,8 +3,8 @@
 ## Ordered Children and Gates
 
 1. Complete Phase A/B implementation-plan Tasks 1-8 in the active child; run deterministic verification before any live request.
-2. If and only if Phase B accepts exactly one candidate, create and plan the Phase C child for Tasks 9-10.
-3. Continue with separately planned Phase D, Phase E/F, Phase G, and Phase H children only after each predecessor gate passes.
+2. Create and plan the Phase C child for Tasks 9-10 as deterministic no-live infrastructure under the user's explicit deferral of unresolved Phase B Issues #4 and #5; do not describe that deferral as Phase B acceptance.
+3. Continue with separately scoped later children without treating Issues #4/#5 as sequencing blockers; each child must preserve unresolved-risk provenance and enforce its own live, write, and adoption review gates.
 4. Create the production-adoption child only after three passing soak artifacts and an explicit adoption review.
 5. Run a requirement-by-requirement integration audit across all children before archiving this parent.
 
@@ -19,7 +19,7 @@
 ## Review Gates
 
 - No live request before deterministic Phase A/B review.
-- No next-phase live work after a valid-but-rejected decision.
+- A valid-but-rejected decision does not block later deterministic implementation when the user explicitly defers its issues; live work still requires the owning task's explicit review and authorization.
 - No product writes in Phase B/C; no Job/Company publication in Phase D.
 - No production-default change before Phase H and final adoption review.
 

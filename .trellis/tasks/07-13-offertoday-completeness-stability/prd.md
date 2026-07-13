@@ -25,19 +25,19 @@ Implement and prove a cursor-correct OfferToday discovery and detail pipeline, t
 3. Keep result and supplemental cohorts separate until evidence classifies supplemental rows.
 4. Preserve production defaults and all v1 artifact meanings while adding fail-closed v2 experiment routing and strict replay.
 5. Execute the no-detail, no-product-write Phase B five-variant bake-off only after deterministic Phase A/B review and two matching database baselines per live repeat.
-6. Advance Phase C through Phase H only after the preceding phase's artifact, stability, conservation, precision, detail, recovery, and efficiency gates pass.
+6. Keep phase results and acceptance gates explicit, but allow later research tasks to be created, planned, and implemented when an earlier unresolved issue is explicitly deferred by the user; deferral is not acceptance and must remain visible in downstream evidence.
 7. Change production defaults only after three independent production-paced soak runs pass and a separate adoption review is complete.
 8. Keep runtime artifacts ignored and uncommitted; preserve all unrelated dirty-worktree changes.
 
 ## Task Map
 
 - Child 1: Phase A/B cursor contract and bounded pagination bake-off (implementation-plan Tasks 1-8).
-- Future child: Phase C endpoint and partition research (Tasks 9-10), created only if Phase B accepts one candidate.
-- Future child: Phase D cursor-correct census (Task 11), created only after Phase C freezes a policy.
-- Future child: Phase E/F IT reference and planner ablation (Tasks 12-13), created only after Phase D freezes a denominator.
-- Future child: Phase G detail bake-off and canaries (Tasks 14-15), created only after Phase F.
-- Future child: Phase H recovery and soak (Tasks 16-17), created only after Phase G.
-- Future child: production adoption (Task 18), created only after Phase H and explicit adoption review.
+- Child 2: Phase C endpoint and partition research infrastructure (Tasks 9-10), authorized as deterministic no-live work while Phase B Issues #4 and #5 remain unresolved but explicitly deferred.
+- Future child: Phase D cursor-correct census (Task 11), scoped independently without treating Issues #4/#5 as a task-sequencing blocker; its exact live inputs and authorization belong to that child.
+- Future child: Phase E/F IT reference and planner ablation (Tasks 12-13), scoped independently while carrying unresolved upstream evidence explicitly.
+- Future child: Phase G detail bake-off and canaries (Tasks 14-15), scoped independently with its own live/write gates.
+- Future child: Phase H recovery and soak (Tasks 16-17), scoped independently with its own live/write gates.
+- Future child: production adoption (Task 18), scoped independently but still requiring an explicit adoption review before any default changes.
 
 ## Acceptance Criteria
 
@@ -56,3 +56,9 @@ Implement and prove a cursor-correct OfferToday discovery and detail pipeline, t
 - Ungated full-census repetition, keyword expansion, higher concurrency, or full detail-backlog draining.
 - Treating `data.total`, row sums, or empty stateless pages as completeness proof.
 - Production fallback to the rejected stateless v1 policy after v2 adoption.
+
+## Deferred Known Issues
+
+- GitHub Issues #4 and #5 remain unresolved and must not be represented as passed.
+- By explicit user decision, they do not block creation, planning, or implementation of later OfferToday tasks.
+- Live execution, product-data writes, and production adoption remain governed by the explicit scope and review gates of their owning tasks.
