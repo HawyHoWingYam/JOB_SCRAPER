@@ -36,6 +36,8 @@ from app.sources.offertoday.listing_contract import (
     OfferTodayListingTransportResult,
     offertoday_listing_cursor_field_presence,
     parse_offertoday_listing_page_result,
+    validate_offertoday_endpoint_request,
+    validate_offertoday_endpoint_response_url,
 )
 from app.sources.offertoday.parsers import (
     parse_offertoday_listing_response,
@@ -616,6 +618,18 @@ class OfferTodayListingRunner:
             v2_seen_job_ids: set[str] = set()
             pending_v2_stage_pages: list[tuple[int, list[dict[str, Any]]]] = []
             active_request_policy = request_policy
+            active_endpoint_contract = (
+                active_request_policy.endpoint_contract
+                if active_request_policy is not None
+                else None
+            )
+            if (
+                active_endpoint_contract is not None
+                and active_endpoint_contract.endpoint != condition.endpoint
+            ):
+                raise ValueError(
+                    "endpoint contract does not match listing condition endpoint"
+                )
             condition_restart_count = 0
             logical_pages_started = 0
 
@@ -648,6 +662,15 @@ class OfferTodayListingRunner:
                     ),
                 )
                 listing_url = _listing_url(condition)
+                if active_endpoint_contract is not None:
+                    if active_endpoint_contract.url != listing_url:
+                        raise ValueError(
+                            "endpoint contract URL does not match listing condition URL"
+                        )
+                    validate_offertoday_endpoint_request(
+                        active_endpoint_contract,
+                        payload,
+                    )
                 fingerprint = offertoday_listing_request_fingerprint(
                     listing_url,
                     payload,
@@ -873,6 +896,44 @@ class OfferTodayListingRunner:
                             "success classification requires a response"
                         )
 
+                    if active_endpoint_contract is not None:
+                        try:
+                            validate_offertoday_endpoint_response_url(
+                                active_endpoint_contract,
+                                current_url,
+                            )
+                        except OfferTodayCursorContractError as exc:
+                            observation = self._empty_observation(
+                                condition=condition,
+                                page=page,
+                                attempt=attempt,
+                                request_fingerprint=fingerprint,
+                                classification=classification,
+                                latency_ms=latency_ms,
+                                session_mode=session_mode,
+                                retry_reason=None,
+                                stop_reason="endpoint_contract_violation",
+                                cursor_evidence=_v2_page_evidence(
+                                    policy=active_request_policy,
+                                    condition=condition,
+                                    page=page,
+                                    attempt=attempt,
+                                    browser_context_hash=browser_context_hash,
+                                    cursor_input=cursor,
+                                    cursor_output=None,
+                                    response_page_size=None,
+                                    previously_seen_job_ids=v2_seen_job_ids,
+                                    awaiting_empty_confirmation=(
+                                        awaiting_empty_confirmation
+                                    ),
+                                    contract_error=exc.reason,
+                                ),
+                            )
+                            observations.append(observation)
+                            await observation_sink.record_page_attempt(observation)
+                            condition_stop_reason = "endpoint_contract_violation"
+                            break
+
                     page_contract = None
                     next_cursor: OfferTodayListingCursor | None = None
                     raw_supplemental_rows: list[dict[str, Any]] = []
@@ -891,6 +952,9 @@ class OfferTodayListingRunner:
                                     if active_request_policy.requires_cursor
                                     else None
                                 ),
+                                endpoint_contract_id=(
+                                    active_request_policy.endpoint_contract_id
+                                ),
                             )
                         except OfferTodayCursorContractError as exc:
                             raw_data = response.get("data")
@@ -904,6 +968,20 @@ class OfferTodayListingRunner:
                                 if type(raw_page_size) is int and raw_page_size > 0
                                 else None
                             )
+                            endpoint_violation = (
+                                active_endpoint_contract is not None
+                                and exc.reason
+                                in {
+                                    "unverified_cursor_contract",
+                                    "unexpected_search_cursor_fields",
+                                    "unexpected_search_supplemental_rows",
+                                }
+                            )
+                            violation_stop_reason = (
+                                "endpoint_contract_violation"
+                                if endpoint_violation
+                                else "cursor_contract_violation"
+                            )
                             observation = ListingPageObservation(
                                 condition_id=condition.condition_id,
                                 search_family=condition.search_family,
@@ -914,7 +992,7 @@ class OfferTodayListingRunner:
                                 page=page,
                                 attempt=attempt,
                                 request_fingerprint=fingerprint,
-                                classification="cursor_contract_violation",
+                                classification=violation_stop_reason,
                                 api_code=classification.code,
                                 reported_total=None,
                                 has_more=None,
@@ -929,7 +1007,7 @@ class OfferTodayListingRunner:
                                 latency_ms=latency_ms,
                                 session_mode=session_mode,
                                 retry_reason=None,
-                                stop_reason="cursor_contract_violation",
+                                stop_reason=violation_stop_reason,
                                 cursor_evidence=_v2_page_evidence(
                                     policy=active_request_policy,
                                     condition=condition,
@@ -953,7 +1031,7 @@ class OfferTodayListingRunner:
                             )
                             observations.append(observation)
                             await observation_sink.record_page_attempt(observation)
-                            condition_stop_reason = "cursor_contract_violation"
+                            condition_stop_reason = violation_stop_reason
                             break
                         raw_rows = list(page_contract.result_rows)
                         raw_supplemental_rows = list(page_contract.supplemental_rows)
@@ -1236,7 +1314,13 @@ class OfferTodayListingRunner:
                     is_nonempty_confirmation = (
                         awaiting_empty_confirmation and has_any_rows
                     )
-                    terminal_signal = not has_any_rows or has_more is False
+                    terminal_contract_verified = (
+                        active_endpoint_contract is None
+                        or active_endpoint_contract.terminal_verified
+                    )
+                    terminal_signal = terminal_contract_verified and (
+                        not has_any_rows or has_more is False
+                    )
                     natural_exhaustion = (
                         awaiting_empty_confirmation and not has_any_rows
                     ) or (

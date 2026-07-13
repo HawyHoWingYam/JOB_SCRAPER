@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from copy import deepcopy
 from dataclasses import asdict
 
@@ -8,6 +9,8 @@ import pytest
 
 from app.sources.offertoday.constants import build_offertoday_listing_payload
 from app.sources.offertoday.listing_contract import (
+    OFFERTODAY_BROWSE_ENDPOINT_CONTRACT,
+    OFFERTODAY_SEARCH_ENDPOINT_CONTRACT,
     OfferTodayCursorContractError,
     OfferTodayListingCursor,
     OfferTodayListingCursorFieldPresence,
@@ -15,7 +18,10 @@ from app.sources.offertoday.listing_contract import (
     OfferTodayListingPageEvidenceV2,
     OfferTodayListingRequestPolicy,
     OfferTodayListingTransportResult,
+    offertoday_endpoint_contract,
     parse_offertoday_listing_page_result,
+    validate_offertoday_endpoint_request,
+    validate_offertoday_endpoint_response_url,
 )
 
 
@@ -46,6 +52,126 @@ def _policy(**overrides) -> OfferTodayListingRequestPolicy:
     }
     values.update(overrides)
     return OfferTodayListingRequestPolicy(**values)
+
+
+def test_endpoint_contracts_are_distinct_versioned_and_rcd_omitted() -> None:
+    assert OFFERTODAY_SEARCH_ENDPOINT_CONTRACT.contract_id == (
+        "recommend-search-list-v1"
+    )
+    assert OFFERTODAY_BROWSE_ENDPOINT_CONTRACT.contract_id == (
+        "recommend-list-envelope-v1"
+    )
+    assert OFFERTODAY_SEARCH_ENDPOINT_CONTRACT.endpoint == "search"
+    assert OFFERTODAY_BROWSE_ENDPOINT_CONTRACT.endpoint == "browse"
+    assert OFFERTODAY_SEARCH_ENDPOINT_CONTRACT.contract_hash != (
+        OFFERTODAY_BROWSE_ENDPOINT_CONTRACT.contract_hash
+    )
+    assert OFFERTODAY_SEARCH_ENDPOINT_CONTRACT.allowed_rcd_types == (None,)
+    assert OFFERTODAY_BROWSE_ENDPOINT_CONTRACT.allowed_rcd_types == (None,)
+    assert OFFERTODAY_SEARCH_ENDPOINT_CONTRACT.cursor_verified is True
+    assert OFFERTODAY_BROWSE_ENDPOINT_CONTRACT.cursor_verified is False
+    assert OFFERTODAY_BROWSE_ENDPOINT_CONTRACT.terminal_verified is False
+    assert (
+        offertoday_endpoint_contract("recommend-search-list-v1")
+        is OFFERTODAY_SEARCH_ENDPOINT_CONTRACT
+    )
+
+
+def test_legacy_policy_identity_is_unchanged_without_endpoint_contract() -> None:
+    policy = _policy()
+    old_payload = {
+        "condition_id": "condition",
+        "condition_restart_index": 0,
+        "protocol_version": 2,
+        "repeat_index": 1,
+        "variant_id": "ui-cursor-same-browser",
+    }
+    canonical = json.dumps(
+        old_payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    assert policy.endpoint_contract is None
+    assert policy.condition_execution_id("condition") == hashlib.sha256(
+        canonical.encode()
+    ).hexdigest()
+
+
+def test_explicit_endpoint_contract_participates_in_policy_identity() -> None:
+    legacy = _policy()
+    explicit = _policy(endpoint_contract_id="recommend-search-list-v1")
+    assert explicit.endpoint_contract is OFFERTODAY_SEARCH_ENDPOINT_CONTRACT
+    assert explicit.condition_execution_id("condition") != (
+        legacy.condition_execution_id("condition")
+    )
+
+
+def test_unverified_browse_contract_rejects_response_cursor_policy() -> None:
+    with pytest.raises(ValueError, match="verified endpoint cursor contract"):
+        _policy(endpoint_contract_id="recommend-list-envelope-v1")
+
+
+def test_browse_contract_parses_envelope_without_claiming_cursor() -> None:
+    response = {
+        "code": 0,
+        "data": {
+            "pageSize": 10,
+            "total": 12,
+            "hasMore": False,
+            "resultList": [{"jobId": "browse-job"}],
+        },
+    }
+    result = parse_offertoday_listing_page_result(
+        response,
+        require_cursor=False,
+        endpoint_contract_id="recommend-list-envelope-v1",
+    )
+    assert result.cursor is None
+    assert result.result_rows == ({"jobId": "browse-job"},)
+    assert result.supplemental_rows == ()
+    assert result.has_more is False
+    assert result.reported_total == 12
+
+
+def test_browse_contract_rejects_search_cursor_or_supplemental_fields() -> None:
+    with pytest.raises(
+        OfferTodayCursorContractError,
+        match="unexpected_search_cursor_fields",
+    ):
+        parse_offertoday_listing_page_result(
+            _response(),
+            require_cursor=False,
+            endpoint_contract_id="recommend-list-envelope-v1",
+        )
+
+
+@pytest.mark.parametrize("rcd_type", [7, True, "7", 7.0])
+def test_phase_c_endpoint_request_rejects_noncatalog_rcd_type(rcd_type) -> None:
+    payload = {"page": 1, "pageSize": 10, "rcdType": rcd_type}
+    with pytest.raises(OfferTodayCursorContractError):
+        validate_offertoday_endpoint_request(
+            OFFERTODAY_SEARCH_ENDPOINT_CONTRACT,
+            payload,
+        )
+
+
+def test_phase_c_endpoint_request_accepts_omitted_rcd_type() -> None:
+    validate_offertoday_endpoint_request(
+        OFFERTODAY_SEARCH_ENDPOINT_CONTRACT,
+        {"page": 1, "pageSize": 10},
+    )
+
+
+def test_endpoint_response_url_must_match_own_contract() -> None:
+    with pytest.raises(
+        OfferTodayCursorContractError,
+        match="endpoint_response_url_mismatch",
+    ):
+        validate_offertoday_endpoint_response_url(
+            OFFERTODAY_SEARCH_ENDPOINT_CONTRACT,
+            OFFERTODAY_BROWSE_ENDPOINT_CONTRACT.url,
+        )
 
 
 def test_cursor_page_result_and_next_payload_preserve_exact_response_values() -> None:

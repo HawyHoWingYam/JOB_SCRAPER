@@ -15,7 +15,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from typing import Any, Literal
 
-from app.scraper.offertoday.category_registry import OFFERTODAY_CATEGORIES_L1
+from app.scraper.offertoday.category_registry import (
+    OFFERTODAY_CATEGORIES_L1,
+    get_offertoday_category,
+)
 from app.sources.offertoday.listing_runner import OfferTodayListingCondition
 
 DEFAULT_OFFERTODAY_IT_KEYWORDS: tuple[str, ...] = (
@@ -168,30 +171,16 @@ DEFAULT_OFFERTODAY_IT_HYBRID_KEYWORDS: tuple[str, ...] = (
     "coordinator",
 )
 
+_OFFERTODAY_IT_ROOT = get_offertoday_category(118000)
+if _OFFERTODAY_IT_ROOT is None:  # pragma: no cover - frozen catalog invariant
+    raise RuntimeError("OfferToday category catalog is missing the IT root")
 OFFERTODAY_IT_CATEGORY_CODES: tuple[int, ...] = (
-    118000,
-    118001,
-    118002,
-    118003,
-    118004,
-    118005,
-    118006,
-    118007,
-    118008,
-    118009,
-    118010,
-    118011,
-    118012,
-    118013,
-    118014,
-    118015,
-    118016,
-    118017,
-    118018,
-    118019,
-    118020,
-    118021,
-    118999,
+    _OFFERTODAY_IT_ROOT.code,
+    *(
+        child.code
+        for child in _OFFERTODAY_IT_ROOT.children
+        if child.code != _OFFERTODAY_IT_ROOT.code
+    ),
 )
 _OFFERTODAY_IT_CATEGORY_SET = set(OFFERTODAY_IT_CATEGORY_CODES)
 

@@ -55,6 +55,20 @@ from app.sources.offertoday.research.pagination_bakeoff import (
     build_bakeoff_order,
     pagination_bakeoff_unexpected_failure_reason,
 )
+from app.sources.offertoday.research.partition_research import (
+    ENDPOINT_PROBE_EXPERIMENT,
+    PARTITION_PROBE_EXPERIMENT,
+    PHASE_C_PAGE_DELAY_RANGE_SECONDS,
+    PHASE_C_RETRY_DELAYS_SECONDS,
+    PHASE_C_SESSION_MODE,
+    EndpointProbePlan,
+    PartitionProbePlan,
+    PhaseCProbeExecution,
+    condition_evidence_from_listing_result,
+    offertoday_partition,
+    request_policy_for_contract,
+    top_level_partition,
+)
 from app.sources.offertoday.research.smoke import (
     SMOKE_DETAIL_TARGET_COUNT,
     SMOKE_LISTING_REQUEST_LIMIT,
@@ -171,6 +185,143 @@ class OfferTodayResearchLiveService:
         self._sleep = sleep
         self._clock = clock
         self._now = now
+
+    async def run_endpoint_probe(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        plan: EndpointProbePlan,
+        staging_sink: Any | None = None,
+    ) -> PhaseCProbeExecution:
+        partition = top_level_partition(plan.category_code)
+        targets = tuple(
+            (partition.partition_id, contract_id)
+            for contract_id in plan.contract_ids
+        )
+        return await self._run_phase_c_probe(
+            experiment=ENDPOINT_PROBE_EXPERIMENT,
+            plan=plan,
+            targets=targets,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            staging_sink=staging_sink,
+        )
+
+    async def run_partition_probe(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        plan: PartitionProbePlan,
+        staging_sink: Any | None = None,
+    ) -> PhaseCProbeExecution:
+        targets = tuple(
+            (partition_id, plan.endpoint_contract_id)
+            for partition_id in plan.partition_ids
+        )
+        return await self._run_phase_c_probe(
+            experiment=PARTITION_PROBE_EXPERIMENT,
+            plan=plan,
+            targets=targets,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            staging_sink=staging_sink,
+        )
+
+    async def _run_phase_c_probe(
+        self,
+        *,
+        experiment: str,
+        plan: EndpointProbePlan | PartitionProbePlan,
+        targets: Sequence[tuple[str, str]],
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        staging_sink: Any | None,
+    ) -> PhaseCProbeExecution:
+        active_staging_sink = (
+            ResearchNoopListingStagingSink() if staging_sink is None else staging_sink
+        )
+        if not isinstance(active_staging_sink, ResearchNoopListingStagingSink):
+            raise ValueError("Phase C probes require ResearchNoopListingStagingSink")
+        conditions = []
+        failure_reason = None
+        for partition_id, contract_id in targets:
+            partition = offertoday_partition(partition_id)
+            contract = request_policy_for_contract(contract_id).endpoint_contract
+            if contract is None:  # pragma: no cover - explicit Phase C invariant
+                raise AssertionError("Phase C request policy requires endpoint contract")
+            condition = OfferTodayListingCondition(
+                search_family=experiment,
+                category_id=partition.category_code,
+                keyword="",
+                endpoint=contract.endpoint,
+                rcd_type=None,
+            )
+            max_pages = (
+                plan.max_pages_per_contract
+                if isinstance(plan, EndpointProbePlan)
+                else plan.max_pages_per_condition
+            )
+            try:
+                async with _ManagedListingTransport(
+                    runtime_factory,
+                    restart_each_page=False,
+                ) as transport:
+                    result = await self._runner_factory(
+                        transport,
+                        sleep=self._sleep,
+                        clock=self._clock,
+                    ).run(
+                        conditions=(condition,),
+                        stop_policy=ListingStopPolicy(
+                            max_pages_per_condition=max_pages,
+                            unique_job_cap=None,
+                            require_empty_confirmation=True,
+                        ),
+                        retry_policy=ListingRetryPolicy(
+                            max_attempts_per_page=plan.max_attempts_per_page,
+                            retry_delays_seconds=PHASE_C_RETRY_DELAYS_SECONDS,
+                            page_delay_seconds=0.0,
+                            page_delay_range_seconds=(
+                                PHASE_C_PAGE_DELAY_RANGE_SECONDS
+                            ),
+                        ),
+                        observation_sink=observation_service,
+                        staging_sink=active_staging_sink,
+                        session_mode=PHASE_C_SESSION_MODE,
+                        request_policy=request_policy_for_contract(contract_id),
+                    )
+            except Exception as exc:
+                failure_reason = f"unexpected_phase_c_probe_error:{type(exc).__name__}"
+                break
+            evidence = condition_evidence_from_listing_result(
+                partition_id=partition_id,
+                endpoint_contract_id=contract_id,
+                result=result,
+            )
+            conditions.append(evidence)
+            if result.stop_reason in {
+                "auth_expired",
+                "waf_challenge",
+                "ip_blocked",
+                "id_mismatch",
+                "identity_conflict",
+                "identity_issue",
+                "unresolved_gap",
+                "cursor_contract_violation",
+                "endpoint_contract_violation",
+                "page_contract_violation",
+                "browser_context_lost",
+            }:
+                failure_reason = f"hard_stop:{result.stop_reason}"
+                break
+        return PhaseCProbeExecution(
+            experiment=experiment,
+            plan=plan,
+            conditions=tuple(conditions),
+            failure_reason=failure_reason,
+        )
 
     async def run_pagination_bakeoff(
         self,

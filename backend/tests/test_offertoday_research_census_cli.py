@@ -19,9 +19,11 @@ from app.services.offertoday_research_live_service import (
 from app.services.offertoday_research_staging_service import (
     OfferTodayReconciledListingStagingSink,
     OfferTodayStagingReconciliation,
+    ResearchNoopListingStagingSink,
 )
 from app.sources.offertoday.listing_contract import (
     OfferTodayListingTransportResult,
+    offertoday_endpoint_contract,
 )
 from app.sources.offertoday.listing_runner import (
     ListingConditionOutcome,
@@ -66,6 +68,24 @@ from app.sources.offertoday.research.live_contracts import (
 from app.sources.offertoday.research.pagination_bakeoff import (
     pagination_bakeoff_controls_payload,
     pagination_bakeoff_thresholds_payload,
+)
+from app.sources.offertoday.research.partition_research import (
+    ENDPOINT_PROBE_EXPERIMENT,
+    OFFERTODAY_PARTITION_CATALOG,
+    PARTITION_PROBE_EXPERIMENT,
+    PhaseCConditionEvidence,
+    PhaseCPageEvidence,
+    PhaseCProbeExecution,
+    build_partition_probe_plan,
+    top_level_partition,
+)
+from app.sources.offertoday.research.partition_stage_gate import (
+    PhaseCArtifactReference,
+    PhaseCBaselineReference,
+    PhaseCNoWriteEvidence,
+    build_phase_c_probe_artifact_payload,
+    phase_c_artifact_events,
+    phase_c_probe_metadata,
 )
 from app.sources.offertoday.research.smoke import (
     build_runtime_smoke_condition,
@@ -1936,6 +1956,48 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     )
     verify = parser.parse_args(["verify-run", "--artifact", "run"])
     freeze = parser.parse_args(["freeze-candidate", "--pilot-artifact", "pilot"])
+    first_partition_id = OFFERTODAY_PARTITION_CATALOG[0].partition_id
+    probe_endpoints = parser.parse_args(
+        [
+            "probe-endpoints",
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--endpoint-contract-id",
+            "recommend-list-envelope-v1",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+            "--confirm-live-research",
+        ]
+    )
+    probe_partitions = parser.parse_args(
+        [
+            "probe-partitions",
+            "--endpoint-probe-artifact",
+            "endpoint-probe",
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--partition-id",
+            first_partition_id,
+            "--max-pages-per-condition",
+            "10",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+            "--confirm-live-research",
+        ]
+    )
+    compare_partitions = parser.parse_args(
+        [
+            "compare-partitions",
+            "--partition-probe-artifact",
+            "partition-probe",
+        ]
+    )
 
     assert smoke.command == "smoke"
     assert smoke.baseline_artifact == [Path("first"), Path("second")]
@@ -1959,6 +2021,18 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     assert verify.command == "verify-run"
     assert freeze.command == "freeze-candidate"
     assert freeze.pilot_artifact == Path("pilot")
+    assert probe_endpoints.command == "probe-endpoints"
+    assert probe_endpoints.confirm_live_research is True
+    assert probe_endpoints.endpoint_contract_id == [
+        "recommend-search-list-v1",
+        "recommend-list-envelope-v1",
+    ]
+    assert probe_partitions.command == "probe-partitions"
+    assert probe_partitions.partition_id == [first_partition_id]
+    assert probe_partitions.max_pages_per_condition == 10
+    assert compare_partitions.command == "compare-partitions"
+    assert compare_partitions.partition_probe_artifact == [Path("partition-probe")]
+    assert "freeze-discovery-policy" not in parser.format_help()
     with pytest.raises(SystemExit):
         parser.parse_args(
             [
@@ -3828,6 +3902,9 @@ def test_help_dispatches_and_offline_cli_does_not_import_live_browser_modules() 
     assert help_result.returncode == 0, help_result.stderr
     assert "smoke" in help_result.stdout
     assert "verify-run" in help_result.stdout
+    assert "probe-endpoints" in help_result.stdout
+    assert "probe-partitions" in help_result.stdout
+    assert "compare-partitions" in help_result.stdout
     assert guard_result.returncode == 0, guard_result.stderr
 
 
@@ -3835,3 +3912,572 @@ def test_live_script_bootstraps_backend_before_app_imports() -> None:
     source = Path(census_cli.__file__).read_text(encoding="utf-8")
 
     assert source.index("BACKEND =") < source.index("from app.")
+    assert "offertoday_endpoint_probe" not in source
+
+
+def _phase_c_page(
+    *,
+    label: str,
+    page: int,
+    job_ids: tuple[str, ...],
+    terminal_signal: bool,
+) -> PhaseCPageEvidence:
+    return PhaseCPageEvidence(
+        page=page,
+        attempt=1,
+        classification="success",
+        stop_reason="natural_exhaustion" if terminal_signal else None,
+        logical_request_id=hashlib.sha256(f"logical:{label}:{page}".encode()).hexdigest(),
+        physical_attempt_id=hashlib.sha256(
+            f"physical:{label}:{page}".encode()
+        ).hexdigest(),
+        result_job_ids=job_ids,
+        supplemental_job_ids=(),
+        terminal_signal=terminal_signal,
+        awaiting_empty_confirmation=False,
+        contract_error=None,
+        reported_total=1_000_000,
+    )
+
+
+def _phase_c_condition(
+    *,
+    partition_id: str,
+    endpoint_contract_id: str,
+    label: str,
+    accepted: bool,
+) -> PhaseCConditionEvidence:
+    contract = offertoday_endpoint_contract(endpoint_contract_id)
+    if accepted:
+        pages = (
+            _phase_c_page(
+                label=label,
+                page=1,
+                job_ids=(f"job-{label}",),
+                terminal_signal=False,
+            ),
+            _phase_c_page(
+                label=label,
+                page=2,
+                job_ids=(),
+                terminal_signal=True,
+            ),
+        )
+    else:
+        pages = (
+            _phase_c_page(
+                label=label,
+                page=1,
+                job_ids=(f"job-{label}",),
+                terminal_signal=False,
+            ),
+        )
+    contract_verified = accepted and contract.cursor_verified and contract.terminal_verified
+    return PhaseCConditionEvidence(
+        partition_id=partition_id,
+        endpoint_contract_id=endpoint_contract_id,
+        endpoint_contract_hash=contract.contract_hash,
+        condition_id=hashlib.sha256(f"condition:{label}".encode()).hexdigest(),
+        stop_reason="natural_exhaustion" if accepted else "page_cap",
+        is_complete=accepted,
+        contract_verified=contract_verified,
+        terminal_confirmed=contract_verified,
+        empty_confirmation=accepted,
+        gap_count=0,
+        identity_conflict_count=0,
+        identity_issue_count=0,
+        conservation_difference=0,
+        pages=pages,
+    )
+
+
+def _phase_c_endpoint_execution(plan) -> PhaseCProbeExecution:
+    partition_id = top_level_partition(plan.category_code).partition_id
+    return PhaseCProbeExecution(
+        experiment=ENDPOINT_PROBE_EXPERIMENT,
+        plan=plan,
+        conditions=(
+            _phase_c_condition(
+                partition_id=partition_id,
+                endpoint_contract_id="recommend-search-list-v1",
+                label="endpoint-search",
+                accepted=True,
+            ),
+            _phase_c_condition(
+                partition_id=partition_id,
+                endpoint_contract_id="recommend-list-envelope-v1",
+                label="endpoint-browse",
+                accepted=False,
+            ),
+        ),
+    )
+
+
+def _phase_c_partition_execution(
+    plan,
+    *,
+    accepted: bool = True,
+) -> PhaseCProbeExecution:
+    return PhaseCProbeExecution(
+        experiment=PARTITION_PROBE_EXPERIMENT,
+        plan=plan,
+        conditions=tuple(
+            _phase_c_condition(
+                partition_id=partition_id,
+                endpoint_contract_id=plan.endpoint_contract_id,
+                label=f"partition-{index}",
+                accepted=accepted,
+            )
+            for index, partition_id in enumerate(plan.partition_ids, start=1)
+        ),
+    )
+
+
+class FakePhaseCLiveService:
+    def __init__(self, state: State, *, accepted_partitions: bool = True) -> None:
+        self.state = state
+        self.accepted_partitions = accepted_partitions
+
+    async def run_endpoint_probe(
+        self,
+        *,
+        runtime_factory,
+        observation_service,
+        plan,
+        staging_sink,
+    ) -> PhaseCProbeExecution:
+        self.state.log.append("network")
+        self.state.staging_sink = staging_sink
+        self.state.phase_c_plan = plan
+        assert observation_service.crawl_job_id == UUID(RUN_ID)
+        return _phase_c_endpoint_execution(plan)
+
+    async def run_partition_probe(
+        self,
+        *,
+        runtime_factory,
+        observation_service,
+        plan,
+        staging_sink,
+    ) -> PhaseCProbeExecution:
+        self.state.log.append("network")
+        self.state.staging_sink = staging_sink
+        self.state.phase_c_plan = plan
+        assert observation_service.crawl_job_id == UUID(RUN_ID)
+        return _phase_c_partition_execution(
+            plan,
+            accepted=self.accepted_partitions,
+        )
+
+
+def _phase_b_reference() -> PhaseCArtifactReference:
+    return PhaseCArtifactReference(
+        experiment="cursor-pagination-comparison-v2",
+        run_id="77777777-7777-7777-7777-777777777777",
+        manifest_hash="7" * 64,
+        payload_hash="8" * 64,
+        accepted=False,
+    )
+
+
+def _endpoint_probe_reference() -> PhaseCArtifactReference:
+    return PhaseCArtifactReference(
+        experiment=ENDPOINT_PROBE_EXPERIMENT,
+        run_id="88888888-8888-8888-8888-888888888888",
+        manifest_hash="9" * 64,
+        payload_hash="0" * 64,
+        accepted=False,
+    )
+
+
+def test_phase_c_parser_requires_explicit_confirmation_and_partition_selection() -> (
+    None
+):
+    parser = census_cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "probe-endpoints",
+                "--phase-b-comparison-artifact",
+                "phase-b",
+                "--endpoint-contract-id",
+                "recommend-search-list-v1",
+                "--endpoint-contract-id",
+                "recommend-list-envelope-v1",
+                "--baseline-artifact",
+                "first",
+                "--baseline-artifact",
+                "second",
+            ]
+        )
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "probe-partitions",
+                "--endpoint-probe-artifact",
+                "endpoint",
+                "--endpoint-contract-id",
+                "recommend-search-list-v1",
+                "--max-pages-per-condition",
+                "3",
+                "--baseline-artifact",
+                "first",
+                "--baseline-artifact",
+                "second",
+                "--confirm-live-research",
+            ]
+        )
+
+
+def test_probe_endpoints_requires_two_baselines_before_any_dependency(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("dependency")
+        raise AssertionError("Phase C constructed a dependency before baseline count")
+
+    result = census_cli.main(
+        [
+            "probe-endpoints",
+            "--phase-b-comparison-artifact",
+            str(tmp_path / "missing-parent"),
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--endpoint-contract-id",
+            "recommend-list-envelope-v1",
+            "--baseline-artifact",
+            str(tmp_path / "only-one"),
+            "--confirm-live-research",
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_USAGE
+    assert calls == []
+
+
+def test_probe_endpoints_invalid_parent_is_evidence_failure_not_usage(
+    tmp_path: Path,
+) -> None:
+    result = census_cli.main(
+        [
+            "probe-endpoints",
+            "--phase-b-comparison-artifact",
+            str(tmp_path / "missing-parent"),
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--endpoint-contract-id",
+            "recommend-list-envelope-v1",
+            "--baseline-artifact",
+            str(tmp_path / "missing-baseline-one"),
+            "--baseline-artifact",
+            str(tmp_path / "missing-baseline-two"),
+            "--confirm-live-research",
+        ]
+    )
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+
+
+def test_probe_endpoints_exports_strict_inconclusive_no_write_artifact(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+    state = State()
+    runtime_calls: list[dict] = []
+    monkeypatch.setattr(
+        census_cli,
+        "_phase_b_comparison_reference",
+        lambda _path: _phase_b_reference(),
+    )
+
+    result = census_cli.main(
+        [
+            "probe-endpoints",
+            "--phase-b-comparison-artifact",
+            str(tmp_path / "phase-b"),
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--endpoint-contract-id",
+            "recommend-list-envelope-v1",
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--confirm-live-research",
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=lambda **kwargs: runtime_calls.append(kwargs),
+        service_factory=lambda: FakePhaseCLiveService(state),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads((artifact / "endpoint-probe.json").read_text())
+
+    assert result == census_cli.EXIT_INCOMPLETE
+    assert output["accepted"] is False
+    assert output["candidate_frozen"] is False
+    assert payload["execution"]["accepted"] is False
+    assert payload["no_write"]["product_data_unchanged"] is True
+    assert payload["no_write"]["product_writes"] == 0
+    assert payload["no_write"]["detail_attempts"] == 0
+    assert state.created_metadata.request_budget == {
+        "listing_logical": 6,
+        "listing_attempt_max": 18,
+        "detail": 0,
+        "product_writes": 0,
+    }
+    assert isinstance(state.staging_sink, ResearchNoopListingStagingSink)
+    assert state.log.index("product_snapshot_1") < state.log.index("network")
+    assert runtime_calls == []
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_probe_partitions_accepts_explicit_inputs_and_strict_replays(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+    state = State()
+    partition_ids = [
+        OFFERTODAY_PARTITION_CATALOG[0].partition_id,
+        OFFERTODAY_PARTITION_CATALOG[1].partition_id,
+    ]
+    monkeypatch.setattr(
+        census_cli,
+        "phase_c_artifact_reference",
+        lambda _path: _endpoint_probe_reference(),
+    )
+
+    result = census_cli.main(
+        [
+            "probe-partitions",
+            "--endpoint-probe-artifact",
+            str(tmp_path / "endpoint-parent"),
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--partition-id",
+            partition_ids[1],
+            "--partition-id",
+            partition_ids[0],
+            "--max-pages-per-condition",
+            "3",
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--confirm-live-research",
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=lambda **_kwargs: None,
+        service_factory=lambda: FakePhaseCLiveService(state),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads((artifact / "partition-probe.json").read_text())
+
+    assert result == census_cli.EXIT_OK
+    assert output["accepted"] is True
+    assert payload["execution"]["plan"]["partition_ids"] == partition_ids
+    assert payload["candidate_frozen"] is False
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_probe_endpoint_current_database_drift_stops_before_service_or_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    baseline_row = StagedListingSnapshot(
+        row_id="row-1",
+        source_job_id="j1",
+        detail_status="pending",
+        published_job_id=None,
+        crawl_job_id="crawl-1",
+    )
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1, listings=[baseline_row])
+    second = baseline_artifact(baselines, BASELINE_RUN_2, listings=[baseline_row])
+    state = State()
+    calls: list[str] = []
+    monkeypatch.setattr(
+        census_cli,
+        "_phase_b_comparison_reference",
+        lambda _path: _phase_b_reference(),
+    )
+
+    result = census_cli.main(
+        [
+            "probe-endpoints",
+            "--phase-b-comparison-artifact",
+            str(tmp_path / "phase-b"),
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--endpoint-contract-id",
+            "recommend-list-envelope-v1",
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--confirm-live-research",
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=lambda **_kwargs: calls.append("runtime"),
+        service_factory=lambda: calls.append("service"),
+    )
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert calls == []
+    assert "network" not in state.log
+    assert state.created_metadata is None
+
+
+def _export_partition_probe_fixture(
+    root: Path,
+    *,
+    run_id: str,
+    partition_index: int,
+    accepted: bool,
+) -> Path:
+    partition_id = OFFERTODAY_PARTITION_CATALOG[partition_index].partition_id
+    plan = build_partition_probe_plan(
+        endpoint_contract_id="recommend-search-list-v1",
+        partition_ids=(partition_id,),
+        max_pages_per_condition=3,
+    )
+    execution = _phase_c_partition_execution(plan, accepted=accepted)
+    baseline = PhaseCBaselineReference(
+        artifact_hashes=("a" * 64, "b" * 64),
+        run_ids=(BASELINE_RUN_1, BASELINE_RUN_2),
+        snapshot_hash="c" * 64,
+        inventory_hash="d" * 64,
+    )
+    no_write = PhaseCNoWriteEvidence(
+        start_snapshot_hash=baseline.snapshot_hash,
+        end_snapshot_hash=baseline.snapshot_hash,
+        start_product_data_hash="e" * 64,
+        end_product_data_hash="e" * 64,
+        start_inventory_hash=baseline.inventory_hash,
+        end_inventory_hash=baseline.inventory_hash,
+        stage_calls=0,
+        would_stage_rows=0,
+    )
+    payload = build_phase_c_probe_artifact_payload(
+        execution=execution,
+        parent=_endpoint_probe_reference(),
+        baseline=baseline,
+        no_write=no_write,
+    )
+    return export_research_artifact(
+        root=root,
+        run_id=run_id,
+        metadata=phase_c_probe_metadata(
+            payload,
+            run_id=run_id,
+            planner_version="fixture",
+        ),
+        events=phase_c_artifact_events(
+            payload,
+            created_at="2026-07-13T12:00:00+00:00",
+        ),
+        provenance=provenance(),
+        json_files={"partition-probe.json": payload},
+    )
+
+
+@pytest.mark.parametrize(
+    ("accepted_parents", "expected_exit"),
+    ((True, census_cli.EXIT_OK), (False, census_cli.EXIT_INCOMPLETE)),
+)
+def test_compare_partitions_is_offline_strict_and_never_freezes_candidate(
+    tmp_path: Path,
+    capsys,
+    accepted_parents: bool,
+    expected_exit: int,
+) -> None:
+    parents_root = tmp_path / "parents"
+    first = _export_partition_probe_fixture(
+        parents_root,
+        run_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        partition_index=0,
+        accepted=accepted_parents,
+    )
+    second = _export_partition_probe_fixture(
+        parents_root,
+        run_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        partition_index=1,
+        accepted=accepted_parents,
+    )
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("offline comparison touched a live dependency")
+
+    result = census_cli.main(
+        [
+            "compare-partitions",
+            "--partition-probe-artifact",
+            str(second),
+            "--partition-probe-artifact",
+            str(first),
+            "--run-id",
+            COMPARISON_RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload_text = (artifact / "partition-comparison.json").read_text()
+
+    assert result == expected_exit
+    assert output["exit_code"] == expected_exit
+    assert output["candidate_frozen"] is False
+    assert dependency_calls == []
+    assert "selected_policy" not in payload_text
+    assert "candidate_hash" not in payload_text
+    assert census_cli.verify_live_research_run(artifact).valid is True

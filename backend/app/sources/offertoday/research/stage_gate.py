@@ -24,6 +24,9 @@ from app.sources.offertoday.research.live_contracts import CensusCandidate
 from app.sources.offertoday.research.pagination_stage_gate import (
     verify_pagination_artifact,
 )
+from app.sources.offertoday.research.partition_stage_gate import (
+    verify_phase_c_artifact,
+)
 from app.sources.offertoday.research.smoke import (
     SMOKE_LISTING_REQUEST_LIMIT,
     runtime_smoke_request_budget,
@@ -2702,6 +2705,18 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
         "discovery-candidate-v2",
     }:
         result = verify_pagination_artifact(artifact_dir)
+        return LiveRunVerification(
+            valid=result.valid,
+            issues=result.issues,
+            experiment=result.experiment,
+            run_id=result.run_id,
+        )
+    if experiment in {
+        "endpoint-contract-probe-v1",
+        "partition-probe-v1",
+        "partition-comparison-v1",
+    }:
+        result = verify_phase_c_artifact(artifact_dir)
         return LiveRunVerification(
             valid=result.valid,
             issues=result.issues,

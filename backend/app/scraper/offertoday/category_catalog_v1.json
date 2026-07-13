@@ -1,0 +1,3491 @@
+{
+  "schema_version": 1,
+  "source_commit": "ed03f114fb8bc73eeb11139d82325a7944802701",
+  "source_git_blob": "80960e8dad9a0f84ca928218ed81bd0133fc18c5",
+  "source_endpoint": "/wapi/geek/recommend/filter/content/all",
+  "language": "en",
+  "categories": [
+    {
+      "code": 101000,
+      "name": "Accounting",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 101000,
+          "name": "All Accounting",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101001,
+          "name": "Accounts Officers&Clerks",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101002,
+          "name": "Accounts Payable",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101003,
+          "name": "Accounts Receivable&Credit Control",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101004,
+          "name": "Analysis & Reporting",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101005,
+          "name": "Assistant Accountants",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101006,
+          "name": "Audit - External",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101007,
+          "name": "Audit - Internal",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101008,
+          "name": "Audit",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101009,
+          "name": "Bookkeeping & Small Practice Accounting",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101010,
+          "name": "Business Services & Corporate Advisory",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101011,
+          "name": "Company Secretaries",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101012,
+          "name": "Compliance & Risk",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101013,
+          "name": "Cost Accounting",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101014,
+          "name": "Financial Accounting & Reporting",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101015,
+          "name": "Financial Managers & Controllers",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101016,
+          "name": "Forensic Accounting & Investigation",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101017,
+          "name": "Insolvency & Corporate Recovery",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101018,
+          "name": "Inventory & Fixed Assets",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101019,
+          "name": "Management",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101020,
+          "name": "Management Accounting & Budgeting",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101021,
+          "name": "Payroll",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101022,
+          "name": "Strategy & Planning",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101023,
+          "name": "Systems Accounting & IT Audit",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101024,
+          "name": "Taxation",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101025,
+          "name": "Treasury",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 101999,
+          "name": "Other",
+          "parent_code": 101000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 102000,
+      "name": "Administration & Office Support",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 102000,
+          "name": "All Administration & Office Support",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 102001,
+          "name": "Administrative Assistants",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 102002,
+          "name": "Client & Sales Administration",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 102003,
+          "name": "Contracts Administration",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 102004,
+          "name": "Data Entry & Word Processing",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 102005,
+          "name": "Office Management",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 102006,
+          "name": "PA, EA & Secretarial",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 102007,
+          "name": "Receptionists",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 102008,
+          "name": "Records Management & Document Control",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 102999,
+          "name": "Other",
+          "parent_code": 102000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 103000,
+      "name": "Advertising & Media",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 103000,
+          "name": "All Advertising & Media",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103001,
+          "name": "Agency Account Management",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103002,
+          "name": "Art Direction",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103003,
+          "name": "Editing & Publishing",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103004,
+          "name": "Event Management",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103005,
+          "name": "Journalism & Writing",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103006,
+          "name": "Management",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103007,
+          "name": "Media Strategy, Planning & Buying",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103008,
+          "name": "Performing Arts",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103009,
+          "name": "Photography",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103010,
+          "name": "Programming & Production",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103011,
+          "name": "Promotions",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 103999,
+          "name": "Other",
+          "parent_code": 103000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 104000,
+      "name": "Banking & Financial Services",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 104000,
+          "name": "All Banking & Financial Services",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104001,
+          "name": "Account & Relationship Management",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104002,
+          "name": "Analysis & Reporting",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104003,
+          "name": "Banking - Business",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104004,
+          "name": "Banking - Corporate & Institutional",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104005,
+          "name": "Banking - Retail&Branch",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104006,
+          "name": "Client Services",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104007,
+          "name": "Compliance & Risk",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104008,
+          "name": "Corporate Finance & Investment Banking",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104009,
+          "name": "Credit",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104010,
+          "name": "Financial Planning",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104011,
+          "name": "Funds Management",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104012,
+          "name": "Management",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104013,
+          "name": "Mortgages",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104014,
+          "name": "Settlements",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104015,
+          "name": "Securities Trading",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104016,
+          "name": "Treasury",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 104999,
+          "name": "Other",
+          "parent_code": 104000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 105000,
+      "name": "Customer Service",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 105000,
+          "name": "All Customer Service",
+          "parent_code": 105000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 105001,
+          "name": "Collections",
+          "parent_code": 105000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 105002,
+          "name": "Customer Service - Call Centre",
+          "parent_code": 105000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 105003,
+          "name": "Customer Service - Customer Facing",
+          "parent_code": 105000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 105004,
+          "name": "Management & Support",
+          "parent_code": 105000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 105005,
+          "name": "Sales - Inbound",
+          "parent_code": 105000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 105006,
+          "name": "Sales - Outbound",
+          "parent_code": 105000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 105007,
+          "name": "Supervisors & Team Leaders",
+          "parent_code": 105000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 105999,
+          "name": "Other",
+          "parent_code": 105000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 106000,
+      "name": "CEO & General Management",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 106000,
+          "name": "All CEO & General Management",
+          "parent_code": 106000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 106001,
+          "name": "Board Appointments",
+          "parent_code": 106000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 106002,
+          "name": "CEO",
+          "parent_code": 106000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 106003,
+          "name": "COO & MD",
+          "parent_code": 106000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 106004,
+          "name": "General & Business Unit Manager",
+          "parent_code": 106000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 106101,
+          "name": "CEO & General Management",
+          "parent_code": 106000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 106999,
+          "name": "Other",
+          "parent_code": 106000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 107000,
+      "name": "Community Services",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 107000,
+          "name": "All Community Services",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107001,
+          "name": "Aged & Disability Support",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107002,
+          "name": "Child Welfare, Youth & Family Services",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107003,
+          "name": "Community Development",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107004,
+          "name": "Employment Services",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107005,
+          "name": "Fundraising",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107006,
+          "name": "Housing & Homelessness Services",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107007,
+          "name": "Indigenous & Multicultural Services",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107008,
+          "name": "Management",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107009,
+          "name": "Volunteer Coordination & Support",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107101,
+          "name": "Community Services & Development",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 107999,
+          "name": "Other",
+          "parent_code": 107000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 108000,
+      "name": "Construction",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 108000,
+          "name": "All Construction",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108001,
+          "name": "Contracts Management",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108002,
+          "name": "Estimating",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108003,
+          "name": "Foreperson&Supervisors",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108004,
+          "name": "Health, Safety & Environment",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108005,
+          "name": "Management",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108006,
+          "name": "Planning & Scheduling",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108007,
+          "name": "Plant & Machinery Operators",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108008,
+          "name": "Project Management",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108009,
+          "name": "Quality Assurance & Control",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108010,
+          "name": "Surveying",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 108999,
+          "name": "Other",
+          "parent_code": 108000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 109000,
+      "name": "Consulting",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 109000,
+          "name": "All Consulting",
+          "parent_code": 109000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 109001,
+          "name": "Analysts",
+          "parent_code": 109000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 109002,
+          "name": "Corporate Development",
+          "parent_code": 109000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 109003,
+          "name": "Environment & Sustainability Consulting",
+          "parent_code": 109000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 109004,
+          "name": "Management & Change Consulting",
+          "parent_code": 109000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 109005,
+          "name": "Policy",
+          "parent_code": 109000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 109006,
+          "name": "Strategy & Planning",
+          "parent_code": 109000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 109101,
+          "name": "Consulting & Strategy",
+          "parent_code": 109000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 109999,
+          "name": "Other",
+          "parent_code": 109000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 110000,
+      "name": "Design",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 110000,
+          "name": "All Design",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110001,
+          "name": "Architectural Drafting",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110002,
+          "name": "Architecture",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110003,
+          "name": "Fashion & Textile Design",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110004,
+          "name": "Graphic Design",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110005,
+          "name": "Illustration & Animation",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110006,
+          "name": "Industrial Design",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110007,
+          "name": "Interior Design",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110008,
+          "name": "Landscape Architecture",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110009,
+          "name": "Urban Design & Planning",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110010,
+          "name": "Web & Interaction Design",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110101,
+          "name": "Graphic & Visual Design",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 110999,
+          "name": "Other",
+          "parent_code": 110000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 111000,
+      "name": "Education",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 111000,
+          "name": "All Education",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111001,
+          "name": "Childcare & Outside School Hours Care",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111002,
+          "name": "Library Services & Information Management",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111003,
+          "name": "Management - Schools",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111004,
+          "name": "Management - Universities",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111005,
+          "name": "Management - Vocational",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111006,
+          "name": "Research & Fellowships",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111007,
+          "name": "Student Services",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111008,
+          "name": "Teaching - Early Childhood",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111009,
+          "name": "Teaching - Primary",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111010,
+          "name": "Teaching - Secondary",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111011,
+          "name": "Teaching - Tertiary",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111012,
+          "name": "Teaching - Vocational",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111013,
+          "name": "Teaching Aides & Special Needs",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111014,
+          "name": "Teacher",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111015,
+          "name": "Tutoring",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111016,
+          "name": "Workplace Training & Assessment",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111101,
+          "name": "Early Childhood & Special Education",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111102,
+          "name": "Primary & Secondary Education",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111103,
+          "name": "Higher Education & Research",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111104,
+          "name": "Vocational & Skills Education",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111105,
+          "name": "Education Admin & Student Support",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 111999,
+          "name": "Other",
+          "parent_code": 111000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 112000,
+      "name": "Engineering",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 112000,
+          "name": "All Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112001,
+          "name": "Aerospace Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112002,
+          "name": "Quality Assurance",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112003,
+          "name": "Automotive Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112004,
+          "name": "Building Services Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112005,
+          "name": "Chemical Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112006,
+          "name": "Civil & Structural Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112007,
+          "name": "Electrical & Electronic Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112008,
+          "name": "Engineering Drafting",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112009,
+          "name": "Environmental Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112010,
+          "name": "Field Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112011,
+          "name": "Industrial Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112012,
+          "name": "Maintenance",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112013,
+          "name": "Management",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112014,
+          "name": "Materials Handling Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112015,
+          "name": "Mechanical Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112016,
+          "name": "Process Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112017,
+          "name": "Project Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112018,
+          "name": "Project Management",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112019,
+          "name": "Supervisors",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112020,
+          "name": "Systems Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112021,
+          "name": "Water & Waste Engineering",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112022,
+          "name": "Quality Assurance",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112101,
+          "name": "Engineer",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 112999,
+          "name": "Other",
+          "parent_code": 112000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 113000,
+      "name": "Farming",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 113000,
+          "name": "All Farming",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113001,
+          "name": "Agronomy & Farm Services",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113002,
+          "name": "Conservation, Parks & Wildlife",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113003,
+          "name": "Farm Labour",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113004,
+          "name": "Farm Management",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113005,
+          "name": "Fishing & Aquaculture",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113006,
+          "name": "Horticulture",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113007,
+          "name": "Veterinary Services & Animal Welfare",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113008,
+          "name": "Winery & Viticulture",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113101,
+          "name": "Farming, Animals & Conservation",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 113999,
+          "name": "Other",
+          "parent_code": 113000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 114000,
+      "name": "Government",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 114000,
+          "name": "All Government",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114001,
+          "name": "Air Force",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114002,
+          "name": "Army",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114003,
+          "name": "Emergency Services",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114004,
+          "name": "Government",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114005,
+          "name": "Government - Federal",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114006,
+          "name": "Government - Local",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114007,
+          "name": "Government - State",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114008,
+          "name": "Local Government",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114009,
+          "name": "Navy",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114010,
+          "name": "Police & Corrections",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114011,
+          "name": "Policy, Planning & Regulation",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114012,
+          "name": "Regional Council",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 114999,
+          "name": "Other",
+          "parent_code": 114000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 115000,
+      "name": "Healthcare & Medical",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 115000,
+          "name": "All Healthcare & Medical",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115001,
+          "name": "Ambulance & Paramedics",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115002,
+          "name": "Chiropractic & Osteopathic",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115003,
+          "name": "Clinical&Medical Research",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115004,
+          "name": "Dental",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115005,
+          "name": "Dieticians",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115006,
+          "name": "Environmental Services",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115007,
+          "name": "General Practitioners",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115008,
+          "name": "Management",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115009,
+          "name": "Medical Administration",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115010,
+          "name": "Medical Imaging",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115011,
+          "name": "Medical Specialists",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115012,
+          "name": "Natural Therapies & Alternative Medicine",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115013,
+          "name": "Nursing - A&E, Critical Care & ICU",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115014,
+          "name": "Nursing - Aged Care",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115015,
+          "name": "Nursing - Community, Maternal & Child Health",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115016,
+          "name": "Nursing - Educators & Facilitators",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115017,
+          "name": "Nursing - General Medical & Surgical",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115018,
+          "name": "Nursing - High Acuity",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115019,
+          "name": "Nursing - Management",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115020,
+          "name": "Nursing - Midwifery, Neo-Natal, SCN & NICU",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115021,
+          "name": "Nursing - Paediatric & PICU",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115022,
+          "name": "Nursing - Psych, Forensic & Correctional Health",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115023,
+          "name": "Nursing - Theatre & Recovery",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115024,
+          "name": "Optical",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115025,
+          "name": "Pathology",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115026,
+          "name": "Pharmaceuticals & Medical Devices",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115027,
+          "name": "Pharmacy",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115028,
+          "name": "Physiotherapy, OT & Rehabilitation",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115029,
+          "name": "Psychology, Counselling & Social Work",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115030,
+          "name": "Residents & Registrars",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115031,
+          "name": "Sales",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115032,
+          "name": "Speech Therapy",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115101,
+          "name": "Nursing",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115102,
+          "name": "Doctors & Medical Specialty",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115103,
+          "name": "Physiotherapy & Rehabilitation",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 115999,
+          "name": "Other",
+          "parent_code": 115000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 116000,
+      "name": "Hospitality & Catering & Tourism",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 116000,
+          "name": "All Hospitality & Catering & Tourism",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116001,
+          "name": "Airlines",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116002,
+          "name": "Bar & Beverage Staff",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116003,
+          "name": "Chefs & Cooks",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116004,
+          "name": "Front Office & Guest Services",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116005,
+          "name": "Gaming",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116006,
+          "name": "Housekeeping",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116007,
+          "name": "Kitchen & Sandwich Hands",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116008,
+          "name": "Management",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116009,
+          "name": "Reservations",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116010,
+          "name": "Tour Guides",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116011,
+          "name": "Travel Agents&Consultants",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116012,
+          "name": "Waiting Staff",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 116999,
+          "name": "Other",
+          "parent_code": 116000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 117000,
+      "name": "Human Resources & Recruitment",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 117000,
+          "name": "All Human Resources & Recruitment",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117001,
+          "name": "Consulting & Generalist HR",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117002,
+          "name": "Industrial & Employee Relations",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117003,
+          "name": "Management - Agency",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117004,
+          "name": "Management - Internal",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117005,
+          "name": "Occupational Health & Safety",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117006,
+          "name": "Organisational Development",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117007,
+          "name": "Recruitment - Agency",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117008,
+          "name": "Recruitment - Internal",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117009,
+          "name": "Remuneration & Benefits",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117010,
+          "name": "Training & Development",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117101,
+          "name": "Recruitment",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117102,
+          "name": "HR Generalist",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 117999,
+          "name": "Other",
+          "parent_code": 117000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 118000,
+      "name": "Information Technology",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 118000,
+          "name": "All Information Technology",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118001,
+          "name": "Architects",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118002,
+          "name": "Business & Systems Analysts",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118003,
+          "name": "Computer Operators",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118004,
+          "name": "Consultants",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118005,
+          "name": "Database Development & Administration",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118006,
+          "name": "Developers & Programmers",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118007,
+          "name": "Engineering - Hardware",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118008,
+          "name": "Engineering - Network",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118009,
+          "name": "Engineering - Software",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118010,
+          "name": "Help Desk & IT Support",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118011,
+          "name": "Management",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118012,
+          "name": "Networks & Systems Administration",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118013,
+          "name": "Product Management & Development",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118014,
+          "name": "Programme & Project Management",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118015,
+          "name": "Sales - Pre & Post",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118016,
+          "name": "Security",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118017,
+          "name": "Team Leaders",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118018,
+          "name": "Technical Writing",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118019,
+          "name": "Telecommunications",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118020,
+          "name": "Testing & Quality Assurance",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118021,
+          "name": "Web Development & Production",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 118999,
+          "name": "Other",
+          "parent_code": 118000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 119000,
+      "name": "Insurance",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 119000,
+          "name": "All Insurance",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119001,
+          "name": "Actuarial",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119002,
+          "name": "Assessment",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119003,
+          "name": "Brokerage",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119004,
+          "name": "Claims",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119005,
+          "name": "Fund Administration",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119006,
+          "name": "Management",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119007,
+          "name": "Risk Consulting",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119008,
+          "name": "Superannuation",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119009,
+          "name": "Underwriting",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119010,
+          "name": "Workers' Compensation",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 119999,
+          "name": "Other",
+          "parent_code": 119000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 120000,
+      "name": "Legal",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 120000,
+          "name": "All Legal",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120001,
+          "name": "Banking & Finance Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120002,
+          "name": "Construction Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120003,
+          "name": "Corporate & Commercial Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120004,
+          "name": "Criminal & Civil Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120005,
+          "name": "Environment & Planning Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120006,
+          "name": "Family Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120007,
+          "name": "Generalists - In-house",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120008,
+          "name": "Generalists - Law Firm",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120009,
+          "name": "Industrial Relations & Employment Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120010,
+          "name": "Insurance & Superannuation Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120011,
+          "name": "Intellectual Property Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120012,
+          "name": "Law Clerks & Paralegals",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120013,
+          "name": "Legal Practice Management",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120014,
+          "name": "Legal Secretaries",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120015,
+          "name": "Litigation & Dispute Resolution",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120016,
+          "name": "Personal Injury Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120017,
+          "name": "Property Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120018,
+          "name": "Tax Law",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 120999,
+          "name": "Other",
+          "parent_code": 120000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 121000,
+      "name": "Manufacturing & Logistics",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 121000,
+          "name": "All Manufacturing & Logistics",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121001,
+          "name": "Analysis & Reporting",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121002,
+          "name": "Assembly & Process Work",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121003,
+          "name": "Aviation Services",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121004,
+          "name": "Couriers, Drivers & Postal Services",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121005,
+          "name": "Fleet Management",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121006,
+          "name": "Freight&Cargo Forwarding",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121007,
+          "name": "Import&Export & Customs",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121008,
+          "name": "Machine Operators",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121009,
+          "name": "Management",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121010,
+          "name": "Pattern Makers & Garment Technicians",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121011,
+          "name": "Pickers & Packers",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121012,
+          "name": "Production, Planning & Scheduling",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121013,
+          "name": "Public Transport & Taxi Services",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121014,
+          "name": "Purchasing, Procurement & Inventory",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121015,
+          "name": "Quality Assurance & Control",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121016,
+          "name": "Rail & Maritime Transport",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121017,
+          "name": "Road Transport",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121018,
+          "name": "Team Leaders&Supervisors",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121019,
+          "name": "Warehousing, Storage & Distribution",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121020,
+          "name": "Delivery",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121101,
+          "name": "Pattern Makers/Process Work",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 121999,
+          "name": "Other",
+          "parent_code": 121000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 122000,
+      "name": "Marketing & Communications",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 122000,
+          "name": "All Marketing & Communications",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122001,
+          "name": "Brand Management",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122002,
+          "name": "Digital & Search Marketing",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122003,
+          "name": "Direct Marketing & CRM",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122004,
+          "name": "Event Management",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122005,
+          "name": "Internal Communications",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122006,
+          "name": "Management",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122007,
+          "name": "Market Research & Analysis",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122008,
+          "name": "Marketing Assistants&Coordinators",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122009,
+          "name": "Marketing Communications",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122010,
+          "name": "Product Management & Development",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122011,
+          "name": "Public Relations & Corporate Affairs",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122012,
+          "name": "Trade Marketing",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 122999,
+          "name": "Other",
+          "parent_code": 122000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 123000,
+      "name": "Natural Energy",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 123000,
+          "name": "All Natural Energy",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123001,
+          "name": "Analysis & Reporting",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123002,
+          "name": "Health, Safety & Environment",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123003,
+          "name": "Management",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123004,
+          "name": "Mining - Drill & Blast",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123005,
+          "name": "Mining - Engineering & Maintenance",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123006,
+          "name": "Mining - Exploration & Geoscience",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123007,
+          "name": "Mining - Operations",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123008,
+          "name": "Mining - Processing",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123009,
+          "name": "Natural Resources & Water",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123010,
+          "name": "Oil & Gas - Drilling",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123011,
+          "name": "Oil & Gas - Engineering & Maintenance",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123012,
+          "name": "Oil & Gas - Exploration & Geoscience",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123013,
+          "name": "Oil & Gas - Operations",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123014,
+          "name": "Oil & Gas - Production & Refinement",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123015,
+          "name": "Power Generation & Distribution",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123016,
+          "name": "Surveying",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123101,
+          "name": "Mining, Resources & Energy",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 123999,
+          "name": "Other",
+          "parent_code": 123000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 124000,
+      "name": "Real Estate & Property",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 124000,
+          "name": "All Real Estate & Property",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124001,
+          "name": "Administration",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124002,
+          "name": "Analysts",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124003,
+          "name": "Body Corporate & Facilities Management",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124004,
+          "name": "Commercial Sales, Leasing & Property Mgmt",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124005,
+          "name": "Residential Leasing & Property Management",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124006,
+          "name": "Residential Sales",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124007,
+          "name": "Retail & Property Development",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124008,
+          "name": "Valuation",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124009,
+          "name": "Surveying",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124010,
+          "name": "Security & Safety Control",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 124999,
+          "name": "Other",
+          "parent_code": 124000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 125000,
+      "name": "Retail & Consumer Products",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 125000,
+          "name": "All Retail & Consumer Products",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125001,
+          "name": "Buying",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125002,
+          "name": "Management - Area&Multi-site",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125003,
+          "name": "Management - Department&Assistant",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125004,
+          "name": "Management - Store",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125005,
+          "name": "Merchandisers",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125006,
+          "name": "Planning",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125007,
+          "name": "Retail Assistants",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125008,
+          "name": "Stockkeeper",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125009,
+          "name": "Cashier",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125101,
+          "name": "Retail Management",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 125999,
+          "name": "Other",
+          "parent_code": 125000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 126000,
+      "name": "Sales",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 126000,
+          "name": "All Sales",
+          "parent_code": 126000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 126001,
+          "name": "Account & Relationship Management",
+          "parent_code": 126000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 126002,
+          "name": "Analysis & Reporting",
+          "parent_code": 126000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 126003,
+          "name": "Management",
+          "parent_code": 126000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 126004,
+          "name": "New Business Development",
+          "parent_code": 126000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 126005,
+          "name": "Sales Coordinators",
+          "parent_code": 126000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 126006,
+          "name": "Sales Representatives&Consultants",
+          "parent_code": 126000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 126999,
+          "name": "Other",
+          "parent_code": 126000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 127000,
+      "name": "Science & Technology",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 127000,
+          "name": "All Science & Technology",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127001,
+          "name": "Biological & Biomedical Sciences",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127002,
+          "name": "Biotechnology & Genetics",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127003,
+          "name": "Chemistry & Physics",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127004,
+          "name": "Environmental, Earth & Geosciences",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127005,
+          "name": "Food Technology & Safety",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127006,
+          "name": "Laboratory & Technical Services",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127007,
+          "name": "Materials Sciences",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127008,
+          "name": "Mathematics, Statistics & Information Sciences",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127009,
+          "name": "Modelling & Simulation",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127010,
+          "name": "Quality Assurance & Control",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127101,
+          "name": "Biological Sciences & Biotechnology",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 127999,
+          "name": "Other",
+          "parent_code": 127000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 128000,
+      "name": "Self Employment",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 128000,
+          "name": "All Self Employment",
+          "parent_code": 128000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 128001,
+          "name": "Other",
+          "parent_code": 128000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 129000,
+      "name": "Sport",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 129000,
+          "name": "All Sport",
+          "parent_code": 129000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 129001,
+          "name": "Coaching & Instruction",
+          "parent_code": 129000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 129002,
+          "name": "Fitness & Personal Training",
+          "parent_code": 129000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 129003,
+          "name": "Management",
+          "parent_code": 129000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 129101,
+          "name": "Sports & Coaching Services",
+          "parent_code": 129000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 129999,
+          "name": "Other",
+          "parent_code": 129000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 130000,
+      "name": "Trades & Services",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 130000,
+          "name": "All Trades & Services",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130001,
+          "name": "Air Conditioning & Refrigeration",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130002,
+          "name": "Automotive Trades",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130003,
+          "name": "Bakers & Pastry Chefs",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130004,
+          "name": "Building Trades",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130005,
+          "name": "Butchers",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130006,
+          "name": "Carpentry & Cabinet Making",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130007,
+          "name": "Cleaning Services",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130008,
+          "name": "Electricians",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130009,
+          "name": "Fitters, Turners & Machinists",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130010,
+          "name": "Floristry",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130011,
+          "name": "Gardening & Landscaping",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130012,
+          "name": "Hair & Beauty Services",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130013,
+          "name": "Labourers",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130014,
+          "name": "Locksmiths",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130015,
+          "name": "Maintenance & Handyperson Services",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130016,
+          "name": "Nannies & Babysitters",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130017,
+          "name": "Painters & Sign Writers",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130018,
+          "name": "Plumbers",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130019,
+          "name": "Printing & Publishing Services",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130020,
+          "name": "Security Services",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130021,
+          "name": "Tailors & Dressmakers",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130022,
+          "name": "Technicians",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130023,
+          "name": "Welders & Boilermakers",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130024,
+          "name": "Manicurist",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130025,
+          "name": "Makeup Artist",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130101,
+          "name": "Floristry & Gardening",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 130999,
+          "name": "Other",
+          "parent_code": 130000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "code": 999000,
+      "name": "Other",
+      "parent_code": 0,
+      "level": 1,
+      "children": [
+        {
+          "code": 999000,
+          "name": "All Other",
+          "parent_code": 999000,
+          "level": 2,
+          "children": []
+        },
+        {
+          "code": 999999,
+          "name": "Other",
+          "parent_code": 999000,
+          "level": 2,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

@@ -26,6 +26,16 @@ BrowserLifecycle = Literal[
     "condition-local-runtime",
     "restart-each-page",
 ]
+EndpointKind = Literal["search", "browse"]
+CursorCapability = Literal["search-response-cursor-v1", "unverified"]
+TerminalCapability = Literal["has-more-empty-confirmation-v1", "unverified"]
+
+OFFERTODAY_LISTING_SEARCH_CONTRACT_URL = (
+    "https://www.offertoday.com/wapi/geek/recommend/search/list"
+)
+OFFERTODAY_LISTING_BROWSE_CONTRACT_URL = (
+    "https://www.offertoday.com/wapi/geek/recommend/list"
+)
 
 _PAGINATION_MODES = {"stateless-control", "response-cursor"}
 _BROWSER_LIFECYCLES = {
@@ -34,6 +44,160 @@ _BROWSER_LIFECYCLES = {
     "restart-each-page",
 }
 _SHA256_LENGTH = 64
+
+
+def _endpoint_nonblank_string(value: Any, field_name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+    ):
+        raise ValueError(f"{field_name} must be an exact nonblank string")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class OfferTodayListingEndpointContract:
+    schema_version: int
+    contract_id: str
+    endpoint: EndpointKind
+    url: str
+    allowed_rcd_types: tuple[int | None, ...]
+    result_rows_field: str
+    supplemental_rows_field: str | None
+    cursor_capability: CursorCapability
+    terminal_capability: TerminalCapability
+
+    def __post_init__(self) -> None:
+        if type(self.schema_version) is not int or self.schema_version != 1:
+            raise ValueError("endpoint contract schema_version must equal 1")
+        _endpoint_nonblank_string(self.contract_id, "contract_id")
+        if self.endpoint not in {"search", "browse"}:
+            raise ValueError("unsupported endpoint contract endpoint")
+        _endpoint_nonblank_string(self.url, "url")
+        if not isinstance(self.allowed_rcd_types, tuple) or not self.allowed_rcd_types:
+            raise ValueError("allowed_rcd_types must be a nonempty tuple")
+        if len(set(self.allowed_rcd_types)) != len(self.allowed_rcd_types):
+            raise ValueError("allowed_rcd_types must be distinct")
+        for value in self.allowed_rcd_types:
+            if value is not None and type(value) is not int:
+                raise ValueError("allowed rcdType values must be exact integers or None")
+        _endpoint_nonblank_string(self.result_rows_field, "result_rows_field")
+        if self.supplemental_rows_field is not None:
+            _endpoint_nonblank_string(
+                self.supplemental_rows_field,
+                "supplemental_rows_field",
+            )
+        if self.cursor_capability not in {
+            "search-response-cursor-v1",
+            "unverified",
+        }:
+            raise ValueError("unsupported endpoint cursor capability")
+        if self.terminal_capability not in {
+            "has-more-empty-confirmation-v1",
+            "unverified",
+        }:
+            raise ValueError("unsupported endpoint terminal capability")
+        if self.endpoint == "browse" and (
+            self.cursor_capability != "unverified"
+            or self.terminal_capability != "unverified"
+        ):
+            raise ValueError("browse v1 capabilities must remain unverified")
+
+    @property
+    def contract_hash(self) -> str:
+        return _canonical_hash(self.to_payload())
+
+    @property
+    def cursor_verified(self) -> bool:
+        return self.cursor_capability != "unverified"
+
+    @property
+    def terminal_verified(self) -> bool:
+        return self.terminal_capability != "unverified"
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "contract_id": self.contract_id,
+            "endpoint": self.endpoint,
+            "url": self.url,
+            "allowed_rcd_types": list(self.allowed_rcd_types),
+            "result_rows_field": self.result_rows_field,
+            "supplemental_rows_field": self.supplemental_rows_field,
+            "cursor_capability": self.cursor_capability,
+            "terminal_capability": self.terminal_capability,
+        }
+
+
+OFFERTODAY_SEARCH_ENDPOINT_CONTRACT = OfferTodayListingEndpointContract(
+    schema_version=1,
+    contract_id="recommend-search-list-v1",
+    endpoint="search",
+    url=OFFERTODAY_LISTING_SEARCH_CONTRACT_URL,
+    allowed_rcd_types=(None,),
+    result_rows_field="resultList",
+    supplemental_rows_field="suppleRcdList",
+    cursor_capability="search-response-cursor-v1",
+    terminal_capability="has-more-empty-confirmation-v1",
+)
+OFFERTODAY_BROWSE_ENDPOINT_CONTRACT = OfferTodayListingEndpointContract(
+    schema_version=1,
+    contract_id="recommend-list-envelope-v1",
+    endpoint="browse",
+    url=OFFERTODAY_LISTING_BROWSE_CONTRACT_URL,
+    allowed_rcd_types=(None,),
+    result_rows_field="resultList",
+    supplemental_rows_field=None,
+    cursor_capability="unverified",
+    terminal_capability="unverified",
+)
+OFFERTODAY_ENDPOINT_CONTRACTS = (
+    OFFERTODAY_SEARCH_ENDPOINT_CONTRACT,
+    OFFERTODAY_BROWSE_ENDPOINT_CONTRACT,
+)
+_ENDPOINT_CONTRACTS_BY_ID = {
+    contract.contract_id: contract for contract in OFFERTODAY_ENDPOINT_CONTRACTS
+}
+
+
+def offertoday_endpoint_contract(
+    contract_id: str,
+) -> OfferTodayListingEndpointContract:
+    try:
+        return _ENDPOINT_CONTRACTS_BY_ID[contract_id]
+    except KeyError as exc:
+        raise ValueError(f"unknown OfferToday endpoint contract: {contract_id}") from exc
+
+
+def validate_offertoday_endpoint_request(
+    contract: OfferTodayListingEndpointContract,
+    payload: Mapping[str, Any],
+) -> None:
+    if not isinstance(payload, Mapping):
+        raise OfferTodayCursorContractError("invalid_request_payload")
+    _exact_positive_int(payload.get("page"), "request_page")
+    _exact_positive_int(payload.get("pageSize"), "request_page_size")
+    rcd_type = payload.get("rcdType") if "rcdType" in payload else None
+    if rcd_type is not None and type(rcd_type) is not int:
+        raise OfferTodayCursorContractError("invalid_request_rcd_type")
+    if rcd_type not in contract.allowed_rcd_types:
+        raise OfferTodayCursorContractError("unsupported_request_rcd_type")
+    cursor_fields = {"sessionId", "supplePage", "suppleAmount", "suppleType"}
+    if not contract.cursor_verified and cursor_fields & set(payload):
+        raise OfferTodayCursorContractError("unverified_cursor_contract")
+
+
+def validate_offertoday_endpoint_response_url(
+    contract: OfferTodayListingEndpointContract,
+    response_url: str | None,
+) -> None:
+    if response_url is None:
+        return
+    if not isinstance(response_url, str) or not response_url.strip():
+        raise OfferTodayCursorContractError("invalid_response_url")
+    if response_url.split("?", 1)[0] != contract.url:
+        raise OfferTodayCursorContractError("endpoint_response_url_mismatch")
 
 
 class OfferTodayCursorContractError(ValueError):
@@ -245,6 +409,7 @@ class OfferTodayListingRequestPolicy:
     variant_id: str
     repeat_index: int
     condition_restart_index: int = 0
+    endpoint_contract_id: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.protocol_version) is not int or self.protocol_version != 2:
@@ -265,21 +430,38 @@ class OfferTodayListingRequestPolicy:
             raise ValueError("repeat_index must be 1 or 2")
         if type(self.condition_restart_index) is not int or self.condition_restart_index < 0:
             raise ValueError("condition_restart_index must be a nonnegative exact integer")
+        if self.endpoint_contract_id is not None:
+            _exact_nonblank_string(
+                self.endpoint_contract_id,
+                "endpoint_contract_id",
+            )
+            contract = offertoday_endpoint_contract(self.endpoint_contract_id)
+            if self.requires_cursor and not contract.cursor_verified:
+                raise ValueError(
+                    "response-cursor mode requires a verified endpoint cursor contract"
+                )
+
+    @property
+    def endpoint_contract(self) -> OfferTodayListingEndpointContract | None:
+        if self.endpoint_contract_id is None:
+            return None
+        return offertoday_endpoint_contract(self.endpoint_contract_id)
 
     @property
     def requires_cursor(self) -> bool:
         return self.pagination_mode == "response-cursor"
 
     def condition_execution_id(self, condition_id: str) -> str:
-        return _canonical_hash(
-            {
-                "condition_id": condition_id,
-                "condition_restart_index": self.condition_restart_index,
-                "protocol_version": self.protocol_version,
-                "repeat_index": self.repeat_index,
-                "variant_id": self.variant_id,
-            }
-        )
+        payload = {
+            "condition_id": condition_id,
+            "condition_restart_index": self.condition_restart_index,
+            "protocol_version": self.protocol_version,
+            "repeat_index": self.repeat_index,
+            "variant_id": self.variant_id,
+        }
+        if self.endpoint_contract_id is not None:
+            payload["endpoint_contract_id"] = self.endpoint_contract_id
+        return _canonical_hash(payload)
 
     def logical_request_id(self, condition_id: str, page: int) -> str:
         if type(page) is not int or page < 1:
@@ -532,8 +714,61 @@ def parse_offertoday_listing_page_result(
     require_cursor: bool,
     expected_session_id: str | None = None,
     expected_effective_page_size: int | None = None,
+    endpoint_contract_id: str | None = None,
 ) -> OfferTodayListingPageResult:
     """Parse and validate the response fields needed for a cursor chain."""
+
+    if endpoint_contract_id is not None:
+        contract = offertoday_endpoint_contract(endpoint_contract_id)
+        if contract.endpoint == "browse":
+            if require_cursor:
+                raise OfferTodayCursorContractError("unverified_cursor_contract")
+            raw_data = response.get("data")
+            if not isinstance(raw_data, Mapping):
+                raise OfferTodayCursorContractError("invalid_data")
+            data = dict(raw_data)
+            cursor_presence = offertoday_listing_cursor_field_presence(response)
+            if any(
+                (
+                    cursor_presence.session_id,
+                    cursor_presence.supple_page,
+                    cursor_presence.supple_amount,
+                    cursor_presence.supple_type,
+                )
+            ):
+                raise OfferTodayCursorContractError(
+                    "unexpected_search_cursor_fields"
+                )
+            if data.get("suppleRcdList") not in (None, []):
+                raise OfferTodayCursorContractError(
+                    "unexpected_search_supplemental_rows"
+                )
+            result_rows = _row_cohort(data, contract.result_rows_field)
+            raw_page_size = data.get("pageSize")
+            response_page_size = (
+                None
+                if raw_page_size is None
+                else _exact_positive_int(raw_page_size, "page_size")
+            )
+            raw_has_more = data.get("hasMore")
+            if raw_has_more is not None and type(raw_has_more) is not bool:
+                raise OfferTodayCursorContractError("invalid_has_more")
+            raw_total = data.get("total")
+            reported_total = (
+                None
+                if raw_total is None
+                else _exact_nonnegative_int(raw_total, "total")
+            )
+            return OfferTodayListingPageResult(
+                raw_payload=response,
+                result_rows=result_rows,
+                supplemental_rows=(),
+                cursor=None,
+                has_more=raw_has_more,
+                reported_total=reported_total,
+                response_page_size=response_page_size,
+                cursor_field_presence=cursor_presence,
+            )
 
     raw_data = response.get("data")
     if not isinstance(raw_data, Mapping):

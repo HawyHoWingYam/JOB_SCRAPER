@@ -4,15 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.sources.offertoday.listing_contract import OfferTodayListingCursor
+from app.sources.offertoday.listing_contract import (
+    OFFERTODAY_LISTING_BROWSE_CONTRACT_URL,
+    OFFERTODAY_LISTING_SEARCH_CONTRACT_URL,
+    OfferTodayListingCursor,
+)
 
 OFFERTODAY_BASE_URL = "https://www.offertoday.com"
 
 # Two listing endpoints:
 # search/list — recommendation-filtered (rcdType:7); returns ~600–700 IT jobs
 # list        — category browse; may return the full unfiltered job database
-OFFERTODAY_LISTING_SEARCH_URL = f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/search/list"
-OFFERTODAY_LISTING_BROWSE_URL = f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/list"
+OFFERTODAY_LISTING_SEARCH_URL = OFFERTODAY_LISTING_SEARCH_CONTRACT_URL
+OFFERTODAY_LISTING_BROWSE_URL = OFFERTODAY_LISTING_BROWSE_CONTRACT_URL
 
 OFFERTODAY_COMMON_HEADERS: dict[str, str] = {
     "api-language": "zh_HK",

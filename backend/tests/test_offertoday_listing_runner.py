@@ -202,6 +202,26 @@ class RestartableScriptedTransport:
         self._context_number += 1
 
 
+class ResponseUrlScriptedTransport:
+    def __init__(self, payload: dict[str, Any], response_url: str) -> None:
+        self.payload = deepcopy(payload)
+        self.response_url = response_url
+        self.requests: list[dict[str, Any]] = []
+
+    async def fetch_listing_page(
+        self,
+        payload: dict[str, Any],
+        *,
+        listing_url: str | None = None,
+    ) -> OfferTodayListingTransportResult:
+        self.requests.append(deepcopy(payload))
+        return OfferTodayListingTransportResult(
+            payload=self.payload,
+            http_status=200,
+            response_url=self.response_url,
+        )
+
+
 class MemoryObservationSink:
     def __init__(self) -> None:
         self.observations: list[object] = []
@@ -1865,6 +1885,114 @@ async def test_cursor_mode_rejects_missing_page_one_cursor_without_staging() -> 
 
     assert result.stop_reason == "cursor_contract_violation"
     assert observations.observations[0].cursor_evidence.contract_error == "incomplete_cursor"
+    assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_search_endpoint_contract_preserves_cursor_execution() -> None:
+    condition = OfferTodayListingCondition(
+        search_family="phase_c_endpoint_probe",
+        category_id=118000,
+        keyword="",
+        endpoint="search",
+        rcd_type=None,
+    )
+    transport = ScriptedTransport(
+        _cursor_response([], has_more=False),
+    )
+    result, observations, staging, _sleep = await _run(
+        transport,
+        conditions=[condition],
+        max_pages=1,
+        require_empty_confirmation=False,
+        request_policy=_request_policy(
+            endpoint_contract_id="recommend-search-list-v1"
+        ),
+    )
+    assert result.stop_reason == "natural_exhaustion"
+    assert observations.observations[0].cursor_evidence.contract_error is None
+    assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_browse_unverified_terminal_cannot_claim_exhaustion_or_stage() -> None:
+    condition = OfferTodayListingCondition(
+        search_family="phase_c_endpoint_probe",
+        category_id=118000,
+        keyword="",
+        endpoint="browse",
+        rcd_type=None,
+    )
+    result, observations, staging, _sleep = await _run(
+        ScriptedTransport(
+            _listing_response([_listing_row("browse-1", "browse-enc-1")], has_more=False)
+        ),
+        conditions=[condition],
+        max_pages=1,
+        request_policy=_request_policy(
+            pagination_mode="stateless-control",
+            variant_id="phase-c-browse-envelope",
+            endpoint_contract_id="recommend-list-envelope-v1",
+        ),
+    )
+    assert result.stop_reason == "page_cap"
+    assert result.accepted_job_ids == ()
+    assert observations.observations[0].cursor_evidence.result_job_ids == (
+        "browse-1",
+    )
+    assert observations.observations[0].cursor_evidence.terminal_signal is False
+    assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_endpoint_contract_mismatch_rejects_before_transport_or_staging() -> None:
+    condition = OfferTodayListingCondition(
+        search_family="phase_c_endpoint_probe",
+        category_id=118000,
+        keyword="",
+        endpoint="browse",
+        rcd_type=None,
+    )
+    transport = ScriptedTransport(
+        _listing_response([], has_more=False),
+    )
+    with pytest.raises(ValueError, match="does not match listing condition endpoint"):
+        await _run(
+            transport,
+            conditions=[condition],
+            max_pages=1,
+            request_policy=_request_policy(
+                endpoint_contract_id="recommend-search-list-v1"
+            ),
+        )
+    assert transport.requests == []
+
+
+@pytest.mark.asyncio
+async def test_endpoint_response_url_mismatch_rejects_before_staging() -> None:
+    condition = OfferTodayListingCondition(
+        search_family="phase_c_endpoint_probe",
+        category_id=118000,
+        keyword="",
+        endpoint="search",
+        rcd_type=None,
+    )
+    transport = ResponseUrlScriptedTransport(
+        _cursor_response([_listing_row("j1", "e1")]),
+        OFFERTODAY_LISTING_BROWSE_URL,
+    )
+    result, observations, staging, _sleep = await _run(
+        transport,
+        conditions=[condition],
+        max_pages=1,
+        request_policy=_request_policy(
+            endpoint_contract_id="recommend-search-list-v1"
+        ),
+    )
+    assert result.stop_reason == "endpoint_contract_violation"
+    assert observations.observations[0].cursor_evidence.contract_error == (
+        "endpoint_response_url_mismatch"
+    )
     assert staging.staged_pages == []
 
 

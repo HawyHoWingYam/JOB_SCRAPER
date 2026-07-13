@@ -38,6 +38,11 @@ from app.sources.offertoday.research.live_contracts import (
     CensusCandidate,
     DetailSmokeTarget,
 )
+from app.sources.offertoday.research.partition_research import (
+    OFFERTODAY_PARTITION_CATALOG,
+    build_endpoint_probe_plan,
+    build_partition_probe_plan,
+)
 from app.sources.offertoday.research.smoke import build_runtime_smoke_condition
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseClassification,
@@ -1501,3 +1506,199 @@ def test_detail_result_conversion_rejects_same_ids_with_different_provenance() -
     )
 
     assert observation.identity_valid is False
+
+
+class PhaseCRuntime:
+    def __init__(self, factory, runtime_index: int) -> None:
+        self.factory = factory
+        self.runtime_index = runtime_index
+        self.browser_context_hash = hashlib.sha256(
+            f"phase-c-context-{runtime_index}".encode()
+        ).hexdigest()
+        self.requests: list[tuple[dict, str]] = []
+
+    async def __aenter__(self):
+        self.factory.entered.append(self)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.factory.exited.append(self)
+
+    async def fetch_listing_page(self, payload, *, listing_url=None):
+        assert isinstance(listing_url, str)
+        self.requests.append((deepcopy(payload), listing_url))
+        if self.factory.fail_runtime_index == self.runtime_index:
+            raise RuntimeError("secret Phase C runtime details")
+        category_id = payload["jobFunctionCodes"][0]
+        page = payload["page"]
+        rows = (
+            [
+                {
+                    "jobId": f"{category_id}-{self.runtime_index}",
+                    "encryptJobId": f"enc-{category_id}-{self.runtime_index}",
+                    "jobName": "Phase C Engineer",
+                    "companyName": "Example",
+                }
+            ]
+            if page == 1
+            else []
+        )
+        data = {
+            "pageSize": 10,
+            "hasMore": False,
+            "total": 999_999,
+            "resultList": rows,
+        }
+        if listing_url.endswith("/recommend/search/list"):
+            data.update(
+                {
+                    "sessionId": payload.get("sessionId")
+                    or f"phase-c-session-{category_id}",
+                    "supplePage": page,
+                    "suppleAmount": 0,
+                    "suppleType": 0,
+                    "suppleRcdList": [],
+                }
+            )
+        return OfferTodayListingTransportResult(
+            payload={"code": 0, "data": data},
+            browser_context_hash=self.browser_context_hash,
+            http_status=200,
+            response_url=listing_url,
+        )
+
+
+class PhaseCRuntimeFactory:
+    def __init__(self, *, fail_runtime_index: int | None = None) -> None:
+        self.fail_runtime_index = fail_runtime_index
+        self.created: list[PhaseCRuntime] = []
+        self.entered: list[PhaseCRuntime] = []
+        self.exited: list[PhaseCRuntime] = []
+
+    def __call__(self, *, headed: bool):
+        assert headed is False
+        runtime = PhaseCRuntime(self, len(self.created) + 1)
+        self.created.append(runtime)
+        return runtime
+
+
+async def _phase_c_no_sleep(_seconds: float) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_probe_separates_contracts_and_never_stages_product_data() -> (
+    None
+):
+    runtime_factory = PhaseCRuntimeFactory()
+    staging_sink = ResearchNoopListingStagingSink()
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_endpoint_probe(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        plan=build_endpoint_probe_plan(),
+        staging_sink=staging_sink,
+    )
+
+    assert execution.failure_reason is None
+    assert len(execution.conditions) == 2
+    assert execution.conditions[0].endpoint_contract_id == "recommend-search-list-v1"
+    assert execution.conditions[0].terminal_confirmed is True
+    assert execution.conditions[1].endpoint_contract_id == "recommend-list-envelope-v1"
+    assert execution.conditions[1].contract_verified is False
+    assert execution.conditions[1].terminal_confirmed is False
+    assert execution.accepted is False
+    assert len(runtime_factory.created) == len(runtime_factory.exited) == 2
+    assert [len(runtime.requests) for runtime in runtime_factory.created] == [2, 3]
+    assert all(
+        "rcdType" not in payload
+        for runtime in runtime_factory.created
+        for payload, _ in runtime.requests
+    )
+    assert staging_sink.stage_calls == 1
+    assert staging_sink.would_stage_rows == 1
+    assert len(staging_sink.staged_pages) == 1
+    assert staging_sink.deferred_conflicts == ()
+
+
+@pytest.mark.asyncio
+async def test_run_partition_probe_honors_explicit_catalog_order_and_exact_budget() -> (
+    None
+):
+    runtime_factory = PhaseCRuntimeFactory()
+    staging_sink = ResearchNoopListingStagingSink()
+    partition_ids = tuple(
+        partition.partition_id for partition in OFFERTODAY_PARTITION_CATALOG[:2]
+    )
+    plan = build_partition_probe_plan(
+        endpoint_contract_id="recommend-search-list-v1",
+        partition_ids=partition_ids,
+        max_pages_per_condition=3,
+    )
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_partition_probe(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        plan=plan,
+        staging_sink=staging_sink,
+    )
+
+    assert execution.failure_reason is None
+    assert execution.accepted is True
+    assert tuple(item.partition_id for item in execution.conditions) == partition_ids
+    assert execution.logical_requests == execution.physical_attempts == 4
+    assert execution.logical_requests <= plan.budget.listing_logical
+    assert execution.physical_attempts <= plan.budget.listing_attempt_max
+    assert len(runtime_factory.created) == len(runtime_factory.exited) == 2
+    assert staging_sink.stage_calls == 2
+    assert staging_sink.would_stage_rows == 2
+    assert len(staging_sink.staged_pages) == 2
+
+
+@pytest.mark.asyncio
+async def test_phase_c_probe_preserves_completed_prefix_and_type_only_failure() -> None:
+    runtime_factory = PhaseCRuntimeFactory(fail_runtime_index=2)
+    partition_ids = tuple(
+        partition.partition_id for partition in OFFERTODAY_PARTITION_CATALOG[:3]
+    )
+    plan = build_partition_probe_plan(
+        endpoint_contract_id="recommend-search-list-v1",
+        partition_ids=partition_ids,
+        max_pages_per_condition=3,
+    )
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_partition_probe(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        plan=plan,
+        staging_sink=ResearchNoopListingStagingSink(),
+    )
+
+    assert tuple(item.partition_id for item in execution.conditions) == partition_ids[:1]
+    assert execution.failure_reason == "unexpected_phase_c_probe_error:RuntimeError"
+    assert "secret" not in execution.failure_reason
+    assert len(runtime_factory.created) == len(runtime_factory.exited) == 2
+
+
+@pytest.mark.asyncio
+async def test_phase_c_probe_rejects_any_non_noop_staging_sink_before_runtime() -> None:
+    runtime_factory = PhaseCRuntimeFactory()
+
+    with pytest.raises(ValueError, match="ResearchNoopListingStagingSink"):
+        await OfferTodayResearchLiveService().run_endpoint_probe(
+            runtime_factory=runtime_factory,
+            observation_service=FakeObservationService(),
+            plan=build_endpoint_probe_plan(),
+            staging_sink=object(),
+        )
+
+    assert runtime_factory.created == []

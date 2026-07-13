@@ -429,6 +429,7 @@ async def test_run_listing_phase_preflights_once_and_uses_shared_default_it_poli
     )
     assert run_kwargs["session_mode"] == "headless"
     assert run_kwargs["conditions"][0].search_family == "it_category"
+    assert "request_policy" not in run_kwargs
 
 
 @pytest.mark.asyncio

@@ -92,6 +92,29 @@ from app.sources.offertoday.research.pagination_stage_gate import (  # noqa: E40
     PAGINATION_BAKEOFF_REQUEST_BUDGET,
     validate_pagination_comparison_parents,
 )
+from app.sources.offertoday.research.partition_research import (  # noqa: E402
+    ENDPOINT_PROBE_EXPERIMENT,
+    OFFERTODAY_PARTITION_CATALOG,
+    PARTITION_PROBE_EXPERIMENT,
+    EndpointProbePlan,
+    PhaseCProbeExecution,
+    build_partition_probe_plan,
+    canonical_phase_c_hash,
+)
+from app.sources.offertoday.research.partition_stage_gate import (  # noqa: E402
+    PhaseCArtifactReference,
+    PhaseCBaselineReference,
+    PhaseCNoWriteEvidence,
+    build_partition_comparison_artifact_payload,
+    build_partition_probe_parent_projection,
+    build_phase_c_probe_artifact_payload,
+    phase_c_artifact_events,
+    phase_c_artifact_reference,
+    phase_c_comparison_metadata,
+    phase_c_comparison_summary,
+    phase_c_probe_metadata,
+    phase_c_probe_summary,
+)
 from app.sources.offertoday.research.smoke import (  # noqa: E402
     runtime_smoke_request_budget,
 )
@@ -396,6 +419,100 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("backend/runtime/offertoday-research"),
     )
     freeze_discovery.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    probe_endpoints = commands.add_parser("probe-endpoints")
+    probe_endpoints.add_argument(
+        "--phase-b-comparison-artifact",
+        type=Path,
+        required=True,
+    )
+    probe_endpoints.add_argument(
+        "--endpoint-contract-id",
+        action="append",
+        required=True,
+    )
+    probe_endpoints.add_argument(
+        "--baseline-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    probe_endpoints.add_argument(
+        "--confirm-live-research",
+        action="store_true",
+        required=True,
+    )
+    probe_endpoints.add_argument("--run-id", default=None)
+    probe_endpoints.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    probe_endpoints.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    probe_partitions = commands.add_parser("probe-partitions")
+    probe_partitions.add_argument(
+        "--endpoint-probe-artifact",
+        type=Path,
+        required=True,
+    )
+    probe_partitions.add_argument(
+        "--endpoint-contract-id",
+        required=True,
+    )
+    probe_partitions.add_argument(
+        "--partition-id",
+        action="append",
+        required=True,
+    )
+    probe_partitions.add_argument(
+        "--max-pages-per-condition",
+        type=int,
+        choices=range(1, 11),
+        required=True,
+    )
+    probe_partitions.add_argument(
+        "--baseline-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    probe_partitions.add_argument(
+        "--confirm-live-research",
+        action="store_true",
+        required=True,
+    )
+    probe_partitions.add_argument("--run-id", default=None)
+    probe_partitions.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    probe_partitions.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    compare_partitions = commands.add_parser("compare-partitions")
+    compare_partitions.add_argument(
+        "--partition-probe-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    compare_partitions.add_argument("--run-id", default=None)
+    compare_partitions.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    compare_partitions.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parents[2],
@@ -2719,6 +2836,336 @@ def _pagination_bakeoff_command(
     return exit_code
 
 
+def _phase_b_comparison_reference(artifact_dir: Path) -> PhaseCArtifactReference:
+    artifact_dir = Path(artifact_dir).resolve(strict=True)
+    verification = verify_live_research_run(artifact_dir)
+    if (
+        not verification.valid
+        or verification.experiment != "cursor-pagination-comparison-v2"
+        or verification.run_id is None
+    ):
+        raise ValueError("Phase B comparison artifact failed strict verification")
+    manifest_path = artifact_dir / "manifest.json"
+    comparison_payload = json.loads(
+        (artifact_dir / "comparison.json").read_text(encoding="utf-8")
+    )
+    decision = comparison_payload.get("decision")
+    accepted = decision.get("accepted") if isinstance(decision, dict) else None
+    if type(accepted) is not bool:
+        raise ValueError("Phase B comparison decision is invalid")
+    return PhaseCArtifactReference(
+        experiment=verification.experiment,
+        run_id=verification.run_id,
+        manifest_hash=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        payload_hash=canonical_phase_c_hash(comparison_payload),
+        accepted=accepted,
+    )
+
+
+def _phase_c_baseline_reference(
+    gate: MatchingBaselineGate,
+) -> PhaseCBaselineReference:
+    return PhaseCBaselineReference(
+        artifact_hashes=(gate.first.manifest_hash, gate.second.manifest_hash),
+        run_ids=(gate.first.run_id, gate.second.run_id),
+        snapshot_hash=gate.first.snapshot_hash,
+        inventory_hash=gate.first.inventory_hash,
+    )
+
+
+def _phase_c_probe_plan(args):
+    if args.command == "probe-endpoints":
+        return EndpointProbePlan(contract_ids=tuple(args.endpoint_contract_id))
+    return build_partition_probe_plan(
+        endpoint_contract_id=args.endpoint_contract_id,
+        partition_ids=tuple(args.partition_id),
+        max_pages_per_condition=args.max_pages_per_condition,
+    )
+
+
+def _phase_c_probe_parent(args) -> PhaseCArtifactReference:
+    if args.command == "probe-endpoints":
+        return _phase_b_comparison_reference(args.phase_b_comparison_artifact)
+    parent = phase_c_artifact_reference(args.endpoint_probe_artifact)
+    if parent.experiment != ENDPOINT_PROBE_EXPERIMENT:
+        raise ValueError("probe-partitions requires an endpoint probe parent")
+    return parent
+
+
+def _phase_c_probe_command(
+    args,
+    *,
+    session_factory,
+    repository,
+    runtime_factory,
+    service_factory,
+    observation_service_factory,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    if len(args.baseline_artifact) != 2:
+        _print_json(
+            {"error": f"{args.command} requires exactly two baseline artifacts"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        plan = _phase_c_probe_plan(args)
+    except (KeyError, TypeError, ValueError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_USAGE
+    try:
+        parent = _phase_c_probe_parent(args)
+        baseline_gate = require_matching_baselines(
+            args.baseline_artifact[0],
+            args.baseline_artifact[1],
+        )
+        baseline = _phase_c_baseline_reference(baseline_gate)
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    research_repository = repository or OfferTodayResearchRepository()
+    db = None
+    artifact_dir = None
+    try:
+        db = session_factory()
+        start_snapshot, start_inventory = _capture_snapshot(
+            research_repository,
+            db,
+        )
+        _require_current_baseline(baseline_gate, start_snapshot, start_inventory)
+        observation_service = observation_service_factory(db)
+        observation_service.create_run(
+            ResearchMetadata(
+                run_id=run_id,
+                experiment=(
+                    ENDPOINT_PROBE_EXPERIMENT
+                    if args.command == "probe-endpoints"
+                    else PARTITION_PROBE_EXPERIMENT
+                ),
+                variant="phase-c-research-only-v1",
+                planner_version=planner_version,
+                plan=3,
+                parent_artifact_hash=parent.manifest_hash,
+                request_budget=plan.budget.to_payload(),
+            ),
+            run_start_inventory=start_inventory,
+        )
+        staging_sink = ResearchNoopListingStagingSink()
+        service = service_factory()
+        if args.command == "probe-endpoints":
+            execution: PhaseCProbeExecution = asyncio.run(
+                service.run_endpoint_probe(
+                    runtime_factory=runtime_factory,
+                    observation_service=observation_service,
+                    plan=plan,
+                    staging_sink=staging_sink,
+                )
+            )
+            file_name = "endpoint-probe.json"
+        else:
+            execution = asyncio.run(
+                service.run_partition_probe(
+                    runtime_factory=runtime_factory,
+                    observation_service=observation_service,
+                    plan=plan,
+                    staging_sink=staging_sink,
+                )
+            )
+            file_name = "partition-probe.json"
+        end_snapshot, end_inventory = _capture_snapshot(
+            research_repository,
+            db,
+        )
+        no_write = PhaseCNoWriteEvidence(
+            start_snapshot_hash=start_snapshot.data_hash,
+            end_snapshot_hash=end_snapshot.data_hash,
+            start_product_data_hash=start_snapshot.product_data_hash,
+            end_product_data_hash=end_snapshot.product_data_hash,
+            start_inventory_hash=start_inventory.data_hash,
+            end_inventory_hash=end_inventory.data_hash,
+            stage_calls=staging_sink.stage_calls,
+            would_stage_rows=staging_sink.would_stage_rows,
+        )
+        payload = build_phase_c_probe_artifact_payload(
+            execution=execution,
+            parent=parent,
+            baseline=baseline,
+            no_write=no_write,
+        )
+        summary = phase_c_probe_summary(payload)
+        terminal_status = summary["status"]
+        observation_service.finish_run(
+            status=terminal_status,
+            summary=summary,
+            error_message=(
+                None
+                if execution.failure_reason is None
+                else "phase_c_probe_stopped"
+            ),
+        )
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": args.command,
+                "session_mode": plan.to_payload()["session_mode"],
+                "crawl_job_status": terminal_status,
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=phase_c_probe_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=phase_c_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={file_name: payload},
+        )
+        generic_check = artifact_verifier(artifact_dir)
+        strict_check = verify_live_research_run(artifact_dir)
+        if not generic_check.valid or not strict_check.valid:
+            _print_json(
+                {
+                    "error": "Phase C probe artifact verification failed",
+                    "strict_issues": list(strict_check.issues),
+                },
+                stream=sys.stderr,
+            )
+            return EXIT_EVIDENCE_FAILURE
+    except (OSError, SQLAlchemyError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    finally:
+        if db is not None:
+            db.close()
+
+    exit_code = (
+        EXIT_HARD_STOP
+        if execution.failure_reason is not None
+        else (EXIT_OK if execution.accepted else EXIT_INCOMPLETE)
+    )
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "experiment": execution.experiment,
+            "accepted": execution.accepted,
+            "failure_reason": execution.failure_reason,
+            "logical_listing_requests": execution.logical_requests,
+            "physical_listing_attempts": execution.physical_attempts,
+            "candidate_frozen": False,
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
+def _compare_partitions_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    try:
+        parent_inputs = []
+        for artifact_path in args.partition_probe_artifact:
+            artifact_dir = Path(artifact_path).resolve(strict=True)
+            reference = phase_c_artifact_reference(artifact_dir)
+            if reference.experiment != PARTITION_PROBE_EXPERIMENT:
+                raise ValueError(
+                    "compare-partitions requires partition probe artifacts"
+                )
+            probe_payload = json.loads(
+                (artifact_dir / "partition-probe.json").read_text(encoding="utf-8")
+            )
+            parent_inputs.append(
+                build_partition_probe_parent_projection(
+                    reference=reference,
+                    probe_payload=probe_payload,
+                )
+            )
+        partition_order = {
+            partition.partition_id: index
+            for index, partition in enumerate(OFFERTODAY_PARTITION_CATALOG)
+        }
+        parent_inputs.sort(
+            key=lambda item: partition_order[item[1].conditions[0].partition_id]
+        )
+        payload = build_partition_comparison_artifact_payload(parent_inputs)
+        summary = phase_c_comparison_summary(payload)
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "compare-partitions",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=phase_c_comparison_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=phase_c_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={"partition-comparison.json": payload},
+        )
+        generic_check = artifact_verifier(artifact_dir)
+        strict_check = verify_live_research_run(artifact_dir)
+        if not generic_check.valid or not strict_check.valid:
+            _print_json(
+                {
+                    "error": "partition comparison artifact verification failed",
+                    "strict_issues": list(strict_check.issues),
+                },
+                stream=sys.stderr,
+            )
+            return EXIT_EVIDENCE_FAILURE
+    except (
+        IndexError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    exit_code = EXIT_OK if summary["accepted"] else EXIT_INCOMPLETE
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "accepted": summary["accepted"],
+            "retained_partition_ids": summary["retained_partition_ids"],
+            "rejected_partition_ids": summary["rejected_partition_ids"],
+            "candidate_frozen": False,
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -2738,6 +3185,25 @@ def main(
         result = verify_live_research_run(args.artifact)
         _print_json(result.to_payload())
         return EXIT_OK if result.valid else EXIT_EVIDENCE_FAILURE
+    if args.command in {"probe-endpoints", "probe-partitions"}:
+        return _phase_c_probe_command(
+            args,
+            session_factory=session_factory,
+            repository=repository,
+            runtime_factory=runtime_factory,
+            service_factory=service_factory,
+            observation_service_factory=observation_service_factory,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command == "compare-partitions":
+        return _compare_partitions_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
     if args.command == "pagination-bakeoff":
         return _pagination_bakeoff_command(
             args,
