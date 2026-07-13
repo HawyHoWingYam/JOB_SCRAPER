@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import fields
+import hashlib
 import importlib
 import json
+from pathlib import Path
 import sys
 import types
 from types import SimpleNamespace
@@ -19,6 +21,9 @@ from app.sources.offertoday.constants import (
     OFFERTODAY_LISTING_SEARCH_URL,
 )
 from app.sources.offertoday.detail_identity import OfferTodayIdentityError
+from app.sources.offertoday.listing_contract import (
+    OfferTodayBrowserContextLostError,
+)
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseKind,
     OfferTodayTransportError,
@@ -93,6 +98,7 @@ class _FakeChromium:
         self.browser = browser
         self.connect_calls: list[str] = []
         self.launch_calls: list[dict[str, object]] = []
+        self.fail_launch_by_channel: dict[str | None, Exception] = {}
 
     async def connect_over_cdp(self, endpoint: str) -> _FakeBrowser:
         self.connect_calls.append(endpoint)
@@ -100,6 +106,9 @@ class _FakeChromium:
 
     async def launch_persistent_context(self, user_data_dir: str, **kwargs) -> _FakeContext:
         self.launch_calls.append({"user_data_dir": user_data_dir, **kwargs})
+        channel = kwargs.get("channel")
+        if channel in self.fail_launch_by_channel:
+            raise self.fail_launch_by_channel[channel]
         return self.browser.contexts[0]
 
 
@@ -254,6 +263,92 @@ async def test_reuse_open_browser_attaches_to_live_browser(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_headed_fresh_profile_retries_missing_msedge_with_chromium(monkeypatch):
+    runtime_module = importlib.import_module("app.scraper.offertoday_browser_runtime")
+    runtime_cls = getattr(runtime_module, "OfferTodayBrowserRuntime")
+
+    page = _FakePage()
+    context = _FakeContext(page)
+    browser = _FakeBrowser(context)
+    chromium = _FakeChromium(browser=browser)
+    chromium.fail_launch_by_channel["msedge"] = RuntimeError(
+        "BrowserType.launch_persistent_context: Chromium distribution 'msedge' is not found at /usr/bin/msedge"
+    )
+    _install_fake_async_playwright(monkeypatch, chromium)
+
+    expected_user_data_dir = str(Path("C:/tmp/offertoday-profile").resolve())
+
+    runtime = runtime_cls(
+        resume_strategy="fresh_profile",
+        user_data_dir="C:/tmp/offertoday-profile",
+        browser_channel="msedge",
+        navigation_timeout_ms=45_000,
+    )
+
+    await runtime.start()
+    try:
+        assert chromium.launch_calls == [
+            {
+                "user_data_dir": expected_user_data_dir,
+                "headless": False,
+                "channel": "msedge",
+            },
+            {
+                "user_data_dir": expected_user_data_dir,
+                "headless": False,
+                "channel": "chromium",
+            },
+        ]
+        assert context.default_navigation_timeout_ms == 45_000
+        assert page.goto_calls == ["https://www.offertoday.com/hk/search"]
+    finally:
+        await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_headed_fresh_profile_reports_display_unavailable_as_manual_action(monkeypatch):
+    runtime_module = importlib.import_module("app.scraper.offertoday_browser_runtime")
+    runtime_cls = getattr(runtime_module, "OfferTodayBrowserRuntime")
+
+    page = _FakePage()
+    context = _FakeContext(page)
+    browser = _FakeBrowser(context)
+    chromium = _FakeChromium(browser=browser)
+    fake_playwright = _install_fake_async_playwright(monkeypatch, chromium)
+
+    async def fake_launch(*args, **kwargs):
+        raise RuntimeError(
+            "Unable to launch headed browser with channel 'chromium': "
+            "BrowserType.launch_persistent_context: Target page, context or browser has been closed\n"
+            "Looks like you launched a headed browser without having a XServer running.\n"
+            "Missing X server or $DISPLAY"
+        )
+
+    monkeypatch.setattr(
+        runtime_module,
+        "launch_persistent_context_with_fallback_async",
+        fake_launch,
+    )
+
+    runtime = runtime_cls(
+        resume_strategy="fresh_profile",
+        user_data_dir="C:/tmp/offertoday-profile",
+        browser_channel="chromium",
+    )
+
+    with pytest.raises(ManualActionRequiredError) as exc_info:
+        await runtime.start()
+
+    assert exc_info.value.stage == "headed_display_unavailable"
+    assert "X server" in str(exc_info.value)
+    assert fake_playwright.stopped is True
+    assert runtime._playwright is None
+    assert runtime._context is None
+    assert runtime._page is None
+    assert runtime._runtime_started is False
+
+
+@pytest.mark.asyncio
 async def test_fetch_listing_json_delegates_to_allowed_endpoint(monkeypatch):
     runtime_module = importlib.import_module("app.scraper.offertoday_browser_runtime")
     runtime = runtime_module.OfferTodayBrowserRuntime()
@@ -276,6 +371,68 @@ async def test_fetch_listing_json_delegates_to_allowed_endpoint(monkeypatch):
         (OFFERTODAY_LISTING_SEARCH_URL, "POST", payload),
         (OFFERTODAY_LISTING_BROWSE_URL, "POST", payload),
     ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_listing_page_returns_typed_context_evidence_without_cursor_state(
+    monkeypatch,
+):
+    runtime_module = importlib.import_module("app.scraper.offertoday_browser_runtime")
+    runtime = runtime_module.OfferTodayBrowserRuntime()
+    runtime._context_id = "opaque-runtime-context"
+    response = {"code": 0, "data": {"resultList": []}}
+
+    async def fake_fetch_json_response(url, *, method, payload=None):
+        assert url == OFFERTODAY_LISTING_SEARCH_URL
+        assert method == "POST"
+        return runtime_module._OfferTodayHttpJsonResponse(
+            payload=response,
+            http_status=200,
+            response_url=url,
+        )
+
+    monkeypatch.setattr(runtime, "_fetch_json_response", fake_fetch_json_response)
+
+    result = await runtime.fetch_listing_page(
+        {"keyword": "python", "page": 1},
+        listing_url=OFFERTODAY_LISTING_SEARCH_URL,
+    )
+
+    assert result.payload == response
+    assert result.browser_context_hash == hashlib.sha256(
+        b"opaque-runtime-context"
+    ).hexdigest()
+    assert result.http_status == 200
+    assert result.response_url == OFFERTODAY_LISTING_SEARCH_URL
+    assert not hasattr(runtime, "cursor")
+    assert not hasattr(runtime, "session_id")
+
+
+@pytest.mark.asyncio
+async def test_fetch_listing_page_classifies_only_known_browser_context_loss(
+    monkeypatch,
+):
+    runtime_module = importlib.import_module("app.scraper.offertoday_browser_runtime")
+    runtime = runtime_module.OfferTodayBrowserRuntime()
+
+    async def lost_fetch(_url, *, method, payload=None):
+        raise RuntimeError(
+            "Target page, context or browser has been closed: private-profile-path"
+        )
+
+    monkeypatch.setattr(runtime, "_fetch_json_response", lost_fetch)
+
+    with pytest.raises(OfferTodayBrowserContextLostError) as exc_info:
+        await runtime.fetch_listing_page({"page": 2, "pageSize": 10})
+
+    assert "private-profile-path" not in str(exc_info.value)
+
+    async def programmer_error(_url, *, method, payload=None):
+        raise RuntimeError("programmer error")
+
+    monkeypatch.setattr(runtime, "_fetch_json_response", programmer_error)
+    with pytest.raises(RuntimeError, match="programmer error"):
+        await runtime.fetch_listing_page({"page": 1, "pageSize": 10})
 
 
 @pytest.mark.asyncio

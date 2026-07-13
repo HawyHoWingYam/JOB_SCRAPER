@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+import app.sources.offertoday.research.stage_gate as stage_gate
 
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailIdentity,
@@ -16,6 +17,7 @@ from app.sources.offertoday.research.artifacts import (
     export_research_artifact,
 )
 from app.sources.offertoday.research.stage_gate import (
+    LiveRunVerification,
     load_baseline_artifact,
     require_matching_baselines,
     verify_live_research_run,
@@ -72,6 +74,72 @@ def _provenance() -> ResearchProvenance:
         excluded_tracked_file_hashes={},
         excluded_untracked_file_hashes={},
     )
+
+
+@pytest.mark.parametrize(
+    ("experiment", "verifier_name", "expected_kwargs"),
+    (
+        ("census-candidate", "_verify_candidate_research_run", {}),
+        ("listing-calibration", "_verify_calibration_research_run", {}),
+        ("category-pilot", "_verify_pilot_research_run", {}),
+        ("full-census", "_verify_census_research_run", {}),
+        (
+            "fixed-condition-repeat",
+            "_verify_census_research_run",
+            {"fixed_repeat": True},
+        ),
+        (
+            "census-stability-comparison",
+            "_verify_comparison_research_run",
+            {},
+        ),
+    ),
+)
+def test_legacy_experiment_names_route_to_exact_frozen_verifiers(
+    tmp_path,
+    monkeypatch,
+    experiment: str,
+    verifier_name: str,
+    expected_kwargs: dict,
+) -> None:
+    artifact = export_research_artifact(
+        root=tmp_path,
+        run_id=RUN_ID_1,
+        metadata={"experiment": experiment},
+        events=[],
+        provenance=_provenance(),
+    )
+    calls = []
+    expected = stage_gate.LiveRunVerification(
+        valid=True,
+        issues=(),
+        experiment=experiment,
+        run_id=RUN_ID_1,
+    )
+
+    def verifier(path, **kwargs):
+        calls.append((Path(path), kwargs))
+        return expected
+
+    monkeypatch.setattr(stage_gate, verifier_name, verifier)
+
+    assert verify_live_research_run(artifact) == expected
+    assert calls == [(artifact, expected_kwargs)]
+
+
+def test_unknown_cursor_experiment_version_fails_closed(tmp_path) -> None:
+    artifact = export_research_artifact(
+        root=tmp_path,
+        run_id=RUN_ID_1,
+        metadata={"experiment": "cursor-pagination-bakeoff-v3"},
+        events=[],
+        provenance=_provenance(),
+    )
+
+    result = verify_live_research_run(artifact)
+
+    assert result.valid is False
+    assert "unsupported_live_experiment" in result.issues
 
 
 def _baseline_event(
@@ -139,6 +207,36 @@ def test_matching_baselines_require_distinct_runs_with_identical_evidence(
     assert (
         gate.parent_artifact_hash
         == hashlib.sha256((second_dir / "manifest.json").read_bytes()).hexdigest()
+    )
+
+
+def test_verify_live_run_accepts_foundation_baseline(tmp_path) -> None:
+    artifact_dir = _export(tmp_path, run_id=RUN_ID_1)
+
+    result = verify_live_research_run(artifact_dir)
+
+    assert result == LiveRunVerification(
+        valid=True,
+        issues=(),
+        experiment="foundation-baseline",
+        run_id=RUN_ID_1,
+    )
+
+
+def test_verify_live_run_rejects_invalid_foundation_baseline(tmp_path) -> None:
+    artifact_dir = _export(
+        tmp_path,
+        run_id=RUN_ID_1,
+        metadata={"experiment": "foundation-baseline", "data_hash": "f" * 64},
+    )
+
+    result = verify_live_research_run(artifact_dir)
+
+    assert result == LiveRunVerification(
+        valid=False,
+        issues=("invalid_foundation_baseline",),
+        experiment="foundation-baseline",
+        run_id=RUN_ID_1,
     )
 
 

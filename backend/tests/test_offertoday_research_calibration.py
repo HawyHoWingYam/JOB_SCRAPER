@@ -26,7 +26,10 @@ from app.sources.offertoday.research.calibration import (
     select_calibration_variants,
     summarize_calibration_variants,
 )
-from app.sources.offertoday.research.live_contracts import CensusCandidate
+from app.sources.offertoday.research.live_contracts import (
+    CensusCandidate,
+    DiscoveryCandidateV2,
+)
 from app.sources.offertoday.response_policy import OfferTodayResponseKind
 
 
@@ -195,6 +198,30 @@ def _candidate(**overrides) -> CensusCandidate:
     return CensusCandidate(**values)
 
 
+def _v2_candidate(**overrides) -> DiscoveryCandidateV2:
+    values = {
+        "candidate_version": 2,
+        "endpoint": "search",
+        "rcd_type": None,
+        "category_ids": (118000, 112000, 127000),
+        "pagination_mode": "response-cursor",
+        "requested_page_size": 10,
+        "browser_lifecycle": "condition-local-runtime",
+        "terminal_policy": "cursor-terminal-empty-confirmation-v1",
+        "max_pages_per_condition": 10,
+        "require_empty_confirmation": True,
+        "max_attempts_per_page": 2,
+        "retry_delays_seconds": (5.0,),
+        "page_delay_range_seconds": (3.0, 5.0),
+        "session_mode": "fresh-headless",
+        "fixed_repeat_category_ids": (118000, 112000, 127000),
+        "source_artifact_hash": "b" * 64,
+        "comparison_artifact_hash": "c" * 64,
+    }
+    values.update(overrides)
+    return DiscoveryCandidateV2(**values)
+
+
 def test_census_candidate_hashes_sorted_compact_canonical_json() -> None:
     candidate = _candidate()
     canonical_payload = {
@@ -226,6 +253,65 @@ def test_census_candidate_hashes_sorted_compact_canonical_json() -> None:
         **canonical_payload,
         "candidate_hash": expected,
     }
+
+
+def test_v2_candidate_is_canonically_hashed_and_round_trips() -> None:
+    candidate = _v2_candidate()
+    payload = candidate.to_payload()
+
+    assert payload["candidate_version"] == 2
+    assert payload["candidate_hash"] == candidate.candidate_hash
+    assert DiscoveryCandidateV2.from_payload(payload) == candidate
+
+
+def test_v1_and_v2_candidate_payloads_fail_closed_across_version_boundary() -> None:
+    with pytest.raises(ValueError, match="candidate payload fields"):
+        CensusCandidate.from_payload(_v2_candidate().to_payload())
+    with pytest.raises(ValueError, match="v2 candidate payload fields"):
+        DiscoveryCandidateV2.from_payload(_candidate().to_payload())
+
+
+def test_v2_candidate_rejects_tampered_hash() -> None:
+    payload = _v2_candidate().to_payload()
+    payload["candidate_hash"] = "f" * 64
+
+    with pytest.raises(ValueError, match="candidate_hash"):
+        DiscoveryCandidateV2.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "category_ids",
+        "retry_delays_seconds",
+        "page_delay_range_seconds",
+        "fixed_repeat_category_ids",
+    ),
+)
+def test_v2_candidate_decoder_rejects_non_list_collection_fields(
+    field_name: str,
+) -> None:
+    payload = _v2_candidate().to_payload()
+    payload[field_name] = None
+
+    with pytest.raises(ValueError, match=field_name):
+        DiscoveryCandidateV2.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("retry_delays_seconds", (float("nan"),)),
+        ("retry_delays_seconds", (float("inf"),)),
+        ("page_delay_range_seconds", (3.0, float("inf"))),
+    ),
+)
+def test_v2_candidate_rejects_nonfinite_pacing(
+    field_name: str,
+    value: tuple[float, ...],
+) -> None:
+    with pytest.raises(ValueError, match=field_name):
+        _v2_candidate(**{field_name: value})
 
 
 @pytest.mark.parametrize(

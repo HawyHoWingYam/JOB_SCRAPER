@@ -21,6 +21,9 @@ from app.sources.offertoday.research.calibration import (
     build_pilot_conditions,
 )
 from app.sources.offertoday.research.live_contracts import CensusCandidate
+from app.sources.offertoday.research.pagination_stage_gate import (
+    verify_pagination_artifact,
+)
 from app.sources.offertoday.research.smoke import (
     SMOKE_LISTING_REQUEST_LIMIT,
     runtime_smoke_request_budget,
@@ -212,6 +215,29 @@ def require_matching_baselines(
     if first.counts != second.counts:
         raise ValueError("baseline count evidence does not match")
     return MatchingBaselineGate(first=first, second=second)
+
+
+def _verify_foundation_baseline(
+    artifact_dir: Path,
+    *,
+    run_id: str | None,
+) -> LiveRunVerification:
+    try:
+        evidence = load_baseline_artifact(artifact_dir)
+    except (OSError, ValueError):
+        return LiveRunVerification(
+            valid=False,
+            issues=("invalid_foundation_baseline",),
+            experiment="foundation-baseline",
+            run_id=run_id,
+        )
+    issues = () if evidence.run_id == run_id else ("baseline_run_id_mismatch",)
+    return LiveRunVerification(
+        valid=not issues,
+        issues=issues,
+        experiment="foundation-baseline",
+        run_id=run_id,
+    )
 
 
 _LEGACY_RUNTIME_SMOKE_REQUEST_BUDGET = {"listing": 1, "detail": 20}
@@ -2668,6 +2694,20 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
     experiment = experiment_value if isinstance(experiment_value, str) else None
     run_id_value = manifest.get("run_id")
     run_id = run_id_value if isinstance(run_id_value, str) else None
+    if experiment == "foundation-baseline":
+        return _verify_foundation_baseline(artifact_dir, run_id=run_id)
+    if experiment in {
+        "cursor-pagination-bakeoff-v2",
+        "cursor-pagination-comparison-v2",
+        "discovery-candidate-v2",
+    }:
+        result = verify_pagination_artifact(artifact_dir)
+        return LiveRunVerification(
+            valid=result.valid,
+            issues=result.issues,
+            experiment=result.experiment,
+            run_id=result.run_id,
+        )
     if experiment == "census-candidate":
         return _verify_candidate_research_run(artifact_dir)
     if experiment == "listing-calibration":

@@ -21,6 +21,12 @@ from app.sources.offertoday.listing_runner import (
     OfferTodayIdentityPair,
     OfferTodayListingCondition,
     OfferTodayListingRunner,
+    listing_observation_to_payload,
+)
+from app.sources.offertoday.listing_contract import (
+    OfferTodayBrowserContextLostError,
+    OfferTodayListingRequestPolicy,
+    OfferTodayListingTransportResult,
 )
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseKind,
@@ -103,6 +109,44 @@ def _listing_response(
     }
 
 
+def _cursor_response(
+    rows: list[dict[str, Any]],
+    *,
+    session_id: str = "session-1",
+    page_size: int = 10,
+    has_more: bool = True,
+    supplemental_rows: list[dict[str, Any]] | None = None,
+    supple_page: int = 0,
+    supple_amount: int = 0,
+    supple_type: int = 0,
+) -> dict[str, Any]:
+    response = _listing_response(rows, has_more=has_more, total=len(rows))
+    response["data"].update(
+        {
+            "pageSize": page_size,
+            "sessionId": session_id,
+            "supplePage": supple_page,
+            "suppleAmount": supple_amount,
+            "suppleType": supple_type,
+            "suppleRcdList": list(supplemental_rows or []),
+        }
+    )
+    return response
+
+
+def _request_policy(**overrides) -> OfferTodayListingRequestPolicy:
+    values = {
+        "protocol_version": 2,
+        "pagination_mode": "response-cursor",
+        "requested_page_size": 10,
+        "browser_lifecycle": "condition-local-runtime",
+        "variant_id": "ui-cursor-same-browser",
+        "repeat_index": 1,
+    }
+    values.update(overrides)
+    return OfferTodayListingRequestPolicy(**values)
+
+
 class ScriptedTransport:
     def __init__(self, *steps: object) -> None:
         self.steps = list(steps)
@@ -121,6 +165,41 @@ class ScriptedTransport:
         if isinstance(step, BaseException):
             raise step
         return deepcopy(step)
+
+
+class RestartableScriptedTransport:
+    def __init__(self, *steps: object) -> None:
+        self.steps = list(steps)
+        self.requests: list[dict[str, Any]] = []
+        self.restart_count = 0
+        self._context_number = 1
+
+    @property
+    def browser_context_hash(self) -> str:
+        return hashlib.sha256(
+            f"restartable-context-{self._context_number}".encode()
+        ).hexdigest()
+
+    async def fetch_listing_page(
+        self,
+        payload: dict[str, Any],
+        *,
+        listing_url: str | None = None,
+    ) -> OfferTodayListingTransportResult:
+        self.requests.append(deepcopy(payload))
+        if not self.steps:
+            raise AssertionError("restartable transport exhausted")
+        step = self.steps.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return OfferTodayListingTransportResult(
+            payload=deepcopy(step),
+            browser_context_hash=self.browser_context_hash,
+        )
+
+    async def restart_after_browser_loss(self) -> None:
+        self.restart_count += 1
+        self._context_number += 1
 
 
 class MemoryObservationSink:
@@ -207,6 +286,7 @@ async def _run(
     max_attempts: int = 3,
     unique_job_cap: int | None = None,
     require_empty_confirmation: bool = True,
+    request_policy: OfferTodayListingRequestPolicy | None = None,
 ):
     observation_sink = MemoryObservationSink()
     staging_sink = MemoryStagingSink()
@@ -231,6 +311,7 @@ async def _run(
         observation_sink=observation_sink,
         staging_sink=staging_sink,
         session_mode="saved-session",
+        request_policy=request_policy,
     )
     return result, observation_sink, staging_sink, sleep
 
@@ -1578,6 +1659,347 @@ async def test_reported_total_and_has_more_require_real_json_scalar_types() -> N
     assert observations.observations[0].reported_total is None
     assert observations.observations[0].has_more is None
     assert result.is_complete is True
+
+
+@pytest.mark.asyncio
+async def test_cursor_mode_carries_exact_prior_response_cursor_to_next_page() -> None:
+    transport = ScriptedTransport(
+        _cursor_response(
+            [_listing_row("j1", "e1")],
+            supple_page=1,
+            supple_amount=2,
+            supple_type=3,
+        ),
+        _cursor_response(
+            [],
+            has_more=False,
+            supple_page=4,
+            supple_amount=5,
+            supple_type=6,
+        ),
+        _cursor_response(
+            [],
+            has_more=False,
+            supple_page=7,
+            supple_amount=8,
+            supple_type=9,
+        ),
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=3,
+        request_policy=_request_policy(),
+    )
+
+    first, second, third = [request[0] for request in transport.requests]
+    assert "sessionId" not in first
+    assert first["pageSize"] == 10
+    assert {
+        key: second[key]
+        for key in ("sessionId", "supplePage", "suppleAmount", "suppleType")
+    } == {
+        "sessionId": "session-1",
+        "supplePage": 1,
+        "suppleAmount": 2,
+        "suppleType": 3,
+    }
+    assert {
+        key: third[key]
+        for key in ("sessionId", "supplePage", "suppleAmount", "suppleType")
+    } == {
+        "sessionId": "session-1",
+        "supplePage": 4,
+        "suppleAmount": 5,
+        "suppleType": 6,
+    }
+    assert result.is_complete is True
+    assert [item.cursor_evidence.session_continuity for item in observations.observations] == [
+        "initial",
+        "continued",
+        "continued",
+    ]
+    assert [item["page"] for item in staging.staged_pages] == [1]
+
+
+@pytest.mark.asyncio
+async def test_cursor_isolation_resets_page_one_for_each_condition() -> None:
+    conditions = [_condition(keyword="one"), _condition(keyword="two")]
+    transport = ScriptedTransport(
+        _cursor_response([_listing_row("j1", "e1")], session_id="session-one"),
+        _cursor_response([], session_id="session-one", has_more=False),
+        _cursor_response([_listing_row("j2", "e2")], session_id="session-two"),
+        _cursor_response([], session_id="session-two", has_more=False),
+    )
+
+    result, _observations, _staging, _sleep = await _run(
+        transport,
+        conditions=conditions,
+        max_pages=2,
+        require_empty_confirmation=False,
+        request_policy=_request_policy(),
+    )
+
+    requests = [request[0] for request in transport.requests]
+    assert "sessionId" not in requests[0]
+    assert requests[1]["sessionId"] == "session-one"
+    assert "sessionId" not in requests[2]
+    assert requests[3]["sessionId"] == "session-two"
+    assert result.is_complete is True
+
+
+@pytest.mark.asyncio
+async def test_cursor_retry_replays_same_input_and_logical_request() -> None:
+    transport = ScriptedTransport(
+        _cursor_response([_listing_row("j1", "e1")]),
+        ConnectionError("transient"),
+        _cursor_response([], has_more=False),
+    )
+
+    result, observations, _staging, _sleep = await _run(
+        transport,
+        max_pages=2,
+        max_attempts=2,
+        require_empty_confirmation=False,
+        request_policy=_request_policy(),
+    )
+
+    page_two_requests = [request[0] for request in transport.requests[1:]]
+    assert page_two_requests[0] == page_two_requests[1]
+    retry_observation, success_observation = observations.observations[1:]
+    assert (
+        retry_observation.cursor_evidence.logical_request_id
+        == success_observation.cursor_evidence.logical_request_id
+    )
+    assert (
+        retry_observation.cursor_evidence.physical_attempt_id
+        != success_observation.cursor_evidence.physical_attempt_id
+    )
+    assert result.is_complete is True
+
+
+@pytest.mark.asyncio
+async def test_browser_context_loss_restarts_condition_at_page_one_and_dedupes() -> None:
+    transport = RestartableScriptedTransport(
+        _cursor_response(
+            [_listing_row("j1", "e1")],
+            session_id="session-before-loss",
+            has_more=False,
+        ),
+        OfferTodayBrowserContextLostError("browser context lost"),
+        _cursor_response(
+            [_listing_row("j1", "e1")],
+            session_id="session-after-loss",
+            has_more=False,
+        ),
+        _cursor_response(
+            [],
+            session_id="session-after-loss",
+            has_more=False,
+        ),
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=5,
+        max_attempts=2,
+        request_policy=_request_policy(),
+    )
+
+    assert [request["page"] for request in transport.requests] == [1, 2, 1, 2]
+    assert transport.restart_count == 1
+    assert result.is_complete is True
+    assert result.accepted_job_ids == ("j1",)
+    assert [item["page"] for item in staging.staged_pages] == [1]
+    assert [
+        item.cursor_evidence.condition_restart_index
+        for item in observations.observations
+    ] == [0, 0, 1, 1]
+    assert observations.observations[1].retry_reason == (
+        "browser_context_lost_restart"
+    )
+    assert (
+        observations.observations[0].cursor_evidence.condition_execution_id
+        != observations.observations[2].cursor_evidence.condition_execution_id
+    )
+    assert len(
+        {
+            item.cursor_evidence.physical_attempt_id
+            for item in observations.observations
+        }
+    ) == 4
+
+
+@pytest.mark.asyncio
+async def test_cursor_contract_failure_never_flushes_condition_staging() -> None:
+    transport = ScriptedTransport(
+        _cursor_response([_listing_row("j1", "e1")]),
+        _cursor_response([], session_id="rolled-over", has_more=False),
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=2,
+        require_empty_confirmation=False,
+        request_policy=_request_policy(),
+    )
+
+    assert result.stop_reason == "cursor_contract_violation"
+    assert result.is_complete is False
+    assert observations.observations[-1].cursor_evidence.contract_error == "session_rollover"
+    assert staging.staged_pages == []
+    assert result.accepted_job_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_cursor_mode_rejects_missing_page_one_cursor_without_staging() -> None:
+    transport = ScriptedTransport(
+        _listing_response([_listing_row("j1", "e1")], has_more=True)
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=1,
+        request_policy=_request_policy(),
+    )
+
+    assert result.stop_reason == "cursor_contract_violation"
+    assert observations.observations[0].cursor_evidence.contract_error == "incomplete_cursor"
+    assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_cursor_mode_rejects_effective_page_size_drift() -> None:
+    transport = ScriptedTransport(
+        _cursor_response([_listing_row("j1", "e1")], page_size=10),
+        _cursor_response([], page_size=9, has_more=False),
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=2,
+        require_empty_confirmation=False,
+        request_policy=_request_policy(),
+    )
+
+    assert result.stop_reason == "cursor_contract_violation"
+    assert observations.observations[-1].cursor_evidence.contract_error == "page_size_drift"
+    assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_supplemental_rows_are_evidence_only_and_not_product_staged() -> None:
+    transport = ScriptedTransport(
+        _cursor_response(
+            [_listing_row("j-result", "e-result")],
+            supplemental_rows=[_listing_row("j-supp", "e-supp")],
+            has_more=False,
+        )
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=1,
+        require_empty_confirmation=False,
+        request_policy=_request_policy(),
+    )
+
+    evidence = observations.observations[0].cursor_evidence
+    assert evidence.result_job_ids == ("j-result",)
+    assert evidence.supplemental_job_ids == ("j-supp",)
+    assert result.accepted_job_ids == ("j-result",)
+    assert [row["job_id"] for row in staging.staged_pages[0]["rows"]] == [
+        "j-result"
+    ]
+    assert [item.job_id for item in evidence.result_identity_pairs] == [
+        "j-result"
+    ]
+    assert [item.job_id for item in evidence.supplemental_identity_pairs] == [
+        "j-supp"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_supplemental_identity_conflict_rejects_before_result_staging() -> None:
+    transport = ScriptedTransport(
+        _cursor_response(
+            [_listing_row("j-result", "shared-route")],
+            supplemental_rows=[_listing_row("j-supp", "shared-route")],
+            has_more=False,
+        )
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=1,
+        require_empty_confirmation=False,
+        request_policy=_request_policy(),
+    )
+
+    assert result.stop_reason == "identity_conflict"
+    assert result.accepted_job_ids == ()
+    assert observations.observations[0].identity_conflicts
+    assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_nonempty_cursor_confirmation_is_terminal_contract_violation() -> None:
+    transport = ScriptedTransport(
+        _cursor_response(
+            [_listing_row("j1", "e1")],
+            has_more=False,
+        ),
+        _cursor_response(
+            [_listing_row("j2", "e2")],
+            has_more=False,
+        ),
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        max_pages=2,
+        request_policy=_request_policy(),
+    )
+
+    assert result.stop_reason == "cursor_contract_violation"
+    assert observations.observations[-1].classification == "contract_anomaly"
+    assert (
+        observations.observations[-1].cursor_evidence.contract_error
+        == "nonempty_confirmation"
+    )
+    assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_v2_observation_serialization_hashes_cursor_session() -> None:
+    transport = ScriptedTransport(
+        _cursor_response([], session_id="raw-session-secret", has_more=False)
+    )
+
+    _result, observations, _staging, _sleep = await _run(
+        transport,
+        max_pages=1,
+        require_empty_confirmation=False,
+        request_policy=_request_policy(),
+    )
+
+    payload = listing_observation_to_payload(observations.observations[0])
+    serialized = json.dumps(payload, sort_keys=True)
+    assert "raw-session-secret" not in serialized
+    assert len(payload["cursor_evidence"]["cursor_output"]["session_id_hash"]) == 64
+
+
+@pytest.mark.asyncio
+async def test_v1_observation_payload_omits_v2_cursor_evidence_key() -> None:
+    transport = ScriptedTransport(
+        _listing_response([], has_more=False),
+        _listing_response([], has_more=False),
+    )
+
+    _result, observations, _staging, _sleep = await _run(transport)
+
+    payload = listing_observation_to_payload(observations.observations[0])
+    assert "cursor_evidence" not in payload
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -15,6 +17,10 @@ from app.sources.offertoday.detail_identity import (
     OfferTodayDetailFetchResult,
     OfferTodayDetailIdentity,
     OfferTodayEncryptedJobIdSource,
+)
+from app.sources.offertoday.listing_contract import (
+    OfferTodayBrowserContextLostError,
+    OfferTodayListingTransportResult,
 )
 from app.sources.offertoday.listing_runner import (
     ListingConditionOutcome,
@@ -393,12 +399,20 @@ class FakeObservationService:
     def __init__(self) -> None:
         self.events: list[tuple[str, dict]] = []
         self.detail_attempts: list[dict] = []
+        self.page_attempts: list[ListingPageObservation] = []
+        self.condition_outcomes: list[ListingConditionOutcome] = []
 
     def record_event(self, event_type: str, payload: dict) -> None:
         self.events.append((event_type, payload))
 
     def record_detail_attempt(self, payload: dict) -> None:
         self.detail_attempts.append(payload)
+
+    async def record_page_attempt(self, observation) -> None:
+        self.page_attempts.append(observation)
+
+    async def record_condition_outcome(self, outcome) -> None:
+        self.condition_outcomes.append(outcome)
 
 
 def deterministic_clocks():
@@ -408,6 +422,433 @@ def deterministic_clocks():
     )
     clock_values = iter(float(index) for index in range(100))
     return lambda: next(timestamps), lambda: next(clock_values)
+
+
+class BakeoffRuntime:
+    def __init__(self, factory, runtime_index: int) -> None:
+        self.factory = factory
+        self.runtime_index = runtime_index
+        self.browser_context_hash = hashlib.sha256(
+            f"bakeoff-context-{runtime_index}".encode()
+        ).hexdigest()
+        self.requests: list[dict] = []
+
+    async def __aenter__(self):
+        self.factory.entered.append(self)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.factory.exited.append(self)
+
+    async def fetch_listing_page(self, payload, *, listing_url=None):
+        self.requests.append(deepcopy(payload))
+        category_id = payload["jobFunctionCodes"][0]
+        page = payload["page"]
+        session_id = payload.get("sessionId") or f"server-session-{category_id}"
+        rows = (
+            [
+                {
+                    "jobId": f"{category_id}-{payload['pageSize']}",
+                    "encryptJobId": f"enc-{category_id}-{payload['pageSize']}",
+                    "jobName": "Platform Engineer",
+                    "companyName": "Example",
+                }
+            ]
+            if page == 1
+            else []
+        )
+        response = {
+            "code": 0,
+            "data": {
+                "pageSize": 10,
+                "sessionId": session_id,
+                "supplePage": page,
+                "suppleAmount": 0,
+                "suppleType": 0,
+                "hasMore": False,
+                "total": 100,
+                "resultList": rows,
+                "suppleRcdList": [],
+            },
+        }
+        return OfferTodayListingTransportResult(
+            payload=response,
+            browser_context_hash=self.browser_context_hash,
+        )
+
+
+class BakeoffRuntimeFactory:
+    def __init__(self) -> None:
+        self.created: list[BakeoffRuntime] = []
+        self.entered: list[BakeoffRuntime] = []
+        self.exited: list[BakeoffRuntime] = []
+
+    def __call__(self, *, headed: bool):
+        assert headed is False
+        runtime = BakeoffRuntime(self, len(self.created) + 1)
+        self.created.append(runtime)
+        return runtime
+
+
+class RetryOnceBakeoffRuntime(BakeoffRuntime):
+    async def fetch_listing_page(self, payload, *, listing_url=None):
+        if not self.factory.retry_emitted:
+            self.factory.retry_emitted = True
+            self.requests.append(deepcopy(payload))
+            raise ConnectionError("transient listing failure")
+        return await super().fetch_listing_page(payload, listing_url=listing_url)
+
+
+class RetryOnceBakeoffRuntimeFactory(BakeoffRuntimeFactory):
+    def __init__(self) -> None:
+        super().__init__()
+        self.retry_emitted = False
+
+    def __call__(self, *, headed: bool):
+        assert headed is False
+        runtime = RetryOnceBakeoffRuntime(self, len(self.created) + 1)
+        self.created.append(runtime)
+        return runtime
+
+
+class BrowserLossBakeoffRuntime(BakeoffRuntime):
+    async def fetch_listing_page(self, payload, *, listing_url=None):
+        if not self.factory.loss_emitted:
+            self.factory.loss_emitted = True
+            self.requests.append(deepcopy(payload))
+            raise OfferTodayBrowserContextLostError("browser context lost")
+        return await super().fetch_listing_page(payload, listing_url=listing_url)
+
+
+class BrowserLossBakeoffRuntimeFactory(BakeoffRuntimeFactory):
+    def __init__(self) -> None:
+        super().__init__()
+        self.loss_emitted = False
+
+    def __call__(self, *, headed: bool):
+        assert headed is False
+        runtime = BrowserLossBakeoffRuntime(self, len(self.created) + 1)
+        self.created.append(runtime)
+        return runtime
+
+
+class MissingCursorBakeoffRuntime(BakeoffRuntime):
+    async def fetch_listing_page(self, payload, *, listing_url=None):
+        result = await super().fetch_listing_page(payload, listing_url=listing_url)
+        response = deepcopy(result.payload)
+        if isinstance(response, dict) and isinstance(response.get("data"), dict):
+            for field_name in (
+                "sessionId",
+                "supplePage",
+                "suppleAmount",
+                "suppleType",
+            ):
+                response["data"].pop(field_name, None)
+        return OfferTodayListingTransportResult(
+            payload=response,
+            browser_context_hash=self.browser_context_hash,
+        )
+
+
+class MissingCursorBakeoffRuntimeFactory(BakeoffRuntimeFactory):
+    def __call__(self, *, headed: bool):
+        assert headed is False
+        runtime = MissingCursorBakeoffRuntime(self, len(self.created) + 1)
+        self.created.append(runtime)
+        return runtime
+
+
+class UnexpectedBakeoffRuntime(BakeoffRuntime):
+    async def fetch_listing_page(self, payload, *, listing_url=None):
+        self.factory.request_count += 1
+        if self.factory.request_count == self.factory.fail_on_request:
+            raise RuntimeError("secret runtime failure details")
+        return await super().fetch_listing_page(payload, listing_url=listing_url)
+
+
+class UnexpectedBakeoffRuntimeFactory(BakeoffRuntimeFactory):
+    def __init__(self, *, fail_on_request: int) -> None:
+        super().__init__()
+        self.fail_on_request = fail_on_request
+        self.request_count = 0
+
+    def __call__(self, *, headed: bool):
+        assert headed is False
+        runtime = UnexpectedBakeoffRuntime(self, len(self.created) + 1)
+        self.created.append(runtime)
+        return runtime
+
+
+class ExitFailureBakeoffRuntime(BakeoffRuntime):
+    async def __aexit__(self, exc_type, exc, tb):
+        await super().__aexit__(exc_type, exc, tb)
+        if len(self.requests) >= 6 and not self.factory.exit_failure_emitted:
+            self.factory.exit_failure_emitted = True
+            raise RuntimeError("secret runtime close failure details")
+
+
+class ExitFailureBakeoffRuntimeFactory(BakeoffRuntimeFactory):
+    def __init__(self) -> None:
+        super().__init__()
+        self.exit_failure_emitted = False
+
+    def __call__(self, *, headed: bool):
+        assert headed is False
+        runtime = ExitFailureBakeoffRuntime(self, len(self.created) + 1)
+        self.created.append(runtime)
+        return runtime
+
+
+class IncrementingClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        self.value += 0.01
+        return self.value
+
+
+@pytest.mark.asyncio
+async def test_run_pagination_bakeoff_honors_frozen_order_and_runtime_lifecycles() -> (
+    None
+):
+    runtime_factory = BakeoffRuntimeFactory()
+    observation_service = FakeObservationService()
+    staging_sink = ResearchNoopListingStagingSink()
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    service = OfferTodayResearchLiveService(
+        sleep=no_sleep,
+        clock=IncrementingClock(),
+    )
+    execution = await service.run_pagination_bakeoff(
+        runtime_factory=runtime_factory,
+        observation_service=observation_service,
+        repeat_index=1,
+        order_seed=20260713,
+        staging_sink=staging_sink,
+    )
+
+    assert len(execution.order) == 15
+    assert len(execution.executions) == 15
+    assert len(observation_service.page_attempts) == 30
+    assert len(observation_service.condition_outcomes) == 15
+    assert staging_sink.stage_calls == 15
+    assert staging_sink.would_stage_rows == 15
+    assert len(runtime_factory.created) == 12
+    assert len(runtime_factory.exited) == len(runtime_factory.entered)
+    assert {id(item) for item in runtime_factory.exited} == {
+        id(item) for item in runtime_factory.entered
+    }
+
+    by_variant = {
+        variant_id: [
+            item for item in execution.executions if item.variant_id == variant_id
+        ]
+        for variant_id in {
+            item.variant_id for item in execution.executions
+        }
+    }
+    shared_hashes = {
+        observation.cursor_evidence.browser_context_hash
+        for item in by_variant["ui-cursor"]
+        for observation in item.result.observations
+    }
+    condition_hashes = {
+        observation.cursor_evidence.browser_context_hash
+        for item in by_variant["ui-cursor-same-browser"]
+        for observation in item.result.observations
+    }
+    assert len(shared_hashes) == 1
+    assert len(condition_hashes) == 3
+    for item in by_variant["ui-cursor-restart"]:
+        assert len(
+            {
+                observation.cursor_evidence.browser_context_hash
+                for observation in item.result.observations
+            }
+        ) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_pagination_bakeoff_uses_cursor_payload_only_after_page_one() -> (
+    None
+):
+    runtime_factory = BakeoffRuntimeFactory()
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    service = OfferTodayResearchLiveService(
+        sleep=no_sleep,
+        clock=IncrementingClock(),
+    )
+    execution = await service.run_pagination_bakeoff(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        repeat_index=2,
+        order_seed=20260713,
+    )
+
+    for item in execution.executions:
+        observations = item.result.observations
+        assert observations[0].cursor_evidence.cursor_input is None
+        if item.variant_id == "stateless-current":
+            assert observations[1].cursor_evidence.cursor_input is None
+        else:
+            assert observations[1].cursor_evidence.cursor_input is not None
+            assert (
+                observations[0].cursor_evidence.cursor_output.cursor_hash
+                == observations[1].cursor_evidence.cursor_input.cursor_hash
+            )
+
+
+@pytest.mark.asyncio
+async def test_pagination_bakeoff_retries_same_logical_page_in_same_runtime() -> None:
+    runtime_factory = RetryOnceBakeoffRuntimeFactory()
+    observation_service = FakeObservationService()
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    service = OfferTodayResearchLiveService(
+        sleep=no_sleep,
+        clock=IncrementingClock(),
+    )
+    await service.run_pagination_bakeoff(
+        runtime_factory=runtime_factory,
+        observation_service=observation_service,
+        repeat_index=1,
+        order_seed=20260713,
+    )
+
+    retry, success = observation_service.page_attempts[:2]
+    assert retry.classification == "transient_transport"
+    assert retry.cursor_evidence.logical_request_id == (
+        success.cursor_evidence.logical_request_id
+    )
+    assert retry.cursor_evidence.browser_context_hash == (
+        success.cursor_evidence.browser_context_hash
+    )
+    assert retry.cursor_evidence.physical_attempt_id != (
+        success.cursor_evidence.physical_attempt_id
+    )
+    assert len(runtime_factory.created) == 12
+    assert len(runtime_factory.exited) == len(runtime_factory.entered)
+
+
+@pytest.mark.asyncio
+async def test_pagination_bakeoff_restarts_page_one_after_browser_loss() -> None:
+    runtime_factory = BrowserLossBakeoffRuntimeFactory()
+    observation_service = FakeObservationService()
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    service = OfferTodayResearchLiveService(
+        sleep=no_sleep,
+        clock=IncrementingClock(),
+    )
+    await service.run_pagination_bakeoff(
+        runtime_factory=runtime_factory,
+        observation_service=observation_service,
+        repeat_index=1,
+        order_seed=20260713,
+    )
+
+    lost, restarted = observation_service.page_attempts[:2]
+    assert lost.retry_reason == "browser_context_lost_restart"
+    assert lost.page == restarted.page == 1
+    assert lost.cursor_evidence.condition_restart_index == 0
+    assert restarted.cursor_evidence.condition_restart_index == 1
+    assert lost.cursor_evidence.browser_context_hash != (
+        restarted.cursor_evidence.browser_context_hash
+    )
+    assert len(runtime_factory.created) == 13
+    assert len(runtime_factory.exited) == len(runtime_factory.entered)
+
+
+@pytest.mark.asyncio
+async def test_pagination_bakeoff_cursor_violation_hard_stops_and_closes() -> None:
+    runtime_factory = MissingCursorBakeoffRuntimeFactory()
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    service = OfferTodayResearchLiveService(
+        sleep=no_sleep,
+        clock=IncrementingClock(),
+    )
+
+    execution = await service.run_pagination_bakeoff(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        repeat_index=1,
+        order_seed=20260713,
+    )
+
+    assert execution.failure_reason == "hard_stop:cursor_contract_violation"
+    assert len(execution.executions) < len(execution.order)
+    assert runtime_factory.entered
+    assert len(runtime_factory.exited) == len(runtime_factory.entered)
+
+
+@pytest.mark.asyncio
+async def test_pagination_bakeoff_unexpected_error_returns_type_only_prefix() -> None:
+    runtime_factory = UnexpectedBakeoffRuntimeFactory(fail_on_request=5)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    service = OfferTodayResearchLiveService(
+        sleep=no_sleep,
+        clock=IncrementingClock(),
+    )
+
+    execution = await service.run_pagination_bakeoff(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        repeat_index=1,
+        order_seed=20260713,
+    )
+
+    assert execution.failure_reason == (
+        "unexpected_pagination_bakeoff_error:RuntimeError"
+    )
+    assert "secret runtime failure details" not in execution.failure_reason
+    assert 0 < len(execution.executions) < len(execution.order)
+    assert len(runtime_factory.exited) == len(runtime_factory.entered)
+
+
+@pytest.mark.asyncio
+async def test_pagination_bakeoff_shared_close_error_returns_type_only_evidence() -> (
+    None
+):
+    runtime_factory = ExitFailureBakeoffRuntimeFactory()
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    service = OfferTodayResearchLiveService(
+        sleep=no_sleep,
+        clock=IncrementingClock(),
+    )
+
+    execution = await service.run_pagination_bakeoff(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        repeat_index=1,
+        order_seed=20260713,
+    )
+
+    assert execution.failure_reason == (
+        "unexpected_pagination_bakeoff_error:RuntimeError"
+    )
+    assert "secret runtime close failure details" not in execution.failure_reason
+    assert len(execution.executions) == len(execution.order)
+    assert len(runtime_factory.exited) == len(runtime_factory.entered)
 
 
 @pytest.mark.asyncio

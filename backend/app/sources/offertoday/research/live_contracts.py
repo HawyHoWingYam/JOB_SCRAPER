@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from copy import deepcopy
 from dataclasses import dataclass
@@ -17,6 +18,181 @@ from app.sources.offertoday.listing_runner import ListingRunResult
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _CENSUS_CATEGORY_IDS = tuple(category.code for category in OFFERTODAY_CATEGORIES_L1)
 _FIXED_REPEAT_CATEGORY_IDS = (118000, 112000, 127000)
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryCandidateV2:
+    candidate_version: int
+    endpoint: str
+    rcd_type: int | None
+    category_ids: tuple[int, ...]
+    pagination_mode: str
+    requested_page_size: int
+    browser_lifecycle: str
+    terminal_policy: str
+    max_pages_per_condition: int
+    require_empty_confirmation: bool
+    max_attempts_per_page: int
+    retry_delays_seconds: tuple[float, ...]
+    page_delay_range_seconds: tuple[float, float]
+    session_mode: str
+    fixed_repeat_category_ids: tuple[int, ...]
+    source_artifact_hash: str
+    comparison_artifact_hash: str
+
+    def __post_init__(self) -> None:
+        if type(self.candidate_version) is not int or self.candidate_version != 2:
+            raise ValueError("candidate_version must equal 2")
+        if self.endpoint not in {"search", "browse"}:
+            raise ValueError("endpoint must be 'search' or 'browse'")
+        if self.rcd_type is not None and type(self.rcd_type) is not int:
+            raise ValueError("rcd_type must be an int or None")
+        if (
+            not self.category_ids
+            or any(type(value) is not int or value < 1 for value in self.category_ids)
+            or len(set(self.category_ids)) != len(self.category_ids)
+        ):
+            raise ValueError("category_ids must be distinct positive exact integers")
+        if self.pagination_mode != "response-cursor":
+            raise ValueError("pagination_mode must equal 'response-cursor'")
+        if type(self.requested_page_size) is not int or self.requested_page_size < 1:
+            raise ValueError("requested_page_size must be a positive exact integer")
+        if self.browser_lifecycle not in {
+            "shared-variant-runtime",
+            "condition-local-runtime",
+            "restart-each-page",
+        }:
+            raise ValueError("unsupported browser_lifecycle")
+        if self.terminal_policy != "cursor-terminal-empty-confirmation-v1":
+            raise ValueError("unsupported terminal_policy")
+        for field_name, value in (
+            ("max_pages_per_condition", self.max_pages_per_condition),
+            ("max_attempts_per_page", self.max_attempts_per_page),
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{field_name} must be a positive exact integer")
+        if type(self.require_empty_confirmation) is not bool:
+            raise ValueError("require_empty_confirmation must be an exact boolean")
+        if (
+            not isinstance(self.retry_delays_seconds, tuple)
+            or any(
+                type(value) not in (int, float) or value < 0
+                or not math.isfinite(value)
+                for value in self.retry_delays_seconds
+            )
+        ):
+            raise ValueError("retry_delays_seconds must be nonnegative numbers")
+        if (
+            not isinstance(self.page_delay_range_seconds, tuple)
+            or len(self.page_delay_range_seconds) != 2
+            or any(
+                type(value) not in (int, float) or value < 0
+                or not math.isfinite(value)
+                for value in self.page_delay_range_seconds
+            )
+            or self.page_delay_range_seconds[0] > self.page_delay_range_seconds[1]
+        ):
+            raise ValueError("page_delay_range_seconds is invalid")
+        if self.session_mode not in {
+            "fresh-headless",
+            "storage-state",
+            "reusable-browser",
+        }:
+            raise ValueError("unsupported session_mode")
+        if self.fixed_repeat_category_ids != _FIXED_REPEAT_CATEGORY_IDS:
+            raise ValueError("fixed_repeat_category_ids must equal the frozen cohort")
+        for field_name in ("source_artifact_hash", "comparison_artifact_hash"):
+            if _SHA256_RE.fullmatch(getattr(self, field_name)) is None:
+                raise ValueError(f"{field_name} must be a lowercase SHA-256")
+
+    def _canonical_payload(self) -> dict[str, Any]:
+        return {
+            "candidate_version": self.candidate_version,
+            "endpoint": self.endpoint,
+            "rcd_type": self.rcd_type,
+            "category_ids": list(self.category_ids),
+            "pagination_mode": self.pagination_mode,
+            "requested_page_size": self.requested_page_size,
+            "browser_lifecycle": self.browser_lifecycle,
+            "terminal_policy": self.terminal_policy,
+            "max_pages_per_condition": self.max_pages_per_condition,
+            "require_empty_confirmation": self.require_empty_confirmation,
+            "max_attempts_per_page": self.max_attempts_per_page,
+            "retry_delays_seconds": list(self.retry_delays_seconds),
+            "page_delay_range_seconds": list(self.page_delay_range_seconds),
+            "session_mode": self.session_mode,
+            "fixed_repeat_category_ids": list(self.fixed_repeat_category_ids),
+            "source_artifact_hash": self.source_artifact_hash,
+            "comparison_artifact_hash": self.comparison_artifact_hash,
+        }
+
+    @property
+    def candidate_hash(self) -> str:
+        canonical = json.dumps(
+            self._canonical_payload(),
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def to_payload(self) -> dict[str, Any]:
+        return {**self._canonical_payload(), "candidate_hash": self.candidate_hash}
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "DiscoveryCandidateV2":
+        expected_keys = {
+            "candidate_version",
+            "endpoint",
+            "rcd_type",
+            "category_ids",
+            "pagination_mode",
+            "requested_page_size",
+            "browser_lifecycle",
+            "terminal_policy",
+            "max_pages_per_condition",
+            "require_empty_confirmation",
+            "max_attempts_per_page",
+            "retry_delays_seconds",
+            "page_delay_range_seconds",
+            "session_mode",
+            "fixed_repeat_category_ids",
+            "source_artifact_hash",
+            "comparison_artifact_hash",
+            "candidate_hash",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected_keys:
+            raise ValueError("v2 candidate payload fields do not match the contract")
+        for field_name in (
+            "category_ids",
+            "retry_delays_seconds",
+            "page_delay_range_seconds",
+            "fixed_repeat_category_ids",
+        ):
+            if not isinstance(payload[field_name], list):
+                raise ValueError(f"{field_name} must be a list")
+        candidate = cls(
+            candidate_version=payload["candidate_version"],
+            endpoint=payload["endpoint"],
+            rcd_type=payload["rcd_type"],
+            category_ids=tuple(payload["category_ids"]),
+            pagination_mode=payload["pagination_mode"],
+            requested_page_size=payload["requested_page_size"],
+            browser_lifecycle=payload["browser_lifecycle"],
+            terminal_policy=payload["terminal_policy"],
+            max_pages_per_condition=payload["max_pages_per_condition"],
+            require_empty_confirmation=payload["require_empty_confirmation"],
+            max_attempts_per_page=payload["max_attempts_per_page"],
+            retry_delays_seconds=tuple(payload["retry_delays_seconds"]),
+            page_delay_range_seconds=tuple(payload["page_delay_range_seconds"]),
+            session_mode=payload["session_mode"],
+            fixed_repeat_category_ids=tuple(payload["fixed_repeat_category_ids"]),
+            source_artifact_hash=payload["source_artifact_hash"],
+            comparison_artifact_hash=payload["comparison_artifact_hash"],
+        )
+        if payload["candidate_hash"] != candidate.candidate_hash:
+            raise ValueError("candidate_hash does not match the v2 canonical payload")
+        return candidate
 
 
 @dataclass(frozen=True, slots=True)

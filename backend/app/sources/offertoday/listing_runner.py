@@ -7,7 +7,7 @@ import math
 import random
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 from uuid import UUID
@@ -25,13 +25,31 @@ from app.sources.offertoday.detail_identity import (
     build_offertoday_identity_authority_index,
     resolve_offertoday_listing_identity,
 )
-from app.sources.offertoday.parsers import parse_offertoday_listing_response
+from app.sources.offertoday.listing_contract import (
+    OfferTodayBrowserContextLostError,
+    OfferTodayCursorContractError,
+    OfferTodayListingCursor,
+    OfferTodayListingCursorFieldPresence,
+    OfferTodayListingIdentityEvidenceV2,
+    OfferTodayListingPageEvidenceV2,
+    OfferTodayListingRequestPolicy,
+    OfferTodayListingTransportResult,
+    offertoday_listing_cursor_field_presence,
+    parse_offertoday_listing_page_result,
+)
+from app.sources.offertoday.parsers import (
+    parse_offertoday_listing_response,
+    parse_offertoday_listing_rows,
+)
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseClassification,
     OfferTodayResponseKind,
     OfferTodayTransportError,
     classify_offertoday_response,
 )
+
+
+_MAX_BROWSER_CONTEXT_RESTARTS_PER_CONDITION = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +188,7 @@ class ListingPageObservation:
     session_mode: str
     retry_reason: str | None
     stop_reason: str | None
+    cursor_evidence: OfferTodayListingPageEvidenceV2 | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +228,7 @@ class OfferTodayListingTransport(Protocol):
         payload: dict[str, Any],
         *,
         listing_url: str | None = None,
-    ) -> dict[str, Any] | None: ...
+    ) -> dict[str, Any] | OfferTodayListingTransportResult | None: ...
 
 
 class ListingObservationSink(Protocol):
@@ -261,9 +280,24 @@ def _classify_title_language(
     return "other"
 
 
-def _request_fingerprint(listing_url: str, payload: dict[str, Any]) -> str:
+def offertoday_listing_request_fingerprint(
+    listing_url: str,
+    payload: dict[str, Any],
+    *,
+    cursor_hash: str | None = None,
+) -> str:
+    fingerprint_payload = dict(payload)
+    for field_name in (
+        "sessionId",
+        "supplePage",
+        "suppleAmount",
+        "suppleType",
+    ):
+        fingerprint_payload.pop(field_name, None)
+    if cursor_hash is not None:
+        fingerprint_payload["cursorHash"] = cursor_hash
     canonical_json = json.dumps(
-        {"payload": payload, "url": listing_url},
+        {"payload": fingerprint_payload, "url": listing_url},
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -379,6 +413,11 @@ def _analyze_listing_row(
 
 def listing_observation_to_payload(value: Any) -> Any:
     """Recursively convert listing evidence values to JSON-safe primitives."""
+    if isinstance(value, ListingPageObservation):
+        payload = asdict(value)
+        if value.cursor_evidence is None:
+            payload.pop("cursor_evidence", None)
+        return listing_observation_to_payload(payload)
     if is_dataclass(value) and not isinstance(value, type):
         return listing_observation_to_payload(asdict(value))
     if isinstance(value, StrEnum):
@@ -395,6 +434,127 @@ def listing_observation_to_payload(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     raise TypeError(f"Unsupported listing observation value: {type(value).__name__}")
+
+
+def _browser_context_hash(transport: Any) -> str | None:
+    value = getattr(transport, "browser_context_hash", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _v2_page_evidence(
+    *,
+    policy: OfferTodayListingRequestPolicy,
+    condition: OfferTodayListingCondition,
+    page: int,
+    attempt: int,
+    browser_context_hash: str | None,
+    cursor_input: OfferTodayListingCursor | None,
+    cursor_output: OfferTodayListingCursor | None,
+    response_page_size: int | None,
+    response_cursor_fields: OfferTodayListingCursorFieldPresence | None = None,
+    result_job_ids: Sequence[str] = (),
+    supplemental_job_ids: Sequence[str] = (),
+    result_identity_pairs: Sequence[OfferTodayListingIdentityEvidenceV2] = (),
+    supplemental_identity_pairs: Sequence[
+        OfferTodayListingIdentityEvidenceV2
+    ] = (),
+    result_row_count: int | None = None,
+    supplemental_row_count: int | None = None,
+    previously_seen_job_ids: set[str] | None = None,
+    terminal_signal: bool = False,
+    awaiting_empty_confirmation: bool = False,
+    contract_error: str | None = None,
+) -> OfferTodayListingPageEvidenceV2:
+    result_ids = tuple(str(value) for value in result_job_ids if str(value))
+    supplemental_ids = tuple(
+        str(value) for value in supplemental_job_ids if str(value)
+    )
+    all_ids = (*result_ids, *supplemental_ids)
+    seen = set(previously_seen_job_ids or ())
+    page_ids = set(all_ids)
+    new_ids = page_ids - seen
+    effective_page_size = (
+        cursor_output.effective_page_size
+        if cursor_output is not None
+        else response_page_size
+    )
+    if policy.pagination_mode == "stateless-control":
+        session_continuity = "not_applicable"
+    elif contract_error is not None:
+        session_continuity = (
+            "violation"
+            if contract_error in {"session_rollover", "page_size_drift"}
+            else "unavailable"
+        )
+    elif cursor_output is None:
+        session_continuity = "unavailable"
+    elif cursor_input is None:
+        session_continuity = "initial"
+    elif cursor_input.session_id == cursor_output.session_id:
+        session_continuity = "continued"
+    else:  # pragma: no cover - parser rejects rollover first
+        session_continuity = "violation"
+    resolved_result_row_count = (
+        len(result_ids) if result_row_count is None else result_row_count
+    )
+    resolved_supplemental_row_count = (
+        len(supplemental_ids)
+        if supplemental_row_count is None
+        else supplemental_row_count
+    )
+    full_row_count = resolved_result_row_count + resolved_supplemental_row_count
+    return OfferTodayListingPageEvidenceV2(
+        protocol_version=policy.protocol_version,
+        variant_id=policy.variant_id,
+        repeat_index=policy.repeat_index,
+        condition_restart_index=policy.condition_restart_index,
+        condition_execution_id=policy.condition_execution_id(condition.condition_id),
+        logical_request_id=policy.logical_request_id(condition.condition_id, page),
+        physical_attempt_id=policy.physical_attempt_id(
+            condition.condition_id,
+            page,
+            attempt,
+        ),
+        browser_context_hash=browser_context_hash,
+        pagination_mode=policy.pagination_mode,
+        browser_lifecycle=policy.browser_lifecycle,
+        requested_page_size=policy.requested_page_size,
+        response_page_size=response_page_size,
+        effective_page_size=effective_page_size,
+        cursor_input=cursor_input.to_evidence() if cursor_input is not None else None,
+        cursor_output=(
+            cursor_output.to_evidence() if cursor_output is not None else None
+        ),
+        response_cursor_fields=(
+            response_cursor_fields
+            if response_cursor_fields is not None
+            else OfferTodayListingCursorFieldPresence(
+                session_id=False,
+                supple_page=False,
+                supple_amount=False,
+                supple_type=False,
+                page_size=False,
+            )
+        ),
+        session_continuity=session_continuity,
+        result_row_count=resolved_result_row_count,
+        supplemental_row_count=resolved_supplemental_row_count,
+        result_job_ids=result_ids,
+        supplemental_job_ids=supplemental_ids,
+        result_identity_pairs=tuple(result_identity_pairs),
+        supplemental_identity_pairs=tuple(supplemental_identity_pairs),
+        cohort_overlap_job_ids=tuple(sorted(set(result_ids) & set(supplemental_ids))),
+        new_job_id_count=len(new_ids),
+        duplicate_job_id_count=max(0, len(all_ids) - len(new_ids)),
+        zero_new_full_page=(
+            effective_page_size is not None
+            and full_row_count >= effective_page_size
+            and not new_ids
+        ),
+        terminal_signal=terminal_signal,
+        awaiting_empty_confirmation=awaiting_empty_confirmation,
+        contract_error=contract_error,
+    )
 
 
 class OfferTodayListingRunner:
@@ -420,6 +580,7 @@ class OfferTodayListingRunner:
         observation_sink: ListingObservationSink,
         staging_sink: ListingStagingSink,
         session_mode: str,
+        request_policy: OfferTodayListingRequestPolicy | None = None,
     ) -> ListingRunResult:
         observations: list[ListingPageObservation] = []
         outcomes: list[ListingConditionOutcome] = []
@@ -440,14 +601,31 @@ class OfferTodayListingRunner:
         run_stop_reason: str | None = None
 
         for condition in conditions:
+            condition_ordered_job_count = len(ordered_job_ids)
+            condition_accepted_job_ids = set(accepted_job_ids)
+            condition_job_to_identity = dict(job_to_identity)
+            condition_staged_identity_values = set(staged_identity_values)
             page = 1
             pages_observed = 0
             awaiting_empty_confirmation = False
             condition_stop_reason: str | None = None
             condition_is_complete = False
+            cursor: OfferTodayListingCursor | None = None
+            initial_session_id: str | None = None
+            effective_page_size: int | None = None
+            v2_seen_job_ids: set[str] = set()
+            pending_v2_stage_pages: list[tuple[int, list[dict[str, Any]]]] = []
+            active_request_policy = request_policy
+            condition_restart_count = 0
+            logical_pages_started = 0
 
             while condition_stop_reason is None:
-                if page > stop_policy.max_pages_per_condition:
+                if active_request_policy is not None:
+                    if logical_pages_started >= stop_policy.max_pages_per_condition:
+                        condition_stop_reason = "page_cap"
+                        break
+                    logical_pages_started += 1
+                elif page > stop_policy.max_pages_per_condition:
                     condition_stop_reason = "page_cap"
                     break
 
@@ -456,22 +634,68 @@ class OfferTodayListingRunner:
                     keyword=condition.keyword,
                     page=page,
                     rcd_type=condition.rcd_type,
+                    page_size=(
+                        active_request_policy.requested_page_size
+                        if active_request_policy is not None
+                        else 50
+                    ),
+                    cursor=(
+                        cursor
+                        if active_request_policy is not None
+                        and active_request_policy.requires_cursor
+                        and page > 1
+                        else None
+                    ),
                 )
                 listing_url = _listing_url(condition)
-                fingerprint = _request_fingerprint(listing_url, payload)
+                fingerprint = offertoday_listing_request_fingerprint(
+                    listing_url,
+                    payload,
+                    cursor_hash=(cursor.cursor_hash if cursor is not None else None),
+                )
                 page_succeeded = False
+                restart_condition = False
 
                 for attempt in range(1, retry_policy.max_attempts_per_page + 1):
                     started_at = self._clock()
                     response: dict[str, Any] | None = None
+                    browser_context_hash = _browser_context_hash(self._transport)
                     transport_error: BaseException | None = None
                     current_url = listing_url
                     http_status: int | None = None
                     try:
-                        response = await self._transport.fetch_listing_json(
-                            payload,
-                            listing_url=listing_url,
+                        typed_fetch = getattr(
+                            self._transport,
+                            "fetch_listing_page",
+                            None,
                         )
+                        if active_request_policy is not None and callable(typed_fetch):
+                            transport_result = await typed_fetch(
+                                payload,
+                                listing_url=listing_url,
+                            )
+                        else:
+                            transport_result = (
+                                await self._transport.fetch_listing_json(
+                                    payload,
+                                    listing_url=listing_url,
+                                )
+                            )
+                        if isinstance(
+                            transport_result,
+                            OfferTodayListingTransportResult,
+                        ):
+                            response = transport_result.payload
+                            current_url = (
+                                transport_result.response_url or current_url
+                            )
+                            http_status = transport_result.http_status
+                            browser_context_hash = (
+                                transport_result.browser_context_hash
+                                or browser_context_hash
+                            )
+                        else:
+                            response = transport_result
                     except (
                         OfferTodayTransportError,
                         TimeoutError,
@@ -488,6 +712,11 @@ class OfferTodayListingRunner:
                         if type(raw_http_status) is int:
                             http_status = raw_http_status
 
+                    browser_context_hash = (
+                        _browser_context_hash(self._transport)
+                        or browser_context_hash
+                    )
+
                     classification = classify_offertoday_response(
                         response,
                         operation="listing",
@@ -496,6 +725,77 @@ class OfferTodayListingRunner:
                         http_status=http_status,
                     )
                     latency_ms = int(round(max(0.0, self._clock() - started_at) * 1000))
+
+                    browser_context_lost = isinstance(
+                        transport_error,
+                        OfferTodayBrowserContextLostError,
+                    )
+                    if browser_context_lost and active_request_policy is not None:
+                        restart_transport = getattr(
+                            self._transport,
+                            "restart_after_browser_loss",
+                            None,
+                        )
+                        can_restart = (
+                            callable(restart_transport)
+                            and condition_restart_count
+                            < _MAX_BROWSER_CONTEXT_RESTARTS_PER_CONDITION
+                        )
+                        observation = self._empty_observation(
+                            condition=condition,
+                            page=page,
+                            attempt=attempt,
+                            request_fingerprint=fingerprint,
+                            classification=classification,
+                            latency_ms=latency_ms,
+                            session_mode=session_mode,
+                            retry_reason=(
+                                "browser_context_lost_restart"
+                                if can_restart
+                                else None
+                            ),
+                            stop_reason=(None if can_restart else "unresolved_gap"),
+                            cursor_evidence=_v2_page_evidence(
+                                policy=active_request_policy,
+                                condition=condition,
+                                page=page,
+                                attempt=attempt,
+                                browser_context_hash=browser_context_hash,
+                                cursor_input=cursor,
+                                cursor_output=None,
+                                response_page_size=None,
+                                previously_seen_job_ids=v2_seen_job_ids,
+                                awaiting_empty_confirmation=(
+                                    awaiting_empty_confirmation
+                                ),
+                            ),
+                        )
+                        observations.append(observation)
+                        await observation_sink.record_page_attempt(observation)
+                        if can_restart:
+                            await restart_transport()
+                            condition_restart_count += 1
+                            active_request_policy = replace(
+                                active_request_policy,
+                                condition_restart_index=condition_restart_count,
+                            )
+                            page = 1
+                            cursor = None
+                            initial_session_id = None
+                            effective_page_size = None
+                            awaiting_empty_confirmation = False
+                            restart_condition = True
+                            break
+                        gaps.append(
+                            ListingGap(
+                                condition_id=condition.condition_id,
+                                page=page,
+                                attempts=attempt,
+                                last_kind=classification.kind,
+                            )
+                        )
+                        condition_stop_reason = "unresolved_gap"
+                        break
 
                     if classification.kind is not OfferTodayResponseKind.SUCCESS:
                         will_retry = (
@@ -521,6 +821,29 @@ class OfferTodayListingRunner:
                                 classification.kind.value if will_retry else None
                             ),
                             stop_reason=attempt_stop_reason,
+                            cursor_evidence=(
+                                _v2_page_evidence(
+                                    policy=active_request_policy,
+                                    condition=condition,
+                                    page=page,
+                                    attempt=attempt,
+                                    browser_context_hash=browser_context_hash,
+                                    cursor_input=cursor,
+                                    cursor_output=None,
+                                    response_page_size=None,
+                                    previously_seen_job_ids=v2_seen_job_ids,
+                                    awaiting_empty_confirmation=(
+                                        awaiting_empty_confirmation
+                                    ),
+                                    contract_error=(
+                                        classification.kind.value
+                                        if not will_retry
+                                        else None
+                                    ),
+                                )
+                                if active_request_policy is not None
+                                else None
+                            ),
                         )
                         observations.append(observation)
                         await observation_sink.record_page_attempt(observation)
@@ -550,28 +873,134 @@ class OfferTodayListingRunner:
                             "success classification requires a response"
                         )
 
-                    parsed_rows = parse_offertoday_listing_response(response)
-                    raw_data = response.get("data")
-                    if not isinstance(raw_data, Mapping):  # pragma: no cover
-                        raise AssertionError("success listing response requires data")
-                    raw_rows = raw_data.get("resultList")
-                    if not isinstance(raw_rows, list):  # pragma: no cover
-                        raise AssertionError(
-                            "success listing response requires resultList"
+                    page_contract = None
+                    next_cursor: OfferTodayListingCursor | None = None
+                    raw_supplemental_rows: list[dict[str, Any]] = []
+                    if active_request_policy is not None:
+                        try:
+                            page_contract = parse_offertoday_listing_page_result(
+                                response,
+                                require_cursor=active_request_policy.requires_cursor,
+                                expected_session_id=(
+                                    initial_session_id
+                                    if active_request_policy.requires_cursor
+                                    else None
+                                ),
+                                expected_effective_page_size=(
+                                    effective_page_size
+                                    if active_request_policy.requires_cursor
+                                    else None
+                                ),
+                            )
+                        except OfferTodayCursorContractError as exc:
+                            raw_data = response.get("data")
+                            raw_page_size = (
+                                raw_data.get("pageSize")
+                                if isinstance(raw_data, Mapping)
+                                else None
+                            )
+                            response_page_size = (
+                                raw_page_size
+                                if type(raw_page_size) is int and raw_page_size > 0
+                                else None
+                            )
+                            observation = ListingPageObservation(
+                                condition_id=condition.condition_id,
+                                search_family=condition.search_family,
+                                category_id=condition.category_id,
+                                keyword=condition.keyword,
+                                endpoint=condition.endpoint,
+                                rcd_type=condition.rcd_type,
+                                page=page,
+                                attempt=attempt,
+                                request_fingerprint=fingerprint,
+                                classification="cursor_contract_violation",
+                                api_code=classification.code,
+                                reported_total=None,
+                                has_more=None,
+                                row_count=0,
+                                missing_job_id_count=0,
+                                missing_encrypted_job_id_count=0,
+                                job_id_fallback_count=0,
+                                id_pairs=(),
+                                rows=(),
+                                identity_issues=(),
+                                identity_conflicts=(),
+                                latency_ms=latency_ms,
+                                session_mode=session_mode,
+                                retry_reason=None,
+                                stop_reason="cursor_contract_violation",
+                                cursor_evidence=_v2_page_evidence(
+                                    policy=active_request_policy,
+                                    condition=condition,
+                                    page=page,
+                                    attempt=attempt,
+                                    browser_context_hash=browser_context_hash,
+                                    cursor_input=cursor,
+                                    cursor_output=None,
+                                    response_page_size=response_page_size,
+                                    response_cursor_fields=(
+                                        offertoday_listing_cursor_field_presence(
+                                            response
+                                        )
+                                    ),
+                                    previously_seen_job_ids=v2_seen_job_ids,
+                                    awaiting_empty_confirmation=(
+                                        awaiting_empty_confirmation
+                                    ),
+                                    contract_error=exc.reason,
+                                ),
+                            )
+                            observations.append(observation)
+                            await observation_sink.record_page_attempt(observation)
+                            condition_stop_reason = "cursor_contract_violation"
+                            break
+                        raw_rows = list(page_contract.result_rows)
+                        raw_supplemental_rows = list(page_contract.supplemental_rows)
+                        parsed_rows = parse_offertoday_listing_rows(raw_rows)
+                        parsed_supplemental_rows = parse_offertoday_listing_rows(
+                            raw_supplemental_rows
                         )
-                    raw_has_more = raw_data.get("hasMore")
-                    has_more = raw_has_more if type(raw_has_more) is bool else None
-                    raw_total = raw_data.get("total")
-                    reported_total = raw_total if type(raw_total) is int else None
+                        has_more = page_contract.has_more
+                        reported_total = page_contract.reported_total
+                        next_cursor = page_contract.cursor
+                    else:
+                        parsed_rows = parse_offertoday_listing_response(response)
+                        parsed_supplemental_rows = []
+                        raw_data = response.get("data")
+                        if not isinstance(raw_data, Mapping):  # pragma: no cover
+                            raise AssertionError(
+                                "success listing response requires data"
+                            )
+                        raw_rows = raw_data.get("resultList")
+                        if not isinstance(raw_rows, list):  # pragma: no cover
+                            raise AssertionError(
+                                "success listing response requires resultList"
+                            )
+                        raw_has_more = raw_data.get("hasMore")
+                        has_more = (
+                            raw_has_more if type(raw_has_more) is bool else None
+                        )
+                        raw_total = raw_data.get("total")
+                        reported_total = (
+                            raw_total if type(raw_total) is int else None
+                        )
                     page_succeeded = True
                     pages_observed += 1
 
                     row_analyses = tuple(
                         _analyze_listing_row(row) for row in parsed_rows
                     )
+                    supplemental_row_analyses = tuple(
+                        _analyze_listing_row(row)
+                        for row in parsed_supplemental_rows
+                    )
                     row_evidence = tuple(analysis.evidence for analysis in row_analyses)
                     page_ordered_job_ids: list[str] = []
                     page_ordered_job_id_set: set[str] = set()
+                    authority_ordered_job_ids: list[str] = []
+                    authority_ordered_job_id_set: set[str] = set()
+                    result_page_job_ids: set[str] = set()
                     page_issues: list[ListingIdentityIssue] = []
                     page_conflicts: list[ListingIdentityConflict] = []
                     page_conflict_keys: set[
@@ -620,19 +1049,34 @@ class OfferTodayListingRunner:
                             identity_conflict_keys.add(key)
                             identity_conflicts.append(conflict)
 
-                    for analysis in row_analyses:
+                    for analysis, is_result_row in (
+                        *((analysis, True) for analysis in row_analyses),
+                        *((analysis, False) for analysis in supplemental_row_analyses),
+                    ):
                         evidence = analysis.evidence
                         job_id = evidence.job_id
                         encrypted_job_id = evidence.encrypted_job_id
-                        if job_id is not None and job_id not in ordered_job_id_set:
+                        if (
+                            is_result_row
+                            and job_id is not None
+                            and job_id not in ordered_job_id_set
+                        ):
                             ordered_job_id_set.add(job_id)
                             ordered_job_ids.append(job_id)
                         if (
-                            job_id is not None
+                            is_result_row
+                            and job_id is not None
                             and job_id not in page_ordered_job_id_set
                         ):
                             page_ordered_job_id_set.add(job_id)
                             page_ordered_job_ids.append(job_id)
+                            result_page_job_ids.add(job_id)
+                        if (
+                            job_id is not None
+                            and job_id not in authority_ordered_job_id_set
+                        ):
+                            authority_ordered_job_id_set.add(job_id)
+                            authority_ordered_job_ids.append(job_id)
 
                         if analysis.issue is not None:
                             issue = analysis.issue
@@ -658,7 +1102,7 @@ class OfferTodayListingRunner:
                             identity
                         )
 
-                    for job_id in page_ordered_job_ids:
+                    for job_id in authority_ordered_job_ids:
                         page_identities = page_identities_by_job.get(job_id)
                         if not page_identities:
                             continue
@@ -686,7 +1130,10 @@ class OfferTodayListingRunner:
                         candidate_job_to_identity[job_id] = (
                             authority_index.authoritative_identity_by_job[job_id]
                         )
-                        if job_id not in deferred_job_ids:
+                        if (
+                            job_id in result_page_job_ids
+                            and job_id not in deferred_job_ids
+                        ):
                             candidate_accepted_job_ids.add(job_id)
 
                     candidate_authority_index = (
@@ -753,14 +1200,51 @@ class OfferTodayListingRunner:
                             stage_identity_values.append(identity_key)
                             stage_rows.append(parsed_row)
 
-                    is_nonempty_confirmation = awaiting_empty_confirmation and bool(
-                        raw_rows
+                    result_evidence_job_ids = tuple(
+                        analysis.evidence.job_id
+                        for analysis in row_analyses
+                        if analysis.evidence.job_id is not None
                     )
-                    terminal_signal = not raw_rows or has_more is False
+                    supplemental_evidence_job_ids = tuple(
+                        analysis.evidence.job_id
+                        for analysis in supplemental_row_analyses
+                        if analysis.evidence.job_id is not None
+                    )
+                    result_identity_evidence = tuple(
+                        OfferTodayListingIdentityEvidenceV2(
+                            job_id=analysis.identity.job_id,
+                            encrypted_job_id=analysis.identity.encrypted_job_id,
+                            encrypted_job_id_source=(
+                                analysis.identity.encrypted_job_id_source
+                            ),
+                        )
+                        for analysis in row_analyses
+                        if analysis.identity is not None
+                    )
+                    supplemental_identity_evidence = tuple(
+                        OfferTodayListingIdentityEvidenceV2(
+                            job_id=analysis.identity.job_id,
+                            encrypted_job_id=analysis.identity.encrypted_job_id,
+                            encrypted_job_id_source=(
+                                analysis.identity.encrypted_job_id_source
+                            ),
+                        )
+                        for analysis in supplemental_row_analyses
+                        if analysis.identity is not None
+                    )
+                    has_any_rows = bool(raw_rows or raw_supplemental_rows)
+                    is_nonempty_confirmation = (
+                        awaiting_empty_confirmation and has_any_rows
+                    )
+                    terminal_signal = not has_any_rows or has_more is False
                     natural_exhaustion = (
-                        awaiting_empty_confirmation and not raw_rows
+                        awaiting_empty_confirmation and not has_any_rows
                     ) or (
                         not stop_policy.require_empty_confirmation and terminal_signal
+                    )
+                    page_contract_violation = (
+                        active_request_policy is not None
+                        and is_nonempty_confirmation
                     )
 
                     if page_conflicts:
@@ -769,6 +1253,9 @@ class OfferTodayListingRunner:
                     elif page_issues:
                         attempt_stop_reason = "identity_issue"
                         condition_stop_reason = "identity_issue"
+                    elif page_contract_violation:
+                        attempt_stop_reason = "cursor_contract_violation"
+                        condition_stop_reason = "cursor_contract_violation"
                     elif (
                         stop_policy.unique_job_cap is not None
                         and len(candidate_accepted_job_ids)
@@ -839,6 +1326,51 @@ class OfferTodayListingRunner:
                         session_mode=session_mode,
                         retry_reason=None,
                         stop_reason=attempt_stop_reason,
+                        cursor_evidence=(
+                            _v2_page_evidence(
+                                policy=active_request_policy,
+                                condition=condition,
+                                page=page,
+                                attempt=attempt,
+                                browser_context_hash=browser_context_hash,
+                                cursor_input=cursor,
+                                cursor_output=next_cursor,
+                                response_page_size=(
+                                    page_contract.response_page_size
+                                    if page_contract is not None
+                                    else None
+                                ),
+                                response_cursor_fields=(
+                                    page_contract.cursor_field_presence
+                                    if page_contract is not None
+                                    else None
+                                ),
+                                result_job_ids=result_evidence_job_ids,
+                                supplemental_job_ids=(
+                                    supplemental_evidence_job_ids
+                                ),
+                                result_identity_pairs=result_identity_evidence,
+                                supplemental_identity_pairs=(
+                                    supplemental_identity_evidence
+                                ),
+                                result_row_count=len(raw_rows),
+                                supplemental_row_count=len(
+                                    raw_supplemental_rows
+                                ),
+                                previously_seen_job_ids=v2_seen_job_ids,
+                                terminal_signal=terminal_signal,
+                                awaiting_empty_confirmation=(
+                                    awaiting_empty_confirmation
+                                ),
+                                contract_error=(
+                                    "nonempty_confirmation"
+                                    if page_contract_violation
+                                    else None
+                                ),
+                            )
+                            if active_request_policy is not None
+                            else None
+                        ),
                     )
                     observations.append(observation)
                     await observation_sink.record_page_attempt(observation)
@@ -848,21 +1380,41 @@ class OfferTodayListingRunner:
                             encrypted_job_ids=encrypted_job_ids,
                             reason=reason,
                         )
-                    if page_issues or page_conflicts:
+                    if page_issues or page_conflicts or page_contract_violation:
                         deferred_job_ids.update(page_rejected_job_ids)
                         accepted_job_ids.difference_update(page_rejected_job_ids)
                     else:
                         if stage_rows:
-                            await staging_sink.stage_page(
-                                condition=condition,
-                                page=page,
-                                rows=stage_rows,
-                            )
+                            if active_request_policy is not None:
+                                pending_v2_stage_pages.append((page, stage_rows))
+                            else:
+                                await staging_sink.stage_page(
+                                    condition=condition,
+                                    page=page,
+                                    rows=stage_rows,
+                                )
                         job_to_identity = candidate_job_to_identity
                         accepted_job_ids = candidate_accepted_job_ids
                         staged_identity_values.update(stage_identity_values)
+                        if active_request_policy is not None:
+                            v2_seen_job_ids.update(result_evidence_job_ids)
+                            v2_seen_job_ids.update(supplemental_evidence_job_ids)
+                            if active_request_policy.requires_cursor:
+                                if next_cursor is None:  # pragma: no cover
+                                    raise AssertionError(
+                                        "cursor mode success requires cursor output"
+                                    )
+                                if initial_session_id is None:
+                                    initial_session_id = next_cursor.session_id
+                                if effective_page_size is None:
+                                    effective_page_size = (
+                                        next_cursor.effective_page_size
+                                    )
+                                cursor = next_cursor
                     break
 
+                if restart_condition:
+                    continue
                 if condition_stop_reason is not None:
                     break
                 if not page_succeeded:  # pragma: no cover - retry loop invariant
@@ -874,6 +1426,22 @@ class OfferTodayListingRunner:
                     page_delay = self._uniform(lower, upper)
                 if page_delay > 0:
                     await self._sleep(page_delay)
+
+            if not condition_is_complete and request_policy is not None:
+                removed_job_ids = ordered_job_ids[condition_ordered_job_count:]
+                del ordered_job_ids[condition_ordered_job_count:]
+                ordered_job_id_set.difference_update(removed_job_ids)
+                accepted_job_ids = condition_accepted_job_ids
+                job_to_identity = condition_job_to_identity
+                staged_identity_values = condition_staged_identity_values
+
+            if condition_is_complete and active_request_policy is not None:
+                for staged_page, staged_rows in pending_v2_stage_pages:
+                    await staging_sink.stage_page(
+                        condition=condition,
+                        page=staged_page,
+                        rows=staged_rows,
+                    )
 
             outcome = ListingConditionOutcome(
                 condition=condition,
@@ -933,6 +1501,7 @@ class OfferTodayListingRunner:
         session_mode: str,
         retry_reason: str | None,
         stop_reason: str | None,
+        cursor_evidence: OfferTodayListingPageEvidenceV2 | None = None,
     ) -> ListingPageObservation:
         return ListingPageObservation(
             condition_id=condition.condition_id,
@@ -960,4 +1529,5 @@ class OfferTodayListingRunner:
             session_mode=session_mode,
             retry_reason=retry_reason,
             stop_reason=stop_reason,
+            cursor_evidence=cursor_evidence,
         )

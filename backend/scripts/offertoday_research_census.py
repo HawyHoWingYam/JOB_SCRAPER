@@ -39,6 +39,7 @@ from app.services.offertoday_research_observation_service import (  # noqa: E402
 )
 from app.services.offertoday_research_staging_service import (  # noqa: E402
     OfferTodayReconciledListingStagingSink,
+    ResearchNoopListingStagingSink,
 )
 from app.sources.offertoday.listing_runner import (  # noqa: E402
     listing_observation_to_payload,
@@ -64,7 +65,33 @@ from app.sources.offertoday.research.conservation import (  # noqa: E402
     build_listing_conservation_report,
 )
 from app.sources.offertoday.research.contracts import ResearchMetadata  # noqa: E402
-from app.sources.offertoday.research.live_contracts import CensusCandidate  # noqa: E402
+from app.sources.offertoday.research.live_contracts import (  # noqa: E402
+    CensusCandidate,
+    DiscoveryCandidateV2,
+)
+from app.sources.offertoday.research.pagination_bakeoff import (  # noqa: E402
+    BAKEOFF_CATEGORY_IDS,
+    BAKEOFF_ENDPOINT,
+    BAKEOFF_MAX_ATTEMPTS_PER_PAGE,
+    BAKEOFF_MAX_LOGICAL_PAGES_PER_CONDITION,
+    BAKEOFF_PAGE_DELAY_RANGE_SECONDS,
+    BAKEOFF_RCD_TYPE,
+    BAKEOFF_REQUIRE_EMPTY_CONFIRMATION,
+    BAKEOFF_RETRY_DELAYS_SECONDS,
+    BAKEOFF_SESSION_MODE,
+    BAKEOFF_TERMINAL_POLICY,
+    BAKEOFF_VARIANTS,
+    canonical_bakeoff_payload_hash,
+    compare_bakeoff_payloads,
+    pagination_bakeoff_controls_payload,
+    pagination_bakeoff_thresholds_payload,
+    pagination_bakeoff_to_payload,
+    validate_bakeoff_payload,
+)
+from app.sources.offertoday.research.pagination_stage_gate import (  # noqa: E402
+    PAGINATION_BAKEOFF_REQUEST_BUDGET,
+    validate_pagination_comparison_parents,
+)
 from app.sources.offertoday.research.smoke import (  # noqa: E402
     runtime_smoke_request_budget,
 )
@@ -309,6 +336,66 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("backend/runtime/offertoday-research"),
     )
     freeze.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    pagination_bakeoff = commands.add_parser("pagination-bakeoff")
+    pagination_bakeoff.add_argument(
+        "--baseline-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    pagination_bakeoff.add_argument(
+        "--repeat-index",
+        type=int,
+        choices=(1, 2),
+        required=True,
+    )
+    pagination_bakeoff.add_argument("--order-seed", type=int, required=True)
+    pagination_bakeoff.add_argument("--run-id", default=None)
+    pagination_bakeoff.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    pagination_bakeoff.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    compare_pagination = commands.add_parser("compare-pagination")
+    compare_pagination.add_argument(
+        "--bakeoff-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    compare_pagination.add_argument("--run-id", default=None)
+    compare_pagination.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    compare_pagination.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    freeze_discovery = commands.add_parser("freeze-discovery-candidate")
+    freeze_discovery.add_argument(
+        "--comparison-artifact",
+        type=Path,
+        required=True,
+    )
+    freeze_discovery.add_argument("--run-id", default=None)
+    freeze_discovery.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    freeze_discovery.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parents[2],
@@ -2158,6 +2245,480 @@ def _best_effort_finalize_unexpected_failure(
     return summary, current_events
 
 
+def _pagination_input_set_hash(inputs: list[dict[str, Any]]) -> str:
+    canonical = json.dumps(
+        inputs,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _require_pagination_bakeoff_artifact(artifact_dir: Path):
+    artifact_dir = Path(artifact_dir).resolve(strict=True)
+    verification = verify_live_research_run(artifact_dir)
+    if (
+        not verification.valid
+        or verification.experiment != "cursor-pagination-bakeoff-v2"
+    ):
+        raise ValueError("pagination bake-off artifact failed strict verification")
+    manifest_path = artifact_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload = json.loads(
+        (artifact_dir / "bakeoff.json").read_text(encoding="utf-8")
+    )
+    validate_bakeoff_payload(payload)
+    metadata = manifest["metadata"]
+    return {
+        "artifact": str(artifact_dir),
+        "manifest_hash": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "run_id": manifest["run_id"],
+        "repeat_index": payload["repeat_index"],
+        "parent_artifact_hash": metadata["parent_artifact_hash"],
+        "baseline_artifact_hashes": metadata["baseline_artifact_hashes"],
+        "baseline_snapshot_hash": metadata["baseline_snapshot_hash"],
+        "baseline_inventory_hash": metadata["baseline_inventory_hash"],
+        "bakeoff_payload_hash": canonical_bakeoff_payload_hash(payload),
+    }, payload
+
+
+def _compare_pagination_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    if len(args.bakeoff_artifact) != 2:
+        _print_json(
+            {"error": "compare-pagination requires exactly two bake-off artifacts"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        evidence = [
+            _require_pagination_bakeoff_artifact(path)
+            for path in args.bakeoff_artifact
+        ]
+        evidence.sort(key=lambda item: item[0]["repeat_index"])
+        inputs = [item[0] for item in evidence]
+        payloads = [item[1] for item in evidence]
+        validate_pagination_comparison_parents(inputs)
+        decision = compare_bakeoff_payloads(payloads[0], payloads[1])
+        input_set_hash = _pagination_input_set_hash(inputs)
+        comparison_payload = {
+            "schema_version": 2,
+            "input_set_hash": input_set_hash,
+            "inputs": inputs,
+            "thresholds": pagination_bakeoff_thresholds_payload(),
+            "decision": decision.to_payload(),
+        }
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "compare-pagination",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=captured_at,
+        )
+        events = [
+            {
+                "sequence_no": 1,
+                "event_type": "research.run_started",
+                "payload": {
+                    "experiment": "cursor-pagination-comparison-v2",
+                    "input_set_hash": input_set_hash,
+                },
+                "emitted_by": "offertoday-research",
+                "created_at": captured_at,
+            },
+            {
+                "sequence_no": 2,
+                "event_type": "research.pagination_comparison",
+                "payload": decision.to_payload(),
+                "emitted_by": "offertoday-research",
+                "created_at": utc_now().isoformat(),
+            },
+            {
+                "sequence_no": 3,
+                "event_type": "research.run_summary",
+                "payload": {
+                    "input_set_hash": input_set_hash,
+                    "decision": decision.to_payload(),
+                },
+                "emitted_by": "offertoday-research",
+                "created_at": utc_now().isoformat(),
+            },
+        ]
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata={
+                "experiment": "cursor-pagination-comparison-v2",
+                "crawl_job_id": run_id,
+                "crawl_job_status": "completed",
+                "parent_artifact_hash": input_set_hash,
+                "pagination_passed": decision.accepted,
+                "selected_variant_id": decision.selected_variant_id,
+                "planner_version": planner_version,
+            },
+            events=events,
+            provenance=provenance,
+            json_files={"comparison.json": comparison_payload},
+        )
+        if (
+            not artifact_verifier(artifact_dir).valid
+            or not verify_live_research_run(artifact_dir).valid
+        ):
+            return EXIT_EVIDENCE_FAILURE
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    exit_code = EXIT_OK if decision.accepted else EXIT_INCOMPLETE
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "pagination_passed": decision.accepted,
+            "selected_variant_id": decision.selected_variant_id,
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
+def _freeze_discovery_candidate_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    try:
+        comparison_dir = args.comparison_artifact.resolve(strict=True)
+        comparison_check = verify_live_research_run(comparison_dir)
+        if (
+            not comparison_check.valid
+            or comparison_check.experiment
+            != "cursor-pagination-comparison-v2"
+        ):
+            raise ValueError("comparison artifact failed strict verification")
+        comparison_payload = json.loads(
+            (comparison_dir / "comparison.json").read_text(encoding="utf-8")
+        )
+        decision = comparison_payload.get("decision")
+        if not isinstance(decision, dict) or decision.get("accepted") is not True:
+            raise ValueError("pagination comparison did not accept a candidate")
+        selected_variant_id = decision.get("selected_variant_id")
+        selected_variant = next(
+            item
+            for item in BAKEOFF_VARIANTS
+            if item.variant_id == selected_variant_id
+        )
+        if selected_variant.pagination_mode != "response-cursor":
+            raise ValueError("selected discovery candidate must be cursor based")
+        comparison_manifest_hash = hashlib.sha256(
+            (comparison_dir / "manifest.json").read_bytes()
+        ).hexdigest()
+        candidate = DiscoveryCandidateV2(
+            candidate_version=2,
+            endpoint=BAKEOFF_ENDPOINT,
+            rcd_type=BAKEOFF_RCD_TYPE,
+            category_ids=BAKEOFF_CATEGORY_IDS,
+            pagination_mode=selected_variant.pagination_mode,
+            requested_page_size=selected_variant.requested_page_size,
+            browser_lifecycle=selected_variant.browser_lifecycle,
+            terminal_policy=BAKEOFF_TERMINAL_POLICY,
+            max_pages_per_condition=BAKEOFF_MAX_LOGICAL_PAGES_PER_CONDITION,
+            require_empty_confirmation=BAKEOFF_REQUIRE_EMPTY_CONFIRMATION,
+            max_attempts_per_page=BAKEOFF_MAX_ATTEMPTS_PER_PAGE,
+            retry_delays_seconds=BAKEOFF_RETRY_DELAYS_SECONDS,
+            page_delay_range_seconds=BAKEOFF_PAGE_DELAY_RANGE_SECONDS,
+            session_mode=BAKEOFF_SESSION_MODE,
+            fixed_repeat_category_ids=BAKEOFF_CATEGORY_IDS,
+            source_artifact_hash=comparison_payload["input_set_hash"],
+            comparison_artifact_hash=comparison_manifest_hash,
+        )
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "freeze-discovery-candidate",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=captured_at,
+        )
+        candidate_payload = candidate.to_payload()
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata={
+                "experiment": "discovery-candidate-v2",
+                "crawl_job_id": run_id,
+                "crawl_job_status": "completed",
+                "candidate_frozen": True,
+                "candidate_hash": candidate.candidate_hash,
+                "parent_artifact_hash": comparison_manifest_hash,
+                "comparison_artifact": str(comparison_dir),
+                "selected_variant_id": selected_variant_id,
+                "planner_version": planner_version,
+            },
+            events=[
+                {
+                    "sequence_no": 1,
+                    "event_type": "research.candidate_frozen",
+                    "payload": candidate_payload,
+                    "emitted_by": "offertoday-research",
+                    "created_at": captured_at,
+                }
+            ],
+            provenance=provenance,
+            json_files={"candidate.json": candidate_payload},
+        )
+        if (
+            not artifact_verifier(artifact_dir).valid
+            or not verify_live_research_run(artifact_dir).valid
+        ):
+            return EXIT_EVIDENCE_FAILURE
+    except (
+        OSError,
+        ValueError,
+        StopIteration,
+        subprocess.SubprocessError,
+    ) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "candidate_hash": candidate.candidate_hash,
+            "selected_variant_id": selected_variant_id,
+        }
+    )
+    return EXIT_OK
+
+
+def _pagination_bakeoff_command(
+    args,
+    *,
+    session_factory,
+    repository,
+    runtime_factory,
+    service_factory,
+    observation_service_factory,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    if len(args.baseline_artifact) != 2:
+        _print_json(
+            {"error": "pagination-bakeoff requires exactly two baseline artifacts"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        baseline_gate = require_matching_baselines(
+            args.baseline_artifact[0],
+            args.baseline_artifact[1],
+        )
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    research_repository = repository or OfferTodayResearchRepository()
+    db = None
+    artifact_dir = None
+    try:
+        db = session_factory()
+        start_snapshot, start_inventory = _capture_snapshot(
+            research_repository,
+            db,
+        )
+        _require_current_baseline(baseline_gate, start_snapshot, start_inventory)
+        observation_service = observation_service_factory(db)
+        observation_service.create_run(
+            ResearchMetadata(
+                run_id=run_id,
+                experiment="cursor-pagination-bakeoff-v2",
+                variant="frozen-five-variant-three-category-v2",
+                planner_version=planner_version,
+                plan=3,
+                parent_artifact_hash=baseline_gate.parent_artifact_hash,
+                request_budget=dict(PAGINATION_BAKEOFF_REQUEST_BUDGET),
+            ),
+            run_start_inventory=start_inventory,
+        )
+        observation_service.record_event(
+            "research.run_started",
+            {
+                "experiment": "cursor-pagination-bakeoff-v2",
+                "repeat_index": args.repeat_index,
+                "order_seed": args.order_seed,
+                "condition_count": 15,
+                "request_budget": dict(PAGINATION_BAKEOFF_REQUEST_BUDGET),
+                "endpoint": BAKEOFF_ENDPOINT,
+                "rcd_type": BAKEOFF_RCD_TYPE,
+                "category_ids": list(BAKEOFF_CATEGORY_IDS),
+                "controls": pagination_bakeoff_controls_payload(),
+                "thresholds": pagination_bakeoff_thresholds_payload(),
+            },
+        )
+        staging_sink = ResearchNoopListingStagingSink()
+        execution = asyncio.run(
+            service_factory().run_pagination_bakeoff(
+                runtime_factory=runtime_factory,
+                observation_service=observation_service,
+                repeat_index=args.repeat_index,
+                order_seed=args.order_seed,
+                staging_sink=staging_sink,
+            )
+        )
+        end_snapshot, end_inventory = _capture_snapshot(
+            research_repository,
+            db,
+        )
+        product_data_unchanged = (
+            start_snapshot.data_hash == end_snapshot.data_hash
+            and start_inventory.data_hash == end_inventory.data_hash
+        )
+        bakeoff_payload = pagination_bakeoff_to_payload(execution)
+        page_evidence = [
+            observation.cursor_evidence
+            for item in execution.executions
+            for observation in item.result.observations
+            if observation.cursor_evidence is not None
+        ]
+        logical_count = len({item.logical_request_id for item in page_evidence})
+        physical_count = len(page_evidence)
+        bakeoff_completed = (
+            execution.failure_reason is None
+            and len(execution.executions) == 15
+            and logical_count <= PAGINATION_BAKEOFF_REQUEST_BUDGET["listing_logical"]
+            and physical_count
+            <= PAGINATION_BAKEOFF_REQUEST_BUDGET["listing_attempt_max"]
+            and product_data_unchanged
+        )
+        summary = {
+            "bakeoff_completed": bakeoff_completed,
+            "failure_reason": execution.failure_reason,
+            "repeat_index": args.repeat_index,
+            "order_seed": args.order_seed,
+            "request_budget": dict(PAGINATION_BAKEOFF_REQUEST_BUDGET),
+            "logical_listing_requests": logical_count,
+            "physical_listing_attempts": physical_count,
+            "detail_attempts": 0,
+            "product_writes": 0,
+            "product_data_unchanged": product_data_unchanged,
+            "run_start_snapshot_hash": start_snapshot.data_hash,
+            "run_end_snapshot_hash": end_snapshot.data_hash,
+            "run_start_product_data_hash": start_snapshot.product_data_hash,
+            "run_end_product_data_hash": end_snapshot.product_data_hash,
+            "run_start_inventory_hash": start_inventory.data_hash,
+            "run_end_inventory_hash": end_inventory.data_hash,
+            "would_stage_rows": staging_sink.would_stage_rows,
+            "stage_calls": staging_sink.stage_calls,
+            "variant_summaries": bakeoff_payload["variant_summaries"],
+            "bakeoff_payload_hash": canonical_bakeoff_payload_hash(
+                bakeoff_payload
+            ),
+        }
+        terminal_status = "completed" if bakeoff_completed else "failed"
+        observation_service.finish_run(
+            status=terminal_status,
+            summary=summary,
+            error_message=(None if bakeoff_completed else "pagination_bakeoff_failed"),
+        )
+        events = _ordered_events(
+            research_repository.list_research_events(db, UUID(run_id))
+        )
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "pagination-bakeoff",
+                "repeat_index": args.repeat_index,
+                "order_seed": args.order_seed,
+                "session_mode": BAKEOFF_SESSION_MODE,
+                "crawl_job_status": terminal_status,
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata={
+                "experiment": "cursor-pagination-bakeoff-v2",
+                "crawl_job_id": run_id,
+                "crawl_job_status": terminal_status,
+                "parent_artifact_hash": baseline_gate.parent_artifact_hash,
+                "baseline_artifact_hash": baseline_gate.parent_artifact_hash,
+                "baseline_artifact_hashes": [
+                    baseline_gate.first.manifest_hash,
+                    baseline_gate.second.manifest_hash,
+                ],
+                "baseline_run_ids": [
+                    baseline_gate.first.run_id,
+                    baseline_gate.second.run_id,
+                ],
+                "baseline_snapshot_hash": baseline_gate.first.snapshot_hash,
+                "baseline_inventory_hash": baseline_gate.first.inventory_hash,
+                "repeat_index": args.repeat_index,
+                "order_seed": args.order_seed,
+                "request_budget": dict(PAGINATION_BAKEOFF_REQUEST_BUDGET),
+                "product_data_unchanged": product_data_unchanged,
+                "planner_version": planner_version,
+            },
+            events=events,
+            provenance=provenance,
+            json_files={"bakeoff.json": bakeoff_payload},
+        )
+        generic_check = artifact_verifier(artifact_dir)
+        strict_check = verify_live_research_run(artifact_dir)
+        if not generic_check.valid or not strict_check.valid:
+            _print_json(
+                {
+                    "error": "pagination bake-off artifact verification failed",
+                    "strict_issues": list(strict_check.issues),
+                },
+                stream=sys.stderr,
+            )
+            return EXIT_EVIDENCE_FAILURE
+    except (OSError, SQLAlchemyError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    finally:
+        if db is not None:
+            db.close()
+    exit_code = EXIT_OK if bakeoff_completed else EXIT_HARD_STOP
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "repeat_index": args.repeat_index,
+            "bakeoff_completed": bakeoff_completed,
+            "failure_reason": execution.failure_reason,
+            "logical_listing_requests": logical_count,
+            "physical_listing_attempts": physical_count,
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -2177,6 +2738,32 @@ def main(
         result = verify_live_research_run(args.artifact)
         _print_json(result.to_payload())
         return EXIT_OK if result.valid else EXIT_EVIDENCE_FAILURE
+    if args.command == "pagination-bakeoff":
+        return _pagination_bakeoff_command(
+            args,
+            session_factory=session_factory,
+            repository=repository,
+            runtime_factory=runtime_factory,
+            service_factory=service_factory,
+            observation_service_factory=observation_service_factory,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command == "compare-pagination":
+        return _compare_pagination_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command == "freeze-discovery-candidate":
+        return _freeze_discovery_candidate_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
     if args.command == "freeze-candidate":
         return _freeze_candidate_command(
             args,

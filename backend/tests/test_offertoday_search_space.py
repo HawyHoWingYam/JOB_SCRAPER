@@ -409,6 +409,11 @@ def test_listing_payload_includes_rcd_type_only_when_requested() -> None:
     )
 
     assert default_payload["rcdType"] == 7
+    assert default_payload["pageSize"] == 50
+    assert "sessionId" not in default_payload
+    assert "supplePage" not in default_payload
+    assert "suppleAmount" not in default_payload
+    assert "suppleType" not in default_payload
     assert custom_payload["rcdType"] == 9
     assert "rcdType" not in no_rcd_payload
 

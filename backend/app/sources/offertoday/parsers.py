@@ -91,10 +91,15 @@ def parse_offertoday_listing_response(
     """Parse the listing/search API response into a list of raw job dicts."""
     data = response_data.get("data") or {}
     result_list = data.get("resultList") or []
-    parsed = []
-    for raw_job in result_list:
-        parsed.append(_parse_listing_job(raw_job))
-    return parsed
+    return parse_offertoday_listing_rows(result_list)
+
+
+def parse_offertoday_listing_rows(
+    rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> list[dict[str, Any]]:
+    """Parse an already validated result or supplemental row cohort."""
+
+    return [_parse_listing_job(raw_job) for raw_job in rows]
 
 
 def _parse_listing_job(raw: dict[str, Any]) -> dict[str, Any]:

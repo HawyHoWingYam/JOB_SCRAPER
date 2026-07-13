@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AsyncExitStack
 from datetime import datetime
 from typing import Any
 
@@ -25,6 +28,7 @@ from app.sources.offertoday.listing_runner import (
     OfferTodayListingCondition,
     OfferTodayListingRunner,
 )
+from app.sources.offertoday.listing_contract import OfferTodayListingTransportResult
 from app.sources.offertoday.research.calibration import (
     BoundedConditionResult,
     build_pilot_conditions,
@@ -36,6 +40,21 @@ from app.sources.offertoday.research.live_contracts import (
     DetailSmokeTarget,
     LiveSmokeExecution,
 )
+from app.sources.offertoday.research.pagination_bakeoff import (
+    BAKEOFF_ENDPOINT,
+    BAKEOFF_MAX_ATTEMPTS_PER_PAGE,
+    BAKEOFF_MAX_LOGICAL_PAGES_PER_CONDITION,
+    BAKEOFF_PAGE_DELAY_RANGE_SECONDS,
+    BAKEOFF_RCD_TYPE,
+    BAKEOFF_REQUIRE_EMPTY_CONFIRMATION,
+    BAKEOFF_RETRY_DELAYS_SECONDS,
+    BAKEOFF_SESSION_MODE,
+    PaginationBakeoffRepeat,
+    PaginationConditionExecution,
+    bakeoff_variant,
+    build_bakeoff_order,
+    pagination_bakeoff_unexpected_failure_reason,
+)
 from app.sources.offertoday.research.smoke import (
     SMOKE_DETAIL_TARGET_COUNT,
     SMOKE_LISTING_REQUEST_LIMIT,
@@ -46,6 +65,95 @@ from app.sources.offertoday.research.smoke import (
 )
 from app.sources.offertoday.response_policy import OfferTodayResponseKind
 from app.utils.time import utc_now
+
+
+async def _typed_listing_fetch(runtime, payload, *, listing_url=None):
+    typed_fetch = getattr(runtime, "fetch_listing_page", None)
+    if callable(typed_fetch):
+        return await typed_fetch(payload, listing_url=listing_url)
+    raw_payload = await runtime.fetch_listing_json(
+        payload,
+        listing_url=listing_url,
+    )
+    return OfferTodayListingTransportResult(
+        payload=raw_payload,
+        browser_context_hash=getattr(runtime, "browser_context_hash", None),
+    )
+
+
+class _ManagedListingTransport:
+    """Own a research runtime and preserve it for one logical page retry."""
+
+    def __init__(self, runtime_factory, *, restart_each_page: bool) -> None:
+        self._runtime_factory = runtime_factory
+        self._restart_each_page = restart_each_page
+        self._runtime_context = None
+        self._runtime = None
+        self._logical_page_key: str | None = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        await self._close_runtime(exc_type, exc, traceback)
+
+    @property
+    def browser_context_hash(self) -> str | None:
+        value = getattr(self._runtime, "browser_context_hash", None)
+        return value if isinstance(value, str) and value else None
+
+    @staticmethod
+    def _page_key(payload, listing_url) -> str:
+        canonical = json.dumps(
+            {"listing_url": listing_url, "payload": payload},
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    async def _open_runtime(self) -> None:
+        runtime_context = self._runtime_factory(headed=False)
+        runtime = await runtime_context.__aenter__()
+        self._runtime_context = runtime_context
+        self._runtime = runtime
+
+    async def _close_runtime(
+        self,
+        exc_type=None,
+        exc=None,
+        traceback=None,
+    ) -> None:
+        runtime_context = self._runtime_context
+        self._runtime_context = None
+        self._runtime = None
+        self._logical_page_key = None
+        if runtime_context is not None:
+            await runtime_context.__aexit__(exc_type, exc, traceback)
+
+    async def fetch_listing_page(self, payload, *, listing_url=None):
+        page_key = self._page_key(payload, listing_url)
+        if (
+            self._restart_each_page
+            and self._runtime is not None
+            and self._logical_page_key != page_key
+        ):
+            await self._close_runtime()
+        if self._runtime is None:
+            await self._open_runtime()
+        self._logical_page_key = page_key
+        return await _typed_listing_fetch(
+            self._runtime,
+            payload,
+            listing_url=listing_url,
+        )
+
+    async def fetch_listing_json(self, payload, *, listing_url=None):
+        result = await self.fetch_listing_page(payload, listing_url=listing_url)
+        return result.payload
+
+    async def restart_after_browser_loss(self) -> None:
+        await self._close_runtime()
 
 
 class OfferTodayResearchLiveService:
@@ -63,6 +171,140 @@ class OfferTodayResearchLiveService:
         self._sleep = sleep
         self._clock = clock
         self._now = now
+
+    async def run_pagination_bakeoff(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        repeat_index: int,
+        order_seed: int,
+        staging_sink: Any | None = None,
+    ) -> PaginationBakeoffRepeat:
+        active_staging_sink = (
+            ResearchNoopListingStagingSink() if staging_sink is None else staging_sink
+        )
+        order = build_bakeoff_order(
+            repeat_index=repeat_index,
+            order_seed=order_seed,
+        )
+        executions: list[PaginationConditionExecution] = []
+        failure_reason: str | None = None
+        shared_stack = AsyncExitStack()
+        await shared_stack.__aenter__()
+        try:
+            shared_transports: dict[str, _ManagedListingTransport] = {}
+            for entry in order:
+                variant = bakeoff_variant(entry.variant_id)
+                policy = variant.request_policy(repeat_index=repeat_index)
+                condition = OfferTodayListingCondition(
+                    search_family="cursor_pagination_bakeoff_v2",
+                    category_id=entry.category_id,
+                    keyword="",
+                    endpoint=BAKEOFF_ENDPOINT,
+                    rcd_type=BAKEOFF_RCD_TYPE,
+                )
+
+                async def run_with_transport(transport) -> ListingRunResult:
+                    runner = self._runner_factory(
+                        transport,
+                        sleep=self._sleep,
+                        clock=self._clock,
+                    )
+                    return await runner.run(
+                        conditions=(condition,),
+                        stop_policy=ListingStopPolicy(
+                            max_pages_per_condition=(
+                                BAKEOFF_MAX_LOGICAL_PAGES_PER_CONDITION
+                            ),
+                            unique_job_cap=None,
+                            require_empty_confirmation=(
+                                BAKEOFF_REQUIRE_EMPTY_CONFIRMATION
+                            ),
+                        ),
+                        retry_policy=ListingRetryPolicy(
+                            max_attempts_per_page=BAKEOFF_MAX_ATTEMPTS_PER_PAGE,
+                            retry_delays_seconds=BAKEOFF_RETRY_DELAYS_SECONDS,
+                            page_delay_seconds=0.0,
+                            page_delay_range_seconds=(
+                                BAKEOFF_PAGE_DELAY_RANGE_SECONDS
+                            ),
+                        ),
+                        observation_sink=observation_service,
+                        staging_sink=active_staging_sink,
+                        session_mode=BAKEOFF_SESSION_MODE,
+                        request_policy=policy,
+                    )
+
+                try:
+                    if variant.browser_lifecycle == "shared-variant-runtime":
+                        transport = shared_transports.get(variant.variant_id)
+                        if transport is None:
+                            transport = await shared_stack.enter_async_context(
+                                _ManagedListingTransport(
+                                    runtime_factory,
+                                    restart_each_page=False,
+                                )
+                            )
+                            shared_transports[variant.variant_id] = transport
+                        result = await run_with_transport(transport)
+                    elif variant.browser_lifecycle == "condition-local-runtime":
+                        async with _ManagedListingTransport(
+                            runtime_factory,
+                            restart_each_page=False,
+                        ) as transport:
+                            result = await run_with_transport(transport)
+                    elif variant.browser_lifecycle == "restart-each-page":
+                        async with _ManagedListingTransport(
+                            runtime_factory,
+                            restart_each_page=True,
+                        ) as transport:
+                            result = await run_with_transport(transport)
+                    else:  # pragma: no cover - variant contract invariant
+                        raise AssertionError(
+                            "unsupported bake-off browser lifecycle"
+                        )
+                except Exception as exc:
+                    failure_reason = pagination_bakeoff_unexpected_failure_reason(exc)
+                    break
+
+                executions.append(
+                    PaginationConditionExecution(
+                        repeat_index=repeat_index,
+                        variant_id=entry.variant_id,
+                        category_id=entry.category_id,
+                        category_order=entry.category_order,
+                        result=result,
+                    )
+                )
+                if result.stop_reason in {
+                    "auth_expired",
+                    "waf_challenge",
+                    "ip_blocked",
+                    "id_mismatch",
+                    "identity_conflict",
+                    "identity_issue",
+                    "unresolved_gap",
+                    "cursor_contract_violation",
+                }:
+                    failure_reason = f"hard_stop:{result.stop_reason}"
+                    break
+        except Exception as exc:
+            failure_reason = pagination_bakeoff_unexpected_failure_reason(exc)
+        finally:
+            try:
+                await shared_stack.aclose()
+            except Exception as exc:
+                if failure_reason is None:
+                    failure_reason = pagination_bakeoff_unexpected_failure_reason(exc)
+
+        return PaginationBakeoffRepeat(
+            repeat_index=repeat_index,
+            order_seed=order_seed,
+            order=order,
+            executions=tuple(executions),
+            failure_reason=failure_reason,
+        )
 
     async def run_bounded_conditions(
         self,

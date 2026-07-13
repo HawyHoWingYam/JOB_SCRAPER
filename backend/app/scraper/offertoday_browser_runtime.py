@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.config import settings
 from app.manual_actions.live_browser_registry import get_live_browser_registry
@@ -26,6 +28,10 @@ from app.sources.offertoday.detail_identity import (
     resolve_offertoday_detail_identity,
     resolve_offertoday_listing_identity,
 )
+from app.sources.offertoday.listing_contract import (
+    OfferTodayBrowserContextLostError,
+    OfferTodayListingTransportResult,
+)
 from app.sources.offertoday.response_policy import (
     OfferTodayResponseKind,
     OfferTodayTransportError,
@@ -36,6 +42,17 @@ logger = logging.getLogger(__name__)
 
 
 _WAF_CHALLENGE_PATH = "/web/passport/cm/verify"
+_HEADED_DISPLAY_UNAVAILABLE_MARKERS = (
+    "Looks like you launched a headed browser without having a XServer running.",
+    "Missing X server or $DISPLAY",
+    "use 'xvfb-run",
+)
+_BROWSER_CONTEXT_LOST_MARKERS = (
+    "target page, context or browser has been closed",
+    "page has been closed",
+    "browser has been closed",
+    "target closed",
+)
 _OFFERTODAY_DETAIL_URL_TEMPLATE = (
     f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/jobDetail?id=%s&encryptJobId=%s"
 )
@@ -51,6 +68,13 @@ class OfferTodaySessionCheckResult:
     api_code: int | None
     message: str | None
     healthy: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _OfferTodayHttpJsonResponse:
+    payload: dict[str, Any] | None
+    http_status: int
+    response_url: str
 
 
 class OfferTodayBrowserRuntime:
@@ -83,6 +107,7 @@ class OfferTodayBrowserRuntime:
         self._owns_context = False
         self._owns_browser = False
         self._runtime_started = False
+        self._context_id: str | None = None
 
     async def __aenter__(self) -> "OfferTodayBrowserRuntime":
         await self.start()
@@ -112,6 +137,7 @@ class OfferTodayBrowserRuntime:
         except Exception:
             await self.stop()
             raise
+        self._context_id = uuid4().hex
         self._runtime_started = True
 
     async def stop(self) -> None:
@@ -130,6 +156,13 @@ class OfferTodayBrowserRuntime:
         self._owns_context = False
         self._owns_browser = False
         self._runtime_started = False
+        self._context_id = None
+
+    @property
+    def browser_context_hash(self) -> str | None:
+        if self._context_id is None:
+            return None
+        return hashlib.sha256(self._context_id.encode()).hexdigest()
 
     async def fetch_listing_json(
         self,
@@ -137,6 +170,43 @@ class OfferTodayBrowserRuntime:
         *,
         listing_url: str | None = None,
     ) -> dict[str, Any] | None:
+        resolved_listing_url = self._resolve_listing_url(listing_url)
+        return await self._fetch_json(
+            resolved_listing_url,
+            method="POST",
+            payload=payload,
+        )
+
+    async def fetch_listing_page(
+        self,
+        payload: dict[str, Any],
+        *,
+        listing_url: str | None = None,
+    ) -> OfferTodayListingTransportResult:
+        """Return typed listing transport evidence without owning cursor state."""
+
+        try:
+            response = await self._fetch_json_response(
+                self._resolve_listing_url(listing_url),
+                method="POST",
+                payload=payload,
+            )
+        except Exception as exc:
+            message = str(exc or "").lower()
+            if any(marker in message for marker in _BROWSER_CONTEXT_LOST_MARKERS):
+                raise OfferTodayBrowserContextLostError(
+                    "OfferToday browser context was lost during listing transport"
+                ) from exc
+            raise
+        return OfferTodayListingTransportResult(
+            payload=response.payload,
+            browser_context_hash=self.browser_context_hash,
+            http_status=response.http_status,
+            response_url=response.response_url,
+        )
+
+    @staticmethod
+    def _resolve_listing_url(listing_url: str | None) -> str:
         resolved_listing_url = (
             OFFERTODAY_LISTING_SEARCH_URL if listing_url is None else listing_url
         )
@@ -145,11 +215,7 @@ class OfferTodayBrowserRuntime:
             OFFERTODAY_LISTING_BROWSE_URL,
         ):
             raise ValueError(f"Unsupported OfferToday listing URL: {listing_url!r}")
-        return await self._fetch_json(
-            resolved_listing_url,
-            method="POST",
-            payload=payload,
-        )
+        return resolved_listing_url
 
     async def fetch_detail_json(
         self,
@@ -358,16 +424,20 @@ class OfferTodayBrowserRuntime:
             launch_kwargs["executable_path"] = self.executable_path
         else:
             launch_kwargs["channel"] = self.browser_channel
-        launch_result = await launch_persistent_context_with_fallback_async(
-            self._playwright.chromium,
-            user_data_dir=str(self._resolve_user_data_dir()),
-            browser_channel=self.browser_channel,
-            executable_path=self.executable_path,
-            headless=False,
-            extra_launch_kwargs={
-                key: value for key, value in launch_kwargs.items() if key != "headless"
-            },
-        )
+        try:
+            launch_result = await launch_persistent_context_with_fallback_async(
+                self._playwright.chromium,
+                user_data_dir=str(self._resolve_user_data_dir()),
+                browser_channel=self.browser_channel,
+                executable_path=self.executable_path,
+                headless=False,
+                extra_launch_kwargs={
+                    key: value for key, value in launch_kwargs.items() if key != "headless"
+                },
+            )
+        except Exception as exc:
+            self._raise_if_headed_display_unavailable(exc)
+            raise
         if launch_result.attempted_fallback:
             logger.warning(
                 "offertoday_browser_channel_fallback requested=%s resolved=%s user_data_dir=%s",
@@ -433,6 +503,20 @@ class OfferTodayBrowserRuntime:
         method: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
+        response = await self._fetch_json_response(
+            url,
+            method=method,
+            payload=payload,
+        )
+        return response.payload
+
+    async def _fetch_json_response(
+        self,
+        url: str,
+        *,
+        method: str,
+        payload: dict[str, Any] | None = None,
+    ) -> _OfferTodayHttpJsonResponse:
         if self._page is None:
             raise RuntimeError("OfferToday browser runtime has not been started")
 
@@ -501,7 +585,11 @@ class OfferTodayBrowserRuntime:
                 payload=parsed_payload,
                 error_kind="http",
             )
-        return parsed_payload
+        return _OfferTodayHttpJsonResponse(
+            payload=parsed_payload,
+            http_status=http_status,
+            response_url=response_url,
+        )
 
     async def _read_csrf_token(self) -> str | None:
         if self._page is None:
@@ -529,6 +617,31 @@ class OfferTodayBrowserRuntime:
                 "Or switch the resume strategy to Fresh Profile.",
             ],
         )
+
+    def _raise_if_headed_display_unavailable(self, exc: Exception) -> None:
+        message = str(exc or "")
+        if not any(marker in message for marker in _HEADED_DISPLAY_UNAVAILABLE_MARKERS):
+            return
+
+        logger.warning(
+            "offertoday_headed_display_unavailable user_data_dir=%s error=%s",
+            self._resolve_user_data_dir(),
+            message.splitlines()[0] if message else type(exc).__name__,
+        )
+        raise ManualActionRequiredError(
+            source_site="offertoday",
+            stage="headed_display_unavailable",
+            blocked_url=f"{OFFERTODAY_BASE_URL}/hk/search",
+            message=(
+                "OfferToday headed browser could not start because this runtime has no X server/$DISPLAY. "
+                "Run the crawl in a desktop session with display support, or retry in headless mode."
+            ),
+            action_type="environment_setup",
+            instructions=[
+                "Run the backend in a desktop session with display support before retrying headed mode.",
+                "Or retry the crawl in headless mode if manual verification is not required.",
+            ],
+        ) from exc
 
     def _resolve_user_data_dir(self) -> Path:
         if self.user_data_dir:

@@ -13,9 +13,15 @@ from uuid import UUID
 
 import pytest
 import scripts.offertoday_research_census as census_cli
+from app.services.offertoday_research_live_service import (
+    OfferTodayResearchLiveService,
+)
 from app.services.offertoday_research_staging_service import (
     OfferTodayReconciledListingStagingSink,
     OfferTodayStagingReconciliation,
+)
+from app.sources.offertoday.listing_contract import (
+    OfferTodayListingTransportResult,
 )
 from app.sources.offertoday.listing_runner import (
     ListingConditionOutcome,
@@ -24,6 +30,10 @@ from app.sources.offertoday.listing_runner import (
     ListingRunResult,
     OfferTodayIdentityPair,
     listing_observation_to_payload,
+)
+from app.sources.offertoday.research.pagination_stage_gate import (
+    PAGINATION_BAKEOFF_REQUEST_BUDGET,
+    verify_pagination_artifact,
 )
 from app.sources.offertoday.research.artifacts import (
     ArtifactVerificationResult,
@@ -52,6 +62,10 @@ from app.sources.offertoday.research.live_contracts import (
     DetailSmokeObservation,
     DetailSmokeTarget,
     LiveSmokeExecution,
+)
+from app.sources.offertoday.research.pagination_bakeoff import (
+    pagination_bakeoff_controls_payload,
+    pagination_bakeoff_thresholds_payload,
 )
 from app.sources.offertoday.research.smoke import (
     build_runtime_smoke_condition,
@@ -1017,6 +1031,7 @@ class State:
         self.created_metadata = None
         self.calibration_conditions = None
         self.staging_sink = None
+        self.pagination_requests: list[dict] = []
 
     def append_event(self, event_type: str, payload: dict) -> None:
         self.events.append(
@@ -1048,6 +1063,22 @@ class FakeObservationService:
     def record_detail_attempt(self, payload: dict) -> None:
         self.state.append_event("research.detail_attempt", payload)
 
+    async def record_page_attempt(self, observation) -> None:
+        self.state.append_event(
+            "research.page_attempt",
+            listing_observation_to_payload(observation),
+        )
+
+    async def record_condition_outcome(self, outcome) -> None:
+        self.state.append_event(
+            (
+                "research.condition_completed"
+                if outcome.is_complete
+                else "research.condition_incomplete"
+            ),
+            listing_observation_to_payload(outcome),
+        )
+
     def finish_run(self, **kwargs) -> None:
         self.state.log.append("finish_run")
         if self.state.finish_errors:
@@ -1068,6 +1099,78 @@ class FakeRuntime:
     async def __aexit__(self, exc_type, exc, tb):
         self.state.log.append("browser_close")
         return None
+
+
+class FakePaginationRuntime:
+    def __init__(
+        self,
+        state: State,
+        *,
+        missing_cursor: bool = False,
+        unexpected_on_request: int | None = None,
+        **kwargs,
+    ) -> None:
+        self.state = state
+        self.missing_cursor = missing_cursor
+        self.unexpected_on_request = unexpected_on_request
+        self.state.runtime_kwargs.append(kwargs)
+        self.runtime_index = len(self.state.runtime_kwargs)
+        self.browser_context_hash = hashlib.sha256(
+            f"pagination-context-{self.runtime_index}".encode()
+        ).hexdigest()
+
+    async def __aenter__(self):
+        self.state.log.append("browser_open")
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.state.log.append("browser_close")
+        return None
+
+    async def fetch_listing_page(self, payload, *, listing_url=None):
+        if self.unexpected_on_request == len(self.state.pagination_requests) + 1:
+            raise RuntimeError("secret runtime failure details")
+        self.state.log.append("network")
+        self.state.pagination_requests.append(dict(payload))
+        category_id = payload["jobFunctionCodes"][0]
+        page = payload["page"]
+        session_id = payload.get("sessionId") or f"session-{category_id}"
+        response_data = {
+            "pageSize": 10,
+            "sessionId": session_id,
+            "supplePage": page,
+            "suppleAmount": 0,
+            "suppleType": 0,
+            "hasMore": False,
+            "total": 100,
+            "resultList": (
+                [
+                    {
+                        "jobId": f"{category_id}-{payload['pageSize']}",
+                        "encryptJobId": (
+                            f"enc-{category_id}-{payload['pageSize']}"
+                        ),
+                        "jobName": "Platform Engineer",
+                        "companyName": "Example Technology",
+                    }
+                ]
+                if page == 1
+                else []
+            ),
+            "suppleRcdList": [],
+        }
+        if self.missing_cursor:
+            for field_name in (
+                "sessionId",
+                "supplePage",
+                "suppleAmount",
+                "suppleType",
+            ):
+                response_data.pop(field_name)
+        return OfferTodayListingTransportResult(
+            payload={"code": 0, "data": response_data},
+            browser_context_hash=self.browser_context_hash,
+        )
 
 
 class FakeLiveService:
@@ -2577,6 +2680,228 @@ def test_current_database_drift_from_matching_baselines_stops_before_browser(
     assert result == census_cli.EXIT_EVIDENCE_FAILURE
     assert runtime_calls == []
     assert "browser_open" not in state.log
+
+
+def test_pagination_bakeoff_current_database_drift_stops_before_browser(
+    tmp_path,
+) -> None:
+    baseline_row = StagedListingSnapshot(
+        row_id="row-1",
+        source_job_id="j1",
+        detail_status="pending",
+        published_job_id=None,
+        crawl_job_id="crawl-1",
+    )
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(
+        baselines,
+        BASELINE_RUN_1,
+        listings=[baseline_row],
+    )
+    second = baseline_artifact(
+        baselines,
+        BASELINE_RUN_2,
+        listings=[baseline_row],
+    )
+    state = State()
+
+    result = census_cli.main(
+        [
+            "pagination-bakeoff",
+            "--repeat-index",
+            "1",
+            "--order-seed",
+            "20260713",
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=lambda **kwargs: FakePaginationRuntime(state, **kwargs),
+    )
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert state.runtime_kwargs == []
+    assert "browser_open" not in state.log
+    assert "network" not in state.log
+
+
+def test_pagination_bakeoff_live_command_persists_exact_budget_and_strict_artifact(
+    tmp_path,
+    capsys,
+) -> None:
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+    state = State()
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    result = census_cli.main(
+        [
+            "pagination-bakeoff",
+            "--repeat-index",
+            "1",
+            "--order-seed",
+            "20260713",
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=lambda **kwargs: FakePaginationRuntime(state, **kwargs),
+        service_factory=lambda: OfferTodayResearchLiveService(sleep=no_sleep),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    manifest = json.loads((artifact / "manifest.json").read_text(encoding="utf-8"))
+    payload = json.loads((artifact / "bakeoff.json").read_text(encoding="utf-8"))
+    summary = state.finished[-1]["summary"]
+
+    assert result == census_cli.EXIT_OK
+    assert output["exit_code"] == census_cli.EXIT_OK
+    assert output["logical_listing_requests"] == 30
+    assert output["physical_listing_attempts"] == 30
+    assert state.created_metadata.request_budget == PAGINATION_BAKEOFF_REQUEST_BUDGET
+    assert manifest["metadata"]["request_budget"] == (
+        PAGINATION_BAKEOFF_REQUEST_BUDGET
+    )
+    assert summary["request_budget"] == PAGINATION_BAKEOFF_REQUEST_BUDGET
+    assert summary["detail_attempts"] == 0
+    assert summary["product_writes"] == 0
+    assert summary["product_data_unchanged"] is True
+    assert payload["controls"] == pagination_bakeoff_controls_payload()
+    assert payload["thresholds"] == pagination_bakeoff_thresholds_payload()
+    assert verify_pagination_artifact(artifact).valid is True
+
+
+def test_pagination_bakeoff_hard_stop_exports_valid_partial_artifact(
+    tmp_path,
+    capsys,
+) -> None:
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+    state = State()
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    result = census_cli.main(
+        [
+            "pagination-bakeoff",
+            "--repeat-index",
+            "1",
+            "--order-seed",
+            "20260713",
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=lambda **kwargs: FakePaginationRuntime(
+            state,
+            missing_cursor=True,
+            **kwargs,
+        ),
+        service_factory=lambda: OfferTodayResearchLiveService(sleep=no_sleep),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads((artifact / "bakeoff.json").read_text(encoding="utf-8"))
+
+    assert result == census_cli.EXIT_HARD_STOP
+    assert output["exit_code"] == census_cli.EXIT_HARD_STOP
+    assert output["failure_reason"] == "hard_stop:cursor_contract_violation"
+    assert payload["status"] == "failed"
+    assert 0 < len(payload["executions"]) < len(payload["order"])
+    assert state.finished[-1]["status"] == "failed"
+    assert verify_pagination_artifact(artifact).valid is True
+
+
+def test_pagination_bakeoff_unexpected_error_exports_type_only_partial_artifact(
+    tmp_path,
+    capsys,
+) -> None:
+    baselines = tmp_path / "baselines"
+    first = baseline_artifact(baselines, BASELINE_RUN_1)
+    second = baseline_artifact(baselines, BASELINE_RUN_2)
+    state = State()
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    result = census_cli.main(
+        [
+            "pagination-bakeoff",
+            "--repeat-index",
+            "1",
+            "--order-seed",
+            "20260713",
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=lambda **kwargs: FakePaginationRuntime(
+            state,
+            unexpected_on_request=5,
+            **kwargs,
+        ),
+        service_factory=lambda: OfferTodayResearchLiveService(sleep=no_sleep),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads((artifact / "bakeoff.json").read_text(encoding="utf-8"))
+
+    assert result == census_cli.EXIT_HARD_STOP
+    assert output["exit_code"] == census_cli.EXIT_HARD_STOP
+    assert output["failure_reason"] == (
+        "unexpected_pagination_bakeoff_error:RuntimeError"
+    )
+    assert "secret runtime failure details" not in json.dumps(output)
+    assert payload["status"] == "failed"
+    assert 0 < len(payload["executions"]) < len(payload["order"])
+    assert verify_pagination_artifact(artifact).valid is True
 
 
 def test_job_id_fallback_rows_drift_stops_before_browser_or_live_dependencies(
