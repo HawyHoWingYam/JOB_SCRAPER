@@ -516,3 +516,228 @@ browser = await playwright.chromium.connect_over_cdp(
 
 The compatibility boundary, profile identity, and container-to-host network
 boundary remain explicit and independently testable.
+
+## Scenario: Listing-bound detail scope and truthful crawl-task history
+
+### 1. Scope / Trigger
+
+Use this contract when changing durable Crawl Tasks ordering, the direct-run
+OfferToday detail scope control, detail target selection/resume behavior, or
+the distinct progress fields returned by crawl-task snapshots.
+
+This boundary exists because mutable crawl metrics update both detail jobs and
+their source listing jobs. Activity timestamps are useful display evidence but
+are not stable history identity, and staging-row counts are not canonical job
+progress.
+
+### 2. Signatures
+
+```http
+POST /api/v1/crawl-jobs
+Content-Type: application/json
+
+{
+  "source_site": "offertoday",
+  "crawl_phase": "detail",
+  "source_listing_crawl_job_id": "<listing-crawl-uuid>",
+  "category_ids": [],
+  "detail_limit": 5000,
+  "detail_statuses": ["pending", "failed", "manual_action_required"],
+  "skip_existing": false
+}
+```
+
+```http
+GET /api/v1/crawl-jobs/tasks?page=<n>&page_size=<n>&time_range=all
+```
+
+```python
+CrawlJobRepository.list_crawl_task_page(
+    db,
+    *,
+    page,
+    page_size,
+    status,
+    source_site,
+    crawl_mode,
+    updated_since=None,
+) -> tuple[list[CrawlJob], int]
+
+build_crawl_task_snapshot(
+    crawl_job,
+    latest_event,
+    *,
+    now,
+    events=None,
+    category_lookup_cache=None,
+) -> dict[str, Any]
+```
+
+### 3. Contracts
+
+#### Stable task history
+
+Durable Crawl Tasks history uses this exact order:
+
+```text
+queued_at DESC, created_at DESC, id DESC
+```
+
+`updated_at` remains display-only. Progress, issue, reconciliation, or linked
+listing metric updates must not move an existing row. The API preserves
+repository order and the frontend must not sort by mutable activity time.
+
+#### Listing-bound versus global detail scope
+
+- OfferToday detail mode defaults to the newest `completed` listing batch with
+  pending, failed, or manual-action work. Compare immutable `queued_at`, then
+  use the crawl-job ID as a deterministic tie-breaker.
+- Selecting a batch persists `source_listing_crawl_job_id` in the crawl-job
+  request payload. Resume starts from that payload and must preserve the ID.
+- When `source_listing_crawl_job_id` is present,
+  `resolve_offertoday_detail_category_ids()` returns `[]`. Selection filters by
+  listing crawl-job ID and includes null-classification keyword/hybrid rows.
+- When the batch ID is absent, global category backlog is an explicit advanced
+  scope. Requested root categories expand normally and
+  `source_classification_id` filtering remains active.
+- Group candidate rows by canonical `source_job_id` before applying
+  `detail_limit`; duplicate staging siblings produce one fetch target.
+
+#### Distinct progress projection
+
+The task-list and active-progress paths batch-load these event types once for
+all task IDs in the requested set:
+
+```text
+crawl.detail_cohort_frozen
+crawl.detail_attempt
+crawl.detail_reconciled
+```
+
+For OfferToday tasks with frozen-cohort evidence, snapshots expose:
+
+```text
+detail_distinct_target_total
+detail_distinct_succeeded
+detail_distinct_terminal_unavailable
+detail_distinct_failed
+detail_distinct_reconciled
+detail_distinct_remaining
+```
+
+The first largest frozen fetch cohort is the stable target universe; later
+resume cohorts are subsets and do not replace the denominator. Reconciled IDs
+were removed before the fetch cohort was frozen, so reconciliation is reported
+as adjacent scope and is not subtracted from fetch-target remaining.
+
+Count distinct canonical `source_job_id` values. `success` wins over terminal
+and failure; `terminal_unavailable` wins over failure. Non-retrying
+`invalid_payload`, `id_mismatch`, `persist_failure`, and exhausted
+`transient_transport` attempts are failed unless the same ID has success or
+terminal evidence. Recoverable `auth_expired`, `waf_challenge`, and
+`ip_blocked` attempts do not settle or inflate a target.
+
+```text
+remaining = max(target_total - distinct(success U terminal U failed), 0)
+```
+
+If no frozen-cohort event exists, return null distinct fields and retain the
+legacy Queue/Saved projection. Do not reinterpret `detail_run_completed` as a
+job count; it is a staging-row metric. OfferToday `jobs_saved` fallback checks
+raw `metrics.jobs_saved` before ingest-only counters; other sources retain
+their existing ingest-first projection.
+
+The Crawl Tasks list row and Task Details panel render the same summary:
+
+```text
+Fetched <success> / <target>
+Terminal <terminal>          # non-zero only
+Reconciled <reconciled>      # non-zero only
+Failed <failed>              # non-zero only
+Remaining <remaining>
+```
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Only `updated_at` or metrics change | Task ID order remains unchanged |
+| Queue/creation timestamps tie | `id DESC` resolves order deterministically |
+| Bound batch row has null classification | Include it when status is eligible |
+| Bound request also carries category IDs | Ignore category narrowing |
+| Unbound root category is requested | Expand and filter global backlog |
+| Duplicate staging rows share one canonical ID | Fetch once after grouping |
+| Resume follows IP/auth/WAF stop | Preserve batch ID and original denominator |
+| An ID has blocked attempts then success | Count one success, zero blocked settlement |
+| An ID has success plus duplicate attempts | Count the ID once |
+| No frozen cohort exists | Emit null distinct fields and use legacy UI fallback |
+| Listing condition reaches page cap | Preserve partial-listing semantics; do not classify as detail failure |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** A completed keyword/hybrid listing batch contains null-category
+  rows. Detail mode selects that batch, fetches every eligible distinct ID,
+  survives an IP-block resume, and continues to show the original denominator.
+- **Base:** An older task has no cohort event. Its row continues to show
+  `Queue <detail_target_rows>` without claiming distinct completion.
+- **Bad:** History is sorted by `updated_at`, so downstream staging metrics move
+  an old listing task above a running detail task every polling interval.
+- **Bad:** A bound listing ID and `category_ids=[118000]` are both applied at the
+  repository query, silently excluding keyword/hybrid rows with null category.
+- **Bad:** `detail_run_completed=2464` is displayed as fetched jobs even though
+  duplicate staging siblings produced that row count.
+
+### 6. Tests Required
+
+- `test_crawl_job_runtime.py`: immutable queue/creation/ID ordering with
+  timestamp ties and pagination; bound null-category keyword/hybrid selection;
+  other-batch exclusion; duplicate grouping; unbound category expansion.
+- `test_crawl_job_regressions.py`: manual dispatch persists the selected listing
+  ID and IP-block resume retains it.
+- `test_offertoday_standalone_crawl.py`: detail manual-action resume context
+  contains `source_listing_crawl_job_id` and later targets remain untouched.
+- `test_crawl_task_snapshot.py`: duplicate attempts, recoverable blocks,
+  terminal/failure precedence, reconciled union, multiple resume cohorts,
+  active-path batch wiring, raw `jobs_saved`, and the historical
+  `1311/1305/6/95/0` projection.
+- `CrawlTasksPage.test.jsx`: running, manual-action, completed, and legacy
+  fallback summaries in both row chips and Task Details; partial listing remains
+  unchanged; frontend consumes API order.
+- `ScheduleManager.test.jsx`: newest completed eligible batch wins even when API
+  order differs, running batches are skipped, explicit global scope survives an
+  async batch response, and submitted payload carries the listing ID.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+rows = query.order_by(desc(CrawlJob.updated_at)).all()
+completed = int(metrics.get("detail_run_completed") or 0)
+```
+
+```jsx
+<option value="">No legacy batch filter</option>
+```
+
+This makes history jump on activity, calls staging rows completed jobs, and
+makes global category backlog look like the normal detail path.
+
+#### Correct
+
+```python
+rows = query.order_by(
+    desc(CrawlJob.queued_at),
+    desc(CrawlJob.created_at),
+    desc(CrawlJob.id),
+).all()
+
+detail_progress = project_distinct_detail_events(events_by_job[crawl_job.id])
+```
+
+```jsx
+<option value="">Global category backlog (advanced)</option>
+```
+
+Immutable history identity, explicit scope, and one shared event projection
+keep the repository, API, and UI on the same units.
