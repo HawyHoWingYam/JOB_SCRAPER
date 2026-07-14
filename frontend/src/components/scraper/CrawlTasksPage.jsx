@@ -96,32 +96,64 @@ function formatTimestamp(value) {
   return parsed.toLocaleString('en-US');
 }
 
+function formatCount(value) {
+  return Number(value || 0).toLocaleString();
+}
+
+function formatCountPair(currentValue, totalValue) {
+  const normalizedTotal = Number(totalValue || 0);
+  if (Number.isFinite(normalizedTotal) && normalizedTotal > 0) {
+    return `${formatCount(currentValue)}/${formatCount(normalizedTotal)}`;
+  }
+
+  return `${formatCount(currentValue)}/?`;
+}
+
+function resolveRequestedCrawlPhase(task) {
+  return `${task?.request_payload?.crawl_phase || task?.crawl_phase || ''}`.trim().toLowerCase();
+}
+
+function isCompletedListingTask(task) {
+  return task?.status === 'completed'
+    && resolveRequestedCrawlPhase(task) === 'listing'
+    && Boolean(task?.listing_completed);
+}
+
 function buildMetricSummary(task) {
   const summary = [];
+  const normalizedSourceSite = `${task?.source_site || ''}`.trim().toLowerCase();
   const jobIdsCollected = Number(task?.job_ids_collected || 0);
   const detailTargetRows = Number(task?.detail_target_rows || 0);
   const jobsSaved = Number(task?.jobs_saved || 0);
   const listingsStaged = Number(task?.listings_staged || 0);
+  const currentPage = Number(task?.current_page || 0);
+  const totalPages = Number(task?.total_pages || 0);
   const failedItems = Number(task?.detail_run_failed || task?.ingest_items_failed || 0);
+  const listingPageLabel = normalizedSourceSite === 'offertoday' ? 'Query tasks' : 'Pages';
+  const completedListingTask = isCompletedListingTask(task);
 
   if (jobIdsCollected > 0) {
-    summary.push(`IDs ${jobIdsCollected.toLocaleString()}`);
+    summary.push(`IDs ${formatCount(jobIdsCollected)}`);
   }
 
   if (detailTargetRows > 0) {
-    summary.push(`Queue ${detailTargetRows.toLocaleString()}`);
+    summary.push(`${completedListingTask ? 'Ready for detail' : 'Queue'} ${formatCount(detailTargetRows)}`);
   }
 
   if (listingsStaged > 0) {
-    summary.push(`Staged ${listingsStaged.toLocaleString()}`);
+    summary.push(`Staged ${formatCount(listingsStaged)}`);
+  }
+
+  if (currentPage > 0 || totalPages > 0) {
+    summary.push(`${listingPageLabel} ${formatCountPair(currentPage, totalPages)}`);
   }
 
   if (jobsSaved > 0) {
-    summary.push(`Saved ${jobsSaved.toLocaleString()}`);
+    summary.push(`Saved ${formatCount(jobsSaved)}`);
   }
 
   if (failedItems > 0) {
-    summary.push(`Failed ${failedItems.toLocaleString()}`);
+    summary.push(`Failed ${formatCount(failedItems)}`);
   }
 
   if (summary.length === 0) {
@@ -132,7 +164,7 @@ function buildMetricSummary(task) {
 }
 
 function buildScopeHint(task) {
-  const crawlPhase = task?.request_payload?.crawl_phase || task?.crawl_phase;
+  const crawlPhase = resolveRequestedCrawlPhase(task);
   return formatCrawlPhaseLabel(crawlPhase);
 }
 
@@ -148,6 +180,14 @@ function buildIssueSummary(task) {
 
 function formatStatusLabel(status) {
   return `${status || 'unknown'}`.replace(/_/g, ' ');
+}
+
+function buildStatusLabel(task) {
+  if (isCompletedListingTask(task)) {
+    return 'Listing Complete';
+  }
+
+  return formatStatusLabel(task?.status);
 }
 
 function isManualActionTask(task) {
@@ -439,7 +479,7 @@ export default function CrawlTasksPage() {
                   >
                     <div className="crawl-task-row-topline">
                       <span className={`crawl-task-status status-${task.status || 'unknown'}`}>
-                        {formatStatusLabel(task.status)}
+                        {buildStatusLabel(task)}
                       </span>
                       <span className="crawl-task-id">{task.crawl_job_id}</span>
                     </div>
@@ -617,7 +657,7 @@ export default function CrawlTasksPage() {
               <dl className="crawl-tasks-detail-grid">
                 <div>
                   <dt>Status</dt>
-                  <dd>{formatStatusLabel(selectedTask.status)}</dd>
+                  <dd>{buildStatusLabel(selectedTask)}</dd>
                 </div>
                 <div>
                   <dt>Source</dt>

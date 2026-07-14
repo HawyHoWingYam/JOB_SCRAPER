@@ -177,7 +177,9 @@ function buildImmediateScrapePayload(form, sourceSite, sourceCatalog = EMPTY_SOU
             category_ids: categoryIds,
             max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite, sourceCatalog),
             detail_limit: crawlPhase === 'detail' ? detailLimit : 100,
-            skip_existing: true,
+            // For listing/full phases: skip re-staging jobs already in the DB.
+            // For detail phase: always process the backlog — failed/pending rows need retrying.
+            skip_existing: crawlPhase !== 'detail',
             ...(sourceListingCrawlJobId ? { source_listing_crawl_job_id: sourceListingCrawlJobId } : {}),
         },
     };

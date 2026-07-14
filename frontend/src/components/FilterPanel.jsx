@@ -1,8 +1,20 @@
 import React from 'react';
 import { CalendarRange, FilterX } from 'lucide-react';
 
+const SOURCE_OPTIONS = [
+    { value: '', label: 'All Sources' },
+    { value: 'jobsdb', label: 'JobsDB' },
+    { value: 'ctgoodjobs', label: 'CTGoodJobs' },
+    { value: 'offertoday', label: 'OfferToday' },
+];
+
 function hasFilterValue(value) {
     return value !== '' && value != null;
+}
+
+function formatSourceLabel(value) {
+    const match = SOURCE_OPTIONS.find((option) => option.value === value);
+    return match?.label || value;
 }
 
 function selectedSubcategoryLabel(filters, filterOptions) {
@@ -34,6 +46,7 @@ function FilterPanel({
     };
 
     const activeFilters = [
+        filters.source_site && `Source: ${formatSourceLabel(filters.source_site)}`,
         filters.employment_type && `Job type: ${filters.employment_type}`,
         filters.subcategory_ids?.length > 0 && `Job taxonomy: ${selectedSubcategoryLabel(filters, filterOptions)}`,
         filters.industry && `Industry: ${filters.industry}`,
@@ -95,6 +108,22 @@ function FilterPanel({
                 </div>
 
                 <div className="filter-grid">
+                    <label className="filter-field">
+                        <span className="filter-label">Source</span>
+                        <select
+                            className="premium-select"
+                            value={filters.source_site || ''}
+                            onChange={(e) => handleChange('source_site', e.target.value)}
+                            disabled={isLoading}
+                        >
+                            {SOURCE_OPTIONS.map((option) => (
+                                <option key={option.value || 'all'} value={option.value}>
+                                    {option.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+
                     <label className="filter-field">
                         <span className="filter-label">Job Type</span>
                         <select

@@ -60,6 +60,8 @@ services:
       - "5678:5678"
     volumes:
       - ./backend:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DATABASE_URL: postgresql://admin:dev_password@postgres-db:5432/jobsdb
       REDIS_URL: redis://redis-mq:6379/0
@@ -78,8 +80,10 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-custom}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       GOOGLE_CSE_ID: ${GOOGLE_CSE_ID:-}
-      JOBSDB_HEADED_BROWSER_CHANNEL: ${JOBSDB_HEADED_BROWSER_CHANNEL:-msedge}
-      JOBSDB_HEADED_BROWSER_USER_DATA_DIR: ${JOBSDB_HEADED_BROWSER_USER_DATA_DIR:-/app/.host_browser_profiles/msedge}
+      JOBSDB_HEADED_BROWSER_CHANNEL: ${JOBSDB_HEADED_BROWSER_CHANNEL:-chromium}
+      JOBSDB_HEADED_BROWSER_USER_DATA_DIR: ${JOBSDB_HEADED_BROWSER_USER_DATA_DIR:-/app/.host_browser_profiles/chromium}
+      OFFERTODAY_HEADED_BROWSER_CHANNEL: ${OFFERTODAY_HEADED_BROWSER_CHANNEL:-chromium}
+      MANUAL_ACTION_CDP_HOST: ${MANUAL_ACTION_CDP_HOST:-host.docker.internal}
       DEBUG: "true"
       UVICORN_RELOAD: "false"
       LOG_LEVEL: INFO

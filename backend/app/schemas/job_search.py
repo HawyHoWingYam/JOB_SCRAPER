@@ -2,6 +2,8 @@ from datetime import date
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal, Optional, List
 
+SourceSiteFilter = Literal["jobsdb", "ctgoodjobs", "offertoday"]
+
 
 class SearchClauseSchema(BaseModel):
     clause_type: str
@@ -9,6 +11,7 @@ class SearchClauseSchema(BaseModel):
 
 
 class JobSearchFiltersSchema(BaseModel):
+    source_site: Optional[SourceSiteFilter] = None
     location: Optional[str] = None
     region: Optional[str] = None
     district: Optional[str] = None
@@ -41,6 +44,16 @@ class JobSearchFiltersSchema(BaseModel):
     def _coerce_blank_optionals_to_none(cls, value):
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("source_site", mode="before")
+    @classmethod
+    def _normalize_source_site(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            return normalized or None
         return value
 
 

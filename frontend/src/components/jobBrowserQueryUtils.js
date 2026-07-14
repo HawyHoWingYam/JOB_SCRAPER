@@ -1,5 +1,6 @@
 const EMPTY_QUERY = {
   search_query: '',
+  source_site: '',
   employment_type: '',
   subcategory_ids: [],
   industry: '',
@@ -9,8 +10,15 @@ const EMPTY_QUERY = {
   experience_years_to: '',
 };
 
+const SUPPORTED_SOURCE_SITES = new Set(['jobsdb', 'ctgoodjobs', 'offertoday']);
+
 function normalizeValue(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeSourceSite(value) {
+  const normalized = normalizeValue(value).toLowerCase();
+  return SUPPORTED_SOURCE_SITES.has(normalized) ? normalized : '';
 }
 
 function getRawNumericString(value) {
@@ -76,6 +84,7 @@ export function normalizeQueryForSubmit(query) {
     ...createEmptyJobBrowserQuery(),
     ...query,
     search_query: normalizeDraftKeyword(query?.search_query || ''),
+    source_site: normalizeSourceSite(query?.source_site),
     employment_type: normalizeValue(query?.employment_type),
     subcategory_ids: normalizeIdArray(query?.subcategory_ids),
     industry: normalizeValue(query?.industry),
@@ -104,6 +113,9 @@ export function countPendingQueryChanges(appliedQuery, draftQuery) {
   let count = 0;
 
   if (applied.search_query !== draft.search_query) {
+    count += 1;
+  }
+  if (applied.source_site !== draft.source_site) {
     count += 1;
   }
   if (applied.employment_type !== draft.employment_type) {

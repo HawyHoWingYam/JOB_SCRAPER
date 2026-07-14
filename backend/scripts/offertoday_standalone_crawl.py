@@ -1078,6 +1078,7 @@ async def main() -> None:
             if str(condition.search_family or "").strip()
         )
     )
+    planned_total_pages = len(listing_conditions) * page_limit_per_query
     source_listing_crawl_job_id, detail_scope = _resolve_detail_scope(
         args,
         listing_phase_completed=False,
@@ -1120,6 +1121,7 @@ async def main() -> None:
     new_jobs_count = 0
     jobs_skipped_existing = 0
     page_count = 0
+    search_family = ""
 
     existing_count = db.query(Job).filter(Job.source_site == "offertoday").count()
     logger.info("Existing OfferToday jobs in DB: %d", existing_count)
@@ -1173,6 +1175,10 @@ async def main() -> None:
                     int(outcome.pages_observed or 0)
                     for outcome in listing_result.condition_outcomes
                 )
+                if listing_result.condition_outcomes:
+                    search_family = str(
+                        listing_result.condition_outcomes[-1].condition.search_family
+                    )
                 if not listing_result.is_complete:
                     logger.warning(
                         "Listing phase incomplete; stop_reason=%s pages=%d",
@@ -1284,12 +1290,15 @@ async def main() -> None:
                     "listings_staged": listing_count,
                     "new_jobs_added": new_jobs_count,
                     "jobs_skipped_existing": jobs_skipped_existing,
+                    "current_page": page_count,
+                    "total_pages": planned_total_pages,
                     "detail_selected_rows": detail_selected_rows,
                     "detail_skipped_existing_rows": detail_skipped_existing_rows,
                     "detail_target_rows": total_details,
                     "detail_pending": 0,
                     "items_emitted": 0,
                     "jobs_saved": 0,
+                    "search_family": search_family,
                     "search_families": search_families,
                 },
                 error_message=(

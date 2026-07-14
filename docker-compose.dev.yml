@@ -9,9 +9,13 @@ services:
     volumes:
       - ./backend:/app
       - /app/__pycache__
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       DEBUG: "true"
       PYTHONUNBUFFERED: "1"
+      WATCHFILES_FORCE_POLLING: "true"
+      MANUAL_ACTION_CDP_HOST: ${MANUAL_ACTION_CDP_HOST:-host.docker.internal}
     command: uvicorn app.main:asgi_app --host 0.0.0.0 --port 8000 --reload
 
   # ============================================

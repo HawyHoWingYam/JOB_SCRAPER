@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, false, func, not_, or_
-from typing import Optional, List
+from typing import Literal, Optional, List
 from pydantic import BaseModel, ConfigDict
 from app.database import get_db
 from app.api.job_search_parser import parse_search_expression, SearchExpressionError
@@ -29,6 +29,7 @@ from app.schemas.job_search import (
     JobSearchLayerSchema,
     JobSearchScopeSchema,
     JobSearchLayerSummarySchema,
+    SourceSiteFilter,
 )
 from app.services.retrieval_client import (
     RetrievalClient,
@@ -49,6 +50,11 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 JOB_SEARCH_EXPORT_MAX_ROWS = 10000
 JOBSDB_BASE_URL = "https://hk.jobsdb.com/job"
 CTGOODJOBS_BASE_URL = "https://jobs.ctgoodjobs.hk/job"
+SOURCE_SITE_LABELS = {
+    "jobsdb": "JobsDB",
+    "ctgoodjobs": "CTGoodJobs",
+    "offertoday": "OfferToday",
+}
 JOB_SEARCH_EXPORT_FIELDNAMES = [
     "job_id",
     "original_job_url",
@@ -328,6 +334,8 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
         filters.experience_years_to,
     )
 
+    if filters.source_site:
+        query = query.filter(Job.source_site == filters.source_site)
     if filters.location and not filters.region and not filters.district:
         query = query.filter(Job.location.ilike(f"%{filters.location}%"))
     if filters.employment_type:
@@ -459,6 +467,8 @@ def _summarize_layer(layer: JobSearchLayerSchema) -> JobSearchLayerSummarySchema
             parts.append(f'Phrase: "{clause.value}"')
 
     filters = layer.structured_filters
+    if filters.source_site:
+        parts.append(f"Source: {SOURCE_SITE_LABELS.get(filters.source_site, filters.source_site)}")
     if filters.industry:
         parts.append(f"Industry: {filters.industry}")
     if filters.employment_type:
@@ -489,6 +499,7 @@ def _build_query_from_scope(db: Session, scope: JobSearchScopeSchema):
 def _build_legacy_scope(
     *,
     q: Optional[str],
+    source_site: Optional[SourceSiteFilter | str],
     location: Optional[str],
     region: Optional[str],
     district: Optional[str],
@@ -514,6 +525,7 @@ def _build_legacy_scope(
                 client_id="legacy-root",
                 text_expression=q or "",
                 structured_filters=JobSearchFiltersSchema(
+                    source_site=source_site,
                     location=location,
                     region=region,
                     district=district,
@@ -787,6 +799,10 @@ async def list_jobs(
 @router.get("/search", response_model=JobSearchResponse)
 async def search_jobs(
     q: Optional[str] = Query(None, description="Full-text search query"),
+    source_site: Optional[Literal["jobsdb", "ctgoodjobs", "offertoday", ""]] = Query(
+        None,
+        description="Filter by job source site",
+    ),
     location: Optional[str] = Query(None, description="Filter by location"),
     region: Optional[str] = Query(None, description="Filter by normalized region"),
     district: Optional[str] = Query(None, description="Filter by normalized district"),
@@ -812,6 +828,7 @@ async def search_jobs(
     """Search jobs with filters and pagination."""
     scope = _build_legacy_scope(
         q=q,
+        source_site=source_site,
         location=location,
         region=region,
         district=district,
