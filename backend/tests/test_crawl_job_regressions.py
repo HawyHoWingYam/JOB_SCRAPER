@@ -7,6 +7,7 @@ import pytest
 from fastapi import Response
 
 import app.api.crawl_jobs as crawl_jobs_api
+import app.host_manual_action_helper as helper_module
 import app.services.crawl_job_dispatch_service as dispatch_module
 from app.schemas.crawl_job import CrawlJobCreateRequest
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
@@ -16,6 +17,7 @@ class _FakeCrawlJobRepository:
     def __init__(self, *, crawl_job, latest_event):
         self._crawl_job = crawl_job
         self._latest_event = latest_event
+        self.appended_events: list[dict] = []
 
     def get_crawl_job_by_id(self, db, crawl_job_id):
         return self._crawl_job
@@ -24,6 +26,7 @@ class _FakeCrawlJobRepository:
         return self._latest_event
 
     def append_event(self, db, **kwargs):
+        self.appended_events.append(dict(kwargs))
         return None
 
     def list_events(self, db, crawl_job_id, event_types=None):
@@ -343,3 +346,160 @@ def test_resume_crawl_job_persists_selected_resume_strategy(monkeypatch):
 
     assert result is crawl_job
     assert crawl_job.request_payload["resume_strategy"] == "reuse_open_browser"
+    assert crawl_job.request_payload["manual_action_browser_channel"]
+    assert crawl_job.request_payload["manual_action_browser_profile_path"]
+
+
+def test_resume_crawl_job_upgrades_legacy_offertoday_ip_block_payload(monkeypatch):
+    crawl_job = SimpleNamespace(
+        id=uuid4(),
+        source_site="offertoday",
+        status="manual_action_required",
+        request_payload={
+            "crawl_mode": "headless",
+            "crawl_phase": "detail",
+            "category_ids": [118000],
+            "detail_limit": 5000,
+        },
+        trigger_type="manual",
+        schedule_id=None,
+        requested_by="api",
+        queued_at=None,
+        completed_at=None,
+        error_message="OfferToday detail phase requires manual action: ip_blocked",
+    )
+    latest_event = SimpleNamespace(
+        payload={
+            "request_payload": dict(crawl_job.request_payload),
+            "manual_action": {
+                "action_type": "session_recovery",
+                "classification": "ip_blocked",
+                "resume_context": dict(crawl_job.request_payload),
+            },
+        }
+    )
+    repository = _FakeCrawlJobRepository(
+        crawl_job=crawl_job,
+        latest_event=latest_event,
+    )
+    monkeypatch.setattr(
+        dispatch_module,
+        "ensure_headed_crawl_worker_available",
+        lambda **kwargs: None,
+    )
+
+    service = CrawlJobDispatchService(
+        crawl_job_repository=repository,
+        event_outbox_repository=_FakeEventOutboxRepository(),
+        outbox_publisher=_FakeOutboxPublisher(),
+        execution_launcher=_NoopExecutionLauncher(),
+    )
+
+    result = service.resume_crawl_job(
+        _FakeDbSession(),
+        crawl_job_id=crawl_job.id,
+        requested_by="api",
+        strategy="reuse_open_browser",
+    )
+
+    assert result is crawl_job
+    assert crawl_job.status == "dispatching"
+    assert crawl_job.request_payload["resume_strategy"] == "reuse_open_browser"
+    assert crawl_job.request_payload["manual_action_browser_channel"]
+    assert crawl_job.request_payload["manual_action_browser_profile_path"]
+    resume_event = next(
+        row for row in repository.appended_events
+        if row["event_type"] == "crawl.resume_requested"
+    )
+    normalized = resume_event["payload"]["manual_action"]
+    assert normalized["resume_supported"] is True
+    assert normalized["reuse_open_browser_supported"] is True
+    assert normalized["code"] == -1000035
+    assert "Change your IP or network" in normalized["message"]
+
+
+def test_resume_crawl_job_keeps_legacy_identity_audit_non_resumable():
+    crawl_job = SimpleNamespace(
+        id=uuid4(),
+        source_site="offertoday",
+        status="manual_action_required",
+        request_payload={"crawl_mode": "headless", "crawl_phase": "detail"},
+        trigger_type="manual",
+        schedule_id=None,
+        requested_by="api",
+        queued_at=None,
+        completed_at=None,
+        error_message="OfferToday detail identity audit is required",
+    )
+    latest_event = SimpleNamespace(
+        payload={
+            "manual_action": {
+                "action_type": "identity_audit",
+                "classification": "identity_conflict",
+                "resume_context": {"crawl_phase": "detail"},
+            }
+        }
+    )
+    service = CrawlJobDispatchService(
+        crawl_job_repository=_FakeCrawlJobRepository(
+            crawl_job=crawl_job,
+            latest_event=latest_event,
+        ),
+        event_outbox_repository=_FakeEventOutboxRepository(),
+        outbox_publisher=_FakeOutboxPublisher(),
+        execution_launcher=_NoopExecutionLauncher(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="manual action does not support resume",
+    ):
+        service.resume_crawl_job(
+            _FakeDbSession(),
+            crawl_job_id=crawl_job.id,
+            requested_by="api",
+            strategy="fresh_profile",
+        )
+
+
+def test_host_helper_upgrades_legacy_offertoday_ip_block_browser_fields(monkeypatch):
+    crawl_job = SimpleNamespace(
+        id=uuid4(),
+        source_site="offertoday",
+        status="manual_action_required",
+        request_payload={"crawl_mode": "headless", "crawl_phase": "detail"},
+    )
+    latest_event = SimpleNamespace(
+        payload={
+            "manual_action": {
+                "action_type": "session_recovery",
+                "classification": "ip_blocked",
+                "resume_context": dict(crawl_job.request_payload),
+            }
+        }
+    )
+    monkeypatch.setattr(
+        helper_module.settings,
+        "jobsdb_headed_browser_channel",
+        "msedge",
+    )
+    monkeypatch.setattr(
+        helper_module.settings,
+        "jobsdb_headed_browser_user_data_dir",
+        "C:/tmp/offertoday-manual",
+    )
+
+    payload = helper_module._load_manual_action_payload(
+        object(),
+        crawl_job_id=crawl_job.id,
+        crawl_job_repository=_FakeCrawlJobRepository(
+            crawl_job=crawl_job,
+            latest_event=latest_event,
+        ),
+    )
+
+    assert payload["blocked_url"] == "https://www.offertoday.com/hk/search"
+    assert payload["browser_channel"] == "msedge"
+    assert payload["browser_profile_path"] == "C:/tmp/offertoday-manual"
+    assert payload["resume_supported"] is True
+    assert payload["reuse_open_browser_supported"] is True

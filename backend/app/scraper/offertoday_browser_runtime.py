@@ -16,6 +16,7 @@ from app.scraper.manual_action import (
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+    resolve_manual_action_cdp_connect_host,
 )
 from app.sources.offertoday.constants import (
     OFFERTODAY_BASE_URL,
@@ -461,11 +462,35 @@ class OfferTodayBrowserRuntime:
                 )
             )
 
+        cdp_host = settings.manual_action_cdp_host or settings.manual_action_helper_host
+        cdp_connect_host = resolve_manual_action_cdp_connect_host(cdp_host)
+        logger.info(
+            "manual_action_attach_attempt",
+            extra={
+                "strategy": self.resume_strategy,
+                "source_site": "offertoday",
+                "cdp_host": cdp_host,
+                "cdp_connect_host": cdp_connect_host,
+                "debug_port": session.debug_port,
+                "browser_profile_path": str(self._resolve_user_data_dir()),
+            },
+        )
         try:
             self._browser = await self._playwright.chromium.connect_over_cdp(
-                f"http://127.0.0.1:{session.debug_port}"
+                f"http://{cdp_connect_host}:{session.debug_port}"
             )
         except Exception as exc:
+            logger.info(
+                "manual_action_attach_failure",
+                extra={
+                    "strategy": self.resume_strategy,
+                    "source_site": "offertoday",
+                    "cdp_host": cdp_host,
+                    "cdp_connect_host": cdp_connect_host,
+                    "debug_port": session.debug_port,
+                    "error": str(exc),
+                },
+            )
             raise self._build_reuse_open_browser_unavailable_error(
                 message=(
                     "The reusable OfferToday browser session is unavailable. "
@@ -475,6 +500,17 @@ class OfferTodayBrowserRuntime:
 
         self._context = self._browser.contexts[0] if self._browser.contexts else None
         if self._context is None:
+            logger.info(
+                "manual_action_attach_failure",
+                extra={
+                    "strategy": self.resume_strategy,
+                    "source_site": "offertoday",
+                    "cdp_host": cdp_host,
+                    "cdp_connect_host": cdp_connect_host,
+                    "debug_port": session.debug_port,
+                    "error": "Attached browser exposes no reusable context",
+                },
+            )
             raise self._build_reuse_open_browser_unavailable_error(
                 message=(
                     "The reusable OfferToday browser session is unavailable. "
@@ -486,6 +522,16 @@ class OfferTodayBrowserRuntime:
         self._page = await self._context.new_page()
         self._owns_context = False
         self._owns_browser = False
+        logger.info(
+            "manual_action_attach_success",
+            extra={
+                "strategy": self.resume_strategy,
+                "source_site": "offertoday",
+                "cdp_host": cdp_host,
+                "cdp_connect_host": cdp_connect_host,
+                "debug_port": session.debug_port,
+            },
+        )
 
     async def _warmup_page(self) -> None:
         if self._page is None:

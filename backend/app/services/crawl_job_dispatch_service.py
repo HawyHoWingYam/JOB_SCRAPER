@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.crawl_phases import resolve_crawl_phase, resolve_detail_statuses
 from app.crawl_modes import normalize_source_site, resolve_crawl_mode
 from app.messaging.outbox_publisher import OutboxPublisher
@@ -20,8 +21,10 @@ from app.services.headed_crawl_runtime import ensure_headed_crawl_worker_availab
 from app.services.source_catalog import resolve_default_max_pages
 from app.scraper.manual_action import (
     LEGACY_RESUME_STRATEGY_DEFAULT,
+    RESUME_STRATEGY_REUSE_OPEN_BROWSER,
     ResumeStrategy,
     SUPPORTED_RESUME_STRATEGIES,
+    normalize_manual_action_payload,
 )
 from app.utils.time import utc_now
 
@@ -328,13 +331,31 @@ class CrawlJobDispatchService:
         if latest_event is None:
             raise RuntimeError("Crawl job is not resumable from its latest event")
 
-        manual_action = dict((latest_event.payload or {}).get("manual_action") or {})
+        latest_event_payload = dict(latest_event.payload or {})
+        manual_action = normalize_manual_action_payload(
+            latest_event_payload.get("manual_action"),
+            source_site=crawl_job.source_site,
+            request_payload=(
+                latest_event_payload.get("request_payload")
+                or crawl_job.request_payload
+                or {}
+            ),
+            default_browser_channel=settings.jobsdb_headed_browser_channel,
+            default_browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
+        )
         if not manual_action.get("resume_supported"):
             raise RuntimeError("Crawl job manual action does not support resume")
 
         selected_strategy = LEGACY_RESUME_STRATEGY_DEFAULT if strategy is None else strategy
         if selected_strategy not in SUPPORTED_RESUME_STRATEGIES:
             raise RuntimeError(f"Unsupported resume strategy: {selected_strategy}")
+        if (
+            selected_strategy == RESUME_STRATEGY_REUSE_OPEN_BROWSER
+            and not manual_action.get("reuse_open_browser_supported")
+        ):
+            raise RuntimeError(
+                "Crawl job manual action does not support reuse-open-browser resume"
+            )
 
         resume_context = dict(manual_action.get("resume_context") or {})
         if not resume_context:
@@ -343,6 +364,16 @@ class CrawlJobDispatchService:
         request_payload["is_resume"] = True
         request_payload["resume_context"] = resume_context
         request_payload["resume_strategy"] = selected_strategy
+        if selected_strategy == RESUME_STRATEGY_REUSE_OPEN_BROWSER:
+            request_payload["manual_action_browser_channel"] = manual_action.get(
+                "browser_channel"
+            )
+            request_payload["manual_action_browser_profile_path"] = manual_action.get(
+                "browser_profile_path"
+            )
+        else:
+            request_payload.pop("manual_action_browser_channel", None)
+            request_payload.pop("manual_action_browser_profile_path", None)
         if resume_context.get("crawl_phase") == "detail":
             source_listing_crawl_job_id = resume_context.get("source_listing_crawl_job_id")
             if source_listing_crawl_job_id and not request_payload.get("source_listing_crawl_job_id"):

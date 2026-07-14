@@ -29,7 +29,11 @@ from app.manual_actions.live_browser_registry import (
     normalize_browser_profile_path,
 )
 from app.repositories.crawl_job_repository import CrawlJobRepository
-from app.scraper.manual_action import RESUME_STRATEGY_FRESH_PROFILE, RESUME_STRATEGY_REUSE_OPEN_BROWSER
+from app.scraper.manual_action import (
+    RESUME_STRATEGY_FRESH_PROFILE,
+    RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+    normalize_manual_action_payload,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -121,7 +125,18 @@ def _load_manual_action_payload(
     if latest_event is None:
         raise HTTPException(status_code=409, detail="Crawl job has no resumable manual action payload")
 
-    manual_action = dict((latest_event.payload or {}).get("manual_action") or {})
+    latest_event_payload = dict(latest_event.payload or {})
+    manual_action = normalize_manual_action_payload(
+        latest_event_payload.get("manual_action"),
+        source_site=crawl_job.source_site,
+        request_payload=(
+            latest_event_payload.get("request_payload")
+            or crawl_job.request_payload
+            or {}
+        ),
+        default_browser_channel=settings.jobsdb_headed_browser_channel,
+        default_browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
+    )
     if not manual_action:
         raise HTTPException(status_code=409, detail="Manual action payload is empty")
     return manual_action

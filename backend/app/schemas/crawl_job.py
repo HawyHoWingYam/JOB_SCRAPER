@@ -129,6 +129,11 @@ class CrawlTaskListItemSchema(BaseModel):
     issue_stage: str | None = None
     latest_issue_text: str | None = None
     request_payload: dict | None = None
+    listing_completed: bool = False
+    listing_partial: bool = False
+    listing_condition_count: int = 0
+    listing_natural_condition_count: int = 0
+    listing_capped_condition_count: int = 0
 
 
 class CrawlTaskListResponse(BaseModel):

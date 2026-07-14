@@ -246,6 +246,16 @@ async def test_reuse_open_browser_attaches_to_live_browser(monkeypatch):
         "get_live_browser_registry",
         lambda: _FakeRegistry(session=types.SimpleNamespace(debug_port=9333)),
     )
+    monkeypatch.setattr(
+        runtime_module.settings,
+        "manual_action_cdp_host",
+        "host.docker.internal",
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_manual_action_cdp_connect_host",
+        lambda host: "192.168.65.254",
+    )
 
     runtime = runtime_cls(
         resume_strategy=RESUME_STRATEGY_REUSE_OPEN_BROWSER,
@@ -255,7 +265,7 @@ async def test_reuse_open_browser_attaches_to_live_browser(monkeypatch):
 
     await runtime.start()
     try:
-        assert chromium.connect_calls == ["http://127.0.0.1:9333"]
+        assert chromium.connect_calls == ["http://192.168.65.254:9333"]
         assert context.default_navigation_timeout_ms == 45_000
         assert page.goto_calls == ["https://www.offertoday.com/hk/search"]
     finally:

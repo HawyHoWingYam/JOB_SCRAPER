@@ -525,6 +525,17 @@ async def test_listing_hard_stop_enters_resumable_manual_or_identity_audit_state
     assert crawl_runtime.manual_action_payload["action_type"] == action_type
     assert crawl_runtime.manual_action_payload["resume_context"]["crawl_phase"] == "listing"
     assert crawl_runtime.manual_action_payload["evidence"]["pages_observed"] == 2
+    resume_supported = action_type == "session_recovery"
+    assert crawl_runtime.manual_action_payload["resume_supported"] is resume_supported
+    assert (
+        crawl_runtime.manual_action_payload["reuse_open_browser_supported"]
+        is resume_supported
+    )
+    if stop_reason == "ip_blocked":
+        assert crawl_runtime.manual_action_payload["code"] == -1000035
+        assert "Change your IP or network" in crawl_runtime.manual_action_payload["message"]
+        assert crawl_runtime.manual_action_payload["browser_channel"]
+        assert crawl_runtime.manual_action_payload["browser_profile_path"]
     assert crawl_runtime.load_detail_targets_calls == []
     assert crawl_runtime.completed_calls == []
 
@@ -1059,6 +1070,8 @@ def test_apply_request_payload_defaults_hydrates_launcher_only_invocation():
             "detail_limit": 25,
             "detail_statuses": ["manual_action_required"],
             "resume_strategy": "reuse_open_browser",
+            "manual_action_browser_channel": "msedge",
+            "manual_action_browser_profile_path": "C:/tmp/offertoday-manual",
             "skip_existing": True,
             "crawl_mode": "headed",
         },
@@ -1072,6 +1085,8 @@ def test_apply_request_payload_defaults_hydrates_launcher_only_invocation():
     assert args.detail_limit == 25
     assert args.detail_statuses == "manual_action_required"
     assert args.resume_strategy == "reuse_open_browser"
+    assert args.manual_action_browser_channel == "msedge"
+    assert args.manual_action_browser_profile_path == "C:/tmp/offertoday-manual"
     assert args.skip_existing is True
     assert args.headed is True
 
@@ -1331,6 +1346,8 @@ async def test_load_time_identity_conflict_enters_identity_audit_without_fetch_o
     assert crawl_runtime.completed_calls == []
     assert crawl_runtime.manual_action_payload["action_type"] == "identity_audit"
     assert crawl_runtime.manual_action_payload["classification"] == "identity_conflict"
+    assert crawl_runtime.manual_action_payload["resume_supported"] is False
+    assert crawl_runtime.manual_action_payload["reuse_open_browser_supported"] is False
     assert crawl_runtime.manual_action_payload["evidence"] == {
         "identity_conflict_ids": ["conflict-1"],
         "identity_conflict_evidence": [evidence],
@@ -1374,6 +1391,12 @@ async def test_stopped_detail_result_leaves_later_target_unprocessed_and_never_c
     assert crawl_runtime.completed_calls == []
     assert crawl_runtime.manual_action_payload["classification"] == "ip_blocked"
     assert crawl_runtime.manual_action_payload["action_type"] == "session_recovery"
+    assert crawl_runtime.manual_action_payload["resume_supported"] is True
+    assert crawl_runtime.manual_action_payload["reuse_open_browser_supported"] is True
+    assert crawl_runtime.manual_action_payload["code"] == -1000035
+    assert "Change your IP or network" in crawl_runtime.manual_action_payload["message"]
+    assert crawl_runtime.manual_action_payload["browser_channel"]
+    assert crawl_runtime.manual_action_payload["browser_profile_path"]
     assert result.stop_batch is True
 
 

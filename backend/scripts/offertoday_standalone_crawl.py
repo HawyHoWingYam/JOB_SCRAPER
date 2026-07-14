@@ -33,6 +33,8 @@ from app.scraper.manual_action import (  # noqa: E402
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+    RESUMABLE_SESSION_CLASSIFICATIONS,
+    normalize_manual_action_payload,
 )
 from app.config import settings  # noqa: E402
 from app.scraper.log_events import build_scrape_log_event  # noqa: E402
@@ -79,6 +81,11 @@ _RESUME_STRATEGY_CHOICES = (
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
 )
+_IDENTITY_AUDIT_CLASSIFICATIONS = {
+    "identity_issue",
+    "identity_conflict",
+    "id_mismatch",
+}
 
 
 async def _check_and_handle_waf_challenge(page, *, headed: bool, crawl_job_id: str, db: Any) -> bool:
@@ -286,6 +293,12 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     detail_statuses = request_payload.get("detail_statuses")
     if detail_statuses:
         args.detail_statuses = ",".join(str(status) for status in detail_statuses if str(status).strip())
+    args.manual_action_browser_channel = str(
+        request_payload.get("manual_action_browser_channel") or ""
+    ).strip()
+    args.manual_action_browser_profile_path = str(
+        request_payload.get("manual_action_browser_profile_path") or ""
+    ).strip()
 
 
 def _resolve_detail_scope(
@@ -336,8 +349,8 @@ def _build_manual_action_payload(
 ) -> dict[str, Any]:
     payload = exc.to_payload(
         crawl_mode="headed" if args.headed else "headless",
-        browser_channel=settings.offertoday_headed_browser_channel,
-        browser_profile_path=settings.offertoday_headed_browser_user_data_dir,
+        browser_channel=settings.jobsdb_headed_browser_channel,
+        browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
     )
     resume_context: dict[str, Any] = {
         "crawl_phase": crawl_phase,
@@ -363,7 +376,65 @@ def _build_manual_action_payload(
         **resume_context,
         **dict(payload.get("resume_context") or {}),
     }
-    return payload
+    return normalize_manual_action_payload(
+        payload,
+        source_site="offertoday",
+        request_payload=payload["resume_context"],
+        default_browser_channel=settings.jobsdb_headed_browser_channel,
+        default_browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
+    )
+
+
+def _build_result_manual_action_payload(
+    *,
+    crawl_phase: str,
+    classification: str,
+    evidence: dict[str, Any],
+    request_payload: dict[str, Any],
+) -> dict[str, Any]:
+    normalized_classification = str(classification or "").strip().lower()
+    resume_supported = (
+        normalized_classification in RESUMABLE_SESSION_CLASSIFICATIONS
+    )
+    identity_audit = normalized_classification in _IDENTITY_AUDIT_CLASSIFICATIONS
+    action_type = (
+        "session_recovery"
+        if resume_supported
+        else "identity_audit" if identity_audit else "operator_review"
+    )
+    payload: dict[str, Any] = {
+        "action_type": action_type,
+        "classification": normalized_classification,
+        "evidence": dict(evidence),
+        "resume_context": dict(request_payload),
+        "resume_supported": resume_supported,
+        "reuse_open_browser_supported": resume_supported,
+    }
+    if identity_audit:
+        payload["message"] = (
+            f"OfferToday {crawl_phase} identity evidence requires operator review; "
+            "this crawl cannot be resumed automatically."
+        )
+        payload["instructions"] = [
+            "Review the recorded OfferToday identity-conflict evidence.",
+            "Start a corrected crawl only after resolving the identity mismatch.",
+        ]
+    elif not resume_supported:
+        payload["message"] = (
+            f"OfferToday {crawl_phase} stopped with {normalized_classification}; "
+            "operator review is required and automatic resume is disabled."
+        )
+        payload["instructions"] = [
+            "Review the recorded OfferToday stop evidence before starting another crawl.",
+        ]
+
+    return normalize_manual_action_payload(
+        payload,
+        source_site="offertoday",
+        request_payload=request_payload,
+        default_browser_channel=settings.jobsdb_headed_browser_channel,
+        default_browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
+    )
 
 
 async def _run_runtime_probe(
@@ -687,37 +758,27 @@ async def _run_listing_phase(
     evidence = _listing_result_evidence(result)
     if not getattr(result, "can_proceed_to_detail", result.is_complete):
         stop_reason = str(result.stop_reason)
-        manual_session_reasons = {"auth_expired", "waf_challenge", "ip_blocked"}
-        identity_reasons = {"identity_issue", "identity_conflict", "id_mismatch"}
-        if stop_reason in manual_session_reasons | identity_reasons:
-            action_type = (
-                "identity_audit"
-                if stop_reason in identity_reasons
-                else "session_recovery"
+        manual_action_classifications = (
+            RESUMABLE_SESSION_CLASSIFICATIONS | _IDENTITY_AUDIT_CLASSIFICATIONS
+        )
+        if stop_reason in manual_action_classifications:
+            request_payload = _build_runtime_request_payload(
+                args,
+                crawl_phase="listing",
+                source_listing_crawl_job_id=str(crawl_job_id),
             )
-            manual_payload = {
-                "action_type": action_type,
-                "classification": stop_reason,
-                "evidence": evidence,
-                "resume_context": {
-                    "crawl_phase": "listing",
-                    "crawl_mode": "headed" if args.headed else "headless",
-                    "category_ids": category_ids,
-                    "keywords": keywords,
-                    "max_pages": int(args.max_pages),
-                    "skip_existing": bool(args.skip_existing),
-                    "resume_strategy": str(args.resume_strategy),
-                },
-            }
+            manual_payload = _build_result_manual_action_payload(
+                crawl_phase="listing",
+                classification=stop_reason,
+                evidence=evidence,
+                request_payload=request_payload,
+            )
             crawl_runtime.mark_manual_action_required(
                 crawl_job_id=crawl_job_id,
                 source_site="offertoday",
-                request_payload=dict(manual_payload["resume_context"]),
+                request_payload=request_payload,
                 payload=manual_payload,
-                error_message=(
-                    "OfferToday listing phase requires manual action: "
-                    f"{stop_reason}"
-                ),
+                error_message=str(manual_payload["message"]),
             )
         else:
             crawl_runtime.mark_failed(
@@ -958,17 +1019,18 @@ async def _run_detail_phase(
             crawl_job_id=crawl_job_id,
             metrics_patch=build_metrics_patch(),
         )
+        manual_payload = _build_result_manual_action_payload(
+            crawl_phase="detail",
+            classification="identity_conflict",
+            evidence=evidence,
+            request_payload=request_payload,
+        )
         crawl_runtime.mark_manual_action_required(
             crawl_job_id=crawl_job_id,
             source_site="offertoday",
             request_payload=request_payload,
-            payload={
-                "action_type": "identity_audit",
-                "classification": "identity_conflict",
-                "evidence": evidence,
-                "resume_context": request_payload,
-            },
-            error_message="OfferToday detail identity audit is required",
+            payload=manual_payload,
+            error_message=str(manual_payload["message"]),
         )
         return build_result(stop_batch=True)
 
@@ -1015,13 +1077,10 @@ async def _run_detail_phase(
             companies_updated += 1
 
         if result.stop_batch:
-            identity_stop = result.outcome is OfferTodayResponseKind.ID_MISMATCH
-            manual_payload = {
-                "action_type": (
-                    "identity_audit" if identity_stop else "session_recovery"
-                ),
-                "classification": result.outcome.value,
-                "evidence": {
+            manual_payload = _build_result_manual_action_payload(
+                crawl_phase="detail",
+                classification=result.outcome.value,
+                evidence={
                     "source_job_id": target.identity.job_id,
                     "listing_ids": [
                         str(listing_id) for listing_id in target.listing_ids
@@ -1029,8 +1088,8 @@ async def _run_detail_phase(
                     "detail_index": index,
                     "detail_total": total_targets,
                 },
-                "resume_context": request_payload,
-            }
+                request_payload=request_payload,
+            )
             crawl_runtime.merge_metrics(
                 crawl_job_id=crawl_job_id,
                 metrics_patch=build_metrics_patch(),
@@ -1040,10 +1099,7 @@ async def _run_detail_phase(
                 source_site="offertoday",
                 request_payload=request_payload,
                 payload=manual_payload,
-                error_message=(
-                    "OfferToday detail phase requires manual action: "
-                    f"{result.outcome.value}"
-                ),
+                error_message=str(manual_payload["message"]),
             )
             return build_result(stop_batch=True)
 
@@ -1268,10 +1324,22 @@ async def main() -> None:
                 auth_state_path,
             )
 
+        reuse_browser_channel = None
+        reuse_browser_profile_path = None
+        if args.resume_strategy == RESUME_STRATEGY_REUSE_OPEN_BROWSER:
+            reuse_browser_channel = (
+                getattr(args, "manual_action_browser_channel", "") or None
+            )
+            reuse_browser_profile_path = (
+                getattr(args, "manual_action_browser_profile_path", "") or None
+            )
+
         async with OfferTodayBrowserRuntime(
             headed=args.headed,
             auth_state_path=str(auth_state_path) if auth_state_path else None,
             resume_strategy=args.resume_strategy,
+            browser_channel=reuse_browser_channel,
+            user_data_dir=reuse_browser_profile_path,
         ) as runtime:
             page = runtime._page
             if page is None:
@@ -1475,22 +1543,23 @@ async def main() -> None:
                 crawl_phase="listing",
                 source_listing_crawl_job_id=str(cj_id),
             )
+            manual_payload = _build_result_manual_action_payload(
+                crawl_phase="listing",
+                classification="identity_conflict",
+                evidence={
+                    "identity_conflict_ids": list(exc.source_job_ids),
+                    "identity_conflict_evidence": [
+                        dict(item) for item in exc.evidence
+                    ],
+                },
+                request_payload=request_payload,
+            )
             crawl_runtime.mark_manual_action_required(
                 crawl_job_id=cj_id,
                 source_site="offertoday",
                 request_payload=request_payload,
-                payload={
-                    "action_type": "identity_audit",
-                    "classification": "identity_conflict",
-                    "evidence": {
-                        "identity_conflict_ids": list(exc.source_job_ids),
-                        "identity_conflict_evidence": [
-                            dict(item) for item in exc.evidence
-                        ],
-                    },
-                    "resume_context": request_payload,
-                },
-                error_message="OfferToday listing identity audit is required",
+                payload=manual_payload,
+                error_message=str(manual_payload["message"]),
             )
     except ManualActionRequiredError as exc:
         logger.warning("Crawl paused for manual action: %s", exc.message)

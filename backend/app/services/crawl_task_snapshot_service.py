@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
+from app.config import settings
 from app.crawl_modes import resolve_crawl_mode
 from app.database import SessionLocal
 from app.repositories.crawl_job_repository import CrawlJobRepository
+from app.scraper.manual_action import normalize_manual_action_payload
 from app.services.source_category_registry import get_source_category_registry
 from app.utils.time import utc_now
 
@@ -192,16 +194,26 @@ def _max_count(*values: Any) -> int:
     return max((_to_int(value) for value in values), default=0)
 
 
-def _extract_issue_text(*, latest_event, crawl_job) -> str:
+def _event_manual_action(latest_event) -> dict[str, Any]:
     event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
-    manual_action = (
+    return (
         event_payload.get("manual_action")
         if isinstance(event_payload.get("manual_action"), dict)
         else {}
     )
+
+
+def _extract_issue_text(
+    *,
+    latest_event,
+    crawl_job,
+    manual_action: dict[str, Any] | None = None,
+) -> str:
+    event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
+    resolved_manual_action = manual_action or _event_manual_action(latest_event)
     candidates = (
-        manual_action.get("reason"),
-        manual_action.get("message"),
+        resolved_manual_action.get("reason"),
+        resolved_manual_action.get("message"),
         event_payload.get("error"),
         event_payload.get("message"),
         event_payload.get("detail"),
@@ -216,15 +228,16 @@ def _extract_issue_text(*, latest_event, crawl_job) -> str:
     return ""
 
 
-def _extract_issue_code(*, latest_event, crawl_job) -> str | None:
+def _extract_issue_code(
+    *,
+    latest_event,
+    crawl_job,
+    manual_action: dict[str, Any] | None = None,
+) -> str | None:
     event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
-    manual_action = (
-        event_payload.get("manual_action")
-        if isinstance(event_payload.get("manual_action"), dict)
-        else {}
-    )
+    resolved_manual_action = manual_action or _event_manual_action(latest_event)
     candidates = (
-        manual_action.get("code"),
+        resolved_manual_action.get("code"),
         event_payload.get("code"),
         getattr(crawl_job, "error_code", None),
     )
@@ -237,14 +250,17 @@ def _extract_issue_code(*, latest_event, crawl_job) -> str | None:
     return None
 
 
-def _extract_issue_stage(latest_event) -> str | None:
+def _extract_issue_stage(
+    latest_event,
+    *,
+    manual_action: dict[str, Any] | None = None,
+) -> str | None:
     event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
-    manual_action = (
-        event_payload.get("manual_action")
-        if isinstance(event_payload.get("manual_action"), dict)
-        else {}
-    )
-    for candidate in (manual_action.get("stage"), event_payload.get("stage")):
+    resolved_manual_action = manual_action or _event_manual_action(latest_event)
+    for candidate in (
+        resolved_manual_action.get("stage"),
+        event_payload.get("stage"),
+    ):
         if candidate is None:
             continue
         issue_stage = str(candidate).strip()
@@ -253,20 +269,45 @@ def _extract_issue_stage(latest_event) -> str | None:
     return None
 
 
-def _derive_issue_metadata(latest_event, *, crawl_job) -> dict[str, str | None]:
-    issue_text = _extract_issue_text(latest_event=latest_event, crawl_job=crawl_job)
-    issue_code = _extract_issue_code(latest_event=latest_event, crawl_job=crawl_job)
-    issue_stage = _extract_issue_stage(latest_event)
+def _derive_issue_metadata(
+    latest_event,
+    *,
+    crawl_job,
+    manual_action: dict[str, Any] | None = None,
+) -> dict[str, str | None]:
+    resolved_manual_action = manual_action or _event_manual_action(latest_event)
+    issue_text = _extract_issue_text(
+        latest_event=latest_event,
+        crawl_job=crawl_job,
+        manual_action=resolved_manual_action,
+    )
+    issue_code = _extract_issue_code(
+        latest_event=latest_event,
+        crawl_job=crawl_job,
+        manual_action=resolved_manual_action,
+    )
+    issue_stage = _extract_issue_stage(
+        latest_event,
+        manual_action=resolved_manual_action,
+    )
     latest_event_type = str(getattr(latest_event, "event_type", "") or "")
     normalized_issue_text = issue_text.lower()
+    classification = str(
+        resolved_manual_action.get("classification") or ""
+    ).strip().lower()
 
-    if issue_code == "1002" or "login expired" in normalized_issue_text:
+    if classification == "auth_expired" or issue_code == "1002" or "login expired" in normalized_issue_text:
         issue_class = "session_expired"
-    elif issue_code == "-1000035" or "ip blocked" in normalized_issue_text or "ip block" in normalized_issue_text:
+    elif (
+        classification == "ip_blocked"
+        or issue_code == "-1000035"
+        or "ip blocked" in normalized_issue_text
+        or "ip block" in normalized_issue_text
+    ):
         issue_class = "ip_blocked"
     elif issue_code == "2520":
         issue_class = "detail_unavailable"
-    elif latest_event_type == "waf.challenge" or "waf" in normalized_issue_text or "verify" in normalized_issue_text or "captcha" in normalized_issue_text:
+    elif classification == "waf_challenge" or latest_event_type == "waf.challenge" or "waf" in normalized_issue_text or "verify" in normalized_issue_text or "captcha" in normalized_issue_text:
         issue_class = "waf_challenge"
     elif crawl_job.status == "manual_action_required" or latest_event_type == "crawl.manual_action_required":
         issue_class = "manual_action_required"
@@ -452,6 +493,11 @@ def build_crawl_task_snapshot(
         events,
         "listing_completed",
     )
+    listing_completed_payload = (
+        listing_completed_event.payload
+        if listing_completed_event and isinstance(listing_completed_event.payload, dict)
+        else {}
+    )
     crawl_started_event = _latest_event_of_type(events, "crawl.started")
     terminal_event = _latest_event_of_types(events, TERMINAL_WORK_EVENT_TYPES)
     waf_state_event = latest_event if latest_event_type in {"waf.challenge", "waf.challenge_cleared"} else _latest_event_of_types(
@@ -476,6 +522,18 @@ def build_crawl_task_snapshot(
         else {}
     )
     request_payload = event_payload.get("request_payload") or crawl_job.request_payload or {}
+    raw_manual_action = _event_manual_action(latest_event)
+    manual_action = (
+        normalize_manual_action_payload(
+            raw_manual_action,
+            source_site=crawl_job.source_site,
+            request_payload=request_payload,
+            default_browser_channel=settings.jobsdb_headed_browser_channel,
+            default_browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
+        )
+        if raw_manual_action
+        else None
+    )
     category_ids = list(event_payload.get("category_ids") or request_payload.get("category_ids") or [])
     category_label = event_payload.get("category_name")
     if not category_label:
@@ -530,8 +588,33 @@ def build_crawl_task_snapshot(
     total_jobs = _to_int(event_payload.get("total_jobs", max(job_ids_collected, jobs_scraped)))
     listings_staged = _max_count(
         event_payload.get("listings_staged"),
+        listing_completed_payload.get("listings_staged"),
         metrics.get("listings_staged", 0),
-        job_ids_collected,
+    )
+    if str(crawl_job.source_site or "").strip().lower() == "offertoday":
+        listings_staged = max(listings_staged, _to_int(event_payload.get("listings")))
+    else:
+        # Preserve the legacy projection for sources whose listing runtimes did
+        # not persist a distinct staged-row metric.
+        listings_staged = max(listings_staged, job_ids_collected)
+    listing_partial = any(
+        bool(payload.get("listing_partial"))
+        for payload in (event_payload, listing_completed_payload, metrics)
+    )
+    listing_condition_count = _max_count(
+        event_payload.get("listing_condition_count"),
+        listing_completed_payload.get("listing_condition_count"),
+        metrics.get("listing_condition_count", 0),
+    )
+    listing_natural_condition_count = _max_count(
+        event_payload.get("listing_natural_condition_count"),
+        listing_completed_payload.get("listing_natural_condition_count"),
+        metrics.get("listing_natural_condition_count", 0),
+    )
+    listing_capped_condition_count = _max_count(
+        event_payload.get("listing_capped_condition_count"),
+        listing_completed_payload.get("listing_capped_condition_count"),
+        metrics.get("listing_capped_condition_count", 0),
     )
     jobs_skipped_existing = _max_count(
         event_payload.get("jobs_skipped_existing"),
@@ -644,7 +727,12 @@ def build_crawl_task_snapshot(
         now=now,
         fallback_running=is_running,
     )
-    issue_metadata = _derive_issue_metadata(latest_event, crawl_job=crawl_job)
+    issue_metadata = _derive_issue_metadata(
+        latest_event,
+        crawl_job=crawl_job,
+        manual_action=manual_action,
+    )
+    ip_blocked = ip_blocked or issue_metadata["issue_class"] == "ip_blocked"
 
     return {
         "crawl_job_id": str(crawl_job.id),
@@ -712,15 +800,24 @@ def build_crawl_task_snapshot(
         "ai_completed_items": ai_completed_items,
         "ai_failed_items": ai_failed_items,
         "ai_total_items": ai_total_items,
-        "manual_action": event_payload.get("manual_action"),
+        "manual_action": manual_action,
         "manual_action_resolution": event_payload.get("manual_action_resolution"),
         **issue_metadata,
         "listing_completed": listing_completed,
+        "listing_partial": listing_partial,
+        "listing_condition_count": listing_condition_count,
+        "listing_natural_condition_count": listing_natural_condition_count,
+        "listing_capped_condition_count": listing_capped_condition_count,
         "waf_challenge": waf_challenge,
         "waf_challenge_message": waf_event_payload.get("message") if waf_challenge else None,
         "waf_challenge_url": waf_event_payload.get("challenge_url") if waf_challenge else None,
         "ip_blocked": ip_blocked,
-        "ip_blocked_message": ip_blocked_event_payload.get("message") if ip_blocked else None,
+        "ip_blocked_message": (
+            ip_blocked_event_payload.get("message")
+            or issue_metadata["latest_issue_text"]
+            if ip_blocked
+            else None
+        ),
         "error": crawl_job.error_message or event_payload.get("error"),
     }
 

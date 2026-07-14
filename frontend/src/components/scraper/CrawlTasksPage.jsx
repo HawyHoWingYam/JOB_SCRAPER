@@ -129,7 +129,6 @@ function buildMetricSummary(task) {
   const currentPage = Number(task?.current_page || 0);
   const totalPages = Number(task?.total_pages || 0);
   const failedItems = Number(task?.detail_run_failed || task?.ingest_items_failed || 0);
-  const listingPageLabel = normalizedSourceSite === 'offertoday' ? 'Query tasks' : 'Pages';
   const completedListingTask = isCompletedListingTask(task);
 
   if (jobIdsCollected > 0) {
@@ -145,7 +144,12 @@ function buildMetricSummary(task) {
   }
 
   if (currentPage > 0 || totalPages > 0) {
-    summary.push(`${listingPageLabel} ${formatCountPair(currentPage, totalPages)}`);
+    if (normalizedSourceSite === 'offertoday') {
+      const maximumBudget = totalPages > 0 ? ` / max ${formatCount(totalPages)}` : '';
+      summary.push(`Query requests ${formatCount(currentPage)}${maximumBudget}`);
+    } else {
+      summary.push(`Pages ${formatCountPair(currentPage, totalPages)}`);
+    }
   }
 
   if (jobsSaved > 0) {
@@ -168,12 +172,44 @@ function buildScopeHint(task) {
   return formatCrawlPhaseLabel(crawlPhase);
 }
 
+function isIpBlockedTask(task) {
+  return task?.issue_class === 'ip_blocked'
+    || task?.manual_action?.classification === 'ip_blocked'
+    || task?.issue_code === '-1000035';
+}
+
+function buildManualActionGuidance(task) {
+  if (isIpBlockedTask(task)) {
+    return 'OfferToday blocked the current public IP. Change your IP or network first, confirm OfferToday is reachable, then resume this same task. Completed progress is preserved.';
+  }
+
+  return null;
+}
+
 function buildIssueSummary(task) {
+  const listingPartialSummary = (() => {
+    if (!task?.listing_partial) {
+      return null;
+    }
+
+    const cappedConditions = Number(task?.listing_capped_condition_count || 0);
+    const totalConditions = Number(task?.listing_condition_count || 0);
+    if (cappedConditions > 0 && totalConditions > 0) {
+      return `Partial listing: ${formatCount(cappedConditions)} of ${formatCount(totalConditions)} query conditions reached the configured page cap.`;
+    }
+    if (cappedConditions > 0) {
+      return `Partial listing: ${formatCount(cappedConditions)} query conditions reached the configured page cap.`;
+    }
+    return 'Partial listing: one or more query conditions reached the configured page cap.';
+  })();
+
   return (
+    buildManualActionGuidance(task) ||
     task?.latest_issue_text ||
     task?.manual_action?.reason ||
     task?.error ||
     task?.status_reason ||
+    listingPartialSummary ||
     null
   );
 }
@@ -184,7 +220,7 @@ function formatStatusLabel(status) {
 
 function buildStatusLabel(task) {
   if (isCompletedListingTask(task)) {
-    return 'Listing Complete';
+    return task?.listing_partial ? 'Listing Complete (Partial)' : 'Listing Complete';
   }
 
   return formatStatusLabel(task?.status);
@@ -218,6 +254,10 @@ export default function CrawlTasksPage() {
     return tasks.find((task) => task.crawl_job_id === selectedTaskId) || null;
   }, [selectedTaskId, tasks]);
   const pageCount = Math.max(1, Math.ceil((pagination.total || 0) / (pagination.pageSize || PAGE_SIZE)));
+  const manualActionResumeSupported = selectedTask?.manual_action?.resume_supported === true;
+  const manualActionReuseSupported = manualActionResumeSupported
+    && selectedTask?.manual_action?.reuse_open_browser_supported === true;
+  const manualActionGuidance = buildManualActionGuidance(selectedTask);
 
   const loadTasks = useCallback(async ({ reason = 'refresh' } = {}) => {
     const requestId = createMonitoringId('req');
@@ -541,80 +581,106 @@ export default function CrawlTasksPage() {
                 </button>
               </div>
 
+              {manualActionGuidance && (
+                <div
+                  className="crawl-tasks-banner crawl-tasks-banner-warning"
+                  data-testid="crawl-task-ip-block-guidance"
+                >
+                  {manualActionGuidance}
+                </div>
+              )}
+
               <div className="crawl-tasks-detail-actions">
                 {isManualActionTask(selectedTask) ? (
                   <>
-                    <button
-                      type="button"
-                      data-testid="crawl-task-resume-open-browser"
-                      disabled={actionState.pending !== null}
-                      onClick={() =>
-                        void runTaskAction(
-                          'resume_open_browser',
-                          'Resume using open browser',
-                          () => resumeCrawlJob(selectedTask.crawl_job_id, 'reuse_open_browser')
-                        )
-                      }
-                    >
-                      <RotateCcw size={16} aria-hidden="true" />
-                      <span>Resume using Open Browser</span>
-                    </button>
+                    {manualActionReuseSupported && (
+                      <button
+                        type="button"
+                        data-testid="crawl-task-resume-open-browser"
+                        disabled={actionState.pending !== null}
+                        onClick={() =>
+                          void runTaskAction(
+                            'resume_open_browser',
+                            'Resume using open browser',
+                            () => resumeCrawlJob(selectedTask.crawl_job_id, 'reuse_open_browser')
+                          )
+                        }
+                      >
+                        <RotateCcw size={16} aria-hidden="true" />
+                        <span>Resume using Open Browser</span>
+                      </button>
+                    )}
 
-                    <button
-                      type="button"
-                      data-testid="crawl-task-resume-fresh"
-                      disabled={actionState.pending !== null}
-                      onClick={() =>
-                        void runTaskAction('resume_fresh', 'Resume fresh', () =>
-                          resumeCrawlJob(selectedTask.crawl_job_id, 'fresh_profile')
-                        )
-                      }
-                    >
-                      <RotateCcw size={16} aria-hidden="true" />
-                      <span>Resume Fresh</span>
-                    </button>
+                    {manualActionResumeSupported && (
+                      <button
+                        type="button"
+                        data-testid="crawl-task-resume-fresh"
+                        disabled={actionState.pending !== null}
+                        onClick={() =>
+                          void runTaskAction('resume_fresh', 'Resume fresh', () =>
+                            resumeCrawlJob(selectedTask.crawl_job_id, 'fresh_profile')
+                          )
+                        }
+                      >
+                        <RotateCcw size={16} aria-hidden="true" />
+                        <span>Resume Fresh</span>
+                      </button>
+                    )}
 
-                    <button
-                      type="button"
-                      data-testid="crawl-task-open-browser"
-                      disabled={actionState.pending !== null}
-                      onClick={() =>
-                        void runTaskAction('open_browser', 'Open browser', () =>
-                          openManualActionBrowser(selectedTask.crawl_job_id)
-                        )
-                      }
-                    >
-                      <MonitorPlay size={16} aria-hidden="true" />
-                      <span>Open Browser</span>
-                    </button>
+                    {manualActionReuseSupported && (
+                      <>
+                        <button
+                          type="button"
+                          data-testid="crawl-task-open-browser"
+                          disabled={actionState.pending !== null}
+                          onClick={() =>
+                            void runTaskAction('open_browser', 'Open browser', () =>
+                              openManualActionBrowser(selectedTask.crawl_job_id)
+                            )
+                          }
+                        >
+                          <MonitorPlay size={16} aria-hidden="true" />
+                          <span>Open Browser</span>
+                        </button>
 
-                    <button
-                      type="button"
-                      data-testid="crawl-task-check-reuse-status"
-                      disabled={actionState.pending !== null}
-                      onClick={() =>
-                        void runTaskAction('reuse_status', 'Check reuse status', () =>
-                          getManualActionReuseStatus(selectedTask.crawl_job_id)
-                        )
-                      }
-                    >
-                      <RefreshCcw size={16} aria-hidden="true" />
-                      <span>Check Reuse Status</span>
-                    </button>
+                        <button
+                          type="button"
+                          data-testid="crawl-task-check-reuse-status"
+                          disabled={actionState.pending !== null}
+                          onClick={() =>
+                            void runTaskAction('reuse_status', 'Check reuse status', () =>
+                              getManualActionReuseStatus(selectedTask.crawl_job_id)
+                            )
+                          }
+                        >
+                          <RefreshCcw size={16} aria-hidden="true" />
+                          <span>Check Reuse Status</span>
+                        </button>
 
-                    <button
-                      type="button"
-                      data-testid="crawl-task-close-profile-windows"
-                      disabled={actionState.pending !== null}
-                      onClick={() =>
-                        void runTaskAction('close_windows', 'Close profile windows', () =>
-                          closeManualActionWindows(selectedTask.crawl_job_id)
-                        )
-                      }
-                    >
-                      <Unplug size={16} aria-hidden="true" />
-                      <span>Close Profile Windows</span>
-                    </button>
+                        <button
+                          type="button"
+                          data-testid="crawl-task-close-profile-windows"
+                          disabled={actionState.pending !== null}
+                          onClick={() =>
+                            void runTaskAction('close_windows', 'Close profile windows', () =>
+                              closeManualActionWindows(selectedTask.crawl_job_id)
+                            )
+                          }
+                        >
+                          <Unplug size={16} aria-hidden="true" />
+                          <span>Close Profile Windows</span>
+                        </button>
+                      </>
+                    )}
+
+                    {!manualActionResumeSupported && (
+                      <div
+                        className="crawl-tasks-action-note"
+                        data-testid="crawl-task-resume-unsupported"
+                      >
+                        This manual action requires operator review and cannot be resumed automatically.
+                      </div>
+                    )}
                   </>
                 ) : (
                   <button
