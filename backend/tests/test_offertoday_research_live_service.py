@@ -6,6 +6,11 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.scraper.offertoday.category_registry import (
+    OFFERTODAY_CATEGORIES_L1,
+    OFFERTODAY_CATEGORY_CATALOG_VERSION,
+    offertoday_category_catalog_hash,
+)
 from app.services.offertoday_research_live_service import (
     OfferTodayResearchLiveService,
     detail_result_to_observation,
@@ -21,6 +26,7 @@ from app.sources.offertoday.detail_identity import (
 from app.sources.offertoday.listing_contract import (
     OfferTodayBrowserContextLostError,
     OfferTodayListingTransportResult,
+    offertoday_endpoint_contract,
 )
 from app.sources.offertoday.listing_runner import (
     ListingConditionOutcome,
@@ -37,11 +43,15 @@ from app.sources.offertoday.research.calibration import (
 from app.sources.offertoday.research.live_contracts import (
     CensusCandidate,
     DetailSmokeTarget,
+    DiscoveryPolicyCandidateV2,
 )
 from app.sources.offertoday.research.partition_research import (
     OFFERTODAY_PARTITION_CATALOG,
     build_endpoint_probe_plan,
     build_partition_probe_plan,
+    offertoday_partition_catalog_hash,
+    phase_c_request_policy_hash,
+    top_level_partition,
 )
 from app.sources.offertoday.research.smoke import build_runtime_smoke_condition
 from app.sources.offertoday.response_policy import (
@@ -1698,6 +1708,134 @@ async def test_phase_c_probe_rejects_any_non_noop_staging_sink_before_runtime() 
             runtime_factory=runtime_factory,
             observation_service=FakeObservationService(),
             plan=build_endpoint_probe_plan(),
+            staging_sink=object(),
+        )
+
+    assert runtime_factory.created == []
+
+
+def _phase_d_candidate() -> DiscoveryPolicyCandidateV2:
+    contract = offertoday_endpoint_contract("recommend-search-list-v1")
+    partitions = tuple(
+        top_level_partition(category.code)
+        for category in OFFERTODAY_CATEGORIES_L1
+    )
+    return DiscoveryPolicyCandidateV2(
+        candidate_version=2,
+        endpoint_contract_id=contract.contract_id,
+        endpoint_contract_hash=contract.contract_hash,
+        endpoint=contract.endpoint,
+        rcd_type=None,
+        category_catalog_version=OFFERTODAY_CATEGORY_CATALOG_VERSION,
+        category_catalog_hash=offertoday_category_catalog_hash(),
+        partition_catalog_hash=offertoday_partition_catalog_hash(),
+        phase_d_partitions=partitions,
+        retained_partition_ids=(partitions[0].partition_id,),
+        retained_condition_hashes=("a" * 64,),
+        pagination_mode="response-cursor",
+        requested_page_size=10,
+        browser_lifecycle="condition-local-runtime",
+        request_policy_hash=phase_c_request_policy_hash(contract.contract_id),
+        terminal_policy="cursor-terminal-empty-confirmation-v1",
+        max_pages_per_condition=500,
+        require_empty_confirmation=True,
+        max_attempts_per_page=3,
+        retry_delays_seconds=(5.0, 15.0),
+        page_delay_range_seconds=(3.0, 5.0),
+        session_mode="saved-session",
+        fixed_repeat_category_ids=(118000, 112000, 127000),
+        phase_b_comparison_artifact_hash="b" * 64,
+        phase_c_comparison_artifact_hash="c" * 64,
+        source_artifact_hash="d" * 64,
+        deferred_issue_ids=(4, 5),
+    )
+
+
+@pytest.mark.asyncio
+async def test_phase_d_fixed_repeat_uses_one_condition_local_cursor_chain_each() -> (
+    None
+):
+    runtime_factory = PhaseCRuntimeFactory()
+    observation_service = FakeObservationService()
+    staging_sink = ResearchNoopListingStagingSink()
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_fixed_repeat_v2(
+        runtime_factory=runtime_factory,
+        observation_service=observation_service,
+        candidate=_phase_d_candidate(),
+        staging_sink=staging_sink,
+    )
+
+    assert execution.failure_reason is None
+    assert execution.completed_condition_count == 3
+    assert len(execution.results) == 3
+    assert len(runtime_factory.created) == len(runtime_factory.exited) == 3
+    assert [len(runtime.requests) for runtime in runtime_factory.created] == [2, 2, 2]
+    assert [
+        runtime.requests[0][0]["jobFunctionCodes"][0]
+        for runtime in runtime_factory.created
+    ] == [118000, 112000, 127000]
+    assert all(
+        "sessionId" not in runtime.requests[0][0]
+        and "sessionId" in runtime.requests[1][0]
+        for runtime in runtime_factory.created
+    )
+    assert staging_sink.stage_calls == 3
+    assert staging_sink.would_stage_rows == 3
+    assert observation_service.detail_attempts == []
+
+
+@pytest.mark.asyncio
+async def test_phase_d_census_runs_all_31_catalog_conditions() -> None:
+    runtime_factory = PhaseCRuntimeFactory()
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_census_v2(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        candidate=_phase_d_candidate(),
+        staging_sink=ResearchNoopListingStagingSink(),
+    )
+
+    assert execution.failure_reason is None
+    assert execution.completed_condition_count == 31
+    assert len(runtime_factory.created) == len(runtime_factory.exited) == 31
+
+
+@pytest.mark.asyncio
+async def test_phase_d_census_preserves_prefix_and_sanitizes_runtime_failure() -> None:
+    runtime_factory = PhaseCRuntimeFactory(fail_runtime_index=2)
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_census_v2(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        candidate=_phase_d_candidate(),
+        staging_sink=ResearchNoopListingStagingSink(),
+    )
+
+    assert execution.completed_condition_count == 1
+    assert execution.failure_reason == "unexpected_phase_d_census_error:RuntimeError"
+    assert "secret" not in execution.failure_reason
+    assert len(runtime_factory.created) == len(runtime_factory.exited) == 2
+
+
+@pytest.mark.asyncio
+async def test_phase_d_rejects_unknown_staging_sink_before_runtime() -> None:
+    runtime_factory = PhaseCRuntimeFactory()
+
+    with pytest.raises(ValueError, match="no-op or reconciled"):
+        await OfferTodayResearchLiveService().run_fixed_repeat_v2(
+            runtime_factory=runtime_factory,
+            observation_service=FakeObservationService(),
+            candidate=_phase_d_candidate(),
             staging_sink=object(),
         )
 

@@ -11,6 +11,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -68,6 +69,25 @@ from app.sources.offertoday.research.contracts import ResearchMetadata  # noqa: 
 from app.sources.offertoday.research.live_contracts import (  # noqa: E402
     CensusCandidate,
     DiscoveryCandidateV2,
+    DiscoveryPolicyCandidateV2,
+)
+from app.sources.offertoday.research.phase_d import (  # noqa: E402
+    DISCOVERY_POLICY_CANDIDATE_EXPERIMENT,
+    PHASE_D_CENSUS_EXPERIMENT,
+    PHASE_D_FIXED_REPEAT_EXPERIMENT,
+    PhaseDProductEvidence,
+    PhaseDStagingEvidence,
+    build_discovery_policy_candidate_v2,
+    build_phase_d_run_evidence,
+    discovery_policy_candidate_artifact_payload,
+    phase_d_run_artifact_payload,
+    validate_discovery_policy_candidate_artifact_payload,
+)
+from app.sources.offertoday.research.phase_d_stage_gate import (  # noqa: E402
+    build_phase_d_comparison_artifact_payload,
+    phase_d_artifact_events,
+    phase_d_artifact_reference,
+    phase_d_metadata,
 )
 from app.sources.offertoday.research.pagination_bakeoff import (  # noqa: E402
     BAKEOFF_CATEGORY_IDS,
@@ -114,6 +134,8 @@ from app.sources.offertoday.research.partition_stage_gate import (  # noqa: E402
     phase_c_comparison_summary,
     phase_c_probe_metadata,
     phase_c_probe_summary,
+    validate_partition_comparison_artifact_payload,
+    validate_phase_c_probe_artifact_payload,
 )
 from app.sources.offertoday.research.smoke import (  # noqa: E402
     runtime_smoke_request_budget,
@@ -166,6 +188,8 @@ _FIXED_REPEAT_REQUEST_BUDGET = {
     "detail": 0,
 }
 _MIN_CENSUS_WINDOW_SECONDS = 6 * 60 * 60
+_PLAYWRIGHT_STORAGE_STATE_FIELDS = {"cookies", "origins"}
+_PLAYWRIGHT_COOKIE_STRING_FIELDS = ("name", "value", "domain", "path")
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +207,20 @@ class CensusCandidateEvidence:
     candidate_hash: str
     parent_artifact_hash: str
     candidate_run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class PhaseDPolicyEvidence:
+    candidate: DiscoveryPolicyCandidateV2
+    candidate_hash: str
+    manifest_hash: str
+    run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class SavedSessionState:
+    path: Path
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,6 +483,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         required=True,
     )
+    probe_endpoints.add_argument("--auth-state", type=Path, required=True)
     probe_endpoints.add_argument("--run-id", default=None)
     probe_endpoints.add_argument(
         "--artifact-root",
@@ -488,6 +527,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         required=True,
     )
+    probe_partitions.add_argument("--auth-state", type=Path, required=True)
     probe_partitions.add_argument("--run-id", default=None)
     probe_partitions.add_argument(
         "--artifact-root",
@@ -517,6 +557,110 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(__file__).resolve().parents[2],
     )
+    freeze_policy = commands.add_parser("freeze-discovery-policy")
+    freeze_policy.add_argument(
+        "--phase-b-comparison-artifact",
+        type=Path,
+        required=True,
+    )
+    freeze_policy.add_argument(
+        "--endpoint-probe-artifact",
+        type=Path,
+        required=True,
+    )
+    freeze_policy.add_argument(
+        "--partition-probe-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    freeze_policy.add_argument(
+        "--partition-comparison-artifact",
+        type=Path,
+        required=True,
+    )
+    freeze_policy.add_argument("--run-id", default=None)
+    freeze_policy.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    freeze_policy.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
+    for command_name in ("census-v2", "repeat-fixed-v2"):
+        phase_d_live = commands.add_parser(command_name)
+        phase_d_live.add_argument("--candidate-artifact", type=Path, required=True)
+        phase_d_live.add_argument(
+            "--baseline-artifact",
+            action="append",
+            type=Path,
+            required=True,
+        )
+        phase_d_live.add_argument(
+            "--run-index",
+            type=int,
+            choices=(1, 2, 3),
+            required=True,
+        )
+        phase_d_live.add_argument("--window-id", required=True)
+        phase_d_live.add_argument(
+            "--staging-mode",
+            choices=("noop", "reconciled"),
+            required=True,
+        )
+        phase_d_live.add_argument(
+            "--confirm-live-research",
+            action="store_true",
+            required=True,
+        )
+        phase_d_live.add_argument("--auth-state", type=Path, required=True)
+        phase_d_live.add_argument(
+            "--confirm-staging-writes",
+            action="store_true",
+        )
+        phase_d_live.add_argument("--run-id", default=None)
+        phase_d_live.add_argument(
+            "--artifact-root",
+            type=Path,
+            default=Path("backend/runtime/offertoday-research"),
+        )
+        phase_d_live.add_argument(
+            "--repo-root",
+            type=Path,
+            default=Path(__file__).resolve().parents[2],
+        )
+    compare_phase_d = commands.add_parser("compare-stability-v2")
+    compare_phase_d.add_argument(
+        "--census-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    compare_phase_d.add_argument(
+        "--fixed-repeat-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    compare_phase_d.add_argument(
+        "--active-holdout-id",
+        action="append",
+        default=[],
+    )
+    compare_phase_d.add_argument("--run-id", default=None)
+    compare_phase_d.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=Path("backend/runtime/offertoday-research"),
+    )
+    compare_phase_d.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+    )
     verify = commands.add_parser("verify-run")
     verify.add_argument("--artifact", type=Path, required=True)
     return parser
@@ -524,6 +668,86 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _print_json(value: dict[str, Any], *, stream=None) -> None:
     print(json.dumps(value, ensure_ascii=True, sort_keys=True), file=stream)
+
+
+def _is_playwright_storage_state(payload: Any) -> bool:
+    if not isinstance(payload, dict) or set(payload) != _PLAYWRIGHT_STORAGE_STATE_FIELDS:
+        return False
+    cookies = payload["cookies"]
+    origins = payload["origins"]
+    if not isinstance(cookies, list) or not isinstance(origins, list):
+        return False
+    for cookie in cookies:
+        if not isinstance(cookie, dict) or any(
+            not isinstance(cookie.get(field_name), str)
+            for field_name in _PLAYWRIGHT_COOKIE_STRING_FIELDS
+        ):
+            return False
+        expires = cookie.get("expires")
+        if (
+            isinstance(expires, bool)
+            or not isinstance(expires, (int, float))
+            or not isinstance(cookie.get("httpOnly"), bool)
+            or not isinstance(cookie.get("secure"), bool)
+            or cookie.get("sameSite") not in {"Strict", "Lax", "None"}
+        ):
+            return False
+    for origin in origins:
+        if (
+            not isinstance(origin, dict)
+            or not isinstance(origin.get("origin"), str)
+            or not origin["origin"].strip()
+            or not isinstance(origin.get("localStorage"), list)
+        ):
+            return False
+        if any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("name"), str)
+            or not isinstance(item.get("value"), str)
+            for item in origin["localStorage"]
+        ):
+            return False
+    return True
+
+
+def _require_saved_session_state(path: Path) -> SavedSessionState:
+    try:
+        resolved_path = Path(path).expanduser().resolve(strict=True)
+        if not resolved_path.is_file():
+            raise ValueError
+        payload_bytes = resolved_path.read_bytes()
+        payload = json.loads(payload_bytes)
+    except (OSError, RuntimeError, TypeError, UnicodeDecodeError, ValueError):
+        raise ValueError(
+            "auth state must be a readable valid Playwright storage-state JSON file"
+        ) from None
+    if not _is_playwright_storage_state(payload):
+        raise ValueError(
+            "auth state must be a readable valid Playwright storage-state JSON file"
+        )
+    return SavedSessionState(
+        path=resolved_path,
+        sha256=hashlib.sha256(payload_bytes).hexdigest(),
+    )
+
+
+def _bind_saved_session_runtime_factory(runtime_factory, state: SavedSessionState):
+    def saved_session_runtime_factory(*args, **kwargs):
+        try:
+            current_hash = hashlib.sha256(state.path.read_bytes()).hexdigest()
+        except OSError:
+            raise ValueError("auth state became unreadable after validation") from None
+        if current_hash != state.sha256:
+            raise ValueError("auth state changed after validation")
+        if "auth_state_path" in kwargs:
+            raise ValueError("runtime auth state must be bound by the live command")
+        return runtime_factory(
+            *args,
+            auth_state_path=str(state.path),
+            **kwargs,
+        )
+
+    return saved_session_runtime_factory
 
 
 def _require_accepted_smoke_artifact(artifact_dir: Path) -> dict[str, Any]:
@@ -2916,6 +3140,11 @@ def _phase_c_probe_command(
         _print_json({"error": str(exc)}, stream=sys.stderr)
         return EXIT_USAGE
     try:
+        saved_session = _require_saved_session_state(args.auth_state)
+        saved_session_runtime_factory = _bind_saved_session_runtime_factory(
+            runtime_factory,
+            saved_session,
+        )
         parent = _phase_c_probe_parent(args)
         baseline_gate = require_matching_baselines(
             args.baseline_artifact[0],
@@ -2961,7 +3190,7 @@ def _phase_c_probe_command(
         if args.command == "probe-endpoints":
             execution: PhaseCProbeExecution = asyncio.run(
                 service.run_endpoint_probe(
-                    runtime_factory=runtime_factory,
+                    runtime_factory=saved_session_runtime_factory,
                     observation_service=observation_service,
                     plan=plan,
                     staging_sink=staging_sink,
@@ -2971,7 +3200,7 @@ def _phase_c_probe_command(
         else:
             execution = asyncio.run(
                 service.run_partition_probe(
-                    runtime_factory=runtime_factory,
+                    runtime_factory=saved_session_runtime_factory,
                     observation_service=observation_service,
                     plan=plan,
                     staging_sink=staging_sink,
@@ -3015,6 +3244,7 @@ def _phase_c_probe_command(
             runtime_context={
                 "command": args.command,
                 "session_mode": plan.to_payload()["session_mode"],
+                "session_state_sha256": saved_session.sha256,
                 "crawl_job_status": terminal_status,
             },
             captured_at=captured_at,
@@ -3166,6 +3396,808 @@ def _compare_partitions_command(
     return exit_code
 
 
+def _phase_c_endpoint_condition_satisfies_policy_freeze(condition) -> bool:
+    contract_evidence_is_clean = (
+        condition.contract_verified
+        and bool(condition.pages)
+        and all(page.contract_error is None for page in condition.pages)
+        and condition.gap_count == 0
+        and condition.identity_conflict_count == 0
+        and condition.identity_issue_count == 0
+        and condition.conservation_difference == 0
+    )
+    bounded_contract_observation = (
+        condition.stop_reason == "page_cap"
+        and not condition.is_complete
+        and not condition.terminal_confirmed
+        and not condition.empty_confirmation
+    )
+    exhausted_contract_observation = (
+        condition.stop_reason == "natural_exhaustion"
+        and condition.is_complete
+        and condition.terminal_confirmed
+        and condition.empty_confirmation
+    )
+    return contract_evidence_is_clean and (
+        bounded_contract_observation or exhausted_contract_observation
+    )
+
+
+def _freeze_discovery_policy_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    try:
+        phase_b = _phase_b_comparison_reference(
+            args.phase_b_comparison_artifact
+        )
+        if phase_b.accepted is not False:
+            raise ValueError(
+                "Phase D policy freeze requires the valid-rejected Phase B lineage"
+            )
+
+        endpoint_dir = Path(args.endpoint_probe_artifact).resolve(strict=True)
+        endpoint_reference = phase_c_artifact_reference(endpoint_dir)
+        if endpoint_reference.experiment != ENDPOINT_PROBE_EXPERIMENT:
+            raise ValueError("policy freeze requires an endpoint probe artifact")
+        endpoint_payload = json.loads(
+            (endpoint_dir / "endpoint-probe.json").read_text(encoding="utf-8")
+        )
+        endpoint_execution, endpoint_parent, _, _ = (
+            validate_phase_c_probe_artifact_payload(endpoint_payload)
+        )
+        if endpoint_parent != phase_b:
+            raise ValueError("endpoint probe does not descend from the supplied Phase B comparison")
+        if endpoint_execution.failure_reason is not None:
+            raise ValueError("endpoint probe ended with a hard stop")
+
+        comparison_dir = Path(args.partition_comparison_artifact).resolve(
+            strict=True
+        )
+        comparison_reference = phase_c_artifact_reference(comparison_dir)
+        if comparison_reference.experiment != "partition-comparison-v1":
+            raise ValueError(
+                "policy freeze requires a partition comparison artifact"
+            )
+        comparison_payload = json.loads(
+            (comparison_dir / "partition-comparison.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        comparison_decision, _ = (
+            validate_partition_comparison_artifact_payload(comparison_payload)
+        )
+        if (
+            comparison_reference.accepted is not True
+            or comparison_decision.accepted is not True
+        ):
+            raise ValueError("partition comparison did not retain a discovery policy")
+
+        endpoint_contract_id = comparison_payload["endpoint_contract_id"]
+        endpoint_conditions = tuple(
+            condition
+            for condition in endpoint_execution.conditions
+            if condition.endpoint_contract_id == endpoint_contract_id
+        )
+        if len(endpoint_conditions) != 1 or not (
+            _phase_c_endpoint_condition_satisfies_policy_freeze(
+                endpoint_conditions[0]
+            )
+        ):
+            raise ValueError(
+                "selected endpoint lacks verified cursor-contract probe evidence"
+            )
+
+        supplied_projections = []
+        for artifact_path in args.partition_probe_artifact:
+            probe_dir = Path(artifact_path).resolve(strict=True)
+            probe_reference = phase_c_artifact_reference(probe_dir)
+            if probe_reference.experiment != PARTITION_PROBE_EXPERIMENT:
+                raise ValueError("policy freeze requires partition probe artifacts")
+            probe_payload = json.loads(
+                (probe_dir / "partition-probe.json").read_text(encoding="utf-8")
+            )
+            probe_execution, probe_parent, _, _ = (
+                validate_phase_c_probe_artifact_payload(probe_payload)
+            )
+            if probe_parent != endpoint_reference:
+                raise ValueError(
+                    "partition probe does not descend from the supplied endpoint probe"
+                )
+            if probe_execution.plan.endpoint_contract_id != endpoint_contract_id:
+                raise ValueError(
+                    "partition probe endpoint does not match the comparison policy"
+                )
+            projection, _ = build_partition_probe_parent_projection(
+                reference=probe_reference,
+                probe_payload=probe_payload,
+            )
+            supplied_projections.append(projection.to_payload())
+
+        expected_projections = comparison_payload["parents"]
+        supplied_hashes = tuple(
+            sorted(canonical_phase_c_hash(item) for item in supplied_projections)
+        )
+        expected_hashes = tuple(
+            sorted(canonical_phase_c_hash(item) for item in expected_projections)
+        )
+        if (
+            len(supplied_projections) != len(expected_projections)
+            or len(set(supplied_hashes)) != len(supplied_hashes)
+            or supplied_hashes != expected_hashes
+        ):
+            raise ValueError(
+                "supplied partition probes do not exactly match comparison parents"
+            )
+
+        candidate = build_discovery_policy_candidate_v2(
+            comparison_payload=comparison_payload["comparison"],
+            endpoint_contract_id=endpoint_contract_id,
+            phase_b_comparison_artifact_hash=phase_b.manifest_hash,
+            phase_c_comparison_artifact_hash=comparison_reference.manifest_hash,
+        )
+        payload = discovery_policy_candidate_artifact_payload(candidate)
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "freeze-discovery-policy",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=phase_d_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=phase_d_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={"discovery-policy.json": payload},
+        )
+        generic_check = artifact_verifier(artifact_dir)
+        strict_check = verify_live_research_run(artifact_dir)
+        if not generic_check.valid or not strict_check.valid:
+            return EXIT_EVIDENCE_FAILURE
+    except (
+        AttributeError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "candidate_hash": candidate.candidate_hash,
+            "endpoint_contract_id": candidate.endpoint_contract_id,
+            "retained_partition_ids": list(candidate.retained_partition_ids),
+            "deferred_issue_ids": list(candidate.deferred_issue_ids),
+            "exit_code": EXIT_OK,
+        }
+    )
+    return EXIT_OK
+
+
+def _require_phase_d_policy_artifact(
+    artifact_dir: Path,
+) -> PhaseDPolicyEvidence:
+    artifact_dir = Path(artifact_dir).resolve(strict=True)
+    strict_check = verify_live_research_run(artifact_dir)
+    if (
+        not strict_check.valid
+        or strict_check.experiment != DISCOVERY_POLICY_CANDIDATE_EXPERIMENT
+        or strict_check.run_id is None
+    ):
+        raise ValueError(
+            "Phase D requires a strict discovery-policy-candidate-v2 artifact"
+        )
+    manifest_path = artifact_dir / "manifest.json"
+    payload = json.loads(
+        (artifact_dir / "discovery-policy.json").read_text(encoding="utf-8")
+    )
+    candidate = validate_discovery_policy_candidate_artifact_payload(payload)
+    return PhaseDPolicyEvidence(
+        candidate=candidate,
+        candidate_hash=candidate.candidate_hash,
+        manifest_hash=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        run_id=strict_check.run_id,
+    )
+
+
+def _phase_d_request_budget(
+    candidate: DiscoveryPolicyCandidateV2,
+    *,
+    experiment: str,
+) -> dict[str, int]:
+    condition_count = (
+        len(candidate.phase_d_partitions)
+        if experiment == PHASE_D_CENSUS_EXPERIMENT
+        else len(candidate.fixed_repeat_category_ids)
+    )
+    logical = condition_count * candidate.max_pages_per_condition
+    return {
+        "listing_logical": logical,
+        "listing_attempt_max": logical * candidate.max_attempts_per_page,
+        "detail": 0,
+        "product_writes": 0,
+    }
+
+
+def _phase_d_staging_evidence(staging_sink) -> PhaseDStagingEvidence:
+    if isinstance(staging_sink, ResearchNoopListingStagingSink):
+        deferred_ids = tuple(
+            sorted(
+                {
+                    job_id
+                    for conflict in staging_sink.deferred_conflicts
+                    for job_id in conflict.job_ids
+                }
+            )
+        )
+        return PhaseDStagingEvidence(
+            staging_mode="noop",
+            rows_seen=0,
+            rows_created=0,
+            published_source_job_ids=(),
+            preexisting_staged_source_job_ids=(),
+            created_source_job_ids=(),
+            deferred_identity_conflict_ids=deferred_ids,
+            would_stage_rows=staging_sink.would_stage_rows,
+            stage_calls=staging_sink.stage_calls,
+        )
+    if isinstance(staging_sink, OfferTodayReconciledListingStagingSink):
+        reconciliation = staging_sink.reconciliation
+
+        def canonical(values) -> tuple[str, ...]:
+            return tuple(sorted(set(values)))
+
+        return PhaseDStagingEvidence(
+            staging_mode="reconciled",
+            rows_seen=reconciliation.rows_seen,
+            rows_created=reconciliation.rows_created,
+            published_source_job_ids=canonical(
+                reconciliation.published_source_job_ids
+            ),
+            preexisting_staged_source_job_ids=canonical(
+                reconciliation.preexisting_staged_source_job_ids
+            ),
+            created_source_job_ids=canonical(
+                reconciliation.created_source_job_ids
+            ),
+            deferred_identity_conflict_ids=canonical(
+                reconciliation.deferred_identity_conflict_ids
+            ),
+            would_stage_rows=0,
+            stage_calls=staging_sink.stage_calls,
+        )
+    raise ValueError("unsupported Phase D staging sink")
+
+
+def _phase_d_condition_conservation_difference(result) -> int:
+    observed_ids = {
+        job_id
+        for observation in result.observations
+        if observation.cursor_evidence is not None
+        for job_id in (
+            *observation.cursor_evidence.result_job_ids,
+            *observation.cursor_evidence.supplemental_job_ids,
+        )
+    }
+    return len(observed_ids.symmetric_difference(result.accepted_job_ids))
+
+
+def _phase_d_staging_conservation_difference(
+    *,
+    results,
+    staging: PhaseDStagingEvidence,
+    start_snapshot,
+    end_snapshot,
+) -> int:
+    if end_snapshot is None:
+        return 1
+    staged_rows_delta = end_snapshot.staged_rows - start_snapshot.staged_rows
+    if staging.staging_mode == "noop":
+        return abs(staged_rows_delta)
+
+    discovered_ids = {
+        job_id for result in results for job_id in result.accepted_job_ids
+    }
+    cohorts = (
+        set(staging.published_source_job_ids),
+        set(staging.preexisting_staged_source_job_ids),
+        set(staging.created_source_job_ids),
+        set(staging.deferred_identity_conflict_ids),
+    )
+    reconciled_ids = set().union(*cohorts)
+    overlap_count = sum(
+        max(sum(job_id in cohort for cohort in cohorts) - 1, 0)
+        for job_id in reconciled_ids
+    )
+    return (
+        len(discovered_ids.symmetric_difference(reconciled_ids))
+        + overlap_count
+        + abs(staged_rows_delta - staging.rows_created)
+    )
+
+
+def _phase_d_product_evidence(
+    *,
+    start_snapshot,
+    end_snapshot,
+    start_inventory,
+    end_inventory,
+    staging: PhaseDStagingEvidence,
+    detail_attempts: int,
+    product_writes: int,
+    activity_evidence_captured: bool = True,
+) -> PhaseDProductEvidence:
+    return PhaseDProductEvidence(
+        start_snapshot_hash=start_snapshot.data_hash,
+        end_snapshot_hash=(end_snapshot.data_hash if end_snapshot else None),
+        start_inventory_hash=start_inventory.data_hash,
+        end_inventory_hash=(end_inventory.data_hash if end_inventory else None),
+        start_staged_rows_hash=start_snapshot.staged_rows_hash,
+        end_staged_rows_hash=(
+            end_snapshot.staged_rows_hash if end_snapshot else None
+        ),
+        start_published_jobs_hash=start_snapshot.published_jobs_hash,
+        end_published_jobs_hash=(
+            end_snapshot.published_jobs_hash if end_snapshot else None
+        ),
+        start_companies_hash=start_snapshot.companies_hash,
+        end_companies_hash=(end_snapshot.companies_hash if end_snapshot else None),
+        start_product_data_hash=start_snapshot.product_data_hash,
+        end_product_data_hash=(
+            end_snapshot.product_data_hash if end_snapshot else None
+        ),
+        detail_attempts=detail_attempts,
+        product_writes=product_writes,
+        staging=staging,
+        activity_evidence_captured=activity_evidence_captured,
+    )
+
+
+def _phase_d_live_command(
+    args,
+    *,
+    session_factory,
+    repository,
+    runtime_factory,
+    service_factory,
+    observation_service_factory,
+    crawl_runtime_factory,
+    staging_sink_factory,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    if len(args.baseline_artifact) != 2:
+        _print_json(
+            {"error": f"{args.command} requires exactly two baseline artifacts"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.staging_mode == "reconciled" and not args.confirm_staging_writes:
+        _print_json(
+            {"error": "reconciled staging requires --confirm-staging-writes"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.staging_mode == "noop" and args.confirm_staging_writes:
+        _print_json(
+            {"error": "--confirm-staging-writes requires reconciled staging"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    try:
+        saved_session = _require_saved_session_state(args.auth_state)
+        saved_session_runtime_factory = _bind_saved_session_runtime_factory(
+            runtime_factory,
+            saved_session,
+        )
+        candidate_evidence = _require_phase_d_policy_artifact(
+            args.candidate_artifact
+        )
+        baseline_gate = require_matching_baselines(
+            args.baseline_artifact[0],
+            args.baseline_artifact[1],
+        )
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    experiment = (
+        PHASE_D_CENSUS_EXPERIMENT
+        if args.command == "census-v2"
+        else PHASE_D_FIXED_REPEAT_EXPERIMENT
+    )
+    candidate = candidate_evidence.candidate
+    request_budget = _phase_d_request_budget(
+        candidate,
+        experiment=experiment,
+    )
+    research_repository = repository or OfferTodayResearchRepository()
+    db = None
+    artifact_dir = None
+    try:
+        db = session_factory()
+        start_snapshot, start_inventory = _capture_snapshot(
+            research_repository,
+            db,
+        )
+        _require_current_baseline(
+            baseline_gate,
+            start_snapshot,
+            start_inventory,
+        )
+
+        observation_service = observation_service_factory(db)
+        observation_service.create_run(
+            ResearchMetadata(
+                run_id=run_id,
+                experiment=experiment,
+                variant=f"phase-c:{candidate.endpoint_contract_id}",
+                planner_version=planner_version,
+                plan=3,
+                parent_artifact_hash=candidate_evidence.manifest_hash,
+                request_budget=request_budget,
+            ),
+            run_start_inventory=start_inventory,
+        )
+        staging_sink = (
+            ResearchNoopListingStagingSink()
+            if args.staging_mode == "noop"
+            else staging_sink_factory(
+                crawl_runtime=crawl_runtime_factory(),
+                crawl_job_id=run_id,
+                skip_existing=True,
+            )
+        )
+        service = service_factory()
+        started_at = time.perf_counter()
+        execution = asyncio.run(
+            (
+                service.run_census_v2
+                if experiment == PHASE_D_CENSUS_EXPERIMENT
+                else service.run_fixed_repeat_v2
+            )(
+                runtime_factory=saved_session_runtime_factory,
+                observation_service=observation_service,
+                candidate=candidate,
+                staging_sink=staging_sink,
+            )
+        )
+        duration_seconds = max(0.0, time.perf_counter() - started_at)
+        evidence_failure = False
+        failure_reason = execution.failure_reason
+        end_snapshot = None
+        end_inventory = None
+        try:
+            end_snapshot, end_inventory = _capture_snapshot(
+                research_repository,
+                db,
+            )
+        except Exception as exc:
+            evidence_failure = True
+            failure_reason = (
+                "unexpected_phase_d_census_error:"
+                f"{type(exc).__name__}"
+            )
+        activity_evidence_captured = True
+        try:
+            recorded_events = _ordered_events(
+                research_repository.list_research_events(db, UUID(run_id))
+            )
+        except Exception as exc:
+            recorded_events = []
+            activity_evidence_captured = False
+            evidence_failure = True
+            failure_reason = (
+                "unexpected_phase_d_census_error:"
+                f"{type(exc).__name__}"
+            )
+        detail_attempts = sum(
+            event.get("event_type") == "research.detail_attempt"
+            for event in recorded_events
+        )
+        product_writes = sum(
+            event.get("event_type") == "research.product_write"
+            for event in recorded_events
+        )
+        staging = _phase_d_staging_evidence(staging_sink)
+        product = _phase_d_product_evidence(
+            start_snapshot=start_snapshot,
+            end_snapshot=end_snapshot,
+            start_inventory=start_inventory,
+            end_inventory=end_inventory,
+            staging=staging,
+            detail_attempts=detail_attempts,
+            product_writes=product_writes,
+            activity_evidence_captured=activity_evidence_captured,
+        )
+        captured_at = utc_now().isoformat()
+        condition_differences = tuple(
+            _phase_d_condition_conservation_difference(result)
+            for result in execution.results
+        )
+        staging_difference = _phase_d_staging_conservation_difference(
+            results=execution.results,
+            staging=staging,
+            start_snapshot=start_snapshot,
+            end_snapshot=end_snapshot,
+        )
+        baseline = _phase_c_baseline_reference(baseline_gate)
+
+        def build_run_payload(active_failure_reason):
+            active_run = build_phase_d_run_evidence(
+                experiment=experiment,
+                run_id=run_id,
+                run_index=args.run_index,
+                window_id=args.window_id,
+                captured_at=captured_at,
+                candidate=candidate,
+                candidate_artifact_hash=candidate_evidence.manifest_hash,
+                duration_seconds=duration_seconds,
+                results=execution.results,
+                product=product,
+                failure_reason=active_failure_reason,
+                condition_conservation_differences=condition_differences,
+                staging_conservation_difference=staging_difference,
+            )
+            active_payload = phase_d_run_artifact_payload(
+                run=active_run,
+                candidate=candidate,
+                baseline=baseline,
+                product=product,
+            )
+            return active_run, active_payload
+
+        run, payload = build_run_payload(failure_reason)
+
+        def build_summary() -> dict[str, Any]:
+            return {
+                "experiment": experiment,
+                "accepted": payload["accepted"],
+                "candidate_hash": candidate.candidate_hash,
+                "run_index": run.run_index,
+                "window_id": run.window_id,
+                "completed_condition_count": len(run.conditions),
+                "logical_listing_requests": run.logical_requests,
+                "physical_listing_attempts": run.physical_attempts,
+                "failure_reason": failure_reason,
+                "staging_mode": staging.staging_mode,
+                "detail_attempts": product.detail_attempts,
+                "product_writes": product.product_writes,
+                "end_snapshot_captured": product.end_snapshot_captured,
+                "activity_evidence_captured": (
+                    product.activity_evidence_captured
+                ),
+            }
+
+        summary = build_summary()
+        try:
+            observation_service.finish_run(
+                status="completed" if payload["accepted"] else "failed",
+                summary=summary,
+                error_message=(
+                    None if failure_reason is None else "phase_d_live_stopped"
+                ),
+            )
+        except Exception as exc:
+            evidence_failure = True
+            failure_reason = (
+                "unexpected_phase_d_census_error:"
+                f"{type(exc).__name__}"
+            )
+            run, payload = build_run_payload(failure_reason)
+            summary = build_summary()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": args.command,
+                "session_mode": candidate.session_mode,
+                "session_state_sha256": saved_session.sha256,
+                "crawl_job_status": (
+                    "completed" if payload["accepted"] else "failed"
+                ),
+                "staging_mode": staging.staging_mode,
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=phase_d_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=phase_d_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={"phase-d-run.json": payload},
+        )
+        generic_check = artifact_verifier(artifact_dir)
+        strict_check = verify_live_research_run(artifact_dir)
+        if not generic_check.valid or not strict_check.valid:
+            return EXIT_EVIDENCE_FAILURE
+    except (
+        AttributeError,
+        OSError,
+        SQLAlchemyError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    finally:
+        if db is not None:
+            db.close()
+
+    exit_code = (
+        EXIT_EVIDENCE_FAILURE
+        if evidence_failure or not product.accepted
+        else (
+            EXIT_HARD_STOP
+            if failure_reason is not None
+            else (EXIT_OK if payload["accepted"] else EXIT_INCOMPLETE)
+        )
+    )
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "experiment": experiment,
+            "candidate_hash": candidate.candidate_hash,
+            "run_index": run.run_index,
+            "window_id": run.window_id,
+            "accepted": payload["accepted"],
+            "failure_reason": failure_reason,
+            "completed_condition_count": len(run.conditions),
+            "logical_listing_requests": run.logical_requests,
+            "physical_listing_attempts": run.physical_attempts,
+            "staging_mode": staging.staging_mode,
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
+def _compare_phase_d_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    if len(args.census_artifact) != 3 or len(args.fixed_repeat_artifact) != 3:
+        _print_json(
+            {
+                "error": (
+                    "compare-stability-v2 requires exactly three census and "
+                    "three fixed-repeat artifacts"
+                )
+            },
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        census_parents = []
+        for artifact_path in args.census_artifact:
+            artifact_dir = Path(artifact_path).resolve(strict=True)
+            reference = phase_d_artifact_reference(artifact_dir)
+            if reference.experiment != PHASE_D_CENSUS_EXPERIMENT:
+                raise ValueError(
+                    "compare-stability-v2 census parent version does not match"
+                )
+            if reference.accepted is not True:
+                raise ValueError(
+                    "compare-stability-v2 requires accepted census parents"
+                )
+            payload = json.loads(
+                (artifact_dir / "phase-d-run.json").read_text(encoding="utf-8")
+            )
+            census_parents.append((reference, payload))
+        fixed_parents = []
+        for artifact_path in args.fixed_repeat_artifact:
+            artifact_dir = Path(artifact_path).resolve(strict=True)
+            reference = phase_d_artifact_reference(artifact_dir)
+            if reference.experiment != PHASE_D_FIXED_REPEAT_EXPERIMENT:
+                raise ValueError(
+                    "compare-stability-v2 fixed parent version does not match"
+                )
+            if reference.accepted is not True:
+                raise ValueError(
+                    "compare-stability-v2 requires accepted fixed-repeat parents"
+                )
+            payload = json.loads(
+                (artifact_dir / "phase-d-run.json").read_text(encoding="utf-8")
+            )
+            fixed_parents.append((reference, payload))
+        census_parents.sort(key=lambda item: item[1]["run"]["run_index"])
+        fixed_parents.sort(key=lambda item: item[1]["run"]["run_index"])
+        payload = build_phase_d_comparison_artifact_payload(
+            (*census_parents, *fixed_parents),
+            active_holdout_ids=tuple(args.active_holdout_id),
+        )
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "compare-stability-v2",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=phase_d_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=phase_d_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={"phase-d-comparison.json": payload},
+        )
+        generic_check = artifact_verifier(artifact_dir)
+        strict_check = verify_live_research_run(artifact_dir)
+        if not generic_check.valid or not strict_check.valid:
+            return EXIT_EVIDENCE_FAILURE
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    accepted = bool(payload["comparison"]["comparison"]["decision"]["accepted"])
+    exit_code = EXIT_OK if accepted else EXIT_INCOMPLETE
+    comparison = payload["comparison"]["comparison"]
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "accepted": accepted,
+            "candidate_hash": comparison["candidate_hash"],
+            "fixed_cohort_jaccard": comparison["fixed_cohort_jaccard"],
+            "unique_count_cv": comparison["unique_count_cv"],
+            "stable_reference_count": len(comparison["stable_reference_ids"]),
+            "stable_reference_hash": comparison["stable_reference_hash"],
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -3199,6 +4231,34 @@ def main(
         )
     if args.command == "compare-partitions":
         return _compare_partitions_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command == "freeze-discovery-policy":
+        return _freeze_discovery_policy_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command in {"census-v2", "repeat-fixed-v2"}:
+        return _phase_d_live_command(
+            args,
+            session_factory=session_factory,
+            repository=repository,
+            runtime_factory=runtime_factory,
+            service_factory=service_factory,
+            observation_service_factory=observation_service_factory,
+            crawl_runtime_factory=crawl_runtime_factory,
+            staging_sink_factory=staging_sink_factory,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command == "compare-stability-v2":
+        return _compare_phase_d_command(
             args,
             provenance_provider=provenance_provider,
             artifact_exporter=artifact_exporter,

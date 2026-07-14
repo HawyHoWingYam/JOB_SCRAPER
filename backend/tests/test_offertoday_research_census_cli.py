@@ -13,6 +13,11 @@ from uuid import UUID
 
 import pytest
 import scripts.offertoday_research_census as census_cli
+from app.scraper.offertoday.category_registry import (
+    OFFERTODAY_CATEGORIES_L1,
+    OFFERTODAY_CATEGORY_CATALOG_VERSION,
+    offertoday_category_catalog_hash,
+)
 from app.services.offertoday_research_live_service import (
     OfferTodayResearchLiveService,
 )
@@ -63,7 +68,17 @@ from app.sources.offertoday.research.live_contracts import (
     CensusCandidate,
     DetailSmokeObservation,
     DetailSmokeTarget,
+    DiscoveryPolicyCandidateV2,
     LiveSmokeExecution,
+)
+from app.sources.offertoday.research.phase_d import (
+    PHASE_D_CENSUS_EXPERIMENT,
+    PHASE_D_FIXED_REPEAT_EXPERIMENT,
+    discovery_policy_candidate_artifact_payload,
+)
+from app.sources.offertoday.research.phase_d_stage_gate import (
+    phase_d_artifact_events,
+    phase_d_metadata,
 )
 from app.sources.offertoday.research.pagination_bakeoff import (
     pagination_bakeoff_controls_payload,
@@ -76,15 +91,22 @@ from app.sources.offertoday.research.partition_research import (
     PhaseCConditionEvidence,
     PhaseCPageEvidence,
     PhaseCProbeExecution,
+    build_endpoint_probe_plan,
     build_partition_probe_plan,
+    offertoday_partition_catalog_hash,
+    phase_c_request_policy_hash,
     top_level_partition,
 )
 from app.sources.offertoday.research.partition_stage_gate import (
     PhaseCArtifactReference,
     PhaseCBaselineReference,
     PhaseCNoWriteEvidence,
+    build_partition_comparison_artifact_payload,
+    build_partition_probe_parent_projection,
     build_phase_c_probe_artifact_payload,
+    phase_c_artifact_reference,
     phase_c_artifact_events,
+    phase_c_comparison_metadata,
     phase_c_probe_metadata,
 )
 from app.sources.offertoday.research.smoke import (
@@ -131,6 +153,42 @@ def provenance(**kwargs) -> ResearchProvenance:
         untracked_file_hashes={},
         excluded_tracked_file_hashes={},
         excluded_untracked_file_hashes={},
+    )
+
+
+def _saved_session_state(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "saved-session.json"
+    cookie_value = hashlib.sha256(str(path.resolve()).encode()).hexdigest()
+    path.write_text(
+        json.dumps(
+            {
+                "cookies": [
+                    {
+                        "name": "fixture-session",
+                        "value": cookie_value,
+                        "domain": ".offertoday.com",
+                        "path": "/",
+                        "expires": -1,
+                        "httpOnly": True,
+                        "secure": True,
+                        "sameSite": "Lax",
+                    }
+                ],
+                "origins": [],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _artifact_text(artifact_dir: Path) -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(artifact_dir.iterdir())
+        if path.is_file()
     )
 
 
@@ -1037,7 +1095,7 @@ class FakeRepository:
         self.state.log.append("load_events")
         if self.event_load_errors:
             raise self.event_load_errors.pop(0)
-        assert str(crawl_job_id) == RUN_ID
+        assert str(crawl_job_id) == self.state.expected_run_id
         return list(self.state.events)
 
 
@@ -1052,6 +1110,7 @@ class State:
         self.calibration_conditions = None
         self.staging_sink = None
         self.pagination_requests: list[dict] = []
+        self.expected_run_id = RUN_ID
 
     def append_event(self, event_type: str, payload: dict) -> None:
         self.events.append(
@@ -1971,6 +2030,8 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
             "--baseline-artifact",
             "second",
             "--confirm-live-research",
+            "--auth-state",
+            "saved-session.json",
         ]
     )
     probe_partitions = parser.parse_args(
@@ -1989,6 +2050,8 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
             "--baseline-artifact",
             "second",
             "--confirm-live-research",
+            "--auth-state",
+            "saved-session.json",
         ]
     )
     compare_partitions = parser.parse_args(
@@ -1996,6 +2059,56 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
             "compare-partitions",
             "--partition-probe-artifact",
             "partition-probe",
+        ]
+    )
+    freeze_policy = parser.parse_args(
+        [
+            "freeze-discovery-policy",
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--endpoint-probe-artifact",
+            "endpoint",
+            "--partition-probe-artifact",
+            "partition",
+            "--partition-comparison-artifact",
+            "comparison",
+        ]
+    )
+    census_v2 = parser.parse_args(
+        [
+            "census-v2",
+            "--candidate-artifact",
+            "candidate-v2",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+            "--run-index",
+            "1",
+            "--window-id",
+            "window-a",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            "saved-session.json",
+        ]
+    )
+    compare_v2 = parser.parse_args(
+        [
+            "compare-stability-v2",
+            "--census-artifact",
+            "c1",
+            "--census-artifact",
+            "c2",
+            "--census-artifact",
+            "c3",
+            "--fixed-repeat-artifact",
+            "f1",
+            "--fixed-repeat-artifact",
+            "f2",
+            "--fixed-repeat-artifact",
+            "f3",
         ]
     )
 
@@ -2023,16 +2136,25 @@ def test_parser_exposes_only_locked_live_inputs_and_offline_verify() -> None:
     assert freeze.pilot_artifact == Path("pilot")
     assert probe_endpoints.command == "probe-endpoints"
     assert probe_endpoints.confirm_live_research is True
+    assert probe_endpoints.auth_state == Path("saved-session.json")
     assert probe_endpoints.endpoint_contract_id == [
         "recommend-search-list-v1",
         "recommend-list-envelope-v1",
     ]
     assert probe_partitions.command == "probe-partitions"
+    assert probe_partitions.auth_state == Path("saved-session.json")
     assert probe_partitions.partition_id == [first_partition_id]
     assert probe_partitions.max_pages_per_condition == 10
     assert compare_partitions.command == "compare-partitions"
     assert compare_partitions.partition_probe_artifact == [Path("partition-probe")]
-    assert "freeze-discovery-policy" not in parser.format_help()
+    assert freeze_policy.command == "freeze-discovery-policy"
+    assert freeze_policy.partition_probe_artifact == [Path("partition")]
+    assert census_v2.command == "census-v2"
+    assert census_v2.run_index == 1
+    assert census_v2.window_id == "window-a"
+    assert census_v2.confirm_live_research is True
+    assert census_v2.auth_state == Path("saved-session.json")
+    assert compare_v2.command == "compare-stability-v2"
     with pytest.raises(SystemExit):
         parser.parse_args(
             [
@@ -3993,23 +4115,45 @@ def _phase_c_condition(
 
 def _phase_c_endpoint_execution(plan) -> PhaseCProbeExecution:
     partition_id = top_level_partition(plan.category_code).partition_id
+    search_condition = replace(
+        _phase_c_condition(
+            partition_id=partition_id,
+            endpoint_contract_id="recommend-search-list-v1",
+            label="endpoint-search",
+            accepted=False,
+        ),
+        contract_verified=True,
+        pages=tuple(
+            _phase_c_page(
+                label="endpoint-search",
+                page=page,
+                job_ids=(f"job-endpoint-search-{page}",),
+                terminal_signal=False,
+            )
+            for page in range(1, plan.max_pages_per_contract + 1)
+        ),
+    )
+    browse_condition = replace(
+        _phase_c_condition(
+            partition_id=partition_id,
+            endpoint_contract_id="recommend-list-envelope-v1",
+            label="endpoint-browse",
+            accepted=False,
+        ),
+        pages=tuple(
+            _phase_c_page(
+                label="endpoint-browse",
+                page=page,
+                job_ids=(f"job-endpoint-browse-{page}",),
+                terminal_signal=False,
+            )
+            for page in range(1, plan.max_pages_per_contract + 1)
+        ),
+    )
     return PhaseCProbeExecution(
         experiment=ENDPOINT_PROBE_EXPERIMENT,
         plan=plan,
-        conditions=(
-            _phase_c_condition(
-                partition_id=partition_id,
-                endpoint_contract_id="recommend-search-list-v1",
-                label="endpoint-search",
-                accepted=True,
-            ),
-            _phase_c_condition(
-                partition_id=partition_id,
-                endpoint_contract_id="recommend-list-envelope-v1",
-                label="endpoint-browse",
-                accepted=False,
-            ),
-        ),
+        conditions=(search_condition, browse_condition),
     )
 
 
@@ -4046,6 +4190,7 @@ class FakePhaseCLiveService:
         plan,
         staging_sink,
     ) -> PhaseCProbeExecution:
+        runtime_factory(headed=False)
         self.state.log.append("network")
         self.state.staging_sink = staging_sink
         self.state.phase_c_plan = plan
@@ -4060,6 +4205,7 @@ class FakePhaseCLiveService:
         plan,
         staging_sink,
     ) -> PhaseCProbeExecution:
+        runtime_factory(headed=False)
         self.state.log.append("network")
         self.state.staging_sink = staging_sink
         self.state.phase_c_plan = plan
@@ -4090,7 +4236,7 @@ def _endpoint_probe_reference() -> PhaseCArtifactReference:
     )
 
 
-def test_phase_c_parser_requires_explicit_confirmation_and_partition_selection() -> (
+def test_phase_c_parser_requires_confirmation_auth_state_and_partition_selection() -> (
     None
 ):
     parser = census_cli.build_parser()
@@ -4108,6 +4254,8 @@ def test_phase_c_parser_requires_explicit_confirmation_and_partition_selection()
                 "first",
                 "--baseline-artifact",
                 "second",
+                "--auth-state",
+                "saved-session.json",
             ]
         )
     with pytest.raises(SystemExit):
@@ -4125,14 +4273,180 @@ def test_phase_c_parser_requires_explicit_confirmation_and_partition_selection()
                 "--baseline-artifact",
                 "second",
                 "--confirm-live-research",
+                "--auth-state",
+                "saved-session.json",
             ]
         )
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "probe-endpoints",
+                "--phase-b-comparison-artifact",
+                "phase-b",
+                "--endpoint-contract-id",
+                "recommend-search-list-v1",
+                "--endpoint-contract-id",
+                "recommend-list-envelope-v1",
+                "--baseline-artifact",
+                "first",
+                "--baseline-artifact",
+                "second",
+                "--confirm-live-research",
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        [
+            "probe-endpoints",
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--endpoint-contract-id",
+            "recommend-list-envelope-v1",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+            "--confirm-live-research",
+        ],
+        [
+            "census-v2",
+            "--candidate-artifact",
+            "candidate",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+            "--run-index",
+            "1",
+            "--window-id",
+            "window-a",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+        ],
+    ),
+)
+def test_saved_session_live_commands_require_auth_state_before_dependencies(
+    argv: list[str],
+) -> None:
+    calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("dependency")
+        raise AssertionError("missing auth state constructed a dependency")
+
+    with pytest.raises(SystemExit) as exc_info:
+        census_cli.main(
+            argv,
+            session_factory=forbidden,
+            repository=forbidden,
+            runtime_factory=forbidden,
+            service_factory=forbidden,
+            observation_service_factory=forbidden,
+            crawl_runtime_factory=forbidden,
+            staging_sink_factory=forbidden,
+        )
+
+    assert exc_info.value.code == census_cli.EXIT_USAGE
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        [
+            "probe-endpoints",
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--endpoint-contract-id",
+            "recommend-list-envelope-v1",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+            "--confirm-live-research",
+        ],
+        [
+            "repeat-fixed-v2",
+            "--candidate-artifact",
+            "candidate",
+            "--baseline-artifact",
+            "first",
+            "--baseline-artifact",
+            "second",
+            "--run-index",
+            "1",
+            "--window-id",
+            "window-a",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+        ],
+    ),
+)
+def test_saved_session_live_commands_reject_invalid_state_before_dependencies(
+    tmp_path: Path,
+    capsys,
+    argv: list[str],
+) -> None:
+    calls: list[str] = []
+    invalid_state = tmp_path / "invalid-session.json"
+    invalid_state.write_text('{"cookies": []}', encoding="utf-8")
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("dependency")
+        raise AssertionError("invalid auth state constructed a dependency")
+
+    result = census_cli.main(
+        [*argv, "--auth-state", str(invalid_state)],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+    )
+
+    error = json.loads(capsys.readouterr().err)
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert error == {
+        "error": "auth state must be a readable valid Playwright storage-state JSON file"
+    }
+    assert str(invalid_state) not in json.dumps(error)
+    assert calls == []
+
+
+def test_saved_session_runtime_binding_rechecks_validated_bytes(tmp_path: Path) -> None:
+    auth_state = _saved_session_state(tmp_path / "auth")
+    saved_session = census_cli._require_saved_session_state(auth_state)
+    runtime_calls: list[dict] = []
+    runtime_factory = census_cli._bind_saved_session_runtime_factory(
+        lambda **kwargs: runtime_calls.append(kwargs),
+        saved_session,
+    )
+    changed_payload = json.loads(auth_state.read_text(encoding="utf-8"))
+    changed_payload["cookies"][0]["value"] = "changed-after-validation"
+    auth_state.write_text(json.dumps(changed_payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="auth state changed after validation"):
+        runtime_factory(headed=False)
+
+    assert runtime_calls == []
 
 
 def test_probe_endpoints_requires_two_baselines_before_any_dependency(
     tmp_path: Path,
 ) -> None:
     calls: list[str] = []
+    auth_state = _saved_session_state(tmp_path / "auth")
 
     def forbidden(*_args, **_kwargs):
         calls.append("dependency")
@@ -4150,6 +4464,8 @@ def test_probe_endpoints_requires_two_baselines_before_any_dependency(
             "--baseline-artifact",
             str(tmp_path / "only-one"),
             "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
         ],
         session_factory=forbidden,
         repository=forbidden,
@@ -4165,6 +4481,7 @@ def test_probe_endpoints_requires_two_baselines_before_any_dependency(
 def test_probe_endpoints_invalid_parent_is_evidence_failure_not_usage(
     tmp_path: Path,
 ) -> None:
+    auth_state = _saved_session_state(tmp_path / "auth")
     result = census_cli.main(
         [
             "probe-endpoints",
@@ -4179,6 +4496,8 @@ def test_probe_endpoints_invalid_parent_is_evidence_failure_not_usage(
             "--baseline-artifact",
             str(tmp_path / "missing-baseline-two"),
             "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
         ]
     )
 
@@ -4193,6 +4512,7 @@ def test_probe_endpoints_exports_strict_inconclusive_no_write_artifact(
     baselines = tmp_path / "baselines"
     first = baseline_artifact(baselines, BASELINE_RUN_1)
     second = baseline_artifact(baselines, BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
     state = State()
     runtime_calls: list[dict] = []
     monkeypatch.setattr(
@@ -4215,6 +4535,8 @@ def test_probe_endpoints_exports_strict_inconclusive_no_write_artifact(
             "--baseline-artifact",
             str(second),
             "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
             "--run-id",
             RUN_ID,
             "--repo-root",
@@ -4248,7 +4570,17 @@ def test_probe_endpoints_exports_strict_inconclusive_no_write_artifact(
     }
     assert isinstance(state.staging_sink, ResearchNoopListingStagingSink)
     assert state.log.index("product_snapshot_1") < state.log.index("network")
-    assert runtime_calls == []
+    assert runtime_calls == [
+        {"auth_state_path": str(auth_state.resolve()), "headed": False}
+    ]
+    manifest = json.loads((artifact / "manifest.json").read_text())
+    artifact_text = _artifact_text(artifact)
+    cookie_value = json.loads(auth_state.read_text())["cookies"][0]["value"]
+    assert manifest["provenance"]["runtime_context"]["session_state_sha256"] == (
+        hashlib.sha256(auth_state.read_bytes()).hexdigest()
+    )
+    assert str(auth_state.resolve()) not in artifact_text
+    assert cookie_value not in artifact_text
     assert census_cli.verify_live_research_run(artifact).valid is True
 
 
@@ -4260,6 +4592,7 @@ def test_probe_partitions_accepts_explicit_inputs_and_strict_replays(
     baselines = tmp_path / "baselines"
     first = baseline_artifact(baselines, BASELINE_RUN_1)
     second = baseline_artifact(baselines, BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
     state = State()
     partition_ids = [
         OFFERTODAY_PARTITION_CATALOG[0].partition_id,
@@ -4289,6 +4622,8 @@ def test_probe_partitions_accepts_explicit_inputs_and_strict_replays(
             "--baseline-artifact",
             str(second),
             "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
             "--run-id",
             RUN_ID,
             "--repo-root",
@@ -4330,6 +4665,7 @@ def test_probe_endpoint_current_database_drift_stops_before_service_or_runtime(
     second = baseline_artifact(baselines, BASELINE_RUN_2, listings=[baseline_row])
     state = State()
     calls: list[str] = []
+    auth_state = _saved_session_state(tmp_path / "auth")
     monkeypatch.setattr(
         census_cli,
         "_phase_b_comparison_reference",
@@ -4350,6 +4686,8 @@ def test_probe_endpoint_current_database_drift_stops_before_service_or_runtime(
             "--baseline-artifact",
             str(second),
             "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
             "--run-id",
             RUN_ID,
             "--repo-root",
@@ -4373,6 +4711,7 @@ def _export_partition_probe_fixture(
     run_id: str,
     partition_index: int,
     accepted: bool,
+    parent_reference: PhaseCArtifactReference | None = None,
 ) -> Path:
     partition_id = OFFERTODAY_PARTITION_CATALOG[partition_index].partition_id
     plan = build_partition_probe_plan(
@@ -4399,7 +4738,7 @@ def _export_partition_probe_fixture(
     )
     payload = build_phase_c_probe_artifact_payload(
         execution=execution,
-        parent=_endpoint_probe_reference(),
+        parent=parent_reference or _endpoint_probe_reference(),
         baseline=baseline,
         no_write=no_write,
     )
@@ -4480,4 +4819,1110 @@ def test_compare_partitions_is_offline_strict_and_never_freezes_candidate(
     assert dependency_calls == []
     assert "selected_policy" not in payload_text
     assert "candidate_hash" not in payload_text
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def _phase_d_candidate() -> DiscoveryPolicyCandidateV2:
+    contract = offertoday_endpoint_contract("recommend-search-list-v1")
+    partitions = tuple(
+        top_level_partition(category.code)
+        for category in OFFERTODAY_CATEGORIES_L1
+    )
+    return DiscoveryPolicyCandidateV2(
+        candidate_version=2,
+        endpoint_contract_id=contract.contract_id,
+        endpoint_contract_hash=contract.contract_hash,
+        endpoint=contract.endpoint,
+        rcd_type=None,
+        category_catalog_version=OFFERTODAY_CATEGORY_CATALOG_VERSION,
+        category_catalog_hash=offertoday_category_catalog_hash(),
+        partition_catalog_hash=offertoday_partition_catalog_hash(),
+        phase_d_partitions=partitions,
+        retained_partition_ids=tuple(
+            partition.partition_id for partition in partitions[:2]
+        ),
+        retained_condition_hashes=("a" * 64, "b" * 64),
+        pagination_mode="response-cursor",
+        requested_page_size=10,
+        browser_lifecycle="condition-local-runtime",
+        request_policy_hash=phase_c_request_policy_hash(contract.contract_id),
+        terminal_policy="cursor-terminal-empty-confirmation-v1",
+        max_pages_per_condition=500,
+        require_empty_confirmation=True,
+        max_attempts_per_page=3,
+        retry_delays_seconds=(5.0, 15.0),
+        page_delay_range_seconds=(3.0, 5.0),
+        session_mode="saved-session",
+        fixed_repeat_category_ids=(118000, 112000, 127000),
+        phase_b_comparison_artifact_hash="c" * 64,
+        phase_c_comparison_artifact_hash="d" * 64,
+        source_artifact_hash="e" * 64,
+        deferred_issue_ids=(4, 5),
+    )
+
+
+def _export_phase_d_candidate_fixture(root: Path) -> Path:
+    candidate = _phase_d_candidate()
+    payload = discovery_policy_candidate_artifact_payload(candidate)
+    captured_at = "2026-07-13T00:00:00+00:00"
+    return export_research_artifact(
+        root=root,
+        run_id=CANDIDATE_RUN_ID,
+        metadata=phase_d_metadata(
+            payload,
+            run_id=CANDIDATE_RUN_ID,
+            planner_version="fixture",
+        ),
+        events=phase_d_artifact_events(payload, created_at=captured_at),
+        provenance=provenance(captured_at=captured_at),
+        json_files={"discovery-policy.json": payload},
+    )
+
+
+def _export_endpoint_probe_fixture(
+    root: Path,
+    *,
+    parent: PhaseCArtifactReference,
+    run_id: str,
+) -> Path:
+    plan = build_endpoint_probe_plan()
+    execution = _phase_c_endpoint_execution(plan)
+    baseline = PhaseCBaselineReference(
+        artifact_hashes=("a" * 64, "b" * 64),
+        run_ids=(BASELINE_RUN_1, BASELINE_RUN_2),
+        snapshot_hash="c" * 64,
+        inventory_hash="d" * 64,
+    )
+    no_write = PhaseCNoWriteEvidence(
+        start_snapshot_hash=baseline.snapshot_hash,
+        end_snapshot_hash=baseline.snapshot_hash,
+        start_product_data_hash="e" * 64,
+        end_product_data_hash="e" * 64,
+        start_inventory_hash=baseline.inventory_hash,
+        end_inventory_hash=baseline.inventory_hash,
+        stage_calls=0,
+        would_stage_rows=0,
+    )
+    payload = build_phase_c_probe_artifact_payload(
+        execution=execution,
+        parent=parent,
+        baseline=baseline,
+        no_write=no_write,
+    )
+    captured_at = "2026-07-13T00:00:00+00:00"
+    return export_research_artifact(
+        root=root,
+        run_id=run_id,
+        metadata=phase_c_probe_metadata(
+            payload,
+            run_id=run_id,
+            planner_version="fixture",
+        ),
+        events=phase_c_artifact_events(payload, created_at=captured_at),
+        provenance=provenance(captured_at=captured_at),
+        json_files={"endpoint-probe.json": payload},
+    )
+
+
+def _export_partition_comparison_fixture(
+    root: Path,
+    *,
+    parents: tuple[Path, ...],
+    run_id: str,
+) -> Path:
+    projected = []
+    for artifact_dir in parents:
+        reference = phase_c_artifact_reference(artifact_dir)
+        payload = json.loads(
+            (artifact_dir / "partition-probe.json").read_text(encoding="utf-8")
+        )
+        projected.append(
+            build_partition_probe_parent_projection(
+                reference=reference,
+                probe_payload=payload,
+            )
+        )
+    payload = build_partition_comparison_artifact_payload(projected)
+    captured_at = "2026-07-13T00:00:00+00:00"
+    return export_research_artifact(
+        root=root,
+        run_id=run_id,
+        metadata=phase_c_comparison_metadata(
+            payload,
+            run_id=run_id,
+            planner_version="fixture",
+        ),
+        events=phase_c_artifact_events(payload, created_at=captured_at),
+        provenance=provenance(captured_at=captured_at),
+        json_files={"partition-comparison.json": payload},
+    )
+
+
+def _phase_d_lineage_fixtures(tmp_path: Path):
+    phase_b = _phase_b_reference()
+    endpoint = _export_endpoint_probe_fixture(
+        tmp_path / "phase-c",
+        parent=phase_b,
+        run_id="99999999-9999-9999-9999-999999999999",
+    )
+    endpoint_reference = phase_c_artifact_reference(endpoint)
+    first = _export_partition_probe_fixture(
+        tmp_path / "phase-c",
+        run_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        partition_index=0,
+        accepted=True,
+        parent_reference=endpoint_reference,
+    )
+    second = _export_partition_probe_fixture(
+        tmp_path / "phase-c",
+        run_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        partition_index=1,
+        accepted=True,
+        parent_reference=endpoint_reference,
+    )
+    comparison = _export_partition_comparison_fixture(
+        tmp_path / "phase-c",
+        parents=(first, second),
+        run_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+    )
+    return phase_b, endpoint, first, second, comparison
+
+
+def test_freeze_discovery_policy_requires_and_preserves_complete_lineage(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    phase_b, endpoint, first, second, comparison = _phase_d_lineage_fixtures(
+        tmp_path
+    )
+    monkeypatch.setattr(
+        census_cli,
+        "_phase_b_comparison_reference",
+        lambda _path: phase_b,
+    )
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("offline policy freeze touched a live dependency")
+
+    result = census_cli.main(
+        [
+            "freeze-discovery-policy",
+            "--phase-b-comparison-artifact",
+            str(tmp_path / "phase-b"),
+            "--endpoint-probe-artifact",
+            str(endpoint),
+            "--partition-probe-artifact",
+            str(second),
+            "--partition-probe-artifact",
+            str(first),
+            "--partition-comparison-artifact",
+            str(comparison),
+            "--run-id",
+            CANDIDATE_RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads((artifact / "discovery-policy.json").read_text())
+    endpoint_payload = json.loads((endpoint / "endpoint-probe.json").read_text())
+    selected_endpoint = next(
+        condition
+        for condition in endpoint_payload["execution"]["conditions"]
+        if condition["endpoint_contract_id"] == "recommend-search-list-v1"
+    )
+    comparison_manifest_hash = hashlib.sha256(
+        (comparison / "manifest.json").read_bytes()
+    ).hexdigest()
+
+    assert result == census_cli.EXIT_OK
+    assert dependency_calls == []
+    assert endpoint_payload["execution"]["accepted"] is False
+    assert selected_endpoint["contract_verified"] is True
+    assert selected_endpoint["stop_reason"] == "page_cap"
+    assert selected_endpoint["is_complete"] is False
+    assert len(selected_endpoint["pages"]) == 3
+    assert payload["candidate"]["phase_b_comparison_artifact_hash"] == (
+        phase_b.manifest_hash
+    )
+    assert payload["candidate"]["phase_c_comparison_artifact_hash"] == (
+        comparison_manifest_hash
+    )
+    assert payload["candidate"]["endpoint_contract_id"] == (
+        "recommend-search-list-v1"
+    )
+    assert payload["candidate"]["deferred_issue_ids"] == [4, 5]
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def test_freeze_discovery_policy_rejects_a_partition_probe_from_another_endpoint_parent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    phase_b, endpoint, _, _, _ = _phase_d_lineage_fixtures(tmp_path)
+    wrong_parent_probe = _export_partition_probe_fixture(
+        tmp_path / "wrong-lineage",
+        run_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        partition_index=0,
+        accepted=True,
+    )
+    comparison = _export_partition_comparison_fixture(
+        tmp_path / "wrong-lineage",
+        parents=(wrong_parent_probe,),
+        run_id="eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+    )
+    monkeypatch.setattr(
+        census_cli,
+        "_phase_b_comparison_reference",
+        lambda _path: phase_b,
+    )
+
+    result = census_cli.main(
+        [
+            "freeze-discovery-policy",
+            "--phase-b-comparison-artifact",
+            str(tmp_path / "phase-b"),
+            "--endpoint-probe-artifact",
+            str(endpoint),
+            "--partition-probe-artifact",
+            str(wrong_parent_probe),
+            "--partition-comparison-artifact",
+            str(comparison),
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ]
+    )
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert not (tmp_path / "runs").exists()
+
+
+def test_phase_d_live_requires_baselines_and_write_confirmation_before_dependencies(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    auth_state = _saved_session_state(tmp_path / "auth")
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("dependency")
+        raise AssertionError("Phase D constructed a dependency before usage gates")
+
+    one_baseline = census_cli.main(
+        [
+            "census-v2",
+            "--candidate-artifact",
+            str(tmp_path / "missing-candidate"),
+            "--baseline-artifact",
+            str(tmp_path / "only-one"),
+            "--run-index",
+            "1",
+            "--window-id",
+            "window-a",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+    )
+    missing_write_confirmation = census_cli.main(
+        [
+            "repeat-fixed-v2",
+            "--candidate-artifact",
+            str(tmp_path / "missing-candidate"),
+            "--baseline-artifact",
+            str(tmp_path / "first"),
+            "--baseline-artifact",
+            str(tmp_path / "second"),
+            "--run-index",
+            "1",
+            "--window-id",
+            "window-a",
+            "--staging-mode",
+            "reconciled",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+    )
+
+    assert one_baseline == census_cli.EXIT_USAGE
+    assert missing_write_confirmation == census_cli.EXIT_USAGE
+    assert calls == []
+
+
+def test_phase_d_live_rejects_the_wrong_candidate_version_before_dependencies(
+    tmp_path: Path,
+) -> None:
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("dependency")
+        raise AssertionError("wrong Phase D parent constructed a live dependency")
+
+    result = census_cli.main(
+        [
+            "repeat-fixed-v2",
+            "--candidate-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "fixed-window",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert calls == []
+
+
+def test_phase_d_current_database_drift_stops_before_live_dependencies(
+    tmp_path: Path,
+) -> None:
+    candidate = _export_phase_d_candidate_fixture(tmp_path / "candidate")
+    baseline_row = StagedListingSnapshot(
+        row_id="row-1",
+        source_job_id="j1",
+        detail_status="pending",
+        published_job_id=None,
+        crawl_job_id="crawl-1",
+    )
+    first = baseline_artifact(
+        tmp_path / "baselines",
+        BASELINE_RUN_1,
+        listings=[baseline_row],
+    )
+    second = baseline_artifact(
+        tmp_path / "baselines",
+        BASELINE_RUN_2,
+        listings=[baseline_row],
+    )
+    state = State()
+    calls: list[str] = []
+    auth_state = _saved_session_state(tmp_path / "auth")
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("dependency")
+        raise AssertionError("Phase D crossed the current database gate")
+
+    result = census_cli.main(
+        [
+            "repeat-fixed-v2",
+            "--candidate-artifact",
+            str(candidate),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "fixed-window",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert calls == []
+    assert state.created_metadata is None
+    assert "network" not in state.log
+
+
+async def _phase_d_no_sleep(_seconds: float) -> None:
+    return None
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_experiment", "expected_conditions"),
+    (
+        ("census-v2", PHASE_D_CENSUS_EXPERIMENT, 31),
+        ("repeat-fixed-v2", PHASE_D_FIXED_REPEAT_EXPERIMENT, 3),
+    ),
+)
+def test_phase_d_live_commands_export_strict_noop_artifacts(
+    tmp_path: Path,
+    capsys,
+    command: str,
+    expected_experiment: str,
+    expected_conditions: int,
+) -> None:
+    candidate = _export_phase_d_candidate_fixture(tmp_path / "candidate")
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    state = State()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("no-op Phase D run touched a write dependency")
+
+    result = census_cli.main(
+        [
+            command,
+            "--candidate-artifact",
+            str(candidate),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "window-a",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=lambda **kwargs: FakePaginationRuntime(state, **kwargs),
+        service_factory=lambda: OfferTodayResearchLiveService(
+            sleep=_phase_d_no_sleep
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads((artifact / "phase-d-run.json").read_text())
+
+    assert result == census_cli.EXIT_OK
+    assert output["accepted"] is True
+    assert output["experiment"] == expected_experiment
+    assert output["completed_condition_count"] == expected_conditions
+    assert len(payload["run"]["conditions"]) == expected_conditions
+    assert payload["product"]["staging"]["staging_mode"] == "noop"
+    assert payload["product"]["detail_attempts"] == 0
+    assert payload["product"]["product_writes"] == 0
+    assert state.created_metadata.request_budget == {
+        "listing_logical": expected_conditions * 500,
+        "listing_attempt_max": expected_conditions * 1_500,
+        "detail": 0,
+        "product_writes": 0,
+    }
+    assert len(state.runtime_kwargs) == expected_conditions
+    assert all(
+        runtime_kwargs == {
+            "auth_state_path": str(auth_state.resolve()),
+            "headed": False,
+        }
+        for runtime_kwargs in state.runtime_kwargs
+    )
+    manifest = json.loads((artifact / "manifest.json").read_text())
+    artifact_text = _artifact_text(artifact)
+    cookie_value = json.loads(auth_state.read_text())["cookies"][0]["value"]
+    assert manifest["provenance"]["runtime_context"]["session_state_sha256"] == (
+        hashlib.sha256(auth_state.read_bytes()).hexdigest()
+    )
+    assert str(auth_state.resolve()) not in artifact_text
+    assert cookie_value not in artifact_text
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+def _invoke_phase_d_live_fixture(
+    *,
+    command: str,
+    run_id: str,
+    run_index: int,
+    window_id: str,
+    captured_at: datetime,
+    candidate: Path,
+    baselines: tuple[Path, Path],
+    artifact_root: Path,
+    capsys,
+    monkeypatch,
+    service_factory=None,
+    expected_exit: int = census_cli.EXIT_OK,
+) -> Path:
+    state = State()
+    state.expected_run_id = run_id
+    auth_state = _saved_session_state(artifact_root.parent / "auth")
+    monkeypatch.setattr(census_cli, "utc_now", lambda: captured_at)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("no-op Phase D fixture touched a write dependency")
+
+    result = census_cli.main(
+        [
+            command,
+            "--candidate-artifact",
+            str(candidate),
+            "--baseline-artifact",
+            str(baselines[0]),
+            "--baseline-artifact",
+            str(baselines[1]),
+            "--run-index",
+            str(run_index),
+            "--window-id",
+            window_id,
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            run_id,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(artifact_root),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=lambda **kwargs: FakePaginationRuntime(state, **kwargs),
+        service_factory=(
+            service_factory
+            or (lambda: OfferTodayResearchLiveService(sleep=_phase_d_no_sleep))
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert result == expected_exit
+    return Path(output["artifact"])
+
+
+def test_compare_stability_v2_is_strict_offline_and_freezes_reference(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    candidate = _export_phase_d_candidate_fixture(tmp_path / "candidate")
+    baselines = (
+        baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1),
+        baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2),
+    )
+    census_times = (
+        datetime(2026, 7, 13, 0, 0, tzinfo=UTC),
+        datetime(2026, 7, 13, 6, 0, tzinfo=UTC),
+        datetime(2026, 7, 13, 12, 0, tzinfo=UTC),
+    )
+    fixed_times = (
+        datetime(2026, 7, 13, 13, 0, tzinfo=UTC),
+        datetime(2026, 7, 13, 13, 10, tzinfo=UTC),
+        datetime(2026, 7, 13, 13, 20, tzinfo=UTC),
+    )
+    census_artifacts = tuple(
+        _invoke_phase_d_live_fixture(
+            command="census-v2",
+            run_id=f"01000000-0000-0000-0000-{index:012d}",
+            run_index=index,
+            window_id=("census-window-a" if index == 1 else "census-window-b"),
+            captured_at=census_times[index - 1],
+            candidate=candidate,
+            baselines=baselines,
+            artifact_root=tmp_path / "parents",
+            capsys=capsys,
+            monkeypatch=monkeypatch,
+        )
+        for index in (1, 2, 3)
+    )
+    fixed_artifacts = tuple(
+        _invoke_phase_d_live_fixture(
+            command="repeat-fixed-v2",
+            run_id=f"02000000-0000-0000-0000-{index:012d}",
+            run_index=index,
+            window_id="fixed-window-a",
+            captured_at=fixed_times[index - 1],
+            candidate=candidate,
+            baselines=baselines,
+            artifact_root=tmp_path / "parents",
+            capsys=capsys,
+            monkeypatch=monkeypatch,
+        )
+        for index in (1, 2, 3)
+    )
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("offline Phase D comparison touched a live dependency")
+
+    argv = ["compare-stability-v2"]
+    for artifact in census_artifacts:
+        argv.extend(("--census-artifact", str(artifact)))
+    for artifact in fixed_artifacts:
+        argv.extend(("--fixed-repeat-artifact", str(artifact)))
+    argv.extend(
+        (
+            "--active-holdout-id",
+            "confirmed-active-holdout",
+            "--run-id",
+            COMPARISON_RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "comparison"),
+        )
+    )
+    result = census_cli.main(
+        argv,
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads((artifact / "phase-d-comparison.json").read_text())
+
+    assert result == census_cli.EXIT_OK
+    assert output["accepted"] is True
+    assert output["fixed_cohort_jaccard"] == 1.0
+    assert output["unique_count_cv"] == 0.0
+    assert output["stable_reference_count"] == 32
+    assert payload["stable_reference_frozen"] is True
+    assert dependency_calls == []
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+    rejected_fixed = _invoke_phase_d_live_fixture(
+        command="repeat-fixed-v2",
+        run_id="02000000-0000-0000-0000-000000000004",
+        run_index=1,
+        window_id="fixed-window-a",
+        captured_at=fixed_times[0],
+        candidate=candidate,
+        baselines=baselines,
+        artifact_root=tmp_path / "rejected-parent",
+        capsys=capsys,
+        monkeypatch=monkeypatch,
+        service_factory=ConservationRejectingPhaseDService,
+        expected_exit=census_cli.EXIT_INCOMPLETE,
+    )
+    rejected_argv = ["compare-stability-v2"]
+    for parent in census_artifacts:
+        rejected_argv.extend(("--census-artifact", str(parent)))
+    for parent in (rejected_fixed, *fixed_artifacts[1:]):
+        rejected_argv.extend(("--fixed-repeat-artifact", str(parent)))
+    rejected_result = census_cli.main(
+        rejected_argv,
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+    )
+
+    assert rejected_result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert dependency_calls == []
+
+
+def test_compare_stability_v2_rejects_wrong_versions_without_live_dependencies(
+    tmp_path: Path,
+) -> None:
+    candidate = _export_phase_d_candidate_fixture(tmp_path / "candidate")
+    calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        calls.append("dependency")
+        raise AssertionError("wrong comparison parent touched a live dependency")
+
+    result = census_cli.main(
+        [
+            "compare-stability-v2",
+            "--census-artifact",
+            str(candidate),
+            "--census-artifact",
+            str(candidate),
+            "--census-artifact",
+            str(candidate),
+            "--fixed-repeat-artifact",
+            str(candidate),
+            "--fixed-repeat-artifact",
+            str(candidate),
+            "--fixed-repeat-artifact",
+            str(candidate),
+            "--repo-root",
+            str(Path.cwd()),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert calls == []
+
+
+class ConservationRejectingPhaseDService:
+    def __init__(self) -> None:
+        self.inner = OfferTodayResearchLiveService(sleep=_phase_d_no_sleep)
+
+    async def run_fixed_repeat_v2(self, **kwargs):
+        execution = await self.inner.run_fixed_repeat_v2(**kwargs)
+        first = replace(execution.results[0], accepted_job_ids=())
+        return replace(execution, results=(first, *execution.results[1:]))
+
+
+def test_phase_d_valid_rejection_and_hard_stop_keep_strict_artifacts(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    candidate = _export_phase_d_candidate_fixture(tmp_path / "candidate")
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+
+    def run(service_factory, runtime_factory, run_id: str):
+        state = State()
+        state.expected_run_id = run_id
+        result = census_cli.main(
+            [
+                "repeat-fixed-v2",
+                "--candidate-artifact",
+                str(candidate),
+                "--baseline-artifact",
+                str(first),
+                "--baseline-artifact",
+                str(second),
+                "--run-index",
+                "1",
+                "--window-id",
+                "fixed-window",
+                "--staging-mode",
+                "noop",
+                "--confirm-live-research",
+                "--auth-state",
+                str(auth_state),
+                "--run-id",
+                run_id,
+                "--repo-root",
+                str(Path.cwd()),
+                "--artifact-root",
+                str(tmp_path / "runs"),
+            ],
+            session_factory=lambda: FakeSession(state.log),
+            repository=FakeRepository(state),
+            runtime_factory=lambda **kwargs: runtime_factory(state, **kwargs),
+            service_factory=service_factory,
+            observation_service_factory=lambda db: FakeObservationService(db, state),
+            provenance_provider=provenance,
+        )
+        output = json.loads(capsys.readouterr().out)
+        return result, output
+
+    incomplete_result, incomplete = run(
+        ConservationRejectingPhaseDService,
+        FakePaginationRuntime,
+        "03000000-0000-0000-0000-000000000001",
+    )
+    hard_stop_result, hard_stop = run(
+        lambda: OfferTodayResearchLiveService(sleep=_phase_d_no_sleep),
+        lambda state, **kwargs: FakePaginationRuntime(
+            state,
+            missing_cursor=True,
+            **kwargs,
+        ),
+        "03000000-0000-0000-0000-000000000002",
+    )
+
+    assert incomplete_result == census_cli.EXIT_INCOMPLETE
+    assert incomplete["accepted"] is False
+    assert incomplete["failure_reason"] is None
+    assert hard_stop_result == census_cli.EXIT_HARD_STOP
+    assert hard_stop["accepted"] is False
+    assert hard_stop["failure_reason"].startswith("hard_stop:")
+    for output in (incomplete, hard_stop):
+        assert census_cli.verify_live_research_run(Path(output["artifact"])).valid
+
+
+def test_phase_d_product_drift_exports_strict_evidence_and_exits_five(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    candidate = _export_phase_d_candidate_fixture(tmp_path / "candidate")
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    state = State()
+
+    result = census_cli.main(
+        [
+            "repeat-fixed-v2",
+            "--candidate-artifact",
+            str(candidate),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "fixed-window",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state, product_drift=True),
+        runtime_factory=lambda **kwargs: FakePaginationRuntime(state, **kwargs),
+        service_factory=lambda: OfferTodayResearchLiveService(
+            sleep=_phase_d_no_sleep
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads((artifact / "phase-d-run.json").read_text())
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert payload["product"]["jobs_unchanged"] is False
+    assert payload["accepted"] is False
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+class PhaseDReconciledRepository(FakeRepository):
+    source_job_ids = ("118000-10", "112000-10", "127000-10")
+
+    def list_staged_snapshots(self, db):
+        self.staged_reads += 1
+        self.state.log.append(f"staged_snapshot_{self.staged_reads}")
+        if self.staged_reads == 1:
+            return []
+        return [
+            StagedListingSnapshot(
+                row_id=f"row-{index}",
+                source_job_id=source_job_id,
+                detail_status="pending",
+                published_job_id=None,
+                crawl_job_id=RUN_ID,
+            )
+            for index, source_job_id in enumerate(self.source_job_ids, start=1)
+        ]
+
+    def capture_product_data_snapshot(self, db):
+        self.product_reads += 1
+        self.state.log.append(f"product_snapshot_{self.product_reads}")
+        return ProductDataSnapshot.from_table_hashes(
+            staged_rows_hash=("a" * 64 if self.product_reads == 1 else "f" * 64),
+            published_jobs_hash="b" * 64,
+            companies_hash="c" * 64,
+        )
+
+
+def test_repeat_fixed_v2_reconciles_listing_only_staging_with_confirmation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    candidate = _export_phase_d_candidate_fixture(tmp_path / "candidate")
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    state = State()
+
+    result = census_cli.main(
+        [
+            "repeat-fixed-v2",
+            "--candidate-artifact",
+            str(candidate),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "fixed-window",
+            "--staging-mode",
+            "reconciled",
+            "--confirm-live-research",
+            "--confirm-staging-writes",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=PhaseDReconciledRepository(state),
+        runtime_factory=lambda **kwargs: FakePaginationRuntime(state, **kwargs),
+        service_factory=lambda: OfferTodayResearchLiveService(
+            sleep=_phase_d_no_sleep
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        crawl_runtime_factory=CreatingPilotCrawlRuntime,
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads((artifact / "phase-d-run.json").read_text())
+    staging = payload["product"]["staging"]
+
+    assert result == census_cli.EXIT_OK
+    assert output["accepted"] is True
+    assert staging["staging_mode"] == "reconciled"
+    assert staging["rows_created"] == 3
+    assert staging["created_source_job_ids"] == sorted(
+        PhaseDReconciledRepository.source_job_ids
+    )
+    assert staging["stage_calls"] == 3
+    assert payload["run"]["staging_conservation_difference"] == 0
+    assert payload["product"]["jobs_unchanged"] is True
+    assert payload["product"]["companies_unchanged"] is True
+    assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+@pytest.mark.parametrize("failure_stage", ("end_snapshot", "finalization"))
+def test_phase_d_post_run_failures_preserve_sanitized_strict_prefix(
+    tmp_path: Path,
+    capsys,
+    failure_stage: str,
+) -> None:
+    candidate = _export_phase_d_candidate_fixture(tmp_path / "candidate")
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    state = State()
+    repository = FakeRepository(
+        state,
+        end_snapshot_error=(
+            RuntimeError("secret end snapshot detail")
+            if failure_stage == "end_snapshot"
+            else None
+        ),
+    )
+    if failure_stage == "finalization":
+        state.finish_errors.append(RuntimeError("secret finalization detail"))
+
+    result = census_cli.main(
+        [
+            "repeat-fixed-v2",
+            "--candidate-artifact",
+            str(candidate),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "fixed-window",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=repository,
+        runtime_factory=lambda **kwargs: FakePaginationRuntime(state, **kwargs),
+        service_factory=lambda: OfferTodayResearchLiveService(
+            sleep=_phase_d_no_sleep
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload_text = (artifact / "phase-d-run.json").read_text()
+    payload = json.loads(payload_text)
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert output["accepted"] is False
+    assert output["failure_reason"] == (
+        "unexpected_phase_d_census_error:RuntimeError"
+    )
+    assert payload["run"]["failure_reason"] == output["failure_reason"]
+    assert payload["run"]["unclassified_failures"] == 1
+    assert "secret end snapshot detail" not in payload_text
+    assert "secret finalization detail" not in payload_text
+    if failure_stage == "end_snapshot":
+        assert payload["product"]["end_snapshot_captured"] is False
+    else:
+        assert payload["product"]["end_snapshot_captured"] is True
     assert census_cli.verify_live_research_run(artifact).valid is True

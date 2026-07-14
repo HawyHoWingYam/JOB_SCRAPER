@@ -24,6 +24,10 @@ from app.sources.offertoday.research.live_contracts import CensusCandidate
 from app.sources.offertoday.research.pagination_stage_gate import (
     verify_pagination_artifact,
 )
+from app.sources.offertoday.research.phase_d_stage_gate import (
+    PHASE_D_EXPERIMENTS,
+    verify_phase_d_artifact,
+)
 from app.sources.offertoday.research.partition_stage_gate import (
     verify_phase_c_artifact,
 )
@@ -2717,6 +2721,14 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
         "partition-comparison-v1",
     }:
         result = verify_phase_c_artifact(artifact_dir)
+        return LiveRunVerification(
+            valid=result.valid,
+            issues=result.issues,
+            experiment=result.experiment,
+            run_id=result.run_id,
+        )
+    if experiment in PHASE_D_EXPERIMENTS:
+        result = verify_phase_d_artifact(artifact_dir)
         return LiveRunVerification(
             valid=result.valid,
             issues=result.issues,

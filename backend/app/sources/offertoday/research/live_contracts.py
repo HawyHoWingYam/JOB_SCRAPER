@@ -8,16 +8,36 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from app.scraper.offertoday.category_registry import OFFERTODAY_CATEGORIES_L1
+from app.scraper.offertoday.category_registry import (
+    OFFERTODAY_CATEGORIES_L1,
+    OFFERTODAY_CATEGORY_CATALOG_VERSION,
+    offertoday_category_catalog_hash,
+)
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailIdentity,
     OfferTodayEncryptedJobIdSource,
 )
+from app.sources.offertoday.listing_contract import offertoday_endpoint_contract
 from app.sources.offertoday.listing_runner import ListingRunResult
+from app.sources.offertoday.research.partition_research import (
+    OFFERTODAY_PARTITION_CATALOG,
+    OfferTodayPartitionDefinition,
+    offertoday_partition,
+    offertoday_partition_catalog_hash,
+    phase_c_request_policy_hash,
+    top_level_partition,
+)
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _CENSUS_CATEGORY_IDS = tuple(category.code for category in OFFERTODAY_CATEGORIES_L1)
 _FIXED_REPEAT_CATEGORY_IDS = (118000, 112000, 127000)
+_PHASE_D_MAX_PAGES_PER_CONDITION = 500
+_PHASE_D_MAX_ATTEMPTS_PER_PAGE = 3
+_PHASE_D_RETRY_DELAYS_SECONDS = (5.0, 15.0)
+_PHASE_D_PAGE_DELAY_RANGE_SECONDS = (3.0, 5.0)
+_PHASE_D_SESSION_MODE = "saved-session"
+_PHASE_D_TERMINAL_POLICY = "cursor-terminal-empty-confirmation-v1"
+_PHASE_D_DEFERRED_ISSUE_IDS = (4, 5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +212,304 @@ class DiscoveryCandidateV2:
         )
         if payload["candidate_hash"] != candidate.candidate_hash:
             raise ValueError("candidate_hash does not match the v2 canonical payload")
+        return candidate
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryPolicyCandidateV2:
+    """Frozen Phase C policy used only by the cursor-correct Phase D path.
+
+    ``DiscoveryCandidateV2`` above is immutable Phase B evidence.  This
+    separately named contract composes the accepted endpoint/partition policy
+    without widening that historical payload schema.
+    """
+
+    candidate_version: int
+    endpoint_contract_id: str
+    endpoint_contract_hash: str
+    endpoint: str
+    rcd_type: int | None
+    category_catalog_version: int
+    category_catalog_hash: str
+    partition_catalog_hash: str
+    phase_d_partitions: tuple[OfferTodayPartitionDefinition, ...]
+    retained_partition_ids: tuple[str, ...]
+    retained_condition_hashes: tuple[str, ...]
+    pagination_mode: str
+    requested_page_size: int
+    browser_lifecycle: str
+    request_policy_hash: str
+    terminal_policy: str
+    max_pages_per_condition: int
+    require_empty_confirmation: bool
+    max_attempts_per_page: int
+    retry_delays_seconds: tuple[float, ...]
+    page_delay_range_seconds: tuple[float, float]
+    session_mode: str
+    fixed_repeat_category_ids: tuple[int, ...]
+    phase_b_comparison_artifact_hash: str
+    phase_c_comparison_artifact_hash: str
+    source_artifact_hash: str
+    deferred_issue_ids: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.candidate_version) is not int or self.candidate_version != 2:
+            raise ValueError("candidate_version must equal 2")
+
+        contract = offertoday_endpoint_contract(self.endpoint_contract_id)
+        if self.endpoint_contract_hash != contract.contract_hash:
+            raise ValueError("endpoint_contract_hash does not match the registry")
+        if self.endpoint != contract.endpoint:
+            raise ValueError("endpoint does not match the endpoint contract")
+        if not contract.cursor_verified or not contract.terminal_verified:
+            raise ValueError("Phase D requires a verified cursor/terminal contract")
+        if self.rcd_type not in contract.allowed_rcd_types:
+            raise ValueError("rcd_type is not allowed by the endpoint contract")
+
+        if self.category_catalog_version != OFFERTODAY_CATEGORY_CATALOG_VERSION:
+            raise ValueError("category_catalog_version does not match the registry")
+        if self.category_catalog_hash != offertoday_category_catalog_hash():
+            raise ValueError("category_catalog_hash does not match the registry")
+        if self.partition_catalog_hash != offertoday_partition_catalog_hash():
+            raise ValueError("partition_catalog_hash does not match the registry")
+
+        expected_partitions = tuple(
+            top_level_partition(category.code)
+            for category in OFFERTODAY_CATEGORIES_L1
+        )
+        if (
+            not isinstance(self.phase_d_partitions, tuple)
+            or self.phase_d_partitions != expected_partitions
+        ):
+            raise ValueError(
+                "phase_d_partitions must equal all top-level partitions in catalog order"
+            )
+
+        catalog_order = {
+            partition.partition_id: index
+            for index, partition in enumerate(OFFERTODAY_PARTITION_CATALOG)
+        }
+        if (
+            not isinstance(self.retained_partition_ids, tuple)
+            or not self.retained_partition_ids
+            or len(set(self.retained_partition_ids))
+            != len(self.retained_partition_ids)
+        ):
+            raise ValueError("retained_partition_ids must be a nonempty distinct tuple")
+        for partition_id in self.retained_partition_ids:
+            offertoday_partition(partition_id)
+        if self.retained_partition_ids != tuple(
+            sorted(self.retained_partition_ids, key=catalog_order.__getitem__)
+        ):
+            raise ValueError("retained_partition_ids must use catalog order")
+        if (
+            not isinstance(self.retained_condition_hashes, tuple)
+            or len(self.retained_condition_hashes)
+            != len(self.retained_partition_ids)
+            or any(
+                _SHA256_RE.fullmatch(value) is None
+                for value in self.retained_condition_hashes
+            )
+        ):
+            raise ValueError(
+                "retained_condition_hashes must bind every retained partition"
+            )
+
+        locked_values = {
+            "pagination_mode": (self.pagination_mode, "response-cursor"),
+            "requested_page_size": (self.requested_page_size, 10),
+            "browser_lifecycle": (
+                self.browser_lifecycle,
+                "condition-local-runtime",
+            ),
+            "request_policy_hash": (
+                self.request_policy_hash,
+                phase_c_request_policy_hash(self.endpoint_contract_id),
+            ),
+            "terminal_policy": (self.terminal_policy, _PHASE_D_TERMINAL_POLICY),
+            "max_pages_per_condition": (
+                self.max_pages_per_condition,
+                _PHASE_D_MAX_PAGES_PER_CONDITION,
+            ),
+            "require_empty_confirmation": (
+                self.require_empty_confirmation,
+                True,
+            ),
+            "max_attempts_per_page": (
+                self.max_attempts_per_page,
+                _PHASE_D_MAX_ATTEMPTS_PER_PAGE,
+            ),
+            "retry_delays_seconds": (
+                self.retry_delays_seconds,
+                _PHASE_D_RETRY_DELAYS_SECONDS,
+            ),
+            "page_delay_range_seconds": (
+                self.page_delay_range_seconds,
+                _PHASE_D_PAGE_DELAY_RANGE_SECONDS,
+            ),
+            "session_mode": (self.session_mode, _PHASE_D_SESSION_MODE),
+            "fixed_repeat_category_ids": (
+                self.fixed_repeat_category_ids,
+                _FIXED_REPEAT_CATEGORY_IDS,
+            ),
+            "deferred_issue_ids": (
+                self.deferred_issue_ids,
+                _PHASE_D_DEFERRED_ISSUE_IDS,
+            ),
+        }
+        for field_name, (actual, expected) in locked_values.items():
+            if actual != expected:
+                raise ValueError(f"{field_name} must equal the locked Phase D value")
+
+        for field_name in (
+            "phase_b_comparison_artifact_hash",
+            "phase_c_comparison_artifact_hash",
+            "source_artifact_hash",
+        ):
+            if _SHA256_RE.fullmatch(getattr(self, field_name)) is None:
+                raise ValueError(f"{field_name} must be a lowercase SHA-256")
+
+    def _canonical_payload(self) -> dict[str, Any]:
+        return {
+            "candidate_version": self.candidate_version,
+            "endpoint_contract_id": self.endpoint_contract_id,
+            "endpoint_contract_hash": self.endpoint_contract_hash,
+            "endpoint": self.endpoint,
+            "rcd_type": self.rcd_type,
+            "category_catalog_version": self.category_catalog_version,
+            "category_catalog_hash": self.category_catalog_hash,
+            "partition_catalog_hash": self.partition_catalog_hash,
+            "phase_d_partitions": [
+                partition.to_payload() for partition in self.phase_d_partitions
+            ],
+            "retained_partition_ids": list(self.retained_partition_ids),
+            "retained_condition_hashes": list(self.retained_condition_hashes),
+            "pagination_mode": self.pagination_mode,
+            "requested_page_size": self.requested_page_size,
+            "browser_lifecycle": self.browser_lifecycle,
+            "request_policy_hash": self.request_policy_hash,
+            "terminal_policy": self.terminal_policy,
+            "max_pages_per_condition": self.max_pages_per_condition,
+            "require_empty_confirmation": self.require_empty_confirmation,
+            "max_attempts_per_page": self.max_attempts_per_page,
+            "retry_delays_seconds": list(self.retry_delays_seconds),
+            "page_delay_range_seconds": list(self.page_delay_range_seconds),
+            "session_mode": self.session_mode,
+            "fixed_repeat_category_ids": list(self.fixed_repeat_category_ids),
+            "phase_b_comparison_artifact_hash": (
+                self.phase_b_comparison_artifact_hash
+            ),
+            "phase_c_comparison_artifact_hash": (
+                self.phase_c_comparison_artifact_hash
+            ),
+            "source_artifact_hash": self.source_artifact_hash,
+            "deferred_issue_ids": list(self.deferred_issue_ids),
+        }
+
+    @property
+    def candidate_hash(self) -> str:
+        canonical = json.dumps(
+            self._canonical_payload(),
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def to_payload(self) -> dict[str, Any]:
+        return {**self._canonical_payload(), "candidate_hash": self.candidate_hash}
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "DiscoveryPolicyCandidateV2":
+        expected_keys = {
+            "candidate_version",
+            "endpoint_contract_id",
+            "endpoint_contract_hash",
+            "endpoint",
+            "rcd_type",
+            "category_catalog_version",
+            "category_catalog_hash",
+            "partition_catalog_hash",
+            "phase_d_partitions",
+            "retained_partition_ids",
+            "retained_condition_hashes",
+            "pagination_mode",
+            "requested_page_size",
+            "browser_lifecycle",
+            "request_policy_hash",
+            "terminal_policy",
+            "max_pages_per_condition",
+            "require_empty_confirmation",
+            "max_attempts_per_page",
+            "retry_delays_seconds",
+            "page_delay_range_seconds",
+            "session_mode",
+            "fixed_repeat_category_ids",
+            "phase_b_comparison_artifact_hash",
+            "phase_c_comparison_artifact_hash",
+            "source_artifact_hash",
+            "deferred_issue_ids",
+            "candidate_hash",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected_keys:
+            raise ValueError(
+                "Phase D discovery candidate payload fields do not match"
+            )
+        for field_name in (
+            "phase_d_partitions",
+            "retained_partition_ids",
+            "retained_condition_hashes",
+            "retry_delays_seconds",
+            "page_delay_range_seconds",
+            "fixed_repeat_category_ids",
+            "deferred_issue_ids",
+        ):
+            if not isinstance(payload[field_name], list):
+                raise ValueError(f"{field_name} must be a list")
+        candidate = cls(
+            candidate_version=payload["candidate_version"],
+            endpoint_contract_id=payload["endpoint_contract_id"],
+            endpoint_contract_hash=payload["endpoint_contract_hash"],
+            endpoint=payload["endpoint"],
+            rcd_type=payload["rcd_type"],
+            category_catalog_version=payload["category_catalog_version"],
+            category_catalog_hash=payload["category_catalog_hash"],
+            partition_catalog_hash=payload["partition_catalog_hash"],
+            phase_d_partitions=tuple(
+                OfferTodayPartitionDefinition.from_payload(item)
+                for item in payload["phase_d_partitions"]
+            ),
+            retained_partition_ids=tuple(payload["retained_partition_ids"]),
+            retained_condition_hashes=tuple(
+                payload["retained_condition_hashes"]
+            ),
+            pagination_mode=payload["pagination_mode"],
+            requested_page_size=payload["requested_page_size"],
+            browser_lifecycle=payload["browser_lifecycle"],
+            request_policy_hash=payload["request_policy_hash"],
+            terminal_policy=payload["terminal_policy"],
+            max_pages_per_condition=payload["max_pages_per_condition"],
+            require_empty_confirmation=payload["require_empty_confirmation"],
+            max_attempts_per_page=payload["max_attempts_per_page"],
+            retry_delays_seconds=tuple(payload["retry_delays_seconds"]),
+            page_delay_range_seconds=tuple(
+                payload["page_delay_range_seconds"]
+            ),
+            session_mode=payload["session_mode"],
+            fixed_repeat_category_ids=tuple(
+                payload["fixed_repeat_category_ids"]
+            ),
+            phase_b_comparison_artifact_hash=payload[
+                "phase_b_comparison_artifact_hash"
+            ],
+            phase_c_comparison_artifact_hash=payload[
+                "phase_c_comparison_artifact_hash"
+            ],
+            source_artifact_hash=payload["source_artifact_hash"],
+            deferred_issue_ids=tuple(payload["deferred_issue_ids"]),
+        )
+        if payload["candidate_hash"] != candidate.candidate_hash:
+            raise ValueError("candidate_hash does not match the Phase D payload")
         return candidate
 
 

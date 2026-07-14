@@ -6,6 +6,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -15,6 +16,7 @@ from app.services.offertoday_research_observation_service import (
     OfferTodayResearchObservationService,
 )
 from app.services.offertoday_research_staging_service import (
+    OfferTodayReconciledListingStagingSink,
     ResearchNoopListingStagingSink,
 )
 from app.sources.offertoday.detail_identity import (
@@ -38,7 +40,12 @@ from app.sources.offertoday.research.live_contracts import (
     CensusCandidate,
     DetailSmokeObservation,
     DetailSmokeTarget,
+    DiscoveryPolicyCandidateV2,
     LiveSmokeExecution,
+)
+from app.sources.offertoday.research.phase_d import (
+    PHASE_D_CENSUS_EXPERIMENT,
+    PHASE_D_FIXED_REPEAT_EXPERIMENT,
 )
 from app.sources.offertoday.research.pagination_bakeoff import (
     BAKEOFF_ENDPOINT,
@@ -170,6 +177,21 @@ class _ManagedListingTransport:
         await self._close_runtime()
 
 
+@dataclass(frozen=True, slots=True)
+class PhaseDListingExecution:
+    experiment: str
+    results: tuple[ListingRunResult, ...]
+    failure_reason: str | None
+
+    @property
+    def completed_condition_count(self) -> int:
+        return sum(
+            len(result.condition_outcomes)
+            for result in self.results
+            if result.is_complete
+        )
+
+
 class OfferTodayResearchLiveService:
     def __init__(
         self,
@@ -227,6 +249,123 @@ class OfferTodayResearchLiveService:
             runtime_factory=runtime_factory,
             observation_service=observation_service,
             staging_sink=staging_sink,
+        )
+
+    async def run_census_v2(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        candidate: DiscoveryPolicyCandidateV2,
+        staging_sink: Any,
+    ) -> PhaseDListingExecution:
+        return await self._run_phase_d_conditions(
+            experiment=PHASE_D_CENSUS_EXPERIMENT,
+            partition_ids=tuple(
+                partition.partition_id
+                for partition in candidate.phase_d_partitions
+            ),
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            candidate=candidate,
+            staging_sink=staging_sink,
+        )
+
+    async def run_fixed_repeat_v2(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        candidate: DiscoveryPolicyCandidateV2,
+        staging_sink: Any,
+    ) -> PhaseDListingExecution:
+        return await self._run_phase_d_conditions(
+            experiment=PHASE_D_FIXED_REPEAT_EXPERIMENT,
+            partition_ids=tuple(
+                top_level_partition(category_id).partition_id
+                for category_id in candidate.fixed_repeat_category_ids
+            ),
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            candidate=candidate,
+            staging_sink=staging_sink,
+        )
+
+    async def _run_phase_d_conditions(
+        self,
+        *,
+        experiment: str,
+        partition_ids: Sequence[str],
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        candidate: DiscoveryPolicyCandidateV2,
+        staging_sink: Any,
+    ) -> PhaseDListingExecution:
+        if not isinstance(
+            staging_sink,
+            (ResearchNoopListingStagingSink, OfferTodayReconciledListingStagingSink),
+        ):
+            raise ValueError("Phase D requires a no-op or reconciled staging sink")
+        policy = request_policy_for_contract(candidate.endpoint_contract_id)
+        results: list[ListingRunResult] = []
+        failure_reason = None
+        for partition_id in partition_ids:
+            partition = offertoday_partition(partition_id)
+            condition = OfferTodayListingCondition(
+                search_family=experiment,
+                category_id=partition.category_code,
+                keyword="",
+                endpoint=candidate.endpoint,
+                rcd_type=candidate.rcd_type,
+            )
+            try:
+                async with _ManagedListingTransport(
+                    runtime_factory,
+                    restart_each_page=False,
+                ) as transport:
+                    result = await self._runner_factory(
+                        transport,
+                        sleep=self._sleep,
+                        clock=self._clock,
+                    ).run(
+                        conditions=(condition,),
+                        stop_policy=ListingStopPolicy(
+                            max_pages_per_condition=(
+                                candidate.max_pages_per_condition
+                            ),
+                            unique_job_cap=None,
+                            require_empty_confirmation=(
+                                candidate.require_empty_confirmation
+                            ),
+                        ),
+                        retry_policy=ListingRetryPolicy(
+                            max_attempts_per_page=(
+                                candidate.max_attempts_per_page
+                            ),
+                            retry_delays_seconds=candidate.retry_delays_seconds,
+                            page_delay_seconds=0.0,
+                            page_delay_range_seconds=(
+                                candidate.page_delay_range_seconds
+                            ),
+                        ),
+                        observation_sink=observation_service,
+                        staging_sink=staging_sink,
+                        session_mode=candidate.session_mode,
+                        request_policy=policy,
+                    )
+            except Exception as exc:
+                failure_reason = (
+                    f"unexpected_phase_d_census_error:{type(exc).__name__}"
+                )
+                break
+            results.append(result)
+            if not result.is_complete:
+                failure_reason = f"hard_stop:{result.stop_reason}"
+                break
+        return PhaseDListingExecution(
+            experiment=experiment,
+            results=tuple(results),
+            failure_reason=failure_reason,
         )
 
     async def _run_phase_c_probe(

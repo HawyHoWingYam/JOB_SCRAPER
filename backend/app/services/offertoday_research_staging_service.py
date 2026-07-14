@@ -112,6 +112,7 @@ class OfferTodayReconciledListingStagingSink:
         self.rows_seen = 0
         self.rows_created = 0
         self.skipped_existing = 0
+        self.stage_calls = 0
         self.created_source_job_ids: list[str] = []
         self.preexisting_staged_source_job_ids: list[str] = []
         self.published_source_job_ids: list[str] = []
@@ -139,6 +140,7 @@ class OfferTodayReconciledListingStagingSink:
         page: int,
         rows: list[dict[str, Any]],
     ) -> None:
+        self.stage_calls += 1
         payloads = [
             build_offertoday_listing_staging_payload(
                 parsed_row,
