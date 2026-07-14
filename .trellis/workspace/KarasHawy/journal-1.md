@@ -72,3 +72,37 @@ Implemented deterministic no-live endpoint and partition research tooling, stric
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: OfferToday practical IT production crawl
+
+**Date**: 2026-07-14
+**Task**: OfferToday practical IT production crawl
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented cursor-correct search listing, partial page-cap continuation, bulk new/repair detail targeting, and production staging isolation while preserving historical research replay; full backend suite passed.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8626d37` | (see git log) |
+| `f3004753` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
