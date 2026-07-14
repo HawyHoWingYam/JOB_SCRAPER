@@ -505,3 +505,176 @@ start_condition_local_runtime(
 
 The freeze owns the exact parent set and the live path crosses each evidence
 gate before constructing runtime or write-capable dependencies.
+
+## Scenario: Additive result and supplemental cohort research
+
+### 1. Scope / Trigger
+
+Use this contract when changing the post-rejection dual-cohort successor to
+Phase C/D. It applies to result-partition exhaustion, global supplemental
+stability, result-only partial runs, complete dual-cohort runs, and their
+offline policy/comparison commands. Historical v1/v2 experiment names,
+payloads, and hashes remain immutable.
+
+### 2. Signatures
+
+```text
+probe-result-partitions-v2       -> result-partition-probe-v2
+freeze-result-partition-policy-v1 -> result-partition-policy-v1
+probe-supplemental-cohort-v1     -> supplemental-cohort-probe-v1
+compare-supplemental-cohort-v1   -> supplemental-cohort-stability-comparison-v1
+freeze-dual-cohort-policy-v3     -> dual-cohort-discovery-policy-candidate-v3
+
+census-result-partial-v3         -> cursor-result-partial-census-v3
+repeat-fixed-result-partial-v3   -> cursor-result-partial-fixed-repeat-v3
+census-dual-cohort-v3            -> cursor-dual-cohort-full-census-v3
+repeat-fixed-dual-cohort-v3      -> cursor-dual-cohort-fixed-repeat-v3
+compare-stability-dual-cohort-v3 -> cursor-dual-cohort-stability-comparison-v3
+```
+
+Every live command requires `--confirm-live-research`, a structurally valid
+`--auth-state`, and exactly two distinct matching baseline artifacts. Phase D
+commands additionally require `--run-index`, `--window-id`, and an explicit
+`--staging-mode`. Reconciled staging requires
+`--confirm-staging-writes`.
+
+### 3. Contracts
+
+- `resultList` is the partition-authoritative cohort. The runner stages only
+  result rows and uses `result-transition-confirmation-v1`: two successful,
+  cursor-continuous result-empty pages in one restart chain. `total`, page
+  caps, and marginal saturation never prove result exhaustion.
+- Exact partition identity is first-class evidence. A probe may target an
+  official leaf partition, so runner-to-artifact projection must carry the
+  requested partition ID and validate that its registered category code equals
+  the listing condition category. It must not reconstruct partition identity
+  with `top_level_partition(category_id)`. Historical v2 Phase D runs remain
+  top-level-only through their exact candidate partition projection.
+- `suppleRcdList` is preserved as a separate global cohort. One probe uses
+  exactly three frozen catalog seeds, ten logical pages per seed, and three
+  attempts per page. One comparison consumes exactly three strict probe
+  parents with run indexes `1,2,3`.
+- Reaching the supplemental phase and measuring supplemental stability are
+  separate gates. If a seed still returns result rows at its page cap, preserve
+  the strict rejected prefix and do not claim that later seeds, an empty
+  supplemental cohort, or cross-seed stability were observed. A successor
+  seed/entry strategy requires a new version and bounded reachability evidence;
+  it cannot widen or reinterpret the rejected v1 contract.
+- Probe wrappers bind the exact strict parent, two-baseline projection, and
+  `PhaseCNoWriteEvidence`. The no-write start snapshot and inventory hashes
+  must equal the baseline projection before the wrapper is valid.
+- A complete v3 candidate binds both policy hashes and the strict result
+  policy, supplemental comparison, and valid-rejected Phase B artifact hashes.
+  A rejected supplemental comparison is valid evidence but cannot freeze a
+  candidate.
+- Result-only Phase D artifacts permanently encode `accepted=false`,
+  `stable_reference_frozen=false`, and `downstream_eligible=false`. Complete
+  loaders and comparisons reject them even when their result research prefix
+  is complete.
+- Complete comparison consumes exactly three accepted census and three
+  accepted fixed-repeat parents. Parent `payload_hash` is the canonical hash
+  of the embedded typed run projection, so strict replay can recompute it;
+  `manifest_hash` preserves the immutable filesystem parent identity.
+- Census windows span at least `21,600` seconds and at least two window IDs.
+  Fixed repeats share one window and span at most `3,600` seconds. Result,
+  supplemental, and combined fixed-cohort Jaccard must each be `>= 0.95`;
+  combined unique-count CV must be `<= 0.05`.
+- CV is a finite nonnegative number, not a `0..1` ratio. Values above `1` are
+  valid rejected evidence and must still export and strict-replay.
+- Saved-session provenance records only `session_mode` and
+  `session_state_sha256`. `auth_state_path`, `storage_state_path`, cookies,
+  raw sessions/cursors, tokens, profiles, and CDP endpoints are forbidden in
+  durable evidence.
+- Post-run snapshot, activity-read, or observation-finalization failures must
+  preserve a sanitized strict-replayable completed-condition prefix and exit
+  as evidence failure. Raw exception text never enters the artifact.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Missing confirmation/auth, wrong baseline count, or invalid staging confirmation | Usage exit `2`; no DB/runtime construction |
+| Malformed/changed saved-session state or invalid parent | Evidence exit `5`; no DB/runtime construction |
+| Probe no-write start state differs from its baseline | Strict replay fails; artifact is ineligible |
+| Result completion depends only on `total`, cap, or saturation | Valid rejection or hard stop; never freeze result policy |
+| Leaf request is projected as its top-level parent | Evidence failure; preserve the exact leaf ID across the boundary |
+| First supplemental seed reaches page cap before supplemental rows | Strict-valid rejected prefix; no comparison or seed-stability claim |
+| Supplemental comparison has other than three strict distinct parents | Usage/evidence failure; no candidate |
+| Supplemental comparison is strict-valid but rejected | Preserve comparison; exit `3`; candidate freeze exits `5` |
+| Partial run supplied to a complete loader/comparison | Evidence exit `5`; no dependency construction |
+| Parent run projection hash differs after rehashing | Strict replay fails |
+| Snapshot/activity/finalization failure after live work | Export sanitized strict prefix; exit `5` |
+| Complete run hard-stops with replayable product evidence | Preserve strict prefix; exit `4` |
+| Complete comparison misses a stability threshold, including CV `> 1` | Preserve strict-valid rejected comparison; exit `3` |
+| Every complete Phase D gate passes | Freeze combined stable denominator; exit `0` |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** Three strict supplemental probes agree across seeds/runs and add a
+  nonempty stable unique cohort. A complete candidate drives six accepted
+  Phase D runs; the offline six-parent comparison recomputes both cohort unions
+  and freezes the combined denominator.
+- **Base:** Result research completes while supplemental evidence is missing or
+  rejected. Preserve an explicit partial artifact and continue no downstream
+  phase from it.
+- **Bad:** Relabel a partial artifact as complete, treat an absent supplemental
+  cohort as an accepted empty set, trust a self-rehashed parent projection, or
+  serialize the saved-session path into provenance.
+
+### 6. Tests Required
+
+- `test_offertoday_listing_runner.py`: legacy default terminal behavior,
+  two-page result confirmation, cursor continuity, restart reset, and no
+  supplemental staging under the result policy.
+- `test_offertoday_dual_cohort.py`: pure terminal replay, frozen budgets,
+  three-run supplemental gates, candidate hashes, partial guards, complete
+  timing/Jaccard/CV decisions, and valid rejection when CV exceeds one.
+- `test_offertoday_dual_cohort_stage_gate.py`: every exact route, baseline to
+  no-write binding, semantic tampering, parent run-projection hash replay,
+  forbidden provenance paths, partial/complete separation, and six-parent
+  replay.
+- `test_offertoday_research_live_service.py`: result/supplemental routing,
+  condition-local runtimes, exact condition order, prefix preservation, and
+  no-op versus reconciled sink allowlists.
+- `test_offertoday_research_census_cli.py`: every parser/dispatch route,
+  pre-dependency auth/baseline guards, exact three supplemental parents,
+  rejected candidate freeze, partial-parent rejection, saved-session SHA-only
+  provenance, offline dependency isolation, post-run fault artifacts, and
+  complete six-parent comparison. The result-probe path must use a real leaf
+  partition fixture and assert that the exact partition ID and category survive
+  request, artifact export, and strict replay.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+if page.total == 9 or page_cap_reached:
+    result_exhausted = True
+candidate = freeze_candidate(result_policy, rejected_supplemental_as_empty=True)
+```
+
+This turns diagnostics into terminal proof and hides an unresolved cohort.
+
+#### Correct
+
+```python
+terminal = evaluate_result_cohort_terminal(condition.pages)
+if not terminal.result_exhausted:
+    preserve_valid_rejection()
+
+supplemental = compare_supplemental_cohort_probes_v1(strict_three_parents)
+if not supplemental.decision.accepted:
+    preserve_partial_scope_and_stop_candidate_freeze()
+
+candidate = build_dual_cohort_discovery_candidate_v3(
+    result_policy=result_policy,
+    supplemental_comparison_payload=supplemental_payload,
+    result_policy_artifact_hash=result_parent_hash,
+    supplemental_comparison_artifact_hash=supplemental_parent_hash,
+    phase_b_comparison_artifact_hash=phase_b_parent_hash,
+)
+```
+
+The two cohorts remain separately replayable until the complete comparison
+explicitly combines them.

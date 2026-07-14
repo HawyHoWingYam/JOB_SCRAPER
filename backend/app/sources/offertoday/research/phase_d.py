@@ -33,6 +33,7 @@ from app.sources.offertoday.research.live_contracts import (
 from app.sources.offertoday.research.partition_research import (
     PhaseCConditionEvidence,
     canonical_phase_c_hash,
+    offertoday_partition,
     offertoday_partition_catalog_hash,
     phase_c_request_policy_hash,
     top_level_partition,
@@ -593,8 +594,8 @@ class PhaseDConditionEvidence:
     pages: tuple[PhaseDPageAttempt, ...]
 
     def __post_init__(self) -> None:
-        partition = top_level_partition(self.category_id)
-        if self.partition_id != partition.partition_id:
+        partition = offertoday_partition(self.partition_id)
+        if partition.category_code != self.category_id:
             raise ValueError("Phase D partition does not match category_id")
         contract = offertoday_endpoint_contract(self.endpoint_contract_id)
         if self.endpoint_contract_hash != contract.contract_hash:
@@ -1392,14 +1393,44 @@ def phase_d_condition_from_listing_result(
     candidate: DiscoveryPolicyCandidateV2,
     conservation_difference: int = 0,
 ) -> PhaseDConditionEvidence:
+    return phase_d_condition_from_listing_result_contract(
+        result,
+        endpoint_contract_id=candidate.endpoint_contract_id,
+        endpoint=candidate.endpoint,
+        rcd_type=candidate.rcd_type,
+        conservation_difference=conservation_difference,
+    )
+
+
+def phase_d_condition_from_listing_result_contract(
+    result: ListingRunResult,
+    *,
+    endpoint_contract_id: str,
+    endpoint: str,
+    rcd_type: int | None,
+    partition_id: str | None = None,
+    conservation_difference: int = 0,
+) -> PhaseDConditionEvidence:
+    """Project one cursor run without coupling it to a candidate version."""
+
     if len(result.condition_outcomes) != 1:
         raise ValueError("Phase D result must own exactly one condition outcome")
     outcome = result.condition_outcomes[0]
     condition = outcome.condition
     if condition.category_id is None:
         raise ValueError("Phase D condition requires category_id")
-    if condition.endpoint != candidate.endpoint or condition.rcd_type != candidate.rcd_type:
+    if condition.endpoint != endpoint or condition.rcd_type != rcd_type:
         raise ValueError("Phase D condition does not match the candidate endpoint")
+    contract = offertoday_endpoint_contract(endpoint_contract_id)
+    if contract.endpoint != endpoint or rcd_type not in contract.allowed_rcd_types:
+        raise ValueError("Phase D endpoint controls do not match the registry")
+    partition = (
+        top_level_partition(condition.category_id)
+        if partition_id is None
+        else offertoday_partition(partition_id)
+    )
+    if partition.category_code != condition.category_id:
+        raise ValueError("Phase D partition does not match the listing condition")
     observations = tuple(
         observation
         for observation in result.observations
@@ -1429,9 +1460,9 @@ def phase_d_condition_from_listing_result(
             )
         )
     return PhaseDConditionEvidence(
-        partition_id=top_level_partition(condition.category_id).partition_id,
-        endpoint_contract_id=candidate.endpoint_contract_id,
-        endpoint_contract_hash=candidate.endpoint_contract_hash,
+        partition_id=partition.partition_id,
+        endpoint_contract_id=contract.contract_id,
+        endpoint_contract_hash=contract.contract_hash,
         category_id=condition.category_id,
         condition_id=condition.condition_id,
         stop_reason=outcome.stop_reason,

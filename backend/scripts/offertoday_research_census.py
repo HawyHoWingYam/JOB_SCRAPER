@@ -12,7 +12,7 @@ import json
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,9 @@ from app.services.offertoday_research_staging_service import (  # noqa: E402
 from app.sources.offertoday.listing_runner import (  # noqa: E402
     listing_observation_to_payload,
 )
+from app.sources.offertoday.listing_contract import (  # noqa: E402
+    offertoday_endpoint_contract,
+)
 from app.sources.offertoday.research.artifacts import (  # noqa: E402
     capture_research_provenance,
     export_research_artifact,
@@ -71,6 +74,42 @@ from app.sources.offertoday.research.live_contracts import (  # noqa: E402
     DiscoveryCandidateV2,
     DiscoveryPolicyCandidateV2,
 )
+from app.sources.offertoday.research.dual_cohort import (  # noqa: E402
+    DUAL_COHORT_CENSUS_EXPERIMENT,
+    DUAL_COHORT_DISCOVERY_CANDIDATE_EXPERIMENT,
+    DUAL_COHORT_FIXED_REPEAT_EXPERIMENT,
+    DUAL_COHORT_MAX_ATTEMPTS_PER_PAGE,
+    DUAL_COHORT_PHASE_D_MAX_PAGES_PER_CONDITION,
+    RESULT_PARTIAL_CENSUS_EXPERIMENT,
+    RESULT_PARTIAL_FIXED_REPEAT_EXPERIMENT,
+    RESULT_PARTITION_POLICY_EXPERIMENT,
+    RESULT_PARTITION_PROBE_EXPERIMENT,
+    SUPPLEMENTAL_COHORT_COMPARISON_EXPERIMENT,
+    SUPPLEMENTAL_COHORT_PROBE_EXPERIMENT,
+    DualCohortDiscoveryPolicyCandidateV3,
+    DualCohortPhaseDRunV3,
+    ResultOnlyDiscoveryScopeV3,
+    ResultPartialPhaseDRunV3,
+    ResultPartitionConditionEvidenceV2,
+    ResultPartitionPolicyV1,
+    ResultPartitionProbeExecutionV2,
+    ResultPartitionProbePlanV2,
+    SupplementalCohortProbeExecutionV1,
+    SupplementalCohortProbePlanV1,
+    SupplementalGateStateV1,
+    SupplementalSeedConditionEvidenceV1,
+    build_dual_cohort_discovery_candidate_v3,
+    canonical_dual_cohort_hash,
+    dual_cohort_candidate_artifact_payload_v3,
+    dual_cohort_phase_d_run_artifact_payload_v3,
+    freeze_result_partition_policy_v1,
+    result_partial_phase_d_artifact_payload_v3,
+    result_partition_policy_artifact_payload_v1,
+    supplemental_cohort_comparison_payload_v1,
+    validate_dual_cohort_candidate_artifact_payload_v3,
+    validate_result_partition_policy_artifact_payload_v1,
+    validate_supplemental_cohort_comparison_payload_v1,
+)
 from app.sources.offertoday.research.phase_d import (  # noqa: E402
     DISCOVERY_POLICY_CANDIDATE_EXPERIMENT,
     PHASE_D_CENSUS_EXPERIMENT,
@@ -81,6 +120,7 @@ from app.sources.offertoday.research.phase_d import (  # noqa: E402
     build_phase_d_run_evidence,
     discovery_policy_candidate_artifact_payload,
     phase_d_run_artifact_payload,
+    phase_d_condition_from_listing_result_contract,
     validate_discovery_policy_candidate_artifact_payload,
 )
 from app.sources.offertoday.research.phase_d_stage_gate import (  # noqa: E402
@@ -88,6 +128,14 @@ from app.sources.offertoday.research.phase_d_stage_gate import (  # noqa: E402
     phase_d_artifact_events,
     phase_d_artifact_reference,
     phase_d_metadata,
+)
+from app.sources.offertoday.research.dual_cohort_stage_gate import (  # noqa: E402
+    build_dual_cohort_phase_d_comparison_artifact_payload_v3,
+    build_dual_cohort_probe_artifact_payload,
+    dual_cohort_artifact_events,
+    dual_cohort_metadata,
+    dual_cohort_phase_d_artifact_reference_v3,
+    validate_dual_cohort_probe_artifact_payload,
 )
 from app.sources.offertoday.research.pagination_bakeoff import (  # noqa: E402
     BAKEOFF_CATEGORY_IDS,
@@ -213,6 +261,20 @@ class CensusCandidateEvidence:
 class PhaseDPolicyEvidence:
     candidate: DiscoveryPolicyCandidateV2
     candidate_hash: str
+    manifest_hash: str
+    run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResultPartitionPolicyEvidence:
+    policy: ResultPartitionPolicyV1
+    manifest_hash: str
+    run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DualCohortPolicyEvidence:
+    candidate: DualCohortDiscoveryPolicyCandidateV3
     manifest_hash: str
     run_id: str
 
@@ -661,6 +723,186 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(__file__).resolve().parents[2],
     )
+
+    def add_output_args(command_parser) -> None:
+        command_parser.add_argument("--run-id", default=None)
+        command_parser.add_argument(
+            "--artifact-root",
+            type=Path,
+            default=Path("backend/runtime/offertoday-research"),
+        )
+        command_parser.add_argument(
+            "--repo-root",
+            type=Path,
+            default=Path(__file__).resolve().parents[2],
+        )
+
+    def add_live_args(command_parser) -> None:
+        command_parser.add_argument(
+            "--baseline-artifact",
+            action="append",
+            type=Path,
+            required=True,
+        )
+        command_parser.add_argument(
+            "--confirm-live-research",
+            action="store_true",
+            required=True,
+        )
+        command_parser.add_argument("--auth-state", type=Path, required=True)
+        add_output_args(command_parser)
+
+    result_probe = commands.add_parser("probe-result-partitions-v2")
+    result_probe.add_argument(
+        "--endpoint-probe-artifact",
+        type=Path,
+        required=True,
+    )
+    result_probe.add_argument("--endpoint-contract-id", required=True)
+    result_probe.add_argument(
+        "--partition-id",
+        action="append",
+        required=True,
+    )
+    add_live_args(result_probe)
+
+    supplemental_probe = commands.add_parser("probe-supplemental-cohort-v1")
+    supplemental_probe.add_argument(
+        "--result-policy-artifact",
+        type=Path,
+        required=True,
+    )
+    supplemental_probe.add_argument("--endpoint-contract-id", required=True)
+    supplemental_probe.add_argument(
+        "--run-index",
+        type=int,
+        choices=(1, 2, 3),
+        required=True,
+    )
+    add_live_args(supplemental_probe)
+
+    freeze_result_policy = commands.add_parser(
+        "freeze-result-partition-policy-v1"
+    )
+    freeze_result_policy.add_argument(
+        "--result-probe-artifact",
+        type=Path,
+        required=True,
+    )
+    add_output_args(freeze_result_policy)
+
+    compare_supplemental = commands.add_parser(
+        "compare-supplemental-cohort-v1"
+    )
+    compare_supplemental.add_argument(
+        "--supplemental-probe-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    add_output_args(compare_supplemental)
+
+    freeze_dual_policy = commands.add_parser("freeze-dual-cohort-policy-v3")
+    freeze_dual_policy.add_argument(
+        "--phase-b-comparison-artifact",
+        type=Path,
+        required=True,
+    )
+    freeze_dual_policy.add_argument(
+        "--result-policy-artifact",
+        type=Path,
+        required=True,
+    )
+    freeze_dual_policy.add_argument(
+        "--supplemental-comparison-artifact",
+        type=Path,
+        required=True,
+    )
+    add_output_args(freeze_dual_policy)
+
+    for command_name in (
+        "census-result-partial-v3",
+        "repeat-fixed-result-partial-v3",
+    ):
+        partial_live = commands.add_parser(command_name)
+        partial_live.add_argument(
+            "--phase-b-comparison-artifact",
+            type=Path,
+            required=True,
+        )
+        partial_live.add_argument(
+            "--result-policy-artifact",
+            type=Path,
+            required=True,
+        )
+        partial_live.add_argument(
+            "--supplemental-comparison-artifact",
+            type=Path,
+            default=None,
+        )
+        partial_live.add_argument(
+            "--run-index",
+            type=int,
+            choices=(1, 2, 3),
+            required=True,
+        )
+        partial_live.add_argument("--window-id", required=True)
+        partial_live.add_argument(
+            "--staging-mode",
+            choices=("noop", "reconciled"),
+            required=True,
+        )
+        partial_live.add_argument(
+            "--confirm-staging-writes",
+            action="store_true",
+        )
+        add_live_args(partial_live)
+
+    for command_name in (
+        "census-dual-cohort-v3",
+        "repeat-fixed-dual-cohort-v3",
+    ):
+        complete_live = commands.add_parser(command_name)
+        complete_live.add_argument(
+            "--candidate-artifact",
+            type=Path,
+            required=True,
+        )
+        complete_live.add_argument(
+            "--run-index",
+            type=int,
+            choices=(1, 2, 3),
+            required=True,
+        )
+        complete_live.add_argument("--window-id", required=True)
+        complete_live.add_argument(
+            "--staging-mode",
+            choices=("noop", "reconciled"),
+            required=True,
+        )
+        complete_live.add_argument(
+            "--confirm-staging-writes",
+            action="store_true",
+        )
+        add_live_args(complete_live)
+
+    compare_dual_phase_d = commands.add_parser(
+        "compare-stability-dual-cohort-v3"
+    )
+    compare_dual_phase_d.add_argument(
+        "--census-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    compare_dual_phase_d.add_argument(
+        "--fixed-repeat-artifact",
+        action="append",
+        type=Path,
+        required=True,
+    )
+    add_output_args(compare_dual_phase_d)
+
     verify = commands.add_parser("verify-run")
     verify.add_argument("--artifact", type=Path, required=True)
     return parser
@@ -3594,6 +3836,624 @@ def _freeze_discovery_policy_command(
     return EXIT_OK
 
 
+def _manifest_hash(artifact_dir: Path) -> str:
+    return hashlib.sha256((artifact_dir / "manifest.json").read_bytes()).hexdigest()
+
+
+def _require_result_partition_policy_artifact(
+    artifact_dir: Path,
+) -> ResultPartitionPolicyEvidence:
+    artifact_dir = Path(artifact_dir).resolve(strict=True)
+    strict_check = verify_live_research_run(artifact_dir)
+    if (
+        not strict_check.valid
+        or strict_check.experiment != RESULT_PARTITION_POLICY_EXPERIMENT
+        or strict_check.run_id is None
+    ):
+        raise ValueError("requires a strict result-partition-policy-v1 artifact")
+    payload = json.loads(
+        (artifact_dir / "result-partition-policy.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    policy = validate_result_partition_policy_artifact_payload_v1(payload)
+    return ResultPartitionPolicyEvidence(
+        policy=policy,
+        manifest_hash=_manifest_hash(artifact_dir),
+        run_id=strict_check.run_id,
+    )
+
+
+def _result_policy_artifact_reference(
+    artifact_dir: Path,
+) -> PhaseCArtifactReference:
+    evidence = _require_result_partition_policy_artifact(artifact_dir)
+    resolved = Path(artifact_dir).resolve(strict=True)
+    payload = json.loads(
+        (resolved / "result-partition-policy.json").read_text(encoding="utf-8")
+    )
+    return PhaseCArtifactReference(
+        experiment=RESULT_PARTITION_POLICY_EXPERIMENT,
+        run_id=evidence.run_id,
+        manifest_hash=evidence.manifest_hash,
+        payload_hash=canonical_dual_cohort_hash(payload),
+        accepted=True,
+    )
+
+
+def _require_dual_cohort_policy_artifact(
+    artifact_dir: Path,
+) -> DualCohortPolicyEvidence:
+    artifact_dir = Path(artifact_dir).resolve(strict=True)
+    strict_check = verify_live_research_run(artifact_dir)
+    if (
+        not strict_check.valid
+        or strict_check.experiment
+        != DUAL_COHORT_DISCOVERY_CANDIDATE_EXPERIMENT
+        or strict_check.run_id is None
+    ):
+        raise ValueError(
+            "requires a strict dual-cohort-discovery-policy-candidate-v3 artifact"
+        )
+    payload = json.loads(
+        (artifact_dir / "dual-cohort-discovery-policy.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    candidate = validate_dual_cohort_candidate_artifact_payload_v3(payload)
+    return DualCohortPolicyEvidence(
+        candidate=candidate,
+        manifest_hash=_manifest_hash(artifact_dir),
+        run_id=strict_check.run_id,
+    )
+
+
+def _freeze_result_partition_policy_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    try:
+        probe_dir = Path(args.result_probe_artifact).resolve(strict=True)
+        strict_check = verify_live_research_run(probe_dir)
+        if strict_check.experiment != RESULT_PARTITION_PROBE_EXPERIMENT or not (
+            strict_check.valid
+        ):
+            raise ValueError("result policy freeze requires a strict result probe")
+        probe_payload = json.loads(
+            (probe_dir / "result-partition-probe.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        execution, _, _, _ = validate_dual_cohort_probe_artifact_payload(
+            probe_payload
+        )
+        if not isinstance(execution, ResultPartitionProbeExecutionV2):
+            raise ValueError("result policy parent version does not match")
+        policy = freeze_result_partition_policy_v1(
+            execution,
+            source_probe_artifact_hash=_manifest_hash(probe_dir),
+        )
+        payload = result_partition_policy_artifact_payload_v1(policy)
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "freeze-result-partition-policy-v1",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=dual_cohort_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=dual_cohort_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={"result-partition-policy.json": payload},
+        )
+        if not artifact_verifier(artifact_dir).valid or not (
+            verify_live_research_run(artifact_dir).valid
+        ):
+            return EXIT_EVIDENCE_FAILURE
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "policy_hash": policy.policy_hash,
+            "exit_code": EXIT_OK,
+        }
+    )
+    return EXIT_OK
+
+
+def _compare_supplemental_cohort_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    if len(args.supplemental_probe_artifact) != 3:
+        _print_json(
+            {"error": "requires exactly three supplemental probe artifacts"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        executions = []
+        parent_hashes = set()
+        for artifact_path in args.supplemental_probe_artifact:
+            artifact_dir = Path(artifact_path).resolve(strict=True)
+            strict_check = verify_live_research_run(artifact_dir)
+            if strict_check.experiment != SUPPLEMENTAL_COHORT_PROBE_EXPERIMENT or not (
+                strict_check.valid
+            ):
+                raise ValueError("supplemental comparison parent failed strict replay")
+            raw_payload = json.loads(
+                (artifact_dir / "supplemental-cohort-probe.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            execution, parent, _, _ = validate_dual_cohort_probe_artifact_payload(
+                raw_payload
+            )
+            if not isinstance(execution, SupplementalCohortProbeExecutionV1):
+                raise ValueError("supplemental comparison parent version does not match")
+            executions.append(execution)
+            parent_hashes.add(parent.manifest_hash)
+        if len(parent_hashes) != 1:
+            raise ValueError("supplemental probes must share one result policy parent")
+        executions.sort(key=lambda item: item.run_index)
+        payload = supplemental_cohort_comparison_payload_v1(executions)
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "compare-supplemental-cohort-v1",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=dual_cohort_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=dual_cohort_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={"supplemental-cohort-comparison.json": payload},
+        )
+        if not artifact_verifier(artifact_dir).valid or not (
+            verify_live_research_run(artifact_dir).valid
+        ):
+            return EXIT_EVIDENCE_FAILURE
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    comparison = validate_supplemental_cohort_comparison_payload_v1(payload)
+    exit_code = EXIT_OK if comparison.decision.accepted else EXIT_INCOMPLETE
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "accepted": comparison.decision.accepted,
+            "policy_hash": comparison.policy_hash,
+            "stable_supplemental_count": len(
+                comparison.stable_supplemental_ids
+            ),
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
+def _freeze_dual_cohort_policy_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    try:
+        phase_b = _phase_b_comparison_reference(
+            args.phase_b_comparison_artifact
+        )
+        if phase_b.accepted is not False:
+            raise ValueError("dual-cohort candidate requires valid-rejected Phase B lineage")
+        result_evidence = _require_result_partition_policy_artifact(
+            args.result_policy_artifact
+        )
+        supplemental_dir = Path(args.supplemental_comparison_artifact).resolve(
+            strict=True
+        )
+        strict_check = verify_live_research_run(supplemental_dir)
+        if (
+            not strict_check.valid
+            or strict_check.experiment
+            != SUPPLEMENTAL_COHORT_COMPARISON_EXPERIMENT
+        ):
+            raise ValueError("dual-cohort candidate requires strict supplemental comparison")
+        supplemental_payload = json.loads(
+            (supplemental_dir / "supplemental-cohort-comparison.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        comparison = validate_supplemental_cohort_comparison_payload_v1(
+            supplemental_payload
+        )
+        if not comparison.decision.accepted:
+            raise ValueError("supplemental comparison is valid but rejected")
+        candidate = build_dual_cohort_discovery_candidate_v3(
+            result_policy=result_evidence.policy,
+            result_policy_artifact_hash=result_evidence.manifest_hash,
+            supplemental_comparison_payload=supplemental_payload,
+            supplemental_comparison_artifact_hash=_manifest_hash(
+                supplemental_dir
+            ),
+            phase_b_comparison_artifact_hash=phase_b.manifest_hash,
+        )
+        payload = dual_cohort_candidate_artifact_payload_v3(
+            candidate=candidate,
+            result_policy=result_evidence.policy,
+            supplemental_comparison_payload=supplemental_payload,
+        )
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "freeze-dual-cohort-policy-v3",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=dual_cohort_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=dual_cohort_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={"dual-cohort-discovery-policy.json": payload},
+        )
+        if not artifact_verifier(artifact_dir).valid or not (
+            verify_live_research_run(artifact_dir).valid
+        ):
+            return EXIT_EVIDENCE_FAILURE
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "candidate_hash": candidate.candidate_hash,
+            "result_partition_policy_hash": (
+                candidate.result_partition_policy_hash
+            ),
+            "supplemental_cohort_policy_hash": (
+                candidate.supplemental_cohort_policy_hash
+            ),
+            "exit_code": EXIT_OK,
+        }
+    )
+    return EXIT_OK
+
+
+def _dual_cohort_probe_command(
+    args,
+    *,
+    session_factory,
+    repository,
+    runtime_factory,
+    service_factory,
+    observation_service_factory,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    if len(args.baseline_artifact) != 2:
+        _print_json(
+            {"error": f"{args.command} requires exactly two baseline artifacts"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        saved_session = _require_saved_session_state(args.auth_state)
+        saved_session_runtime_factory = _bind_saved_session_runtime_factory(
+            runtime_factory,
+            saved_session,
+        )
+        baseline_gate = require_matching_baselines(
+            args.baseline_artifact[0],
+            args.baseline_artifact[1],
+        )
+        baseline = _phase_c_baseline_reference(baseline_gate)
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        if args.command == "probe-result-partitions-v2":
+            endpoint_dir = Path(args.endpoint_probe_artifact).resolve(strict=True)
+            parent = phase_c_artifact_reference(endpoint_dir)
+            if parent.experiment != ENDPOINT_PROBE_EXPERIMENT:
+                raise ValueError("result probe requires an endpoint probe parent")
+            endpoint_payload = json.loads(
+                (endpoint_dir / "endpoint-probe.json").read_text(encoding="utf-8")
+            )
+            endpoint_execution, _, _, _ = validate_phase_c_probe_artifact_payload(
+                endpoint_payload
+            )
+            selected = tuple(
+                condition
+                for condition in endpoint_execution.conditions
+                if condition.endpoint_contract_id == args.endpoint_contract_id
+            )
+            if len(selected) != 1 or not (
+                _phase_c_endpoint_condition_satisfies_policy_freeze(selected[0])
+            ):
+                raise ValueError("result probe endpoint lacks clean cursor evidence")
+            explicit_ids = tuple(args.partition_id)
+            if len(set(explicit_ids)) != len(explicit_ids):
+                raise ValueError("result probe partitions must be distinct")
+            order = {
+                partition.partition_id: index
+                for index, partition in enumerate(OFFERTODAY_PARTITION_CATALOG)
+            }
+            plan = ResultPartitionProbePlanV2(
+                endpoint_contract_id=args.endpoint_contract_id,
+                partition_ids=tuple(sorted(explicit_ids, key=order.__getitem__)),
+            )
+        else:
+            policy_evidence = _require_result_partition_policy_artifact(
+                args.result_policy_artifact
+            )
+            parent = _result_policy_artifact_reference(
+                args.result_policy_artifact
+            )
+            if policy_evidence.policy.endpoint_contract_id != (
+                args.endpoint_contract_id
+            ):
+                raise ValueError("supplemental probe endpoint does not match result policy")
+            plan = SupplementalCohortProbePlanV1(
+                endpoint_contract_id=args.endpoint_contract_id
+            )
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    research_repository = repository or OfferTodayResearchRepository()
+    db = None
+    artifact_dir = None
+    try:
+        db = session_factory()
+        start_snapshot, start_inventory = _capture_snapshot(
+            research_repository,
+            db,
+        )
+        _require_current_baseline(baseline_gate, start_snapshot, start_inventory)
+        observation_service = observation_service_factory(db)
+        request_budget = {
+            "listing_logical": plan.listing_logical_budget,
+            "listing_attempt_max": plan.listing_attempt_budget,
+            "detail": 0,
+            "product_writes": 0,
+        }
+        observation_service.create_run(
+            ResearchMetadata(
+                run_id=run_id,
+                experiment=(
+                    RESULT_PARTITION_PROBE_EXPERIMENT
+                    if isinstance(plan, ResultPartitionProbePlanV2)
+                    else SUPPLEMENTAL_COHORT_PROBE_EXPERIMENT
+                ),
+                variant="dual-cohort-phase-c-v1",
+                planner_version=planner_version,
+                plan=3,
+                parent_artifact_hash=parent.manifest_hash,
+                request_budget=request_budget,
+            ),
+            run_start_inventory=start_inventory,
+        )
+        staging_sink = ResearchNoopListingStagingSink()
+        service = service_factory()
+        if isinstance(plan, ResultPartitionProbePlanV2):
+            raw_execution = asyncio.run(
+                service.run_result_partition_probe_v2(
+                    runtime_factory=saved_session_runtime_factory,
+                    observation_service=observation_service,
+                    plan=plan,
+                    staging_sink=staging_sink,
+                )
+            )
+        else:
+            raw_execution = asyncio.run(
+                service.run_supplemental_cohort_probe_v1(
+                    runtime_factory=saved_session_runtime_factory,
+                    observation_service=observation_service,
+                    plan=plan,
+                    staging_sink=staging_sink,
+                )
+            )
+        end_snapshot, end_inventory = _capture_snapshot(
+            research_repository,
+            db,
+        )
+        no_write = PhaseCNoWriteEvidence(
+            start_snapshot_hash=start_snapshot.data_hash,
+            end_snapshot_hash=end_snapshot.data_hash,
+            start_product_data_hash=start_snapshot.product_data_hash,
+            end_product_data_hash=end_snapshot.product_data_hash,
+            start_inventory_hash=start_inventory.data_hash,
+            end_inventory_hash=end_inventory.data_hash,
+            stage_calls=staging_sink.stage_calls,
+            would_stage_rows=staging_sink.would_stage_rows,
+        )
+        contract = offertoday_endpoint_contract(plan.endpoint_contract_id)
+        requested_partition_ids = (
+            plan.partition_ids
+            if isinstance(plan, ResultPartitionProbePlanV2)
+            else plan.seed_partition_ids
+        )
+        if len(raw_execution.results) > len(requested_partition_ids):
+            raise ValueError("dual-cohort probe returned unexpected conditions")
+        conditions = tuple(
+            phase_d_condition_from_listing_result_contract(
+                result,
+                endpoint_contract_id=contract.contract_id,
+                endpoint=contract.endpoint,
+                rcd_type=None,
+                partition_id=requested_partition_ids[index],
+                conservation_difference=(
+                    _dual_cohort_condition_conservation_difference(result)
+                ),
+            )
+            for index, result in enumerate(raw_execution.results)
+        )
+        captured_at = utc_now().isoformat()
+        if isinstance(plan, ResultPartitionProbePlanV2):
+            execution = ResultPartitionProbeExecutionV2(
+                plan=plan,
+                conditions=tuple(
+                    ResultPartitionConditionEvidenceV2.from_condition(condition)
+                    for condition in conditions
+                ),
+                failure_reason=raw_execution.failure_reason,
+            )
+            file_name = "result-partition-probe.json"
+        else:
+            execution = SupplementalCohortProbeExecutionV1(
+                run_id=run_id,
+                run_index=args.run_index,
+                captured_at=captured_at,
+                plan=plan,
+                conditions=tuple(
+                    SupplementalSeedConditionEvidenceV1(
+                        seed_partition_id=condition.partition_id,
+                        condition=condition,
+                    )
+                    for condition in conditions
+                ),
+                failure_reason=raw_execution.failure_reason,
+            )
+            file_name = "supplemental-cohort-probe.json"
+        payload = build_dual_cohort_probe_artifact_payload(
+            execution=execution,
+            parent=parent,
+            baseline=baseline,
+            no_write=no_write,
+        )
+        summary = {
+            "experiment": payload["experiment"],
+            "accepted": execution.accepted,
+            "logical_listing_requests": execution.logical_requests,
+            "physical_listing_attempts": execution.physical_attempts,
+            "failure_reason": execution.failure_reason,
+        }
+        observation_service.finish_run(
+            status="completed" if execution.accepted else "failed",
+            summary=summary,
+            error_message=(
+                None
+                if execution.failure_reason is None
+                else "dual_cohort_probe_stopped"
+            ),
+        )
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": args.command,
+                "session_mode": "saved-session",
+                "session_state_sha256": saved_session.sha256,
+                "crawl_job_status": (
+                    "completed" if execution.accepted else "failed"
+                ),
+                "staging_mode": "noop",
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=dual_cohort_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=dual_cohort_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={file_name: payload},
+        )
+        if not artifact_verifier(artifact_dir).valid or not (
+            verify_live_research_run(artifact_dir).valid
+        ):
+            return EXIT_EVIDENCE_FAILURE
+    except (
+        AttributeError,
+        OSError,
+        SQLAlchemyError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    finally:
+        if db is not None:
+            db.close()
+
+    exit_code = (
+        EXIT_HARD_STOP
+        if execution.failure_reason is not None
+        else (EXIT_OK if execution.accepted else EXIT_INCOMPLETE)
+    )
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "experiment": payload["experiment"],
+            "accepted": execution.accepted,
+            "failure_reason": execution.failure_reason,
+            "logical_listing_requests": execution.logical_requests,
+            "physical_listing_attempts": execution.physical_attempts,
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
 def _require_phase_d_policy_artifact(
     artifact_dir: Path,
 ) -> PhaseDPolicyEvidence:
@@ -3700,6 +4560,22 @@ def _phase_d_condition_conservation_difference(result) -> int:
         )
     }
     return len(observed_ids.symmetric_difference(result.accepted_job_ids))
+
+
+def _dual_cohort_condition_conservation_difference(result) -> int:
+    observed_ids = set()
+    identified_ids = set()
+    for observation in result.observations:
+        evidence = observation.cursor_evidence
+        if evidence is None:
+            continue
+        observed_ids.update(evidence.result_job_ids)
+        observed_ids.update(evidence.supplemental_job_ids)
+        identified_ids.update(item.job_id for item in evidence.result_identity_pairs)
+        identified_ids.update(
+            item.job_id for item in evidence.supplemental_identity_pairs
+        )
+    return len(observed_ids.symmetric_difference(identified_ids))
 
 
 def _phase_d_staging_conservation_difference(
@@ -4083,6 +4959,482 @@ def _phase_d_live_command(
     return exit_code
 
 
+def _unresolved_supplemental_gate(
+    artifact_path: Path | None,
+) -> SupplementalGateStateV1:
+    if artifact_path is None:
+        return SupplementalGateStateV1(
+            status="missing",
+            artifact_hash=None,
+            comparison_hash=None,
+            failing_gates=("supplemental_evidence_missing",),
+        )
+    artifact_dir = Path(artifact_path).resolve(strict=True)
+    strict_check = verify_live_research_run(artifact_dir)
+    if (
+        not strict_check.valid
+        or strict_check.experiment != SUPPLEMENTAL_COHORT_COMPARISON_EXPERIMENT
+    ):
+        raise ValueError("partial Phase D supplemental gate failed strict replay")
+    payload = json.loads(
+        (artifact_dir / "supplemental-cohort-comparison.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    comparison = validate_supplemental_cohort_comparison_payload_v1(payload)
+    if comparison.decision.accepted:
+        raise ValueError(
+            "accepted supplemental evidence requires a complete v3 candidate"
+        )
+    return SupplementalGateStateV1(
+        status="rejected",
+        artifact_hash=_manifest_hash(artifact_dir),
+        comparison_hash=canonical_dual_cohort_hash(payload),
+        failing_gates=comparison.decision.failing_gates,
+    )
+
+
+def _dual_cohort_phase_d_live_command(
+    args,
+    *,
+    session_factory,
+    repository,
+    runtime_factory,
+    service_factory,
+    observation_service_factory,
+    crawl_runtime_factory,
+    staging_sink_factory,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    if len(args.baseline_artifact) != 2:
+        _print_json(
+            {"error": f"{args.command} requires exactly two baseline artifacts"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.staging_mode == "reconciled" and not args.confirm_staging_writes:
+        _print_json(
+            {"error": "reconciled staging requires --confirm-staging-writes"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.staging_mode == "noop" and args.confirm_staging_writes:
+        _print_json(
+            {"error": "--confirm-staging-writes requires reconciled staging"},
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    partial = args.command in {
+        "census-result-partial-v3",
+        "repeat-fixed-result-partial-v3",
+    }
+    try:
+        saved_session = _require_saved_session_state(args.auth_state)
+        saved_session_runtime_factory = _bind_saved_session_runtime_factory(
+            runtime_factory,
+            saved_session,
+        )
+        baseline_gate = require_matching_baselines(
+            args.baseline_artifact[0],
+            args.baseline_artifact[1],
+        )
+        baseline = _phase_c_baseline_reference(baseline_gate)
+        if partial:
+            phase_b = _phase_b_comparison_reference(
+                args.phase_b_comparison_artifact
+            )
+            if phase_b.accepted is not False:
+                raise ValueError("partial v3 requires valid-rejected Phase B lineage")
+            result_policy_evidence = _require_result_partition_policy_artifact(
+                args.result_policy_artifact
+            )
+            scope = ResultOnlyDiscoveryScopeV3(
+                result_policy=result_policy_evidence.policy,
+                result_policy_artifact_hash=result_policy_evidence.manifest_hash,
+                supplemental_gate=_unresolved_supplemental_gate(
+                    args.supplemental_comparison_artifact
+                ),
+                phase_b_comparison_artifact_hash=phase_b.manifest_hash,
+            )
+            candidate_evidence = None
+        else:
+            candidate_evidence = _require_dual_cohort_policy_artifact(
+                args.candidate_artifact
+            )
+            scope = None
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+
+    research_repository = repository or OfferTodayResearchRepository()
+    db = None
+    artifact_dir = None
+    try:
+        db = session_factory()
+        start_snapshot, start_inventory = _capture_snapshot(
+            research_repository,
+            db,
+        )
+        _require_current_baseline(baseline_gate, start_snapshot, start_inventory)
+        census_command = args.command in {
+            "census-result-partial-v3",
+            "census-dual-cohort-v3",
+        }
+        result_condition_count = 31 if census_command else 3
+        planned_condition_count = result_condition_count + (0 if partial else 1)
+        logical_budget = (
+            planned_condition_count
+            * DUAL_COHORT_PHASE_D_MAX_PAGES_PER_CONDITION
+        )
+        observation_service = observation_service_factory(db)
+        experiment = (
+            RESULT_PARTIAL_CENSUS_EXPERIMENT
+            if args.command == "census-result-partial-v3"
+            else (
+                RESULT_PARTIAL_FIXED_REPEAT_EXPERIMENT
+                if args.command == "repeat-fixed-result-partial-v3"
+                else (
+                    DUAL_COHORT_CENSUS_EXPERIMENT
+                    if args.command == "census-dual-cohort-v3"
+                    else DUAL_COHORT_FIXED_REPEAT_EXPERIMENT
+                )
+            )
+        )
+        parent_hash = (
+            scope.result_policy_artifact_hash
+            if partial
+            else candidate_evidence.manifest_hash
+        )
+        observation_service.create_run(
+            ResearchMetadata(
+                run_id=run_id,
+                experiment=experiment,
+                variant="dual-cohort-phase-d-v3",
+                planner_version=planner_version,
+                plan=3,
+                parent_artifact_hash=parent_hash,
+                request_budget={
+                    "listing_logical": logical_budget,
+                    "listing_attempt_max": (
+                        logical_budget * DUAL_COHORT_MAX_ATTEMPTS_PER_PAGE
+                    ),
+                    "detail": 0,
+                    "product_writes": 0,
+                },
+            ),
+            run_start_inventory=start_inventory,
+        )
+        staging_sink = (
+            ResearchNoopListingStagingSink()
+            if args.staging_mode == "noop"
+            else staging_sink_factory(
+                crawl_runtime=crawl_runtime_factory(),
+                crawl_job_id=run_id,
+                skip_existing=True,
+            )
+        )
+        service = service_factory()
+        if partial:
+            service_method = (
+                service.run_result_partial_census_v3
+                if census_command
+                else service.run_result_partial_fixed_repeat_v3
+            )
+            service_kwargs = {"scope": scope}
+        else:
+            service_method = (
+                service.run_dual_cohort_census_v3
+                if census_command
+                else service.run_dual_cohort_fixed_repeat_v3
+            )
+            service_kwargs = {"candidate": candidate_evidence.candidate}
+        started_at = time.perf_counter()
+        execution = asyncio.run(
+            service_method(
+                runtime_factory=saved_session_runtime_factory,
+                observation_service=observation_service,
+                staging_sink=staging_sink,
+                **service_kwargs,
+            )
+        )
+        duration_seconds = max(0.0, time.perf_counter() - started_at)
+        evidence_failure = False
+        failure_reason = execution.failure_reason
+
+        def unexpected_post_run_failure(exc: BaseException) -> str:
+            return (
+                "unexpected_dual_cohort_phase_d_error:"
+                f"{type(exc).__name__}"
+            )
+
+        end_snapshot = None
+        end_inventory = None
+        try:
+            end_snapshot, end_inventory = _capture_snapshot(
+                research_repository,
+                db,
+            )
+        except Exception as exc:
+            evidence_failure = True
+            failure_reason = unexpected_post_run_failure(exc)
+        activity_evidence_captured = True
+        try:
+            recorded_events = _ordered_events(
+                research_repository.list_research_events(db, UUID(run_id))
+            )
+        except Exception as exc:
+            recorded_events = []
+            activity_evidence_captured = False
+            evidence_failure = True
+            failure_reason = unexpected_post_run_failure(exc)
+        detail_attempts = sum(
+            event.get("event_type") == "research.detail_attempt"
+            for event in recorded_events
+        )
+        product_writes = sum(
+            event.get("event_type") == "research.product_write"
+            for event in recorded_events
+        )
+        staging = _phase_d_staging_evidence(staging_sink)
+        product = _phase_d_product_evidence(
+            start_snapshot=start_snapshot,
+            end_snapshot=end_snapshot,
+            start_inventory=start_inventory,
+            end_inventory=end_inventory,
+            staging=staging,
+            detail_attempts=detail_attempts,
+            product_writes=product_writes,
+            activity_evidence_captured=activity_evidence_captured,
+        )
+        captured_at = utc_now().isoformat()
+        raw_result_runs = (
+            execution.results if partial else execution.result_results
+        )
+        result_conditions = tuple(
+            ResultPartitionConditionEvidenceV2.from_condition(
+                phase_d_condition_from_listing_result_contract(
+                    result,
+                    endpoint_contract_id=(
+                        scope.result_policy.endpoint_contract_id
+                        if partial
+                        else candidate_evidence.candidate.endpoint_contract_id
+                    ),
+                    endpoint="search",
+                    rcd_type=None,
+                    conservation_difference=(
+                        _dual_cohort_condition_conservation_difference(result)
+                    ),
+                )
+            )
+            for result in raw_result_runs
+        )
+        staging_difference = _phase_d_staging_conservation_difference(
+            results=raw_result_runs,
+            staging=staging,
+            start_snapshot=start_snapshot,
+            end_snapshot=end_snapshot,
+        )
+        if staging_difference:
+            failure_reason = failure_reason or "staging_conservation_difference"
+        if partial:
+            run = ResultPartialPhaseDRunV3(
+                experiment=experiment,
+                run_id=run_id,
+                run_index=args.run_index,
+                window_id=args.window_id,
+                captured_at=captured_at,
+                scope_hash=scope.scope_hash,
+                duration_seconds=duration_seconds,
+                conditions=result_conditions,
+                product=product,
+                failure_reason=failure_reason,
+            )
+            payload = result_partial_phase_d_artifact_payload_v3(
+                run=run,
+                scope=scope,
+                baseline=baseline,
+            )
+        else:
+            supplemental_condition = (
+                None
+                if execution.supplemental_result is None
+                else SupplementalSeedConditionEvidenceV1(
+                    seed_partition_id=(
+                        candidate_evidence.candidate
+                        .supplemental_canonical_seed_partition_id
+                    ),
+                    condition=phase_d_condition_from_listing_result_contract(
+                        execution.supplemental_result,
+                        endpoint_contract_id=(
+                            candidate_evidence.candidate.endpoint_contract_id
+                        ),
+                        endpoint="search",
+                        rcd_type=None,
+                        conservation_difference=(
+                            _dual_cohort_condition_conservation_difference(
+                                execution.supplemental_result
+                            )
+                        ),
+                    ),
+                )
+            )
+            run = DualCohortPhaseDRunV3(
+                experiment=experiment,
+                run_id=run_id,
+                run_index=args.run_index,
+                window_id=args.window_id,
+                captured_at=captured_at,
+                candidate_hash=candidate_evidence.candidate.candidate_hash,
+                candidate_artifact_hash=candidate_evidence.manifest_hash,
+                duration_seconds=duration_seconds,
+                result_conditions=result_conditions,
+                supplemental_condition=supplemental_condition,
+                product=product,
+                failure_reason=failure_reason,
+            )
+            payload = dual_cohort_phase_d_run_artifact_payload_v3(
+                run=run,
+                candidate=candidate_evidence.candidate,
+                baseline=baseline,
+            )
+
+        def rebuild_payload(active_run):
+            if partial:
+                return result_partial_phase_d_artifact_payload_v3(
+                    run=active_run,
+                    scope=scope,
+                    baseline=baseline,
+                )
+            return dual_cohort_phase_d_run_artifact_payload_v3(
+                run=active_run,
+                candidate=candidate_evidence.candidate,
+                baseline=baseline,
+            )
+
+        def build_summary() -> dict[str, Any]:
+            return {
+                "experiment": experiment,
+                "accepted": payload["accepted"],
+                "downstream_eligible": payload["downstream_eligible"],
+                "run_index": run.run_index,
+                "window_id": run.window_id,
+                "logical_listing_requests": run.logical_requests,
+                "physical_listing_attempts": run.physical_attempts,
+                "failure_reason": failure_reason,
+                "staging_mode": staging.staging_mode,
+                "detail_attempts": product.detail_attempts,
+                "product_writes": product.product_writes,
+                "end_snapshot_captured": product.end_snapshot_captured,
+                "activity_evidence_captured": (
+                    product.activity_evidence_captured
+                ),
+            }
+
+        def run_completed() -> bool:
+            return (
+                failure_reason is None
+                and product.accepted
+                and (
+                    payload["accepted"]
+                    or (partial and run.partial_research_complete)
+                )
+            )
+
+        summary = build_summary()
+        try:
+            observation_service.finish_run(
+                status="completed" if run_completed() else "failed",
+                summary=summary,
+                error_message=(
+                    None
+                    if failure_reason is None
+                    else "dual_cohort_phase_d_stopped"
+                ),
+            )
+        except Exception as exc:
+            evidence_failure = True
+            failure_reason = unexpected_post_run_failure(exc)
+            run = replace(run, failure_reason=failure_reason)
+            payload = rebuild_payload(run)
+            summary = build_summary()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": args.command,
+                "session_mode": "saved-session",
+                "session_state_sha256": saved_session.sha256,
+                "crawl_job_status": (
+                    "completed" if run_completed() else "failed"
+                ),
+                "staging_mode": staging.staging_mode,
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=dual_cohort_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=dual_cohort_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={"dual-cohort-phase-d-run.json": payload},
+        )
+        if not artifact_verifier(artifact_dir).valid or not (
+            verify_live_research_run(artifact_dir).valid
+        ):
+            return EXIT_EVIDENCE_FAILURE
+    except (
+        AttributeError,
+        OSError,
+        SQLAlchemyError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    finally:
+        if db is not None:
+            db.close()
+
+    exit_code = (
+        EXIT_EVIDENCE_FAILURE
+        if evidence_failure or not product.accepted
+        else (
+            EXIT_HARD_STOP
+            if failure_reason is not None
+            else (EXIT_OK if payload["accepted"] else EXIT_INCOMPLETE)
+        )
+    )
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "experiment": experiment,
+            "accepted": payload["accepted"],
+            "downstream_eligible": payload["downstream_eligible"],
+            "partial_research_complete": (
+                run.partial_research_complete if partial else None
+            ),
+            "failure_reason": failure_reason,
+            "logical_listing_requests": run.logical_requests,
+            "physical_listing_attempts": run.physical_attempts,
+            "staging_mode": staging.staging_mode,
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
 def _compare_phase_d_command(
     args,
     *,
@@ -4198,6 +5550,122 @@ def _compare_phase_d_command(
     return exit_code
 
 
+def _compare_dual_cohort_phase_d_command(
+    args,
+    *,
+    provenance_provider,
+    artifact_exporter,
+    artifact_verifier,
+) -> int:
+    if len(args.census_artifact) != 3 or len(args.fixed_repeat_artifact) != 3:
+        _print_json(
+            {
+                "error": (
+                    "compare-stability-dual-cohort-v3 requires exactly three "
+                    "census and three fixed-repeat artifacts"
+                )
+            },
+            stream=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        census_parents = []
+        for artifact_path in args.census_artifact:
+            artifact_dir = Path(artifact_path).resolve(strict=True)
+            reference = dual_cohort_phase_d_artifact_reference_v3(artifact_dir)
+            if reference.experiment != DUAL_COHORT_CENSUS_EXPERIMENT:
+                raise ValueError("dual-cohort census parent version does not match")
+            if not reference.accepted:
+                raise ValueError("dual-cohort comparison requires accepted censuses")
+            payload = json.loads(
+                (artifact_dir / "dual-cohort-phase-d-run.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            census_parents.append((reference, payload))
+        fixed_parents = []
+        for artifact_path in args.fixed_repeat_artifact:
+            artifact_dir = Path(artifact_path).resolve(strict=True)
+            reference = dual_cohort_phase_d_artifact_reference_v3(artifact_dir)
+            if reference.experiment != DUAL_COHORT_FIXED_REPEAT_EXPERIMENT:
+                raise ValueError("dual-cohort fixed parent version does not match")
+            if not reference.accepted:
+                raise ValueError("dual-cohort comparison requires accepted fixed runs")
+            payload = json.loads(
+                (artifact_dir / "dual-cohort-phase-d-run.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            fixed_parents.append((reference, payload))
+        census_parents.sort(key=lambda item: item[1]["run"]["run_index"])
+        fixed_parents.sort(key=lambda item: item[1]["run"]["run_index"])
+        payload = build_dual_cohort_phase_d_comparison_artifact_payload_v3(
+            (*census_parents, *fixed_parents)
+        )
+        run_id = str(UUID(args.run_id)) if args.run_id else str(uuid4())
+        repo_root = args.repo_root.resolve(strict=True)
+        planner_version = _git_head(repo_root)
+        captured_at = utc_now().isoformat()
+        provenance = provenance_provider(
+            repo_root=repo_root,
+            runtime_context={
+                "command": "compare-stability-dual-cohort-v3",
+                "session_mode": "offline",
+                "crawl_job_status": "completed",
+            },
+            captured_at=captured_at,
+        )
+        artifact_dir = artifact_exporter(
+            root=args.artifact_root,
+            run_id=run_id,
+            metadata=dual_cohort_metadata(
+                payload,
+                run_id=run_id,
+                planner_version=planner_version,
+            ),
+            events=dual_cohort_artifact_events(payload, created_at=captured_at),
+            provenance=provenance,
+            json_files={"dual-cohort-phase-d-comparison.json": payload},
+        )
+        if not artifact_verifier(artifact_dir).valid or not (
+            verify_live_research_run(artifact_dir).valid
+        ):
+            return EXIT_EVIDENCE_FAILURE
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
+        _print_json({"error": str(exc)}, stream=sys.stderr)
+        return EXIT_EVIDENCE_FAILURE
+    comparison = payload["comparison"]["comparison"]
+    accepted = bool(comparison["decision"]["accepted"])
+    exit_code = EXIT_OK if accepted else EXIT_INCOMPLETE
+    _print_json(
+        {
+            "artifact": str(artifact_dir),
+            "run_id": run_id,
+            "accepted": accepted,
+            "candidate_hash": comparison["candidate_hash"],
+            "result_fixed_min_jaccard": comparison[
+                "result_fixed_min_jaccard"
+            ],
+            "supplemental_fixed_min_jaccard": comparison[
+                "supplemental_fixed_min_jaccard"
+            ],
+            "combined_unique_count_cv": comparison[
+                "combined_unique_count_cv"
+            ],
+            "stable_reference_count": len(comparison["stable_reference_ids"]),
+            "stable_reference_hash": comparison["stable_reference_hash"],
+            "exit_code": exit_code,
+        }
+    )
+    return exit_code
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -4229,8 +5697,44 @@ def main(
             artifact_exporter=artifact_exporter,
             artifact_verifier=artifact_verifier,
         )
+    if args.command in {
+        "probe-result-partitions-v2",
+        "probe-supplemental-cohort-v1",
+    }:
+        return _dual_cohort_probe_command(
+            args,
+            session_factory=session_factory,
+            repository=repository,
+            runtime_factory=runtime_factory,
+            service_factory=service_factory,
+            observation_service_factory=observation_service_factory,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
     if args.command == "compare-partitions":
         return _compare_partitions_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command == "freeze-result-partition-policy-v1":
+        return _freeze_result_partition_policy_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command == "compare-supplemental-cohort-v1":
+        return _compare_supplemental_cohort_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command == "freeze-dual-cohort-policy-v3":
+        return _freeze_dual_cohort_policy_command(
             args,
             provenance_provider=provenance_provider,
             artifact_exporter=artifact_exporter,
@@ -4259,6 +5763,32 @@ def main(
         )
     if args.command == "compare-stability-v2":
         return _compare_phase_d_command(
+            args,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command in {
+        "census-result-partial-v3",
+        "repeat-fixed-result-partial-v3",
+        "census-dual-cohort-v3",
+        "repeat-fixed-dual-cohort-v3",
+    }:
+        return _dual_cohort_phase_d_live_command(
+            args,
+            session_factory=session_factory,
+            repository=repository,
+            runtime_factory=runtime_factory,
+            service_factory=service_factory,
+            observation_service_factory=observation_service_factory,
+            crawl_runtime_factory=crawl_runtime_factory,
+            staging_sink_factory=staging_sink_factory,
+            provenance_provider=provenance_provider,
+            artifact_exporter=artifact_exporter,
+            artifact_verifier=artifact_verifier,
+        )
+    if args.command == "compare-stability-dual-cohort-v3":
+        return _compare_dual_cohort_phase_d_command(
             args,
             provenance_provider=provenance_provider,
             artifact_exporter=artifact_exporter,

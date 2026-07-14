@@ -113,6 +113,27 @@ from app.sources.offertoday.research.smoke import (
     build_runtime_smoke_condition,
     evaluate_smoke,
 )
+from test_offertoday_dual_cohort import (
+    _complete_candidate as _dual_complete_candidate,
+    _complete_run as _dual_complete_run,
+    _partial_run as _dual_partial_run,
+    _partial_scope as _dual_partial_scope,
+    _result_policy as _dual_result_policy,
+    _supplemental_probe as _dual_supplemental_probe,
+)
+from test_offertoday_dual_cohort_stage_gate import (
+    _export as _export_dual_cohort_fixture,
+    _result_probe_payload as _dual_result_probe_payload,
+    _supplemental_probe_payload as _dual_supplemental_probe_payload,
+)
+from test_offertoday_phase_d import (
+    _baseline_reference as _dual_baseline_reference,
+)
+from test_offertoday_research_live_service import (
+    DualCohortRuntimeFactory,
+    IncrementingClock,
+    _phase_c_no_sleep,
+)
 
 RUN_ID = "33333333-3333-3333-3333-333333333333"
 CANDIDATE_RUN_ID = "44444444-4444-4444-4444-444444444444"
@@ -5926,3 +5947,1216 @@ def test_phase_d_post_run_failures_preserve_sanitized_strict_prefix(
     else:
         assert payload["product"]["end_snapshot_captured"] is True
     assert census_cli.verify_live_research_run(artifact).valid is True
+
+
+DUAL_COHORT_LIVE_COMMANDS = (
+    "probe-result-partitions-v2",
+    "probe-supplemental-cohort-v1",
+    "census-result-partial-v3",
+    "repeat-fixed-result-partial-v3",
+    "census-dual-cohort-v3",
+    "repeat-fixed-dual-cohort-v3",
+)
+
+
+def _dual_cohort_cli_argv(
+    command: str,
+    *,
+    auth_state: str = "saved-session.json",
+    baseline_count: int = 2,
+) -> list[str]:
+    baselines = [
+        argument
+        for index in range(baseline_count)
+        for argument in ("--baseline-artifact", f"baseline-{index + 1}")
+    ]
+    live_tail = [
+        *baselines,
+        "--confirm-live-research",
+        "--auth-state",
+        auth_state,
+    ]
+    if command == "probe-result-partitions-v2":
+        return [
+            command,
+            "--endpoint-probe-artifact",
+            "endpoint-probe",
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--partition-id",
+            OFFERTODAY_PARTITION_CATALOG[0].partition_id,
+            *live_tail,
+        ]
+    if command == "probe-supplemental-cohort-v1":
+        return [
+            command,
+            "--result-policy-artifact",
+            "result-policy",
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--run-index",
+            "1",
+            *live_tail,
+        ]
+    if command == "freeze-result-partition-policy-v1":
+        return [command, "--result-probe-artifact", "result-probe"]
+    if command == "compare-supplemental-cohort-v1":
+        return [
+            command,
+            "--supplemental-probe-artifact",
+            "supplemental-1",
+            "--supplemental-probe-artifact",
+            "supplemental-2",
+            "--supplemental-probe-artifact",
+            "supplemental-3",
+        ]
+    if command == "freeze-dual-cohort-policy-v3":
+        return [
+            command,
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--result-policy-artifact",
+            "result-policy",
+            "--supplemental-comparison-artifact",
+            "supplemental-comparison",
+        ]
+    if command in {
+        "census-result-partial-v3",
+        "repeat-fixed-result-partial-v3",
+    }:
+        return [
+            command,
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--result-policy-artifact",
+            "result-policy",
+            "--run-index",
+            "1",
+            "--window-id",
+            "window-a",
+            "--staging-mode",
+            "noop",
+            *live_tail,
+        ]
+    if command in {"census-dual-cohort-v3", "repeat-fixed-dual-cohort-v3"}:
+        return [
+            command,
+            "--candidate-artifact",
+            "dual-candidate",
+            "--run-index",
+            "1",
+            "--window-id",
+            "window-a",
+            "--staging-mode",
+            "noop",
+            *live_tail,
+        ]
+    if command == "compare-stability-dual-cohort-v3":
+        return [
+            command,
+            *[
+                argument
+                for prefix in ("census", "fixed-repeat")
+                for index in range(1, 4)
+                for argument in (f"--{prefix}-artifact", f"{prefix}-{index}")
+            ],
+        ]
+    raise AssertionError(f"unsupported dual-cohort test command: {command}")
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "probe-result-partitions-v2",
+        "probe-supplemental-cohort-v1",
+        "freeze-result-partition-policy-v1",
+        "compare-supplemental-cohort-v1",
+        "freeze-dual-cohort-policy-v3",
+        "census-result-partial-v3",
+        "repeat-fixed-result-partial-v3",
+        "census-dual-cohort-v3",
+        "repeat-fixed-dual-cohort-v3",
+        "compare-stability-dual-cohort-v3",
+    ),
+)
+def test_parser_exposes_every_exact_dual_cohort_command(command: str) -> None:
+    args = census_cli.build_parser().parse_args(_dual_cohort_cli_argv(command))
+
+    assert args.command == command
+
+
+@pytest.mark.parametrize(
+    "alias",
+    (
+        "probe-result-partitions-v3",
+        "freeze-dual-cohort-policy",
+        "dual-cohort-census-v3",
+        "compare-stability-dual-cohort-v4",
+    ),
+)
+def test_parser_rejects_dual_cohort_aliases_and_future_versions(alias: str) -> None:
+    with pytest.raises(SystemExit):
+        census_cli.build_parser().parse_args([alias])
+
+
+@pytest.mark.parametrize(
+    ("command", "helper_name", "uses_live_dependencies", "uses_crawl_runtime"),
+    (
+        (
+            "probe-result-partitions-v2",
+            "_dual_cohort_probe_command",
+            True,
+            False,
+        ),
+        (
+            "probe-supplemental-cohort-v1",
+            "_dual_cohort_probe_command",
+            True,
+            False,
+        ),
+        (
+            "freeze-result-partition-policy-v1",
+            "_freeze_result_partition_policy_command",
+            False,
+            False,
+        ),
+        (
+            "compare-supplemental-cohort-v1",
+            "_compare_supplemental_cohort_command",
+            False,
+            False,
+        ),
+        (
+            "freeze-dual-cohort-policy-v3",
+            "_freeze_dual_cohort_policy_command",
+            False,
+            False,
+        ),
+        (
+            "census-result-partial-v3",
+            "_dual_cohort_phase_d_live_command",
+            True,
+            True,
+        ),
+        (
+            "repeat-fixed-result-partial-v3",
+            "_dual_cohort_phase_d_live_command",
+            True,
+            True,
+        ),
+        (
+            "census-dual-cohort-v3",
+            "_dual_cohort_phase_d_live_command",
+            True,
+            True,
+        ),
+        (
+            "repeat-fixed-dual-cohort-v3",
+            "_dual_cohort_phase_d_live_command",
+            True,
+            True,
+        ),
+        (
+            "compare-stability-dual-cohort-v3",
+            "_compare_dual_cohort_phase_d_command",
+            False,
+            False,
+        ),
+    ),
+)
+def test_main_dispatches_every_dual_cohort_command_without_fallthrough(
+    monkeypatch,
+    command: str,
+    helper_name: str,
+    uses_live_dependencies: bool,
+    uses_crawl_runtime: bool,
+) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def dispatched(args, **kwargs):
+        calls.append((args.command, kwargs))
+        return 73
+
+    monkeypatch.setattr(census_cli, helper_name, dispatched)
+
+    result = census_cli.main(_dual_cohort_cli_argv(command))
+
+    assert result == 73
+    assert len(calls) == 1
+    dispatched_command, kwargs = calls[0]
+    assert dispatched_command == command
+    assert ("session_factory" in kwargs) is uses_live_dependencies
+    assert ("runtime_factory" in kwargs) is uses_live_dependencies
+    assert ("crawl_runtime_factory" in kwargs) is uses_crawl_runtime
+
+
+@pytest.mark.parametrize("command", DUAL_COHORT_LIVE_COMMANDS)
+def test_dual_cohort_live_commands_reject_invalid_auth_before_dependencies(
+    tmp_path: Path,
+    capsys,
+    command: str,
+) -> None:
+    invalid_state = tmp_path / "invalid-session.json"
+    invalid_state.write_text('{"cookies": []}', encoding="utf-8")
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("invalid dual-cohort auth constructed a dependency")
+
+    result = census_cli.main(
+        _dual_cohort_cli_argv(command, auth_state=str(invalid_state)),
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+    )
+
+    error = json.loads(capsys.readouterr().err)
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert error == {
+        "error": "auth state must be a readable valid Playwright storage-state JSON file"
+    }
+    assert str(invalid_state) not in json.dumps(error)
+    assert dependency_calls == []
+
+
+@pytest.mark.parametrize("command", DUAL_COHORT_LIVE_COMMANDS)
+def test_dual_cohort_live_commands_require_exactly_two_baselines_before_dependencies(
+    command: str,
+) -> None:
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("invalid baseline count constructed a dependency")
+
+    result = census_cli.main(
+        _dual_cohort_cli_argv(command, baseline_count=1),
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_USAGE
+    assert dependency_calls == []
+
+
+def test_dual_cohort_offline_policy_chain_is_strict_and_uses_no_live_dependencies(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("offline dual-cohort command touched a live dependency")
+
+    result_probe = _export_dual_cohort_fixture(
+        tmp_path / "parents",
+        _dual_result_probe_payload(),
+    )
+    freeze_result = census_cli.main(
+        [
+            "freeze-result-partition-policy-v1",
+            "--result-probe-artifact",
+            str(result_probe),
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    result_policy_output = json.loads(capsys.readouterr().out)
+    result_policy_artifact = Path(result_policy_output["artifact"])
+
+    supplemental_artifacts = []
+    for run_index in (1, 2, 3):
+        probe = _dual_supplemental_probe(run_index)
+        supplemental_artifacts.append(
+            _export_dual_cohort_fixture(
+                tmp_path / "parents",
+                _dual_supplemental_probe_payload(probe),
+                run_id=probe.run_id,
+            )
+        )
+    compare_supplemental = census_cli.main(
+        [
+            "compare-supplemental-cohort-v1",
+            *[
+                argument
+                for artifact in supplemental_artifacts
+                for argument in (
+                    "--supplemental-probe-artifact",
+                    str(artifact),
+                )
+            ],
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    supplemental_output = json.loads(capsys.readouterr().out)
+    supplemental_comparison_artifact = Path(supplemental_output["artifact"])
+
+    monkeypatch.setattr(
+        census_cli,
+        "_phase_b_comparison_reference",
+        lambda _path: _phase_b_reference(),
+    )
+    freeze_candidate = census_cli.main(
+        [
+            "freeze-dual-cohort-policy-v3",
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--result-policy-artifact",
+            str(result_policy_artifact),
+            "--supplemental-comparison-artifact",
+            str(supplemental_comparison_artifact),
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    candidate_output = json.loads(capsys.readouterr().out)
+    candidate_artifact = Path(candidate_output["artifact"])
+    candidate_payload = json.loads(
+        (candidate_artifact / "dual-cohort-discovery-policy.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert freeze_result == census_cli.EXIT_OK
+    assert compare_supplemental == census_cli.EXIT_OK
+    assert freeze_candidate == census_cli.EXIT_OK
+    assert dependency_calls == []
+    assert census_cli.verify_live_research_run(result_policy_artifact).valid
+    assert census_cli.verify_live_research_run(
+        supplemental_comparison_artifact
+    ).valid
+    assert census_cli.verify_live_research_run(candidate_artifact).valid
+    assert candidate_payload["candidate"][
+        "result_partition_policy_artifact_hash"
+    ] == census_cli._manifest_hash(result_policy_artifact)
+    assert candidate_payload["candidate"][
+        "supplemental_comparison_artifact_hash"
+    ] == census_cli._manifest_hash(supplemental_comparison_artifact)
+
+
+def test_supplemental_comparison_requires_exactly_three_parents_before_dependencies(
+    tmp_path: Path,
+) -> None:
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("invalid parent count touched a dependency")
+
+    result = census_cli.main(
+        [
+            "compare-supplemental-cohort-v1",
+            "--supplemental-probe-artifact",
+            str(tmp_path / "first"),
+            "--supplemental-probe-artifact",
+            str(tmp_path / "second"),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_USAGE
+    assert dependency_calls == []
+
+
+def test_rejected_supplemental_comparison_cannot_freeze_candidate(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    result_probe = _export_dual_cohort_fixture(
+        tmp_path / "parents",
+        _dual_result_probe_payload(),
+    )
+    assert census_cli.main(
+        [
+            "freeze-result-partition-policy-v1",
+            "--result-probe-artifact",
+            str(result_probe),
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        provenance_provider=provenance,
+    ) == census_cli.EXIT_OK
+    result_policy_artifact = Path(json.loads(capsys.readouterr().out)["artifact"])
+    rejected_artifacts = []
+    for run_index in (1, 2, 3):
+        probe = _dual_supplemental_probe(run_index, accepted=False)
+        rejected_artifacts.append(
+            _export_dual_cohort_fixture(
+                tmp_path / "parents",
+                _dual_supplemental_probe_payload(probe),
+                run_id=probe.run_id,
+            )
+        )
+    assert census_cli.main(
+        [
+            "compare-supplemental-cohort-v1",
+            *[
+                argument
+                for artifact in rejected_artifacts
+                for argument in (
+                    "--supplemental-probe-artifact",
+                    str(artifact),
+                )
+            ],
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        provenance_provider=provenance,
+    ) == census_cli.EXIT_INCOMPLETE
+    comparison_artifact = Path(json.loads(capsys.readouterr().out)["artifact"])
+    monkeypatch.setattr(
+        census_cli,
+        "_phase_b_comparison_reference",
+        lambda _path: _phase_b_reference(),
+    )
+
+    result = census_cli.main(
+        [
+            "freeze-dual-cohort-policy-v3",
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--result-policy-artifact",
+            str(result_policy_artifact),
+            "--supplemental-comparison-artifact",
+            str(comparison_artifact),
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "candidate"),
+        ],
+        provenance_provider=provenance,
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert error == {"error": "supplemental comparison is valid but rejected"}
+    assert not (tmp_path / "candidate").exists()
+
+
+def test_partial_phase_d_artifact_cannot_enter_complete_cli_comparison(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    partial = _dual_partial_run()
+    partial_payload = census_cli.result_partial_phase_d_artifact_payload_v3(
+        run=partial,
+        scope=_dual_partial_scope(),
+        baseline=_dual_baseline_reference(),
+    )
+    partial_artifact = _export_dual_cohort_fixture(
+        tmp_path / "parents",
+        partial_payload,
+        run_id=partial.run_id,
+    )
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("offline comparison touched a live dependency")
+
+    result = census_cli.main(
+        [
+            "compare-stability-dual-cohort-v3",
+            "--census-artifact",
+            str(partial_artifact),
+            "--census-artifact",
+            str(tmp_path / "missing-census-2"),
+            "--census-artifact",
+            str(tmp_path / "missing-census-3"),
+            "--fixed-repeat-artifact",
+            str(tmp_path / "missing-fixed-1"),
+            "--fixed-repeat-artifact",
+            str(tmp_path / "missing-fixed-2"),
+            "--fixed-repeat-artifact",
+            str(tmp_path / "missing-fixed-3"),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+    )
+    error = json.loads(capsys.readouterr().err)
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert "complete dual-cohort run" in error["error"]
+    assert dependency_calls == []
+
+
+def test_complete_dual_cohort_live_command_rejects_partial_parent_before_dependencies(
+    tmp_path: Path,
+) -> None:
+    partial = _dual_partial_run()
+    partial_payload = census_cli.result_partial_phase_d_artifact_payload_v3(
+        run=partial,
+        scope=_dual_partial_scope(),
+        baseline=_dual_baseline_reference(),
+    )
+    partial_artifact = _export_dual_cohort_fixture(
+        tmp_path / "parents",
+        partial_payload,
+        run_id=partial.run_id,
+    )
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("partial parent constructed a live dependency")
+
+    result = census_cli.main(
+        [
+            "repeat-fixed-dual-cohort-v3",
+            "--candidate-artifact",
+            str(partial_artifact),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "fixed-window-a",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+    )
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert dependency_calls == []
+
+
+def test_complete_dual_cohort_comparison_cli_is_strict_and_offline(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    candidate, _, _ = _dual_complete_candidate()
+    censuses = (
+        _dual_complete_run(
+            experiment=census_cli.DUAL_COHORT_CENSUS_EXPERIMENT,
+            run_index=1,
+            captured_at="2026-07-14T00:00:00+00:00",
+            window_id="census-window-a",
+            uuid_int=961,
+        ),
+        _dual_complete_run(
+            experiment=census_cli.DUAL_COHORT_CENSUS_EXPERIMENT,
+            run_index=2,
+            captured_at="2026-07-14T06:00:00+00:00",
+            window_id="census-window-b",
+            uuid_int=962,
+        ),
+        _dual_complete_run(
+            experiment=census_cli.DUAL_COHORT_CENSUS_EXPERIMENT,
+            run_index=3,
+            captured_at="2026-07-14T06:10:00+00:00",
+            window_id="census-window-b",
+            uuid_int=963,
+        ),
+    )
+    fixed = tuple(
+        _dual_complete_run(
+            experiment=census_cli.DUAL_COHORT_FIXED_REPEAT_EXPERIMENT,
+            run_index=index,
+            captured_at=f"2026-07-14T07:0{index}:00+00:00",
+            window_id="fixed-window-a",
+            uuid_int=970 + index,
+        )
+        for index in (1, 2, 3)
+    )
+    census_artifacts = []
+    fixed_artifacts = []
+    for run in (*censuses, *fixed):
+        payload = census_cli.dual_cohort_phase_d_run_artifact_payload_v3(
+            run=run,
+            candidate=candidate,
+            baseline=_dual_baseline_reference(),
+        )
+        artifact = _export_dual_cohort_fixture(
+            tmp_path / "parents",
+            payload,
+            run_id=run.run_id,
+        )
+        target = (
+            census_artifacts
+            if run.experiment == census_cli.DUAL_COHORT_CENSUS_EXPERIMENT
+            else fixed_artifacts
+        )
+        target.append(artifact)
+    dependency_calls: list[str] = []
+
+    def forbidden(*_args, **_kwargs):
+        dependency_calls.append("called")
+        raise AssertionError("offline comparison touched a live dependency")
+
+    result = census_cli.main(
+        [
+            "compare-stability-dual-cohort-v3",
+            *[
+                argument
+                for prefix, artifacts in (
+                    ("census", census_artifacts),
+                    ("fixed-repeat", fixed_artifacts),
+                )
+                for artifact in artifacts
+                for argument in (f"--{prefix}-artifact", str(artifact))
+            ],
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=forbidden,
+        repository=forbidden,
+        runtime_factory=forbidden,
+        service_factory=forbidden,
+        observation_service_factory=forbidden,
+        crawl_runtime_factory=forbidden,
+        staging_sink_factory=forbidden,
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+
+    assert result == census_cli.EXIT_OK
+    assert output["accepted"] is True
+    assert output["stable_reference_count"] > 0
+    assert dependency_calls == []
+    assert census_cli.verify_live_research_run(artifact).valid
+
+
+def test_result_probe_and_partial_phase_d_bind_saved_session_and_no_write(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    endpoint_probe = _export_endpoint_probe_fixture(
+        tmp_path / "parents",
+        parent=_phase_b_reference(),
+        run_id="88888888-8888-8888-8888-888888888881",
+    )
+    probe_state = State()
+    probe_runtimes = DualCohortRuntimeFactory(result_runtime_count=1)
+    probe_runtime_bindings: list[dict] = []
+    technical_writing_partition_id = (
+        "2efc511e63bedcdec8da0689fe67d16c022abe932a973ecc3aa7c42f2dc9472c"
+    )
+
+    def probe_runtime_factory(**kwargs):
+        probe_runtime_bindings.append(dict(kwargs))
+        return probe_runtimes(headed=kwargs["headed"])
+
+    result_probe_exit = census_cli.main(
+        [
+            "probe-result-partitions-v2",
+            "--endpoint-probe-artifact",
+            str(endpoint_probe),
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--partition-id",
+            technical_writing_partition_id,
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            "88888888-8888-8888-8888-888888888882",
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(probe_state.log),
+        repository=FakeRepository(probe_state),
+        runtime_factory=probe_runtime_factory,
+        service_factory=lambda: OfferTodayResearchLiveService(
+            sleep=_phase_c_no_sleep,
+            clock=IncrementingClock(),
+        ),
+        observation_service_factory=lambda db: FakeObservationService(
+            db,
+            probe_state,
+        ),
+        provenance_provider=provenance,
+    )
+    probe_capture = capsys.readouterr()
+    assert result_probe_exit == census_cli.EXIT_OK, probe_capture.err
+    probe_output = json.loads(probe_capture.out)
+    result_probe_artifact = Path(probe_output["artifact"])
+    result_probe_payload = json.loads(
+        (result_probe_artifact / "result-partition-probe.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert probe_output["accepted"] is True
+    assert result_probe_payload["no_write"]["detail_attempts"] == 0
+    assert result_probe_payload["no_write"]["product_writes"] == 0
+    assert result_probe_payload["execution"]["conditions"][0]["condition"][
+        "partition_id"
+    ] == technical_writing_partition_id
+    assert probe_runtimes.created[0].requests[0][0]["jobFunctionCodes"] == [118018]
+    assert census_cli.verify_live_research_run(result_probe_artifact).valid
+
+    freeze_result_exit = census_cli.main(
+        [
+            "freeze-result-partition-policy-v1",
+            "--result-probe-artifact",
+            str(result_probe_artifact),
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        provenance_provider=provenance,
+    )
+    result_policy_output = json.loads(capsys.readouterr().out)
+    result_policy_artifact = Path(result_policy_output["artifact"])
+    assert freeze_result_exit == census_cli.EXIT_OK
+
+    monkeypatch.setattr(
+        census_cli,
+        "_phase_b_comparison_reference",
+        lambda _path: _phase_b_reference(),
+    )
+    partial_state = State()
+    partial_runtimes = DualCohortRuntimeFactory(result_runtime_count=3)
+    partial_runtime_bindings: list[dict] = []
+
+    def partial_runtime_factory(**kwargs):
+        partial_runtime_bindings.append(dict(kwargs))
+        return partial_runtimes(headed=kwargs["headed"])
+
+    partial_exit = census_cli.main(
+        [
+            "repeat-fixed-result-partial-v3",
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--result-policy-artifact",
+            str(result_policy_artifact),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "partial-window-a",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(partial_state.log),
+        repository=FakeRepository(partial_state),
+        runtime_factory=partial_runtime_factory,
+        service_factory=lambda: OfferTodayResearchLiveService(
+            sleep=_phase_c_no_sleep,
+            clock=IncrementingClock(),
+        ),
+        observation_service_factory=lambda db: FakeObservationService(
+            db,
+            partial_state,
+        ),
+        crawl_runtime_factory=lambda: (_ for _ in ()).throw(
+            AssertionError("noop partial run constructed a crawl runtime")
+        ),
+        provenance_provider=provenance,
+    )
+    partial_output = json.loads(capsys.readouterr().out)
+    partial_artifact = Path(partial_output["artifact"])
+    partial_payload = json.loads(
+        (partial_artifact / "dual-cohort-phase-d-run.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    artifact_text = _artifact_text(partial_artifact)
+    cookie_value = json.loads(auth_state.read_text(encoding="utf-8"))["cookies"][
+        0
+    ]["value"]
+    expected_sha = hashlib.sha256(auth_state.read_bytes()).hexdigest()
+
+    assert partial_exit == census_cli.EXIT_INCOMPLETE
+    assert partial_output["accepted"] is False
+    assert partial_output["downstream_eligible"] is False
+    assert partial_output["partial_research_complete"] is True
+    assert partial_payload["stable_reference_frozen"] is False
+    assert partial_payload["run"]["product"]["detail_attempts"] == 0
+    assert partial_payload["run"]["product"]["product_writes"] == 0
+    assert census_cli.verify_live_research_run(partial_artifact).valid
+    assert probe_runtime_bindings and partial_runtime_bindings
+    assert all(
+        binding["auth_state_path"] == str(auth_state.resolve())
+        for binding in (*probe_runtime_bindings, *partial_runtime_bindings)
+    )
+    manifest = json.loads(
+        (partial_artifact / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["provenance"]["runtime_context"][
+        "session_state_sha256"
+    ] == expected_sha
+    assert str(auth_state.resolve()) not in artifact_text
+    assert cookie_value not in artifact_text
+
+
+def test_supplemental_probe_binds_result_policy_baselines_and_no_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    policy_payload = census_cli.result_partition_policy_artifact_payload_v1(
+        _dual_result_policy()
+    )
+    policy_artifact = _export_dual_cohort_fixture(
+        tmp_path / "parents",
+        policy_payload,
+    )
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    state = State()
+    runtimes = DualCohortRuntimeFactory(result_runtime_count=0)
+    runtime_bindings: list[dict] = []
+
+    def runtime_factory(**kwargs):
+        runtime_bindings.append(dict(kwargs))
+        return runtimes(headed=kwargs["headed"])
+
+    result = census_cli.main(
+        [
+            "probe-supplemental-cohort-v1",
+            "--result-policy-artifact",
+            str(policy_artifact),
+            "--endpoint-contract-id",
+            "recommend-search-list-v1",
+            "--run-index",
+            "1",
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=runtime_factory,
+        service_factory=lambda: OfferTodayResearchLiveService(
+            sleep=_phase_c_no_sleep,
+            clock=IncrementingClock(),
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads(
+        (artifact / "supplemental-cohort-probe.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads(
+        (artifact / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert result == census_cli.EXIT_OK
+    assert output["accepted"] is True
+    assert payload["parent"]["manifest_hash"] == census_cli._manifest_hash(
+        policy_artifact
+    )
+    assert set(payload["baseline"]["artifact_hashes"]) == {
+        census_cli._manifest_hash(first),
+        census_cli._manifest_hash(second),
+    }
+    assert payload["no_write"]["detail_attempts"] == 0
+    assert payload["no_write"]["product_writes"] == 0
+    assert payload["no_write"]["product_data_unchanged"] is True
+    assert len(runtime_bindings) == 3
+    assert all(
+        binding == {
+            "auth_state_path": str(auth_state.resolve()),
+            "headed": False,
+        }
+        for binding in runtime_bindings
+    )
+    assert manifest["provenance"]["runtime_context"][
+        "session_state_sha256"
+    ] == hashlib.sha256(auth_state.read_bytes()).hexdigest()
+    assert census_cli.verify_live_research_run(artifact).valid
+
+
+def test_complete_dual_cohort_fixed_cli_exports_strict_no_write_artifact(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    candidate, result_policy, supplemental_payload = _dual_complete_candidate()
+    candidate_payload = census_cli.dual_cohort_candidate_artifact_payload_v3(
+        candidate=candidate,
+        result_policy=result_policy,
+        supplemental_comparison_payload=supplemental_payload,
+    )
+    candidate_artifact = _export_dual_cohort_fixture(
+        tmp_path / "parents",
+        candidate_payload,
+    )
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    state = State()
+    runtimes = DualCohortRuntimeFactory(result_runtime_count=3)
+    runtime_bindings: list[dict] = []
+
+    def runtime_factory(**kwargs):
+        runtime_bindings.append(dict(kwargs))
+        return runtimes(headed=kwargs["headed"])
+
+    result = census_cli.main(
+        [
+            "repeat-fixed-dual-cohort-v3",
+            "--candidate-artifact",
+            str(candidate_artifact),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "fixed-window-a",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=FakeRepository(state),
+        runtime_factory=runtime_factory,
+        service_factory=lambda: OfferTodayResearchLiveService(
+            sleep=_phase_c_no_sleep,
+            clock=IncrementingClock(),
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        crawl_runtime_factory=lambda: (_ for _ in ()).throw(
+            AssertionError("noop complete run constructed a crawl runtime")
+        ),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload = json.loads(
+        (artifact / "dual-cohort-phase-d-run.json").read_text(encoding="utf-8")
+    )
+    run = payload["run"]
+
+    assert result == census_cli.EXIT_OK
+    assert output["accepted"] is True
+    assert output["downstream_eligible"] is True
+    assert len(run["result_conditions"]) == 3
+    assert run["supplemental_condition"] is not None
+    assert run["product"]["detail_attempts"] == 0
+    assert run["product"]["product_writes"] == 0
+    assert run["product"]["jobs_unchanged"] is True
+    assert run["product"]["companies_unchanged"] is True
+    assert state.created_metadata.request_budget == {
+        "listing_logical": 2_000,
+        "listing_attempt_max": 6_000,
+        "detail": 0,
+        "product_writes": 0,
+    }
+    assert len(runtime_bindings) == 4
+    assert all(
+        binding == {
+            "auth_state_path": str(auth_state.resolve()),
+            "headed": False,
+        }
+        for binding in runtime_bindings
+    )
+    assert census_cli.verify_live_research_run(artifact).valid
+
+
+@pytest.mark.parametrize("failure_stage", ("end_snapshot", "finalization"))
+def test_dual_cohort_post_run_failures_preserve_sanitized_strict_prefix(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+    failure_stage: str,
+) -> None:
+    policy_payload = census_cli.result_partition_policy_artifact_payload_v1(
+        _dual_result_policy()
+    )
+    policy_artifact = _export_dual_cohort_fixture(
+        tmp_path / "parents",
+        policy_payload,
+    )
+    first = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_1)
+    second = baseline_artifact(tmp_path / "baselines", BASELINE_RUN_2)
+    auth_state = _saved_session_state(tmp_path / "auth")
+    monkeypatch.setattr(
+        census_cli,
+        "_phase_b_comparison_reference",
+        lambda _path: _phase_b_reference(),
+    )
+    state = State()
+    repository = FakeRepository(
+        state,
+        end_snapshot_error=(
+            RuntimeError("secret dual end snapshot detail")
+            if failure_stage == "end_snapshot"
+            else None
+        ),
+    )
+    if failure_stage == "finalization":
+        state.finish_errors.append(RuntimeError("secret dual finalization detail"))
+    runtimes = DualCohortRuntimeFactory(result_runtime_count=3)
+
+    def runtime_factory(**kwargs):
+        return runtimes(headed=kwargs["headed"])
+
+    result = census_cli.main(
+        [
+            "repeat-fixed-result-partial-v3",
+            "--phase-b-comparison-artifact",
+            "phase-b",
+            "--result-policy-artifact",
+            str(policy_artifact),
+            "--baseline-artifact",
+            str(first),
+            "--baseline-artifact",
+            str(second),
+            "--run-index",
+            "1",
+            "--window-id",
+            "partial-window-a",
+            "--staging-mode",
+            "noop",
+            "--confirm-live-research",
+            "--auth-state",
+            str(auth_state),
+            "--run-id",
+            RUN_ID,
+            "--repo-root",
+            str(Path.cwd()),
+            "--artifact-root",
+            str(tmp_path / "runs"),
+        ],
+        session_factory=lambda: FakeSession(state.log),
+        repository=repository,
+        runtime_factory=runtime_factory,
+        service_factory=lambda: OfferTodayResearchLiveService(
+            sleep=_phase_c_no_sleep,
+            clock=IncrementingClock(),
+        ),
+        observation_service_factory=lambda db: FakeObservationService(db, state),
+        provenance_provider=provenance,
+    )
+    output = json.loads(capsys.readouterr().out)
+    artifact = Path(output["artifact"])
+    payload_text = (artifact / "dual-cohort-phase-d-run.json").read_text(
+        encoding="utf-8"
+    )
+    payload = json.loads(payload_text)
+
+    assert result == census_cli.EXIT_EVIDENCE_FAILURE
+    assert output["accepted"] is False
+    assert output["failure_reason"] == (
+        "unexpected_dual_cohort_phase_d_error:RuntimeError"
+    )
+    assert payload["run"]["failure_reason"] == output["failure_reason"]
+    assert "secret dual end snapshot detail" not in payload_text
+    assert "secret dual finalization detail" not in payload_text
+    assert payload["run"]["product"]["end_snapshot_captured"] is (
+        failure_stage != "end_snapshot"
+    )
+    assert census_cli.verify_live_research_run(artifact).valid

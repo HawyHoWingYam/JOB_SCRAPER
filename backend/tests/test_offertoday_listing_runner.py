@@ -16,6 +16,8 @@ from app.sources.offertoday.constants import (
 )
 from app.sources.offertoday import listing_runner as runner_module
 from app.sources.offertoday.listing_runner import (
+    ENVELOPE_TERMINAL_POLICY_ID,
+    RESULT_TERMINAL_POLICY_ID,
     ListingRetryPolicy,
     ListingStopPolicy,
     OfferTodayIdentityPair,
@@ -307,6 +309,7 @@ async def _run(
     unique_job_cap: int | None = None,
     require_empty_confirmation: bool = True,
     request_policy: OfferTodayListingRequestPolicy | None = None,
+    terminal_policy: str = ENVELOPE_TERMINAL_POLICY_ID,
 ):
     observation_sink = MemoryObservationSink()
     staging_sink = MemoryStagingSink()
@@ -332,6 +335,7 @@ async def _run(
         staging_sink=staging_sink,
         session_mode="saved-session",
         request_policy=request_policy,
+        terminal_policy=terminal_policy,
     )
     return result, observation_sink, staging_sink, sleep
 
@@ -1912,6 +1916,106 @@ async def test_search_endpoint_contract_preserves_cursor_execution() -> None:
     assert result.stop_reason == "natural_exhaustion"
     assert observations.observations[0].cursor_evidence.contract_error is None
     assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_result_terminal_policy_stops_after_two_cursor_confirmations() -> None:
+    condition = OfferTodayListingCondition(
+        search_family="result_partition_probe_v2",
+        category_id=118000,
+        keyword="",
+        endpoint="search",
+        rcd_type=None,
+    )
+    transport = ScriptedTransport(
+        _cursor_response(
+            [_listing_row("result-1", "result-encrypted-1")],
+            supplemental_rows=[_listing_row("supp-1", "supp-encrypted-1")],
+            supple_page=0,
+        ),
+        _cursor_response(
+            [],
+            supplemental_rows=[_listing_row("supp-2", "supp-encrypted-2")],
+            supple_page=1,
+        ),
+        _cursor_response(
+            [],
+            supplemental_rows=[_listing_row("supp-3", "supp-encrypted-3")],
+            supple_page=2,
+        ),
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        conditions=[condition],
+        max_pages=10,
+        request_policy=_request_policy(
+            endpoint_contract_id="recommend-search-list-v1"
+        ),
+        terminal_policy=RESULT_TERMINAL_POLICY_ID,
+    )
+
+    assert result.is_complete is True
+    assert result.condition_outcomes[0].stop_reason == "result_cohort_exhaustion"
+    assert len(observations.observations) == 3
+    assert result.accepted_job_ids == ("result-1",)
+    assert [item["page"] for item in staging.staged_pages] == [1]
+    assert observations.observations[-1].cursor_evidence.terminal_signal is False
+
+
+@pytest.mark.asyncio
+async def test_envelope_terminal_default_does_not_claim_result_exhaustion() -> None:
+    condition = OfferTodayListingCondition(
+        search_family="legacy-envelope",
+        category_id=118000,
+        keyword="",
+        endpoint="search",
+        rcd_type=None,
+    )
+    transport = ScriptedTransport(
+        _cursor_response(
+            [_listing_row("result-1", "result-encrypted-1")],
+            supple_page=0,
+        ),
+        _cursor_response(
+            [],
+            supplemental_rows=[_listing_row("supp-2", "supp-encrypted-2")],
+            supple_page=1,
+        ),
+        _cursor_response(
+            [],
+            supplemental_rows=[_listing_row("supp-3", "supp-encrypted-3")],
+            supple_page=2,
+        ),
+    )
+
+    result, _observations, staging, _sleep = await _run(
+        transport,
+        conditions=[condition],
+        max_pages=3,
+        request_policy=_request_policy(
+            endpoint_contract_id="recommend-search-list-v1"
+        ),
+    )
+
+    assert result.is_complete is False
+    assert result.stop_reason == "page_cap"
+    assert staging.staged_pages == []
+
+
+@pytest.mark.asyncio
+async def test_result_terminal_policy_requires_response_cursor_mode() -> None:
+    transport = ScriptedTransport(
+        _listing_response([], has_more=False),
+    )
+
+    with pytest.raises(ValueError, match="requires response-cursor"):
+        await _run(
+            transport,
+            terminal_policy=RESULT_TERMINAL_POLICY_ID,
+        )
+
+    assert transport.requests == []
 
 
 @pytest.mark.asyncio

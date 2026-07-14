@@ -21,6 +21,10 @@ from app.sources.offertoday.research.calibration import (
     build_pilot_conditions,
 )
 from app.sources.offertoday.research.live_contracts import CensusCandidate
+from app.sources.offertoday.research.dual_cohort_stage_gate import (
+    DUAL_COHORT_EXPERIMENTS,
+    verify_dual_cohort_artifact,
+)
 from app.sources.offertoday.research.pagination_stage_gate import (
     verify_pagination_artifact,
 )
@@ -2729,6 +2733,14 @@ def verify_live_research_run(artifact_dir: Path) -> LiveRunVerification:
         )
     if experiment in PHASE_D_EXPERIMENTS:
         result = verify_phase_d_artifact(artifact_dir)
+        return LiveRunVerification(
+            valid=result.valid,
+            issues=result.issues,
+            experiment=result.experiment,
+            run_id=result.run_id,
+        )
+    if experiment in DUAL_COHORT_EXPERIMENTS:
+        result = verify_dual_cohort_artifact(artifact_dir)
         return LiveRunVerification(
             valid=result.valid,
             issues=result.issues,

@@ -40,6 +40,7 @@ _PRIVATE_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 _FORBIDDEN_NORMALIZED_KEYS = {
+    "authstatepath",
     "authorization",
     "cdpendpoint",
     "cookie",
@@ -54,6 +55,7 @@ _FORBIDDEN_NORMALIZED_KEYS = {
     "suppleamount",
     "supplepage",
     "suppletype",
+    "storagestatepath",
 }
 
 

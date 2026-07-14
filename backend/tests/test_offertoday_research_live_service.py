@@ -45,6 +45,10 @@ from app.sources.offertoday.research.live_contracts import (
     DetailSmokeTarget,
     DiscoveryPolicyCandidateV2,
 )
+from app.sources.offertoday.research.dual_cohort import (
+    ResultPartitionProbePlanV2,
+    SupplementalCohortProbePlanV1,
+)
 from app.sources.offertoday.research.partition_research import (
     OFFERTODAY_PARTITION_CATALOG,
     build_endpoint_probe_plan,
@@ -58,6 +62,7 @@ from app.sources.offertoday.response_policy import (
     OfferTodayResponseClassification,
     OfferTodayResponseKind,
 )
+from test_offertoday_dual_cohort import _complete_candidate, _partial_scope
 
 
 def listing_result(
@@ -1592,6 +1597,97 @@ class PhaseCRuntimeFactory:
         return runtime
 
 
+class DualCohortRuntime(PhaseCRuntime):
+    async def fetch_listing_page(self, payload, *, listing_url=None):
+        assert isinstance(listing_url, str)
+        self.requests.append((deepcopy(payload), listing_url))
+        category_id = payload["jobFunctionCodes"][0]
+        page = payload["page"]
+        result_mode = self.runtime_index <= self.factory.result_runtime_count
+        if result_mode:
+            result_rows = (
+                [
+                    {
+                        "jobId": f"result-{category_id}",
+                        "encryptJobId": f"result-enc-{category_id}",
+                        "jobName": "Result Engineer",
+                        "companyName": "Example",
+                    }
+                ]
+                if page == 1
+                else []
+            )
+            supplemental_rows = (
+                []
+                if page == 1
+                else [
+                    {
+                        "jobId": f"supp-{category_id}-{page}",
+                        "encryptJobId": f"supp-enc-{category_id}-{page}",
+                        "jobName": "Supplemental Engineer",
+                        "companyName": "Example",
+                    }
+                ]
+            )
+            has_more = True
+        else:
+            result_rows = (
+                [
+                    {
+                        "jobId": f"seed-result-{category_id}",
+                        "encryptJobId": f"seed-result-enc-{category_id}",
+                        "jobName": "Seed Result",
+                        "companyName": "Example",
+                    }
+                ]
+                if page == 1
+                else []
+            )
+            supplemental_rows = (
+                [
+                    {
+                        "jobId": f"global-supp-{category_id}",
+                        "encryptJobId": f"global-supp-enc-{category_id}",
+                        "jobName": "Global Supplemental",
+                        "companyName": "Example",
+                    }
+                ]
+                if page == 1
+                else []
+            )
+            has_more = False
+        data = {
+            "pageSize": 10,
+            "hasMore": has_more,
+            "total": 999_999,
+            "resultList": result_rows,
+            "sessionId": payload.get("sessionId")
+            or f"dual-session-{self.runtime_index}",
+            "supplePage": page,
+            "suppleAmount": len(supplemental_rows),
+            "suppleType": 1 if supplemental_rows else 0,
+            "suppleRcdList": supplemental_rows,
+        }
+        return OfferTodayListingTransportResult(
+            payload={"code": 0, "data": data},
+            browser_context_hash=self.browser_context_hash,
+            http_status=200,
+            response_url=listing_url,
+        )
+
+
+class DualCohortRuntimeFactory(PhaseCRuntimeFactory):
+    def __init__(self, *, result_runtime_count: int) -> None:
+        super().__init__()
+        self.result_runtime_count = result_runtime_count
+
+    def __call__(self, *, headed: bool):
+        assert headed is False
+        runtime = DualCohortRuntime(self, len(self.created) + 1)
+        self.created.append(runtime)
+        return runtime
+
+
 async def _phase_c_no_sleep(_seconds: float) -> None:
     return None
 
@@ -1840,3 +1936,109 @@ async def test_phase_d_rejects_unknown_staging_sink_before_runtime() -> None:
         )
 
     assert runtime_factory.created == []
+
+
+@pytest.mark.asyncio
+async def test_result_partition_probe_v2_uses_result_terminal_policy() -> None:
+    runtime_factory = DualCohortRuntimeFactory(result_runtime_count=1)
+    plan = ResultPartitionProbePlanV2(
+        endpoint_contract_id="recommend-search-list-v1",
+        partition_ids=(top_level_partition(118000).partition_id,),
+    )
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_result_partition_probe_v2(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        plan=plan,
+    )
+
+    assert execution.failure_reason is None
+    assert len(execution.results) == 1
+    assert execution.results[0].condition_outcomes[0].stop_reason == (
+        "result_cohort_exhaustion"
+    )
+    assert [request[0]["page"] for request in runtime_factory.created[0].requests] == [
+        1,
+        2,
+        3,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_supplemental_probe_v1_uses_three_bounded_envelope_chains() -> None:
+    runtime_factory = DualCohortRuntimeFactory(result_runtime_count=0)
+    plan = SupplementalCohortProbePlanV1(
+        endpoint_contract_id="recommend-search-list-v1"
+    )
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_supplemental_cohort_probe_v1(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        plan=plan,
+    )
+
+    assert execution.failure_reason is None
+    assert len(execution.results) == 3
+    assert len(runtime_factory.created) == len(runtime_factory.exited) == 3
+    assert all(
+        result.condition_outcomes[0].stop_reason == "natural_exhaustion"
+        for result in execution.results
+    )
+    assert [len(runtime.requests) for runtime in runtime_factory.created] == [2, 2, 2]
+
+
+@pytest.mark.asyncio
+async def test_result_partial_fixed_v3_remains_result_only() -> None:
+    runtime_factory = DualCohortRuntimeFactory(result_runtime_count=3)
+    staging_sink = ResearchNoopListingStagingSink()
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_result_partial_fixed_repeat_v3(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        scope=_partial_scope(),
+        staging_sink=staging_sink,
+    )
+
+    assert execution.failure_reason is None
+    assert len(execution.results) == 3
+    assert len(runtime_factory.created) == 3
+    assert staging_sink.stage_calls == 3
+    assert all(
+        result.condition_outcomes[0].stop_reason == "result_cohort_exhaustion"
+        for result in execution.results
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_dual_cohort_fixed_v3_runs_global_supplement_separately() -> None:
+    runtime_factory = DualCohortRuntimeFactory(result_runtime_count=3)
+    staging_sink = ResearchNoopListingStagingSink()
+    candidate, _, _ = _complete_candidate()
+
+    execution = await OfferTodayResearchLiveService(
+        sleep=_phase_c_no_sleep,
+        clock=IncrementingClock(),
+    ).run_dual_cohort_fixed_repeat_v3(
+        runtime_factory=runtime_factory,
+        observation_service=FakeObservationService(),
+        candidate=candidate,
+        staging_sink=staging_sink,
+    )
+
+    assert execution.failure_reason is None
+    assert len(execution.result_results) == 3
+    assert execution.supplemental_result is not None
+    assert execution.supplemental_result.condition_outcomes[0].stop_reason == (
+        "natural_exhaustion"
+    )
+    assert len(runtime_factory.created) == len(runtime_factory.exited) == 4
+    assert staging_sink.stage_calls == 3

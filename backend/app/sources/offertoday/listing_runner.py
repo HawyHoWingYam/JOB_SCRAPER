@@ -52,6 +52,13 @@ from app.sources.offertoday.response_policy import (
 
 
 _MAX_BROWSER_CONTEXT_RESTARTS_PER_CONDITION = 1
+ENVELOPE_TERMINAL_POLICY_ID = "cursor-terminal-empty-confirmation-v1"
+RESULT_TERMINAL_POLICY_ID = "result-transition-confirmation-v1"
+RESULT_TERMINAL_CONFIRMATION_PAGE_COUNT = 2
+ListingTerminalPolicy = Literal[
+    "cursor-terminal-empty-confirmation-v1",
+    "result-transition-confirmation-v1",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -583,7 +590,17 @@ class OfferTodayListingRunner:
         staging_sink: ListingStagingSink,
         session_mode: str,
         request_policy: OfferTodayListingRequestPolicy | None = None,
+        terminal_policy: ListingTerminalPolicy = ENVELOPE_TERMINAL_POLICY_ID,
     ) -> ListingRunResult:
+        if terminal_policy not in {
+            ENVELOPE_TERMINAL_POLICY_ID,
+            RESULT_TERMINAL_POLICY_ID,
+        }:
+            raise ValueError("unsupported listing terminal policy")
+        if terminal_policy == RESULT_TERMINAL_POLICY_ID and (
+            request_policy is None or not request_policy.requires_cursor
+        ):
+            raise ValueError("result terminal policy requires response-cursor mode")
         observations: list[ListingPageObservation] = []
         outcomes: list[ListingConditionOutcome] = []
         gaps: list[ListingGap] = []
@@ -632,6 +649,7 @@ class OfferTodayListingRunner:
                 )
             condition_restart_count = 0
             logical_pages_started = 0
+            result_empty_confirmation_count = 0
 
             while condition_stop_reason is None:
                 if active_request_policy is not None:
@@ -807,6 +825,7 @@ class OfferTodayListingRunner:
                             initial_session_id = None
                             effective_page_size = None
                             awaiting_empty_confirmation = False
+                            result_empty_confirmation_count = 0
                             restart_condition = True
                             break
                         gaps.append(
@@ -1321,6 +1340,31 @@ class OfferTodayListingRunner:
                     terminal_signal = terminal_contract_verified and (
                         not has_any_rows or has_more is False
                     )
+                    result_cohort_exhaustion = False
+                    if terminal_policy == RESULT_TERMINAL_POLICY_ID:
+                        if raw_rows:
+                            result_empty_confirmation_count = 0
+                        else:
+                            cursor_continues = next_cursor is not None and (
+                                (
+                                    cursor is None
+                                    and page == 1
+                                )
+                                or (
+                                    cursor is not None
+                                    and next_cursor.session_id == cursor.session_id
+                                    and next_cursor.cursor_hash != cursor.cursor_hash
+                                )
+                            )
+                            result_empty_confirmation_count = (
+                                result_empty_confirmation_count + 1
+                                if cursor_continues
+                                else 0
+                            )
+                        result_cohort_exhaustion = (
+                            result_empty_confirmation_count
+                            >= RESULT_TERMINAL_CONFIRMATION_PAGE_COUNT
+                        )
                     natural_exhaustion = (
                         awaiting_empty_confirmation and not has_any_rows
                     ) or (
@@ -1347,6 +1391,10 @@ class OfferTodayListingRunner:
                     ):
                         attempt_stop_reason = "target_cap"
                         condition_stop_reason = "target_cap"
+                    elif result_cohort_exhaustion:
+                        attempt_stop_reason = "result_cohort_exhaustion"
+                        condition_stop_reason = "result_cohort_exhaustion"
+                        condition_is_complete = True
                     elif natural_exhaustion:
                         attempt_stop_reason = "natural_exhaustion"
                         condition_stop_reason = "natural_exhaustion"

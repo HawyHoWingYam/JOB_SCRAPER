@@ -24,6 +24,8 @@ from app.sources.offertoday.detail_identity import (
     OfferTodayDetailIdentity,
 )
 from app.sources.offertoday.listing_runner import (
+    ENVELOPE_TERMINAL_POLICY_ID,
+    RESULT_TERMINAL_POLICY_ID,
     ListingRetryPolicy,
     ListingRunResult,
     ListingStopPolicy,
@@ -42,6 +44,24 @@ from app.sources.offertoday.research.live_contracts import (
     DetailSmokeTarget,
     DiscoveryPolicyCandidateV2,
     LiveSmokeExecution,
+)
+from app.sources.offertoday.research.dual_cohort import (
+    DUAL_COHORT_CENSUS_EXPERIMENT,
+    DUAL_COHORT_FIXED_REPEAT_CATEGORY_IDS,
+    DUAL_COHORT_FIXED_REPEAT_EXPERIMENT,
+    DUAL_COHORT_MAX_ATTEMPTS_PER_PAGE,
+    DUAL_COHORT_PHASE_D_MAX_PAGES_PER_CONDITION,
+    DUAL_COHORT_PHASE_D_PAGE_DELAY_RANGE_SECONDS,
+    DUAL_COHORT_PHASE_D_RETRY_DELAYS_SECONDS,
+    DUAL_COHORT_PHASE_D_SESSION_MODE,
+    RESULT_PARTIAL_CENSUS_EXPERIMENT,
+    RESULT_PARTIAL_FIXED_REPEAT_EXPERIMENT,
+    RESULT_PARTITION_PROBE_EXPERIMENT,
+    SUPPLEMENTAL_COHORT_PROBE_EXPERIMENT,
+    DualCohortDiscoveryPolicyCandidateV3,
+    ResultOnlyDiscoveryScopeV3,
+    ResultPartitionProbePlanV2,
+    SupplementalCohortProbePlanV1,
 )
 from app.sources.offertoday.research.phase_d import (
     PHASE_D_CENSUS_EXPERIMENT,
@@ -192,6 +212,14 @@ class PhaseDListingExecution:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class DualCohortPhaseDListingExecution:
+    experiment: str
+    result_results: tuple[ListingRunResult, ...]
+    supplemental_result: ListingRunResult | None
+    failure_reason: str | None
+
+
 class OfferTodayResearchLiveService:
     def __init__(
         self,
@@ -251,6 +279,142 @@ class OfferTodayResearchLiveService:
             staging_sink=staging_sink,
         )
 
+    async def run_result_partition_probe_v2(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        plan: ResultPartitionProbePlanV2,
+        staging_sink: Any | None = None,
+    ) -> PhaseDListingExecution:
+        active_sink = (
+            ResearchNoopListingStagingSink()
+            if staging_sink is None
+            else staging_sink
+        )
+        if not isinstance(active_sink, ResearchNoopListingStagingSink):
+            raise ValueError("result partition probes require no-op staging")
+        return await self._run_versioned_condition_sequence(
+            experiment=RESULT_PARTITION_PROBE_EXPERIMENT,
+            partition_ids=plan.partition_ids,
+            endpoint_contract_id=plan.endpoint_contract_id,
+            max_pages_per_condition=plan.max_pages_per_condition,
+            max_attempts_per_page=plan.max_attempts_per_page,
+            retry_delays_seconds=PHASE_C_RETRY_DELAYS_SECONDS,
+            page_delay_range_seconds=PHASE_C_PAGE_DELAY_RANGE_SECONDS,
+            session_mode=PHASE_C_SESSION_MODE,
+            terminal_policy=RESULT_TERMINAL_POLICY_ID,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            staging_sink=active_sink,
+            unexpected_failure_prefix="unexpected_result_partition_probe_error",
+        )
+
+    async def run_supplemental_cohort_probe_v1(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        plan: SupplementalCohortProbePlanV1,
+        staging_sink: Any | None = None,
+    ) -> PhaseDListingExecution:
+        active_sink = (
+            ResearchNoopListingStagingSink()
+            if staging_sink is None
+            else staging_sink
+        )
+        if not isinstance(active_sink, ResearchNoopListingStagingSink):
+            raise ValueError("supplemental cohort probes require no-op staging")
+        return await self._run_versioned_condition_sequence(
+            experiment=SUPPLEMENTAL_COHORT_PROBE_EXPERIMENT,
+            partition_ids=plan.seed_partition_ids,
+            endpoint_contract_id=plan.endpoint_contract_id,
+            max_pages_per_condition=plan.max_pages_per_seed,
+            max_attempts_per_page=plan.max_attempts_per_page,
+            retry_delays_seconds=PHASE_C_RETRY_DELAYS_SECONDS,
+            page_delay_range_seconds=PHASE_C_PAGE_DELAY_RANGE_SECONDS,
+            session_mode=PHASE_C_SESSION_MODE,
+            terminal_policy=ENVELOPE_TERMINAL_POLICY_ID,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            staging_sink=active_sink,
+            unexpected_failure_prefix="unexpected_supplemental_probe_error",
+        )
+
+    async def run_result_partial_census_v3(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        scope: ResultOnlyDiscoveryScopeV3,
+        staging_sink: Any,
+    ) -> PhaseDListingExecution:
+        return await self._run_result_partial_v3(
+            experiment=RESULT_PARTIAL_CENSUS_EXPERIMENT,
+            partition_ids=scope.phase_d_partition_ids,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            scope=scope,
+            staging_sink=staging_sink,
+        )
+
+    async def run_result_partial_fixed_repeat_v3(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        scope: ResultOnlyDiscoveryScopeV3,
+        staging_sink: Any,
+    ) -> PhaseDListingExecution:
+        return await self._run_result_partial_v3(
+            experiment=RESULT_PARTIAL_FIXED_REPEAT_EXPERIMENT,
+            partition_ids=tuple(
+                top_level_partition(category_id).partition_id
+                for category_id in DUAL_COHORT_FIXED_REPEAT_CATEGORY_IDS
+            ),
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            scope=scope,
+            staging_sink=staging_sink,
+        )
+
+    async def run_dual_cohort_census_v3(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        candidate: DualCohortDiscoveryPolicyCandidateV3,
+        staging_sink: Any,
+    ) -> DualCohortPhaseDListingExecution:
+        return await self._run_complete_dual_cohort_v3(
+            experiment=DUAL_COHORT_CENSUS_EXPERIMENT,
+            partition_ids=candidate.phase_d_partition_ids,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            candidate=candidate,
+            staging_sink=staging_sink,
+        )
+
+    async def run_dual_cohort_fixed_repeat_v3(
+        self,
+        *,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        candidate: DualCohortDiscoveryPolicyCandidateV3,
+        staging_sink: Any,
+    ) -> DualCohortPhaseDListingExecution:
+        return await self._run_complete_dual_cohort_v3(
+            experiment=DUAL_COHORT_FIXED_REPEAT_EXPERIMENT,
+            partition_ids=tuple(
+                top_level_partition(category_id).partition_id
+                for category_id in DUAL_COHORT_FIXED_REPEAT_CATEGORY_IDS
+            ),
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            candidate=candidate,
+            staging_sink=staging_sink,
+        )
+
     async def run_census_v2(
         self,
         *,
@@ -301,12 +465,149 @@ class OfferTodayResearchLiveService:
         candidate: DiscoveryPolicyCandidateV2,
         staging_sink: Any,
     ) -> PhaseDListingExecution:
+        return await self._run_versioned_condition_sequence(
+            experiment=experiment,
+            partition_ids=partition_ids,
+            endpoint_contract_id=candidate.endpoint_contract_id,
+            max_pages_per_condition=candidate.max_pages_per_condition,
+            max_attempts_per_page=candidate.max_attempts_per_page,
+            retry_delays_seconds=candidate.retry_delays_seconds,
+            page_delay_range_seconds=candidate.page_delay_range_seconds,
+            session_mode=candidate.session_mode,
+            terminal_policy=ENVELOPE_TERMINAL_POLICY_ID,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            staging_sink=staging_sink,
+            unexpected_failure_prefix="unexpected_phase_d_census_error",
+            require_empty_confirmation=candidate.require_empty_confirmation,
+        )
+
+    async def _run_result_partial_v3(
+        self,
+        *,
+        experiment: str,
+        partition_ids: Sequence[str],
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        scope: ResultOnlyDiscoveryScopeV3,
+        staging_sink: Any,
+    ) -> PhaseDListingExecution:
+        return await self._run_versioned_condition_sequence(
+            experiment=experiment,
+            partition_ids=partition_ids,
+            endpoint_contract_id=scope.result_policy.endpoint_contract_id,
+            max_pages_per_condition=(
+                DUAL_COHORT_PHASE_D_MAX_PAGES_PER_CONDITION
+            ),
+            max_attempts_per_page=DUAL_COHORT_MAX_ATTEMPTS_PER_PAGE,
+            retry_delays_seconds=DUAL_COHORT_PHASE_D_RETRY_DELAYS_SECONDS,
+            page_delay_range_seconds=(
+                DUAL_COHORT_PHASE_D_PAGE_DELAY_RANGE_SECONDS
+            ),
+            session_mode=DUAL_COHORT_PHASE_D_SESSION_MODE,
+            terminal_policy=RESULT_TERMINAL_POLICY_ID,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            staging_sink=staging_sink,
+            unexpected_failure_prefix="unexpected_result_partial_phase_d_error",
+        )
+
+    async def _run_complete_dual_cohort_v3(
+        self,
+        *,
+        experiment: str,
+        partition_ids: Sequence[str],
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        candidate: DualCohortDiscoveryPolicyCandidateV3,
+        staging_sink: Any,
+    ) -> DualCohortPhaseDListingExecution:
+        result_execution = await self._run_versioned_condition_sequence(
+            experiment=experiment,
+            partition_ids=partition_ids,
+            endpoint_contract_id=candidate.endpoint_contract_id,
+            max_pages_per_condition=(
+                DUAL_COHORT_PHASE_D_MAX_PAGES_PER_CONDITION
+            ),
+            max_attempts_per_page=DUAL_COHORT_MAX_ATTEMPTS_PER_PAGE,
+            retry_delays_seconds=DUAL_COHORT_PHASE_D_RETRY_DELAYS_SECONDS,
+            page_delay_range_seconds=(
+                DUAL_COHORT_PHASE_D_PAGE_DELAY_RANGE_SECONDS
+            ),
+            session_mode=DUAL_COHORT_PHASE_D_SESSION_MODE,
+            terminal_policy=RESULT_TERMINAL_POLICY_ID,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            staging_sink=staging_sink,
+            unexpected_failure_prefix="unexpected_dual_cohort_result_error",
+        )
+        if result_execution.failure_reason is not None:
+            return DualCohortPhaseDListingExecution(
+                experiment=experiment,
+                result_results=result_execution.results,
+                supplemental_result=None,
+                failure_reason=result_execution.failure_reason,
+            )
+
+        supplemental_execution = await self._run_versioned_condition_sequence(
+            experiment=experiment,
+            partition_ids=(candidate.supplemental_canonical_seed_partition_id,),
+            endpoint_contract_id=candidate.endpoint_contract_id,
+            max_pages_per_condition=(
+                DUAL_COHORT_PHASE_D_MAX_PAGES_PER_CONDITION
+            ),
+            max_attempts_per_page=DUAL_COHORT_MAX_ATTEMPTS_PER_PAGE,
+            retry_delays_seconds=DUAL_COHORT_PHASE_D_RETRY_DELAYS_SECONDS,
+            page_delay_range_seconds=(
+                DUAL_COHORT_PHASE_D_PAGE_DELAY_RANGE_SECONDS
+            ),
+            session_mode=DUAL_COHORT_PHASE_D_SESSION_MODE,
+            terminal_policy=ENVELOPE_TERMINAL_POLICY_ID,
+            runtime_factory=runtime_factory,
+            observation_service=observation_service,
+            staging_sink=ResearchNoopListingStagingSink(),
+            unexpected_failure_prefix=(
+                "unexpected_dual_cohort_supplemental_error"
+            ),
+        )
+        return DualCohortPhaseDListingExecution(
+            experiment=experiment,
+            result_results=result_execution.results,
+            supplemental_result=(
+                supplemental_execution.results[0]
+                if supplemental_execution.results
+                else None
+            ),
+            failure_reason=supplemental_execution.failure_reason,
+        )
+
+    async def _run_versioned_condition_sequence(
+        self,
+        *,
+        experiment: str,
+        partition_ids: Sequence[str],
+        endpoint_contract_id: str,
+        max_pages_per_condition: int,
+        max_attempts_per_page: int,
+        retry_delays_seconds: Sequence[float],
+        page_delay_range_seconds: tuple[float, float],
+        session_mode: str,
+        terminal_policy: str,
+        runtime_factory,
+        observation_service: OfferTodayResearchObservationService,
+        staging_sink: Any,
+        unexpected_failure_prefix: str,
+        require_empty_confirmation: bool = True,
+    ) -> PhaseDListingExecution:
         if not isinstance(
             staging_sink,
             (ResearchNoopListingStagingSink, OfferTodayReconciledListingStagingSink),
         ):
             raise ValueError("Phase D requires a no-op or reconciled staging sink")
-        policy = request_policy_for_contract(candidate.endpoint_contract_id)
+        policy = request_policy_for_contract(endpoint_contract_id)
+        contract = policy.endpoint_contract
+        if contract is None:  # pragma: no cover - request policy invariant
+            raise AssertionError("versioned research requires an endpoint contract")
         results: list[ListingRunResult] = []
         failure_reason = None
         for partition_id in partition_ids:
@@ -315,8 +616,8 @@ class OfferTodayResearchLiveService:
                 search_family=experiment,
                 category_id=partition.category_code,
                 keyword="",
-                endpoint=candidate.endpoint,
-                rcd_type=candidate.rcd_type,
+                endpoint=contract.endpoint,
+                rcd_type=None,
             )
             try:
                 async with _ManagedListingTransport(
@@ -330,33 +631,24 @@ class OfferTodayResearchLiveService:
                     ).run(
                         conditions=(condition,),
                         stop_policy=ListingStopPolicy(
-                            max_pages_per_condition=(
-                                candidate.max_pages_per_condition
-                            ),
+                            max_pages_per_condition=max_pages_per_condition,
                             unique_job_cap=None,
-                            require_empty_confirmation=(
-                                candidate.require_empty_confirmation
-                            ),
+                            require_empty_confirmation=require_empty_confirmation,
                         ),
                         retry_policy=ListingRetryPolicy(
-                            max_attempts_per_page=(
-                                candidate.max_attempts_per_page
-                            ),
-                            retry_delays_seconds=candidate.retry_delays_seconds,
+                            max_attempts_per_page=max_attempts_per_page,
+                            retry_delays_seconds=tuple(retry_delays_seconds),
                             page_delay_seconds=0.0,
-                            page_delay_range_seconds=(
-                                candidate.page_delay_range_seconds
-                            ),
+                            page_delay_range_seconds=page_delay_range_seconds,
                         ),
                         observation_sink=observation_service,
                         staging_sink=staging_sink,
-                        session_mode=candidate.session_mode,
+                        session_mode=session_mode,
                         request_policy=policy,
+                        terminal_policy=terminal_policy,
                     )
             except Exception as exc:
-                failure_reason = (
-                    f"unexpected_phase_d_census_error:{type(exc).__name__}"
-                )
+                failure_reason = f"{unexpected_failure_prefix}:{type(exc).__name__}"
                 break
             results.append(result)
             if not result.is_complete:
