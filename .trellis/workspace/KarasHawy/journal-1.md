@@ -139,3 +139,37 @@ Corrected OfferToday Crawl Tasks partial metrics, added resumable IP-block manua
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Stabilize crawl tasks and OfferToday detail scope
+
+**Date**: 2026-07-15
+**Task**: Stabilize crawl tasks and OfferToday detail scope
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented stable crawl-task ordering, listing-bound OfferToday detail scope, resume-safe distinct progress projection, truthful UI counters, regression coverage, and documented the contracts.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `180271c7` | (see git log) |
+| `8f6e0347` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
