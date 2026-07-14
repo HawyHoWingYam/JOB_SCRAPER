@@ -1,9 +1,9 @@
 {
-  "id": "offertoday-completeness-stability",
-  "name": "offertoday-completeness-stability",
-  "title": "OfferToday completeness and stability implementation",
-  "description": "",
-  "status": "planning",
+  "id": "offertoday-phase-d-cursor-census",
+  "name": "offertoday-phase-d-cursor-census",
+  "title": "OfferToday Phase D cursor-correct census",
+  "description": "Task 11 deterministic v2 census/fixed-repeat infrastructure, strict replay, staging guards, and gated live evidence",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -18,12 +18,8 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "07-13-offertoday-phase-ab-cursor-bakeoff",
-    "07-13-phase-c-research-infrastructure",
-    "07-13-offertoday-phase-d-cursor-census"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "07-13-offertoday-completeness-stability",
   "relatedFiles": [],
   "notes": "",
   "meta": {}
