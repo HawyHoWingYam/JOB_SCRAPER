@@ -19,7 +19,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
-| [OfferToday Research Artifacts](./offertoday-research-artifacts.md) | Artifact parent, verification, replay, and exit-code contracts | Active |
+| [OfferToday Production Crawl](./offertoday-production-crawl.md) | Cursor listing, partial caps, incremental targeting, and hard-stop contracts | Active |
+| [OfferToday Research Artifacts](./offertoday-research-artifacts.md) | Historical artifact parent, verification, replay, and exit-code contracts | Preserved |
 
 ---
 

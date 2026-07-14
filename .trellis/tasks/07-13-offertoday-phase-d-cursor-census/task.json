@@ -1,8 +1,8 @@
 {
   "id": "offertoday-phase-d-cursor-census",
   "name": "offertoday-phase-d-cursor-census",
-  "title": "OfferToday Phase D cursor-correct census",
-  "description": "Task 11 deterministic v2 census/fixed-repeat infrastructure, strict replay, staging guards, and gated live evidence",
+  "title": "OfferToday practical IT production crawl",
+  "description": "Cursor-correct production IT listing, bulk incremental detail targeting, partial page-cap handling, and historical research isolation",
   "status": "in_progress",
   "dev_type": null,
   "scope": null,

@@ -1,8 +1,8 @@
 {
   "id": "offertoday-completeness-stability",
   "name": "offertoday-completeness-stability",
-  "title": "OfferToday completeness and stability implementation",
-  "description": "",
+  "title": "OfferToday practical IT production crawl parent",
+  "description": "Supersedes the completeness research program with one practical production listing/detail path",
   "status": "planning",
   "dev_type": null,
   "scope": null,
