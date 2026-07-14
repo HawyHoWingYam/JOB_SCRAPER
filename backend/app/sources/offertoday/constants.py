@@ -13,8 +13,8 @@ from app.sources.offertoday.listing_contract import (
 OFFERTODAY_BASE_URL = "https://www.offertoday.com"
 
 # Two listing endpoints:
-# search/list — recommendation-filtered (rcdType:7); returns ~600–700 IT jobs
-# list        — category browse; may return the full unfiltered job database
+# search/list — production search contract omits rcdType and carries the response cursor
+# list        — legacy category browse contract retained for historical callers
 OFFERTODAY_LISTING_SEARCH_URL = OFFERTODAY_LISTING_SEARCH_CONTRACT_URL
 OFFERTODAY_LISTING_BROWSE_URL = OFFERTODAY_LISTING_BROWSE_CONTRACT_URL
 

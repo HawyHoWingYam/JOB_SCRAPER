@@ -20,6 +20,7 @@ from app.sources.offertoday.listing_contract import (
     OfferTodayListingTransportResult,
     offertoday_endpoint_contract,
     parse_offertoday_listing_page_result,
+    production_offertoday_listing_request_policy,
     validate_offertoday_endpoint_request,
     validate_offertoday_endpoint_response_url,
 )
@@ -75,6 +76,17 @@ def test_endpoint_contracts_are_distinct_versioned_and_rcd_omitted() -> None:
         offertoday_endpoint_contract("recommend-search-list-v1")
         is OFFERTODAY_SEARCH_ENDPOINT_CONTRACT
     )
+
+
+def test_production_request_policy_hides_research_controls() -> None:
+    policy = production_offertoday_listing_request_policy()
+
+    assert policy.pagination_mode == "response-cursor"
+    assert policy.requested_page_size == 10
+    assert policy.browser_lifecycle == "condition-local-runtime"
+    assert policy.variant_id == "production-it-cursor"
+    assert policy.endpoint_contract is OFFERTODAY_SEARCH_ENDPOINT_CONTRACT
+    assert policy.requires_cursor is True
 
 
 def test_legacy_policy_identity_is_unchanged_without_endpoint_contract() -> None:

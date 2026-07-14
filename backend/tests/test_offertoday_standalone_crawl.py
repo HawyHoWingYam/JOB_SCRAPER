@@ -3,16 +3,16 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
-from app.services.offertoday_research_observation_service import (
-    OfferTodayResearchObservationService,
-)
 from app.sources.offertoday.listing_runner import (
+    ListingIdentityConflict,
+    ListingIdentityIssue,
     ListingPageObservation,
     ListingRowEvidence,
     OfferTodayIdentityPair,
@@ -261,10 +261,22 @@ def _listing_result(
     identity_issues=(),
     observations=(),
     condition_outcomes=(),
+    is_partial=False,
+    capped_condition_ids=(),
+    supplemental_rows_observed=0,
+    supplemental_job_ids=(),
+    supplemental_identity_issue_count=0,
 ):
     return SimpleNamespace(
         stop_reason=stop_reason,
         is_complete=is_complete,
+        is_partial=is_partial,
+        is_partial_success=is_partial,
+        can_proceed_to_detail=is_complete or is_partial,
+        capped_condition_ids=tuple(capped_condition_ids),
+        supplemental_rows_observed=supplemental_rows_observed,
+        supplemental_job_ids=tuple(supplemental_job_ids),
+        supplemental_identity_issue_count=supplemental_identity_issue_count,
         accepted_job_ids=tuple(accepted_job_ids),
         ordered_job_ids=tuple(ordered_job_ids or accepted_job_ids),
         gaps=tuple(gaps),
@@ -326,6 +338,11 @@ class _FakeCrawlRuntime:
             preexisting_staged_source_job_ids=(),
             published_source_job_ids=(),
             job_ids_seen=len(source_job_ids),
+            complete_existing_source_job_ids=(),
+            terminal_unavailable_source_job_ids=(),
+            new_source_job_ids=source_job_ids,
+            repair_source_job_ids=(),
+            duplicate_source_job_ids=(),
         )
 
     def defer_listing_identity_conflict(self, **kwargs):
@@ -344,6 +361,16 @@ class _FakeCrawlRuntime:
         if self.detail_load_result is not None:
             return self.detail_load_result
         source_job_ids = list(kwargs["request_payload"].get("source_job_ids") or [])
+        if not source_job_ids and kwargs["request_payload"].get(
+            "source_listing_crawl_job_id"
+        ):
+            source_job_ids = list(
+                dict.fromkeys(
+                    payload["source_job_id"]
+                    for call in self.stage_calls
+                    for payload in call["payloads"]
+                )
+            )
         return SimpleNamespace(
             targets=[{"source_job_id": source_job_id} for source_job_id in source_job_ids],
             target_rows=len(source_job_ids),
@@ -412,12 +439,9 @@ async def test_run_listing_phase_preflights_once_and_uses_shared_default_it_poli
     assert trace == ["preflight", "runner"]
     run_kwargs = runner.run.await_args.kwargs
     assert run_kwargs["stop_policy"].max_pages_per_condition == 50
-    assert (
-        run_kwargs["stop_policy"].unique_job_cap
-        == crawl_module.DEFAULT_IT_UNIQUE_JOB_TARGET
-        == 5000
-    )
+    assert run_kwargs["stop_policy"].unique_job_cap is None
     assert run_kwargs["stop_policy"].require_empty_confirmation is True
+    assert run_kwargs["stop_policy"].page_cap_behavior == "retain-and-continue"
     assert run_kwargs["retry_policy"].max_attempts_per_page == 3
     assert run_kwargs["retry_policy"].retry_delays_seconds == (1.0, 2.0)
     assert run_kwargs["retry_policy"].page_delay_seconds == 1.5
@@ -429,7 +453,14 @@ async def test_run_listing_phase_preflights_once_and_uses_shared_default_it_poli
     )
     assert run_kwargs["session_mode"] == "headless"
     assert run_kwargs["conditions"][0].search_family == "it_category"
-    assert "request_policy" not in run_kwargs
+    assert all(condition.endpoint == "search" for condition in run_kwargs["conditions"])
+    assert all(condition.rcd_type is None for condition in run_kwargs["conditions"])
+    assert run_kwargs["request_policy"].requested_page_size == 10
+    assert run_kwargs["request_policy"].requires_cursor is True
+    assert run_kwargs["request_policy"].endpoint_contract_id == (
+        "recommend-search-list-v1"
+    )
+    assert run_kwargs["terminal_policy"] == "result-transition-confirmation-v1"
 
 
 @pytest.mark.asyncio
@@ -537,18 +568,19 @@ async def test_incomplete_listing_failure_records_stop_evidence_and_loads_no_det
         "identity_issue_count": 0,
         "pages_observed": 4,
         "accepted_job_ids": ["job-1"],
+        "listing_partial": False,
+        "capped_condition_ids": [],
     }
     assert crawl_runtime.load_detail_targets_calls == []
     assert crawl_runtime.completed_calls == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("accepted_job_ids", [("old-1", "new-1"), ()])
-async def test_complete_full_listing_loads_only_accepted_global_cohort(accepted_job_ids):
+async def test_complete_full_listing_freezes_current_crawl_targets():
     crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
     crawl_runtime = _FakeCrawlRuntime()
     runner = SimpleNamespace(
-        run=AsyncMock(return_value=_listing_result(accepted_job_ids=accepted_job_ids))
+        run=AsyncMock(return_value=_listing_result(accepted_job_ids=("seen-1",)))
     )
 
     result = await crawl_module._run_listing_phase(
@@ -562,14 +594,175 @@ async def test_complete_full_listing_loads_only_accepted_global_cohort(accepted_
     assert result.is_complete is True
     assert len(crawl_runtime.load_detail_targets_calls) == 1
     detail_call = crawl_runtime.load_detail_targets_calls[0]
-    assert detail_call["request_payload"]["source_job_ids"] == list(
-        accepted_job_ids
+    assert "source_job_ids" not in detail_call["request_payload"]
+    assert detail_call["request_payload"]["source_listing_crawl_job_id"] == (
+        "crawl-1"
     )
-    assert detail_call["request_payload"]["detail_limit"] == len(accepted_job_ids)
-    assert "source_listing_crawl_job_id" not in detail_call["request_payload"]
-    assert [target["source_job_id"] for target in result.detail_targets] == list(
-        accepted_job_ids
+    assert detail_call["request_payload"]["detail_limit"] is None
+    assert result.detail_targets == []
+
+
+@pytest.mark.asyncio
+async def test_partial_listing_completes_event_before_detail_target_freeze():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+    trace: list[str] = []
+    condition = SimpleNamespace(
+        condition=SimpleNamespace(condition_id="capped-condition"),
+        pages_observed=100,
+        is_complete=False,
+        is_partial=True,
     )
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            return_value=_listing_result(
+                stop_reason="page_cap",
+                is_complete=False,
+                is_partial=True,
+                accepted_job_ids=("new-1",),
+                condition_outcomes=(condition,),
+                capped_condition_ids=("capped-condition",),
+            )
+        )
+    )
+    crawl_runtime = _FakeCrawlRuntime(trace=trace)
+
+    result = await crawl_module._run_listing_phase(
+        args=_default_listing_args(crawl_phase="full"),
+        browser_runtime=_FakeListingBrowserRuntime(trace=trace),
+        crawl_runtime=crawl_runtime,
+        crawl_job_id="crawl-1",
+        listing_runner=runner,
+    )
+
+    assert result.is_partial_success is True
+    assert crawl_runtime.failed_payload is None
+    assert trace.index("listing_completed") < trace.index("load_detail_targets")
+    assert crawl_runtime.metrics["listing_partial"] is True
+    assert crawl_runtime.metrics["listing_capped_condition_count"] == 1
+    assert crawl_runtime.load_detail_targets_calls[0]["request_payload"][
+        "source_listing_crawl_job_id"
+    ] == "crawl-1"
+
+
+@pytest.mark.asyncio
+async def test_partial_full_crawl_finishes_completed_after_detail_phase():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+    trace: list[str] = []
+    condition = SimpleNamespace(
+        condition=SimpleNamespace(condition_id="capped-condition"),
+        pages_observed=100,
+        is_complete=False,
+        is_partial=True,
+    )
+    runner = SimpleNamespace(
+        run=AsyncMock(
+            return_value=_listing_result(
+                stop_reason="page_cap",
+                is_complete=False,
+                is_partial=True,
+                accepted_job_ids=("new-1",),
+                condition_outcomes=(condition,),
+                capped_condition_ids=("capped-condition",),
+            )
+        )
+    )
+    crawl_runtime = _FakeCrawlRuntime(
+        detail_load_result=_detail_load_result(
+            [_detail_runtime_target("new-1")],
+            fetch_cohort_hash="partial-hash",
+        ),
+        trace=trace,
+    )
+
+    listing_execution = await crawl_module._run_listing_phase(
+        args=_default_listing_args(crawl_phase="full"),
+        browser_runtime=_FakeListingBrowserRuntime(trace=trace),
+        crawl_runtime=crawl_runtime,
+        crawl_job_id="crawl-1",
+        listing_runner=runner,
+    )
+    listing_metrics = crawl_module._listing_metrics(
+        listing_execution.listing_result,
+        listing_execution.staging_sink,
+    )
+    detail_result = await crawl_module._run_detail_phase(
+        args=_default_listing_args(crawl_phase="full"),
+        browser_runtime=_FakeListingBrowserRuntime(trace=trace),
+        crawl_runtime=crawl_runtime,
+        crawl_job_id="crawl-1",
+        detail_load_result=listing_execution.detail_load_result,
+        pipeline=_FakeDetailPipeline(
+            [
+                _detail_process_result(
+                    "success",
+                    job_action="created",
+                    company_action="created",
+                )
+            ],
+            trace=trace,
+        ),
+        completion_metrics=listing_metrics,
+    )
+
+    assert detail_result.stop_batch is False
+    assert crawl_runtime.failed_payload is None
+    assert len(crawl_runtime.completed_calls) == 1
+    completed_metrics = crawl_runtime.completed_calls[0]["metrics"]
+    assert completed_metrics["listing_partial"] is True
+    assert completed_metrics["listing_capped_condition_count"] == 1
+    assert completed_metrics["detail_success"] == 1
+    assert completed_metrics["detail_failure"] == 0
+    assert trace.index("listing_completed") < trace.index("load_detail_targets")
+    assert trace.index("load_detail_targets") < trace.index(
+        "crawl.detail_cohort_frozen"
+    )
+    assert trace.index("crawl.detail_cohort_frozen") < trace.index("completed")
+
+
+def test_listing_metrics_report_exact_partial_and_incremental_cohorts():
+    crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
+    sink = crawl_module.OfferTodayCrawlStagingSink(
+        crawl_runtime=_FakeCrawlRuntime(),
+        crawl_job_id="crawl-1",
+    )
+    sink.complete_existing_source_job_ids.extend(["complete-1", "complete-1"])
+    sink.terminal_unavailable_source_job_ids.append("terminal-1")
+    sink.new_source_job_ids.extend(["new-1", "new-1"])
+    sink.repair_source_job_ids.append("repair-1")
+    outcomes = (
+        SimpleNamespace(is_complete=True, is_partial=False),
+        SimpleNamespace(is_complete=False, is_partial=True),
+    )
+    result = _listing_result(
+        stop_reason="page_cap",
+        is_complete=False,
+        is_partial=True,
+        accepted_job_ids=("new-1", "repair-1", "overlap-1"),
+        condition_outcomes=outcomes,
+        capped_condition_ids=("capped-1",),
+        supplemental_rows_observed=4,
+        supplemental_job_ids=("supp-1", "overlap-1"),
+        supplemental_identity_issue_count=2,
+    )
+
+    assert crawl_module._listing_metrics(result, sink) == {
+        "listing_partial": True,
+        "listing_condition_count": 2,
+        "listing_natural_condition_count": 1,
+        "listing_capped_condition_count": 1,
+        "listing_capped_condition_ids": ["capped-1"],
+        "distinct_it_result_ids": 3,
+        "supplemental_rows_observed": 4,
+        "distinct_supplemental_ids": 2,
+        "supplemental_result_overlap_count": 1,
+        "supplemental_identity_issue_count": 2,
+        "complete_existing_skipped": 1,
+        "terminal_unavailable_skipped": 1,
+        "new_detail_targets": 1,
+        "repair_detail_targets": 1,
+        "detail_success": 0,
+        "detail_failure": 0,
+    }
 
 
 def test_build_listing_staging_payload_uses_canonical_id_and_encrypted_public_url():
@@ -723,39 +916,60 @@ def _sample_listing_observation():
 
 
 @pytest.mark.asyncio
-async def test_production_and_research_sinks_serialize_identical_page_payload():
+async def test_production_observation_sink_keeps_supplemental_identity_evidence():
     crawl_module = importlib.import_module("backend.scripts.offertoday_standalone_crawl")
-    observation = _sample_listing_observation()
+    observation = replace(
+        _sample_listing_observation(),
+        supplemental_identity_issues=(
+            ListingIdentityIssue(
+                job_id="supplemental-1",
+                encrypted_job_id=None,
+                reason="missing_encrypted_job_id",
+            ),
+        ),
+        supplemental_identity_conflicts=(
+            ListingIdentityConflict(
+                job_ids=("supplemental-2",),
+                encrypted_job_ids=("enc-a", "enc-b"),
+                reason="supplemental_job_id_to_multiple_encrypted_ids",
+            ),
+        ),
+    )
     crawl_runtime = _FakeCrawlRuntime()
-    production_sink = crawl_module.CrawlJobListingObservationSink(
+    sink = crawl_module.CrawlJobListingObservationSink(
         crawl_runtime=crawl_runtime,
         crawl_job_id="crawl-1",
     )
 
-    class _ResearchRepository:
-        def __init__(self):
-            self.events = []
+    await sink.record_page_attempt(observation)
 
-        def append_event(self, _db, **kwargs):
-            self.events.append(dict(kwargs))
+    payload = crawl_runtime.events[-1]["payload"]
+    assert payload["supplemental_identity_issues"] == [
+        {
+            "job_id": "supplemental-1",
+            "encrypted_job_id": None,
+            "reason": "missing_encrypted_job_id",
+        }
+    ]
+    assert payload["supplemental_identity_conflicts"] == [
+        {
+            "job_ids": ["supplemental-2"],
+            "encrypted_job_ids": ["enc-a", "enc-b"],
+            "reason": "supplemental_job_id_to_multiple_encrypted_ids",
+        }
+    ]
 
-    repository = _ResearchRepository()
-    research_sink = OfferTodayResearchObservationService(
-        db=object(),
-        crawl_job_repository=repository,
-        crawl_job_id="research-1",
-    )
 
-    await production_sink.record_page_attempt(observation)
-    await research_sink.record_page_attempt(observation)
-
-    assert crawl_runtime.events[-1]["payload"] == repository.events[-1]["payload"]
-
-
-def _success_page(rows, *, has_more):
+def _success_page(rows, *, has_more, supple_page=0):
     return {
         "code": 0,
         "data": {
+            "pageSize": 10,
+            "sessionId": "production-session",
+            "supplePage": supple_page,
+            "suppleAmount": 0,
+            "suppleType": 0,
+            "suppleRcdList": [],
             "resultList": rows,
             "hasMore": has_more,
             "totalCount": len(rows),
@@ -783,7 +997,8 @@ async def test_saved_response_production_orchestration_uses_authenticated_runner
                 ],
                 has_more=False,
             ),
-            _success_page([], has_more=False),
+                _success_page([], has_more=False, supple_page=1),
+                _success_page([], has_more=False, supple_page=2),
         ]
     )
 

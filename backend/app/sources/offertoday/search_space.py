@@ -280,11 +280,13 @@ def build_offertoday_listing_conditions(
     keywords: str | Sequence[str] | None = None,
     default_to_it: bool = True,
     endpoint: Literal["search", "browse"] = "search",
+    category_endpoint: Literal["search", "browse"] | None = None,
     rcd_type: int | None = 7,
 ) -> list[OfferTodayListingCondition]:
     """Build the ordered, page-independent OfferToday listing conditions."""
     normalized_category_ids = _normalize_category_ids(category_ids)
     explicit_keywords = normalize_offertoday_keywords(keywords)
+    resolved_category_endpoint = category_endpoint or "browse"
     if explicit_keywords:
         return [
             OfferTodayListingCondition(
@@ -306,7 +308,7 @@ def build_offertoday_listing_conditions(
             ),
             category_id=category_id,
             keyword="",
-            endpoint="browse",
+            endpoint=resolved_category_endpoint,
             rcd_type=rcd_type,
         )
         for category_id in expand_offertoday_category_ids(

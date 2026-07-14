@@ -192,6 +192,8 @@ class _FakeCrawlJobListingRepository:
         self.upsert_calls: list[dict] = []
         self.candidate_calls: list[dict] = []
         self.list_identity_history_calls = 0
+        self.list_source_rows_calls = 0
+        self.legacy_existing_id_lookup_calls = 0
         self.completed_listing_ids: list[str] = []
         self.identity_conflict_listing_ids: list[str] = []
 
@@ -207,6 +209,7 @@ class _FakeCrawlJobListingRepository:
         source_job_ids,
         exclude_crawl_job_id=None,
     ):
+        self.legacy_existing_id_lookup_calls += 1
         if self.trace is not None:
             self.trace.append("staged_lookup")
         requested = set(source_job_ids)
@@ -220,6 +223,24 @@ class _FakeCrawlJobListingRepository:
                 or listing.crawl_job_id != str(exclude_crawl_job_id)
             )
         }
+
+    def list_source_rows_by_job_ids(
+        self,
+        _db,
+        *,
+        source_site,
+        source_job_ids,
+    ):
+        self.list_source_rows_calls += 1
+        if self.trace is not None:
+            self.trace.append("staged_lookup")
+        requested = set(source_job_ids)
+        return [
+            listing
+            for listing in self.listings
+            if listing.source_site == source_site
+            and listing.source_job_id in requested
+        ]
 
     def get_max_listing_rank_for_crawl_job(self, _db, *, crawl_job_id, source_site=None) -> int:
         if self.trace is not None:
@@ -839,7 +860,7 @@ def test_listing_batch_result_reports_true_created_rows_with_compatibility_alias
     assert result.skipped_existing == 2
 
 
-def test_offertoday_stage_batch_preserves_every_fallback_and_explicit_observation():
+def test_offertoday_stage_batch_bulk_classifies_complete_repair_and_new():
     trace: list[str] = []
     session = _FakeSession(trace)
     crawl_job_id = "current-crawl"
@@ -849,12 +870,12 @@ def test_offertoday_stage_batch_preserves_every_fallback_and_explicit_observatio
         source_site="offertoday",
         source_job_id="staged-1",
         source_url="https://www.offertoday.com/hk/job/old-encrypted-id",
-        listing_payload={"preserved": True},
+        listing_payload=_offertoday_stage_payload("staged-1")["listing_payload"],
     )
     listing_repository = _FakeCrawlJobListingRepository([historical], trace=trace)
     crawl_job_repository = _FakeCrawlJobRepository(trace=trace)
     job_repository = _FakeJobRepository(
-        {"published-1": SimpleNamespace(id="job-row-1")},
+        {"published-1": _published_job("published-1")},
         trace=trace,
     )
     runtime = CrawlJobRuntime(
@@ -895,117 +916,168 @@ def test_offertoday_stage_batch_preserves_every_fallback_and_explicit_observatio
 
     assert trace[:3] == ["lock", "published_lookup", "staged_lookup"]
     assert trace.count("lock") == 1
+    assert trace.count("published_lookup") == 1
+    assert trace.count("staged_lookup") == 1
+    assert listing_repository.list_source_rows_calls == 1
+    assert listing_repository.legacy_existing_id_lookup_calls == 0
+    assert trace.count("upsert:staged-1:created") == 1
     assert trace.count("upsert:new-1:created") == 1
     assert trace.count("upsert:upgrade-1:created") == 1
     assert trace[-3:] == ["merge_metrics", "append_event", "commit"]
     assert job_repository.raise_on_error_calls == [True]
     assert result == ListingBatchPersistResult(
-        rows_created=2,
-        created_source_job_ids=("new-1", "upgrade-1"),
-        preexisting_staged_source_job_ids=("staged-1",),
+        rows_created=3,
+        created_source_job_ids=("staged-1", "new-1", "upgrade-1"),
+        preexisting_staged_source_job_ids=(),
         published_source_job_ids=("published-1",),
         job_ids_seen=4,
-        skipped_existing=2,
+        skipped_existing=1,
+        complete_existing_source_job_ids=("published-1",),
+        terminal_unavailable_source_job_ids=(),
+        new_source_job_ids=("new-1", "upgrade-1"),
+        repair_source_job_ids=("staged-1",),
+        duplicate_source_job_ids=(),
     )
     assert historical.source_url.endswith("old-encrypted-id")
-    assert historical.listing_payload == {"preserved": True}
-    assert crawl_job_repository.events == [
-        {
-            "crawl_job_id": crawl_job_id,
-            "event_type": "crawl.listing_observed",
-            "payload": {
-                "source_site": "offertoday",
-                "source_job_ids": [
-                    "published-1",
-                    "staged-1",
-                    "new-1",
-                    "upgrade-1",
-                ],
-                "observations": [
-                    {
-                        "source_job_id": "published-1",
-                        "job_id": "published-1",
-                        "encrypted_job_id": "enc-published-1",
-                        "encrypted_job_id_source": "encryptJobId",
-                        "classification": "published",
-                        "search_family": "it_category",
-                        "category_id": "101",
-                        "category_name": "Information Technology",
-                        "keyword": "python",
-                        "page": 1,
-                    },
-                    {
-                        "source_job_id": "staged-1",
-                        "job_id": "staged-1",
-                        "encrypted_job_id": "enc-staged-1",
-                        "encrypted_job_id_source": "encryptJobId",
-                        "classification": "preexisting_staged_unpublished",
-                        "search_family": "it_category",
-                        "category_id": "101",
-                        "category_name": "Information Technology",
-                        "keyword": "python",
-                        "page": 2,
-                    },
-                    {
-                        "source_job_id": "new-1",
-                        "job_id": "new-1",
-                        "encrypted_job_id": "enc-new-1",
-                        "encrypted_job_id_source": "encryptJobId",
-                        "classification": "newly_staged",
-                        "search_family": "it_category",
-                        "category_id": "101",
-                        "category_name": "Information Technology",
-                        "keyword": "python",
-                        "page": 3,
-                    },
-                    {
-                        "source_job_id": "new-1",
-                        "job_id": "new-1",
-                        "encrypted_job_id": "enc-new-1",
-                        "encrypted_job_id_source": "encryptJobId",
-                        "classification": "newly_staged",
-                        "search_family": "it_category",
-                        "category_id": "101",
-                        "category_name": "Information Technology",
-                        "keyword": "duplicate",
-                        "page": 4,
-                    },
-                    {
-                        "source_job_id": "upgrade-1",
-                        "job_id": "upgrade-1",
-                        "encrypted_job_id": "upgrade-1",
-                        "encrypted_job_id_source": "jobId_fallback",
-                        "classification": "newly_staged",
-                        "search_family": "it_category",
-                        "category_id": "101",
-                        "category_name": "Information Technology",
-                        "keyword": "python",
-                        "page": 1,
-                    },
-                    {
-                        "source_job_id": "upgrade-1",
-                        "job_id": "upgrade-1",
-                        "encrypted_job_id": "enc-upgrade-1",
-                        "encrypted_job_id_source": "encryptJobId",
-                        "classification": "newly_staged",
-                        "search_family": "it_category",
-                        "category_id": "101",
-                        "category_name": "Information Technology",
-                        "keyword": "python",
-                        "page": 1,
-                    },
-                ],
-                "published_source_job_ids": ["published-1"],
-                "preexisting_staged_source_job_ids": ["staged-1"],
-                "created_source_job_ids": ["new-1", "upgrade-1"],
-                "rows_created": 2,
-                "job_ids_seen": 4,
-                "skipped_existing": 2,
-            },
-            "emitted_by": "offertoday-crawl",
-            "auto_commit": False,
-        }
+    event = crawl_job_repository.events[-1]
+    assert event["event_type"] == "crawl.listing_observed"
+    assert event["payload"]["complete_existing_source_job_ids"] == [
+        "published-1"
     ]
+    assert event["payload"]["repair_source_job_ids"] == ["staged-1"]
+    assert event["payload"]["new_source_job_ids"] == ["new-1", "upgrade-1"]
+    assert {
+        observation["source_job_id"]: observation["classification"]
+        for observation in event["payload"]["observations"]
+    } == {
+        "published-1": "complete_existing",
+        "staged-1": "repair",
+        "new-1": "new",
+        "upgrade-1": "new",
+    }
+    current_rows = [
+        row
+        for row in listing_repository.listings
+        if row.crawl_job_id == crawl_job_id
+    ]
+    assert {
+        row.source_job_id: row.listing_payload["detail_target_kind"]
+        for row in current_rows
+    } == {
+        "staged-1": "repair",
+        "new-1": "new",
+        "upgrade-1": "new",
+    }
+
+
+def test_offertoday_stage_batch_partitions_terminal_incomplete_and_duplicate():
+    session = _FakeSession()
+    terminal = _FakeListing(
+        id="terminal-history",
+        crawl_job_id="old-crawl",
+        source_site="offertoday",
+        source_job_id="terminal-1",
+        source_url="https://www.offertoday.com/hk/job/enc-terminal-1",
+        detail_status="terminal_unavailable",
+    )
+    current_duplicate = _FakeListing(
+        id="current-duplicate",
+        crawl_job_id="current-crawl",
+        source_site="offertoday",
+        source_job_id="duplicate-1",
+        source_url="https://www.offertoday.com/hk/job/enc-duplicate-1",
+    )
+    listing_repository = _FakeCrawlJobListingRepository(
+        [terminal, current_duplicate]
+    )
+    complete = _published_job("complete-1")
+    incomplete = _published_job("incomplete-1", description=None)
+    runtime = CrawlJobRuntime(
+        lambda: session,
+        crawl_job_repository=_FakeCrawlJobRepository(),
+        crawl_job_listing_repository=listing_repository,
+        job_repository=_FakeJobRepository(
+            {
+                "complete-1": complete,
+                "incomplete-1": incomplete,
+            }
+        ),
+    )
+
+    result = runtime.stage_listing_batch(
+        crawl_job_id="current-crawl",
+        source_site="offertoday",
+        payloads=[
+            _offertoday_stage_payload("complete-1"),
+            _offertoday_stage_payload("terminal-1"),
+            _offertoday_stage_payload("incomplete-1"),
+            _offertoday_stage_payload("new-1"),
+            _offertoday_stage_payload("duplicate-1"),
+        ],
+        skip_existing=True,
+    )
+
+    assert result.complete_existing_source_job_ids == ("complete-1",)
+    assert result.terminal_unavailable_source_job_ids == ("terminal-1",)
+    assert result.repair_source_job_ids == ("incomplete-1",)
+    assert result.new_source_job_ids == ("new-1",)
+    assert result.duplicate_source_job_ids == ("duplicate-1",)
+    assert result.created_source_job_ids == ("incomplete-1", "new-1")
+    assert result.skipped_existing == 3
+    current_rows = {
+        row.source_job_id: row
+        for row in listing_repository.listings
+        if row.crawl_job_id == "current-crawl"
+    }
+    assert current_rows["incomplete-1"].listing_payload[
+        "detail_target_kind"
+    ] == "repair"
+    assert current_rows["new-1"].listing_payload["detail_target_kind"] == "new"
+    assert listing_repository.list_source_rows_calls == 1
+    assert listing_repository.legacy_existing_id_lookup_calls == 0
+
+
+def test_offertoday_stage_batch_historical_identity_conflict_rolls_back():
+    session = _FakeSession()
+    historical = _FakeListing(
+        id="historical-conflict",
+        crawl_job_id="old-crawl",
+        source_site="offertoday",
+        source_job_id="conflict-1",
+        source_url="https://www.offertoday.com/hk/job/enc-old",
+        listing_payload=_offertoday_stage_payload(
+            "conflict-1",
+            encrypted_job_id="enc-old",
+        )["listing_payload"],
+    )
+    listing_repository = _FakeCrawlJobListingRepository([historical])
+    runtime = CrawlJobRuntime(
+        lambda: session,
+        crawl_job_repository=_FakeCrawlJobRepository(),
+        crawl_job_listing_repository=listing_repository,
+        job_repository=_FakeJobRepository(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="OfferToday listing identity conflict: conflict-1",
+    ) as exc_info:
+        runtime.stage_listing_batch(
+            crawl_job_id="current-crawl",
+            source_site="offertoday",
+            payloads=[
+                _offertoday_stage_payload(
+                    "conflict-1",
+                    encrypted_job_id="enc-new",
+                )
+            ],
+            skip_existing=False,
+        )
+
+    assert exc_info.value.source_job_ids == ("conflict-1",)
+    assert listing_repository.upsert_calls == []
+    assert session.commits == 0
+    assert session.rollbacks == 1
 
 
 def test_offertoday_stage_batches_assign_monotonic_run_global_listing_ranks():
@@ -1662,6 +1734,81 @@ def test_detail_limit_applies_after_grouping_duplicate_rows():
     assert result.targets[0]["identity"].job_id == "j-1"
     assert result.fetch_cohort_source_job_ids == ("j-1",)
     assert result.fetch_cohort_hash == _expected_cohort_hash(("j-1",))
+
+
+def test_explicit_unlimited_detail_cohort_keeps_every_current_crawl_target():
+    rows = [
+        _detail_listing(
+            f"row-{index}",
+            f"j-{index}",
+            rank=index,
+            crawl_job_id="current-crawl",
+        )
+        for index in range(1, 102)
+    ]
+    runtime, _repository, _crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={
+            "source_listing_crawl_job_id": "current-crawl",
+            "detail_limit": None,
+        },
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.selected_rows == 101
+    assert result.target_rows == 101
+    assert len(result.fetch_cohort_source_job_ids) == 101
+
+
+def test_detail_targets_preserve_new_and_repair_kinds_once_per_canonical_id():
+    rows = [
+        _detail_listing(
+            "new-row",
+            "j-new",
+            rank=1,
+            listing_payload={
+                "job_id": "j-new",
+                "encrypted_job_id": "enc-j-new",
+                "encrypted_job_id_source": "encryptJobId",
+                "detail_target_kind": "new",
+                "raw_data": {"jobId": "j-new", "encryptJobId": "enc-j-new"},
+            },
+        ),
+        _detail_listing(
+            "repair-row",
+            "j-repair",
+            rank=2,
+            listing_payload={
+                "job_id": "j-repair",
+                "encrypted_job_id": "enc-j-repair",
+                "encrypted_job_id_source": "encryptJobId",
+                "detail_target_kind": "repair",
+                "raw_data": {
+                    "jobId": "j-repair",
+                    "encryptJobId": "enc-j-repair",
+                },
+            },
+        ),
+    ]
+    runtime, _repository, _crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={
+            "source_listing_crawl_job_id": "batch-1",
+            "detail_limit": 10,
+        },
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert result.new_detail_targets == 1
+    assert result.repair_detail_targets == 1
+    assert [target["detail_target_kind"] for target in result.targets] == [
+        "new",
+        "repair",
+    ]
 
 
 def test_complete_job_reconciles_all_duplicates_before_limit_and_records_event():

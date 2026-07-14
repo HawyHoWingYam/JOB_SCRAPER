@@ -202,6 +202,24 @@ def test_default_conditions_keep_stable_family_order_and_endpoint_semantics() ->
     assert all(condition.rcd_type == 9 for condition in conditions)
 
 
+def test_production_it_conditions_explicitly_use_search_and_omit_rcd_type() -> None:
+    conditions = build_offertoday_listing_conditions(
+        [118000],
+        endpoint="search",
+        category_endpoint="search",
+        rcd_type=None,
+    )
+
+    assert len(conditions) == 152
+    assert {condition.search_family for condition in conditions} == {
+        "it_category",
+        "it_keyword",
+        "it_hybrid",
+    }
+    assert all(condition.endpoint == "search" for condition in conditions)
+    assert all(condition.rcd_type is None for condition in conditions)
+
+
 def test_explicit_keywords_are_the_only_conditions_and_use_selected_endpoint() -> None:
     conditions = build_offertoday_listing_conditions(
         [118000, 101000],

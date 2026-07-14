@@ -310,6 +310,7 @@ async def _run(
     require_empty_confirmation: bool = True,
     request_policy: OfferTodayListingRequestPolicy | None = None,
     terminal_policy: str = ENVELOPE_TERMINAL_POLICY_ID,
+    page_cap_behavior: str = "reject",
 ):
     observation_sink = MemoryObservationSink()
     staging_sink = MemoryStagingSink()
@@ -325,6 +326,7 @@ async def _run(
             max_pages_per_condition=max_pages,
             unique_job_cap=unique_job_cap,
             require_empty_confirmation=require_empty_confirmation,
+            page_cap_behavior=page_cap_behavior,
         ),
         retry_policy=ListingRetryPolicy(
             max_attempts_per_page=max_attempts,
@@ -760,6 +762,92 @@ async def test_page_cap_preventing_confirmation_is_incomplete() -> None:
     assert result.condition_outcomes[0].is_complete is False
     assert result.stop_reason == "page_cap"
     assert result.is_complete is False
+
+
+@pytest.mark.asyncio
+async def test_retain_page_cap_stages_prefix_and_continues_with_fresh_cursor() -> None:
+    conditions = [
+        OfferTodayListingCondition(
+            search_family="explicit_keyword",
+            category_id=None,
+            keyword=keyword,
+            endpoint="search",
+            rcd_type=None,
+        )
+        for keyword in ("capped", "natural")
+    ]
+    transport = ScriptedTransport(
+        _cursor_response([_listing_row("cap-1", "cap-e1")], supple_page=1),
+        _cursor_response([_listing_row("cap-2", "cap-e2")], supple_page=2),
+        _cursor_response([], session_id="session-2", supple_page=1),
+        _cursor_response([], session_id="session-2", supple_page=2),
+    )
+
+    result, observations, staging, _sleep = await _run(
+        transport,
+        conditions=conditions,
+        max_pages=2,
+        request_policy=_request_policy(
+            endpoint_contract_id="recommend-search-list-v1"
+        ),
+        terminal_policy=RESULT_TERMINAL_POLICY_ID,
+        page_cap_behavior="retain-and-continue",
+    )
+
+    requests = [request[0] for request in transport.requests]
+    assert [request["page"] for request in requests] == [1, 2, 1, 2]
+    assert "sessionId" not in requests[0]
+    assert requests[1]["sessionId"] == "session-1"
+    assert "sessionId" not in requests[2]
+    assert requests[3]["sessionId"] == "session-2"
+    assert [item["page"] for item in staging.staged_pages] == [1, 2]
+    assert result.accepted_job_ids == ("cap-1", "cap-2")
+    assert result.is_complete is False
+    assert result.is_partial_success is True
+    assert result.can_proceed_to_detail is True
+    assert result.capped_condition_ids == (conditions[0].condition_id,)
+    assert result.condition_outcomes[0].stop_reason == "page_cap"
+    assert result.condition_outcomes[0].is_partial is True
+    assert result.condition_outcomes[1].is_complete is True
+    assert len(observations.outcomes) == 2
+
+
+@pytest.mark.asyncio
+async def test_retain_page_cap_never_swallows_later_hard_stop() -> None:
+    conditions = [
+        OfferTodayListingCondition(
+            search_family="explicit_keyword",
+            category_id=None,
+            keyword=keyword,
+            endpoint="search",
+            rcd_type=None,
+        )
+        for keyword in ("capped", "blocked", "never-run")
+    ]
+    transport = ScriptedTransport(
+        _cursor_response([_listing_row("cap-1", "cap-e1")]),
+        {"code": 1002, "message": "Login expired"},
+    )
+
+    result, _observations, staging, _sleep = await _run(
+        transport,
+        conditions=conditions,
+        max_pages=1,
+        request_policy=_request_policy(
+            endpoint_contract_id="recommend-search-list-v1"
+        ),
+        terminal_policy=RESULT_TERMINAL_POLICY_ID,
+        page_cap_behavior="retain-and-continue",
+    )
+
+    assert len(transport.requests) == 2
+    assert result.stop_reason == "auth_expired"
+    assert result.can_proceed_to_detail is False
+    assert result.is_partial_success is False
+    assert result.condition_outcomes[0].is_partial is True
+    assert result.condition_outcomes[1].stop_reason == "auth_expired"
+    assert result.accepted_job_ids == ("cap-1",)
+    assert [item["page"] for item in staging.staged_pages] == [1]
 
 
 @pytest.mark.asyncio
@@ -1960,7 +2048,7 @@ async def test_result_terminal_policy_stops_after_two_cursor_confirmations() -> 
     assert len(observations.observations) == 3
     assert result.accepted_job_ids == ("result-1",)
     assert [item["page"] for item in staging.staged_pages] == [1]
-    assert observations.observations[-1].cursor_evidence.terminal_signal is False
+    assert observations.observations[-1].cursor_evidence.terminal_signal is True
 
 
 @pytest.mark.asyncio
@@ -2152,7 +2240,7 @@ async def test_supplemental_rows_are_evidence_only_and_not_product_staged() -> N
 
 
 @pytest.mark.asyncio
-async def test_supplemental_identity_conflict_rejects_before_result_staging() -> None:
+async def test_supplemental_identity_conflict_is_counted_without_blocking_result() -> None:
     transport = ScriptedTransport(
         _cursor_response(
             [_listing_row("j-result", "shared-route")],
@@ -2168,10 +2256,18 @@ async def test_supplemental_identity_conflict_rejects_before_result_staging() ->
         request_policy=_request_policy(),
     )
 
-    assert result.stop_reason == "identity_conflict"
-    assert result.accepted_job_ids == ()
-    assert observations.observations[0].identity_conflicts
-    assert staging.staged_pages == []
+    assert result.stop_reason == "natural_exhaustion"
+    assert result.accepted_job_ids == ("j-result",)
+    assert result.supplemental_job_ids == ()
+    assert result.supplemental_identity_issue_count == 1
+    assert observations.observations[0].identity_conflicts == ()
+    assert observations.observations[0].supplemental_identity_conflicts
+    payload = listing_observation_to_payload(observations.observations[0])
+    assert "supplemental_identity_conflicts" not in payload
+    assert "supplemental_identity_issues" not in payload
+    assert [row["job_id"] for row in staging.staged_pages[0]["rows"]] == [
+        "j-result"
+    ]
 
 
 @pytest.mark.asyncio

@@ -43,11 +43,13 @@ class _ProductionCrawlRuntime:
         self.events = []
         self.failed = None
         self.manual = None
+        self.metrics = {}
 
     def stage_listing_batch(self, **kwargs):
         self.stage_calls.append(dict(kwargs))
         ids = tuple(payload["source_job_id"] for payload in kwargs["payloads"])
         return SimpleNamespace(
+            job_ids_seen=len(ids),
             rows_staged=len(ids),
             rows_created=len(ids),
             skipped_existing=0,
@@ -61,6 +63,9 @@ class _ProductionCrawlRuntime:
 
     def write_progress_event(self, **kwargs):
         self.events.append(dict(kwargs))
+
+    def merge_metrics(self, **kwargs):
+        self.metrics.update(dict(kwargs["metrics_patch"]))
 
     def mark_failed(self, **kwargs):
         self.failed = dict(kwargs)
@@ -80,11 +85,17 @@ def _listing_row(job_id: str, encrypted_job_id: str):
     }
 
 
-def _success_page(rows, *, has_more):
+def _success_page(rows, *, has_more, supple_page=1):
     return {
         "code": 0,
         "data": {
+            "pageSize": 10,
+            "sessionId": "saved-session",
+            "supplePage": supple_page,
+            "suppleAmount": 0,
+            "suppleType": 0,
             "resultList": list(rows),
+            "suppleRcdList": [],
             "hasMore": has_more,
             "total": len(rows),
         },
@@ -144,8 +155,10 @@ async def test_audit_and_production_return_same_ids_and_completion_from_saved_re
         _success_page(
             [_listing_row("j-1", "enc-1"), _listing_row("j-2", "enc-2")],
             has_more=False,
+            supple_page=1,
         ),
-        _success_page([], has_more=False),
+        _success_page([], has_more=False, supple_page=2),
+        _success_page([], has_more=False, supple_page=3),
     ]
 
     production, production_browser = await _run_production_saved_responses(
@@ -218,6 +231,7 @@ async def test_audit_and_production_report_same_shared_encrypted_id_conflict():
         _success_page(
             [_listing_row("j-1", "enc-shared"), _listing_row("j-2", "enc-shared")],
             has_more=True,
+            supple_page=1,
         )
     ]
 

@@ -26,6 +26,20 @@ from app.utils.time import utc_now
 _UNSET = CRAWL_JOB_REPOSITORY_UNSET
 
 
+class OfferTodayListingIdentityConflictError(RuntimeError):
+    """Historical/current listing identity evidence conflicts during staging."""
+
+    def __init__(self, evidence: tuple[dict[str, Any], ...]) -> None:
+        self.evidence = tuple(dict(item) for item in evidence)
+        self.source_job_ids = tuple(
+            str(item["source_job_id"]) for item in self.evidence
+        )
+        super().__init__(
+            "OfferToday listing identity conflict: "
+            + ", ".join(self.source_job_ids)
+        )
+
+
 @dataclass(frozen=True)
 class ListingBatchPersistResult:
     rows_created: int
@@ -34,6 +48,11 @@ class ListingBatchPersistResult:
     published_source_job_ids: tuple[str, ...]
     job_ids_seen: int
     skipped_existing: int
+    complete_existing_source_job_ids: tuple[str, ...] = ()
+    terminal_unavailable_source_job_ids: tuple[str, ...] = ()
+    new_source_job_ids: tuple[str, ...] = ()
+    repair_source_job_ids: tuple[str, ...] = ()
+    duplicate_source_job_ids: tuple[str, ...] = ()
 
     @property
     def rows_staged(self) -> int:
@@ -57,6 +76,8 @@ class DetailTargetLoadResult:
     identity_conflict_evidence: tuple[dict[str, Any], ...]
     reconciliation_records: tuple[dict[str, Any], ...]
     targets: list[dict[str, Any]]
+    new_detail_targets: int = 0
+    repair_detail_targets: int = 0
 
 
 def _canonical_id_hash(source_job_ids: tuple[str, ...]) -> str:
@@ -385,24 +406,194 @@ class CrawlJobRuntime:
                 if source_job_id in existing_jobs_by_source_id
             )
             published_source_job_id_set = set(published_source_job_ids)
-            preexisting_staged_source_job_ids: tuple[str, ...] = ()
-            if is_offertoday and seen_job_ids:
-                staged_source_job_ids = (
-                    self.crawl_job_listing_repository.list_existing_source_job_ids(
-                        db,
-                        source_site=normalized_source,
-                        source_job_ids=ordered_job_ids,
-                    )
+
+            source_rows = (
+                self.crawl_job_listing_repository.list_source_rows_by_job_ids(
+                    db,
+                    source_site=normalized_source,
+                    source_job_ids=ordered_job_ids,
                 )
-                preexisting_staged_source_job_ids = tuple(
+                if is_offertoday and seen_job_ids
+                else []
+            )
+            rows_by_source_job_id: dict[str, list[Any]] = {
+                source_job_id: [] for source_job_id in ordered_job_ids
+            }
+            for row in source_rows:
+                source_job_id = str(
+                    getattr(row, "source_job_id", "") or ""
+                ).strip()
+                if source_job_id in rows_by_source_job_id:
+                    rows_by_source_job_id[source_job_id].append(row)
+
+            current_staged_source_job_ids = tuple(
+                source_job_id
+                for source_job_id in ordered_job_ids
+                if any(
+                    str(getattr(row, "crawl_job_id", "")) == str(crawl_job_id)
+                    for row in rows_by_source_job_id[source_job_id]
+                )
+            )
+            current_staged_source_job_id_set = set(
+                current_staged_source_job_ids
+            )
+            historical_rows_by_source_job_id = {
+                source_job_id: [
+                    row
+                    for row in rows_by_source_job_id[source_job_id]
+                    if str(getattr(row, "crawl_job_id", ""))
+                    != str(crawl_job_id)
+                ]
+                for source_job_id in ordered_job_ids
+            }
+
+            classification_by_source_job_id: dict[str, str] = {}
+            complete_existing_source_job_ids: tuple[str, ...] = ()
+            terminal_unavailable_source_job_ids: tuple[str, ...] = ()
+            new_source_job_ids: tuple[str, ...] = ()
+            repair_source_job_ids: tuple[str, ...] = ()
+            duplicate_source_job_ids: tuple[str, ...] = ()
+
+            if is_offertoday and ordered_job_ids:
+                identities: list[OfferTodayDetailIdentity] = []
+                invalid_identity_job_ids: set[str] = set()
+                for source_job_id in ordered_job_ids:
+                    identity_payloads = [
+                        dict(payload.get("listing_payload") or {})
+                        for payload in batch_payloads
+                        if str(payload.get("source_job_id") or "").strip()
+                        == source_job_id
+                    ]
+                    identity_payloads.extend(
+                        dict(getattr(row, "listing_payload", None) or {})
+                        for row in rows_by_source_job_id[source_job_id]
+                    )
+                    existing_job = existing_jobs_by_source_id.get(source_job_id)
+                    if existing_job is not None:
+                        identity_payloads.append(
+                            dict(getattr(existing_job, "raw_data", None) or {})
+                        )
+                    for identity_payload in identity_payloads:
+                        try:
+                            identities.append(
+                                resolve_offertoday_detail_identity(
+                                    source_job_id=source_job_id,
+                                    listing_payload=identity_payload,
+                                )
+                            )
+                        except OfferTodayIdentityError:
+                            invalid_identity_job_ids.add(source_job_id)
+
+                authority_index = build_offertoday_identity_authority_index(
+                    tuple(identities)
+                )
+                conflict_reason_by_job = {
+                    source_job_id: "unusable_historical_identity_evidence"
+                    for source_job_id in invalid_identity_job_ids
+                }
+                conflict_reason_by_job.update(
+                    authority_index.conflict_reason_by_job
+                )
+                for source_job_id, rows in rows_by_source_job_id.items():
+                    if any(
+                        str(getattr(row, "detail_status", "") or "")
+                        == "identity_conflict"
+                        for row in rows
+                    ):
+                        conflict_reason_by_job[source_job_id] = (
+                            "historical_identity_conflict"
+                        )
+                if conflict_reason_by_job:
+                    evidence = tuple(
+                        {
+                            "source_job_id": source_job_id,
+                            "encrypted_job_ids": list(
+                                authority_index.explicit_ids_by_job.get(
+                                    source_job_id, ()
+                                )
+                            ),
+                            "reason": conflict_reason_by_job[source_job_id],
+                        }
+                        for source_job_id in ordered_job_ids
+                        if source_job_id in conflict_reason_by_job
+                    )
+                    raise OfferTodayListingIdentityConflictError(evidence)
+
+                terminal_unavailable_source_job_ids = tuple(
                     source_job_id
                     for source_job_id in ordered_job_ids
-                    if source_job_id in staged_source_job_ids
-                    and source_job_id not in published_source_job_id_set
+                    if any(
+                        str(getattr(row, "detail_status", "") or "")
+                        == "terminal_unavailable"
+                        for row in rows_by_source_job_id[source_job_id]
+                    )
                 )
-            preexisting_staged_source_job_id_set = set(
-                preexisting_staged_source_job_ids
-            )
+                terminal_unavailable_source_job_id_set = set(
+                    terminal_unavailable_source_job_ids
+                )
+                complete_existing_source_job_ids = tuple(
+                    source_job_id
+                    for source_job_id in ordered_job_ids
+                    if source_job_id not in terminal_unavailable_source_job_id_set
+                    and (
+                        existing_job := existing_jobs_by_source_id.get(
+                            source_job_id
+                        )
+                    )
+                    is not None
+                    and is_complete_offertoday_job(existing_job)
+                )
+                complete_existing_source_job_id_set = set(
+                    complete_existing_source_job_ids
+                )
+                duplicate_source_job_ids = tuple(
+                    source_job_id
+                    for source_job_id in ordered_job_ids
+                    if source_job_id not in terminal_unavailable_source_job_id_set
+                    and source_job_id
+                    not in complete_existing_source_job_id_set
+                    and source_job_id in current_staged_source_job_id_set
+                )
+                duplicate_source_job_id_set = set(duplicate_source_job_ids)
+                repair_source_job_ids = tuple(
+                    source_job_id
+                    for source_job_id in ordered_job_ids
+                    if source_job_id not in terminal_unavailable_source_job_id_set
+                    and source_job_id
+                    not in complete_existing_source_job_id_set
+                    and source_job_id not in duplicate_source_job_id_set
+                    and (
+                        source_job_id in published_source_job_id_set
+                        or bool(
+                            historical_rows_by_source_job_id[source_job_id]
+                        )
+                    )
+                )
+                repair_source_job_id_set = set(repair_source_job_ids)
+                new_source_job_ids = tuple(
+                    source_job_id
+                    for source_job_id in ordered_job_ids
+                    if source_job_id not in terminal_unavailable_source_job_id_set
+                    and source_job_id
+                    not in complete_existing_source_job_id_set
+                    and source_job_id not in duplicate_source_job_id_set
+                    and source_job_id not in repair_source_job_id_set
+                )
+                for source_job_id in ordered_job_ids:
+                    classification_by_source_job_id[source_job_id] = (
+                        "terminal_unavailable"
+                        if source_job_id
+                        in terminal_unavailable_source_job_id_set
+                        else "complete_existing"
+                        if source_job_id
+                        in complete_existing_source_job_id_set
+                        else "duplicate"
+                        if source_job_id in duplicate_source_job_id_set
+                        else "repair"
+                        if source_job_id in repair_source_job_id_set
+                        else "new"
+                    )
+
             skipped_existing = 0
             rows_created = 0
             created_source_job_ids: list[str] = []
@@ -434,15 +625,14 @@ class CrawlJobRuntime:
                 source_job_id = str(payload.get("source_job_id") or "").strip()
                 if not source_job_id:
                     continue
-                if source_job_id in published_source_job_id_set and (
-                    is_offertoday or skip_existing
-                ):
-                    skipped_existing += 1
-                    continue
-                if (
-                    is_offertoday
-                    and source_job_id in preexisting_staged_source_job_id_set
-                ):
+                detail_target_kind: str | None = None
+                if is_offertoday:
+                    classification = classification_by_source_job_id[source_job_id]
+                    if classification not in {"new", "repair"}:
+                        skipped_existing += 1
+                        continue
+                    detail_target_kind = classification
+                elif source_job_id in published_source_job_id_set and skip_existing:
                     skipped_existing += 1
                     continue
 
@@ -452,6 +642,9 @@ class CrawlJobRuntime:
                     if is_offertoday
                     else self._optional_int(payload.get("listing_rank")) or next_rank
                 )
+                listing_payload = dict(payload.get("listing_payload") or {})
+                if detail_target_kind is not None:
+                    listing_payload["detail_target_kind"] = detail_target_kind
                 _listing, persistence_status = (
                     self.crawl_job_listing_repository.upsert_listing(
                         db,
@@ -467,7 +660,7 @@ class CrawlJobRuntime:
                         ),
                         listing_page=self._optional_int(payload.get("listing_page")),
                         listing_rank=listing_rank,
-                        listing_payload=dict(payload.get("listing_payload") or {}),
+                        listing_payload=listing_payload,
                         auto_commit=False,
                     )
                 )
@@ -486,16 +679,6 @@ class CrawlJobRuntime:
                 skipped_existing_delta=skipped_existing,
             )
             if is_offertoday:
-                classification_by_source_job_id = {
-                    source_job_id: (
-                        "published"
-                        if source_job_id in published_source_job_id_set
-                        else "preexisting_staged_unpublished"
-                        if source_job_id in preexisting_staged_source_job_id_set
-                        else "newly_staged"
-                    )
-                    for source_job_id in ordered_job_ids
-                }
                 self.crawl_job_repository.append_event(
                     db,
                     crawl_job_id=crawl_job_id,
@@ -520,7 +703,18 @@ class CrawlJobRuntime:
                             published_source_job_ids
                         ),
                         "preexisting_staged_source_job_ids": list(
-                            preexisting_staged_source_job_ids
+                            current_staged_source_job_ids
+                        ),
+                        "complete_existing_source_job_ids": list(
+                            complete_existing_source_job_ids
+                        ),
+                        "terminal_unavailable_source_job_ids": list(
+                            terminal_unavailable_source_job_ids
+                        ),
+                        "new_source_job_ids": list(new_source_job_ids),
+                        "repair_source_job_ids": list(repair_source_job_ids),
+                        "duplicate_source_job_ids": list(
+                            duplicate_source_job_ids
                         ),
                         "created_source_job_ids": created_source_job_ids,
                         "rows_created": rows_created,
@@ -534,10 +728,21 @@ class CrawlJobRuntime:
             return ListingBatchPersistResult(
                 rows_created=rows_created,
                 created_source_job_ids=tuple(created_source_job_ids),
-                preexisting_staged_source_job_ids=preexisting_staged_source_job_ids,
+                preexisting_staged_source_job_ids=(
+                    current_staged_source_job_ids
+                ),
                 published_source_job_ids=published_source_job_ids,
                 job_ids_seen=len(ordered_job_ids),
                 skipped_existing=skipped_existing,
+                complete_existing_source_job_ids=(
+                    complete_existing_source_job_ids
+                ),
+                terminal_unavailable_source_job_ids=(
+                    terminal_unavailable_source_job_ids
+                ),
+                new_source_job_ids=new_source_job_ids,
+                repair_source_job_ids=repair_source_job_ids,
+                duplicate_source_job_ids=duplicate_source_job_ids,
             )
         except Exception:
             db.rollback()
@@ -567,7 +772,12 @@ class CrawlJobRuntime:
                 if source_job_ids_present
                 else payload.get("source_listing_crawl_job_id")
             )
-            detail_limit = max(int(payload.get("detail_limit") or 100), 1)
+            detail_limit = (
+                None
+                if "detail_limit" in payload
+                and payload.get("detail_limit") is None
+                else max(int(payload.get("detail_limit") or 100), 1)
+            )
             category_ids = (
                 resolve_offertoday_detail_category_ids(
                     payload.get("category_ids") or [],
@@ -679,8 +889,12 @@ class CrawlJobRuntime:
                     db,
                     source_site=normalized_source,
                     source_job_ids=list(eligible_groups),
+                    raise_on_error=normalized_source == "offertoday",
                 )
-                if payload.get("skip_existing") and eligible_groups
+                if (
+                    (normalized_source == "offertoday" or payload.get("skip_existing"))
+                    and eligible_groups
+                )
                 else {}
             )
             targets: list[dict[str, Any]] = []
@@ -723,6 +937,16 @@ class CrawlJobRuntime:
                     continue
 
                 authoritative = rows[0]
+                authoritative_listing_payload = dict(
+                    getattr(authoritative, "listing_payload", None) or {}
+                )
+                detail_target_kind = str(
+                    authoritative_listing_payload.get("detail_target_kind") or ""
+                ).strip()
+                if detail_target_kind not in {"new", "repair"}:
+                    detail_target_kind = (
+                        "repair" if existing_job is not None else "new"
+                    )
                 targets.append(
                     {
                         "listing_id": authoritative.id,
@@ -735,9 +959,7 @@ class CrawlJobRuntime:
                         "source_url": authoritative.source_url,
                         "source_classification_id": authoritative.source_classification_id,
                         "source_classification_name": authoritative.source_classification_name,
-                        "listing_payload": dict(
-                            getattr(authoritative, "listing_payload", None) or {}
-                        ),
+                        "listing_payload": authoritative_listing_payload,
                         "detail_payload": dict(
                             getattr(authoritative, "detail_payload", None) or {}
                         ),
@@ -746,10 +968,18 @@ class CrawlJobRuntime:
                             if normalized_source == "offertoday"
                             else None
                         ),
+                        "detail_target_kind": detail_target_kind,
                     }
                 )
 
-            targets = targets[:detail_limit]
+            if detail_limit is not None:
+                targets = targets[:detail_limit]
+            new_detail_targets = sum(
+                target["detail_target_kind"] == "new" for target in targets
+            )
+            repair_detail_targets = sum(
+                target["detail_target_kind"] == "repair" for target in targets
+            )
             if reconciliation_records:
                 self.crawl_job_repository.append_event(
                     db,
@@ -798,6 +1028,8 @@ class CrawlJobRuntime:
                 identity_conflict_evidence=tuple(conflict_evidence),
                 reconciliation_records=tuple(reconciliation_records),
                 targets=targets,
+                new_detail_targets=new_detail_targets,
+                repair_detail_targets=repair_detail_targets,
             )
         except Exception:
             db.rollback()

@@ -59,6 +59,7 @@ ListingTerminalPolicy = Literal[
     "cursor-terminal-empty-confirmation-v1",
     "result-transition-confirmation-v1",
 ]
+ListingPageCapBehavior = Literal["reject", "retain-and-continue"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,10 +97,15 @@ class ListingStopPolicy:
     max_pages_per_condition: int
     unique_job_cap: int | None = None
     require_empty_confirmation: bool = True
+    page_cap_behavior: ListingPageCapBehavior = "reject"
 
     def __post_init__(self) -> None:
         if self.max_pages_per_condition < 1:
             raise ValueError("max_pages_per_condition must be >= 1")
+        if self.page_cap_behavior not in {"reject", "retain-and-continue"}:
+            raise ValueError(
+                "page_cap_behavior must be 'reject' or 'retain-and-continue'"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +203,8 @@ class ListingPageObservation:
     session_mode: str
     retry_reason: str | None
     stop_reason: str | None
+    supplemental_identity_issues: tuple[ListingIdentityIssue, ...] = ()
+    supplemental_identity_conflicts: tuple[ListingIdentityConflict, ...] = ()
     cursor_evidence: OfferTodayListingPageEvidenceV2 | None = None
 
 
@@ -206,6 +214,7 @@ class ListingConditionOutcome:
     pages_observed: int
     stop_reason: str
     is_complete: bool
+    is_partial: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +229,29 @@ class ListingRunResult:
     gaps: tuple[ListingGap, ...]
     stop_reason: str
     is_complete: bool
+    is_partial: bool = False
+    capped_condition_ids: tuple[str, ...] = ()
+    supplemental_rows_observed: int = 0
+    supplemental_job_ids: tuple[str, ...] = ()
+    supplemental_identity_issue_count: int = 0
+
+    @property
+    def is_partial_success(self) -> bool:
+        return (
+            self.is_partial
+            and len(self.condition_outcomes) > 0
+            and all(
+                outcome.is_complete or outcome.is_partial
+                for outcome in self.condition_outcomes
+            )
+            and not self.gaps
+            and not self.identity_conflicts
+            and not self.identity_issues
+        )
+
+    @property
+    def can_proceed_to_detail(self) -> bool:
+        return self.is_complete or self.is_partial_success
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,6 +458,13 @@ def listing_observation_to_payload(value: Any) -> Any:
         payload = asdict(value)
         if value.cursor_evidence is None:
             payload.pop("cursor_evidence", None)
+        payload.pop("supplemental_identity_issues", None)
+        payload.pop("supplemental_identity_conflicts", None)
+        return listing_observation_to_payload(payload)
+    if isinstance(value, ListingConditionOutcome):
+        payload = asdict(value)
+        if not value.is_partial:
+            payload.pop("is_partial", None)
         return listing_observation_to_payload(payload)
     if is_dataclass(value) and not isinstance(value, type):
         return listing_observation_to_payload(asdict(value))
@@ -617,6 +656,11 @@ class OfferTodayListingRunner:
             set()
         )
         identity_issues: list[ListingIdentityIssue] = []
+        supplemental_rows_observed = 0
+        supplemental_job_ids: list[str] = []
+        supplemental_job_id_set: set[str] = set()
+        supplemental_identity_issue_count = 0
+        capped_condition_ids: list[str] = []
         run_stop_reason: str | None = None
 
         for condition in conditions:
@@ -629,6 +673,7 @@ class OfferTodayListingRunner:
             awaiting_empty_confirmation = False
             condition_stop_reason: str | None = None
             condition_is_complete = False
+            condition_is_partial = False
             cursor: OfferTodayListingCursor | None = None
             initial_session_id: str | None = None
             effective_page_size: int | None = None
@@ -655,10 +700,16 @@ class OfferTodayListingRunner:
                 if active_request_policy is not None:
                     if logical_pages_started >= stop_policy.max_pages_per_condition:
                         condition_stop_reason = "page_cap"
+                        condition_is_partial = (
+                            stop_policy.page_cap_behavior == "retain-and-continue"
+                        )
                         break
                     logical_pages_started += 1
                 elif page > stop_policy.max_pages_per_condition:
                     condition_stop_reason = "page_cap"
+                    condition_is_partial = (
+                        stop_policy.page_cap_behavior == "retain-and-continue"
+                    )
                     break
 
                 payload = build_offertoday_listing_payload(
@@ -1095,11 +1146,11 @@ class OfferTodayListingRunner:
                     row_evidence = tuple(analysis.evidence for analysis in row_analyses)
                     page_ordered_job_ids: list[str] = []
                     page_ordered_job_id_set: set[str] = set()
-                    authority_ordered_job_ids: list[str] = []
-                    authority_ordered_job_id_set: set[str] = set()
                     result_page_job_ids: set[str] = set()
                     page_issues: list[ListingIdentityIssue] = []
                     page_conflicts: list[ListingIdentityConflict] = []
+                    supplemental_page_issues: list[ListingIdentityIssue] = []
+                    supplemental_page_conflicts: list[ListingIdentityConflict] = []
                     page_conflict_keys: set[
                         tuple[tuple[str, ...], tuple[str, ...], str]
                     ] = set()
@@ -1115,6 +1166,9 @@ class OfferTodayListingRunner:
                     ] = {}
                     candidate_accepted_job_ids = set(accepted_job_ids)
                     page_rejected_job_ids: set[str] = set()
+                    supplemental_identities_by_job: dict[
+                        str, list[OfferTodayDetailIdentity]
+                    ] = {}
 
                     def add_deferral(
                         job_ids: tuple[str, ...],
@@ -1146,34 +1200,19 @@ class OfferTodayListingRunner:
                             identity_conflict_keys.add(key)
                             identity_conflicts.append(conflict)
 
-                    for analysis, is_result_row in (
-                        *((analysis, True) for analysis in row_analyses),
-                        *((analysis, False) for analysis in supplemental_row_analyses),
-                    ):
+                    for analysis in row_analyses:
                         evidence = analysis.evidence
                         job_id = evidence.job_id
-                        encrypted_job_id = evidence.encrypted_job_id
-                        if (
-                            is_result_row
-                            and job_id is not None
-                            and job_id not in ordered_job_id_set
-                        ):
+                        if job_id is not None and job_id not in ordered_job_id_set:
                             ordered_job_id_set.add(job_id)
                             ordered_job_ids.append(job_id)
                         if (
-                            is_result_row
-                            and job_id is not None
+                            job_id is not None
                             and job_id not in page_ordered_job_id_set
                         ):
                             page_ordered_job_id_set.add(job_id)
                             page_ordered_job_ids.append(job_id)
                             result_page_job_ids.add(job_id)
-                        if (
-                            job_id is not None
-                            and job_id not in authority_ordered_job_id_set
-                        ):
-                            authority_ordered_job_id_set.add(job_id)
-                            authority_ordered_job_ids.append(job_id)
 
                         if analysis.issue is not None:
                             issue = analysis.issue
@@ -1199,7 +1238,102 @@ class OfferTodayListingRunner:
                             identity
                         )
 
-                    for job_id in authority_ordered_job_ids:
+                    for analysis in supplemental_row_analyses:
+                        if analysis.issue is not None:
+                            supplemental_page_issues.append(analysis.issue)
+                            continue
+                        identity = analysis.identity
+                        if identity is None:  # pragma: no cover - resolver invariant
+                            continue
+                        supplemental_identities_by_job.setdefault(
+                            identity.job_id, []
+                        ).append(identity)
+
+                    supplemental_conflicted_job_ids: set[str] = set()
+                    supplemental_conflict_reason_by_job: dict[str, str] = {}
+                    for job_id, identities in supplemental_identities_by_job.items():
+                        route_ids = {
+                            identity.encrypted_job_id for identity in identities
+                        }
+                        current_identity = candidate_job_to_identity.get(job_id)
+                        if current_identity is not None:
+                            route_ids.add(current_identity.encrypted_job_id)
+                        route_ids.update(
+                            identity.encrypted_job_id
+                            for identity in page_identities_by_job.get(job_id, [])
+                        )
+                        if len(route_ids) > 1:
+                            supplemental_conflicted_job_ids.add(job_id)
+                            supplemental_conflict_reason_by_job[job_id] = (
+                                "supplemental_job_id_to_multiple_encrypted_ids"
+                            )
+
+                    supplemental_route_to_jobs: dict[str, set[str]] = {}
+                    for job_id, identities in supplemental_identities_by_job.items():
+                        for identity in identities:
+                            supplemental_route_to_jobs.setdefault(
+                                identity.encrypted_job_id, set()
+                            ).add(job_id)
+                            if any(
+                                result_job_id != job_id
+                                and result_identity.encrypted_job_id
+                                == identity.encrypted_job_id
+                                for result_job_id in (
+                                    candidate_job_to_identity.keys()
+                                    | page_identities_by_job.keys()
+                                )
+                                for result_identity in (
+                                    [candidate_job_to_identity[result_job_id]]
+                                    if result_job_id in candidate_job_to_identity
+                                    else []
+                                )
+                                + page_identities_by_job.get(result_job_id, [])
+                            ):
+                                supplemental_conflicted_job_ids.add(job_id)
+                                supplemental_conflict_reason_by_job[job_id] = (
+                                    "supplemental_one_encrypted_id_to_multiple_job_ids"
+                                )
+                    for encrypted_job_id, job_ids in supplemental_route_to_jobs.items():
+                        if len(job_ids) > 1:
+                            for job_id in job_ids:
+                                supplemental_conflicted_job_ids.add(job_id)
+                                supplemental_conflict_reason_by_job.setdefault(
+                                    job_id,
+                                    "supplemental_one_encrypted_id_to_multiple_job_ids",
+                                )
+                    for job_id in sorted(supplemental_conflicted_job_ids):
+                        identities = supplemental_identities_by_job[job_id]
+                        supplemental_page_conflicts.append(
+                            ListingIdentityConflict(
+                                job_ids=(job_id,),
+                                encrypted_job_ids=tuple(
+                                    sorted(
+                                        {
+                                            identity.encrypted_job_id
+                                            for identity in identities
+                                        }
+                                    )
+                                ),
+                                reason=supplemental_conflict_reason_by_job[job_id],
+                            )
+                        )
+
+                    valid_supplemental_job_ids = tuple(
+                        job_id
+                        for job_id in supplemental_identities_by_job
+                        if job_id not in supplemental_conflicted_job_ids
+                    )
+                    for job_id in valid_supplemental_job_ids:
+                        if job_id not in supplemental_job_id_set:
+                            supplemental_job_id_set.add(job_id)
+                            supplemental_job_ids.append(job_id)
+                    supplemental_rows_observed += len(raw_supplemental_rows)
+                    supplemental_identity_issue_count += (
+                        len(supplemental_page_issues)
+                        + len(supplemental_page_conflicts)
+                    )
+
+                    for job_id in page_ordered_job_ids:
                         page_identities = page_identities_by_job.get(job_id)
                         if not page_identities:
                             continue
@@ -1303,9 +1437,7 @@ class OfferTodayListingRunner:
                         if analysis.evidence.job_id is not None
                     )
                     supplemental_evidence_job_ids = tuple(
-                        analysis.evidence.job_id
-                        for analysis in supplemental_row_analyses
-                        if analysis.evidence.job_id is not None
+                        job_id for job_id in valid_supplemental_job_ids
                     )
                     result_identity_evidence = tuple(
                         OfferTodayListingIdentityEvidenceV2(
@@ -1320,25 +1452,30 @@ class OfferTodayListingRunner:
                     )
                     supplemental_identity_evidence = tuple(
                         OfferTodayListingIdentityEvidenceV2(
-                            job_id=analysis.identity.job_id,
-                            encrypted_job_id=analysis.identity.encrypted_job_id,
-                            encrypted_job_id_source=(
-                                analysis.identity.encrypted_job_id_source
-                            ),
+                            job_id=identity.job_id,
+                            encrypted_job_id=identity.encrypted_job_id,
+                            encrypted_job_id_source=identity.encrypted_job_id_source,
                         )
-                        for analysis in supplemental_row_analyses
-                        if analysis.identity is not None
+                        for job_id in valid_supplemental_job_ids
+                        for identity in supplemental_identities_by_job[job_id][:1]
                     )
                     has_any_rows = bool(raw_rows or raw_supplemental_rows)
                     is_nonempty_confirmation = (
-                        awaiting_empty_confirmation and has_any_rows
+                        terminal_policy != RESULT_TERMINAL_POLICY_ID
+                        and awaiting_empty_confirmation
+                        and has_any_rows
                     )
                     terminal_contract_verified = (
                         active_endpoint_contract is None
                         or active_endpoint_contract.terminal_verified
                     )
                     terminal_signal = terminal_contract_verified and (
-                        not has_any_rows or has_more is False
+                        (
+                            not raw_rows
+                            if terminal_policy == RESULT_TERMINAL_POLICY_ID
+                            else not has_any_rows
+                        )
+                        or has_more is False
                     )
                     result_cohort_exhaustion = False
                     if terminal_policy == RESULT_TERMINAL_POLICY_ID:
@@ -1366,7 +1503,12 @@ class OfferTodayListingRunner:
                             >= RESULT_TERMINAL_CONFIRMATION_PAGE_COUNT
                         )
                     natural_exhaustion = (
-                        awaiting_empty_confirmation and not has_any_rows
+                        awaiting_empty_confirmation
+                        and (
+                            not raw_rows
+                            if terminal_policy == RESULT_TERMINAL_POLICY_ID
+                            else not has_any_rows
+                        )
                     ) or (
                         not stop_policy.require_empty_confirmation and terminal_signal
                     )
@@ -1408,6 +1550,10 @@ class OfferTodayListingRunner:
                         if page >= stop_policy.max_pages_per_condition:
                             attempt_stop_reason = "page_cap"
                             condition_stop_reason = "page_cap"
+                            condition_is_partial = (
+                                stop_policy.page_cap_behavior
+                                == "retain-and-continue"
+                            )
                         else:
                             attempt_stop_reason = None
 
@@ -1458,6 +1604,12 @@ class OfferTodayListingRunner:
                         session_mode=session_mode,
                         retry_reason=None,
                         stop_reason=attempt_stop_reason,
+                        supplemental_identity_issues=tuple(
+                            supplemental_page_issues
+                        ),
+                        supplemental_identity_conflicts=tuple(
+                            supplemental_page_conflicts
+                        ),
                         cursor_evidence=(
                             _v2_page_evidence(
                                 policy=active_request_policy,
@@ -1517,7 +1669,10 @@ class OfferTodayListingRunner:
                         accepted_job_ids.difference_update(page_rejected_job_ids)
                     else:
                         if stage_rows:
-                            if active_request_policy is not None:
+                            if (
+                                active_request_policy is not None
+                                and stop_policy.page_cap_behavior == "reject"
+                            ):
                                 pending_v2_stage_pages.append((page, stage_rows))
                             else:
                                 await staging_sink.stage_page(
@@ -1559,7 +1714,11 @@ class OfferTodayListingRunner:
                 if page_delay > 0:
                     await self._sleep(page_delay)
 
-            if not condition_is_complete and request_policy is not None:
+            if (
+                not condition_is_complete
+                and not condition_is_partial
+                and request_policy is not None
+            ):
                 removed_job_ids = ordered_job_ids[condition_ordered_job_count:]
                 del ordered_job_ids[condition_ordered_job_count:]
                 ordered_job_id_set.difference_update(removed_job_ids)
@@ -1580,9 +1739,13 @@ class OfferTodayListingRunner:
                 pages_observed=pages_observed,
                 stop_reason=condition_stop_reason or "condition_incomplete",
                 is_complete=condition_is_complete,
+                is_partial=condition_is_partial,
             )
             outcomes.append(outcome)
             await observation_sink.record_condition_outcome(outcome)
+            if condition_is_partial:
+                capped_condition_ids.append(condition.condition_id)
+                continue
             if not condition_is_complete:
                 run_stop_reason = outcome.stop_reason
                 break
@@ -1594,8 +1757,20 @@ class OfferTodayListingRunner:
             and not identity_conflicts
             and not identity_issues
         )
+        is_partial = (
+            len(outcomes) == len(conditions)
+            and any(outcome.is_partial for outcome in outcomes)
+            and all(
+                outcome.is_complete or outcome.is_partial for outcome in outcomes
+            )
+            and not gaps
+            and not identity_conflicts
+            and not identity_issues
+        )
         if is_complete:
             run_stop_reason = "natural_exhaustion"
+        elif is_partial:
+            run_stop_reason = "page_cap"
 
         return ListingRunResult(
             ordered_job_ids=tuple(ordered_job_ids),
@@ -1619,6 +1794,13 @@ class OfferTodayListingRunner:
             gaps=tuple(gaps),
             stop_reason=run_stop_reason or "condition_incomplete",
             is_complete=is_complete,
+            is_partial=is_partial,
+            capped_condition_ids=tuple(capped_condition_ids),
+            supplemental_rows_observed=supplemental_rows_observed,
+            supplemental_job_ids=tuple(supplemental_job_ids),
+            supplemental_identity_issue_count=(
+                supplemental_identity_issue_count
+            ),
         )
 
     @staticmethod

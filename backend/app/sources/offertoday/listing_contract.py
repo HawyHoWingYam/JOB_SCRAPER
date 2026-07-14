@@ -484,6 +484,28 @@ class OfferTodayListingRequestPolicy:
         )
 
 
+def production_offertoday_listing_request_policy(
+    *,
+    page_size: int = 10,
+) -> OfferTodayListingRequestPolicy:
+    """Return the fixed request contract used by the production IT crawl.
+
+    Research callers still construct ``OfferTodayListingRequestPolicy`` with
+    their own variant/repeat metadata.  The production path deliberately
+    hides those experiment controls and pins the verified search contract.
+    """
+
+    return OfferTodayListingRequestPolicy(
+        protocol_version=2,
+        pagination_mode="response-cursor",
+        requested_page_size=page_size,
+        browser_lifecycle="condition-local-runtime",
+        variant_id="production-it-cursor",
+        repeat_index=1,
+        endpoint_contract_id="recommend-search-list-v1",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class OfferTodayListingTransportResult:
     payload: dict[str, Any] | None
