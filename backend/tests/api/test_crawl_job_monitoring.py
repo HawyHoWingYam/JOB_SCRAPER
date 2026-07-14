@@ -33,6 +33,52 @@ def test_build_crawl_request_created_log_message_includes_request_and_batch_cont
 
 
 @pytest.mark.asyncio
+async def test_list_crawl_tasks_batch_loads_detail_progress_events(monkeypatch):
+    observed_event_types = set()
+    fake_job = SimpleNamespace(id="job-1")
+
+    class _FakeRepository:
+        def list_crawl_task_page(self, db, **filters):
+            return [fake_job], 1
+
+        def list_latest_events_for_jobs(self, db, *, crawl_job_ids):
+            return {}
+
+        def list_events_by_job_ids(self, db, *, crawl_job_ids, event_types):
+            observed_event_types.update(event_types)
+            return {}
+
+    monkeypatch.setattr(crawl_jobs_api, "crawl_job_repository", _FakeRepository())
+    monkeypatch.setattr(
+        crawl_jobs_api,
+        "build_crawl_task_snapshot",
+        lambda *args, **kwargs: {
+            "crawl_job_id": "job-1",
+            "persisted_status": "running",
+            "status": "running",
+            "source_site": "offertoday",
+        },
+    )
+
+    payload = await crawl_jobs_api.list_crawl_tasks(
+        page=1,
+        page_size=10,
+        status=None,
+        source_site="offertoday",
+        crawl_mode=None,
+        time_range="all",
+        db=object(),
+    )
+
+    assert payload.total == 1
+    assert {
+        "crawl.detail_attempt",
+        "crawl.detail_cohort_frozen",
+        "crawl.detail_reconciled",
+    }.issubset(observed_event_types)
+
+
+@pytest.mark.asyncio
 async def test_create_crawl_job_accepts_positional_direct_call_db_argument(monkeypatch):
     supplied_db = object()
     captured: dict[str, object] = {}

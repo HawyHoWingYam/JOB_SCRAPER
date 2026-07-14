@@ -202,6 +202,45 @@ function formatBacklogCount(value) {
     return Number(value || 0).toLocaleString();
 }
 
+function hasEligibleListingBatchDetailWork(batch) {
+    if (`${batch?.status || ''}`.trim().toLowerCase() !== 'completed') {
+        return false;
+    }
+    return [
+        batch?.detail_pending,
+        batch?.detail_failed,
+        batch?.detail_manual_action_required,
+    ].some((value) => Number(value || 0) > 0);
+}
+
+function findNewestEligibleListingBatch(batches) {
+    return (batches || [])
+        .filter(hasEligibleListingBatchDetailWork)
+        .reduce((newest, batch) => {
+            if (!newest) {
+                return batch;
+            }
+
+            const batchTimestamp = Date.parse(
+                batch?.queued_at || batch?.created_at || batch?.completed_at || ''
+            );
+            const newestTimestamp = Date.parse(
+                newest?.queued_at || newest?.created_at || newest?.completed_at || ''
+            );
+            const normalizedBatchTimestamp = Number.isFinite(batchTimestamp) ? batchTimestamp : 0;
+            const normalizedNewestTimestamp = Number.isFinite(newestTimestamp) ? newestTimestamp : 0;
+            if (normalizedBatchTimestamp !== normalizedNewestTimestamp) {
+                return normalizedBatchTimestamp > normalizedNewestTimestamp ? batch : newest;
+            }
+
+            return `${batch?.crawl_job_id || ''}`.localeCompare(
+                `${newest?.crawl_job_id || ''}`
+            ) > 0
+                ? batch
+                : newest;
+        }, null);
+}
+
 function formatSourceLabel(sourceSite) {
     return formatScraperSourceLabel(sourceSite);
 }
@@ -321,7 +360,7 @@ function buildImmediateRunSummary(form, sourceSite, categories) {
 
         if (listingBatchId) {
             summaryMetrics.push(
-                `Legacy batch filter: ${formatListingBatchIdentity({
+                `Listing batch scope: ${formatListingBatchIdentity({
                     sourceSite,
                     crawlJobId: listingBatchId,
                 })}`
@@ -384,7 +423,7 @@ function buildImmediateRunReadiness(
         if (crawlPhase === 'listing' && selectedSectorCount === 0 && sourceSite !== 'offertoday') {
             detail = 'Select at least one sector to launch this listing crawl.';
         } else if (crawlPhase === 'detail' && selectedSectorCount === 0 && !hasBatchFilter) {
-            detail = 'Select sectors or a legacy listing batch before launching this detail recovery run.';
+            detail = 'Select sectors or a listing batch before launching this detail recovery run.';
         }
 
         return {
@@ -402,8 +441,8 @@ function buildImmediateRunReadiness(
                 ? 'Listing crawl will use 全 IT 分類（預設）.'
                 : `Listing crawl will scan ${selectedSectorCount} selected sector${selectedSectorCount === 1 ? '' : 's'}.`)
             : hasBatchFilter
-                ? 'Detail crawl will narrow recovery to the selected legacy listing batch.'
-                : 'Detail crawl will recover eligible backlog from the selected sector scope.',
+                ? 'Detail crawl will use only the selected listing batch, including keyword and hybrid rows.'
+                : 'Detail crawl will use global category backlog across matching listing batches.',
     };
 }
 
@@ -414,7 +453,7 @@ function buildImmediateRunModeCopy(form) {
         return {
             eyebrow: 'Detail Mode',
             title: 'Recover eligible detail backlog',
-            description: 'Use sectors and optional legacy batch narrowing to target pending detail work.',
+            description: 'Use a listing batch for complete batch recovery, or explicitly choose category backlog.',
         };
     }
 
@@ -458,6 +497,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
     const immediateDirtyFieldsRef = useRef({
         crawlMode: false,
         maxPages: false,
+        listingBatch: false,
     });
     const scheduleHistoryCacheRef = useRef(new Map());
     const categoryCacheRef = useRef(new Map());
@@ -796,6 +836,35 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
         fetchListingBatches(currentSourceSite);
     }, [currentSourceSite, fetchListingBatches, immediateForm.crawl_phase, showImmediateScrape]);
 
+    useEffect(() => {
+        if (
+            !showImmediateScrape
+            || immediateForm.crawl_phase !== 'detail'
+            || currentSourceSite !== 'offertoday'
+            || immediateDirtyFieldsRef.current.listingBatch
+            || immediateForm.source_listing_crawl_job_id
+        ) {
+            return;
+        }
+
+        const defaultBatch = findNewestEligibleListingBatch(listingBatches);
+        if (!defaultBatch?.crawl_job_id) {
+            return;
+        }
+
+        setImmediateForm((prev) => (
+            prev.source_listing_crawl_job_id
+                ? prev
+                : { ...prev, source_listing_crawl_job_id: defaultBatch.crawl_job_id }
+        ));
+    }, [
+        currentSourceSite,
+        immediateForm.crawl_phase,
+        immediateForm.source_listing_crawl_job_id,
+        listingBatches,
+        showImmediateScrape,
+    ]);
+
     const schedulerStatus = capabilities?.scheduler || null;
     const headedWorkerStatus = capabilities?.crawl_workers?.headed || null;
     const schedulerAutomationAvailable = schedulerStatus?.available !== false;
@@ -1029,6 +1098,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
 
         setCurrentSourceSite(nextSourceSite);
         setCreateFormHasSourceSelections(false);
+        immediateDirtyFieldsRef.current.listingBatch = false;
         setImmediateForm((prev) => ({
             ...prev,
             crawl_phase: resolveDefaultCrawlPhase(),
@@ -1254,13 +1324,17 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                             data-testid="direct-override-phase"
                             className="premium-select"
                             value={immediateForm.crawl_phase}
-                            onChange={(e) => setImmediateForm(prev => ({
-                                ...prev,
-                                crawl_phase: e.target.value,
-                                source_listing_crawl_job_id: e.target.value === 'detail'
-                                    ? prev.source_listing_crawl_job_id
-                                    : '',
-                            }))}
+                            onChange={(e) => {
+                                const nextPhase = e.target.value;
+                                immediateDirtyFieldsRef.current.listingBatch = false;
+                                setImmediateForm(prev => ({
+                                    ...prev,
+                                    crawl_phase: nextPhase,
+                                    source_listing_crawl_job_id: nextPhase === 'detail'
+                                        ? prev.source_listing_crawl_job_id
+                                        : '',
+                                }));
+                            }}
                         >
                             {CRAWL_PHASE_OPTIONS.map((option) => (
                                 <option key={option.value} value={option.value}>
@@ -1347,18 +1421,21 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
 
                     {immediateForm.crawl_phase === 'detail' && (
                         <div className="cyber-form-group">
-                            <label htmlFor="source-listing-crawl-job-id">Legacy Listing Batch Filter</label>
+                            <label htmlFor="source-listing-crawl-job-id">Listing Batch Scope</label>
                             <select
                                 id="source-listing-crawl-job-id"
                                 data-testid="direct-override-listing-batch"
                                 className="premium-select"
                                 value={immediateForm.source_listing_crawl_job_id}
-                                onChange={(e) => setImmediateForm(prev => ({
-                                    ...prev,
-                                    source_listing_crawl_job_id: e.target.value,
-                                }))}
+                                onChange={(e) => {
+                                    immediateDirtyFieldsRef.current.listingBatch = true;
+                                    setImmediateForm(prev => ({
+                                        ...prev,
+                                        source_listing_crawl_job_id: e.target.value,
+                                    }));
+                                }}
                             >
-                                <option value="">No legacy batch filter</option>
+                                <option value="">Global category backlog (advanced)</option>
                                 {listingBatches.map((batch) => (
                                     <option key={batch.crawl_job_id} value={batch.crawl_job_id}>
                                         {formatListingBatchOptionLabel(batch, formatRuntimeTimestamp)}
@@ -1366,7 +1443,9 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                                 ))}
                             </select>
                             <p className="form-hint backlog-guidance-muted">
-                                Optional narrowing control. Leave blank to recover eligible backlog across the selected sectors.
+                                {currentSourceSite === 'offertoday'
+                                    ? 'OfferToday defaults to the newest batch with detail work. Choose global backlog explicitly only for category-wide recovery.'
+                                    : 'Choose a listing batch to narrow recovery, or leave it blank for category backlog.'}
                             </p>
                             <div className="backlog-guidance-panel">
                                 <div>

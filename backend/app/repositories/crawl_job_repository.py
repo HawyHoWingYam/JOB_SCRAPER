@@ -400,9 +400,9 @@ class CrawlJobRepository:
         total = int(query.count() or 0)
         rows = (
             query.order_by(
-                desc(CrawlJob.updated_at),
                 desc(CrawlJob.queued_at),
                 desc(CrawlJob.created_at),
+                desc(CrawlJob.id),
             )
             .offset((page - 1) * page_size)
             .limit(page_size)

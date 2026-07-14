@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import app.services.crawl_task_snapshot_service as snapshot_service
 from app.services.crawl_task_snapshot_service import build_crawl_task_snapshot
 
 
@@ -115,6 +116,31 @@ def test_non_offertoday_snapshot_preserves_legacy_staged_fallback():
     assert snapshot["listing_partial"] is False
 
 
+def test_jobs_saved_fallback_is_source_aware():
+    offertoday_job = _crawl_job(
+        source_site="offertoday",
+        metrics={"jobs_saved": 68, "ingest_items_seen": 0},
+    )
+    jobsdb_job = _crawl_job(
+        source_site="jobsdb",
+        metrics={"jobs_saved": 3, "ingest_items_seen": 7},
+    )
+
+    offertoday_snapshot = build_crawl_task_snapshot(
+        offertoday_job,
+        _event("crawl.completed", {}, offertoday_job.completed_at),
+        now=offertoday_job.completed_at,
+    )
+    jobsdb_snapshot = build_crawl_task_snapshot(
+        jobsdb_job,
+        _event("crawl.completed", {}, jobsdb_job.completed_at),
+        now=jobsdb_job.completed_at,
+    )
+
+    assert offertoday_snapshot["jobs_saved"] == 68
+    assert jobsdb_snapshot["jobs_saved"] == 7
+
+
 def test_legacy_offertoday_ip_block_snapshot_is_resumable_and_actionable():
     request_payload = {
         "crawl_phase": "detail",
@@ -160,3 +186,222 @@ def test_legacy_offertoday_ip_block_snapshot_is_resumable_and_actionable():
     assert snapshot["manual_action"]["reuse_open_browser_supported"] is True
     assert snapshot["manual_action"]["browser_channel"]
     assert snapshot["manual_action"]["browser_profile_path"]
+
+
+def test_offertoday_snapshot_projects_distinct_resume_safe_detail_progress():
+    crawl_job = _crawl_job(
+        source_site="offertoday",
+        metrics={"detail_target_rows": 1, "detail_run_completed": 9},
+        status="manual_action_required",
+        request_payload={"crawl_phase": "detail"},
+    )
+    events = [
+        _event(
+            "crawl.detail_cohort_frozen",
+            {
+                "fetch_cohort_source_job_ids": ["a", "b", "c", "d"],
+                "fetch_cohort_distinct": 4,
+                "reconciled_source_job_ids": ["reconciled-1", "reconciled-2"],
+            },
+            crawl_job.started_at,
+        ),
+        _event(
+            "crawl.detail_attempt",
+            {"source_job_id": "a", "classification": "ip_blocked"},
+            crawl_job.started_at,
+        ),
+        _event(
+            "crawl.detail_attempt",
+            {"source_job_id": "a", "classification": "success"},
+            crawl_job.started_at,
+        ),
+        _event(
+            "crawl.detail_attempt",
+            {"source_job_id": "a", "classification": "success"},
+            crawl_job.started_at,
+        ),
+        _event(
+            "crawl.detail_attempt",
+            {"source_job_id": "b", "classification": "terminal_unavailable"},
+            crawl_job.started_at,
+        ),
+        _event(
+            "crawl.detail_attempt",
+            {
+                "source_job_id": "c",
+                "classification": "transient_transport",
+                "will_retry": True,
+            },
+            crawl_job.started_at,
+        ),
+        _event(
+            "crawl.detail_attempt",
+            {"source_job_id": "c", "classification": "invalid_payload"},
+            crawl_job.started_at,
+        ),
+        _event(
+            "crawl.detail_attempt",
+            {"source_job_id": "d", "classification": "waf_challenge"},
+            crawl_job.started_at,
+        ),
+        _event(
+            "crawl.detail_cohort_frozen",
+            {
+                "fetch_cohort_source_job_ids": ["d"],
+                "fetch_cohort_distinct": 1,
+                "reconciled_source_job_ids": ["reconciled-2", "reconciled-3"],
+            },
+            crawl_job.completed_at,
+        ),
+        _event(
+            "crawl.detail_reconciled",
+            {"records": [{"source_job_id": "reconciled-3"}]},
+            crawl_job.completed_at,
+        ),
+    ]
+
+    snapshot = build_crawl_task_snapshot(
+        crawl_job,
+        events[-1],
+        now=crawl_job.completed_at,
+        events=events,
+    )
+
+    assert snapshot["detail_distinct_target_total"] == 4
+    assert snapshot["detail_distinct_succeeded"] == 1
+    assert snapshot["detail_distinct_terminal_unavailable"] == 1
+    assert snapshot["detail_distinct_failed"] == 1
+    assert snapshot["detail_distinct_reconciled"] == 3
+    assert snapshot["detail_distinct_remaining"] == 1
+
+
+def test_historical_offertoday_detail_snapshot_uses_distinct_event_evidence():
+    target_ids = [f"job-{index}" for index in range(1311)]
+    reconciled_ids = [f"reconciled-{index}" for index in range(95)]
+    crawl_job = _crawl_job(
+        source_site="offertoday",
+        metrics={
+            "detail_target_rows": 68,
+            "detail_run_completed": 2464,
+            "jobs_saved": 68,
+        },
+        request_payload={"crawl_phase": "detail"},
+    )
+    events = [
+        _event(
+            "crawl.detail_cohort_frozen",
+            {
+                "fetch_cohort_source_job_ids": target_ids,
+                "fetch_cohort_distinct": 1311,
+                "reconciled_source_job_ids": reconciled_ids,
+            },
+            crawl_job.started_at,
+        )
+    ]
+    events.extend(
+        _event(
+            "crawl.detail_attempt",
+            {"source_job_id": target_ids[index], "classification": "ip_blocked"},
+            crawl_job.started_at,
+        )
+        for index in range(5)
+    )
+    events.extend(
+        _event(
+            "crawl.detail_attempt",
+            {"source_job_id": source_job_id, "classification": "success"},
+            crawl_job.completed_at,
+        )
+        for source_job_id in target_ids[:1305]
+    )
+    events.extend(
+        _event(
+            "crawl.detail_attempt",
+            {
+                "source_job_id": source_job_id,
+                "classification": "terminal_unavailable",
+            },
+            crawl_job.completed_at,
+        )
+        for source_job_id in target_ids[1305:]
+    )
+    completed_event = _event("crawl.completed", {}, crawl_job.completed_at)
+    events.append(completed_event)
+
+    snapshot = build_crawl_task_snapshot(
+        crawl_job,
+        completed_event,
+        now=crawl_job.completed_at,
+        events=events,
+    )
+
+    assert snapshot["jobs_saved"] == 68
+    assert snapshot["detail_target_rows"] == 68
+    assert snapshot["detail_run_completed"] == 2464
+    assert snapshot["detail_distinct_target_total"] == 1311
+    assert snapshot["detail_distinct_succeeded"] == 1305
+    assert snapshot["detail_distinct_terminal_unavailable"] == 6
+    assert snapshot["detail_distinct_failed"] == 0
+    assert snapshot["detail_distinct_reconciled"] == 95
+    assert snapshot["detail_distinct_remaining"] == 0
+
+
+def test_active_progress_payload_uses_the_same_batched_distinct_projection(monkeypatch):
+    crawl_job = _crawl_job(
+        source_site="offertoday",
+        metrics={"detail_target_rows": 1},
+        status="running",
+        request_payload={"crawl_phase": "detail"},
+    )
+    started_event = _event("crawl.started", {}, crawl_job.started_at)
+    cohort_event = _event(
+        "crawl.detail_cohort_frozen",
+        {
+            "fetch_cohort_source_job_ids": ["job-1", "job-2"],
+            "fetch_cohort_distinct": 2,
+            "reconciled_source_job_ids": [],
+        },
+        crawl_job.started_at,
+    )
+    attempt_event = _event(
+        "crawl.detail_attempt",
+        {"source_job_id": "job-1", "classification": "success"},
+        crawl_job.started_at,
+    )
+    observed_event_types = set()
+
+    class _FakeDb:
+        def close(self):
+            return None
+
+    class _FakeRepository:
+        def list_crawl_jobs_by_statuses(self, db, **kwargs):
+            return [crawl_job]
+
+        def list_recent_crawl_jobs(self, db, **kwargs):
+            return []
+
+        def list_latest_events_for_jobs(self, db, *, crawl_job_ids):
+            return {crawl_job.id: attempt_event}
+
+        def list_events_by_job_ids(self, db, *, crawl_job_ids, event_types):
+            observed_event_types.update(event_types)
+            return {
+                crawl_job.id: [started_event, cohort_event, attempt_event],
+            }
+
+    monkeypatch.setattr(snapshot_service, "SessionLocal", _FakeDb)
+
+    payload = snapshot_service.collect_progress_payload(
+        repository=_FakeRepository()
+    )
+    snapshot = payload["active"][str(crawl_job.id)]
+
+    assert snapshot["detail_distinct_target_total"] == 2
+    assert snapshot["detail_distinct_succeeded"] == 1
+    assert snapshot["detail_distinct_remaining"] == 1
+    assert {
+        "crawl.detail_attempt",
+        "crawl.detail_cohort_frozen",
+        "crawl.detail_reconciled",
+    }.issubset(observed_event_types)

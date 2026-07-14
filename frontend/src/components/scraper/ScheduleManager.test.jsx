@@ -912,7 +912,7 @@ describe('ScheduleManager', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows a readable launch summary for detail mode when a legacy batch filter is selected', async () => {
+  it('shows a readable launch summary for detail mode when a listing batch is selected', async () => {
     vi.stubGlobal(
       'fetch',
       createFetchMock({
@@ -940,11 +940,11 @@ describe('ScheduleManager', () => {
       target: { value: 'detail' },
     });
 
-    const batchSelect = await screen.findByRole('combobox', { name: /legacy listing batch filter/i });
+    const batchSelect = await screen.findByRole('combobox', { name: /listing batch scope/i });
     fireEvent.change(batchSelect, { target: { value: 'listing-batch-123' } });
 
-    expect(await screen.findByText(/legacy batch filter: jobsdb batch listing-batch-123/i)).toBeInTheDocument();
-    expect(screen.getByText(/detail crawl will narrow recovery to the selected legacy listing batch/i)).toBeInTheDocument();
+    expect(await screen.findByText(/listing batch scope: jobsdb batch listing-batch-123/i)).toBeInTheDocument();
+    expect(screen.getByText(/detail crawl will use only the selected listing batch/i)).toBeInTheDocument();
   });
 
   it('reuses cached listing batches when reopening detail mode for the same source', async () => {
@@ -971,12 +971,12 @@ describe('ScheduleManager', () => {
       target: { value: 'detail' },
     });
 
-    expect(await screen.findByRole('combobox', { name: /legacy listing batch filter/i })).toBeInTheDocument();
+    expect(await screen.findByRole('combobox', { name: /listing batch scope/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
     fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
 
-    expect(await screen.findByRole('combobox', { name: /legacy listing batch filter/i })).toBeInTheDocument();
+    expect(await screen.findByRole('combobox', { name: /listing batch scope/i })).toBeInTheDocument();
 
     const urls = globalThis.fetch.mock.calls.map(([url]) => url);
     expect(urls.filter((url) => url === '/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20')).toHaveLength(1);
@@ -1033,7 +1033,7 @@ describe('ScheduleManager', () => {
     fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
       target: { value: 'detail' },
     });
-    expect(await screen.findByRole('combobox', { name: /legacy listing batch filter/i })).toBeInTheDocument();
+    expect(await screen.findByRole('combobox', { name: /listing batch scope/i })).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
       target: { value: 'listing' },
@@ -1050,7 +1050,7 @@ describe('ScheduleManager', () => {
     fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
       target: { value: 'detail' },
     });
-    expect(await screen.findByRole('combobox', { name: /legacy listing batch filter/i })).toBeInTheDocument();
+    expect(await screen.findByRole('combobox', { name: /listing batch scope/i })).toBeInTheDocument();
 
     const urls = globalThis.fetch.mock.calls.map(([url]) => url);
     expect(urls.filter((url) => url === '/api/v1/crawl-jobs/listing-batches?source_site=jobsdb&limit=20')).toHaveLength(2);
@@ -1774,7 +1774,7 @@ describe('ScheduleManager', () => {
     expect(screen.getByText(/eligible backlog: pending, failed, manual review/i)).toBeInTheDocument();
     expect(screen.getByText(/sectors: none selected/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/legacy batch filter: jobsdb batch 11111111-1111-4111-8111-111111111111/i)
+      screen.getByText(/listing batch scope: jobsdb batch 11111111-1111-4111-8111-111111111111/i)
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /start job detail crawl/i }));
 
@@ -1795,6 +1795,152 @@ describe('ScheduleManager', () => {
         skip_existing: true,
       });
     });
+  });
+
+  it('defaults OfferToday detail runs to the newest eligible listing batch and keeps global scope explicit', async () => {
+    const listingBatchId = '4cee200d-9b1b-40ad-88da-8866bacd71a7';
+    vi.stubGlobal(
+      'fetch',
+      createFetchMock({
+        listingBatches: [
+          {
+            crawl_job_id: 'newer-running-listing-batch',
+            source_site: 'offertoday',
+            status: 'running',
+            category_ids: [118000],
+            queued_at: '2026-07-14T12:00:00Z',
+            listings_staged: 10,
+            detail_pending: 10,
+            detail_running: 0,
+            detail_completed: 0,
+            detail_failed: 0,
+            detail_manual_action_required: 0,
+          },
+          {
+            crawl_job_id: 'older-completed-listing-batch',
+            source_site: 'offertoday',
+            status: 'completed',
+            category_ids: [118000],
+            queued_at: '2026-07-14T10:00:00Z',
+            completed_at: '2026-07-14T10:30:00Z',
+            listings_staged: 25,
+            detail_pending: 25,
+            detail_running: 0,
+            detail_completed: 0,
+            detail_failed: 0,
+            detail_manual_action_required: 0,
+          },
+          {
+            crawl_job_id: listingBatchId,
+            source_site: 'offertoday',
+            status: 'completed',
+            category_ids: [118000],
+            queued_at: '2026-07-14T11:28:59Z',
+            completed_at: '2026-07-14T12:45:50Z',
+            listings_staged: 6969,
+            detail_pending: 5956,
+            detail_running: 0,
+            detail_completed: 1013,
+            detail_failed: 0,
+            detail_manual_action_required: 0,
+          },
+        ],
+      }),
+    );
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    await waitForSourceCatalogOptions();
+    changeSource('offertoday');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    const batchScope = await screen.findByRole('combobox', { name: /listing batch scope/i });
+    await waitFor(() => {
+      expect(batchScope).toHaveValue(listingBatchId);
+    });
+    expect(
+      screen.getByText(new RegExp(`listing batch scope: offertoday batch ${listingBatchId}`, 'i'))
+    ).toBeInTheDocument();
+
+    fireEvent.change(batchScope, { target: { value: '' } });
+    await waitFor(() => {
+      expect(batchScope).toHaveValue('');
+    });
+    expect(
+      screen.getByRole('option', { name: /global category backlog \(advanced\)/i }).selected
+    ).toBe(true);
+
+    fireEvent.change(batchScope, { target: { value: listingBatchId } });
+    fireEvent.click(screen.getByRole('button', { name: /start job detail crawl/i }));
+
+    await waitFor(() => {
+      const crawlJobCall = globalThis.fetch.mock.calls.find(
+        ([url, request]) => url === '/api/v1/crawl-jobs' && request?.method === 'POST',
+      );
+      expect(crawlJobCall).toBeTruthy();
+      expect(JSON.parse(crawlJobCall[1].body)).toMatchObject({
+        source_site: 'offertoday',
+        crawl_phase: 'detail',
+        crawl_mode: 'headless',
+        category_ids: [],
+        source_listing_crawl_job_id: listingBatchId,
+        detail_limit: 100,
+        skip_existing: false,
+      });
+    });
+  });
+
+  it('does not overwrite an explicit global OfferToday scope when listing batches finish loading', async () => {
+    const baseFetch = createFetchMock();
+    let resolveListingBatches;
+    const listingBatchResponse = new Promise((resolve) => {
+      resolveListingBatches = resolve;
+    });
+    vi.stubGlobal('fetch', vi.fn((input, init) => {
+      if (String(input).startsWith('/api/v1/crawl-jobs/listing-batches')) {
+        return listingBatchResponse;
+      }
+      return baseFetch(input, init);
+    }));
+
+    render(<ScheduleManager onNavigateToAI={vi.fn()} />);
+
+    await screen.findByText('Task Control Board');
+    await waitForSourceCatalogOptions();
+    changeSource('offertoday');
+    fireEvent.click(screen.getByRole('button', { name: /direct override/i }));
+    fireEvent.change(screen.getByRole('combobox', { name: /crawl phase/i }), {
+      target: { value: 'detail' },
+    });
+
+    const batchScope = await screen.findByRole('combobox', { name: /listing batch scope/i });
+    fireEvent.change(batchScope, { target: { value: '' } });
+
+    await act(async () => {
+      resolveListingBatches(await mockJsonResponse({
+        batches: [
+          {
+            crawl_job_id: 'completed-batch-after-request',
+            source_site: 'offertoday',
+            status: 'completed',
+            queued_at: '2026-07-14T12:00:00Z',
+            detail_pending: 10,
+            detail_failed: 0,
+            detail_manual_action_required: 0,
+          },
+        ],
+      }));
+    });
+
+    await screen.findByRole('option', { name: /completed-batch-after-request/i });
+    expect(batchScope).toHaveValue('');
+    expect(
+      screen.getByRole('option', { name: /global category backlog \(advanced\)/i }).selected
+    ).toBe(true);
   });
 
   it('does not present cleared numeric override fields as zero-valued run summaries', async () => {

@@ -100,6 +100,11 @@ function formatCount(value) {
   return Number(value || 0).toLocaleString();
 }
 
+function normalizeNonNegativeCount(value) {
+  const count = Number(value || 0);
+  return Number.isFinite(count) ? Math.max(count, 0) : 0;
+}
+
 function formatCountPair(currentValue, totalValue) {
   const normalizedTotal = Number(totalValue || 0);
   if (Number.isFinite(normalizedTotal) && normalizedTotal > 0) {
@@ -119,7 +124,49 @@ function isCompletedListingTask(task) {
     && Boolean(task?.listing_completed);
 }
 
+function buildDistinctDetailMetricSummary(task) {
+  const normalizedSourceSite = `${task?.source_site || ''}`.trim().toLowerCase();
+  if (
+    normalizedSourceSite !== 'offertoday'
+    || task?.detail_distinct_target_total === null
+    || task?.detail_distinct_target_total === undefined
+  ) {
+    return null;
+  }
+
+  const targetTotal = Number(task.detail_distinct_target_total);
+  if (!Number.isFinite(targetTotal) || targetTotal < 0) {
+    return null;
+  }
+
+  const succeeded = normalizeNonNegativeCount(task.detail_distinct_succeeded);
+  const terminal = normalizeNonNegativeCount(task.detail_distinct_terminal_unavailable);
+  const reconciled = normalizeNonNegativeCount(task.detail_distinct_reconciled);
+  const failed = normalizeNonNegativeCount(task.detail_distinct_failed);
+  const remaining = normalizeNonNegativeCount(task.detail_distinct_remaining);
+  const summary = [
+    `Fetched ${formatCount(succeeded)} / ${formatCount(targetTotal)}`,
+  ];
+
+  if (terminal > 0) {
+    summary.push(`Terminal ${formatCount(terminal)}`);
+  }
+  if (reconciled > 0) {
+    summary.push(`Reconciled ${formatCount(reconciled)}`);
+  }
+  if (failed > 0) {
+    summary.push(`Failed ${formatCount(failed)}`);
+  }
+  summary.push(`Remaining ${formatCount(remaining)}`);
+  return summary;
+}
+
 function buildMetricSummary(task) {
+  const distinctDetailSummary = buildDistinctDetailMetricSummary(task);
+  if (distinctDetailSummary) {
+    return distinctDetailSummary;
+  }
+
   const summary = [];
   const normalizedSourceSite = `${task?.source_site || ''}`.trim().toLowerCase();
   const jobIdsCollected = Number(task?.job_ids_collected || 0);
@@ -751,7 +798,9 @@ export default function CrawlTasksPage() {
                 </div>
                 <div>
                   <dt>Metrics</dt>
-                  <dd>{buildMetricSummary(selectedTask).join(' | ')}</dd>
+                  <dd data-testid="crawl-task-detail-metrics">
+                    {buildMetricSummary(selectedTask).join(' | ')}
+                  </dd>
                 </div>
               </dl>
 

@@ -1378,7 +1378,10 @@ async def test_stopped_detail_result_leaves_later_target_unprocessed_and_never_c
     )
 
     result = await crawl_module._run_detail_phase(
-        args=_default_listing_args(crawl_phase="full"),
+        args=_default_listing_args(
+            crawl_phase="full",
+            source_listing_crawl_job_id="listing-batch-1",
+        ),
         browser_runtime=_FakeListingBrowserRuntime(trace=trace),
         crawl_runtime=crawl_runtime,
         crawl_job_id="detail-run",
@@ -1397,6 +1400,12 @@ async def test_stopped_detail_result_leaves_later_target_unprocessed_and_never_c
     assert "Change your IP or network" in crawl_runtime.manual_action_payload["message"]
     assert crawl_runtime.manual_action_payload["browser_channel"]
     assert crawl_runtime.manual_action_payload["browser_profile_path"]
+    assert (
+        crawl_runtime.manual_action_payload["resume_context"][
+            "source_listing_crawl_job_id"
+        ]
+        == "listing-batch-1"
+    )
     assert result.stop_batch is True
 
 

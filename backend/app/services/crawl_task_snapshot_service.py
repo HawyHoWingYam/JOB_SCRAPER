@@ -25,12 +25,17 @@ INACTIVE_WORK_EVENT_TYPES = {
 }
 TERMINAL_WORK_EVENT_TYPES = {"crawl.completed", "crawl.failed", "crawl.cancelled"}
 ACTIVITY_INTERVAL_EVENT_TYPES = ACTIVE_WORK_EVENT_TYPES | INACTIVE_WORK_EVENT_TYPES
+DETAIL_PROGRESS_EVENT_TYPES = {
+    "crawl.detail_attempt",
+    "crawl.detail_cohort_frozen",
+    "crawl.detail_reconciled",
+}
 PROGRESS_CONTEXT_EVENT_TYPES = ACTIVITY_INTERVAL_EVENT_TYPES | {
     "listing_completed",
     "waf.challenge",
     "waf.challenge_cleared",
     "crawl.ip_blocked",
-}
+} | DETAIL_PROGRESS_EVENT_TYPES
 
 
 def _elapsed_seconds(reference_time, timestamp) -> int:
@@ -192,6 +197,128 @@ def _to_int(value: Any) -> int:
 
 def _max_count(*values: Any) -> int:
     return max((_to_int(value) for value in values), default=0)
+
+
+def _normalize_source_job_id(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _normalize_source_job_ids(value: Any) -> set[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return set()
+    return {
+        normalized
+        for item in value
+        if (normalized := _normalize_source_job_id(item)) is not None
+    }
+
+
+def _project_distinct_detail_progress(
+    events: list[Any] | None,
+) -> dict[str, int] | None:
+    saw_frozen_cohort = False
+    target_total = 0
+    target_ids: set[str] | None = None
+    succeeded_ids: set[str] = set()
+    terminal_ids: set[str] = set()
+    failed_ids: set[str] = set()
+    reconciled_ids: set[str] = set()
+    settled_failure_classifications = {
+        "id_mismatch",
+        "invalid_payload",
+        "persist_failure",
+        "transient_transport",
+    }
+
+    for event in events or []:
+        event_type = getattr(event, "event_type", None)
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, dict):
+            continue
+
+        if event_type == "crawl.detail_cohort_frozen":
+            saw_frozen_cohort = True
+            cohort_ids = _normalize_source_job_ids(
+                payload.get("fetch_cohort_source_job_ids")
+            )
+            declared_total = _to_int(payload.get("fetch_cohort_distinct"))
+            cohort_total = max(len(cohort_ids), declared_total)
+            # Resume cohorts are subsets of the original frozen fetch cohort.
+            # Keep the first largest cohort on ties so the original denominator
+            # and target universe remain stable across retries.
+            if cohort_total > target_total:
+                target_total = cohort_total
+                target_ids = (
+                    cohort_ids
+                    if cohort_ids and len(cohort_ids) == cohort_total
+                    else None
+                )
+            reconciled_ids.update(
+                _normalize_source_job_ids(payload.get("reconciled_source_job_ids"))
+            )
+            continue
+
+        if event_type == "crawl.detail_reconciled":
+            reconciled_source_job_id = _normalize_source_job_id(
+                payload.get("source_job_id")
+            )
+            if reconciled_source_job_id is not None:
+                reconciled_ids.add(reconciled_source_job_id)
+            records = payload.get("records")
+            if isinstance(records, list):
+                reconciled_ids.update(
+                    normalized
+                    for record in records
+                    if isinstance(record, dict)
+                    if (
+                        normalized := _normalize_source_job_id(
+                            record.get("source_job_id")
+                        )
+                    )
+                    is not None
+                )
+            continue
+
+        if event_type != "crawl.detail_attempt":
+            continue
+
+        source_job_id = _normalize_source_job_id(payload.get("source_job_id"))
+        classification = str(payload.get("classification") or "").strip().lower()
+        if source_job_id is None or not classification:
+            continue
+        if classification == "success":
+            succeeded_ids.add(source_job_id)
+        elif classification == "terminal_unavailable":
+            terminal_ids.add(source_job_id)
+        elif classification in settled_failure_classifications and not bool(
+            payload.get("will_retry")
+        ):
+            failed_ids.add(source_job_id)
+
+    if not saw_frozen_cohort:
+        return None
+
+    if target_ids is not None:
+        succeeded_ids.intersection_update(target_ids)
+        terminal_ids.intersection_update(target_ids)
+        failed_ids.intersection_update(target_ids)
+
+    # A successful detail response is the strongest available outcome. Terminal
+    # and non-recoverable failure remain mutually exclusive fallbacks. Reconciled
+    # IDs are deliberately adjacent to, not part of, the frozen fetch cohort.
+    terminal_ids.difference_update(succeeded_ids)
+    failed_ids.difference_update(succeeded_ids | terminal_ids)
+    settled_total = len(succeeded_ids | terminal_ids | failed_ids)
+
+    return {
+        "detail_distinct_target_total": target_total,
+        "detail_distinct_succeeded": len(succeeded_ids),
+        "detail_distinct_terminal_unavailable": len(terminal_ids),
+        "detail_distinct_failed": len(failed_ids),
+        "detail_distinct_reconciled": len(reconciled_ids),
+        "detail_distinct_remaining": max(target_total - settled_total, 0),
+    }
 
 
 def _event_manual_action(latest_event) -> dict[str, Any]:
@@ -551,6 +678,7 @@ def build_crawl_task_snapshot(
             category_label = f"{crawl_job.source_site} crawl"
 
     metrics = crawl_job.metrics if isinstance(crawl_job.metrics, dict) else {}
+    normalized_source_site = str(crawl_job.source_site or "").strip().lower()
     job_ids_collected = _max_count(
         event_payload.get("job_ids_collected"),
         metrics.get("job_ids_collected", 0),
@@ -563,7 +691,17 @@ def build_crawl_task_snapshot(
     elif not isinstance(search_families, list):
         search_families = list(search_families)
     jobs_scraped = _to_int(event_payload.get("jobs_scraped", metrics.get("items_emitted", metrics.get("jobs_saved", 0))))
-    jobs_saved = _to_int(event_payload.get("jobs_saved", metrics.get("ingest_items_seen", 0)))
+    jobs_saved_fallback = (
+        metrics.get("jobs_saved", metrics.get("ingest_items_seen", 0))
+        if normalized_source_site == "offertoday"
+        else metrics.get("ingest_items_seen", metrics.get("jobs_saved", 0))
+    )
+    jobs_saved = _to_int(
+        event_payload.get(
+            "jobs_saved",
+            jobs_saved_fallback,
+        )
+    )
     ingest_items_failed = _to_int(
         event_payload.get("ingest_items_failed", metrics.get("ingest_items_failed", 0))
     )
@@ -591,7 +729,7 @@ def build_crawl_task_snapshot(
         listing_completed_payload.get("listings_staged"),
         metrics.get("listings_staged", 0),
     )
-    if str(crawl_job.source_site or "").strip().lower() == "offertoday":
+    if normalized_source_site == "offertoday":
         listings_staged = max(listings_staged, _to_int(event_payload.get("listings")))
     else:
         # Preserve the legacy projection for sources whose listing runtimes did
@@ -653,6 +791,11 @@ def build_crawl_task_snapshot(
             "detail_run_manual_action_required",
             metrics.get("detail_run_manual_action_required", 0),
         )
+    )
+    detail_distinct_progress = (
+        _project_distinct_detail_progress(events)
+        if normalized_source_site == "offertoday"
+        else None
     )
     ai_run_id = event_payload.get("ai_run_id") or metrics.get("ai_run_id")
     ai_completed_items = _to_int(
@@ -783,6 +926,17 @@ def build_crawl_task_snapshot(
         "detail_run_completed": detail_run_completed,
         "detail_run_failed": detail_run_failed,
         "detail_run_manual_action_required": detail_run_manual_action_required,
+        **(
+            detail_distinct_progress
+            or {
+                "detail_distinct_target_total": None,
+                "detail_distinct_succeeded": None,
+                "detail_distinct_terminal_unavailable": None,
+                "detail_distinct_failed": None,
+                "detail_distinct_reconciled": None,
+                "detail_distinct_remaining": None,
+            }
+        ),
         "listings_staged": listings_staged,
         "jobs_skipped_existing": jobs_skipped_existing,
         "detail_pending": detail_pending,

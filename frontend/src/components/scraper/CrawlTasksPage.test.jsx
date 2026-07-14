@@ -125,6 +125,82 @@ const OFFERTODAY_IP_BLOCK_PAYLOAD = {
         resume_supported: true,
         reuse_open_browser_supported: true,
       },
+      detail_target_rows: 811,
+      detail_distinct_target_total: 1311,
+      detail_distinct_succeeded: 672,
+      detail_distinct_terminal_unavailable: 4,
+      detail_distinct_failed: 0,
+      detail_distinct_reconciled: 95,
+      detail_distinct_remaining: 635,
+    },
+  ],
+};
+
+const OFFERTODAY_DETAIL_RUNNING_PAYLOAD = {
+  ...OFFERTODAY_IP_BLOCK_PAYLOAD,
+  items: [
+    {
+      ...OFFERTODAY_IP_BLOCK_PAYLOAD.items[0],
+      crawl_job_id: 'crawl-job-offertoday-detail-running',
+      persisted_status: 'running',
+      status: 'running',
+      issue_class: null,
+      issue_code: null,
+      latest_issue_text: null,
+      manual_action: null,
+      detail_distinct_target_total: 100,
+      detail_distinct_succeeded: 40,
+      detail_distinct_terminal_unavailable: 1,
+      detail_distinct_failed: 0,
+      detail_distinct_reconciled: 10,
+      detail_distinct_remaining: 59,
+    },
+  ],
+};
+
+const OFFERTODAY_DETAIL_COMPLETED_PAYLOAD = {
+  ...OFFERTODAY_IP_BLOCK_PAYLOAD,
+  items: [
+    {
+      ...OFFERTODAY_IP_BLOCK_PAYLOAD.items[0],
+      persisted_status: 'completed',
+      status: 'completed',
+      issue_class: null,
+      issue_code: null,
+      latest_issue_text: null,
+      manual_action: null,
+      detail_target_rows: 68,
+      detail_run_completed: 2464,
+      detail_distinct_target_total: 1311,
+      detail_distinct_succeeded: 1305,
+      detail_distinct_terminal_unavailable: 6,
+      detail_distinct_failed: 0,
+      detail_distinct_reconciled: 95,
+      detail_distinct_remaining: 0,
+    },
+  ],
+};
+
+const OFFERTODAY_DETAIL_LEGACY_PAYLOAD = {
+  ...OFFERTODAY_IP_BLOCK_PAYLOAD,
+  items: [
+    {
+      ...OFFERTODAY_IP_BLOCK_PAYLOAD.items[0],
+      crawl_job_id: 'crawl-job-offertoday-detail-legacy',
+      persisted_status: 'running',
+      status: 'running',
+      issue_class: null,
+      issue_code: null,
+      latest_issue_text: null,
+      manual_action: null,
+      detail_target_rows: 68,
+      jobs_saved: 24,
+      detail_distinct_target_total: null,
+      detail_distinct_succeeded: null,
+      detail_distinct_terminal_unavailable: null,
+      detail_distinct_failed: null,
+      detail_distinct_reconciled: null,
+      detail_distinct_remaining: null,
     },
   ],
 };
@@ -315,6 +391,31 @@ describe('CrawlTasksPage', () => {
     expect(screen.getByText(/page 2 of 2/i)).toBeInTheDocument();
   });
 
+  it('preserves the stable task order returned by the API', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => createJsonResponse({
+      ...PAGE_ONE_PAYLOAD,
+      items: [
+        {
+          ...PAGE_ONE_PAYLOAD.items[0],
+          crawl_job_id: 'stable-first',
+          updated_at: '2026-07-09T01:00:00+00:00',
+        },
+        {
+          ...PAGE_ONE_PAYLOAD.items[0],
+          crawl_job_id: 'stable-second',
+          updated_at: '2026-07-09T03:00:00+00:00',
+        },
+      ],
+      total: 2,
+    })));
+
+    render(<CrawlTasksPage />);
+
+    const rows = await screen.findAllByRole('listitem');
+    expect(rows[0]).toHaveTextContent('stable-first');
+    expect(rows[1]).toHaveTextContent('stable-second');
+  });
+
   it('reloads when filters change and exposes detail action scaffolding for manual-action tasks', async () => {
     const fetchSpy = vi.fn((input) => {
       const url = new URL(String(input), 'http://localhost');
@@ -367,6 +468,68 @@ describe('CrawlTasksPage', () => {
     expect(screen.getByRole('button', { name: /resume using open browser/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^resume fresh$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^open browser$/i })).toBeInTheDocument();
+    expect(screen.getByText('Fetched 672 / 1,311')).toBeInTheDocument();
+    expect(screen.getByText('Terminal 4')).toBeInTheDocument();
+    expect(screen.getByText('Reconciled 95')).toBeInTheDocument();
+    expect(screen.getByText('Remaining 635')).toBeInTheDocument();
+    expect(screen.getByTestId('crawl-task-detail-metrics')).toHaveTextContent(
+      'Fetched 672 / 1,311 | Terminal 4 | Reconciled 95 | Remaining 635',
+    );
+  });
+
+  it('shows cumulative distinct progress for a running OfferToday detail task', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => createJsonResponse(OFFERTODAY_DETAIL_RUNNING_PAYLOAD)),
+    );
+
+    render(<CrawlTasksPage />);
+
+    expect(
+      (await screen.findAllByText(/crawl-job-offertoday-detail-running/i)).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText('Fetched 40 / 100')).toBeInTheDocument();
+    expect(screen.getByText('Terminal 1')).toBeInTheDocument();
+    expect(screen.getByText('Reconciled 10')).toBeInTheDocument();
+    expect(screen.getByText('Remaining 59')).toBeInTheDocument();
+  });
+
+  it('shows the verified completed OfferToday detail outcome instead of staging rows', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => createJsonResponse(OFFERTODAY_DETAIL_COMPLETED_PAYLOAD)),
+    );
+
+    render(<CrawlTasksPage />);
+
+    expect(
+      (await screen.findAllByText(/21436eff-7d0f-4df2-9460-e4ab9d8805e2/i)).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText('Fetched 1,305 / 1,311')).toBeInTheDocument();
+    expect(screen.getByText('Terminal 6')).toBeInTheDocument();
+    expect(screen.getByText('Reconciled 95')).toBeInTheDocument();
+    expect(screen.getByText('Remaining 0')).toBeInTheDocument();
+    expect(screen.queryByText('Queue 68')).not.toBeInTheDocument();
+    expect(screen.queryByText(/2,464/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('crawl-task-detail-metrics')).toHaveTextContent(
+      'Fetched 1,305 / 1,311 | Terminal 6 | Reconciled 95 | Remaining 0',
+    );
+  });
+
+  it('keeps the legacy queue fallback when distinct detail evidence is unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => createJsonResponse(OFFERTODAY_DETAIL_LEGACY_PAYLOAD)),
+    );
+
+    render(<CrawlTasksPage />);
+
+    expect(
+      (await screen.findAllByText(/crawl-job-offertoday-detail-legacy/i)).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText('Queue 68')).toBeInTheDocument();
+    expect(screen.getByText('Saved 24')).toBeInTheDocument();
+    expect(screen.queryByText(/Fetched/)).not.toBeInTheDocument();
   });
 
   it('does not expose resume or browser actions for identity audits', async () => {

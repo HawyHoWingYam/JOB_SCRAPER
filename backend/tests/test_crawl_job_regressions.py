@@ -205,6 +205,41 @@ def test_dispatch_manual_crawl_job_launches_local_executor_for_offertoday():
     assert outbox_publisher.published_batches == []
 
 
+def test_dispatch_manual_offertoday_detail_persists_listing_batch_scope():
+    listing_batch_id = uuid4()
+    crawl_job_repository = _FakeCrawlJobWriterRepository()
+    service = CrawlJobDispatchService(
+        crawl_job_repository=crawl_job_repository,
+        event_outbox_repository=_FakeEventOutboxRepository(),
+        outbox_publisher=_FakeOutboxPublisher(),
+        execution_launcher=_RecordingExecutionLauncher(),
+    )
+
+    result = service.dispatch_manual_crawl_job(
+        _FakeDbSession(),
+        source_site="offertoday",
+        crawl_phase="detail",
+        crawl_mode="headless",
+        category_ids=[],
+        max_pages=20,
+        source_listing_crawl_job_id=listing_batch_id,
+        detail_limit=5000,
+        requested_by="api",
+    )
+
+    assert result.crawl_job.request_payload["source_listing_crawl_job_id"] == str(
+        listing_batch_id
+    )
+    requested_event = next(
+        event
+        for event in crawl_job_repository.appended_events
+        if event["event_type"] == "crawl.requested"
+    )
+    assert requested_event["payload"]["request_payload"][
+        "source_listing_crawl_job_id"
+    ] == str(listing_batch_id)
+
+
 def test_dispatch_schedule_crawl_job_launches_local_executor_for_jobsdb():
     crawl_job_repository = _FakeCrawlJobWriterRepository()
     event_outbox_repository = _FakeEventOutboxRepository()
@@ -351,6 +386,7 @@ def test_resume_crawl_job_persists_selected_resume_strategy(monkeypatch):
 
 
 def test_resume_crawl_job_upgrades_legacy_offertoday_ip_block_payload(monkeypatch):
+    listing_batch_id = str(uuid4())
     crawl_job = SimpleNamespace(
         id=uuid4(),
         source_site="offertoday",
@@ -360,6 +396,7 @@ def test_resume_crawl_job_upgrades_legacy_offertoday_ip_block_payload(monkeypatc
             "crawl_phase": "detail",
             "category_ids": [118000],
             "detail_limit": 5000,
+            "source_listing_crawl_job_id": listing_batch_id,
         },
         trigger_type="manual",
         schedule_id=None,
@@ -407,6 +444,7 @@ def test_resume_crawl_job_upgrades_legacy_offertoday_ip_block_payload(monkeypatc
     assert crawl_job.request_payload["resume_strategy"] == "reuse_open_browser"
     assert crawl_job.request_payload["manual_action_browser_channel"]
     assert crawl_job.request_payload["manual_action_browser_profile_path"]
+    assert crawl_job.request_payload["source_listing_crawl_job_id"] == listing_batch_id
     resume_event = next(
         row for row in repository.appended_events
         if row["event_type"] == "crawl.resume_requested"
@@ -416,6 +454,7 @@ def test_resume_crawl_job_upgrades_legacy_offertoday_ip_block_payload(monkeypatc
     assert normalized["reuse_open_browser_supported"] is True
     assert normalized["code"] == -1000035
     assert "Change your IP or network" in normalized["message"]
+    assert normalized["resume_context"]["source_listing_crawl_job_id"] == listing_batch_id
 
 
 def test_resume_crawl_job_keeps_legacy_identity_audit_non_resumable():

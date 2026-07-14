@@ -16,10 +16,12 @@ from sqlalchemy.orm import Session
 from app.crawl_phases import DEFAULT_DETAIL_RETRY_STATUSES, SUPPORTED_DETAIL_STATUSES
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_listing import CrawlJobListing
+from app.models.crawl_run import CrawlRun
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.job_repository import JobRepository
 from app.services.crawl_job_runtime import CrawlJobRuntime, ListingBatchPersistResult
+from app.sources.offertoday.search_space import OFFERTODAY_IT_CATEGORY_CODES
 
 
 class _FakeSession:
@@ -1957,7 +1959,7 @@ def test_authoritative_row_priority_is_manual_then_failed_then_pending():
     assert result.targets[0]["duplicate_listing_ids"] == ("failed", "pending")
 
 
-def test_batch_scope_keeps_leaf_and_keyword_only_rows():
+def test_batch_scope_keeps_leaf_keyword_and_hybrid_rows():
     rows = [
         _detail_listing(
             "leaf",
@@ -1974,11 +1976,29 @@ def test_batch_scope_keeps_leaf_and_keyword_only_rows():
             rank=2,
         ),
         _detail_listing(
+            "hybrid",
+            "j-hybrid",
+            category_id=None,
+            crawl_job_id="batch-1",
+            rank=3,
+            listing_payload={
+                "job_id": "j-hybrid",
+                "encrypted_job_id": "enc-j-hybrid",
+                "encrypted_job_id_source": "encryptJobId",
+                "search_family": "it_hybrid",
+                "detail_target_kind": "new",
+                "raw_data": {
+                    "jobId": "j-hybrid",
+                    "encryptJobId": "enc-j-hybrid",
+                },
+            },
+        ),
+        _detail_listing(
             "other",
             "j-other",
             category_id="118000",
             crawl_job_id="batch-2",
-            rank=3,
+            rank=4,
         ),
     ]
     runtime, repository, _crawl_jobs, _session = _detail_runtime(rows)
@@ -1995,8 +2015,34 @@ def test_batch_scope_keeps_leaf_and_keyword_only_rows():
 
     assert repository.candidate_calls[-1]["category_ids"] == []
     assert {target["source_job_id"] for target in result.targets} == {
+        "j-hybrid",
         "j-leaf",
         "j-keyword",
+    }
+
+
+def test_unbound_offertoday_detail_scope_keeps_expanded_category_filter():
+    rows = [
+        _detail_listing("root", "j-root", category_id="118000", rank=1),
+        _detail_listing("leaf", "j-leaf", category_id="118005", rank=2),
+        _detail_listing("keyword", "j-keyword", category_id=None, rank=3),
+        _detail_listing("other", "j-other", category_id="999999", rank=4),
+    ]
+    runtime, repository, _crawl_jobs, _session = _detail_runtime(rows)
+
+    result = runtime.load_detail_targets(
+        source_site="offertoday",
+        request_payload={"category_ids": [118000], "detail_limit": 10},
+        detail_crawl_job_id="detail-run-1",
+    )
+
+    assert repository.candidate_calls[-1]["source_listing_crawl_job_id"] is None
+    assert repository.candidate_calls[-1]["category_ids"] == list(
+        OFFERTODAY_IT_CATEGORY_CODES
+    )
+    assert {target["source_job_id"] for target in result.targets} == {
+        "j-root",
+        "j-leaf",
     }
 
 
@@ -2322,6 +2368,88 @@ def test_repository_lists_all_offertoday_identity_history_in_creation_order():
 
     assert [row.source_job_id for row in history] == ["earlier", "later"]
     assert [row.detail_status for row in history] == ["failed", "completed"]
+
+
+def test_crawl_job_repository_lists_crawl_tasks_in_stable_queue_order():
+    engine = create_engine("sqlite://")
+    CrawlJob.__table__.create(engine)
+    CrawlRun.__table__.create(engine)
+    newest_time = datetime(2026, 7, 14, 10, 0, tzinfo=UTC)
+    older_time = newest_time - timedelta(hours=1)
+    oldest_time = newest_time - timedelta(hours=2)
+    newest_high_id = UUID("ffffffff-ffff-4fff-8fff-ffffffffffff")
+    newest_low_id = UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+    older_id = UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+    oldest_id = UUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+
+    with Session(engine) as db:
+        db.add_all(
+            [
+                CrawlJob(
+                    id=older_id,
+                    source_site="offertoday",
+                    trigger_type="manual",
+                    status="completed",
+                    request_payload={},
+                    queued_at=older_time,
+                    created_at=older_time,
+                    updated_at=newest_time + timedelta(hours=3),
+                ),
+                CrawlJob(
+                    id=newest_low_id,
+                    source_site="offertoday",
+                    trigger_type="manual",
+                    status="running",
+                    request_payload={},
+                    queued_at=newest_time,
+                    created_at=newest_time,
+                    updated_at=oldest_time,
+                ),
+                CrawlJob(
+                    id=oldest_id,
+                    source_site="jobsdb",
+                    trigger_type="manual",
+                    status="completed",
+                    request_payload={},
+                    queued_at=oldest_time,
+                    created_at=oldest_time,
+                    updated_at=newest_time + timedelta(hours=4),
+                ),
+                CrawlJob(
+                    id=newest_high_id,
+                    source_site="offertoday",
+                    trigger_type="manual",
+                    status="queued",
+                    request_payload={},
+                    queued_at=newest_time,
+                    created_at=newest_time,
+                    updated_at=oldest_time,
+                ),
+            ]
+        )
+        db.commit()
+
+        repository = CrawlJobRepository()
+        first_page, first_total = repository.list_crawl_task_page(
+            db,
+            page=1,
+            page_size=2,
+            status=None,
+            source_site=None,
+            crawl_mode=None,
+        )
+        second_page, second_total = repository.list_crawl_task_page(
+            db,
+            page=2,
+            page_size=2,
+            status=None,
+            source_site=None,
+            crawl_mode=None,
+        )
+
+    assert first_total == second_total == 4
+    assert [row.id for row in first_page] == [newest_high_id, newest_low_id]
+    assert [row.id for row in second_page] == [older_id, oldest_id]
 
 
 def test_crawl_job_repository_lists_offertoday_identity_observations_in_order():
