@@ -106,3 +106,36 @@ Implemented cursor-correct search listing, partial page-cap continuation, bulk n
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: OfferToday crawl metrics and IP-block recovery
+
+**Date**: 2026-07-14
+**Task**: OfferToday crawl metrics and IP-block recovery
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Corrected OfferToday Crawl Tasks partial metrics, added resumable IP-block manual actions with legacy normalization and host-browser CDP reuse, and live-verified task 21436eff-7d0f-4df2-9460-e4ab9d8805e2 through five recovery cycles to completion.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e05d2235` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

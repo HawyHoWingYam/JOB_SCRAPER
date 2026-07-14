@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
+- **Total Sessions**: 4
 - **Last Active**: 2026-07-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~108 | Active |
+| `journal-1.md` | ~141 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-07-14 | OfferToday crawl metrics and IP-block recovery | `e05d2235` | `codex/offertoday-it-coverage-20260702` |
 | 3 | 2026-07-14 | OfferToday practical IT production crawl | `b8626d37`, `f3004753` | `codex/offertoday-it-coverage-20260702` |
 | 2 | 2026-07-13 | OfferToday Phase C research infrastructure | `c68e0f5d` | `codex/offertoday-it-coverage-20260702` |
 | 1 | 2026-07-13 | OfferToday Phase A-B cursor pagination bake-off | `70c60680`, `a99d76ec` | `codex/offertoday-it-coverage-20260702` |
