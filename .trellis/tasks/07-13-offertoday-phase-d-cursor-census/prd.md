@@ -19,7 +19,107 @@ Implement and prove the Phase D cursor-correct full-site census path from an imm
 - Phase C comparison evidence exposes strict-replayable endpoint, policy, baseline, partition, terminal, contribution, and parent hashes. `PartitionComparison.accepted` only means at least one condition was retained; Phase D must apply stronger freeze rules.
 - The earlier Plan 2 comparison used the user-approved 15-minute sampling-window amendment. The newer authoritative Phase D specification independently requires at least two census windows separated by six hours; the old amendment does not overwrite Phase D.
 
+## Live Phase C Checkpoint (2026-07-14)
+
+- The deterministic Phase D implementation was committed as `965c4bcc` and
+  `ab3d5148` before live evidence capture. Focused Phase A-D tests passed
+  `494` cases and the complete backend suite passed `1350` cases from the
+  committed implementation.
+- Endpoint probe `02bd9816-6b54-4433-8598-2895d4dba541` is generic-valid and
+  strict-valid. Its `recommend-search-list-v1` condition recorded three clean
+  contract-verified pages, 30 distinct IDs, zero gaps/identity/conservation
+  differences, and the expected bounded `page_cap`. The unverified browse
+  envelope returned empty pages and remains ineligible.
+- Partition probe `1943d7e6-2fc6-4f5d-946d-801085d10860` is generic-valid and
+  strict-valid but rejected. Technical Writing (`118018`) returned nine
+  filter-matching `resultList` IDs on page 1, then switched to a
+  supplemental-only cursor chain. Across ten pages it produced 100 distinct
+  IDs (9 result plus 91 supplemental), ten new IDs per page, `hasMore=true`,
+  no terminal signal, and stopped at the frozen page cap.
+- Both live probes used the SHA-bound saved-session state, noop staging, zero
+  detail attempts, zero product writes, and identical start/end snapshot,
+  inventory, and product-data hashes. Comparison and policy freeze were not
+  run after the partition rejection.
+- The live result disproves the planning assumption that a low-count leaf can
+  prove whole-envelope exhaustion within ten pages. It does not prove that
+  supplemental recommendations may be discarded, counted as category matches,
+  or allowed to govern partition exhaustion. Phase D live execution remains
+  gated on an explicit versioned supplemental-cohort contract amendment.
+
+## Approved Dual-Cohort Decision (2026-07-14)
+
+- `resultList` is the authoritative cohort for each filtered category or leaf
+  partition. Supplemental recommendations must not be counted as matches for
+  that partition and must not prevent the result cohort from proving its own
+  endpoint-specific exhaustion.
+- `suppleRcdList` remains required discovery evidence. It must be deduplicated
+  into a separately versioned global recommendation cohort with its own cursor,
+  terminal, stability, and contribution gates; it may not be silently dropped.
+- The final stable reference denominator is eligible only when its exact
+  result-partition union and any admitted global supplemental union are both
+  hash-bound and accepted under their own contracts. An incomplete
+  supplemental gate must remain visible rather than being represented as zero
+  contribution.
+- Historical Phase A-D classes, payloads, experiment names, hashes, and the two
+  2026-07-14 live artifacts remain immutable. The dual-cohort amendment is
+  additive and versioned.
+- Once the result-partition contract passes its replacement Phase C gate,
+  result-only Phase D runs may proceed as explicitly partial research while the
+  supplemental global gate remains incomplete. Partial runs cannot be accepted,
+  cannot freeze a stable denominator, and cannot authorize Phase E-H or
+  production adoption.
+
+## Replacement Dual-Cohort Live Checkpoint (2026-07-14)
+
+- Replacement preflight reverified the Phase B parent, endpoint parent, and
+  both baseline artifacts with generic plus strict replay. The saved-session
+  bytes still matched the SHA-256 frozen by the earlier live parents, and every
+  live command passed the current-database gate before runtime construction.
+- Result-probe attempt `eb6fcd53-774e-41e8-9539-b4a81699208c` made three
+  bounded listing requests and completed the Technical Writing condition, but
+  artifact projection failed because the shared Phase D condition type
+  re-derived a top-level partition from leaf category `118018`. It produced no
+  artifact and was closed as a sanitized failed research run. The fix carries
+  the exact requested partition ID across the runner-to-artifact boundary,
+  verifies its category-code match, and leaves legacy candidate-level 31/3
+  partition guards unchanged.
+- Replacement result probe `67fbb753-430c-4ad2-b7c4-5fa3d4a013b0` is
+  generic-valid, strict-valid, and accepted. Three logical/physical requests
+  recorded nine Technical Writing result IDs, 21 separately preserved
+  supplemental IDs, and two cursor-continuous result-empty confirmation pages
+  with zero gap, identity, conservation, rollover, or unclassified failures.
+  Only the nine result IDs were would-stage rows in noop mode.
+- Frozen result policy `99829af2-a91a-46a8-beb1-0f5a215b64f9` is
+  generic-valid and strict-valid with policy hash
+  `181c8b29f7277b95cceff819ce747b2290f66207827f5e4eb68e957e917b1ace`.
+  It binds `result-transition-confirmation-v1` and exactly two confirmation
+  pages to the accepted result-probe parent.
+- Supplemental runs `4f2c9ca4-f96a-4c55-b3b8-5c35688b8a14`,
+  `b75ef983-8160-4f07-a14c-e2a032b8f13e`, and
+  `e1e9d69a-0719-4bad-9e38-46d9e2a3e10c` are each generic-valid and
+  strict-valid rejected evidence. In every run, the first frozen seed
+  `112000` produced 100 result IDs and zero supplemental IDs across ten clean
+  logical/physical requests, then stopped at the page cap. Fail-fast prefix
+  semantics correctly prevented the later two seeds from being represented as
+  observed.
+- Every accepted/rejected replacement artifact used noop staging, zero detail
+  attempts, zero product writes, and identical start/end snapshot, inventory,
+  and product-data hashes. No supplemental comparison, complete dual-cohort
+  candidate, Phase D census/fixed repeat, staging write, or downstream phase
+  was run.
+- The three-run rejection disproves the frozen v1 assumption that a broad
+  top-level seed can reach the supplemental phase within ten pages. A future
+  amendment must version supplemental-phase reachability separately from
+  cross-seed stability; it may not widen this v1 budget, relabel result rows as
+  supplemental, or reinterpret the rejected artifacts.
+
 ## Requirements
+
+R1-R7 preserve the already committed v2 deterministic baseline and its exact
+compatibility contracts. R8 owns the additive dual-cohort successor required
+for all new live evidence after the 2026-07-14 rejection. Where the old v2 live
+shape assumes one envelope cohort, it remains replayable historical behavior
+but is not eligible to bypass R8 or produce the final denominator.
 
 ### R1. Phase C predecessor closure
 
@@ -76,6 +176,43 @@ Implement and prove the Phase D cursor-correct full-site census path from an imm
 - Runtime artifacts remain ignored and uncommitted; unrelated dirty-worktree changes remain untouched.
 - Implementing the deterministic path does not authorize Phase C probes, Phase D live traffic, staging writes, later Phase E-H live work, or production adoption. Each live/write step must use the exact reviewed command and inputs owned by its task gate.
 
+### R8. Versioned dual-cohort discovery
+
+- The exact additive experiments are `result-partition-probe-v2`,
+  `result-partition-policy-v1`, `supplemental-cohort-probe-v1`,
+  `supplemental-cohort-stability-comparison-v1`,
+  `dual-cohort-discovery-policy-candidate-v3`,
+  `cursor-result-partial-census-v3`,
+  `cursor-result-partial-fixed-repeat-v3`,
+  `cursor-dual-cohort-full-census-v3`,
+  `cursor-dual-cohort-fixed-repeat-v3`, and
+  `cursor-dual-cohort-stability-comparison-v3`. Exact-name dispatch must fail
+  unknown aliases or future versions closed.
+
+- Add an explicit result-partition cohort policy that records both response
+  cohorts but admits only canonical `resultList` IDs to that partition's union,
+  staging, contribution, and exhaustion decision.
+- Prove result-cohort exhaustion from replayable endpoint/cursor evidence. A
+  `total` value, page cap, marginal saturation, or the mere presence of
+  supplemental rows is insufficient by itself.
+- Add a separately budgeted supplemental-cohort experiment that measures seed
+  sensitivity, cursor continuity, terminal behavior, unique contribution, and
+  cross-run stability before one global recommendation cohort can be admitted.
+- Preserve the exact source page and cohort provenance for IDs that appear in
+  both result and supplemental streams; global deduplication must not erase
+  cohort membership evidence.
+- A rejected or incomplete supplemental experiment is valid evidence but may
+  not be converted into an empty accepted cohort or a complete stable
+  denominator.
+- Result-only Phase D artifacts must carry an exact partial cohort scope and
+  the unresolved supplemental parent/gate state. Strict replay must reject any
+  attempt to mark them accepted or consume them as complete comparison,
+  denominator, Phase E-H, or production parents.
+- After the supplemental cohort is accepted, the complete Phase D comparison
+  must recompute the time-aligned result union, supplemental union, overlap,
+  and combined stable denominator. It may not relabel an earlier result-only
+  artifact as complete without a new exact parent projection and decision.
+
 ## Acceptance Criteria
 
 ### Deterministic implementation gate
@@ -87,13 +224,24 @@ Implement and prove the Phase D cursor-correct full-site census path from an imm
 - [x] Current Phase A-C focused tests and locally present historical artifacts still verify unchanged; production-default guards pass.
 - [x] Phase C/D live commands fail before database/runtime construction without a valid explicit storage state, bind its exact path to every runtime, and export only its SHA-256 proof.
 
-### Live Phase D evidence gate
+### Amended live Phase D evidence gate
 
-- [ ] One immutable accepted Phase C discovery-policy candidate exists and passes generic plus strict verification.
-- [ ] Three accepted cursor-full-census-v2 artifacts span at least two windows separated by six hours.
-- [ ] Three accepted cursor-fixed-repeat-v2 artifacts cover `(118000, 112000, 127000)` within one short window.
-- [ ] All six artifacts share one exact candidate hash, and Jobs/Companies/defaults remain unchanged.
-- [ ] The strict comparison passes every Phase D gate and freezes one stable reference denominator artifact.
+- [ ] One immutable accepted additive dual-cohort Phase C policy candidate
+      exists and passes generic plus strict verification; the historical v2
+      candidate type is not relabeled or mutated.
+- [ ] Three accepted complete dual-cohort census artifacts span at least two
+      windows separated by six hours.
+- [ ] Three accepted complete dual-cohort fixed-repeat artifacts cover
+      `(118000, 112000, 127000)` within one short window.
+- [ ] All six complete artifacts share one exact additive candidate hash, and
+      Jobs/Companies/defaults remain unchanged.
+- [ ] The additive strict comparison passes every Phase D gate and freezes one
+      stable reference denominator artifact.
+- [ ] The dual-cohort contract proves result-partition exhaustion independently
+      and either accepts a hash-bound global supplemental cohort or keeps the
+      final denominator and production promotion explicitly gated.
+- [ ] Any result-only Phase D research artifact is explicitly partial and is
+      rejected as a stable-comparison, downstream-phase, or production parent.
 
 ## Out of Scope
 
@@ -101,6 +249,17 @@ Implement and prove the Phase D cursor-correct full-site census path from an imm
 - Treating `total`, gross rows, page caps, marginal saturation, or one run as completeness proof.
 - Rewriting rejected artifacts or silently falling back to legacy stateless pagination.
 
-## Open Gates
+## Remaining Evidence Gates
 
-- Exact Phase C live probe artifacts do not yet exist. Deterministic implementation may proceed, but `freeze-discovery-policy` and all Phase D live commands must remain unusable until their strict predecessor evidence and command-level live/write review exist.
+- One accepted result-partition policy now exists, but all three strict
+  supplemental probes rejected before reaching the supplemental phase. No
+  supplemental comparison or complete dual-cohort candidate exists, so all
+  complete Phase D commands remain gated.
+- The next live amendment must prove a versioned supplemental entry/seed
+  strategy can reach and terminate the supplemental cohort within its own
+  bounded contract before any cross-seed stability claim or candidate freeze.
+- Result-only Phase D research may begin only after its own amended Phase C
+  contract passes and exact commands are reviewed. It remains partial until the
+  separately visible supplemental global gate passes.
+- Phase D acceptance, stable-denominator freeze, Phase E-H, and production
+  adoption remain gated on accepted evidence from both cohorts.
