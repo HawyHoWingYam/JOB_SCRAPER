@@ -9,6 +9,7 @@ htmlcov/
 tests/
 runtime/
 .host_browser_profiles/
+*host_browser_profiles*/
 .host_worker_venv/
 tmp-*.png
 tmp-*.md

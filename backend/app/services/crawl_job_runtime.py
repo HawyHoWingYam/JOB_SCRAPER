@@ -1325,6 +1325,29 @@ class CrawlJobRuntime:
         finally:
             db.close()
 
+    def mark_detail_terminal_unavailable(
+        self,
+        *,
+        listing_id,
+        detail_crawl_job_id,
+        error_message: str,
+    ) -> None:
+        db = self.session_factory()
+        try:
+            self.transition_detail_outcome(
+                db,
+                listing_ids=(listing_id,),
+                detail_crawl_job_id=detail_crawl_job_id,
+                status="terminal_unavailable",
+                error_message=error_message,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     def mark_manual_action_required(
         self,
         *,

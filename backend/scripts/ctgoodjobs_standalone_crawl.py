@@ -28,15 +28,23 @@ from app.scraper.ctgoodjobs.category_registry import get_static_ctgoodjobs_categ
 from app.scraper.ctgoodjobs.detail_scraper import parse_detail_page  # noqa: E402
 from app.scraper.ctgoodjobs.list_scraper import category_page_url, parse_category_page  # noqa: E402
 from app.scraper.ctgoodjobs.merge import merge_ctgoodjobs_job  # noqa: E402
+from app.scraper.ctgoodjobs.page_state import CTGoodJobsTerminalUnavailableError  # noqa: E402
 from app.scraper.ctgoodjobs_browser_page_scraper import CTGoodJobsBrowserPageScraper  # noqa: E402
 from app.scraper.log_events import build_scrape_log_event  # noqa: E402
-from app.scraper.manual_action import ManualActionRequiredError  # noqa: E402
+from app.scraper.manual_action import (  # noqa: E402
+    ManualActionRequiredError,
+    build_session_recovery_manual_action,
+)
 from app.services.crawl_job_runtime import CrawlJobRuntime  # noqa: E402
 from app.sources.contracts import build_ctgoodjobs_canonical_job  # noqa: E402
-from app.workers.run_ingest_worker import IngestWorkerService  # noqa: E402
+from app.workers.run_ingest_worker import (  # noqa: E402
+    IngestWorkerService,
+    InvalidIngestPayloadError,
+)
 
 CTGOODJOBS_SOURCE_SITE = "ctgoodjobs"
 DEFAULT_DETAIL_STATUSES = ["pending", "manual_action_required"]
+CONTENT_ANOMALY_REASONS = frozenset({"missing_job_content", "missing_company_identity"})
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
@@ -512,8 +520,10 @@ async def _run_detail_phase(
         "target_rows": int(detail_targets.target_rows),
         "completed": 0,
         "failed": 0,
+        "terminal_unavailable": 0,
         "manual_action_required": 0,
     }
+    last_content_anomaly_reason: str | None = None
 
     def log_detail_done(outcome: str) -> None:
         logger.info(
@@ -536,14 +546,115 @@ async def _run_detail_phase(
                 processed=(
                     counts["completed"]
                     + counts["failed"]
+                    + counts["terminal_unavailable"]
                     + counts["manual_action_required"]
                 ),
                 succeeded=counts["completed"],
                 failed=counts["failed"],
+                terminal_unavailable=counts["terminal_unavailable"],
                 manual_action_required=counts["manual_action_required"],
                 saved=counts["completed"],
             )
         )
+
+    def record_failure(*, exc: Exception, index: int, target, item_started_at: float) -> None:
+        crawl_runtime.mark_detail_failed(
+            listing_id=target["listing_id"],
+            detail_crawl_job_id=args.crawl_job_id,
+            error_message=str(exc),
+        )
+        counts["failed"] += 1
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_ITEM_FAIL",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=args.crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_index=index,
+                detail_total=detail_targets.target_rows,
+                source_job_id=target["source_job_id"],
+                error_type=type(exc).__name__,
+                anomaly_reason=(
+                    exc.reason if isinstance(exc, InvalidIngestPayloadError) else None
+                ),
+                elapsed_ms=max(int((time.perf_counter() - item_started_at) * 1000), 0),
+                outcome="failed",
+                cumulative_processed=(
+                    counts["completed"]
+                    + counts["failed"]
+                    + counts["terminal_unavailable"]
+                ),
+                cumulative_succeeded=counts["completed"],
+                cumulative_failed=counts["failed"],
+                cumulative_terminal_unavailable=counts["terminal_unavailable"],
+                cumulative_saved=counts["completed"],
+            )
+        )
+
+    def pause_for_manual_action(
+        *,
+        exc: ManualActionRequiredError,
+        index: int,
+        target,
+        item_started_at: float,
+    ) -> dict[str, int]:
+        crawl_runtime.mark_detail_manual_action_required(
+            listing_id=target["listing_id"],
+            detail_crawl_job_id=args.crawl_job_id,
+            error_message=exc.message,
+        )
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_ITEM_MANUAL_ACTION",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=args.crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_index=index,
+                detail_total=detail_targets.target_rows,
+                source_job_id=target["source_job_id"],
+                stage=exc.stage,
+                blocked_url=exc.blocked_url,
+                classification=exc.classification,
+                code=exc.code,
+                reason=exc.evidence.get("reason"),
+                consecutive_count=exc.evidence.get("consecutive_count"),
+                elapsed_ms=max(int((time.perf_counter() - item_started_at) * 1000), 0),
+                outcome="manual_action_required",
+                cumulative_processed=(
+                    counts["completed"]
+                    + counts["failed"]
+                    + counts["terminal_unavailable"]
+                    + 1
+                ),
+                cumulative_succeeded=counts["completed"],
+                cumulative_failed=counts["failed"],
+                cumulative_terminal_unavailable=counts["terminal_unavailable"],
+                cumulative_manual_action=1,
+                cumulative_saved=counts["completed"],
+            )
+        )
+        crawl_runtime.mark_manual_action_required(
+            crawl_job_id=args.crawl_job_id,
+            source_site=CTGOODJOBS_SOURCE_SITE,
+            request_payload=_build_detail_request_payload(
+                args,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+            ),
+            payload=_build_manual_action_payload(
+                args,
+                exc,
+                crawl_phase="detail",
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+            ),
+            error_message=exc.message,
+        )
+        counts["manual_action_required"] = 1
+        log_detail_done("manual_action_required")
+        return counts
 
     if detail_targets.target_rows == 0:
         logger.warning(
@@ -618,6 +729,7 @@ async def _run_detail_phase(
                 published_job_id=saved_job_id,
             )
             counts["completed"] += 1
+            last_content_anomaly_reason = None
             logger.info(
                 build_scrape_log_event(
                     "SCRAPE_DETAIL_ITEM_OK",
@@ -644,64 +756,20 @@ async def _run_detail_phase(
                 )
             )
         except ManualActionRequiredError as exc:
-            crawl_runtime.mark_detail_manual_action_required(
-                listing_id=target["listing_id"],
-                detail_crawl_job_id=args.crawl_job_id,
-                error_message=exc.message,
+            return pause_for_manual_action(
+                exc=exc,
+                index=index,
+                target=target,
+                item_started_at=item_started_at,
             )
-            logger.warning(
-                build_scrape_log_event(
-                    "SCRAPE_DETAIL_ITEM_MANUAL_ACTION",
-                    source=CTGOODJOBS_SOURCE_SITE,
-                    crawl_job_id=args.crawl_job_id,
-                    crawl_phase="detail",
-                    crawl_mode=args.crawl_mode,
-                    source_listing_crawl_job_id=source_listing_crawl_job_id,
-                    detail_index=index,
-                    detail_total=detail_targets.target_rows,
-                    source_job_id=target["source_job_id"],
-                    stage=exc.stage,
-                    blocked_url=exc.blocked_url,
-                    classification=exc.classification,
-                    code=exc.code,
-                    elapsed_ms=max(
-                        int((time.perf_counter() - item_started_at) * 1000),
-                        0,
-                    ),
-                    outcome="manual_action_required",
-                    cumulative_processed=(
-                        counts["completed"]
-                        + counts["failed"]
-                        + 1
-                    ),
-                    cumulative_succeeded=counts["completed"],
-                    cumulative_failed=counts["failed"],
-                    cumulative_manual_action=1,
-                    cumulative_saved=counts["completed"],
-                )
-            )
-            crawl_runtime.mark_manual_action_required(
-                crawl_job_id=args.crawl_job_id,
-                source_site=CTGOODJOBS_SOURCE_SITE,
-                request_payload=_build_detail_request_payload(args, source_listing_crawl_job_id=source_listing_crawl_job_id),
-                payload=_build_manual_action_payload(
-                    args,
-                    exc,
-                    crawl_phase="detail",
-                    source_listing_crawl_job_id=source_listing_crawl_job_id,
-                ),
-                error_message=exc.message,
-            )
-            counts["manual_action_required"] = 1
-            log_detail_done("manual_action_required")
-            return counts
-        except Exception as exc:
-            crawl_runtime.mark_detail_failed(
+        except CTGoodJobsTerminalUnavailableError as exc:
+            last_content_anomaly_reason = None
+            crawl_runtime.mark_detail_terminal_unavailable(
                 listing_id=target["listing_id"],
                 detail_crawl_job_id=args.crawl_job_id,
                 error_message=str(exc),
             )
-            counts["failed"] += 1
+            counts["terminal_unavailable"] += 1
             logger.warning(
                 build_scrape_log_event(
                     "SCRAPE_DETAIL_ITEM_FAIL",
@@ -713,19 +781,57 @@ async def _run_detail_phase(
                     detail_index=index,
                     detail_total=detail_targets.target_rows,
                     source_job_id=target["source_job_id"],
-                    error_type=type(exc).__name__,
-                    elapsed_ms=max(
-                        int((time.perf_counter() - item_started_at) * 1000),
-                        0,
-                    ),
-                    outcome="failed",
+                    classification="terminal_unavailable",
+                    reason=exc.reason,
+                    status_code=exc.status_code,
+                    elapsed_ms=max(int((time.perf_counter() - item_started_at) * 1000), 0),
+                    outcome="terminal_unavailable",
                     cumulative_processed=(
-                        counts["completed"] + counts["failed"]
+                        counts["completed"]
+                        + counts["failed"]
+                        + counts["terminal_unavailable"]
                     ),
                     cumulative_succeeded=counts["completed"],
                     cumulative_failed=counts["failed"],
+                    cumulative_terminal_unavailable=counts["terminal_unavailable"],
                     cumulative_saved=counts["completed"],
                 )
+            )
+        except InvalidIngestPayloadError as exc:
+            if (
+                exc.reason in CONTENT_ANOMALY_REASONS
+                and last_content_anomaly_reason == exc.reason
+            ):
+                manual_exc = build_session_recovery_manual_action(
+                    source_site=CTGOODJOBS_SOURCE_SITE,
+                    stage="detail_page",
+                    blocked_url=target["source_url"],
+                    referer=target["source_url"],
+                    classification="content_anomaly",
+                    evidence={"reason": exc.reason, "consecutive_count": 2},
+                )
+                return pause_for_manual_action(
+                    exc=manual_exc,
+                    index=index,
+                    target=target,
+                    item_started_at=item_started_at,
+                )
+            last_content_anomaly_reason = (
+                exc.reason if exc.reason in CONTENT_ANOMALY_REASONS else None
+            )
+            record_failure(
+                exc=exc,
+                index=index,
+                target=target,
+                item_started_at=item_started_at,
+            )
+        except Exception as exc:
+            last_content_anomaly_reason = None
+            record_failure(
+                exc=exc,
+                index=index,
+                target=target,
+                item_started_at=item_started_at,
             )
 
         crawl_runtime.write_progress_event(
@@ -736,6 +842,8 @@ async def _run_detail_phase(
                 "phase": 2,
                 "detail_ok": counts["completed"],
                 "detail_fail": counts["failed"],
+                "detail_unavailable": counts["terminal_unavailable"],
+                "detail_manual_action": counts["manual_action_required"],
                 "detail_total": counts["target_rows"],
                 "detail_index": index,
                 "detail_selected_rows": counts["selected_rows"],

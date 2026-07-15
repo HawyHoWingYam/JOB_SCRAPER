@@ -21,6 +21,7 @@ PREFERRED_MANUAL_ACTION_RESUME_STRATEGY: ResumeStrategy = RESUME_STRATEGY_REUSE_
 RESUMABLE_SESSION_CLASSIFICATIONS = frozenset(
     {
         "auth_expired",
+        "content_anomaly",
         "ip_blocked",
         "waf_challenge",
     }
@@ -85,6 +86,12 @@ def default_session_recovery_message(
             f"{source_name} requires browser verification. Complete the challenge "
             "in the verification browser, then resume this same crawl."
         )
+    if normalized_classification == "content_anomaly":
+        return (
+            f"{source_name} returned the same invalid page structure for consecutive "
+            "jobs. Inspect the verification browser, resolve any challenge or site "
+            "change, then resume this same crawl."
+        )
     return f"{source_name} requires operator action before this crawl can resume."
 
 
@@ -111,6 +118,11 @@ def default_session_recovery_instructions(
         return [
             f"Complete the {source_name} verification challenge in the browser.",
             f"Return to {source_name}, then resume this same crawl.",
+        ]
+    if normalized_classification == "content_anomaly":
+        return [
+            f"Inspect the current {source_name} page for a verification prompt or site change.",
+            "Resolve the page issue, then resume this same crawl; completed jobs are preserved.",
         ]
     return ["Resolve the reported issue, then resume this same crawl."]
 
@@ -343,7 +355,7 @@ def build_session_recovery_manual_action(
     if normalized_classification not in RESUMABLE_SESSION_CLASSIFICATIONS:
         raise ValueError(
             "session recovery classification must be auth_expired, "
-            "ip_blocked, or waf_challenge"
+            "content_anomaly, ip_blocked, or waf_challenge"
         )
     resolved_code = (
         code

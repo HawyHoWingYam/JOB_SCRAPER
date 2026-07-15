@@ -18,6 +18,7 @@ from app.scraper.manual_action import (
 )
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime
 from app.services.crawl_job_runtime import ListingBatchPersistResult
+from app.services.crawl_job_dispatch_service import resolve_resume_detail_statuses
 from app.sources.offertoday.listing_contract import (
     production_offertoday_listing_request_policy,
 )
@@ -516,6 +517,39 @@ def test_generic_cloudflare_challenge_is_not_relabelled_as_ip_block() -> None:
     ) is None
 
 
+def test_content_anomaly_is_resumable_without_ip_guidance() -> None:
+    error = build_session_recovery_manual_action(
+        source_site="ctgoodjobs",
+        stage="detail_page",
+        blocked_url="https://jobs.ctgoodjobs.hk/job/job-2",
+        classification="content_anomaly",
+        evidence={"reason": "missing_company_identity", "consecutive_count": 2},
+    )
+
+    payload = error.to_payload(
+        crawl_mode="headed",
+        browser_channel="msedge",
+        browser_profile_path="C:/profiles/ctgoodjobs",
+    )
+    assert payload["classification"] == "content_anomaly"
+    assert payload["resume_supported"] is True
+    assert "IP" not in payload["message"]
+    assert "structure" in payload["message"].lower()
+    assert resolve_resume_detail_statuses(payload["classification"]) == [
+        "failed",
+        "manual_action_required",
+        "pending",
+    ]
+    assert "completed" not in resolve_resume_detail_statuses(payload["classification"])
+    assert "terminal_unavailable" not in resolve_resume_detail_statuses(
+        payload["classification"]
+    )
+    assert resolve_resume_detail_statuses("waf_challenge") == [
+        "manual_action_required",
+        "pending",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_ctgoodjobs_explicit_ip_marker_stops_without_challenge_retries() -> None:
     calls = 0
@@ -537,6 +571,24 @@ async def test_ctgoodjobs_explicit_ip_marker_stops_without_challenge_retries() -
 
     assert raised.value.classification == "ip_blocked"
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_waf_evidence_wins_over_unavailable_page_text() -> None:
+    async def fetcher(_url: str) -> str:
+        return "Just a moment... cf-challenge. Job not found."
+
+    scraper = CTGoodJobsBrowserPageScraper(
+        page_content_fetcher=fetcher,
+        max_attempts=1,
+    )
+    with pytest.raises(ManualActionRequiredError) as raised:
+        await scraper.fetch_page_html(
+            "https://jobs.ctgoodjobs.hk/job/job-1",
+            stage="detail_page",
+        )
+
+    assert raised.value.classification == "waf_challenge"
 
 
 @pytest.mark.asyncio

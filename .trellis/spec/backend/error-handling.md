@@ -237,3 +237,110 @@ raw_manual_action = _event_manual_action(manual_action_event)
 
 The persisted state prevents stale controls; the event-kind lookup preserves
 the active recovery contract across later bookkeeping events.
+
+---
+
+## Scenario: CTGoodJobs malformed-detail circuit breaker
+
+### 1. Scope / Trigger
+
+Use this contract when CTGoodJobs returns HTML that passes bounded IP/WAF
+inspection but repeatedly fails canonical ingest because the document is not a
+valid job detail. It prevents a verification or site-shape change from being
+recorded as hundreds of unrelated job failures.
+
+### 2. Signatures
+
+```python
+classify_ctgoodjobs_detail_page(
+    *, status_code, final_url, title, html
+) -> CTGoodJobsTerminalUnavailableEvidence | None
+
+resolve_resume_detail_statuses(classification: str | None) -> list[str]
+```
+
+The manual-action classification is `content_anomaly`; its compact evidence is:
+
+```text
+reason = missing_job_content | missing_company_identity
+consecutive_count = 2
+```
+
+### 3. Contracts
+
+- Positive IP/WAF evidence runs before terminal-unavailable inspection.
+- A positive CTGoodJobs WAF/interstitial classification pauses on its first
+  occurrence. Do not spend transport retries on a page already known to need
+  operator action.
+- HTTP 404/410 or an explicit top-level removed/expired/not-found marker is
+  `terminal_unavailable`; missing parsed fields alone are not expiry evidence.
+- For HTTP 200 pages, unavailable marker text is authoritative only in the
+  document title or an explicitly labelled page-state container (for example
+  `data-page-state="job-not-found"`). Never scan arbitrary body prefixes or job
+  descriptions for generic expiry phrases.
+- The first allowlisted structural anomaly is `failed` and crawling continues.
+- The immediately consecutive identical anomaly marks the current target
+  `manual_action_required`, emits `content_anomaly`, and stops later requests.
+- A successful detail or unrelated exception resets the consecutive signature.
+- `content_anomaly` resume selects `failed,manual_action_required,pending` so
+  the first anomaly is retried. Other manual-action resumes retain
+  `manual_action_required,pending`.
+- Never log or persist inspected HTML.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Explicit WAF marker plus `job not found` text | WAF manual action wins |
+| Positive WAF marker on attempt 1 of N | Immediate manual action; one request total |
+| HTTP 404/410 without WAF evidence | `terminal_unavailable`; continue next target |
+| Expiry phrase inside an ordinary job description | Normal/unknown page state |
+| First `missing_company_identity` | `failed`; continue |
+| Second consecutive `missing_company_identity` | `content_anomaly`; stop |
+| Anomaly, success, same anomaly | Two separate failures; no circuit break |
+| Generic parser/network exception | Existing failed/transport behavior; never IP |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** Two consecutive verification-shaped pages pause after two requests,
+  preserving completed work and retrying both anomaly targets after resume.
+- **Base:** One genuinely malformed job fails, the next valid job succeeds, and
+  crawling continues.
+- **Bad:** Treating `missing_company_identity` as proof of expiry permanently
+  drops a verification-blocked job.
+- **Bad:** Inspecting unavailable markers before WAF markers turns a challenge
+  page containing generic `job not found` copy into a terminal job outcome.
+
+### 6. Tests Required
+
+- `backend/tests/test_ctgoodjobs_page_state.py` covers HTTP and explicit page
+  state evidence plus missing-field/body-text non-classification.
+- `backend/tests/test_cross_source_ip_recovery.py` covers WAF precedence,
+  resumable `content_anomaly`, non-IP guidance, and resume status selection.
+- `backend/tests/test_cross_source_crawl_logging.py` covers first/second anomaly
+  transitions, success reset, terminal-unavailable continuation, first-request
+  WAF pause through the browser adapter, bounded logs, and no-later-target
+  behavior.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+except InvalidIngestPayloadError:
+    mark_detail_failed(...)
+    continue
+```
+
+#### Correct
+
+```python
+if reason == previous_allowlisted_reason:
+    pause_as_content_anomaly(reason=reason, consecutive_count=2)
+else:
+    mark_detail_failed(...)
+    previous_allowlisted_reason = reason
+```
+
+The bounded circuit breaker contains an unknown page-shape incident without
+claiming it is an IP block, WAF challenge, or expired job.

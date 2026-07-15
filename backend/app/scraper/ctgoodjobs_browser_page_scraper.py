@@ -13,6 +13,10 @@ from app.scraper.browser_launch import launch_persistent_context_with_fallback
 from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
 from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError, looks_like_interstitial_html
+from app.scraper.ctgoodjobs.page_state import (
+    CTGoodJobsTerminalUnavailableError,
+    classify_ctgoodjobs_detail_page,
+)
 from app.scraper.proxy_rotation import build_ctgoodjobs_proxy_runtime
 from app.scraper.manual_action import (
     ManualActionRequiredError,
@@ -148,38 +152,52 @@ class CTGoodJobsBrowserPageScraper:
                             stage=stage,
                             lease=self._proxy_lease,
                         )
-                    if attempt == self.max_attempts - 1:
-                        challenge_evidence = access_evidence.to_payload() if access_evidence else {
+                    challenge_evidence = (
+                        access_evidence.to_payload()
+                        if access_evidence
+                        else {
                             "final_url": self._last_page_url or url,
                             "status_code": self._last_response_status,
                             "reason": "interstitial_marker",
                         }
-                        raise build_session_recovery_manual_action(
-                            source_site="ctgoodjobs",
-                            stage=stage,
-                            blocked_url=self._last_page_url or url,
-                            referer=referer,
-                            classification="waf_challenge",
-                            evidence=challenge_evidence,
-                        )
+                    )
                     logger.warning(
-                        "SCRAPE_FETCH_RETRY source=ctgoodjobs crawl_job_id=%s "
-                        "stage=%s classification=waf_challenge attempt=%s/%s",
+                        "SCRAPE_FETCH_MANUAL_ACTION source=ctgoodjobs crawl_job_id=%s "
+                        "stage=%s classification=waf_challenge reason=%s",
                         self.request_payload.get("crawl_job_id"),
                         stage,
-                        attempt + 1,
-                        self.max_attempts,
+                        challenge_evidence.get("reason"),
                     )
-                    await self._reset_runtime_for_retry()
-                    await backoff.wait(attempt)
-                    continue
+                    raise build_session_recovery_manual_action(
+                        source_site="ctgoodjobs",
+                        stage=stage,
+                        blocked_url=self._last_page_url or url,
+                        referer=referer,
+                        classification="waf_challenge",
+                        evidence=challenge_evidence,
+                    )
+                if stage == "detail_page":
+                    unavailable_evidence = classify_ctgoodjobs_detail_page(
+                        status_code=self._last_response_status,
+                        final_url=self._last_page_url or url,
+                        title=self._last_page_title,
+                        html=html,
+                    )
+                    if unavailable_evidence is not None:
+                        raise CTGoodJobsTerminalUnavailableError.from_evidence(
+                            unavailable_evidence
+                        )
                 if self._proxy_runtime.enabled:
                     await self._proxy_runtime.report_success(
                         stage=stage,
                         lease=self._proxy_lease,
                     )
                 return html
-            except (CTGoodJobsFetchError, ManualActionRequiredError):
+            except (
+                CTGoodJobsFetchError,
+                CTGoodJobsTerminalUnavailableError,
+                ManualActionRequiredError,
+            ):
                 raise
             except Exception as exc:
                 if self._proxy_runtime.enabled:

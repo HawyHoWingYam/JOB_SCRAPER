@@ -17,6 +17,9 @@ from app.scraper.manual_action import (
     ManualActionRequiredError,
     build_session_recovery_manual_action,
 )
+from app.scraper.ctgoodjobs.page_state import CTGoodJobsTerminalUnavailableError
+from app.scraper.ctgoodjobs_browser_page_scraper import CTGoodJobsBrowserPageScraper
+from app.workers.run_ingest_worker import InvalidIngestPayloadError
 from app.sources.offertoday.listing_runner import (
     ListingConditionOutcome,
     ListingPageObservation,
@@ -144,6 +147,9 @@ class _OneTargetRuntime(_FakeRuntime):
     def mark_detail_manual_action_required(self, **_kwargs):
         self.detail_transitions.append("manual_action_required")
 
+    def mark_detail_terminal_unavailable(self, **_kwargs):
+        self.detail_transitions.append("terminal_unavailable")
+
     def mark_manual_action_required(self, **_kwargs):
         self.detail_transitions.append("crawl_manual_action_required")
 
@@ -166,6 +172,22 @@ class _OneTargetRuntime(_FakeRuntime):
         self.targets.target_rows = 2
         self.targets.fetch_cohort_source_job_ids = ("job-1", "job-2")
         self.targets.fetch_cohort_hash = "two-targets"
+
+    def add_third_target(self) -> None:
+        third = deepcopy(self.targets.targets[0])
+        third.update(
+            {
+                "listing_id": "listing-3",
+                "source_job_id": "job-3",
+                "source_url": third["source_url"].replace("job-1", "job-3"),
+                "listing_payload": {"job_id": "job-3"},
+            }
+        )
+        self.targets.targets.append(third)
+        self.targets.selected_rows = 3
+        self.targets.target_rows = 3
+        self.targets.fetch_cohort_source_job_ids = ("job-1", "job-2", "job-3")
+        self.targets.fetch_cohort_hash = "three-targets"
 
 
 class _FakeDb:
@@ -914,21 +936,17 @@ async def test_ctgoodjobs_detail_ip_block_stops_before_later_target(
         lambda: {"ct-it": category},
     )
 
-    class BlockedBrowser:
-        def __init__(self) -> None:
-            self.calls = 0
+    calls = 0
 
-        async def fetch_page_html(self, url, **_kwargs):
-            self.calls += 1
-            raise build_session_recovery_manual_action(
-                source_site="ctgoodjobs",
-                stage="detail_page",
-                blocked_url=url,
-                classification="ip_blocked",
-                evidence={"status_code": 403},
-            )
+    async def verification_page(_url: str) -> str:
+        nonlocal calls
+        calls += 1
+        return "Just a moment... cf-challenge. Job not found."
 
-    browser = BlockedBrowser()
+    browser = CTGoodJobsBrowserPageScraper(
+        page_content_fetcher=verification_page,
+        max_attempts=3,
+    )
     args = SimpleNamespace(
         crawl_job_id="ctgoodjobs-blocked-detail",
         crawl_mode="headed",
@@ -949,7 +967,7 @@ async def test_ctgoodjobs_detail_ip_block_stops_before_later_target(
         )
 
     assert result["manual_action_required"] == 1
-    assert browser.calls == 1
+    assert calls == 1
     assert runtime.detail_transitions == [
         "running",
         "manual_action_required",
@@ -958,7 +976,210 @@ async def test_ctgoodjobs_detail_ip_block_stops_before_later_target(
     messages = _messages(caplog)
     assert messages.count("SCRAPE_DETAIL_ITEM_START") == 1
     assert messages.count("SCRAPE_DETAIL_ITEM_MANUAL_ACTION") == 1
+    assert "classification=waf_challenge" in messages
     assert "SCRAPE_DETAIL_DONE" in messages
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_repeated_content_anomaly_pauses_before_third_target(
+    monkeypatch,
+    caplog,
+) -> None:
+    runtime = _OneTargetRuntime(source_site="ctgoodjobs")
+    runtime.add_second_target()
+    runtime.add_third_target()
+    category = SimpleNamespace(
+        source_classification_id="ct-it",
+        name="Information Technology",
+        slug="information-technology",
+    )
+    monkeypatch.setattr(ctgoodjobs_crawl, "_categories_by_id", lambda: {"ct-it": category})
+    monkeypatch.setattr(ctgoodjobs_crawl, "parse_detail_page", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(ctgoodjobs_crawl, "merge_ctgoodjobs_job", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "build_ctgoodjobs_canonical_job",
+        lambda _merged: SimpleNamespace(to_dict=lambda: {"raw_data": {}}),
+    )
+
+    persist_calls = 0
+
+    async def anomalous_persist(**_kwargs):
+        nonlocal persist_calls
+        persist_calls += 1
+        raise InvalidIngestPayloadError(
+            "missing_company_identity",
+            "Missing source company id and company name for source_site=ctgoodjobs",
+        )
+
+    monkeypatch.setattr(ctgoodjobs_crawl, "_persist_ctgoodjobs_job", anomalous_persist)
+
+    class FakeBrowser:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch_page_html(self, *_args, **_kwargs):
+            self.calls += 1
+            return "<html><main>unknown shape</main></html>"
+
+    browser = FakeBrowser()
+    args = SimpleNamespace(
+        crawl_job_id="ctgoodjobs-content-anomaly",
+        crawl_mode="headed",
+        category_ids=["ct-it"],
+        detail_limit=10,
+        detail_statuses=["failed", "manual_action_required", "pending"],
+        skip_existing=False,
+        resume_strategy="fresh_profile",
+    )
+
+    with caplog.at_level("INFO", logger="ctgoodjobs-crawl"):
+        result = await ctgoodjobs_crawl._run_detail_phase(
+            args,
+            runtime,
+            browser,
+            source_listing_crawl_job_id="listing-task",
+            detail_scope="listing_batch",
+        )
+
+    assert browser.calls == 2
+    assert persist_calls == 2
+    assert result["failed"] == 1
+    assert result["manual_action_required"] == 1
+    assert runtime.detail_transitions == [
+        "running",
+        "failed",
+        "running",
+        "manual_action_required",
+        "crawl_manual_action_required",
+    ]
+    messages = _messages(caplog)
+    assert messages.count("SCRAPE_DETAIL_ITEM_FAIL") == 1
+    assert messages.count("SCRAPE_DETAIL_ITEM_MANUAL_ACTION") == 1
+    assert "classification=content_anomaly" in messages
+    assert "consecutive_count=2" in messages
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_success_resets_content_anomaly_guard(monkeypatch) -> None:
+    runtime = _OneTargetRuntime(source_site="ctgoodjobs")
+    runtime.add_second_target()
+    runtime.add_third_target()
+    category = SimpleNamespace(
+        source_classification_id="ct-it",
+        name="Information Technology",
+        slug="information-technology",
+    )
+    monkeypatch.setattr(ctgoodjobs_crawl, "_categories_by_id", lambda: {"ct-it": category})
+    monkeypatch.setattr(ctgoodjobs_crawl, "parse_detail_page", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(ctgoodjobs_crawl, "merge_ctgoodjobs_job", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "build_ctgoodjobs_canonical_job",
+        lambda _merged: SimpleNamespace(to_dict=lambda: {"raw_data": {}}),
+    )
+    outcomes = iter(("anomaly", "success", "anomaly"))
+
+    async def persist_sequence(**_kwargs):
+        if next(outcomes) == "anomaly":
+            raise InvalidIngestPayloadError(
+                "missing_company_identity",
+                "Missing source company id and company name for source_site=ctgoodjobs",
+            )
+        return "published-2"
+
+    monkeypatch.setattr(ctgoodjobs_crawl, "_persist_ctgoodjobs_job", persist_sequence)
+
+    class FakeBrowser:
+        async def fetch_page_html(self, *_args, **_kwargs):
+            return "<html><main>detail</main></html>"
+
+    result = await ctgoodjobs_crawl._run_detail_phase(
+        SimpleNamespace(
+            crawl_job_id="ctgoodjobs-anomaly-reset",
+            crawl_mode="headed",
+            category_ids=["ct-it"],
+            detail_limit=10,
+            detail_statuses=["failed", "manual_action_required", "pending"],
+            skip_existing=False,
+            resume_strategy="fresh_profile",
+        ),
+        runtime,
+        FakeBrowser(),
+        source_listing_crawl_job_id="listing-task",
+        detail_scope="listing_batch",
+    )
+
+    assert result["completed"] == 1
+    assert result["failed"] == 2
+    assert result["manual_action_required"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_terminal_unavailable_continues_to_next_target(
+    monkeypatch,
+) -> None:
+    runtime = _OneTargetRuntime(source_site="ctgoodjobs")
+    runtime.add_second_target()
+    category = SimpleNamespace(
+        source_classification_id="ct-it",
+        name="Information Technology",
+        slug="information-technology",
+    )
+    monkeypatch.setattr(ctgoodjobs_crawl, "_categories_by_id", lambda: {"ct-it": category})
+    monkeypatch.setattr(ctgoodjobs_crawl, "parse_detail_page", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(ctgoodjobs_crawl, "merge_ctgoodjobs_job", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "build_ctgoodjobs_canonical_job",
+        lambda _merged: SimpleNamespace(to_dict=lambda: {"raw_data": {}}),
+    )
+
+    async def fake_persist(**_kwargs):
+        return "published-2"
+
+    monkeypatch.setattr(ctgoodjobs_crawl, "_persist_ctgoodjobs_job", fake_persist)
+
+    class FakeBrowser:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch_page_html(self, url, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise CTGoodJobsTerminalUnavailableError(
+                    reason="http_status_410",
+                    url=url,
+                    status_code=410,
+                )
+            return "<html><main>valid detail</main></html>"
+
+    browser = FakeBrowser()
+    result = await ctgoodjobs_crawl._run_detail_phase(
+        SimpleNamespace(
+            crawl_job_id="ctgoodjobs-terminal-unavailable",
+            crawl_mode="headed",
+            category_ids=["ct-it"],
+            detail_limit=10,
+            detail_statuses=["pending"],
+            skip_existing=False,
+            resume_strategy="fresh_profile",
+        ),
+        runtime,
+        browser,
+        source_listing_crawl_job_id="listing-task",
+        detail_scope="listing_batch",
+    )
+
+    assert browser.calls == 2
+    assert result["terminal_unavailable"] == 1
+    assert result["completed"] == 1
+    assert runtime.detail_transitions == [
+        "running",
+        "terminal_unavailable",
+        "running",
+        "completed",
+    ]
 
 
 @pytest.mark.asyncio

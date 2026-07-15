@@ -36,6 +36,12 @@ RESUME_CONTEXT_EVENT_TYPES = {
 }
 
 
+def resolve_resume_detail_statuses(classification: str | None) -> list[str]:
+    if str(classification or "").strip().lower() == "content_anomaly":
+        return ["failed", "manual_action_required", "pending"]
+    return ["manual_action_required", "pending"]
+
+
 @dataclass(frozen=True)
 class CrawlJobDispatchResult:
     crawl_job: CrawlJob
@@ -396,7 +402,9 @@ class CrawlJobDispatchService:
                     "OfferToday listing_batch resume requires a listing batch ID"
                 )
             request_payload["detail_scope"] = detail_scope
-            request_payload["detail_statuses"] = ["manual_action_required", "pending"]
+            request_payload["detail_statuses"] = resolve_resume_detail_statuses(
+                manual_action.get("classification")
+            )
         ensure_headed_crawl_worker_available(
             crawl_mode=request_payload.get("crawl_mode"),
             source_site=crawl_job.source_site,
