@@ -870,6 +870,12 @@ def build_crawl_task_snapshot(
             metrics.get("detail_manual_action_required", 0),
         )
     )
+    detail_terminal_unavailable = _to_int(
+        event_payload.get(
+            "detail_terminal_unavailable",
+            metrics.get("detail_terminal_unavailable", 0),
+        )
+    )
     detail_run_completed = _to_int(
         event_payload.get("detail_run_completed", metrics.get("detail_run_completed", 0))
     )
@@ -880,6 +886,12 @@ def build_crawl_task_snapshot(
         event_payload.get(
             "detail_run_manual_action_required",
             metrics.get("detail_run_manual_action_required", 0),
+        )
+    )
+    detail_run_terminal_unavailable = _to_int(
+        event_payload.get(
+            "detail_run_terminal_unavailable",
+            metrics.get("detail_run_terminal_unavailable", 0),
         )
     )
     detail_reconciled_rows = _to_int(
@@ -894,15 +906,53 @@ def build_crawl_task_snapshot(
         else None
     )
     if detail_distinct_progress is not None:
-        detail_fetched = _to_int(detail_distinct_progress["detail_distinct_succeeded"])
-        detail_failed_count = _to_int(detail_distinct_progress["detail_distinct_failed"])
+        detail_target_count = _to_int(
+            detail_distinct_progress["detail_distinct_target_total"]
+        )
+        detail_fetched_count = _to_int(
+            detail_distinct_progress["detail_distinct_succeeded"]
+        )
+        detail_failed_count = _to_int(
+            detail_distinct_progress["detail_distinct_failed"]
+        )
+        detail_unavailable_count = _to_int(
+            detail_distinct_progress["detail_distinct_terminal_unavailable"]
+        )
+        detail_remaining_count = _to_int(
+            detail_distinct_progress["detail_distinct_remaining"]
+        )
     else:
-        detail_fetched = max(detail_completed - detail_reconciled_rows, 0)
+        detail_target_count = detail_target_rows
+        detail_fetched_count = _max_count(
+            detail_run_completed,
+            max(detail_completed - detail_reconciled_rows, 0),
+        )
         detail_failed_count = _max_count(
             detail_failed,
             detail_run_failed,
             ingest_items_failed,
         )
+        detail_unavailable_count = _max_count(
+            detail_terminal_unavailable,
+            detail_run_terminal_unavailable,
+        )
+        detail_remaining_count = max(
+            detail_target_count
+            - detail_fetched_count
+            - detail_failed_count
+            - detail_unavailable_count,
+            0,
+        )
+    detail_manual_action_count = _max_count(
+        detail_manual_action_required,
+        detail_run_manual_action_required,
+    )
+    detail_saved_count = (
+        _max_count(jobs_saved, detail_run_completed)
+        if normalized_source_site in {"ctgoodjobs", "jobsdb"}
+        else jobs_saved
+    )
+    detail_fetched = detail_fetched_count
     ai_run_id = event_payload.get("ai_run_id") or metrics.get("ai_run_id")
     ai_completed_items = _to_int(
         event_payload.get("ai_completed_items", metrics.get("ai_completed_items", 0))
@@ -1042,9 +1092,16 @@ def build_crawl_task_snapshot(
         "detail_run_completed": detail_run_completed,
         "detail_run_failed": detail_run_failed,
         "detail_run_manual_action_required": detail_run_manual_action_required,
+        "detail_run_terminal_unavailable": detail_run_terminal_unavailable,
         "detail_reconciled_rows": detail_reconciled_rows,
         "detail_fetched": detail_fetched,
         "detail_failed_count": detail_failed_count,
+        "detail_target_count": detail_target_count,
+        "detail_fetched_count": detail_fetched_count,
+        "detail_saved_count": detail_saved_count,
+        "detail_unavailable_count": detail_unavailable_count,
+        "detail_manual_action_count": detail_manual_action_count,
+        "detail_remaining_count": detail_remaining_count,
         **(
             detail_distinct_progress
             or {
@@ -1063,6 +1120,7 @@ def build_crawl_task_snapshot(
         "detail_completed": detail_completed,
         "detail_failed": detail_failed,
         "detail_manual_action_required": detail_manual_action_required,
+        "detail_terminal_unavailable": detail_terminal_unavailable,
         "jobs_classified": event_payload.get("jobs_classified", metrics.get("jobs_classified", 0)),
         "new_jobs_added": event_payload.get("new_jobs_added") or metrics.get("new_jobs_added") or metrics.get("new_jobs_count", 0),
         "classification_total": event_payload.get(

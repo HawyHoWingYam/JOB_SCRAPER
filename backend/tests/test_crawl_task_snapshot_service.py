@@ -98,6 +98,102 @@ def test_snapshot_exposes_normalized_detail_metrics() -> None:
     assert snapshot["detail_failed_count"] == 2
 
 
+def test_snapshot_exposes_common_detail_run_metrics_and_conserves_remaining() -> None:
+    event = _event({"phase": 2}, event_type="crawl.detail_progress")
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(
+            source_site="ctgoodjobs",
+            status="running",
+            request_payload={"crawl_phase": "detail"},
+            metrics={
+                "detail_target_rows": 10,
+                "detail_run_completed": 3,
+                "detail_run_failed": 2,
+                "detail_run_terminal_unavailable": 1,
+                "detail_run_manual_action_required": 1,
+            },
+        ),
+        event,
+        now=NOW,
+        events=[event],
+    )
+
+    assert snapshot["detail_target_count"] == 10
+    assert snapshot["detail_fetched_count"] == 3
+    assert snapshot["detail_saved_count"] == 3
+    assert snapshot["detail_failed_count"] == 2
+    assert snapshot["detail_unavailable_count"] == 1
+    assert snapshot["detail_manual_action_count"] == 1
+    assert snapshot["detail_remaining_count"] == 4
+
+
+def test_snapshot_common_detail_metrics_are_numeric_zeros() -> None:
+    event = _event({"phase": 2}, event_type="crawl.detail_progress")
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(
+            source_site="jobsdb",
+            status="running",
+            request_payload={"crawl_phase": "detail"},
+        ),
+        event,
+        now=NOW,
+        events=[event],
+    )
+
+    assert snapshot["detail_target_count"] == 0
+    assert snapshot["detail_fetched_count"] == 0
+    assert snapshot["detail_saved_count"] == 0
+    assert snapshot["detail_failed_count"] == 0
+    assert snapshot["detail_unavailable_count"] == 0
+    assert snapshot["detail_manual_action_count"] == 0
+    assert snapshot["detail_remaining_count"] == 0
+
+
+def test_offertoday_common_metrics_prefer_distinct_frozen_cohort() -> None:
+    cohort = _event(
+        {
+            "fetch_cohort_source_job_ids": ["job-1", "job-2", "job-3", "job-4"],
+            "fetch_cohort_distinct": 4,
+        },
+        event_type="crawl.detail_cohort_frozen",
+    )
+    success = _event(
+        {"source_job_id": "job-1", "classification": "success"},
+        event_type="crawl.detail_attempt",
+    )
+    unavailable = _event(
+        {"source_job_id": "job-2", "classification": "terminal_unavailable"},
+        event_type="crawl.detail_attempt",
+    )
+    failure = _event(
+        {
+            "source_job_id": "job-3",
+            "classification": "invalid_payload",
+            "will_retry": False,
+        },
+        event_type="crawl.detail_attempt",
+    )
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(
+            source_site="offertoday",
+            status="manual_action_required",
+            request_payload={"crawl_phase": "detail"},
+            metrics={"jobs_saved": 1, "detail_run_manual_action_required": 1},
+        ),
+        failure,
+        now=NOW,
+        events=[cohort, success, unavailable, failure],
+    )
+
+    assert snapshot["detail_target_count"] == 4
+    assert snapshot["detail_fetched_count"] == 1
+    assert snapshot["detail_saved_count"] == 1
+    assert snapshot["detail_failed_count"] == 1
+    assert snapshot["detail_unavailable_count"] == 1
+    assert snapshot["detail_manual_action_count"] == 1
+    assert snapshot["detail_remaining_count"] == 1
+
+
 def test_snapshot_projects_detail_segment_and_backlog_metrics() -> None:
     event = _event(
         {
