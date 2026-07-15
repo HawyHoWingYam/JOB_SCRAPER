@@ -3,11 +3,9 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
-  MonitorPlay,
   RefreshCcw,
   RotateCcw,
   Square,
-  Unplug,
 } from 'lucide-react';
 import { apiPath } from '../../api/base';
 import { fetchCapabilities } from '../../api/capabilities';
@@ -19,15 +17,9 @@ import { formatScraperSourceLabel } from './listingBatchLabel';
 import { buildIpBlockGuidance } from './ipBlockGuidance';
 import {
   cancelCrawlJob,
-  closeManualActionWindows,
-  DEFAULT_MANUAL_ACTION_HELPER_START_COMMAND,
-  DEFAULT_MANUAL_ACTION_HELPER_START_WORKDIR,
-  DEFAULT_MANUAL_ACTION_HELPER_URL,
-  getManualActionHelperHealth,
-  getManualActionReuseStatus,
-  openManualActionBrowser,
   resumeCrawlJob,
 } from './crawlTaskActions';
+import ManualActionRecoveryPanel from './ManualActionRecoveryPanel';
 import './CrawlTasksPage.css';
 
 const API_BASE = apiPath('');
@@ -88,7 +80,6 @@ function buildTasksUrl(page, filters) {
 
   return `${API_BASE}/crawl-jobs/tasks?${params.toString()}`;
 }
-
 function formatTimestamp(value) {
   if (!value) {
     return '-';
@@ -348,25 +339,13 @@ export default function CrawlTasksPage() {
   const [error, setError] = useState(null);
   const [actionState, setActionState] = useState({ pending: null, error: null, notice: null });
   const [manualActionCapability, setManualActionCapability] = useState(null);
-  const [helperHealth, setHelperHealth] = useState({ status: 'unknown', detail: null });
   const latestLoadRef = useRef(0);
 
   const selectedTask = useMemo(() => {
     return tasks.find((task) => task.crawl_job_id === selectedTaskId) || null;
   }, [selectedTaskId, tasks]);
   const pageCount = Math.max(1, Math.ceil((pagination.total || 0) / (pagination.pageSize || PAGE_SIZE)));
-  const manualActionResumeSupported = selectedTask?.manual_action?.resume_supported === true;
-  const manualActionReuseSupported = manualActionResumeSupported
-    && selectedTask?.manual_action?.reuse_open_browser_supported === true;
   const manualActionGuidance = buildManualActionGuidance(selectedTask);
-  const manualActionHelperUrl = manualActionCapability?.helper_url
-    || DEFAULT_MANUAL_ACTION_HELPER_URL;
-  const manualActionHelperHealthUrl = manualActionCapability?.health_url
-    || `${manualActionHelperUrl}/health`;
-  const manualActionHelperStartWorkdir = manualActionCapability?.manual_start_workdir
-    || DEFAULT_MANUAL_ACTION_HELPER_START_WORKDIR;
-  const manualActionHelperStartCommand = manualActionCapability?.manual_start_command
-    || DEFAULT_MANUAL_ACTION_HELPER_START_COMMAND;
 
   const loadTasks = useCallback(async ({ reason = 'refresh' } = {}) => {
     const requestId = createMonitoringId('req');
@@ -463,27 +442,6 @@ export default function CrawlTasksPage() {
     };
   }, []);
 
-  const checkHelperHealth = useCallback(async () => {
-    setHelperHealth({ status: 'checking', detail: null });
-    const health = await getManualActionHelperHealth({
-      helperUrl: manualActionHelperUrl,
-      healthUrl: manualActionHelperHealthUrl,
-    });
-    setHelperHealth({
-      status: health.available ? 'online' : 'offline',
-      detail: health.available ? null : health.error || health.reason,
-    });
-    return health;
-  }, [manualActionHelperHealthUrl, manualActionHelperUrl]);
-
-  useEffect(() => {
-    if (!manualActionReuseSupported) {
-      setHelperHealth({ status: 'unknown', detail: null });
-      return;
-    }
-    void checkHelperHealth();
-  }, [checkHelperHealth, manualActionReuseSupported, selectedTaskId]);
-
   const handleFilterChange = useCallback((field) => (event) => {
     const value = event.target.value;
     setFilters((current) => ({
@@ -536,6 +494,24 @@ export default function CrawlTasksPage() {
       'noopener,noreferrer'
     );
   }, [selectedTask]);
+
+  const handleTaskChanged = useCallback(async (reason) => {
+    await loadTasks({ reason });
+  }, [loadTasks]);
+
+  const handleCancelTask = useCallback(() => {
+    if (!selectedTask?.crawl_job_id) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Cancel crawl job ${selectedTask.crawl_job_id}? This stops any remaining work for this task.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    void runTaskAction('cancel', 'Cancel crawl job', () =>
+      cancelCrawlJob(selectedTask.crawl_job_id));
+  }, [runTaskAction, selectedTask]);
 
   return (
     <section className="crawl-tasks-page">
@@ -743,143 +719,15 @@ export default function CrawlTasksPage() {
                 </div>
               )}
 
-              {manualActionReuseSupported && helperHealth.status !== 'online' && (
-                <div
-                  className="crawl-tasks-action-note"
-                  data-testid="crawl-task-helper-offline"
-                >
-                  <strong>
-                    {helperHealth.status === 'checking' ? 'Checking helper...' : 'Helper offline'}
-                  </strong>
-                  <span>
-                    Start the dedicated helper on the host, then retry the health check.
-                  </span>
-                  <code>{`cd ${manualActionHelperStartWorkdir}`}</code>
-                  <code>{manualActionHelperStartCommand}</code>
-                  <span>{manualActionHelperHealthUrl}</span>
-                  {helperHealth.detail && <span>{helperHealth.detail}</span>}
-                  <button
-                    type="button"
-                    data-testid="crawl-task-retry-helper-health"
-                    disabled={helperHealth.status === 'checking'}
-                    onClick={() => void checkHelperHealth()}
-                  >
-                    <RefreshCcw size={16} aria-hidden="true" />
-                    <span>Retry Helper Health</span>
-                  </button>
-                </div>
-              )}
-
-              <div className="crawl-tasks-detail-actions">
-                {isManualActionTask(selectedTask) ? (
-                  <>
-                    {manualActionReuseSupported && (
-                      <button
-                        type="button"
-                        data-testid="crawl-task-resume-open-browser"
-                        disabled={actionState.pending !== null}
-                        onClick={() =>
-                          void runTaskAction(
-                            'resume_open_browser',
-                            'Resume using open browser',
-                            () => resumeCrawlJob(selectedTask.crawl_job_id, 'reuse_open_browser')
-                          )
-                        }
-                      >
-                        <RotateCcw size={16} aria-hidden="true" />
-                        <span>Resume using Open Browser</span>
-                      </button>
-                    )}
-
-                    {manualActionResumeSupported && (
-                      <button
-                        type="button"
-                        data-testid="crawl-task-resume-fresh"
-                        disabled={actionState.pending !== null}
-                        onClick={() =>
-                          void runTaskAction('resume_fresh', 'Resume fresh', () =>
-                            resumeCrawlJob(selectedTask.crawl_job_id, 'fresh_profile')
-                          )
-                        }
-                      >
-                        <RotateCcw size={16} aria-hidden="true" />
-                        <span>Resume Fresh</span>
-                      </button>
-                    )}
-
-                    {manualActionReuseSupported && (
-                      <>
-                        <button
-                          type="button"
-                          data-testid="crawl-task-open-browser"
-                          disabled={
-                            actionState.pending !== null
-                            || helperHealth.status !== 'online'
-                          }
-                          onClick={() =>
-                            void runTaskAction('open_browser', 'Open browser', async () => {
-                              try {
-                                return await openManualActionBrowser(
-                                  selectedTask.crawl_job_id,
-                                  manualActionHelperUrl,
-                                );
-                              } catch (openError) {
-                                setHelperHealth({
-                                  status: 'offline',
-                                  detail: extractErrorMessage(
-                                    openError,
-                                    'Manual-action helper is unavailable',
-                                  ),
-                                });
-                                throw openError;
-                              }
-                            })
-                          }
-                        >
-                          <MonitorPlay size={16} aria-hidden="true" />
-                          <span>Open Browser</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          data-testid="crawl-task-check-reuse-status"
-                          disabled={actionState.pending !== null}
-                          onClick={() =>
-                            void runTaskAction('reuse_status', 'Check reuse status', () =>
-                              getManualActionReuseStatus(selectedTask.crawl_job_id)
-                            )
-                          }
-                        >
-                          <RefreshCcw size={16} aria-hidden="true" />
-                          <span>Check Reuse Status</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          data-testid="crawl-task-close-profile-windows"
-                          disabled={actionState.pending !== null}
-                          onClick={() =>
-                            void runTaskAction('close_windows', 'Close profile windows', () =>
-                              closeManualActionWindows(selectedTask.crawl_job_id)
-                            )
-                          }
-                        >
-                          <Unplug size={16} aria-hidden="true" />
-                          <span>Close Profile Windows</span>
-                        </button>
-                      </>
-                    )}
-
-                    {!manualActionResumeSupported && (
-                      <div
-                        className="crawl-tasks-action-note"
-                        data-testid="crawl-task-resume-unsupported"
-                      >
-                        This manual action requires operator review and cannot be resumed automatically.
-                      </div>
-                    )}
-                  </>
-                ) : (
+              {isManualActionTask(selectedTask) ? (
+                <ManualActionRecoveryPanel
+                  key={selectedTask.crawl_job_id}
+                  task={selectedTask}
+                  capability={manualActionCapability}
+                  onTaskChanged={handleTaskChanged}
+                />
+              ) : (
+                <div className="crawl-tasks-detail-actions">
                   <button
                     type="button"
                     data-testid="crawl-task-resume"
@@ -893,22 +741,8 @@ export default function CrawlTasksPage() {
                     <RotateCcw size={16} aria-hidden="true" />
                     <span>Resume Task</span>
                   </button>
-                )}
-
-                <button
-                  type="button"
-                  data-testid="crawl-task-cancel"
-                  disabled={actionState.pending !== null}
-                  onClick={() =>
-                    void runTaskAction('cancel', 'Cancel crawl job', () =>
-                      cancelCrawlJob(selectedTask.crawl_job_id)
-                    )
-                  }
-                >
-                  <Square size={16} aria-hidden="true" />
-                  <span>Cancel Crawl Job</span>
-                </button>
-              </div>
+                </div>
+              )}
 
               {actionState.error && (
                 <div className="crawl-tasks-banner crawl-tasks-banner-error">{actionState.error}</div>
@@ -1001,6 +835,22 @@ export default function CrawlTasksPage() {
                   </pre>
                 </div>
               )}
+
+              <div className="crawl-tasks-danger-zone">
+                <div>
+                  <strong>Danger zone</strong>
+                  <p>Cancel this crawl only when it should not be resumed.</p>
+                </div>
+                <button
+                  type="button"
+                  data-testid="crawl-task-cancel"
+                  disabled={actionState.pending !== null}
+                  onClick={handleCancelTask}
+                >
+                  <Square size={16} aria-hidden="true" />
+                  <span>Cancel Crawl Job</span>
+                </button>
+              </div>
             </>
           ) : (
             <div className="crawl-tasks-empty">
