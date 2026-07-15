@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 from pathlib import Path
-import socket
 from typing import Awaitable, Callable
 
 from app.config import settings
@@ -18,6 +17,7 @@ from app.scraper.manual_action import (
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+    resolve_manual_action_cdp_connect_host,
 )
 from app.utils.anti_detection import ExponentialBackoff
 
@@ -231,10 +231,7 @@ class CTGoodJobsBrowserPageScraper:
                 message="No reusable browser session is available for this automation profile. Open the manual browser again or choose Fresh Profile."
             )
         cdp_host = settings.manual_action_cdp_host or settings.manual_action_helper_host
-        try:
-            cdp_connect_host = socket.gethostbyname(cdp_host)
-        except OSError:
-            cdp_connect_host = cdp_host
+        cdp_connect_host = resolve_manual_action_cdp_connect_host(cdp_host)
 
         logger.info(
             "manual_action_attach_attempt",
