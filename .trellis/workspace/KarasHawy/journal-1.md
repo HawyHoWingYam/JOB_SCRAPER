@@ -208,3 +208,36 @@ Added source-aware IP-block pause/resume, cross-source crawl-stage logging, focu
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Crawl Tasks raw ID metrics
+
+**Date**: 2026-07-15
+**Task**: Crawl Tasks raw ID metrics
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Added cross-source raw listing Job ID metrics, unified Crawl Tasks listing/detail summaries, one-minute auto-refresh with manual refresh, legacy detail phase fallback, and regression coverage. Committed as cebe7815. No Trellis task was archived because no task was active; Bootstrap Guidelines remains in progress and the OfferToday parent remains planning.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cebe7815` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
