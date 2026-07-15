@@ -90,3 +90,44 @@ def test_snapshot_exposes_normalized_detail_metrics() -> None:
     assert snapshot["detail_reconciled_rows"] == 1
     assert snapshot["detail_fetched"] == 2
     assert snapshot["detail_failed_count"] == 2
+
+
+def test_snapshot_projects_detail_segment_and_backlog_metrics() -> None:
+    event = _event(
+        {
+            "phase": 2,
+            "detail_scope": "global",
+            "segment_index": 2,
+            "segment_target_rows": 5000,
+            "continuation_state": "continuing",
+            "detail_backlog_remaining": 7431,
+        },
+        event_type="crawl.detail_segment",
+    )
+    crawl_job = _crawl_job(
+        source_site="offertoday",
+        request_payload={"crawl_phase": "detail", "detail_scope": "global"},
+        metrics={
+            "detail_segments_completed": 2,
+            "detail_backlog_pending": 7400,
+            "detail_backlog_failed": 20,
+            "detail_backlog_manual_action_required": 11,
+        },
+    )
+
+    snapshot = build_crawl_task_snapshot(
+        crawl_job,
+        event,
+        now=NOW,
+        events=[event],
+    )
+
+    assert snapshot["detail_scope"] == "global"
+    assert snapshot["detail_segment_index"] == 2
+    assert snapshot["detail_segments_completed"] == 2
+    assert snapshot["detail_segment_target_rows"] == 5000
+    assert snapshot["detail_backlog_pending"] == 7400
+    assert snapshot["detail_backlog_failed"] == 20
+    assert snapshot["detail_backlog_manual_action_required"] == 11
+    assert snapshot["detail_backlog_remaining"] == 7431
+    assert snapshot["detail_continuation_state"] == "continuing"

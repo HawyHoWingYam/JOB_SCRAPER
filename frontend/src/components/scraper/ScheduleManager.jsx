@@ -11,6 +11,11 @@ import { getCrawlModeOptionsForSource, resolveDefaultCrawlMode } from './crawlMo
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
 import { sourceRequiresExternalHeadedWorker } from './headedRuntime';
 import { resolveDefaultMaxPages } from './maxPages';
+import { DEFAULT_MANUAL_ACTION_HELPER_URL } from './crawlTaskActions';
+import {
+    buildImmediateScrapePayload,
+    normalizeCategoryIdsForSource,
+} from './schedulePayload';
 import {
     formatListingBatchIdentity,
     formatListingBatchOptionLabel,
@@ -20,7 +25,6 @@ import './Scheduler.css';
 
 const API_BASE = apiPath('');
 const CATEGORY_API_BASE = `${API_BASE_URL}/api`;
-const DEFAULT_MANUAL_ACTION_HELPER_URL = 'http://127.0.0.1:47652';
 const DIRECT_OVERRIDE_RUN_KEY = 'scheduler.directOverrideRun';
 const DIRECT_OVERRIDE_RECOVERY_WINDOW_MS = 20_000;
 const EMPTY_PROGRESS = {};
@@ -116,75 +120,6 @@ async function apiFetchJsonWithMonitoring(url, {
     }
 }
 
-function normalizeCategoryIdsForSource(sourceSite, categoryIds) {
-    if (!Array.isArray(categoryIds)) {
-        return [];
-    }
-
-    if (sourceSite === 'offertoday') {
-        return categoryIds
-            .map((value) => Number.parseInt(`${value}`, 10))
-            .filter((value) => Number.isInteger(value));
-    }
-
-    if (sourceSite === 'ctgoodjobs') {
-        return categoryIds.filter(
-            (value) => typeof value === 'string' && value.startsWith('ctgoodjobs:')
-        );
-    }
-
-    return categoryIds
-        .map((value) => Number.parseInt(`${value}`, 10))
-        .filter((value) => Number.isInteger(value));
-}
-
-function buildImmediateScrapePayload(form, sourceSite, sourceCatalog = EMPTY_SOURCE_CATALOG) {
-    const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
-    const categoryIds = normalizeCategoryIdsForSource(sourceSite, form?.category_ids);
-    const maxPages = Number.parseInt(`${form?.max_pages ?? ''}`, 10);
-    const detailLimit = Number.parseInt(`${form?.detail_limit ?? ''}`, 10);
-    const sourceListingCrawlJobId = `${form?.source_listing_crawl_job_id ?? ''}`.trim();
-
-    if (crawlPhase === 'listing' && categoryIds.length === 0 && sourceSite !== 'offertoday') {
-        return {
-            error: 'Please select at least one category.',
-        };
-    }
-
-    if (crawlPhase === 'listing' && (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 9999)) {
-        return {
-            error: 'Max pages must be a whole number between 1 and 1000.',
-        };
-    }
-
-    if (crawlPhase === 'detail' && categoryIds.length === 0 && !sourceListingCrawlJobId) {
-        return {
-            error: 'Detail runs need categories or a source listing crawl job ID.',
-        };
-    }
-
-    if (crawlPhase === 'detail' && (!Number.isInteger(detailLimit) || detailLimit < 1 || detailLimit > 5000)) {
-        return {
-            error: 'Detail batch size must be a whole number between 1 and 5000.',
-        };
-    }
-
-    return {
-        payload: {
-            source_site: sourceSite,
-            crawl_phase: crawlPhase,
-            crawl_mode: form?.crawl_mode || resolveDefaultCrawlMode(sourceSite, sourceCatalog),
-            category_ids: categoryIds,
-            max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite, sourceCatalog),
-            detail_limit: crawlPhase === 'detail' ? detailLimit : 100,
-            // For listing/full phases: skip re-staging jobs already in the DB.
-            // For detail phase: always process the backlog — failed/pending rows need retrying.
-            skip_existing: crawlPhase !== 'detail',
-            ...(sourceListingCrawlJobId ? { source_listing_crawl_job_id: sourceListingCrawlJobId } : {}),
-        },
-    };
-}
-
 function formatRuntimeTimestamp(value) {
     if (!value) {
         return 'Unknown';
@@ -200,45 +135,6 @@ function formatRuntimeTimestamp(value) {
 
 function formatBacklogCount(value) {
     return Number(value || 0).toLocaleString();
-}
-
-function hasEligibleListingBatchDetailWork(batch) {
-    if (`${batch?.status || ''}`.trim().toLowerCase() !== 'completed') {
-        return false;
-    }
-    return [
-        batch?.detail_pending,
-        batch?.detail_failed,
-        batch?.detail_manual_action_required,
-    ].some((value) => Number(value || 0) > 0);
-}
-
-function findNewestEligibleListingBatch(batches) {
-    return (batches || [])
-        .filter(hasEligibleListingBatchDetailWork)
-        .reduce((newest, batch) => {
-            if (!newest) {
-                return batch;
-            }
-
-            const batchTimestamp = Date.parse(
-                batch?.queued_at || batch?.created_at || batch?.completed_at || ''
-            );
-            const newestTimestamp = Date.parse(
-                newest?.queued_at || newest?.created_at || newest?.completed_at || ''
-            );
-            const normalizedBatchTimestamp = Number.isFinite(batchTimestamp) ? batchTimestamp : 0;
-            const normalizedNewestTimestamp = Number.isFinite(newestTimestamp) ? newestTimestamp : 0;
-            if (normalizedBatchTimestamp !== normalizedNewestTimestamp) {
-                return normalizedBatchTimestamp > normalizedNewestTimestamp ? batch : newest;
-            }
-
-            return `${batch?.crawl_job_id || ''}`.localeCompare(
-                `${newest?.crawl_job_id || ''}`
-            ) > 0
-                ? batch
-                : newest;
-        }, null);
 }
 
 function formatSourceLabel(sourceSite) {
@@ -355,7 +251,11 @@ function buildImmediateRunSummary(form, sourceSite, categories) {
         summaryMetrics.push(
             formatImmediateDetailLimitMetric(detailLimit),
             'Eligible backlog: pending, failed, manual review',
-            buildSelectedSectorSummary(form, categories)
+            sourceSite === 'offertoday'
+                ? (listingBatchId
+                    ? 'Scope: selected listing batch'
+                    : 'Scope: global OfferToday backlog')
+                : buildSelectedSectorSummary(form, categories)
         );
 
         if (listingBatchId) {
@@ -422,7 +322,12 @@ function buildImmediateRunReadiness(
 
         if (crawlPhase === 'listing' && selectedSectorCount === 0 && sourceSite !== 'offertoday') {
             detail = 'Select at least one sector to launch this listing crawl.';
-        } else if (crawlPhase === 'detail' && selectedSectorCount === 0 && !hasBatchFilter) {
+        } else if (
+            crawlPhase === 'detail'
+            && selectedSectorCount === 0
+            && !hasBatchFilter
+            && sourceSite !== 'offertoday'
+        ) {
             detail = 'Select sectors or a listing batch before launching this detail recovery run.';
         }
 
@@ -442,7 +347,9 @@ function buildImmediateRunReadiness(
                 : `Listing crawl will scan ${selectedSectorCount} selected sector${selectedSectorCount === 1 ? '' : 's'}.`)
             : hasBatchFilter
                 ? 'Detail crawl will use only the selected listing batch, including keyword and hybrid rows.'
-                : 'Detail crawl will use global category backlog across matching listing batches.',
+                : sourceSite === 'offertoday'
+                    ? 'Detail crawl will recover the global OfferToday backlog across all categories, including unclassified staging rows.'
+                    : 'Detail crawl will use global category backlog across matching listing batches.',
     };
 }
 
@@ -453,7 +360,7 @@ function buildImmediateRunModeCopy(form) {
         return {
             eyebrow: 'Detail Mode',
             title: 'Recover eligible detail backlog',
-            description: 'Use a listing batch for complete batch recovery, or explicitly choose category backlog.',
+            description: 'Leave Listing Batch Scope empty for global recovery, or choose one batch for targeted repair.',
         };
     }
 
@@ -835,35 +742,6 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
 
         fetchListingBatches(currentSourceSite);
     }, [currentSourceSite, fetchListingBatches, immediateForm.crawl_phase, showImmediateScrape]);
-
-    useEffect(() => {
-        if (
-            !showImmediateScrape
-            || immediateForm.crawl_phase !== 'detail'
-            || currentSourceSite !== 'offertoday'
-            || immediateDirtyFieldsRef.current.listingBatch
-            || immediateForm.source_listing_crawl_job_id
-        ) {
-            return;
-        }
-
-        const defaultBatch = findNewestEligibleListingBatch(listingBatches);
-        if (!defaultBatch?.crawl_job_id) {
-            return;
-        }
-
-        setImmediateForm((prev) => (
-            prev.source_listing_crawl_job_id
-                ? prev
-                : { ...prev, source_listing_crawl_job_id: defaultBatch.crawl_job_id }
-        ));
-    }, [
-        currentSourceSite,
-        immediateForm.crawl_phase,
-        immediateForm.source_listing_crawl_job_id,
-        listingBatches,
-        showImmediateScrape,
-    ]);
 
     const schedulerStatus = capabilities?.scheduler || null;
     const headedWorkerStatus = capabilities?.crawl_workers?.headed || null;
@@ -1412,7 +1290,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                         />
                         <p className="form-hint">
                             {immediateForm.crawl_phase === 'detail'
-                                ? 'Set the maximum number of eligible detail rows to recover in this run.'
+                                ? 'Set the maximum number of distinct job details in each recovery segment. Successful segments continue automatically.'
                                 : (currentSourceSite === 'offertoday' && immediateForm.category_ids.length === 0
                                     ? 'Set how many listing pages to scan across the default IT scope.'
                                     : 'Set how many listing pages to scan per selected sector.')}
@@ -1421,7 +1299,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
 
                     {immediateForm.crawl_phase === 'detail' && (
                         <div className="cyber-form-group">
-                            <label htmlFor="source-listing-crawl-job-id">Listing Batch Scope</label>
+                            <label htmlFor="source-listing-crawl-job-id">Listing Batch Scope (advanced)</label>
                             <select
                                 id="source-listing-crawl-job-id"
                                 data-testid="direct-override-listing-batch"
@@ -1435,7 +1313,11 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                                     }));
                                 }}
                             >
-                                <option value="">Global category backlog (advanced)</option>
+                                <option value="">
+                                    {currentSourceSite === 'offertoday'
+                                        ? 'Global OfferToday backlog (default)'
+                                        : 'Category backlog'}
+                                </option>
                                 {listingBatches.map((batch) => (
                                     <option key={batch.crawl_job_id} value={batch.crawl_job_id}>
                                         {formatListingBatchOptionLabel(batch, formatRuntimeTimestamp)}
@@ -1444,14 +1326,20 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                             </select>
                             <p className="form-hint backlog-guidance-muted">
                                 {currentSourceSite === 'offertoday'
-                                    ? 'OfferToday defaults to the newest batch with detail work. Choose global backlog explicitly only for category-wide recovery.'
+                                    ? 'Leave this empty to recover every eligible OfferToday detail across all categories, including unclassified staging rows.'
                                     : 'Choose a listing batch to narrow recovery, or leave it blank for category backlog.'}
                             </p>
                             <div className="backlog-guidance-panel">
                                 <div>
-                                    <span className="backlog-guidance-label">Category-scoped backlog recovery</span>
+                                    <span className="backlog-guidance-label">
+                                        {currentSourceSite === 'offertoday'
+                                            ? 'Global OfferToday backlog recovery'
+                                            : 'Category-scoped backlog recovery'}
+                                    </span>
                                     <p>
-                                        Recover pending, failed, and manual-review detail backlog for the selected source and sectors. The target counts actual detail pages after existing jobs are filtered out.
+                                        {currentSourceSite === 'offertoday'
+                                            ? 'Recover pending, failed, and manual-review detail work globally. The limit applies to distinct detail pages per segment after duplicate and existing jobs are filtered.'
+                                            : 'Recover pending, failed, and manual-review detail backlog for the selected source and sectors. The target counts actual detail pages after existing jobs are filtered out.'}
                                     </p>
                                 </div>
                                 {selectedListingBatch ? (

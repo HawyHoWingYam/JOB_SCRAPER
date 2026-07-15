@@ -217,6 +217,7 @@ class CrawlJobListingRepository:
         *,
         source_site: str,
         source_listing_crawl_job_id=None,
+        detail_scope: str | None = None,
         category_ids: Iterable[str | int] | None = None,
         statuses: Iterable[str] | None = None,
         source_job_ids: Iterable[str] | None = None,
@@ -245,6 +246,20 @@ class CrawlJobListingRepository:
         )
         query = query.filter(CrawlJobListing.detail_status.in_(normalized_statuses))
         if normalized_source_job_ids is None:
+            normalized_detail_scope = str(detail_scope or "").strip().lower()
+            if normalized_source_site == "offertoday":
+                if normalized_detail_scope not in {"", "global", "listing_batch"}:
+                    raise ValueError(
+                        f"Unsupported OfferToday detail scope: {normalized_detail_scope}"
+                    )
+                if normalized_detail_scope == "global" and source_listing_crawl_job_id is not None:
+                    raise ValueError(
+                        "OfferToday global detail scope cannot carry a listing batch ID"
+                    )
+                if normalized_detail_scope == "listing_batch" and source_listing_crawl_job_id is None:
+                    raise ValueError(
+                        "OfferToday listing_batch detail scope requires a listing batch ID"
+                    )
             if source_listing_crawl_job_id is not None:
                 query = query.filter(
                     CrawlJobListing.crawl_job_id == source_listing_crawl_job_id

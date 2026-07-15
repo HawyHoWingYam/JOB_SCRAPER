@@ -344,6 +344,14 @@ POST /manual-actions/close-profile-windows
 POST /manual-actions/capture-screenshot
 ```
 
+The helper also exposes `GET /health`. Runtime capabilities must distinguish a
+configured helper URL from a reachable helper and include the health URL plus
+an environment-appropriate manual-start command. The frontend keeps
+`Open Browser` disabled while health is unavailable, exposes Retry and the
+manual-start instruction, and re-enables it after a successful health check.
+There is no resident launcher or automatic host-process startup contract.
+`Resume Fresh` remains independent of helper reachability.
+
 The container-side attach address is configured separately:
 
 ```text
@@ -385,9 +393,10 @@ persists an unbounded accepted-ID list. Detail evidence includes the blocked
 
 `resume_context` must contain enough data to redispatch the same phase. Listing
 context includes the search categories/keywords and page budget. Detail context
-includes `source_listing_crawl_job_id`, detail statuses, and detail limit. A
-detail resume selects `manual_action_required` and `pending` targets; completed
-targets are not reset or fetched again.
+includes `detail_scope`, `source_listing_crawl_job_id` when bound, detail
+statuses, and detail limit. A detail resume preserves the stored scope and
+batch ID; it selects `manual_action_required` and `pending` targets, while
+completed targets are not reset or fetched again.
 
 #### Browser-fetch redirect race
 
@@ -616,6 +625,7 @@ Content-Type: application/json
 {
   "source_site": "offertoday",
   "crawl_phase": "detail",
+  "detail_scope": "listing_batch",
   "source_listing_crawl_job_id": "<listing-crawl-uuid>",
   "category_ids": [],
   "detail_limit": 5000,
@@ -666,19 +676,30 @@ repository order and the frontend must not sort by mutable activity time.
 
 #### Listing-bound versus global detail scope
 
-- OfferToday detail mode defaults to the newest `completed` listing batch with
-  pending, failed, or manual-action work. Compare immutable `queued_at`, then
-  use the crawl-job ID as a deterministic tie-breaker.
-- Selecting a batch persists `source_listing_crawl_job_id` in the crawl-job
-  request payload. Resume starts from that payload and must preserve the ID.
-- When `source_listing_crawl_job_id` is present,
-  `resolve_offertoday_detail_category_ids()` returns `[]`. Selection filters by
-  listing crawl-job ID and includes null-classification keyword/hybrid rows.
-- When the batch ID is absent, global category backlog is an explicit advanced
-  scope. Requested root categories expand normally and
-  `source_classification_id` filtering remains active.
+- OfferToday detail mode defaults to the source-wide global backlog. The
+  frontend leaves Listing Batch Scope empty and must not auto-select the newest
+  listing batch.
+- New detail requests persist `detail_scope=global` when the batch selector is
+  empty, or `detail_scope=listing_batch` plus
+  `source_listing_crawl_job_id` when a batch is explicitly selected.
+- Resume starts from the persisted scope and, when bound, the original batch
+  ID. It must not query for or replace the scope with a newer batch.
+- For `global`, selection filters only `source_site=offertoday`, eligible
+  statuses, and the existing terminal/identity-conflict sibling blocker. It
+  includes rows where `source_classification_id` is `NULL`.
+- For `listing_batch`, selection filters by the selected listing crawl-job ID
+  and includes that batch's null-classification rows.
+- Detail category IDs do not narrow either scope. Category expansion remains a
+  listing-phase concern, not a hidden filter on global detail recovery.
 - Group candidate rows by canonical `source_job_id` before applying
   `detail_limit`; duplicate staging siblings produce one fetch target.
+- `detail_limit` is a per-segment cap. A successful segment automatically
+  continues in the same crawl task while the refreshed eligible global/bound
+  query is non-empty.
+- A manual-action/IP/WAF stop preserves completed progress and remains
+  `manual_action_required`; retryable failed targets stop continuation and
+  remain visible for a later operator-triggered run. Only an empty eligible
+  query may emit final `crawl.completed`.
 
 #### Distinct progress projection
 
@@ -687,6 +708,7 @@ all task IDs in the requested set:
 
 ```text
 crawl.detail_cohort_frozen
+crawl.detail_segment
 crawl.detail_attempt
 crawl.detail_reconciled
 ```
@@ -700,12 +722,25 @@ detail_distinct_terminal_unavailable
 detail_distinct_failed
 detail_distinct_reconciled
 detail_distinct_remaining
+detail_scope
+detail_segment_index
+detail_segments_completed
+detail_segment_target_rows
+detail_backlog_pending
+detail_backlog_failed
+detail_backlog_manual_action_required
+detail_backlog_remaining
+detail_continuation_state
 ```
 
-The first largest frozen fetch cohort is the stable target universe; later
-resume cohorts are subsets and do not replace the denominator. Reconciled IDs
-were removed before the fetch cohort was frozen, so reconciliation is reported
-as adjacent scope and is not subtracted from fetch-target remaining.
+For a segmented recovery, each frozen cohort describes one segment rather than
+the whole source backlog. Cumulative detail outcome fields union canonical
+`source_job_id` evidence across segments, while the `detail_backlog_*` fields
+come from a fresh eligible query after the segment. Do not use a segment target
+count or `detail_distinct_remaining` as the current global backlog remaining.
+Reconciled IDs were removed before the fetch cohort was frozen, so
+reconciliation is reported as adjacent scope and is not subtracted from the
+fresh backlog count.
 
 Count distinct canonical `source_job_id` values. `success` wins over terminal
 and failure; `terminal_unavailable` wins over failure. Non-retrying
@@ -715,24 +750,31 @@ terminal evidence. Recoverable `auth_expired`, `waf_challenge`, and
 `ip_blocked` attempts do not settle or inflate a target.
 
 ```text
-remaining = max(target_total - distinct(success U terminal U failed), 0)
+detail_backlog_remaining = distinct(pending U failed U manual_action_required)
 ```
 
-If no frozen-cohort event exists, return null distinct fields and retain the
-legacy Queue/Saved projection. Do not reinterpret `detail_run_completed` as a
-job count; it is a staging-row metric. OfferToday `jobs_saved` fallback checks
-raw `metrics.jobs_saved` before ingest-only counters; other sources retain
-their existing ingest-first projection.
+Do not reinterpret `detail_run_completed` as a job count; it is a staging-row
+metric. OfferToday `jobs_saved` fallback checks raw `metrics.jobs_saved` before
+ingest-only counters; other sources retain their existing ingest-first
+projection. Historical task/event readability is not a contract for this
+change.
 
-The Crawl Tasks list row and Task Details panel render the same summary:
+The Crawl Tasks list row and Task Details panel expose scope, segment work,
+and the refreshed backlog as separate values:
 
 ```text
-Fetched <success> / <target>
-Terminal <terminal>          # non-zero only
-Reconciled <reconciled>      # non-zero only
-Failed <failed>              # non-zero only
-Remaining <remaining>
+Job Detail Crawl - Global backlog
+Detail targets <cumulative target count>
+Segment <index> targets <segment target count>
+Backlog remaining <fresh eligible count>
+Backlog failed <fresh failed count>       # non-zero only
+Manual review <fresh manual count>        # non-zero only
 ```
+
+`ScrapeProgressPanel` remains the intentionally compact live-status shell; it
+links to Crawl Tasks for durable task metrics and operator actions. Do not add
+new detail accounting to its retained legacy `ProgressItem` implementation,
+which is not part of the rendered shell.
 
 ### 4. Validation & Error Matrix
 
@@ -742,21 +784,24 @@ Remaining <remaining>
 | Queue/creation timestamps tie | `id DESC` resolves order deterministically |
 | Bound batch row has null classification | Include it when status is eligible |
 | Bound request also carries category IDs | Ignore category narrowing |
-| Unbound root category is requested | Expand and filter global backlog |
+| Global request carries category IDs | Ignore category narrowing and include null classifications |
 | Duplicate staging rows share one canonical ID | Fetch once after grouping |
-| Resume follows IP/auth/WAF stop | Preserve batch ID and original denominator |
+| Resume follows IP/auth/WAF stop | Preserve detail scope and original batch ID |
 | An ID has blocked attempts then success | Count one success, zero blocked settlement |
 | An ID has success plus duplicate attempts | Count the ID once |
-| No frozen cohort exists | Emit null distinct fields and use legacy UI fallback |
+| Successful segment leaves eligible rows | Continue in the same crawl task |
+| Retryable failure remains after a segment | Stop automatic continuation and expose remaining failed rows |
+| Manual/IP/WAF stop occurs during a segment | Preserve progress; do not emit final completion |
 | Listing condition reaches page cap | Preserve partial-listing semantics; do not classify as detail failure |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** A completed keyword/hybrid listing batch contains null-category
-  rows. Detail mode selects that batch, fetches every eligible distinct ID,
-  survives an IP-block resume, and continues to show the original denominator.
-- **Base:** An older task has no cohort event. Its row continues to show
-  `Queue <detail_target_rows>` without claiming distinct completion.
+- **Good:** Empty batch scope starts a global recovery, includes null-category
+  rows, processes multiple 5,000-target segments, and emits final completion
+  only after the refreshed eligible query is empty.
+- **Good:** An explicitly selected keyword/hybrid listing batch contains
+  null-category rows. Detail mode stays bound to that batch, survives an
+  IP-block resume, and does not pick up another batch.
 - **Bad:** History is sorted by `updated_at`, so downstream staging metrics move
   an old listing task above a running detail task every polling interval.
 - **Bad:** A bound listing ID and `category_ids=[118000]` are both applied at the
@@ -766,23 +811,26 @@ Remaining <remaining>
 
 ### 6. Tests Required
 
-- `test_crawl_job_runtime.py`: immutable queue/creation/ID ordering with
-  timestamp ties and pagination; bound null-category keyword/hybrid selection;
-  other-batch exclusion; duplicate grouping; unbound category expansion.
+- `backend/tests/test_offertoday_global_detail_backlog.py`: global category
+  bypass, null-classification candidates, duplicate grouping, per-segment
+  limit, continuation, failed/manual stops, helper capability metadata, and
+  canonical classification preservation.
 - `test_crawl_job_regressions.py`: manual dispatch persists the selected listing
   ID and IP-block resume retains it.
 - `test_offertoday_standalone_crawl.py`: detail manual-action resume context
   contains `source_listing_crawl_job_id` and later targets remain untouched.
-- `test_crawl_task_snapshot.py`: duplicate attempts, recoverable blocks,
+- `backend/tests/test_crawl_task_snapshot_service.py`: segment/backlog field
+  projection plus existing normalized detail metrics. Distinct-event suites
+  cover duplicate attempts, recoverable blocks,
   terminal/failure precedence, reconciled union, multiple resume cohorts,
   active-path batch wiring, raw `jobs_saved`, and the historical
   `1311/1305/6/95/0` projection.
 - `CrawlTasksPage.test.jsx`: running, manual-action, completed, and legacy
   fallback summaries in both row chips and Task Details; partial listing remains
   unchanged; frontend consumes API order.
-- `ScheduleManager.test.jsx`: newest completed eligible batch wins even when API
-  order differs, running batches are skipped, explicit global scope survives an
-  async batch response, and submitted payload carries the listing ID.
+- `ScheduleManager.test.jsx`: empty global scope remains empty even when batch
+  data arrives asynchronously, explicit batch scope survives the same update,
+  and submitted payload carries the correct `detail_scope` and listing ID.
 
 ### 7. Wrong vs Correct
 
@@ -794,11 +842,11 @@ completed = int(metrics.get("detail_run_completed") or 0)
 ```
 
 ```jsx
-<option value="">No legacy batch filter</option>
+useEffect(() => setSourceListingCrawlJobId(newestEligibleBatch.id), [batches]);
 ```
 
 This makes history jump on activity, calls staging rows completed jobs, and
-makes global category backlog look like the normal detail path.
+silently replaces the normal global recovery with one newest listing batch.
 
 #### Correct
 
@@ -813,7 +861,8 @@ detail_progress = project_distinct_detail_events(events_by_job[crawl_job.id])
 ```
 
 ```jsx
-<option value="">Global category backlog (advanced)</option>
+<option value="">Global OfferToday backlog (default)</option>
+<label>Listing Batch Scope (advanced)</label>
 ```
 
 Immutable history identity, explicit scope, and one shared event projection

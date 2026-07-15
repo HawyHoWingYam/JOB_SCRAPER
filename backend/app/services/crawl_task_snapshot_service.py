@@ -779,6 +779,61 @@ def build_crawl_task_snapshot(
     detail_target_rows = _to_int(
         event_payload.get("detail_target_rows", metrics.get("detail_target_rows", total_jobs))
     )
+    detail_scope = (
+        event_payload.get("detail_scope")
+        or metrics.get("detail_scope")
+        or request_payload.get("detail_scope")
+    )
+    detail_segment_index = _to_int(
+        event_payload.get(
+            "detail_segment_index",
+            event_payload.get("segment_index", metrics.get("detail_segment_index", 0)),
+        )
+    )
+    detail_segments_completed = _to_int(
+        event_payload.get(
+            "detail_segments_completed",
+            metrics.get("detail_segments_completed", 0),
+        )
+    )
+    detail_segment_target_rows = _to_int(
+        event_payload.get(
+            "detail_segment_target_rows",
+            event_payload.get(
+                "segment_target_rows",
+                metrics.get("detail_segment_target_rows", 0),
+            ),
+        )
+    )
+    detail_backlog_pending = _to_int(
+        event_payload.get(
+            "detail_backlog_pending",
+            metrics.get("detail_backlog_pending", 0),
+        )
+    )
+    detail_backlog_failed = _to_int(
+        event_payload.get(
+            "detail_backlog_failed",
+            metrics.get("detail_backlog_failed", 0),
+        )
+    )
+    detail_backlog_manual_action_required = _to_int(
+        event_payload.get(
+            "detail_backlog_manual_action_required",
+            metrics.get("detail_backlog_manual_action_required", 0),
+        )
+    )
+    detail_backlog_remaining = _to_int(
+        event_payload.get(
+            "detail_backlog_remaining",
+            metrics.get("detail_backlog_remaining", 0),
+        )
+    )
+    detail_continuation_state = (
+        event_payload.get("detail_continuation_state")
+        or event_payload.get("continuation_state")
+        or metrics.get("detail_continuation_state")
+    )
     detail_pending = _to_int(event_payload.get("detail_pending", metrics.get("detail_pending", 0)))
     detail_running = _to_int(event_payload.get("detail_running", metrics.get("detail_running", 0)))
     detail_completed = _to_int(event_payload.get("detail_completed", metrics.get("detail_completed", 0)))
@@ -949,6 +1004,15 @@ def build_crawl_task_snapshot(
         "detail_selected_rows": detail_selected_rows,
         "detail_skipped_existing_rows": detail_skipped_existing_rows,
         "detail_target_rows": detail_target_rows,
+        "detail_scope": detail_scope,
+        "detail_segment_index": detail_segment_index,
+        "detail_segments_completed": detail_segments_completed,
+        "detail_segment_target_rows": detail_segment_target_rows,
+        "detail_backlog_pending": detail_backlog_pending,
+        "detail_backlog_failed": detail_backlog_failed,
+        "detail_backlog_manual_action_required": detail_backlog_manual_action_required,
+        "detail_backlog_remaining": detail_backlog_remaining,
+        "detail_continuation_state": detail_continuation_state,
         "detail_run_completed": detail_run_completed,
         "detail_run_failed": detail_run_failed,
         "detail_run_manual_action_required": detail_run_manual_action_required,

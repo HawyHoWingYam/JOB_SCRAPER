@@ -79,6 +79,11 @@ class DetailTargetLoadResult:
     targets: list[dict[str, Any]]
     new_detail_targets: int = 0
     repair_detail_targets: int = 0
+    eligible_distinct_target_rows: int = 0
+    detail_scope: str | None = None
+    eligible_pending_rows: int = 0
+    eligible_failed_rows: int = 0
+    eligible_manual_action_rows: int = 0
 
 
 def _canonical_id_hash(source_job_ids: tuple[str, ...]) -> str:
@@ -780,6 +785,22 @@ class CrawlJobRuntime:
                 if source_job_ids_present
                 else payload.get("source_listing_crawl_job_id")
             )
+            detail_scope = str(payload.get("detail_scope") or "").strip().lower()
+            if normalized_source == "offertoday":
+                if detail_scope not in {"global", "listing_batch"}:
+                    detail_scope = (
+                        "listing_batch"
+                        if source_listing_crawl_job_id is not None
+                        else "global"
+                    )
+                if detail_scope == "global" and source_listing_crawl_job_id is not None:
+                    raise ValueError(
+                        "OfferToday global detail scope cannot carry a listing batch ID"
+                    )
+                if detail_scope == "listing_batch" and source_listing_crawl_job_id is None:
+                    raise ValueError(
+                        "OfferToday listing_batch detail scope requires a listing batch ID"
+                    )
             detail_limit = (
                 None
                 if "detail_limit" in payload
@@ -790,6 +811,7 @@ class CrawlJobRuntime:
                 resolve_offertoday_detail_category_ids(
                     payload.get("category_ids") or [],
                     source_listing_crawl_job_id=source_listing_crawl_job_id,
+                    detail_scope=detail_scope,
                 )
                 if normalized_source == "offertoday"
                 else payload.get("category_ids") or []
@@ -799,6 +821,7 @@ class CrawlJobRuntime:
                     db,
                     source_site=normalized_source,
                     source_listing_crawl_job_id=source_listing_crawl_job_id,
+                    detail_scope=detail_scope or None,
                     category_ids=category_ids,
                     statuses=payload.get("detail_statuses"),
                     source_job_ids=source_job_ids,
@@ -977,9 +1000,23 @@ class CrawlJobRuntime:
                             else None
                         ),
                         "detail_target_kind": detail_target_kind,
+                        "detail_status": str(
+                            getattr(authoritative, "detail_status", "") or ""
+                        ),
                     }
                 )
 
+            eligible_distinct_target_rows = len(targets)
+            eligible_pending_rows = sum(
+                target["detail_status"] == "pending" for target in targets
+            )
+            eligible_failed_rows = sum(
+                target["detail_status"] == "failed" for target in targets
+            )
+            eligible_manual_action_rows = sum(
+                target["detail_status"] == "manual_action_required"
+                for target in targets
+            )
             if detail_limit is not None:
                 targets = targets[:detail_limit]
             new_detail_targets = sum(
@@ -1038,6 +1075,11 @@ class CrawlJobRuntime:
                 targets=targets,
                 new_detail_targets=new_detail_targets,
                 repair_detail_targets=repair_detail_targets,
+                eligible_distinct_target_rows=eligible_distinct_target_rows,
+                detail_scope=detail_scope or None,
+                eligible_pending_rows=eligible_pending_rows,
+                eligible_failed_rows=eligible_failed_rows,
+                eligible_manual_action_rows=eligible_manual_action_rows,
             )
         except Exception:
             db.rollback()

@@ -10,6 +10,7 @@ import {
   Unplug,
 } from 'lucide-react';
 import { apiPath } from '../../api/base';
+import { fetchCapabilities } from '../../api/capabilities';
 import { apiFetchJson } from '../../api/client';
 import { createMonitoringId, logError, logInfo } from '../../monitoring';
 import { formatCrawlModeLabel } from './crawlMode';
@@ -19,6 +20,10 @@ import { buildIpBlockGuidance } from './ipBlockGuidance';
 import {
   cancelCrawlJob,
   closeManualActionWindows,
+  DEFAULT_MANUAL_ACTION_HELPER_START_COMMAND,
+  DEFAULT_MANUAL_ACTION_HELPER_START_WORKDIR,
+  DEFAULT_MANUAL_ACTION_HELPER_URL,
+  getManualActionHelperHealth,
   getManualActionReuseStatus,
   openManualActionBrowser,
   resumeCrawlJob,
@@ -187,6 +192,11 @@ function buildListingMetricSummary(task) {
 function buildDetailMetricSummary(task) {
   const summary = [];
   const detailTargetRows = Number(task?.detail_target_rows || 0);
+  const detailSegmentIndex = Number(task?.detail_segment_index || 0);
+  const detailSegmentTargetRows = Number(task?.detail_segment_target_rows || 0);
+  const detailBacklogRemaining = Number(task?.detail_backlog_remaining || 0);
+  const detailBacklogFailed = Number(task?.detail_backlog_failed || 0);
+  const detailBacklogManual = Number(task?.detail_backlog_manual_action_required || 0);
   const detailFetched = Number(
     task?.detail_fetched
       ?? Math.max(
@@ -205,6 +215,19 @@ function buildDetailMetricSummary(task) {
 
   if (detailTargetRows > 0) {
     summary.push(`Detail targets ${formatCount(detailTargetRows)}`);
+  }
+  if (detailSegmentIndex > 0 || detailSegmentTargetRows > 0) {
+    const segmentLabel = detailSegmentIndex > 0 ? `Segment ${formatCount(detailSegmentIndex)}` : 'Segment';
+    summary.push(`${segmentLabel} targets ${formatCount(detailSegmentTargetRows)}`);
+  }
+  if (task?.detail_continuation_state || detailBacklogRemaining > 0) {
+    summary.push(`Backlog remaining ${formatCount(detailBacklogRemaining)}`);
+  }
+  if (detailBacklogFailed > 0) {
+    summary.push(`Backlog failed ${formatCount(detailBacklogFailed)}`);
+  }
+  if (detailBacklogManual > 0) {
+    summary.push(`Manual review ${formatCount(detailBacklogManual)}`);
   }
   if (detailFetched > 0) {
     summary.push(`Fetched ${formatCount(detailFetched)}`);
@@ -231,6 +254,15 @@ function buildMetricSummary(task) {
 
 function buildScopeHint(task) {
   const crawlPhase = resolveRequestedCrawlPhase(task);
+  const detailScope = `${task?.detail_scope || task?.request_payload?.detail_scope || ''}`.trim();
+  if (crawlPhase === 'detail' && `${task?.source_site || ''}`.trim().toLowerCase() === 'offertoday') {
+    if (detailScope === 'global') {
+      return `${formatCrawlPhaseLabel(crawlPhase)} · Global backlog`;
+    }
+    if (detailScope === 'listing_batch') {
+      return `${formatCrawlPhaseLabel(crawlPhase)} · Listing batch`;
+    }
+  }
   return formatCrawlPhaseLabel(crawlPhase);
 }
 
@@ -315,6 +347,8 @@ export default function CrawlTasksPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [actionState, setActionState] = useState({ pending: null, error: null, notice: null });
+  const [manualActionCapability, setManualActionCapability] = useState(null);
+  const [helperHealth, setHelperHealth] = useState({ status: 'unknown', detail: null });
   const latestLoadRef = useRef(0);
 
   const selectedTask = useMemo(() => {
@@ -325,6 +359,14 @@ export default function CrawlTasksPage() {
   const manualActionReuseSupported = manualActionResumeSupported
     && selectedTask?.manual_action?.reuse_open_browser_supported === true;
   const manualActionGuidance = buildManualActionGuidance(selectedTask);
+  const manualActionHelperUrl = manualActionCapability?.helper_url
+    || DEFAULT_MANUAL_ACTION_HELPER_URL;
+  const manualActionHelperHealthUrl = manualActionCapability?.health_url
+    || `${manualActionHelperUrl}/health`;
+  const manualActionHelperStartWorkdir = manualActionCapability?.manual_start_workdir
+    || DEFAULT_MANUAL_ACTION_HELPER_START_WORKDIR;
+  const manualActionHelperStartCommand = manualActionCapability?.manual_start_command
+    || DEFAULT_MANUAL_ACTION_HELPER_START_COMMAND;
 
   const loadTasks = useCallback(async ({ reason = 'refresh' } = {}) => {
     const requestId = createMonitoringId('req');
@@ -397,6 +439,50 @@ export default function CrawlTasksPage() {
       window.clearInterval(intervalId);
     };
   }, [loadTasks]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCapabilities()
+      .then((payload) => {
+        if (!cancelled) {
+          setManualActionCapability(payload?.manual_actions || null);
+        }
+      })
+      .catch((capabilityError) => {
+        if (!cancelled) {
+          logError('crawl_tasks.manual_action_capabilities_failed', {
+            detail: extractErrorMessage(
+              capabilityError,
+              'Failed to load manual-action helper capability',
+            ),
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const checkHelperHealth = useCallback(async () => {
+    setHelperHealth({ status: 'checking', detail: null });
+    const health = await getManualActionHelperHealth({
+      helperUrl: manualActionHelperUrl,
+      healthUrl: manualActionHelperHealthUrl,
+    });
+    setHelperHealth({
+      status: health.available ? 'online' : 'offline',
+      detail: health.available ? null : health.error || health.reason,
+    });
+    return health;
+  }, [manualActionHelperHealthUrl, manualActionHelperUrl]);
+
+  useEffect(() => {
+    if (!manualActionReuseSupported) {
+      setHelperHealth({ status: 'unknown', detail: null });
+      return;
+    }
+    void checkHelperHealth();
+  }, [checkHelperHealth, manualActionReuseSupported, selectedTaskId]);
 
   const handleFilterChange = useCallback((field) => (event) => {
     const value = event.target.value;
@@ -657,6 +743,33 @@ export default function CrawlTasksPage() {
                 </div>
               )}
 
+              {manualActionReuseSupported && helperHealth.status !== 'online' && (
+                <div
+                  className="crawl-tasks-action-note"
+                  data-testid="crawl-task-helper-offline"
+                >
+                  <strong>
+                    {helperHealth.status === 'checking' ? 'Checking helper...' : 'Helper offline'}
+                  </strong>
+                  <span>
+                    Start the dedicated helper on the host, then retry the health check.
+                  </span>
+                  <code>{`cd ${manualActionHelperStartWorkdir}`}</code>
+                  <code>{manualActionHelperStartCommand}</code>
+                  <span>{manualActionHelperHealthUrl}</span>
+                  {helperHealth.detail && <span>{helperHealth.detail}</span>}
+                  <button
+                    type="button"
+                    data-testid="crawl-task-retry-helper-health"
+                    disabled={helperHealth.status === 'checking'}
+                    onClick={() => void checkHelperHealth()}
+                  >
+                    <RefreshCcw size={16} aria-hidden="true" />
+                    <span>Retry Helper Health</span>
+                  </button>
+                </div>
+              )}
+
               <div className="crawl-tasks-detail-actions">
                 {isManualActionTask(selectedTask) ? (
                   <>
@@ -699,11 +812,28 @@ export default function CrawlTasksPage() {
                         <button
                           type="button"
                           data-testid="crawl-task-open-browser"
-                          disabled={actionState.pending !== null}
+                          disabled={
+                            actionState.pending !== null
+                            || helperHealth.status !== 'online'
+                          }
                           onClick={() =>
-                            void runTaskAction('open_browser', 'Open browser', () =>
-                              openManualActionBrowser(selectedTask.crawl_job_id)
-                            )
+                            void runTaskAction('open_browser', 'Open browser', async () => {
+                              try {
+                                return await openManualActionBrowser(
+                                  selectedTask.crawl_job_id,
+                                  manualActionHelperUrl,
+                                );
+                              } catch (openError) {
+                                setHelperHealth({
+                                  status: 'offline',
+                                  detail: extractErrorMessage(
+                                    openError,
+                                    'Manual-action helper is unavailable',
+                                  ),
+                                });
+                                throw openError;
+                              }
+                            })
                           }
                         >
                           <MonitorPlay size={16} aria-hidden="true" />

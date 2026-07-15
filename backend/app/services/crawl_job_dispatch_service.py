@@ -378,6 +378,24 @@ class CrawlJobDispatchService:
             source_listing_crawl_job_id = resume_context.get("source_listing_crawl_job_id")
             if source_listing_crawl_job_id and not request_payload.get("source_listing_crawl_job_id"):
                 request_payload["source_listing_crawl_job_id"] = source_listing_crawl_job_id
+            detail_scope = str(
+                resume_context.get("detail_scope")
+                or request_payload.get("detail_scope")
+                or ""
+            ).strip().lower()
+            if detail_scope not in {"global", "listing_batch"}:
+                detail_scope = (
+                    "listing_batch"
+                    if request_payload.get("source_listing_crawl_job_id")
+                    else "global"
+                )
+            if detail_scope == "global":
+                request_payload.pop("source_listing_crawl_job_id", None)
+            elif not request_payload.get("source_listing_crawl_job_id"):
+                raise RuntimeError(
+                    "OfferToday listing_batch resume requires a listing batch ID"
+                )
+            request_payload["detail_scope"] = detail_scope
             request_payload["detail_statuses"] = ["manual_action_required", "pending"]
         ensure_headed_crawl_worker_available(
             crawl_mode=request_payload.get("crawl_mode"),

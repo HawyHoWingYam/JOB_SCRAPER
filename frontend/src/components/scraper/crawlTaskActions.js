@@ -3,7 +3,9 @@ import { apiFetchJson } from '../../api/client';
 import { createMonitoringId } from '../../monitoring';
 
 const API_BASE = apiPath('');
-const DEFAULT_MANUAL_ACTION_HELPER_URL = 'http://127.0.0.1:47652';
+export const DEFAULT_MANUAL_ACTION_HELPER_URL = 'http://127.0.0.1:47652';
+export const DEFAULT_MANUAL_ACTION_HELPER_START_WORKDIR = 'backend';
+export const DEFAULT_MANUAL_ACTION_HELPER_START_COMMAND = 'python -m app.workers.run_manual_action_helper';
 
 function buildManualActionHelperUnavailableMessage(actionLabel) {
   return `Manual-action helper is unavailable. Start the dedicated helper service and retry ${actionLabel}.`;
@@ -11,6 +13,34 @@ function buildManualActionHelperUnavailableMessage(actionLabel) {
 
 function resolveManualActionHelperUrl(helperUrl) {
   return helperUrl || DEFAULT_MANUAL_ACTION_HELPER_URL;
+}
+
+export async function getManualActionHelperHealth({ helperUrl, healthUrl } = {}) {
+  const resolvedHelperUrl = resolveManualActionHelperUrl(helperUrl);
+  const resolvedHealthUrl = healthUrl || `${resolvedHelperUrl}/health`;
+
+  try {
+    const payload = await apiFetchJson(resolvedHealthUrl, {
+      timeoutMs: 2500,
+      requestId: createMonitoringId('req'),
+    });
+    const available = payload?.status === 'ok';
+    return {
+      available,
+      helperUrl: resolvedHelperUrl,
+      healthUrl: resolvedHealthUrl,
+      reason: available ? null : 'unexpected_health_response',
+      payload,
+    };
+  } catch (error) {
+    return {
+      available: false,
+      helperUrl: resolvedHelperUrl,
+      healthUrl: resolvedHealthUrl,
+      reason: 'helper_unreachable',
+      error: error instanceof Error ? error.message : `${error}`,
+    };
+  }
 }
 
 async function postManualActionHelper({ crawlJobId, helperUrl, path, actionLabel, fallbackDetail }) {

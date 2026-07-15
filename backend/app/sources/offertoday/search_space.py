@@ -248,9 +248,13 @@ def resolve_offertoday_detail_category_ids(
     category_ids: Sequence[int] | None,
     *,
     source_listing_crawl_job_id: str | None,
+    detail_scope: str | None = None,
 ) -> list[int]:
     """Resolve detail scope without narrowing an already bounded listing run."""
 
+    normalized_scope = str(detail_scope or "").strip().lower()
+    if normalized_scope in {"global", "listing_batch"}:
+        return []
     if source_listing_crawl_job_id is not None:
         return []
     return expand_offertoday_category_ids(category_ids, default_to_it=False)

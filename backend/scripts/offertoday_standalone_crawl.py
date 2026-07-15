@@ -286,8 +286,19 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
         args.crawl_phase = requested_phase
     else:
         args.crawl_phase = "full"
-    if request_payload.get("source_listing_crawl_job_id"):
-        args.source_listing_crawl_job_id = str(request_payload["source_listing_crawl_job_id"])
+    if "source_listing_crawl_job_id" in request_payload:
+        args.source_listing_crawl_job_id = str(
+            request_payload.get("source_listing_crawl_job_id") or ""
+        )
+    requested_detail_scope = str(request_payload.get("detail_scope") or "").strip().lower()
+    if requested_detail_scope:
+        args.detail_scope = requested_detail_scope
+    elif requested_phase == "detail":
+        args.detail_scope = (
+            "listing_batch"
+            if str(getattr(args, "source_listing_crawl_job_id", "") or "").strip()
+            else "global"
+        )
     if request_payload.get("detail_limit") is not None:
         args.detail_limit = int(request_payload["detail_limit"])
     detail_statuses = request_payload.get("detail_statuses")
@@ -307,11 +318,29 @@ def _resolve_detail_scope(
     listing_phase_completed: bool,
 ) -> tuple[str | None, str]:
     requested_source_listing_crawl_job_id = str(args.source_listing_crawl_job_id or "").strip() or None
-    if requested_source_listing_crawl_job_id:
-        return requested_source_listing_crawl_job_id, "listing_batch"
-    if listing_phase_completed:
-        return str(args.crawl_job_id), "current_run_listing_batch"
-    return None, "category_backlog"
+    requested_scope = str(getattr(args, "detail_scope", "") or "").strip().lower()
+    if requested_scope and requested_scope not in {"global", "listing_batch"}:
+        raise ValueError(f"Unsupported OfferToday detail scope: {requested_scope}")
+    if not requested_scope:
+        requested_scope = (
+            "listing_batch"
+            if requested_source_listing_crawl_job_id or listing_phase_completed
+            else "global"
+        )
+    if requested_scope == "global":
+        if requested_source_listing_crawl_job_id:
+            raise ValueError(
+                "OfferToday global detail scope cannot carry a listing batch ID"
+            )
+        return None, "global"
+    resolved_batch_id = requested_source_listing_crawl_job_id
+    if resolved_batch_id is None and listing_phase_completed:
+        resolved_batch_id = str(args.crawl_job_id)
+    if not resolved_batch_id:
+        raise ValueError(
+            "OfferToday listing_batch detail scope requires a listing batch ID"
+        )
+    return resolved_batch_id, "listing_batch"
 
 
 def _build_runtime_request_payload(
@@ -319,6 +348,7 @@ def _build_runtime_request_payload(
     *,
     crawl_phase: str,
     source_listing_crawl_job_id: str | None,
+    detail_scope: str | None = None,
 ) -> dict[str, Any]:
     category_ids = _normalize_listing_category_ids(args.category_ids)
     detail_statuses = _normalize_detail_statuses(args.detail_statuses)
@@ -335,6 +365,21 @@ def _build_runtime_request_payload(
     keywords = normalize_offertoday_keywords(args.keywords)
     if keywords:
         payload["keywords"] = ",".join(keywords)
+    if crawl_phase == "detail":
+        resolved_scope = str(detail_scope or "").strip().lower() or (
+            "listing_batch" if source_listing_crawl_job_id else "global"
+        )
+        if resolved_scope not in {"global", "listing_batch"}:
+            raise ValueError(f"Unsupported OfferToday detail scope: {resolved_scope}")
+        if resolved_scope == "global" and source_listing_crawl_job_id:
+            raise ValueError(
+                "OfferToday global detail scope cannot carry a listing batch ID"
+            )
+        if resolved_scope == "listing_batch" and not source_listing_crawl_job_id:
+            raise ValueError(
+                "OfferToday listing_batch detail scope requires a listing batch ID"
+            )
+        payload["detail_scope"] = resolved_scope
     if source_listing_crawl_job_id:
         payload["source_listing_crawl_job_id"] = source_listing_crawl_job_id
     return payload
@@ -346,6 +391,7 @@ def _build_manual_action_payload(
     *,
     crawl_phase: str,
     source_listing_crawl_job_id: str | None,
+    detail_scope: str | None = None,
 ) -> dict[str, Any]:
     payload = exc.to_payload(
         crawl_mode="headed" if args.headed else "headless",
@@ -365,6 +411,10 @@ def _build_manual_action_payload(
     if crawl_phase == "listing":
         resume_context["max_pages"] = int(args.max_pages)
     else:
+        resolved_scope = str(detail_scope or "").strip().lower() or (
+            "listing_batch" if source_listing_crawl_job_id else "global"
+        )
+        resume_context["detail_scope"] = resolved_scope
         resume_context["detail_limit"] = int(args.detail_limit)
         resume_context["detail_statuses"] = _normalize_detail_statuses(
             args.detail_statuses
@@ -1161,8 +1211,9 @@ async def _run_listing_phase(
                 "crawl_phase": "detail",
                 "crawl_mode": "headed" if args.headed else "headless",
                 "category_ids": category_ids,
+                "detail_scope": "listing_batch",
                 "source_listing_crawl_job_id": crawl_job_id,
-                "detail_limit": None,
+                "detail_limit": int(args.detail_limit),
                 "detail_statuses": _normalize_detail_statuses(
                     args.detail_statuses
                 ),
@@ -1203,6 +1254,9 @@ class OfferTodayDetailPhaseResult:
     terminal_unavailable: int
     persist_failure: int
     stop_batch: bool
+    total_target_rows: int = 0
+    segments_completed: int = 1
+    stop_reason: str | None = None
 
     @property
     def jobs_saved(self) -> int:
@@ -1219,6 +1273,8 @@ async def _run_detail_phase(
     pipeline=None,
     completion_payload: dict[str, Any] | None = None,
     completion_metrics: dict[str, Any] | None = None,
+    finalize_crawl: bool = True,
+    segment_index: int = 1,
 ) -> OfferTodayDetailPhaseResult:
     phase_started_at = time.perf_counter()
     crawl_phase = str(args.crawl_phase or "").strip().lower()
@@ -1231,6 +1287,7 @@ async def _run_detail_phase(
         args,
         crawl_phase="detail",
         source_listing_crawl_job_id=source_listing_crawl_job_id,
+        detail_scope=detail_scope,
     )
 
     try:
@@ -1322,6 +1379,16 @@ async def _run_detail_phase(
         "fetch_cohort_distinct": len(
             detail_load_result.fetch_cohort_source_job_ids
         ),
+        "detail_scope": detail_scope,
+        "segment_index": int(segment_index),
+        "segment_target_rows": int(detail_load_result.target_rows),
+        "eligible_distinct_rows_before_segment": int(
+            getattr(detail_load_result, "eligible_distinct_target_rows", 0) or 0
+        ),
+        "continuation": bool(
+            int(getattr(detail_load_result, "eligible_distinct_target_rows", 0) or 0)
+            > int(detail_load_result.target_rows)
+        ),
     }
     crawl_runtime.write_progress_event(
         crawl_job_id=crawl_job_id,
@@ -1393,9 +1460,19 @@ async def _run_detail_phase(
             "repair_detail_targets": int(
                 getattr(detail_load_result, "repair_detail_targets", 0) or 0
             ),
+            "detail_scope": detail_scope,
+            "detail_segment_index": int(segment_index),
+            "detail_segment_target_rows": int(detail_load_result.target_rows),
+            "detail_eligible_before_segment": int(
+                getattr(detail_load_result, "eligible_distinct_target_rows", 0) or 0
+            ),
         }
 
-    def build_result(*, stop_batch: bool) -> OfferTodayDetailPhaseResult:
+    def build_result(
+        *,
+        stop_batch: bool,
+        stop_reason: str | None = None,
+    ) -> OfferTodayDetailPhaseResult:
         return OfferTodayDetailPhaseResult(
             detail_load_result=detail_load_result,
             processed_targets=sum(outcome_counts.values()),
@@ -1415,6 +1492,9 @@ async def _run_detail_phase(
                 outcome_counts.get(OfferTodayResponseKind.PERSIST_FAILURE.value, 0)
             ),
             stop_batch=stop_batch,
+            total_target_rows=int(detail_load_result.target_rows),
+            segments_completed=1,
+            stop_reason=stop_reason,
         )
 
     def log_detail_done(outcome: str) -> None:
@@ -1489,7 +1569,10 @@ async def _run_detail_phase(
             )
         )
         log_detail_done("manual_action_required")
-        return build_result(stop_batch=True)
+        return build_result(
+            stop_batch=True,
+            stop_reason="manual_action_required",
+        )
 
     async def fetch_detail(*, job_id: str, encrypted_job_id: str):
         return await _fetch_detail_json_with_identifiers(
@@ -1671,7 +1754,10 @@ async def _run_detail_phase(
                 error_message=str(manual_payload["message"]),
             )
             log_detail_done("manual_action_required")
-            return build_result(stop_batch=True)
+            return build_result(
+                stop_batch=True,
+                stop_reason="manual_action_required",
+            )
 
         if index % 10 == 0:
             checkpoint_metrics = build_metrics_patch()
@@ -1708,18 +1794,292 @@ async def _run_detail_phase(
         **dict(completion_metrics or {}),
         **build_metrics_patch(),
     }
-    try:
-        crawl_runtime.mark_completed(
-            crawl_job_id=crawl_job_id,
-            source_site="offertoday",
-            payload=completed_payload,
-            metrics=completed_metrics,
-        )
-    except Exception:
-        log_detail_done("failed")
-        raise
+    if finalize_crawl:
+        try:
+            crawl_runtime.mark_completed(
+                crawl_job_id=crawl_job_id,
+                source_site="offertoday",
+                payload=completed_payload,
+                metrics=completed_metrics,
+            )
+        except Exception:
+            log_detail_done("failed")
+            raise
     log_detail_done("completed")
     return phase_result
+
+
+async def _run_detail_recovery(
+    *,
+    args,
+    browser_runtime,
+    crawl_runtime: CrawlJobRuntime,
+    crawl_job_id,
+    detail_load_result=None,
+    pipeline=None,
+    completion_payload: dict[str, Any] | None = None,
+    completion_metrics: dict[str, Any] | None = None,
+) -> OfferTodayDetailPhaseResult:
+    source_listing_crawl_job_id, detail_scope = _resolve_detail_scope(
+        args,
+        listing_phase_completed=str(args.crawl_phase or "").strip().lower() == "full",
+    )
+    request_payload = _build_runtime_request_payload(
+        args,
+        crawl_phase="detail",
+        source_listing_crawl_job_id=source_listing_crawl_job_id,
+        detail_scope=detail_scope,
+    )
+    current_load_result = detail_load_result
+    segment_index = 1
+    cumulative_outcomes: dict[str, int] = {}
+    cumulative_target_rows = 0
+    jobs_created = 0
+    jobs_updated = 0
+    companies_created = 0
+    companies_updated = 0
+    persist_failure = 0
+    reconciled_source_job_ids: set[str] = set()
+    last_result: OfferTodayDetailPhaseResult | None = None
+
+    def build_cumulative_metrics(
+        *,
+        backlog_result,
+        continuation_state: str,
+    ) -> dict[str, Any]:
+        detail_success = int(
+            cumulative_outcomes.get(OfferTodayResponseKind.SUCCESS.value, 0)
+        )
+        terminal_unavailable = int(
+            cumulative_outcomes.get(
+                OfferTodayResponseKind.TERMINAL_UNAVAILABLE.value,
+                0,
+            )
+        )
+        processed_targets = sum(cumulative_outcomes.values())
+        return {
+            **dict(completion_metrics or {}),
+            "detail_scope": detail_scope,
+            "detail_segment_index": int(segment_index),
+            "detail_segments_completed": int(segment_index),
+            "detail_target_rows": int(cumulative_target_rows),
+            "detail_processed_targets": int(processed_targets),
+            "detail_outcomes": dict(cumulative_outcomes),
+            "detail_success": detail_success,
+            "detail_failure": max(
+                processed_targets - detail_success - terminal_unavailable,
+                0,
+            ),
+            "terminal_unavailable": terminal_unavailable,
+            "persist_failure": int(persist_failure),
+            "jobs_created": int(jobs_created),
+            "jobs_updated": int(jobs_updated),
+            "jobs_reconciled": len(reconciled_source_job_ids),
+            "jobs_saved": int(jobs_created + jobs_updated),
+            "items_emitted": int(jobs_created + jobs_updated),
+            "companies_created": int(companies_created),
+            "companies_updated": int(companies_updated),
+            "detail_backlog_pending": int(
+                getattr(backlog_result, "eligible_pending_rows", 0) or 0
+            ),
+            "detail_backlog_failed": int(
+                getattr(backlog_result, "eligible_failed_rows", 0) or 0
+            ),
+            "detail_backlog_manual_action_required": int(
+                getattr(backlog_result, "eligible_manual_action_rows", 0) or 0
+            ),
+            "detail_backlog_remaining": int(
+                getattr(backlog_result, "eligible_distinct_target_rows", 0) or 0
+            ),
+            "detail_continuation_state": continuation_state,
+        }
+
+    def build_aggregate_result(
+        *,
+        stop_batch: bool,
+        stop_reason: str | None,
+    ) -> OfferTodayDetailPhaseResult:
+        assert last_result is not None
+        return OfferTodayDetailPhaseResult(
+            detail_load_result=last_result.detail_load_result,
+            processed_targets=sum(cumulative_outcomes.values()),
+            outcome_counts=dict(cumulative_outcomes),
+            jobs_created=jobs_created,
+            jobs_updated=jobs_updated,
+            jobs_reconciled=len(reconciled_source_job_ids),
+            companies_created=companies_created,
+            companies_updated=companies_updated,
+            terminal_unavailable=int(
+                cumulative_outcomes.get(
+                    OfferTodayResponseKind.TERMINAL_UNAVAILABLE.value,
+                    0,
+                )
+            ),
+            persist_failure=persist_failure,
+            stop_batch=stop_batch,
+            total_target_rows=cumulative_target_rows,
+            segments_completed=segment_index,
+            stop_reason=stop_reason,
+        )
+
+    while True:
+        segment_result = await _run_detail_phase(
+            args=args,
+            browser_runtime=browser_runtime,
+            crawl_runtime=crawl_runtime,
+            crawl_job_id=crawl_job_id,
+            detail_load_result=current_load_result,
+            pipeline=pipeline,
+            completion_payload=completion_payload,
+            completion_metrics=completion_metrics,
+            finalize_crawl=False,
+            segment_index=segment_index,
+        )
+        last_result = segment_result
+        cumulative_target_rows += int(segment_result.detail_load_result.target_rows)
+        for outcome, count in segment_result.outcome_counts.items():
+            cumulative_outcomes[outcome] = cumulative_outcomes.get(outcome, 0) + int(count)
+        jobs_created += int(segment_result.jobs_created)
+        jobs_updated += int(segment_result.jobs_updated)
+        companies_created += int(segment_result.companies_created)
+        companies_updated += int(segment_result.companies_updated)
+        persist_failure += int(segment_result.persist_failure)
+        reconciled_source_job_ids.update(
+            segment_result.detail_load_result.reconciled_source_job_ids
+        )
+
+        next_load_result = crawl_runtime.load_detail_targets(
+            source_site="offertoday",
+            request_payload=request_payload,
+            detail_crawl_job_id=crawl_job_id,
+        )
+        segment_failure = max(
+            segment_result.processed_targets
+            - int(
+                segment_result.outcome_counts.get(
+                    OfferTodayResponseKind.SUCCESS.value,
+                    0,
+                )
+            )
+            - int(segment_result.terminal_unavailable),
+            0,
+        )
+        if segment_result.stop_batch:
+            metrics = build_cumulative_metrics(
+                backlog_result=next_load_result,
+                continuation_state="manual_action_required",
+            )
+            crawl_runtime.merge_metrics(
+                crawl_job_id=crawl_job_id,
+                metrics_patch=metrics,
+            )
+            crawl_runtime.write_progress_event(
+                crawl_job_id=crawl_job_id,
+                emitted_by="offertoday-crawl",
+                event_type="crawl.detail_segment",
+                payload={
+                    "detail_scope": detail_scope,
+                    "segment_index": segment_index,
+                    "segment_target_rows": int(
+                        segment_result.detail_load_result.target_rows
+                    ),
+                    "continuation_state": "manual_action_required",
+                    "detail_backlog_remaining": metrics[
+                        "detail_backlog_remaining"
+                    ],
+                },
+            )
+            return build_aggregate_result(
+                stop_batch=True,
+                stop_reason=segment_result.stop_reason or "manual_action_required",
+            )
+
+        if segment_failure > 0:
+            metrics = build_cumulative_metrics(
+                backlog_result=next_load_result,
+                continuation_state="failed",
+            )
+            error_message = (
+                "OfferToday detail recovery stopped after a failed segment; "
+                f"{metrics['detail_backlog_failed']} failed targets remain."
+            )
+            crawl_runtime.mark_failed(
+                crawl_job_id=crawl_job_id,
+                source_site="offertoday",
+                error_message=error_message,
+                payload={
+                    **dict(completion_payload or {}),
+                    "detail_scope": detail_scope,
+                    "detail_segments_completed": segment_index,
+                    "detail_backlog_remaining": metrics[
+                        "detail_backlog_remaining"
+                    ],
+                },
+                metrics=metrics,
+            )
+            return build_aggregate_result(
+                stop_batch=True,
+                stop_reason="failed",
+            )
+
+        if (
+            int(next_load_result.target_rows) == 0
+            and not next_load_result.identity_conflict_ids
+        ):
+            reconciled_source_job_ids.update(
+                next_load_result.reconciled_source_job_ids
+            )
+            metrics = build_cumulative_metrics(
+                backlog_result=next_load_result,
+                continuation_state="completed",
+            )
+            crawl_runtime.mark_completed(
+                crawl_job_id=crawl_job_id,
+                source_site="offertoday",
+                payload={
+                    **dict(completion_payload or {}),
+                    "detail_scope": detail_scope,
+                    "detail_segments_completed": segment_index,
+                    "detail_outcomes": dict(cumulative_outcomes),
+                    "jobs_created": jobs_created,
+                    "jobs_updated": jobs_updated,
+                    "jobs_reconciled": len(reconciled_source_job_ids),
+                    "terminal_unavailable": metrics["terminal_unavailable"],
+                    "persist_failure": persist_failure,
+                },
+                metrics=metrics,
+            )
+            return build_aggregate_result(
+                stop_batch=False,
+                stop_reason=None,
+            )
+
+        continuing_metrics = build_cumulative_metrics(
+            backlog_result=next_load_result,
+            continuation_state="continuing",
+        )
+        crawl_runtime.merge_metrics(
+            crawl_job_id=crawl_job_id,
+            metrics_patch=continuing_metrics,
+        )
+        crawl_runtime.write_progress_event(
+            crawl_job_id=crawl_job_id,
+            emitted_by="offertoday-crawl",
+            event_type="crawl.detail_segment",
+            payload={
+                "detail_scope": detail_scope,
+                "segment_index": segment_index,
+                "segment_target_rows": int(
+                    segment_result.detail_load_result.target_rows
+                ),
+                "continuation_state": "continuing",
+                "detail_backlog_remaining": continuing_metrics[
+                    "detail_backlog_remaining"
+                ],
+            },
+        )
+        current_load_result = next_load_result
+        segment_index += 1
 
 
 def _persist_listing_checkpoint(
@@ -2016,7 +2376,7 @@ async def main() -> None:
 
             total_details = detail_target_rows
             if crawl_phase in {"full", "detail"}:
-                detail_phase_result = await _run_detail_phase(
+                detail_phase_result = await _run_detail_recovery(
                     args=args,
                     browser_runtime=runtime,
                     crawl_runtime=crawl_runtime,
@@ -2036,9 +2396,7 @@ async def main() -> None:
                         "search_families": search_families,
                     },
                 )
-                total_details = int(
-                    detail_phase_result.detail_load_result.target_rows
-                )
+                total_details = int(detail_phase_result.total_target_rows)
                 detail_ok = int(
                     detail_phase_result.outcome_counts.get(
                         OfferTodayResponseKind.SUCCESS.value,
@@ -2052,9 +2410,14 @@ async def main() -> None:
                     0,
                 )
                 if detail_phase_result.stop_batch:
+                    executor_event = (
+                        "SCRAPE_EXECUTOR_FAIL"
+                        if detail_phase_result.stop_reason == "failed"
+                        else "SCRAPE_EXECUTOR_MANUAL_ACTION"
+                    )
                     logger.warning(
                         build_scrape_log_event(
-                            "SCRAPE_EXECUTOR_MANUAL_ACTION",
+                            executor_event,
                             source="offertoday",
                             crawl_job_id=cj_id,
                             crawl_phase="detail",
@@ -2067,6 +2430,7 @@ async def main() -> None:
                             detail_processed=(
                                 detail_phase_result.processed_targets
                             ),
+                            stop_reason=detail_phase_result.stop_reason,
                         )
                     )
                     return
