@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal, Mapping
+from urllib.parse import parse_qs, urlparse
 
 
 class OfferTodayResponseKind(StrEnum):
@@ -37,13 +38,29 @@ class OfferTodayTransportError(RuntimeError):
         http_status: int | None,
         response_url: str | None,
         payload: Mapping[str, Any] | None,
-        error_kind: Literal["http", "invalid_json"],
+        error_kind: Literal["http", "invalid_json", "network"],
     ) -> None:
         super().__init__(message)
         self.http_status = http_status
         self.response_url = response_url
         self.payload = deepcopy(dict(payload)) if isinstance(payload, Mapping) else None
         self.error_kind = error_kind
+
+
+def _verification_url_code(current_url: str | None) -> int | None:
+    raw_url = str(current_url or "").strip()
+    if "/web/passport/cm/verify" not in raw_url:
+        return None
+    values = parse_qs(urlparse(raw_url).query).get("code") or []
+    if len(values) != 1:
+        return None
+    raw_code = values[0].strip()
+    if not raw_code or raw_code in {"+", "-"}:
+        return None
+    unsigned_code = raw_code[1:] if raw_code[0] in {"+", "-"} else raw_code
+    if not unsigned_code.isdigit():
+        return None
+    return int(raw_code)
 
 
 def _result(
@@ -76,11 +93,26 @@ def classify_offertoday_response(
     transport_error: BaseException | None = None,
     http_status: int | None = None,
 ) -> OfferTodayResponseClassification:
+    verification_code = _verification_url_code(current_url)
+    if verification_code == -1000035:
+        return _result(
+            OfferTodayResponseKind.IP_BLOCKED,
+            payload=payload,
+            code=verification_code,
+            message=(
+                "OfferToday blocked the current public IP or network; change "
+                "network access before resuming this crawl"
+            ),
+            data=None,
+            retryable=False,
+            stop_batch=True,
+        )
+
     if "/web/passport/cm/verify" in str(current_url or ""):
         return _result(
             OfferTodayResponseKind.WAF_CHALLENGE,
             payload=payload,
-            code=None,
+            code=verification_code,
             message="OfferToday verification challenge",
             data=None,
             retryable=False,

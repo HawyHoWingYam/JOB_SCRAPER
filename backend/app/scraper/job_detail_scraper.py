@@ -7,7 +7,6 @@ Phase 2 of the two-phase scraping approach.
 Extracts job data from window.SEEK_REDUX_DATA embedded in HTML.
 """
 
-import json
 import asyncio
 import random
 import logging
@@ -16,7 +15,12 @@ from typing import Dict, Any, Optional, List
 import httpx
 
 from app.config import settings
+from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.log_events import build_scrape_log_event
+from app.scraper.manual_action import (
+    ManualActionRequiredError,
+    build_session_recovery_manual_action,
+)
 from app.sources.jobsdb.parsers import parse_detail_page as parse_jobsdb_detail_page
 
 logger = logging.getLogger(__name__)
@@ -84,6 +88,34 @@ class JobDetailScraper:
         try:
             headers = self._get_headers(referer)
             response = await client.get(url, headers=headers, follow_redirects=True)
+            access_evidence = classify_public_access_evidence(
+                status_code=response.status_code,
+                final_url=str(response.url),
+                text=(
+                    response.text
+                    if len(response.text) <= 65536
+                    else response.text[:4096]
+                ),
+            )
+            if access_evidence is not None:
+                logger.warning(
+                    build_scrape_log_event(
+                        "SCRAPE_DETAIL_MANUAL_ACTION",
+                        source="jobsdb",
+                        source_job_id=job_id,
+                        classification=access_evidence.classification,
+                        status_code=access_evidence.status_code,
+                        reason=access_evidence.reason,
+                    )
+                )
+                raise build_session_recovery_manual_action(
+                    source_site="jobsdb",
+                    stage="detail_page",
+                    blocked_url=access_evidence.final_url or url,
+                    referer=referer,
+                    classification=access_evidence.classification,
+                    evidence=access_evidence.to_payload(),
+                )
             response.raise_for_status()
 
             html = response.text
@@ -98,6 +130,8 @@ class JobDetailScraper:
             )
             return detail
 
+        except ManualActionRequiredError:
+            raise
         except httpx.HTTPError as exc:
             logger.warning(
                 build_scrape_log_event(

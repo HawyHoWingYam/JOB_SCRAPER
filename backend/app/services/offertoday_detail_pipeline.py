@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.scraper.log_events import build_scrape_log_event
 from app.sources.contracts import (
     build_offertoday_canonical_job,
     build_offertoday_company_data,
     build_offertoday_job_data,
 )
+
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailIdentity,
     OfferTodayIdentityError,
@@ -31,6 +34,8 @@ from app.sources.offertoday.response_policy import (
     OfferTodayTransportError,
     classify_offertoday_response,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DetailFetcher(Protocol):
@@ -129,6 +134,7 @@ class OfferTodayDetailPipeline:
         target: OfferTodayDetailTarget,
         detail_crawl_job_id,
         fetch_detail: DetailFetcher,
+        crawl_mode: str | None = None,
     ) -> OfferTodayDetailProcessResult:
         prepared_payload: dict[str, Any] | None = None
         persisted_detail_payload: dict[str, Any] | None = None
@@ -243,6 +249,43 @@ class OfferTodayDetailPipeline:
                         else None
                     ),
                 )
+                if will_retry:
+                    logger.warning(
+                        build_scrape_log_event(
+                            "SCRAPE_DETAIL_RETRY",
+                            source="offertoday",
+                            crawl_job_id=detail_crawl_job_id,
+                            crawl_phase="detail",
+                            crawl_mode=crawl_mode,
+                            source_job_id=target.identity.job_id,
+                            attempt=attempt,
+                            max_attempts=self.max_attempts,
+                            elapsed_ms=max(
+                                int(latency_seconds * 1000),
+                                0,
+                            ),
+                            classification=classification.kind.value,
+                            code=classification.code,
+                        )
+                    )
+                elif classification.stop_batch:
+                    logger.warning(
+                        build_scrape_log_event(
+                            "SCRAPE_DETAIL_MANUAL_ACTION",
+                            source="offertoday",
+                            crawl_job_id=detail_crawl_job_id,
+                            crawl_phase="detail",
+                            crawl_mode=crawl_mode,
+                            source_job_id=target.identity.job_id,
+                            attempt=attempt,
+                            elapsed_ms=max(
+                                int(latency_seconds * 1000),
+                                0,
+                            ),
+                            classification=classification.kind.value,
+                            code=classification.code,
+                        )
+                    )
             except Exception as exc:
                 final_non_success = (
                     not will_retry

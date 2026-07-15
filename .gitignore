@@ -92,6 +92,9 @@ backend/.host_worker_venv/
 # OfferToday auth session (contains login token — never commit)
 **/offertoday_auth_state*.json
 backend/tests/*
+!backend/tests/conftest.py
+!backend/tests/test_cross_source_ip_recovery.py
+!backend/tests/test_cross_source_crawl_logging.py
 !backend/tests/test_crawl_job_execution_launcher.py
 !backend/tests/test_crawl_job_runtime.py
 !backend/tests/test_jobsdb_standalone_crawl.py

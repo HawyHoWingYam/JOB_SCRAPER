@@ -15,6 +15,7 @@ import { createMonitoringId, logError, logInfo } from '../../monitoring';
 import { formatCrawlModeLabel } from './crawlMode';
 import { formatCrawlPhaseLabel } from './crawlPhase';
 import { formatScraperSourceLabel } from './listingBatchLabel';
+import { buildIpBlockGuidance } from './ipBlockGuidance';
 import {
   cancelCrawlJob,
   closeManualActionWindows,
@@ -227,7 +228,12 @@ function isIpBlockedTask(task) {
 
 function buildManualActionGuidance(task) {
   if (isIpBlockedTask(task)) {
-    return 'OfferToday blocked the current public IP. Change your IP or network first, confirm OfferToday is reachable, then resume this same task. Completed progress is preserved.';
+    return buildIpBlockGuidance({
+      sourceSite: task?.manual_action?.source_site
+        || task?.request_payload?.source_site
+        || task?.source_site,
+      message: task?.manual_action?.message,
+    }).message;
   }
 
   return null;

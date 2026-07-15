@@ -404,7 +404,11 @@ def _build_result_manual_action_payload(
     )
     payload: dict[str, Any] = {
         "action_type": action_type,
+        "source_site": "offertoday",
+        "stage": crawl_phase,
         "classification": normalized_classification,
+        "code": evidence.get("code"),
+        "blocked_url": evidence.get("blocked_url"),
         "evidence": dict(evidence),
         "resume_context": dict(request_payload),
         "resume_supported": resume_supported,
@@ -540,11 +544,13 @@ def _normalize_detail_statuses(value: Any) -> list[str]:
 
 
 _build_listing_staging_payload = build_offertoday_listing_staging_payload
-OfferTodayCrawlStagingSink = OfferTodayReconciledListingStagingSink
 
 
 def _production_listing_observation_payload(observation) -> dict[str, Any]:
     payload = listing_observation_to_payload(observation)
+    response_url = str(getattr(observation, "response_url", "") or "").strip()
+    if response_url:
+        payload["response_url"] = response_url
     for field_name in (
         "supplemental_identity_issues",
         "supplemental_identity_conflicts",
@@ -556,11 +562,112 @@ def _production_listing_observation_payload(observation) -> dict[str, Any]:
 
 
 class CrawlJobListingObservationSink:
-    def __init__(self, *, crawl_runtime, crawl_job_id) -> None:
+    def __init__(self, *, crawl_runtime, crawl_job_id, crawl_mode: str) -> None:
         self.crawl_runtime = crawl_runtime
         self.crawl_job_id = crawl_job_id
+        self.crawl_mode = crawl_mode
+        self._started_condition_ids: set[str] = set()
+        self._success_latency_ms: dict[tuple[str, int], int] = {}
+        self.page_attempt_count = 0
+        self.successful_page_count = 0
+
+    async def record_page_start(
+        self,
+        *,
+        condition,
+        page: int,
+        attempt: int,
+        max_attempts: int,
+    ) -> None:
+        if condition.condition_id not in self._started_condition_ids:
+            self._started_condition_ids.add(condition.condition_id)
+            logger.info(
+                build_scrape_log_event(
+                    "SCRAPE_LISTING_CATEGORY_START",
+                    source="offertoday",
+                    crawl_job_id=self.crawl_job_id,
+                    crawl_phase="listing",
+                    crawl_mode=self.crawl_mode,
+                    condition_id=condition.condition_id,
+                    search_family=condition.search_family,
+                    category_id=condition.category_id,
+                    keyword=condition.keyword or None,
+                )
+            )
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_PAGE_START",
+                source="offertoday",
+                crawl_job_id=self.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=self.crawl_mode,
+                condition_id=condition.condition_id,
+                search_family=condition.search_family,
+                category_id=condition.category_id,
+                keyword=condition.keyword or None,
+                current_page=page,
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
+        )
 
     async def record_page_attempt(self, observation) -> None:
+        self.page_attempt_count += 1
+        if observation.classification == OfferTodayResponseKind.SUCCESS.value:
+            self.successful_page_count += 1
+            self._success_latency_ms[
+                (observation.condition_id, observation.page)
+            ] = int(observation.latency_ms)
+            if observation.row_count == 0:
+                logger.info(
+                    build_scrape_log_event(
+                        "SCRAPE_LISTING_BATCH_STAGED",
+                        source="offertoday",
+                        crawl_job_id=self.crawl_job_id,
+                        crawl_phase="listing",
+                        crawl_mode=self.crawl_mode,
+                        condition_id=observation.condition_id,
+                        search_family=observation.search_family,
+                        category_id=observation.category_id,
+                        keyword=observation.keyword or None,
+                        current_page=observation.page,
+                        attempt=observation.attempt,
+                        elapsed_ms=observation.latency_ms,
+                        job_ids=0,
+                        listings_staged=0,
+                        outcome="empty_page",
+                    )
+                )
+        else:
+            event_name = (
+                "SCRAPE_LISTING_PAGE_RETRY"
+                if observation.retry_reason
+                else "SCRAPE_LISTING_MANUAL_ACTION"
+                if observation.classification
+                in RESUMABLE_SESSION_CLASSIFICATIONS
+                else "SCRAPE_LISTING_PAGE_FAIL"
+            )
+            logger.warning(
+                build_scrape_log_event(
+                    event_name,
+                    source="offertoday",
+                    crawl_job_id=self.crawl_job_id,
+                    crawl_phase="listing",
+                    crawl_mode=self.crawl_mode,
+                    condition_id=observation.condition_id,
+                    search_family=observation.search_family,
+                    category_id=observation.category_id,
+                    keyword=observation.keyword or None,
+                    current_page=observation.page,
+                    attempt=observation.attempt,
+                    elapsed_ms=observation.latency_ms,
+                    classification=observation.classification,
+                    code=observation.api_code,
+                    blocked_url=observation.response_url,
+                    retry_reason=observation.retry_reason,
+                    stop_reason=observation.stop_reason,
+                )
+            )
         self.crawl_runtime.write_progress_event(
             crawl_job_id=self.crawl_job_id,
             emitted_by="offertoday-crawl",
@@ -581,6 +688,69 @@ class CrawlJobListingObservationSink:
             emitted_by="offertoday-crawl",
             event_type=f"crawl.listing_condition_{suffix}",
             payload=listing_observation_to_payload(outcome),
+        )
+
+    def pop_success_latency_ms(self, *, condition_id: str, page: int) -> int:
+        return self._success_latency_ms.pop((condition_id, page), 0)
+
+
+class OfferTodayCrawlStagingSink(OfferTodayReconciledListingStagingSink):
+    def __init__(
+        self,
+        *,
+        crawl_runtime,
+        crawl_job_id,
+        skip_existing: bool,
+        observation_sink: CrawlJobListingObservationSink,
+        crawl_mode: str,
+    ) -> None:
+        super().__init__(
+            crawl_runtime=crawl_runtime,
+            crawl_job_id=crawl_job_id,
+            skip_existing=skip_existing,
+        )
+        self.observation_sink = observation_sink
+        self.crawl_mode = crawl_mode
+
+    async def stage_page(self, *, condition, page: int, rows) -> None:
+        rows_created_before = self.rows_created
+        skipped_before = self.skipped_existing
+        persistence_started_at = time.perf_counter()
+        await super().stage_page(
+            condition=condition,
+            page=page,
+            rows=rows,
+        )
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_BATCH_STAGED",
+                source="offertoday",
+                crawl_job_id=self.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=self.crawl_mode,
+                condition_id=condition.condition_id,
+                search_family=condition.search_family,
+                category_id=condition.category_id,
+                keyword=condition.keyword or None,
+                current_page=page,
+                elapsed_ms=self.observation_sink.pop_success_latency_ms(
+                    condition_id=condition.condition_id,
+                    page=page,
+                ),
+                persist_elapsed_ms=max(
+                    int((time.perf_counter() - persistence_started_at) * 1000),
+                    0,
+                ),
+                job_ids=len(rows),
+                listings_staged=self.rows_created - rows_created_before,
+                jobs_skipped_existing=(
+                    self.skipped_existing - skipped_before
+                ),
+                cumulative_pages=self.observation_sink.successful_page_count,
+                cumulative_job_ids=self.rows_seen,
+                cumulative_listings_staged=self.rows_created,
+                cumulative_skipped=self.skipped_existing,
+            )
         )
 
 
@@ -641,8 +811,19 @@ class ProductionListingPhaseResult:
 
 
 def _listing_result_evidence(result) -> dict[str, Any]:
-    return {
-        "stop_reason": str(result.stop_reason),
+    stop_reason = str(result.stop_reason)
+    stopping_observation = next(
+        (
+            observation
+            for observation in reversed(tuple(result.observations))
+            if str(getattr(observation, "stop_reason", "") or "") == stop_reason
+            or str(getattr(observation, "classification", "") or "")
+            == stop_reason
+        ),
+        None,
+    )
+    evidence = {
+        "stop_reason": stop_reason,
         "gap_count": len(result.gaps),
         "conflict_count": len(result.identity_conflicts),
         "identity_issue_count": len(result.identity_issues),
@@ -650,12 +831,22 @@ def _listing_result_evidence(result) -> dict[str, Any]:
             int(getattr(outcome, "pages_observed", 0) or 0)
             for outcome in result.condition_outcomes
         ),
-        "accepted_job_ids": list(result.accepted_job_ids),
+        "accepted_job_id_count": len(result.accepted_job_ids),
         "listing_partial": bool(getattr(result, "is_partial", False)),
         "capped_condition_ids": list(
             getattr(result, "capped_condition_ids", ())
         ),
     }
+    if stopping_observation is not None:
+        blocked_url = str(
+            getattr(stopping_observation, "response_url", "") or ""
+        ).strip()
+        if blocked_url:
+            evidence["blocked_url"] = blocked_url
+        code = getattr(stopping_observation, "api_code", None)
+        if code is not None:
+            evidence["code"] = code
+    return evidence
 
 
 def _listing_metrics(result, staging_sink) -> dict[str, Any]:
@@ -705,6 +896,8 @@ async def _run_listing_phase(
     crawl_job_id,
     listing_runner=OfferTodayListingRunner,
 ) -> ProductionListingPhaseResult:
+    phase_started_at = time.perf_counter()
+    crawl_mode = "headed" if args.headed else "headless"
     category_ids = _normalize_listing_category_ids(args.category_ids)
     keywords = normalize_offertoday_keywords(args.keywords)
     conditions = build_offertoday_listing_conditions(
@@ -718,11 +911,14 @@ async def _run_listing_phase(
     observation_sink = CrawlJobListingObservationSink(
         crawl_runtime=crawl_runtime,
         crawl_job_id=crawl_job_id,
+        crawl_mode=crawl_mode,
     )
     staging_sink = OfferTodayCrawlStagingSink(
         crawl_runtime=crawl_runtime,
         crawl_job_id=crawl_job_id,
         skip_existing=bool(args.skip_existing),
+        observation_sink=observation_sink,
+        crawl_mode=crawl_mode,
     )
     runner = (
         listing_runner(browser_runtime)
@@ -730,26 +926,101 @@ async def _run_listing_phase(
         else listing_runner
     )
 
-    await browser_runtime.require_healthy_session()
-    result = await runner.run(
-        conditions=conditions,
-        stop_policy=ListingStopPolicy(
-            max_pages_per_condition=min(int(args.max_pages), MAX_PAGES_GLOBAL),
-            unique_job_cap=None,
-            require_empty_confirmation=True,
-            page_cap_behavior="retain-and-continue",
-        ),
-        retry_policy=ListingRetryPolicy(
-            max_attempts_per_page=3,
-            retry_delays_seconds=(1.0, 2.0),
-            page_delay_seconds=1.5,
-        ),
-        observation_sink=observation_sink,
-        staging_sink=staging_sink,
-        session_mode="headed" if args.headed else "headless",
-        request_policy=production_offertoday_listing_request_policy(),
-        terminal_policy="result-transition-confirmation-v1",
-    )
+    try:
+        await browser_runtime.require_healthy_session()
+        result = await runner.run(
+            conditions=conditions,
+            stop_policy=ListingStopPolicy(
+                max_pages_per_condition=min(
+                    int(args.max_pages),
+                    MAX_PAGES_GLOBAL,
+                ),
+                unique_job_cap=None,
+                require_empty_confirmation=True,
+                page_cap_behavior="retain-and-continue",
+            ),
+            retry_policy=ListingRetryPolicy(
+                max_attempts_per_page=3,
+                retry_delays_seconds=(1.0, 2.0),
+                page_delay_seconds=1.5,
+            ),
+            observation_sink=observation_sink,
+            staging_sink=staging_sink,
+            session_mode=crawl_mode,
+            request_policy=production_offertoday_listing_request_policy(),
+            terminal_policy="result-transition-confirmation-v1",
+        )
+    except ManualActionRequiredError as exc:
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_MANUAL_ACTION",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=crawl_mode,
+                classification=exc.classification,
+                code=exc.code,
+                stage=exc.stage,
+                blocked_url=exc.blocked_url,
+                cumulative_pages=observation_sink.successful_page_count,
+                cumulative_job_ids=staging_sink.rows_seen,
+                cumulative_listings_staged=staging_sink.rows_created,
+            )
+        )
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_DONE",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=crawl_mode,
+                outcome="manual_action_required",
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                conditions=len(conditions),
+                pages_processed=observation_sink.successful_page_count,
+                job_ids_collected=staging_sink.rows_seen,
+                listings_staged=staging_sink.rows_created,
+                jobs_skipped_existing=staging_sink.skipped_existing,
+            )
+        )
+        raise
+    except Exception as exc:
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_PAGE_FAIL",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=crawl_mode,
+                error_type=type(exc).__name__,
+                cumulative_pages=observation_sink.successful_page_count,
+                cumulative_job_ids=staging_sink.rows_seen,
+                cumulative_listings_staged=staging_sink.rows_created,
+            )
+        )
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_DONE",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=crawl_mode,
+                outcome="failed",
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                conditions=len(conditions),
+                pages_processed=observation_sink.successful_page_count,
+                job_ids_collected=staging_sink.rows_seen,
+                listings_staged=staging_sink.rows_created,
+                jobs_skipped_existing=staging_sink.skipped_existing,
+            )
+        )
+        raise
     execution = ProductionListingPhaseResult(
         listing_result=result,
         staging_sink=staging_sink,
@@ -780,6 +1051,22 @@ async def _run_listing_phase(
                 payload=manual_payload,
                 error_message=str(manual_payload["message"]),
             )
+            logger.warning(
+                build_scrape_log_event(
+                    "SCRAPE_LISTING_MANUAL_ACTION",
+                    source="offertoday",
+                    crawl_job_id=crawl_job_id,
+                    crawl_phase="listing",
+                    crawl_mode=crawl_mode,
+                    classification=stop_reason,
+                    code=manual_payload.get("code"),
+                    stage=manual_payload.get("stage") or "listing",
+                    blocked_url=manual_payload.get("blocked_url"),
+                    cumulative_pages=evidence["pages_observed"],
+                    cumulative_job_ids=len(result.accepted_job_ids),
+                    cumulative_listings_staged=staging_sink.rows_created,
+                )
+            )
         else:
             crawl_runtime.mark_failed(
                 crawl_job_id=crawl_job_id,
@@ -787,6 +1074,30 @@ async def _run_listing_phase(
                 error_message=f"OfferToday listing phase incomplete: {stop_reason}",
                 payload=evidence,
             )
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_DONE",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=crawl_mode,
+                outcome=(
+                    "manual_action_required"
+                    if stop_reason in manual_action_classifications
+                    else "failed"
+                ),
+                stop_reason=stop_reason,
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                conditions=len(conditions),
+                pages_processed=evidence["pages_observed"],
+                job_ids_collected=len(result.accepted_job_ids),
+                listings_staged=staging_sink.rows_created,
+                jobs_skipped_existing=staging_sink.skipped_existing,
+            )
+        )
         return execution
 
     listing_metrics = _listing_metrics(result, staging_sink)
@@ -808,6 +1119,29 @@ async def _run_listing_phase(
             "job_ids_collected": len(result.accepted_job_ids),
             "listings_staged": int(staging_sink.rows_created),
         },
+    )
+
+    logger.info(
+        build_scrape_log_event(
+            "SCRAPE_LISTING_DONE",
+            source="offertoday",
+            crawl_job_id=crawl_job_id,
+            crawl_phase="listing",
+            crawl_mode=crawl_mode,
+            outcome="completed_partial" if result.is_partial else "completed",
+            elapsed_ms=max(
+                int((time.perf_counter() - phase_started_at) * 1000),
+                0,
+            ),
+            conditions=len(conditions),
+            pages_processed=sum(
+                int(getattr(outcome, "pages_observed", 0) or 0)
+                for outcome in result.condition_outcomes
+            ),
+            job_ids_collected=len(result.accepted_job_ids),
+            listings_staged=staging_sink.rows_created,
+            jobs_skipped_existing=staging_sink.skipped_existing,
+        )
     )
 
     if str(args.crawl_phase or "").strip().lower() == "full":
@@ -876,7 +1210,9 @@ async def _run_detail_phase(
     completion_payload: dict[str, Any] | None = None,
     completion_metrics: dict[str, Any] | None = None,
 ) -> OfferTodayDetailPhaseResult:
+    phase_started_at = time.perf_counter()
     crawl_phase = str(args.crawl_phase or "").strip().lower()
+    crawl_mode = "headed" if args.headed else "headless"
     source_listing_crawl_job_id, detail_scope = _resolve_detail_scope(
         args,
         listing_phase_completed=crawl_phase == "full",
@@ -887,14 +1223,78 @@ async def _run_detail_phase(
         source_listing_crawl_job_id=source_listing_crawl_job_id,
     )
 
-    if crawl_phase == "detail":
-        await browser_runtime.require_healthy_session()
-    if detail_load_result is None:
-        detail_load_result = crawl_runtime.load_detail_targets(
-            source_site="offertoday",
-            request_payload=request_payload,
-            detail_crawl_job_id=crawl_job_id,
+    try:
+        if crawl_phase == "detail":
+            await browser_runtime.require_healthy_session()
+        if detail_load_result is None:
+            detail_load_result = crawl_runtime.load_detail_targets(
+                source_site="offertoday",
+                request_payload=request_payload,
+                detail_crawl_job_id=crawl_job_id,
+            )
+    except ManualActionRequiredError as exc:
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_MANUAL_ACTION",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_scope=detail_scope,
+                classification=exc.classification,
+                code=exc.code,
+                stage=exc.stage,
+                blocked_url=exc.blocked_url,
+                outcome="manual_action_required",
+            )
         )
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_DONE",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_scope=detail_scope,
+                outcome="manual_action_required",
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                detail_target_rows=0,
+                processed=0,
+                succeeded=0,
+                failed=0,
+                saved=0,
+            )
+        )
+        raise
+    except Exception as exc:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_DONE",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_scope=detail_scope,
+                outcome="failed",
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                detail_target_rows=0,
+                processed=0,
+                succeeded=0,
+                failed=0,
+                saved=0,
+                error_type=type(exc).__name__,
+            )
+        )
+        raise
 
     cohort_payload = {
         "fetch_cohort_source_job_ids": list(
@@ -924,6 +1324,8 @@ async def _run_detail_phase(
             "SCRAPE_DETAIL_TARGETS_LOADED",
             source="offertoday",
             crawl_job_id=crawl_job_id,
+            crawl_phase="detail",
+            crawl_mode=crawl_mode,
             source_listing_crawl_job_id=source_listing_crawl_job_id,
             detail_scope=detail_scope,
             detail_selected_rows=detail_load_result.selected_rows,
@@ -1005,6 +1407,37 @@ async def _run_detail_phase(
             stop_batch=stop_batch,
         )
 
+    def log_detail_done(outcome: str) -> None:
+        metrics = build_metrics_patch()
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_DONE",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_scope=detail_scope,
+                outcome=outcome,
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                detail_selected_rows=detail_load_result.selected_rows,
+                detail_skipped_existing_rows=(
+                    detail_load_result.skipped_existing_rows
+                ),
+                detail_target_rows=detail_load_result.target_rows,
+                processed=metrics["detail_processed_targets"],
+                succeeded=metrics["detail_success"],
+                failed=metrics["detail_failure"],
+                saved=metrics["jobs_saved"],
+                terminal_unavailable=metrics["terminal_unavailable"],
+                persist_failure=metrics["persist_failure"],
+                jobs_reconciled=metrics["jobs_reconciled"],
+            )
+        )
+
     if detail_load_result.identity_conflict_ids:
         evidence = {
             "identity_conflict_ids": list(
@@ -1032,6 +1465,20 @@ async def _run_detail_phase(
             payload=manual_payload,
             error_message=str(manual_payload["message"]),
         )
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_MANUAL_ACTION",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                classification="identity_conflict",
+                stage="detail",
+                outcome="manual_action_required",
+            )
+        )
+        log_detail_done("manual_action_required")
         return build_result(stop_batch=True)
 
     async def fetch_detail(*, job_id: str, encrypted_job_id: str):
@@ -1058,13 +1505,79 @@ async def _run_detail_phase(
         )
 
     total_targets = int(detail_load_result.target_rows)
-    for index, runtime_target in enumerate(detail_load_result.targets, start=1):
-        target = OfferTodayDetailTarget.from_runtime_target(runtime_target)
-        result = await pipeline.process_target(
-            target=target,
-            detail_crawl_job_id=crawl_job_id,
-            fetch_detail=fetch_detail,
+    if total_targets == 0:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_TARGETS_EMPTY",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_scope=detail_scope,
+                detail_statuses=",".join(
+                    _normalize_detail_statuses(args.detail_statuses)
+                ),
+                detail_limit=args.detail_limit,
+            )
         )
+    for index, runtime_target in enumerate(detail_load_result.targets, start=1):
+        item_started_at = time.perf_counter()
+        raw_source_job_id = str(
+            runtime_target.get("source_job_id") or ""
+        ).strip()
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_ITEM_START",
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_index=index,
+                detail_total=total_targets,
+                source_job_id=raw_source_job_id,
+                listing_id=runtime_target.get("listing_id"),
+            )
+        )
+        try:
+            target = OfferTodayDetailTarget.from_runtime_target(runtime_target)
+            result = await pipeline.process_target(
+                target=target,
+                detail_crawl_job_id=crawl_job_id,
+                fetch_detail=fetch_detail,
+                crawl_mode=crawl_mode,
+            )
+        except Exception as exc:
+            logger.warning(
+                build_scrape_log_event(
+                    "SCRAPE_DETAIL_ITEM_FAIL",
+                    source="offertoday",
+                    crawl_job_id=crawl_job_id,
+                    crawl_phase="detail",
+                    crawl_mode=crawl_mode,
+                    source_listing_crawl_job_id=(
+                        source_listing_crawl_job_id
+                    ),
+                    detail_index=index,
+                    detail_total=total_targets,
+                    source_job_id=raw_source_job_id,
+                    elapsed_ms=max(
+                        int((time.perf_counter() - item_started_at) * 1000),
+                        0,
+                    ),
+                    outcome="failed",
+                    error_type=type(exc).__name__,
+                    cumulative_processed=sum(outcome_counts.values()),
+                    cumulative_succeeded=outcome_counts.get(
+                        OfferTodayResponseKind.SUCCESS.value,
+                        0,
+                    ),
+                    cumulative_saved=jobs_created + jobs_updated,
+                )
+            )
+            log_detail_done("failed")
+            raise
         outcome_key = result.outcome.value
         outcome_counts[outcome_key] = outcome_counts.get(outcome_key, 0) + 1
         if result.job_action == "created":
@@ -1075,6 +1588,52 @@ async def _run_detail_phase(
             companies_created += 1
         elif result.company_action == "updated":
             companies_updated += 1
+
+        current_metrics = build_metrics_patch()
+        terminal_event = (
+            "SCRAPE_DETAIL_ITEM_OK"
+            if result.outcome is OfferTodayResponseKind.SUCCESS
+            else "SCRAPE_DETAIL_ITEM_MANUAL_ACTION"
+            if result.stop_batch
+            else "SCRAPE_DETAIL_ITEM_FAIL"
+        )
+        terminal_logger = (
+            logger.info
+            if result.outcome
+            in {
+                OfferTodayResponseKind.SUCCESS,
+                OfferTodayResponseKind.TERMINAL_UNAVAILABLE,
+            }
+            else logger.warning
+        )
+        terminal_logger(
+            build_scrape_log_event(
+                terminal_event,
+                source="offertoday",
+                crawl_job_id=crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_index=index,
+                detail_total=total_targets,
+                source_job_id=target.identity.job_id,
+                elapsed_ms=max(
+                    int((time.perf_counter() - item_started_at) * 1000),
+                    0,
+                ),
+                outcome=result.outcome.value,
+                classification=result.outcome.value,
+                cumulative_processed=current_metrics[
+                    "detail_processed_targets"
+                ],
+                cumulative_succeeded=current_metrics["detail_success"],
+                cumulative_failed=current_metrics["detail_failure"],
+                cumulative_saved=current_metrics["jobs_saved"],
+                cumulative_terminal_unavailable=current_metrics[
+                    "terminal_unavailable"
+                ],
+            )
+        )
 
         if result.stop_batch:
             manual_payload = _build_result_manual_action_payload(
@@ -1101,6 +1660,7 @@ async def _run_detail_phase(
                 payload=manual_payload,
                 error_message=str(manual_payload["message"]),
             )
+            log_detail_done("manual_action_required")
             return build_result(stop_batch=True)
 
         if index % 10 == 0:
@@ -1138,12 +1698,17 @@ async def _run_detail_phase(
         **dict(completion_metrics or {}),
         **build_metrics_patch(),
     }
-    crawl_runtime.mark_completed(
-        crawl_job_id=crawl_job_id,
-        source_site="offertoday",
-        payload=completed_payload,
-        metrics=completed_metrics,
-    )
+    try:
+        crawl_runtime.mark_completed(
+            crawl_job_id=crawl_job_id,
+            source_site="offertoday",
+            payload=completed_payload,
+            metrics=completed_metrics,
+        )
+    except Exception:
+        log_detail_done("failed")
+        raise
+    log_detail_done("completed")
     return phase_result
 
 
@@ -1389,6 +1954,26 @@ async def main() -> None:
                         listing_result.stop_reason,
                         page_count,
                     )
+                    logger.warning(
+                        build_scrape_log_event(
+                            "SCRAPE_EXECUTOR_MANUAL_ACTION"
+                            if str(listing_result.stop_reason)
+                            in (
+                                RESUMABLE_SESSION_CLASSIFICATIONS
+                                | _IDENTITY_AUDIT_CLASSIFICATIONS
+                            )
+                            else "SCRAPE_EXECUTOR_FAIL",
+                            source="offertoday",
+                            crawl_job_id=cj_id,
+                            crawl_phase="listing",
+                            crawl_mode=(
+                                "headed" if args.headed else "headless"
+                            ),
+                            classification=listing_result.stop_reason,
+                            pages_processed=page_count,
+                            listings_staged=listing_count,
+                        )
+                    )
                     return
 
             detail_load_result = (
@@ -1457,6 +2042,23 @@ async def main() -> None:
                     0,
                 )
                 if detail_phase_result.stop_batch:
+                    logger.warning(
+                        build_scrape_log_event(
+                            "SCRAPE_EXECUTOR_MANUAL_ACTION",
+                            source="offertoday",
+                            crawl_job_id=cj_id,
+                            crawl_phase="detail",
+                            crawl_mode=(
+                                "headed" if args.headed else "headless"
+                            ),
+                            source_listing_crawl_job_id=(
+                                source_listing_crawl_job_id
+                            ),
+                            detail_processed=(
+                                detail_phase_result.processed_targets
+                            ),
+                        )
+                    )
                     return
 
         if args.crawl_job_id and crawl_phase == "listing":
@@ -1538,6 +2140,17 @@ async def main() -> None:
     except OfferTodayListingIdentityConflictError as exc:
         logger.warning("Crawl paused for listing identity audit: %s", exc)
         if args.crawl_job_id:
+            logger.warning(
+                build_scrape_log_event(
+                    "SCRAPE_EXECUTOR_MANUAL_ACTION",
+                    source="offertoday",
+                    crawl_job_id=cj_id,
+                    crawl_phase="listing",
+                    crawl_mode="headed" if args.headed else "headless",
+                    classification="identity_conflict",
+                    error_type=type(exc).__name__,
+                )
+            )
             request_payload = _build_runtime_request_payload(
                 args,
                 crawl_phase="listing",
@@ -1568,6 +2181,19 @@ async def main() -> None:
             resume_source_listing_crawl_job_id = source_listing_crawl_job_id
             if resume_crawl_phase == "listing":
                 resume_source_listing_crawl_job_id = str(cj_id)
+            logger.warning(
+                build_scrape_log_event(
+                    "SCRAPE_EXECUTOR_MANUAL_ACTION",
+                    source="offertoday",
+                    crawl_job_id=cj_id,
+                    crawl_phase=resume_crawl_phase,
+                    crawl_mode="headed" if args.headed else "headless",
+                    classification=exc.classification,
+                    code=exc.code,
+                    stage=exc.stage,
+                    blocked_url=exc.blocked_url,
+                )
+            )
             crawl_runtime.mark_manual_action_required(
                 crawl_job_id=cj_id,
                 source_site="offertoday",
@@ -1585,7 +2211,16 @@ async def main() -> None:
                 error_message=exc.message,
             )
     except Exception as exc:
-        logger.error("Crawl failed: %s", exc)
+        logger.exception(
+            build_scrape_log_event(
+                "SCRAPE_EXECUTOR_FAIL",
+                source="offertoday",
+                crawl_job_id=cj_id,
+                crawl_phase=crawl_phase,
+                crawl_mode="headed" if args.headed else "headless",
+                error_type=type(exc).__name__,
+            )
+        )
         if args.crawl_job_id:
             crawl_runtime.mark_failed(
                 crawl_job_id=cj_id,

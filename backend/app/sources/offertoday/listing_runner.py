@@ -206,6 +206,7 @@ class ListingPageObservation:
     supplemental_identity_issues: tuple[ListingIdentityIssue, ...] = ()
     supplemental_identity_conflicts: tuple[ListingIdentityConflict, ...] = ()
     cursor_evidence: OfferTodayListingPageEvidenceV2 | None = None
+    response_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +461,9 @@ def listing_observation_to_payload(value: Any) -> Any:
             payload.pop("cursor_evidence", None)
         payload.pop("supplemental_identity_issues", None)
         payload.pop("supplemental_identity_conflicts", None)
+        # Historical research artifacts have a frozen key set. Production
+        # events add this transport field explicitly at their own boundary.
+        payload.pop("response_url", None)
         return listing_observation_to_payload(payload)
     if isinstance(value, ListingConditionOutcome):
         payload = asdict(value)
@@ -749,6 +753,18 @@ class OfferTodayListingRunner:
                 restart_condition = False
 
                 for attempt in range(1, retry_policy.max_attempts_per_page + 1):
+                    record_page_start = getattr(
+                        observation_sink,
+                        "record_page_start",
+                        None,
+                    )
+                    if callable(record_page_start):
+                        await record_page_start(
+                            condition=condition,
+                            page=page,
+                            attempt=attempt,
+                            max_attempts=retry_policy.max_attempts_per_page,
+                        )
                     started_at = self._clock()
                     response: dict[str, Any] | None = None
                     browser_context_hash = _browser_context_hash(self._transport)
@@ -847,6 +863,7 @@ class OfferTodayListingRunner:
                                 else None
                             ),
                             stop_reason=(None if can_restart else "unresolved_gap"),
+                            response_url=current_url,
                             cursor_evidence=_v2_page_evidence(
                                 policy=active_request_policy,
                                 condition=condition,
@@ -914,6 +931,7 @@ class OfferTodayListingRunner:
                                 classification.kind.value if will_retry else None
                             ),
                             stop_reason=attempt_stop_reason,
+                            response_url=current_url,
                             cursor_evidence=(
                                 _v2_page_evidence(
                                     policy=active_request_policy,
@@ -983,6 +1001,7 @@ class OfferTodayListingRunner:
                                 session_mode=session_mode,
                                 retry_reason=None,
                                 stop_reason="endpoint_contract_violation",
+                                response_url=current_url,
                                 cursor_evidence=_v2_page_evidence(
                                     policy=active_request_policy,
                                     condition=condition,
@@ -1078,6 +1097,7 @@ class OfferTodayListingRunner:
                                 session_mode=session_mode,
                                 retry_reason=None,
                                 stop_reason=violation_stop_reason,
+                                response_url=current_url,
                                 cursor_evidence=_v2_page_evidence(
                                     policy=active_request_policy,
                                     condition=condition,
@@ -1604,6 +1624,7 @@ class OfferTodayListingRunner:
                         session_mode=session_mode,
                         retry_reason=None,
                         stop_reason=attempt_stop_reason,
+                        response_url=current_url,
                         supplemental_identity_issues=tuple(
                             supplemental_page_issues
                         ),
@@ -1815,6 +1836,7 @@ class OfferTodayListingRunner:
         session_mode: str,
         retry_reason: str | None,
         stop_reason: str | None,
+        response_url: str | None = None,
         cursor_evidence: OfferTodayListingPageEvidenceV2 | None = None,
     ) -> ListingPageObservation:
         return ListingPageObservation(
@@ -1843,5 +1865,6 @@ class OfferTodayListingRunner:
             session_mode=session_mode,
             retry_reason=retry_reason,
             stop_reason=stop_reason,
+            response_url=response_url,
             cursor_evidence=cursor_evidence,
         )

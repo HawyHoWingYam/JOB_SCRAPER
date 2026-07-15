@@ -4,6 +4,7 @@ import { createMonitoringId, logError, logInfo, logWarn } from '../../monitoring
 import { formatCrawlModeLabel } from './crawlMode';
 import { formatCrawlPhaseLabel } from './crawlPhase';
 import { sourceRequiresExternalHeadedWorker } from './headedRuntime';
+import { buildIpBlockGuidance } from './ipBlockGuidance';
 import {
     formatListingBatchIdentity,
     formatScraperSourceLabel,
@@ -251,6 +252,23 @@ function ScrapeProgressPanel({
     const progressSections = buildProgressSections(progressEntries);
     const visibleTaskCount = progressSections.reduce((count, section) => count + section.entries.length, 0);
     const hasProgress = visibleTaskCount > 0;
+    const activeIpBlock = progressEntries
+        .map(([, data]) => data)
+        .find((data) => (
+            data?.ip_blocked
+            || data?.issue_class === 'ip_blocked'
+            || data?.manual_action?.classification === 'ip_blocked'
+        ));
+    const activeIpBlockGuidance = activeIpBlock
+        ? buildIpBlockGuidance({
+            sourceSite: activeIpBlock?.manual_action?.source_site
+                || activeIpBlock?.request_payload?.source_site
+                || activeIpBlock?.source_site,
+            message: activeIpBlock?.ip_blocked_message
+                || activeIpBlock?.manual_action?.message
+                || activeIpBlock?.latest_issue_text,
+        })
+        : null;
 
     useEffect(() => {
         clearRecoveryTimeout();
@@ -321,6 +339,12 @@ function ScrapeProgressPanel({
             </div>
 
             {error && <div className="progress-error">{error}</div>}
+            {activeIpBlockGuidance && (
+                <div className="progress-warning-banner ip-blocked">
+                    <strong>{activeIpBlockGuidance.title}</strong>
+                    <span>{activeIpBlockGuidance.message}</span>
+                </div>
+            )}
 
             <div className="progress-panel-body">
                 {isRecovering && (
@@ -921,6 +945,10 @@ function ProgressItem({
     const hasIpBlocked = Boolean(ip_blocked);
     const isPartialComplete = Boolean(listing_completed && effectiveStatus === 'failed');
     const runtimeSourceSite = `${manual_action?.source_site || request_payload?.source_site || source_site || ''}`.trim().toLowerCase();
+    const ipBlockGuidance = buildIpBlockGuidance({
+        sourceSite: runtimeSourceSite,
+        message: ip_blocked_message || manual_action?.message,
+    });
     const isQueuedHeadedRun =
         effectiveStatus === 'queued'
         && `${request_payload?.crawl_mode || crawl_mode || ''}`.trim().toLowerCase() === 'headed';
@@ -1644,9 +1672,9 @@ function ProgressItem({
             )}
             {hasIpBlocked && (
                 <div className="progress-warning-banner ip-blocked">
-                    <strong>OfferToday IP has been blocked.</strong>
+                    <strong>{ipBlockGuidance.title}</strong>
                     <span>
-                        {ip_blocked_message || 'The server rejected further requests due to IP behavior flags. Detail phase has been stopped.'}
+                        {ipBlockGuidance.message}
                     </span>
                 </div>
             )}

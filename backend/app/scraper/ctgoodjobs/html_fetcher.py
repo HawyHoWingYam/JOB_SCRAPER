@@ -4,8 +4,10 @@ import logging
 
 import httpx
 
+from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
 from app.scraper.log_events import build_scrape_log_event
+from app.scraper.manual_action import build_session_recovery_manual_action
 from app.scraper.proxy_rotation import (
     CTGoodJobsProxyRuntime,
     build_ctgoodjobs_proxy_runtime,
@@ -141,27 +143,80 @@ async def fetch_html_document(
                     build_document_headers(referer=referer)
                 )
                 response = await attempt_client.get(url, headers=request_headers)
+                access_evidence = classify_public_access_evidence(
+                    status_code=response.status_code,
+                    final_url=str(response.url),
+                    text=(
+                        response.text
+                        if len(response.text) <= 65536
+                        else response.text[:4096]
+                    ),
+                )
+                if (
+                    access_evidence is not None
+                    and access_evidence.classification == "ip_blocked"
+                ):
+                    if active_proxy_runtime.enabled:
+                        await active_proxy_runtime.report_challenge(
+                            stage=stage,
+                            lease=attempt_proxy_lease,
+                        )
+                    logger.warning(
+                        build_scrape_log_event(
+                            "SCRAPE_FETCH_MANUAL_ACTION",
+                            source="ctgoodjobs",
+                            stage=stage,
+                            classification="ip_blocked",
+                            status_code=access_evidence.status_code,
+                            reason=access_evidence.reason,
+                            attempt=attempt + 1,
+                        )
+                    )
+                    raise build_session_recovery_manual_action(
+                        source_site="ctgoodjobs",
+                        stage=stage,
+                        blocked_url=access_evidence.final_url or url,
+                        referer=referer,
+                        classification="ip_blocked",
+                        evidence=access_evidence.to_payload(),
+                    )
                 response.raise_for_status()
-                if looks_like_interstitial_html(response.text):
+                if (
+                    access_evidence is not None
+                    and access_evidence.classification == "waf_challenge"
+                ) or looks_like_interstitial_html(response.text):
                     if active_proxy_runtime.enabled:
                         await active_proxy_runtime.report_challenge(
                             stage=stage,
                             lease=attempt_proxy_lease,
                         )
                     if attempt == max_attempts - 1:
-                        raise CTGoodJobsFetchError(
+                        challenge_evidence = (
+                            access_evidence.to_payload()
+                            if access_evidence is not None
+                            else {
+                                "final_url": str(response.url),
+                                "status_code": response.status_code,
+                                "reason": "interstitial_marker",
+                            }
+                        )
+                        raise build_session_recovery_manual_action(
+                            source_site="ctgoodjobs",
                             stage=stage,
-                            url=url,
-                            attempts=attempt + 1,
-                            exception_type="InterstitialChallenge",
-                            challenge_detected=True,
+                            blocked_url=str(response.url or url),
+                            referer=referer,
+                            classification="waf_challenge",
+                            evidence=challenge_evidence,
                         )
                     logger.warning(
-                        "CTGoodJobs %s fetch hit human-verification interstitial: url=%s attempt=%s/%s",
-                        stage,
-                        url,
-                        attempt + 1,
-                        max_attempts,
+                        build_scrape_log_event(
+                            "SCRAPE_FETCH_RETRY",
+                            source="ctgoodjobs",
+                            stage=stage,
+                            classification="waf_challenge",
+                            attempt=attempt + 1,
+                            max_attempts=max_attempts,
+                        )
                     )
                     await backoff.wait(attempt)
                     continue

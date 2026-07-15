@@ -9,12 +9,14 @@ from typing import Awaitable, Callable
 
 from app.config import settings
 from app.manual_actions.live_browser_registry import get_live_browser_registry
+from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.browser_launch import launch_persistent_context_with_fallback
 from app.scraper.log_events import build_scrape_log_event
 from app.scraper.manual_action import (
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+    build_session_recovery_manual_action,
 )
 from app.sources.jobsdb.parsers import parse_detail_page as parse_jobsdb_detail_page
 
@@ -57,6 +59,7 @@ class JobsDBBrowserDetailScraper:
         self._sync_page = None
         self._last_page_title: str | None = None
         self._last_page_url: str | None = None
+        self._last_response_status: int | None = None
 
     async def __aenter__(self):
         if self.page_content_fetcher is None and self.sync_page_content_fetcher is None:
@@ -93,7 +96,27 @@ class JobsDBBrowserDetailScraper:
             )
         )
         html = await self._fetch_page_content(url)
-        if self._looks_like_interstitial(html):
+        access_evidence = classify_public_access_evidence(
+            status_code=self._last_response_status,
+            final_url=self._last_page_url or url,
+            title=self._last_page_title,
+            text=html if len(html) <= 65536 else html[:4096],
+        )
+        if access_evidence is not None or self._looks_like_interstitial(html):
+            classification = (
+                access_evidence.classification
+                if access_evidence is not None
+                else "waf_challenge"
+            )
+            evidence = (
+                access_evidence.to_payload()
+                if access_evidence is not None
+                else {
+                    "status_code": self._last_response_status,
+                    "final_url": self._last_page_url or url,
+                    "reason": "interstitial_marker",
+                }
+            )
             logger.warning(
                 build_scrape_log_event(
                     "SCRAPE_DETAIL_MANUAL_ACTION",
@@ -101,19 +124,18 @@ class JobsDBBrowserDetailScraper:
                     crawl_job_id=self.request_payload.get("crawl_job_id"),
                     source_job_id=job_id,
                     url=url,
+                    classification=classification,
+                    status_code=self._last_response_status,
+                    reason=evidence.get("reason"),
                 )
             )
-            raise ManualActionRequiredError(
+            raise build_session_recovery_manual_action(
                 source_site="jobsdb",
                 stage="detail_page",
-                blocked_url=url,
+                blocked_url=self._last_page_url or url,
                 referer=settings.jobsdb_base_url,
-                message="JobsDB detail fetch blocked by human verification",
-                instructions=[
-                    "Open the headed browser profile.",
-                    "Complete the human verification challenge.",
-                    "Return to the app and click Resume.",
-                ],
+                classification=classification,
+                evidence=evidence,
             )
         detail = parse_jobsdb_detail_page(html, job_id=job_id)
         logger.debug(
@@ -129,9 +151,15 @@ class JobsDBBrowserDetailScraper:
 
     async def _fetch_page_content(self, url: str) -> str:
         if self.page_content_fetcher is not None:
+            self._last_response_status = None
+            self._last_page_title = None
+            self._last_page_url = url
             return await self.page_content_fetcher(url)
         fetcher = self.sync_page_content_fetcher or self._fetch_page_content_sync
         if self._executor is None:
+            self._last_response_status = None
+            self._last_page_title = None
+            self._last_page_url = url
             return await asyncio.to_thread(fetcher, url)
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, fetcher, url)
@@ -263,6 +291,7 @@ class JobsDBBrowserDetailScraper:
         self._runtime_started = False
         self._last_page_title = None
         self._last_page_url = None
+        self._last_response_status = None
 
     async def _cleanup_failed_startup(self, loop) -> None:
         if self._executor is None:
@@ -288,8 +317,12 @@ class JobsDBBrowserDetailScraper:
     def _fetch_page_content_sync(self, url: str) -> str:
         if not self._runtime_started:
             self._start_sync_runtime()
-        self._sync_page.goto(url, wait_until="domcontentloaded")
+        response = self._sync_page.goto(url, wait_until="domcontentloaded")
         self._sync_page.wait_for_timeout(3000)
+        response_status = getattr(response, "status", None)
+        self._last_response_status = (
+            response_status if type(response_status) is int else None
+        )
         self._last_page_title = self._sync_page.title()
         self._last_page_url = str(getattr(self._sync_page, "url", url) or url)
         return self._sync_page.content()

@@ -6,19 +6,24 @@ Phase 1 of the two-phase scraping approach.
 """
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import logging
 import random
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
 from app.config import settings
+from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.categories import JOBSDB_CATEGORIES, get_category_by_id, get_category_name
 from app.scraper.log_events import build_scrape_log_event
-from app.scraper.manual_action import ManualActionRequiredError
+from app.scraper.manual_action import build_session_recovery_manual_action
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
+
+ListingPageSink = Callable[..., Awaitable[None]]
+ListingPageStartSink = Callable[..., Awaitable[None]]
 
 
 class CategoryListScraper:
@@ -63,22 +68,46 @@ class CategoryListScraper:
                 params=params,
                 headers=self.headers,
             )
+            content_type = str(response.headers.get("content-type") or "").lower()
+            access_text = (
+                ""
+                if 200 <= response.status_code < 300
+                and "application/json" in content_type
+                else response.text[:65536]
+            )
+            access_evidence = classify_public_access_evidence(
+                status_code=response.status_code,
+                final_url=str(response.url),
+                text=access_text,
+            )
+            if access_evidence is not None:
+                raise build_session_recovery_manual_action(
+                    source_site="jobsdb",
+                    stage="category_page",
+                    blocked_url=self._build_category_page_url(
+                        classification_id,
+                        page=page,
+                    ),
+                    referer=settings.jobsdb_base_url,
+                    classification=access_evidence.classification,
+                    evidence=access_evidence.to_payload(),
+                )
             response.raise_for_status()
             try:
                 return response.json()
             except ValueError as exc:
                 if self._looks_like_interstitial_response(response):
-                    raise ManualActionRequiredError(
+                    raise build_session_recovery_manual_action(
                         source_site="jobsdb",
                         stage="category_page",
                         blocked_url=self._build_category_page_url(classification_id, page=page),
                         referer=settings.jobsdb_base_url,
-                        message="JobsDB listing fetch blocked by human verification",
-                        instructions=[
-                            "Open the headed browser profile.",
-                            "Complete the human verification challenge.",
-                            "Return to the app and click Resume.",
-                        ],
+                        classification="waf_challenge",
+                        evidence={
+                            "status_code": response.status_code,
+                            "final_url": str(response.url),
+                            "reason": "non_json_interstitial",
+                        },
                     ) from exc
                 raise
         finally:
@@ -112,6 +141,8 @@ class CategoryListScraper:
         classification_id: int,
         max_pages: Optional[int] = None,
         on_progress: Optional[callable] = None,
+        page_sink: ListingPageSink | None = None,
+        on_page_start: ListingPageStartSink | None = None,
     ) -> Dict[str, Any]:
         """
         Scrape all job IDs from a category.
@@ -127,6 +158,7 @@ class CategoryListScraper:
         job_ids: List[str] = []
         page = 1
         total_count = 0
+        pages_scraped = 0
         category_name = get_category_name(classification_id) or f"Category {classification_id}"
         logger.info(
             build_scrape_log_event(
@@ -158,27 +190,25 @@ class CategoryListScraper:
 
             # Start from last page and iterate backwards
             page = total_pages
+            if on_page_start is not None:
+                await on_page_start(
+                    category_id=classification_id,
+                    category_name=category_name,
+                    page=page,
+                    total_pages=total_pages,
+                )
             result = await self.fetch_page(classification_id, page, client)
             jobs = result.get("data", [])
-            job_ids.extend([job["id"] for job in jobs])
-            logger.info(
-                build_scrape_log_event(
-                    "SCRAPE_LISTING_PAGE",
-                    source="jobsdb",
+            if page_sink is not None:
+                await page_sink(
                     category_id=classification_id,
+                    category_name=category_name,
                     page=page,
-                    jobs=len(jobs),
+                    total_pages=total_pages,
+                    jobs=list(jobs),
                 )
-            )
-            for job in jobs:
-                logger.debug(
-                    build_scrape_log_event(
-                        "SCRAPE_LISTING_JOB",
-                        source="jobsdb",
-                        category_id=classification_id,
-                        source_job_id=job["id"],
-                    )
-                )
+            pages_scraped += 1
+            job_ids.extend([job["id"] for job in jobs])
 
             if on_progress:
                 on_progress(page, total_pages, len(job_ids))
@@ -191,31 +221,30 @@ class CategoryListScraper:
                 delay = random.uniform(self.min_delay, self.max_delay)
                 await asyncio.sleep(delay)
 
+                if on_page_start is not None:
+                    await on_page_start(
+                        category_id=classification_id,
+                        category_name=category_name,
+                        page=page,
+                        total_pages=total_pages,
+                    )
                 result = await self.fetch_page(classification_id, page, client)
                 jobs = result.get("data", [])
+
+                if page_sink is not None:
+                    await page_sink(
+                        category_id=classification_id,
+                        category_name=category_name,
+                        page=page,
+                        total_pages=total_pages,
+                        jobs=list(jobs),
+                    )
+                pages_scraped += 1
 
                 if not jobs:
                     break
 
                 job_ids.extend([job["id"] for job in jobs])
-                logger.info(
-                    build_scrape_log_event(
-                        "SCRAPE_LISTING_PAGE",
-                        source="jobsdb",
-                        category_id=classification_id,
-                        page=page,
-                        jobs=len(jobs),
-                    )
-                )
-                for job in jobs:
-                    logger.debug(
-                        build_scrape_log_event(
-                            "SCRAPE_LISTING_JOB",
-                            source="jobsdb",
-                            category_id=classification_id,
-                            source_job_id=job["id"],
-                        )
-                    )
 
                 if on_progress:
                     on_progress(page, total_pages, len(job_ids))
@@ -225,7 +254,7 @@ class CategoryListScraper:
             "category_name": category_name,
             "job_ids": job_ids,
             "total_count": total_count,
-            "pages_scraped": page,
+            "pages_scraped": pages_scraped,
             "scraped_at": utc_now().isoformat(),
         }
 

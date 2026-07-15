@@ -10,6 +10,7 @@ from typing import Awaitable, Callable
 from app.config import settings
 from app.manual_actions.live_browser_registry import get_live_browser_registry
 from app.scraper.browser_launch import launch_persistent_context_with_fallback
+from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
 from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError, looks_like_interstitial_html
 from app.scraper.proxy_rotation import build_ctgoodjobs_proxy_runtime
@@ -17,6 +18,7 @@ from app.scraper.manual_action import (
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+    build_session_recovery_manual_action,
     resolve_manual_action_cdp_connect_host,
 )
 from app.utils.anti_detection import ExponentialBackoff
@@ -68,6 +70,7 @@ class CTGoodJobsBrowserPageScraper:
         self._sync_page = None
         self._last_page_title: str | None = None
         self._last_page_url: str | None = None
+        self._last_response_status: int | None = None
         self._proxy_runtime = build_ctgoodjobs_proxy_runtime(settings_source=settings)
         self._proxy_lease = None
 
@@ -107,6 +110,38 @@ class CTGoodJobsBrowserPageScraper:
         for attempt in range(self.max_attempts):
             try:
                 html = await self._fetch_page_content(url)
+                access_evidence = classify_public_access_evidence(
+                    status_code=self._last_response_status,
+                    final_url=self._last_page_url or url,
+                    title=self._last_page_title,
+                    text=html if len(html) <= 65536 else html[:4096],
+                )
+                if (
+                    access_evidence is not None
+                    and access_evidence.classification == "ip_blocked"
+                ):
+                    if self._proxy_runtime.enabled:
+                        await self._proxy_runtime.report_challenge(
+                            stage=stage,
+                            lease=self._proxy_lease,
+                        )
+                    logger.warning(
+                        "SCRAPE_FETCH_MANUAL_ACTION source=ctgoodjobs "
+                        "crawl_job_id=%s stage=%s classification=ip_blocked "
+                        "status_code=%s reason=%s",
+                        self.request_payload.get("crawl_job_id"),
+                        stage,
+                        access_evidence.status_code,
+                        access_evidence.reason,
+                    )
+                    raise build_session_recovery_manual_action(
+                        source_site="ctgoodjobs",
+                        stage=stage,
+                        blocked_url=access_evidence.final_url or url,
+                        referer=referer,
+                        classification="ip_blocked",
+                        evidence=access_evidence.to_payload(),
+                    )
                 if self._looks_like_interstitial(html):
                     if self._proxy_runtime.enabled:
                         await self._proxy_runtime.report_challenge(
@@ -114,19 +149,27 @@ class CTGoodJobsBrowserPageScraper:
                             lease=self._proxy_lease,
                         )
                     if attempt == self.max_attempts - 1:
-                        raise ManualActionRequiredError(
+                        challenge_evidence = access_evidence.to_payload() if access_evidence else {
+                            "final_url": self._last_page_url or url,
+                            "status_code": self._last_response_status,
+                            "reason": "interstitial_marker",
+                        }
+                        raise build_session_recovery_manual_action(
                             source_site="ctgoodjobs",
                             stage=stage,
-                            blocked_url=url,
+                            blocked_url=self._last_page_url or url,
                             referer=referer,
-                            message=f"CTGoodJobs {stage} fetch blocked by human verification",
-                            instructions=[
-                                "Open Edge using the listed profile.",
-                                "Visit the blocked URL and complete the verification challenge.",
-                                "Keep the browser open after the challenge is solved.",
-                                "Return to the app and click Resume.",
-                            ],
+                            classification="waf_challenge",
+                            evidence=challenge_evidence,
                         )
+                    logger.warning(
+                        "SCRAPE_FETCH_RETRY source=ctgoodjobs crawl_job_id=%s "
+                        "stage=%s classification=waf_challenge attempt=%s/%s",
+                        self.request_payload.get("crawl_job_id"),
+                        stage,
+                        attempt + 1,
+                        self.max_attempts,
+                    )
                     await self._reset_runtime_for_retry()
                     await backoff.wait(attempt)
                     continue
@@ -158,9 +201,15 @@ class CTGoodJobsBrowserPageScraper:
 
     async def _fetch_page_content(self, url: str) -> str:
         if self.page_content_fetcher is not None:
+            self._last_response_status = None
+            self._last_page_title = None
+            self._last_page_url = url
             return await self.page_content_fetcher(url)
         fetcher = self.sync_page_content_fetcher or self._fetch_page_content_sync
         if self._executor is None:
+            self._last_response_status = None
+            self._last_page_title = None
+            self._last_page_url = url
             return await asyncio.to_thread(fetcher, url)
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, fetcher, url)
@@ -311,6 +360,7 @@ class CTGoodJobsBrowserPageScraper:
         self._runtime_started = False
         self._last_page_title = None
         self._last_page_url = None
+        self._last_response_status = None
         self._proxy_lease = None
 
     async def _cleanup_failed_startup(self, loop) -> None:
@@ -349,8 +399,12 @@ class CTGoodJobsBrowserPageScraper:
     def _fetch_page_content_sync(self, url: str) -> str:
         if not self._runtime_started:
             self._start_sync_runtime()
-        self._sync_page.goto(url, wait_until="domcontentloaded")
+        response = self._sync_page.goto(url, wait_until="domcontentloaded")
         self._sync_page.wait_for_timeout(3000)
+        response_status = getattr(response, "status", None)
+        self._last_response_status = (
+            response_status if type(response_status) is int else None
+        )
         self._last_page_title = self._sync_page.title()
         self._last_page_url = str(getattr(self._sync_page, "url", url) or url)
         return self._sync_page.content()

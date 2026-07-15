@@ -28,25 +28,38 @@ SCRAPER_LOGGER_NAMES = (
 )
 
 
-def redact_url(url: str) -> str:
-    """Mask credentials in connection URLs before logging them."""
+def redact_url(url: str, *, redact_query: bool = False) -> str:
+    """Mask URL credentials and optionally remove query/fragment values."""
     try:
         parsed = urlsplit(url)
     except ValueError:
         return url
 
-    if not parsed.scheme or not parsed.netloc or "@" not in parsed.netloc:
+    if not parsed.scheme or not parsed.netloc:
+        if redact_query and (parsed.query or parsed.fragment):
+            return urlunsplit(
+                (parsed.scheme, parsed.netloc, parsed.path, "", "")
+            )
         return url
 
-    auth, host = parsed.netloc.rsplit("@", 1)
-    username = auth.split(":", 1)[0] if auth else ""
-    if username:
-        safe_auth = f"{username}:***"
-    else:
-        safe_auth = "***"
+    safe_netloc = parsed.netloc
+    if "@" in parsed.netloc:
+        auth, host = parsed.netloc.rsplit("@", 1)
+        username = auth.split(":", 1)[0] if auth else ""
+        safe_auth = f"{username}:***" if username else "***"
+        safe_netloc = f"{safe_auth}@{host}"
+
+    if safe_netloc == parsed.netloc and not redact_query:
+        return url
 
     return urlunsplit(
-        (parsed.scheme, f"{safe_auth}@{host}", parsed.path, parsed.query, parsed.fragment)
+        (
+            parsed.scheme,
+            safe_netloc,
+            parsed.path,
+            "" if redact_query else parsed.query,
+            "" if redact_query else parsed.fragment,
+        )
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import hashlib
 import json
@@ -16,6 +17,7 @@ from app.scraper.manual_action import (
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
+    build_session_recovery_manual_action,
     resolve_manual_action_cdp_connect_host,
 )
 from app.sources.offertoday.constants import (
@@ -54,6 +56,11 @@ _BROWSER_CONTEXT_LOST_MARKERS = (
     "browser has been closed",
     "target closed",
 )
+_BROWSER_FETCH_REJECTION_MARKERS = (
+    "typeerror: failed to fetch",
+    "networkerror when attempting to fetch resource",
+)
+_FAILED_FETCH_URL_SETTLE_DELAYS_SECONDS = (0.0, 0.05, 0.1)
 _OFFERTODAY_DETAIL_URL_TEMPLATE = (
     f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/jobDetail?id=%s&encryptJobId=%s"
 )
@@ -297,39 +304,25 @@ class OfferTodayBrowserRuntime:
             OfferTodayResponseKind.WAF_CHALLENGE,
             OfferTodayResponseKind.IP_BLOCKED,
         }:
-            instructions = {
-                OfferTodayResponseKind.AUTH_EXPIRED: [
-                    "Sign in to OfferToday in the browser profile used by this crawl.",
-                    "Refresh the OfferToday search page, then retry the crawl.",
-                ],
-                OfferTodayResponseKind.WAF_CHALLENGE: [
-                    "Complete the OfferToday verification challenge in the browser.",
-                    "Return to the OfferToday search page, then retry the crawl.",
-                ],
-                OfferTodayResponseKind.IP_BLOCKED: [
-                    "Wait for the OfferToday IP block to clear or use an allowed network.",
-                    "Retry with the authenticated browser session after access is restored.",
-                ],
-            }[result.classification]
-            evidence = (
-                f"classification={result.classification.value}, "
-                f"api_code={result.api_code}"
-            )
-            raise ManualActionRequiredError(
+            raise build_session_recovery_manual_action(
                 source_site="offertoday",
                 stage="browser_session",
-                blocked_url=(result.current_url or f"{OFFERTODAY_BASE_URL}/hk/search"),
-                referer=OFFERTODAY_BASE_URL,
-                message=(
-                    f"OfferToday browser session requires manual action ({evidence}): "
-                    f"{result.message or 'session preflight failed'}"
+                blocked_url=(
+                    result.current_url or f"{OFFERTODAY_BASE_URL}/hk/search"
                 ),
+                referer=OFFERTODAY_BASE_URL,
+                classification=result.classification.value,
+                code=result.api_code,
+                evidence={
+                    "final_url": result.current_url,
+                    "api_code": result.api_code,
+                    "reason": "session_preflight",
+                },
                 resume_context={
                     "classification": result.classification.value,
                     "api_code": result.api_code,
                     "message": result.message,
                 },
-                instructions=instructions,
             )
 
         raise RuntimeError(
@@ -587,9 +580,26 @@ class OfferTodayBrowserRuntime:
             "  };"
             "}"
         )
-        result = await self._page.evaluate(
-            script, {"url": url, "options": fetch_options}
-        )
+        try:
+            result = await self._page.evaluate(
+                script,
+                {"url": url, "options": fetch_options},
+            )
+        except Exception as exc:
+            normalized_message = str(exc or "").lower()
+            if not any(
+                marker in normalized_message
+                for marker in _BROWSER_FETCH_REJECTION_MARKERS
+            ):
+                raise
+            response_url = await self._capture_failed_fetch_url(url)
+            raise OfferTodayTransportError(
+                "OfferToday browser fetch was interrupted",
+                http_status=None,
+                response_url=response_url,
+                payload=None,
+                error_kind="network",
+            ) from exc
         if not isinstance(result, dict):
             raise RuntimeError(
                 "OfferToday browser fetch returned invalid response metadata"
@@ -636,6 +646,23 @@ class OfferTodayBrowserRuntime:
             http_status=http_status,
             response_url=response_url,
         )
+
+    async def _capture_failed_fetch_url(self, fallback_url: str) -> str:
+        """Allow a navigation-aborted fetch to expose its redirect destination."""
+
+        page = self._page
+        current_url = str(getattr(page, "url", "") or fallback_url)
+        if self.is_waf_challenge_url(current_url):
+            return current_url
+
+        for delay_seconds in _FAILED_FETCH_URL_SETTLE_DELAYS_SECONDS:
+            await asyncio.sleep(delay_seconds)
+            candidate_url = str(getattr(page, "url", "") or current_url)
+            if candidate_url:
+                current_url = candidate_url
+            if self.is_waf_challenge_url(current_url):
+                break
+        return current_url
 
     async def _read_csrf_token(self) -> str | None:
         if self._page is None:

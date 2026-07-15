@@ -8,6 +8,7 @@ import asyncio
 import logging
 from pathlib import Path
 import sys
+import time
 from typing import Any, Sequence
 from uuid import uuid4
 
@@ -209,14 +210,15 @@ async def _persist_ctgoodjobs_job(*, canonical_job: dict[str, Any]):
         db.close()
 
 
-async def _run_listing_phase(args, crawl_runtime: CrawlJobRuntime, browser_scraper) -> dict[str, int]:
+async def _run_listing_phase_impl(
+    args,
+    crawl_runtime: CrawlJobRuntime,
+    browser_scraper,
+    *,
+    totals: dict[str, int],
+    current_page_context: dict[str, Any],
+) -> dict[str, int]:
     category_lookup = _categories_by_id()
-    totals = {
-        "pages_processed": 0,
-        "job_ids_collected": 0,
-        "listings_staged": 0,
-        "jobs_skipped_existing": 0,
-    }
 
     for category_id in args.category_ids:
         category = _resolve_category(category_lookup, category_id)
@@ -225,6 +227,8 @@ async def _run_listing_phase(args, crawl_runtime: CrawlJobRuntime, browser_scrap
                 "SCRAPE_LISTING_CATEGORY_START",
                 source=CTGOODJOBS_SOURCE_SITE,
                 crawl_job_id=args.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=args.crawl_mode,
                 category_id=category.source_classification_id,
                 max_pages=args.max_pages,
                 skip_existing=args.skip_existing,
@@ -232,6 +236,27 @@ async def _run_listing_phase(args, crawl_runtime: CrawlJobRuntime, browser_scrap
         )
         for page_number in range(1, int(args.max_pages) + 1):
             url = category_page_url(category.url, page=page_number)
+            current_page_context.update(
+                {
+                    "category_id": category.source_classification_id,
+                    "page": page_number,
+                    "total_pages": int(args.max_pages),
+                    "url": url,
+                }
+            )
+            page_started_at = time.perf_counter()
+            logger.info(
+                build_scrape_log_event(
+                    "SCRAPE_LISTING_PAGE_START",
+                    source=CTGOODJOBS_SOURCE_SITE,
+                    crawl_job_id=args.crawl_job_id,
+                    crawl_phase="listing",
+                    crawl_mode=args.crawl_mode,
+                    category_id=category.source_classification_id,
+                    current_page=page_number,
+                    total_pages=int(args.max_pages),
+                )
+            )
             html = await browser_scraper.fetch_page_html(
                 url,
                 stage="category_page",
@@ -282,12 +307,22 @@ async def _run_listing_phase(args, crawl_runtime: CrawlJobRuntime, browser_scrap
                     "SCRAPE_LISTING_BATCH_STAGED",
                     source=CTGOODJOBS_SOURCE_SITE,
                     crawl_job_id=args.crawl_job_id,
+                    crawl_phase="listing",
+                    crawl_mode=args.crawl_mode,
                     category_id=category.source_classification_id,
                     current_page=page_number,
                     total_pages=int(args.max_pages),
                     job_ids=batch_result.job_ids_seen,
                     listings_staged=batch_result.rows_staged,
                     jobs_skipped_existing=batch_result.skipped_existing,
+                    elapsed_ms=max(
+                        int((time.perf_counter() - page_started_at) * 1000),
+                        0,
+                    ),
+                    cumulative_pages=totals["pages_processed"],
+                    cumulative_job_ids=totals["job_ids_collected"],
+                    cumulative_listings_staged=totals["listings_staged"],
+                    cumulative_skipped=totals["jobs_skipped_existing"],
                 )
             )
             crawl_runtime.write_progress_event(
@@ -322,6 +357,90 @@ async def _run_listing_phase(args, crawl_runtime: CrawlJobRuntime, browser_scrap
     return totals
 
 
+async def _run_listing_phase(
+    args,
+    crawl_runtime: CrawlJobRuntime,
+    browser_scraper,
+) -> dict[str, int]:
+    totals = {
+        "pages_processed": 0,
+        "job_ids_collected": 0,
+        "listings_staged": 0,
+        "jobs_skipped_existing": 0,
+    }
+    current_page_context: dict[str, Any] = {}
+    phase_started_at = time.perf_counter()
+    outcome = "completed"
+    try:
+        return await _run_listing_phase_impl(
+            args,
+            crawl_runtime,
+            browser_scraper,
+            totals=totals,
+            current_page_context=current_page_context,
+        )
+    except ManualActionRequiredError as exc:
+        outcome = "manual_action_required"
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_MANUAL_ACTION",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=args.crawl_mode,
+                category_id=current_page_context.get("category_id"),
+                current_page=current_page_context.get("page"),
+                total_pages=current_page_context.get("total_pages"),
+                classification=exc.classification,
+                code=exc.code,
+                stage=exc.stage,
+                blocked_url=exc.blocked_url,
+                cumulative_pages=totals["pages_processed"],
+                cumulative_job_ids=totals["job_ids_collected"],
+                cumulative_listings_staged=totals["listings_staged"],
+            )
+        )
+        raise
+    except Exception as exc:
+        outcome = "failed"
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_PAGE_FAIL",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=args.crawl_mode,
+                category_id=current_page_context.get("category_id"),
+                current_page=current_page_context.get("page"),
+                total_pages=current_page_context.get("total_pages"),
+                error_type=type(exc).__name__,
+                cumulative_pages=totals["pages_processed"],
+                cumulative_job_ids=totals["job_ids_collected"],
+                cumulative_listings_staged=totals["listings_staged"],
+            )
+        )
+        raise
+    finally:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_DONE",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=args.crawl_mode,
+                outcome=outcome,
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                pages_processed=totals["pages_processed"],
+                job_ids_collected=totals["job_ids_collected"],
+                listings_staged=totals["listings_staged"],
+                jobs_skipped_existing=totals["jobs_skipped_existing"],
+            )
+        )
+
+
 async def _run_detail_phase(
     args,
     crawl_runtime: CrawlJobRuntime,
@@ -330,16 +449,47 @@ async def _run_detail_phase(
     source_listing_crawl_job_id: str | None,
     detail_scope: str,
 ) -> dict[str, int]:
-    detail_targets = crawl_runtime.load_detail_targets(
-        source_site=CTGOODJOBS_SOURCE_SITE,
-        request_payload=_build_detail_request_payload(args, source_listing_crawl_job_id=source_listing_crawl_job_id),
-        detail_crawl_job_id=args.crawl_job_id,
-    )
+    phase_started_at = time.perf_counter()
+    try:
+        detail_targets = crawl_runtime.load_detail_targets(
+            source_site=CTGOODJOBS_SOURCE_SITE,
+            request_payload=_build_detail_request_payload(
+                args,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+            ),
+            detail_crawl_job_id=args.crawl_job_id,
+        )
+    except Exception as exc:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_DONE",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=args.crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_scope=detail_scope,
+                outcome="failed",
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                detail_target_rows=0,
+                processed=0,
+                succeeded=0,
+                failed=0,
+                saved=0,
+                error_type=type(exc).__name__,
+            )
+        )
+        raise
     logger.info(
         build_scrape_log_event(
             "SCRAPE_DETAIL_TARGETS_LOADED",
             source=CTGOODJOBS_SOURCE_SITE,
             crawl_job_id=args.crawl_job_id,
+            crawl_phase="detail",
+            crawl_mode=args.crawl_mode,
             source_listing_crawl_job_id=source_listing_crawl_job_id,
             detail_scope=detail_scope,
             detail_selected_rows=detail_targets.selected_rows,
@@ -355,6 +505,37 @@ async def _run_detail_phase(
         "failed": 0,
         "manual_action_required": 0,
     }
+
+    def log_detail_done(outcome: str) -> None:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_DONE",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=args.crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
+                detail_scope=detail_scope,
+                outcome=outcome,
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                detail_selected_rows=counts["selected_rows"],
+                detail_skipped_existing_rows=counts["skipped_existing_rows"],
+                detail_target_rows=counts["target_rows"],
+                processed=(
+                    counts["completed"]
+                    + counts["failed"]
+                    + counts["manual_action_required"]
+                ),
+                succeeded=counts["completed"],
+                failed=counts["failed"],
+                manual_action_required=counts["manual_action_required"],
+                saved=counts["completed"],
+            )
+        )
+
     if detail_targets.target_rows == 0:
         logger.warning(
             build_scrape_log_event(
@@ -371,11 +552,15 @@ async def _run_detail_phase(
     category_lookup = _categories_by_id()
 
     for index, target in enumerate(detail_targets.targets, start=1):
+        item_started_at = time.perf_counter()
         logger.info(
             build_scrape_log_event(
                 "SCRAPE_DETAIL_ITEM_START",
                 source=CTGOODJOBS_SOURCE_SITE,
                 crawl_job_id=args.crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=args.crawl_mode,
+                source_listing_crawl_job_id=source_listing_crawl_job_id,
                 detail_index=index,
                 detail_total=detail_targets.target_rows,
                 source_job_id=target["source_job_id"],
@@ -392,8 +577,8 @@ async def _run_detail_phase(
             or listing_payload.get("source_classification_id")
             or ""
         ).strip()
-        category = _resolve_category(category_lookup, category_id)
         try:
+            category = _resolve_category(category_lookup, category_id)
             html = await browser_scraper.fetch_page_html(
                 target["source_url"],
                 stage="detail_page",
@@ -429,10 +614,24 @@ async def _run_detail_phase(
                     "SCRAPE_DETAIL_ITEM_OK",
                     source=CTGOODJOBS_SOURCE_SITE,
                     crawl_job_id=args.crawl_job_id,
+                    crawl_phase="detail",
+                    crawl_mode=args.crawl_mode,
+                    source_listing_crawl_job_id=source_listing_crawl_job_id,
                     detail_index=index,
                     detail_total=detail_targets.target_rows,
                     source_job_id=target["source_job_id"],
                     published_job_id=saved_job_id,
+                    elapsed_ms=max(
+                        int((time.perf_counter() - item_started_at) * 1000),
+                        0,
+                    ),
+                    outcome="success",
+                    cumulative_processed=(
+                        counts["completed"] + counts["failed"]
+                    ),
+                    cumulative_succeeded=counts["completed"],
+                    cumulative_failed=counts["failed"],
+                    cumulative_saved=counts["completed"],
                 )
             )
         except ManualActionRequiredError as exc:
@@ -446,11 +645,30 @@ async def _run_detail_phase(
                     "SCRAPE_DETAIL_ITEM_MANUAL_ACTION",
                     source=CTGOODJOBS_SOURCE_SITE,
                     crawl_job_id=args.crawl_job_id,
+                    crawl_phase="detail",
+                    crawl_mode=args.crawl_mode,
+                    source_listing_crawl_job_id=source_listing_crawl_job_id,
                     detail_index=index,
                     detail_total=detail_targets.target_rows,
                     source_job_id=target["source_job_id"],
                     stage=exc.stage,
                     blocked_url=exc.blocked_url,
+                    classification=exc.classification,
+                    code=exc.code,
+                    elapsed_ms=max(
+                        int((time.perf_counter() - item_started_at) * 1000),
+                        0,
+                    ),
+                    outcome="manual_action_required",
+                    cumulative_processed=(
+                        counts["completed"]
+                        + counts["failed"]
+                        + 1
+                    ),
+                    cumulative_succeeded=counts["completed"],
+                    cumulative_failed=counts["failed"],
+                    cumulative_manual_action=1,
+                    cumulative_saved=counts["completed"],
                 )
             )
             crawl_runtime.mark_manual_action_required(
@@ -466,6 +684,7 @@ async def _run_detail_phase(
                 error_message=exc.message,
             )
             counts["manual_action_required"] = 1
+            log_detail_done("manual_action_required")
             return counts
         except Exception as exc:
             crawl_runtime.mark_detail_failed(
@@ -479,10 +698,24 @@ async def _run_detail_phase(
                     "SCRAPE_DETAIL_ITEM_FAIL",
                     source=CTGOODJOBS_SOURCE_SITE,
                     crawl_job_id=args.crawl_job_id,
+                    crawl_phase="detail",
+                    crawl_mode=args.crawl_mode,
+                    source_listing_crawl_job_id=source_listing_crawl_job_id,
                     detail_index=index,
                     detail_total=detail_targets.target_rows,
                     source_job_id=target["source_job_id"],
-                    error=exc,
+                    error_type=type(exc).__name__,
+                    elapsed_ms=max(
+                        int((time.perf_counter() - item_started_at) * 1000),
+                        0,
+                    ),
+                    outcome="failed",
+                    cumulative_processed=(
+                        counts["completed"] + counts["failed"]
+                    ),
+                    cumulative_succeeded=counts["completed"],
+                    cumulative_failed=counts["failed"],
+                    cumulative_saved=counts["completed"],
                 )
             )
 
@@ -502,6 +735,7 @@ async def _run_detail_phase(
             },
         )
 
+    log_detail_done("completed")
     return counts
 
 
@@ -593,6 +827,18 @@ async def main(argv: Sequence[str] | None = None) -> int:
                     detail_scope=detail_scope,
                 )
                 if detail_summary.get("manual_action_required"):
+                    logger.warning(
+                        build_scrape_log_event(
+                            "SCRAPE_EXECUTOR_MANUAL_ACTION",
+                            source=CTGOODJOBS_SOURCE_SITE,
+                            crawl_job_id=args.crawl_job_id,
+                            crawl_phase="detail",
+                            crawl_mode=args.crawl_mode,
+                            source_listing_crawl_job_id=(
+                                source_listing_crawl_job_id
+                            ),
+                        )
+                    )
                     return 1
 
             crawl_runtime.mark_completed(
@@ -637,6 +883,19 @@ async def main(argv: Sequence[str] | None = None) -> int:
         resume_source_listing_crawl_job_id = source_listing_crawl_job_id
         if resume_crawl_phase == "listing":
             resume_source_listing_crawl_job_id = str(args.crawl_job_id)
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_EXECUTOR_MANUAL_ACTION",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase=resume_crawl_phase,
+                crawl_mode=args.crawl_mode,
+                classification=exc.classification,
+                code=exc.code,
+                stage=exc.stage,
+                blocked_url=exc.blocked_url,
+            )
+        )
         crawl_runtime.mark_manual_action_required(
             crawl_job_id=args.crawl_job_id,
             source_site=CTGOODJOBS_SOURCE_SITE,
@@ -651,7 +910,16 @@ async def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
     except Exception as exc:
-        logger.exception("CTGoodJobs crawl failed")
+        logger.exception(
+            build_scrape_log_event(
+                "SCRAPE_EXECUTOR_FAIL",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase=args.crawl_phase,
+                crawl_mode=args.crawl_mode,
+                error_type=type(exc).__name__,
+            )
+        )
         crawl_runtime.mark_failed(
             crawl_job_id=args.crawl_job_id,
             source_site=CTGOODJOBS_SOURCE_SITE,

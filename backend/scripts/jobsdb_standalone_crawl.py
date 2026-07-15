@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import logging
 from pathlib import Path
 import sys
+import time
 from typing import Any, AsyncIterator, Sequence
 from uuid import uuid4
 
@@ -160,51 +161,224 @@ def _build_manual_action_payload(
 
 async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatchPersistResult:
     scraper = CategoryListScraper()
-    page_payloads: list[dict[str, Any]] = []
+    phase_started_at = time.perf_counter()
     pages_processed = 0
+    rows_created = 0
+    seen_source_job_ids: dict[str, None] = {}
+    created_source_job_ids: dict[str, None] = {}
+    preexisting_staged_source_job_ids: dict[str, None] = {}
+    published_source_job_ids: dict[str, None] = {}
+    skipped_existing_source_job_ids: dict[str, None] = {}
+    current_page_context: dict[str, Any] = {}
+    page_started_at: dict[tuple[int, int], float] = {}
+    phase_outcome = "completed"
 
-    for category_id in args.category_ids:
+    async def on_page_start(
+        *,
+        category_id: int,
+        category_name: str,
+        page: int,
+        total_pages: int,
+    ) -> None:
+        current_page_context.update(
+            {
+                "category_id": category_id,
+                "category_name": category_name,
+                "page": page,
+                "total_pages": total_pages,
+            }
+        )
+        page_started_at[(category_id, page)] = time.perf_counter()
         logger.info(
             build_scrape_log_event(
-                "SCRAPE_LISTING_CATEGORY_START",
+                "SCRAPE_LISTING_PAGE_START",
                 source=JOBSDB_SOURCE_SITE,
                 crawl_job_id=args.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=args.crawl_mode,
                 category_id=category_id,
-                max_pages=args.max_pages,
-                skip_existing=args.skip_existing,
+                category_name=category_name,
+                current_page=page,
+                total_pages=total_pages,
             )
         )
-        result = await scraper.scrape_category(category_id, max_pages=args.max_pages)
-        pages_processed += int(result.get("pages_scraped") or 0)
-        for source_job_id in result.get("job_ids", []):
-            page_payloads.append(
-                {
-                    "source_job_id": str(source_job_id),
-                    "source_url": f"https://hk.jobsdb.com/job/{source_job_id}",
-                    "source_classification_id": str(category_id),
-                    "source_classification_name": None,
-                    "listing_payload": {},
-                }
-            )
-    batch_result = crawl_runtime.stage_listing_batch(
-        crawl_job_id=args.crawl_job_id,
-        source_site=JOBSDB_SOURCE_SITE,
-        payloads=page_payloads,
-        skip_existing=args.skip_existing,
-    )
-    logger.info(
-        build_scrape_log_event(
-            "SCRAPE_LISTING_BATCH_STAGED",
-            source=JOBSDB_SOURCE_SITE,
+
+    async def stage_page(
+        *,
+        category_id: int,
+        category_name: str,
+        page: int,
+        total_pages: int,
+        jobs: list[dict[str, Any]],
+    ) -> None:
+        nonlocal pages_processed, rows_created
+        page_payloads = [
+            {
+                "source_job_id": source_job_id,
+                "source_url": f"https://hk.jobsdb.com/job/{source_job_id}",
+                "source_classification_id": str(category_id),
+                "source_classification_name": None,
+                "listing_page": page,
+                "listing_payload": {},
+            }
+            for job in jobs
+            if (source_job_id := str(job.get("id") or "").strip())
+        ]
+        batch_result = crawl_runtime.stage_listing_batch(
             crawl_job_id=args.crawl_job_id,
-            categories=len(args.category_ids),
-            pages_processed=pages_processed,
-            job_ids=batch_result.job_ids_seen,
-            listings_staged=batch_result.rows_staged,
-            jobs_skipped_existing=batch_result.skipped_existing,
+            source_site=JOBSDB_SOURCE_SITE,
+            payloads=page_payloads,
+            skip_existing=args.skip_existing,
         )
+        pages_processed += 1
+        rows_created += int(batch_result.rows_created)
+        for source_job_id in (
+            str(payload["source_job_id"]) for payload in page_payloads
+        ):
+            seen_source_job_ids.setdefault(source_job_id, None)
+        for source_job_id in batch_result.created_source_job_ids:
+            created_source_job_ids.setdefault(str(source_job_id), None)
+        for source_job_id in batch_result.preexisting_staged_source_job_ids:
+            preexisting_staged_source_job_ids.setdefault(str(source_job_id), None)
+        for source_job_id in batch_result.published_source_job_ids:
+            published_source_job_ids.setdefault(str(source_job_id), None)
+            if args.skip_existing:
+                skipped_existing_source_job_ids.setdefault(str(source_job_id), None)
+
+        started_at = page_started_at.pop((category_id, page), None)
+        elapsed_ms = (
+            max(int((time.perf_counter() - started_at) * 1000), 0)
+            if started_at is not None
+            else 0
+        )
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_BATCH_STAGED",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=args.crawl_mode,
+                category_id=category_id,
+                category_name=category_name,
+                current_page=page,
+                total_pages=total_pages,
+                elapsed_ms=elapsed_ms,
+                job_ids=batch_result.job_ids_seen,
+                listings_staged=batch_result.rows_staged,
+                jobs_skipped_existing=batch_result.skipped_existing,
+                cumulative_pages=pages_processed,
+                cumulative_job_ids=len(seen_source_job_ids),
+                cumulative_listings_staged=rows_created,
+                cumulative_skipped=len(skipped_existing_source_job_ids),
+            )
+        )
+        crawl_runtime.write_progress_event(
+            crawl_job_id=args.crawl_job_id,
+            event_type="crawl.page_processed",
+            emitted_by="jobsdb-crawl",
+            payload={
+                "phase": 1,
+                "category_id": category_id,
+                "current_page": page,
+                "total_pages": total_pages,
+                "job_ids_collected": len(seen_source_job_ids),
+                "listings_staged": rows_created,
+                "jobs_skipped_existing": len(skipped_existing_source_job_ids),
+            },
+        )
+
+    try:
+        for category_id in args.category_ids:
+            logger.info(
+                build_scrape_log_event(
+                    "SCRAPE_LISTING_CATEGORY_START",
+                    source=JOBSDB_SOURCE_SITE,
+                    crawl_job_id=args.crawl_job_id,
+                    crawl_phase="listing",
+                    crawl_mode=args.crawl_mode,
+                    category_id=category_id,
+                    max_pages=args.max_pages,
+                    skip_existing=args.skip_existing,
+                )
+            )
+            await scraper.scrape_category(
+                category_id,
+                max_pages=args.max_pages,
+                page_sink=stage_page,
+                on_page_start=on_page_start,
+            )
+    except ManualActionRequiredError as exc:
+        phase_outcome = "manual_action_required"
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_MANUAL_ACTION",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=args.crawl_mode,
+                category_id=current_page_context.get("category_id"),
+                current_page=current_page_context.get("page"),
+                total_pages=current_page_context.get("total_pages"),
+                classification=exc.classification,
+                code=exc.code,
+                stage=exc.stage,
+                blocked_url=exc.blocked_url,
+                cumulative_pages=pages_processed,
+                cumulative_job_ids=len(seen_source_job_ids),
+                cumulative_listings_staged=rows_created,
+            )
+        )
+        raise
+    except Exception as exc:
+        phase_outcome = "failed"
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_PAGE_FAIL",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=args.crawl_mode,
+                category_id=current_page_context.get("category_id"),
+                current_page=current_page_context.get("page"),
+                total_pages=current_page_context.get("total_pages"),
+                error_type=type(exc).__name__,
+                cumulative_pages=pages_processed,
+                cumulative_job_ids=len(seen_source_job_ids),
+                cumulative_listings_staged=rows_created,
+            )
+        )
+        raise
+    finally:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_LISTING_DONE",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="listing",
+                crawl_mode=args.crawl_mode,
+                outcome=phase_outcome,
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                categories=len(args.category_ids),
+                pages_processed=pages_processed,
+                job_ids_collected=len(seen_source_job_ids),
+                listings_staged=rows_created,
+                jobs_skipped_existing=len(skipped_existing_source_job_ids),
+            )
+        )
+
+    return ListingBatchPersistResult(
+        rows_created=rows_created,
+        created_source_job_ids=tuple(created_source_job_ids),
+        preexisting_staged_source_job_ids=tuple(
+            preexisting_staged_source_job_ids
+        ),
+        published_source_job_ids=tuple(published_source_job_ids),
+        job_ids_seen=len(seen_source_job_ids),
+        skipped_existing=len(skipped_existing_source_job_ids),
     )
-    return batch_result
 
 
 def _should_use_headed_detail_scraper(args) -> bool:
@@ -235,16 +409,45 @@ async def _detail_scraper_context(args) -> AsyncIterator[Any]:
 
 
 async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, int]:
-    detail_targets = crawl_runtime.load_detail_targets(
-        source_site=JOBSDB_SOURCE_SITE,
-        request_payload=_build_detail_request_payload(args),
-        detail_crawl_job_id=args.crawl_job_id,
-    )
+    phase_started_at = time.perf_counter()
+    try:
+        detail_targets = crawl_runtime.load_detail_targets(
+            source_site=JOBSDB_SOURCE_SITE,
+            request_payload=_build_detail_request_payload(args),
+            detail_crawl_job_id=args.crawl_job_id,
+        )
+    except Exception as exc:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_DONE",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=args.crawl_mode,
+                source_listing_crawl_job_id=(
+                    _resolve_source_listing_crawl_job_id(args)
+                ),
+                outcome="failed",
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                detail_target_rows=0,
+                processed=0,
+                succeeded=0,
+                failed=0,
+                saved=0,
+                error_type=type(exc).__name__,
+            )
+        )
+        raise
     logger.info(
         build_scrape_log_event(
             "SCRAPE_DETAIL_TARGETS_LOADED",
             source=JOBSDB_SOURCE_SITE,
             crawl_job_id=args.crawl_job_id,
+            crawl_phase="detail",
+            crawl_mode=args.crawl_mode,
             source_listing_crawl_job_id=_resolve_source_listing_crawl_job_id(args),
             detail_selected_rows=detail_targets.selected_rows,
             detail_skipped_existing_rows=detail_targets.skipped_existing_rows,
@@ -258,20 +461,43 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
         "target_rows": int(detail_targets.target_rows),
         "completed": 0,
         "failed": 0,
+        "manual_action_required": 0,
     }
+    if detail_targets.target_rows == 0:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_TARGETS_EMPTY",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=args.crawl_mode,
+                source_listing_crawl_job_id=(
+                    _resolve_source_listing_crawl_job_id(args)
+                ),
+                detail_statuses=",".join(args.detail_statuses),
+                detail_limit=args.detail_limit,
+            )
+        )
     company_repository = CompanyRepository()
     job_repository = JobRepository()
     ingest_service = IngestWorkerService()
     db = SessionLocal()
+    phase_outcome = "completed"
 
     try:
         async with _detail_scraper_context(args) as detail_scraper:
             for index, target in enumerate(detail_targets.targets, start=1):
+                item_started_at = time.perf_counter()
                 logger.info(
                     build_scrape_log_event(
                         "SCRAPE_DETAIL_ITEM_START",
                         source=JOBSDB_SOURCE_SITE,
                         crawl_job_id=args.crawl_job_id,
+                        crawl_phase="detail",
+                        crawl_mode=args.crawl_mode,
+                        source_listing_crawl_job_id=(
+                            _resolve_source_listing_crawl_job_id(args)
+                        ),
                         detail_index=index,
                         detail_total=detail_targets.target_rows,
                         source_job_id=target["source_job_id"],
@@ -314,10 +540,29 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                             "SCRAPE_DETAIL_ITEM_OK",
                             source=JOBSDB_SOURCE_SITE,
                             crawl_job_id=args.crawl_job_id,
+                            crawl_phase="detail",
+                            crawl_mode=args.crawl_mode,
+                            source_listing_crawl_job_id=(
+                                _resolve_source_listing_crawl_job_id(args)
+                            ),
                             detail_index=index,
                             detail_total=detail_targets.target_rows,
                             source_job_id=target["source_job_id"],
                             published_job_id=published_job_id,
+                            elapsed_ms=max(
+                                int(
+                                    (time.perf_counter() - item_started_at)
+                                    * 1000
+                                ),
+                                0,
+                            ),
+                            outcome="success",
+                            cumulative_processed=(
+                                counts["completed"] + counts["failed"]
+                            ),
+                            cumulative_succeeded=counts["completed"],
+                            cumulative_failed=counts["failed"],
+                            cumulative_saved=counts["completed"],
                         )
                     )
                 except ManualActionRequiredError as exc:
@@ -327,16 +572,43 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                         detail_crawl_job_id=args.crawl_job_id,
                         error_message=exc.message,
                     )
+                    counts["manual_action_required"] += 1
                     logger.warning(
                         build_scrape_log_event(
                             "SCRAPE_DETAIL_ITEM_MANUAL_ACTION",
                             source=JOBSDB_SOURCE_SITE,
                             crawl_job_id=args.crawl_job_id,
+                            crawl_phase="detail",
+                            crawl_mode=args.crawl_mode,
+                            source_listing_crawl_job_id=(
+                                _resolve_source_listing_crawl_job_id(args)
+                            ),
                             detail_index=index,
                             detail_total=detail_targets.target_rows,
                             source_job_id=target["source_job_id"],
                             stage=exc.stage,
                             blocked_url=exc.blocked_url,
+                            classification=exc.classification,
+                            code=exc.code,
+                            elapsed_ms=max(
+                                int(
+                                    (time.perf_counter() - item_started_at)
+                                    * 1000
+                                ),
+                                0,
+                            ),
+                            outcome="manual_action_required",
+                            cumulative_processed=(
+                                counts["completed"]
+                                + counts["failed"]
+                                + counts["manual_action_required"]
+                            ),
+                            cumulative_succeeded=counts["completed"],
+                            cumulative_failed=counts["failed"],
+                            cumulative_manual_action=(
+                                counts["manual_action_required"]
+                            ),
+                            cumulative_saved=counts["completed"],
                         )
                     )
                     raise
@@ -353,10 +625,29 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                             "SCRAPE_DETAIL_ITEM_FAIL",
                             source=JOBSDB_SOURCE_SITE,
                             crawl_job_id=args.crawl_job_id,
+                            crawl_phase="detail",
+                            crawl_mode=args.crawl_mode,
+                            source_listing_crawl_job_id=(
+                                _resolve_source_listing_crawl_job_id(args)
+                            ),
                             detail_index=index,
                             detail_total=detail_targets.target_rows,
                             source_job_id=target["source_job_id"],
-                            error=exc,
+                            error_type=type(exc).__name__,
+                            elapsed_ms=max(
+                                int(
+                                    (time.perf_counter() - item_started_at)
+                                    * 1000
+                                ),
+                                0,
+                            ),
+                            outcome="failed",
+                            cumulative_processed=(
+                                counts["completed"] + counts["failed"]
+                            ),
+                            cumulative_succeeded=counts["completed"],
+                            cumulative_failed=counts["failed"],
+                            cumulative_saved=counts["completed"],
                         )
                     )
                 crawl_runtime.write_progress_event(
@@ -374,8 +665,43 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                         "detail_target_rows": counts["target_rows"],
                     },
                 )
+    except ManualActionRequiredError:
+        phase_outcome = "manual_action_required"
+        raise
+    except Exception:
+        phase_outcome = "failed"
+        raise
     finally:
         db.close()
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_DONE",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=args.crawl_mode,
+                source_listing_crawl_job_id=(
+                    _resolve_source_listing_crawl_job_id(args)
+                ),
+                outcome=phase_outcome,
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                detail_selected_rows=counts["selected_rows"],
+                detail_skipped_existing_rows=counts["skipped_existing_rows"],
+                detail_target_rows=counts["target_rows"],
+                processed=(
+                    counts["completed"]
+                    + counts["failed"]
+                    + counts["manual_action_required"]
+                ),
+                succeeded=counts["completed"],
+                failed=counts["failed"],
+                manual_action_required=counts["manual_action_required"],
+                saved=counts["completed"],
+            )
+        )
 
     return counts
 
@@ -438,6 +764,19 @@ async def main(argv: Sequence[str] | None = None) -> int:
                     },
                 )
             except ManualActionRequiredError as exc:
+                logger.warning(
+                    build_scrape_log_event(
+                        "SCRAPE_EXECUTOR_MANUAL_ACTION",
+                        source=JOBSDB_SOURCE_SITE,
+                        crawl_job_id=args.crawl_job_id,
+                        crawl_phase="listing",
+                        crawl_mode=args.crawl_mode,
+                        classification=exc.classification,
+                        code=exc.code,
+                        stage=exc.stage,
+                        blocked_url=exc.blocked_url,
+                    )
+                )
                 crawl_runtime.mark_manual_action_required(
                     crawl_job_id=args.crawl_job_id,
                     source_site=JOBSDB_SOURCE_SITE,
@@ -451,6 +790,19 @@ async def main(argv: Sequence[str] | None = None) -> int:
             try:
                 detail_result = await run_detail_phase(args, crawl_runtime)
             except ManualActionRequiredError as exc:
+                logger.warning(
+                    build_scrape_log_event(
+                        "SCRAPE_EXECUTOR_MANUAL_ACTION",
+                        source=JOBSDB_SOURCE_SITE,
+                        crawl_job_id=args.crawl_job_id,
+                        crawl_phase="detail",
+                        crawl_mode=args.crawl_mode,
+                        classification=exc.classification,
+                        code=exc.code,
+                        stage=exc.stage,
+                        blocked_url=exc.blocked_url,
+                    )
+                )
                 crawl_runtime.mark_manual_action_required(
                     crawl_job_id=args.crawl_job_id,
                     source_site=JOBSDB_SOURCE_SITE,
@@ -500,7 +852,16 @@ async def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     except Exception as exc:
-        logger.exception("JobsDB crawl failed")
+        logger.exception(
+            build_scrape_log_event(
+                "SCRAPE_EXECUTOR_FAIL",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase=args.crawl_phase,
+                crawl_mode=args.crawl_mode,
+                error_type=type(exc).__name__,
+            )
+        )
         crawl_runtime.mark_failed(
             crawl_job_id=args.crawl_job_id,
             source_site=JOBSDB_SOURCE_SITE,
