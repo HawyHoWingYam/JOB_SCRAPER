@@ -173,3 +173,38 @@ Implemented stable crawl-task ordering, listing-bound OfferToday detail scope, r
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Cross-source IP-block recovery and crawl observability
+
+**Date**: 2026-07-15
+**Task**: Cross-source IP-block recovery and crawl observability
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Added source-aware IP-block pause/resume, cross-source crawl-stage logging, focused regression coverage, specs, and verified a live OfferToday IP-block task.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `39195543` | (see git log) |
+| `b27e5557` | (see git log) |
+| `c83eae62` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
