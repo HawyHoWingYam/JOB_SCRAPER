@@ -373,3 +373,39 @@ Fixed Crawl Tasks manual-action projection to preserve resumable recovery metada
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Harden CTGoodJobs recovery and crawl task metrics
+
+**Date**: 2026-07-15
+**Task**: Harden CTGoodJobs recovery and crawl task metrics
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Paused CTGoodJobs immediately on verification evidence, added conservative unavailable and content-anomaly handling, normalized cross-source detail metrics, verified rebuilt healthy services, and retained OfferToday segment/backlog metrics.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ad950cc0` | (see git log) |
+| `38af8cec` | (see git log) |
+| `6c49b6b9` | (see git log) |
+| `8876896d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
