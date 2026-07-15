@@ -4,7 +4,7 @@ function formatCount(value) {
 
 export function formatScraperSourceLabel(sourceSite) {
     if (sourceSite === 'ctgoodjobs') {
-        return 'CTgoodjobs';
+        return 'CTGoodJobs';
     }
 
     if (sourceSite === 'jobsdb') {
