@@ -319,6 +319,13 @@ CrawlJobDispatchService.resume_crawl_job(
     requested_by=None,
     strategy: Literal["fresh_profile", "reuse_open_browser"] | None = None,
 ) -> CrawlJob
+
+OfferTodayBrowserRuntime._fetch_json_response(
+    url,
+    *,
+    method,
+    payload=None,
+) -> _OfferTodayHttpJsonResponse
 ```
 
 ```http
@@ -371,15 +378,45 @@ preferred_resume_strategy = "reuse_open_browser"
 
 For `ip_blocked`, `code` is exact integer `-1000035`; the message and
 instructions explicitly say to change the public IP/network, confirm access,
-and resume the same crawl. Listing evidence records the hard-stop observation.
-Detail evidence includes the blocked `source_job_id`, listing IDs,
-`detail_index`, and `detail_total`.
+and resume the same crawl. Listing evidence records the hard-stop observation,
+blocked response URL, exact code, page count, and accepted-ID count; it never
+persists an unbounded accepted-ID list. Detail evidence includes the blocked
+`source_job_id`, listing IDs, `detail_index`, and `detail_total`.
 
 `resume_context` must contain enough data to redispatch the same phase. Listing
 context includes the search categories/keywords and page budget. Detail context
 includes `source_listing_crawl_job_id`, detail statuses, and detail limit. A
 detail resume selects `manual_action_required` and `pending` targets; completed
 targets are not reset or fetched again.
+
+#### Browser-fetch redirect race
+
+OfferToday may navigate the page to `/web/passport/cm/verify.html` while an
+in-page `window.fetch()` is active. Playwright then rejects `page.evaluate()`
+with `TypeError: Failed to fetch` before an API payload exists.
+
+`OfferTodayBrowserRuntime._fetch_json_response()` handles only recognized
+browser-fetch rejection messages. It gives the page URL a bounded settle
+window (currently at most 150 ms), captures the post-error `page.url`, and
+raises `OfferTodayTransportError(error_kind="network", response_url=...)`.
+Programming/context errors still propagate unchanged.
+
+`classify_offertoday_response()` parses the verification URL's exact integer
+query code before applying the generic verify-path rule:
+
+```text
+verify URL code=-1000035 -> ip_blocked, retryable=false, stop_batch=true
+other verify URL          -> waf_challenge, retryable=false, stop_batch=true
+failed fetch on normal URL -> transient_transport, retryable=true
+```
+
+`ListingPageObservation.response_url` carries this evidence through the
+production listing runner. The frozen historical
+`listing_observation_to_payload()` serializer always omits the new field;
+`_production_listing_observation_payload()` adds it only to production crawl
+events. The full URL remains in the durable manual-action payload, while
+structured logs strip query/fragment values and log `classification` / `code`
+separately.
 
 #### Legacy event normalization
 
@@ -430,6 +467,10 @@ dispatcher rejects any direct resume attempt.
 
 | Condition | Required result |
 |---|---|
+| `page.evaluate()` fails and settled page URL has `code=-1000035` | Classify one non-retryable `ip_blocked` attempt, preserve URL/code, and pause |
+| `page.evaluate()` fails on a normal page URL | Keep `transient_transport`; use the bounded retry policy |
+| Non-fetch Playwright programming/context error | Propagate unchanged; do not normalize as network/IP |
+| Verify URL has another or missing code | Classify `waf_challenge`, not `ip_blocked` |
 | Listing response is `ip_blocked` | Persist complete session-recovery payload, stop listing, and do not load details |
 | Detail response is `ip_blocked` | Persist metrics and complete session-recovery payload, stop before later targets, and do not mark the crawl completed |
 | Legacy event lacks resume/browser fields but proves a resumable classification | Normalize at read time and expose the recovered browser/resume contract |
@@ -448,6 +489,9 @@ dispatcher rejects any direct resume attempt.
   completed results, shows change-IP guidance, opens the registered host
   profile, and after operator verification resumes with target 191/pending
   work rather than resetting the cohort.
+- **Good:** Listing fetch aborts while the page redirects to
+  `verify.html?code=-1000035`. One attempt is recorded, the exact URL/code reach
+  the durable manual action, and no transient retry or detail request occurs.
 - **Base:** An old OfferToday event contains only `classification=ip_blocked`
   in its resume context. Snapshot, helper, and dispatcher independently
   normalize it to the same actionable contract without mutating the event.
@@ -456,23 +500,25 @@ dispatcher rejects any direct resume attempt.
   browser and reuse fails despite a visible verified page.
 - **Bad:** An identity conflict is normalized as generic human verification.
   This hides the integrity problem and permits an unsafe automatic resume.
+- **Bad:** The rejected fetch is classified from the original API URL before
+  the page URL settles. The IP block becomes a generic transport retry and the
+  operator sees only `Page.evaluate: Failed to fetch`.
 
 ### 6. Tests Required
 
-- `test_offertoday_standalone_crawl.py`: listing and detail `ip_blocked`
-  payloads contain classification/code/evidence/context/browser fields,
-  preserve prior metrics, stop later work, and never emit completion.
-- `test_crawl_task_snapshot.py`: an old incomplete IP-block event projects as
-  actionable with change-IP text, exact issue code/stage, browser fields, and
-  both resume capabilities.
-- `test_crawl_job_regressions.py`: legacy normalization permits a valid resume,
-  copies the host profile for `reuse_open_browser`, and still rejects identity
-  audits or unsupported strategies.
-- `test_offertoday_browser_runtime.py`: the configured Docker CDP hostname is
-  resolved and `connect_over_cdp` receives the resolved host plus registry
-  port.
-- `CrawlTasksPage.test.jsx`: IP blocks render change-IP and preserved-progress
-  guidance plus browser/resume actions; identity audits render neither action.
+- `backend/tests/test_cross_source_ip_recovery.py`: synchronous and delayed
+  redirect races, exact `-1000035` classification, other-verify WAF behavior,
+  normal-page transport behavior, non-fetch error propagation, one-attempt
+  listing hard stop, production-only response URL, compact evidence, and
+  source-aware same-task resume payload.
+- `backend/tests/test_cross_source_crawl_logging.py`: OfferToday listing/detail
+  manual and terminal summaries, retry correlation, common fields, and blocked
+  URL query-secret exclusion.
+- `frontend/src/components/scraper/ipBlockGuidance.test.js`: source-aware
+  CTGoodJobs, JobsDB, OfferToday, and unknown-source change-IP guidance.
+- Run focused tests, Ruff, `compileall`, frontend helper tests/build, container
+  health/log smoke, and `git diff --check` without restoring the intentionally
+  deleted legacy suites.
 - Live verification: open the browser through the helper, complete the
   challenge/change network, resume with `reuse_open_browser`, observe
   `manual_action_attach_success`, and prove the same crawl leaves
@@ -516,6 +562,37 @@ browser = await playwright.chromium.connect_over_cdp(
 
 The compatibility boundary, profile identity, and container-to-host network
 boundary remain explicit and independently testable.
+
+#### Redirect race: wrong
+
+```python
+except Exception as exc:
+    raise OfferTodayTransportError(
+        "fetch failed",
+        response_url=request_url,
+        error_kind="network",
+    ) from exc
+```
+
+This records the original API URL and can consume transient retries while the
+page is already redirecting to an IP-verification URL.
+
+#### Redirect race: correct
+
+```python
+except Exception as exc:
+    if not is_browser_fetch_rejection(exc):
+        raise
+    response_url = await capture_bounded_post_fetch_url(page, request_url)
+    raise OfferTodayTransportError(
+        "fetch interrupted",
+        response_url=response_url,
+        error_kind="network",
+    ) from exc
+```
+
+The response policy, not the raw Playwright error string, decides whether the
+settled URL is an IP block, a generic WAF challenge, or transient transport.
 
 ## Scenario: Listing-bound detail scope and truthful crawl-task history
 
