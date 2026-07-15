@@ -274,3 +274,36 @@ Archived the superseded 07-13-offertoday-completeness-stability Trellis task aft
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: OfferToday global detail backlog recovery
+
+**Date**: 2026-07-15
+**Task**: OfferToday global detail backlog recovery
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Made empty OfferToday detail batch scope recover the global eligible backlog, added bounded same-task continuation with truthful segment/backlog projection, preserved canonical job-function classification, and exposed manual helper health/retry guidance while keeping Fresh resume independent.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `57b0525e` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
