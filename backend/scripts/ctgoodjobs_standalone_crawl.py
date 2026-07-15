@@ -300,6 +300,7 @@ async def _run_listing_phase_impl(
             )
             totals["pages_processed"] += 1
             totals["job_ids_collected"] += int(batch_result.job_ids_seen)
+            totals["raw_job_ids_collected"] += int(batch_result.raw_job_ids_seen)
             totals["listings_staged"] += int(batch_result.rows_staged)
             totals["jobs_skipped_existing"] += int(batch_result.skipped_existing)
             logger.info(
@@ -313,6 +314,7 @@ async def _run_listing_phase_impl(
                     current_page=page_number,
                     total_pages=int(args.max_pages),
                     job_ids=batch_result.job_ids_seen,
+                    raw_job_ids=batch_result.raw_job_ids_seen,
                     listings_staged=batch_result.rows_staged,
                     jobs_skipped_existing=batch_result.skipped_existing,
                     elapsed_ms=max(
@@ -321,6 +323,7 @@ async def _run_listing_phase_impl(
                     ),
                     cumulative_pages=totals["pages_processed"],
                     cumulative_job_ids=totals["job_ids_collected"],
+                    cumulative_raw_job_ids=totals["raw_job_ids_collected"],
                     cumulative_listings_staged=totals["listings_staged"],
                     cumulative_skipped=totals["jobs_skipped_existing"],
                 )
@@ -335,6 +338,7 @@ async def _run_listing_phase_impl(
                     "current_page": page_number,
                     "total_pages": int(args.max_pages),
                     "job_ids_collected": totals["job_ids_collected"],
+                    "raw_job_ids_collected": totals["raw_job_ids_collected"],
                     "listings_staged": totals["listings_staged"],
                     "jobs_skipped_existing": totals["jobs_skipped_existing"],
                 },
@@ -348,6 +352,7 @@ async def _run_listing_phase_impl(
             "phase": 1,
             "pages_processed": totals["pages_processed"],
             "job_ids_collected": totals["job_ids_collected"],
+            "raw_job_ids_collected": totals["raw_job_ids_collected"],
             "listings_staged": totals["listings_staged"],
             "jobs_skipped_existing": totals["jobs_skipped_existing"],
             "detail_target_rows": totals["listings_staged"],
@@ -365,6 +370,7 @@ async def _run_listing_phase(
     totals = {
         "pages_processed": 0,
         "job_ids_collected": 0,
+        "raw_job_ids_collected": 0,
         "listings_staged": 0,
         "jobs_skipped_existing": 0,
     }
@@ -397,6 +403,7 @@ async def _run_listing_phase(
                 blocked_url=exc.blocked_url,
                 cumulative_pages=totals["pages_processed"],
                 cumulative_job_ids=totals["job_ids_collected"],
+                cumulative_raw_job_ids=totals["raw_job_ids_collected"],
                 cumulative_listings_staged=totals["listings_staged"],
             )
         )
@@ -416,6 +423,7 @@ async def _run_listing_phase(
                 error_type=type(exc).__name__,
                 cumulative_pages=totals["pages_processed"],
                 cumulative_job_ids=totals["job_ids_collected"],
+                cumulative_raw_job_ids=totals["raw_job_ids_collected"],
                 cumulative_listings_staged=totals["listings_staged"],
             )
         )
@@ -435,6 +443,7 @@ async def _run_listing_phase(
                 ),
                 pages_processed=totals["pages_processed"],
                 job_ids_collected=totals["job_ids_collected"],
+                raw_job_ids_collected=totals["raw_job_ids_collected"],
                 listings_staged=totals["listings_staged"],
                 jobs_skipped_existing=totals["jobs_skipped_existing"],
             )
@@ -781,6 +790,7 @@ async def main(argv: Sequence[str] | None = None) -> int:
     listing_summary = {
         "pages_processed": 0,
         "job_ids_collected": 0,
+        "raw_job_ids_collected": 0,
         "listings_staged": 0,
         "jobs_skipped_existing": 0,
     }
@@ -852,6 +862,7 @@ async def main(argv: Sequence[str] | None = None) -> int:
                 metrics={
                     "pages_processed": listing_summary["pages_processed"],
                     "job_ids_collected": listing_summary["job_ids_collected"],
+                    "raw_job_ids_collected": listing_summary["raw_job_ids_collected"],
                     "listings_staged": listing_summary["listings_staged"],
                     "jobs_skipped_existing": listing_summary["jobs_skipped_existing"],
                     "detail_selected_rows": detail_summary["selected_rows"],
@@ -871,6 +882,7 @@ async def main(argv: Sequence[str] | None = None) -> int:
                     crawl_phase=args.crawl_phase,
                     crawl_mode=args.crawl_mode,
                     job_ids_collected=listing_summary["job_ids_collected"],
+                    raw_job_ids_collected=listing_summary["raw_job_ids_collected"],
                     listings_staged=listing_summary["listings_staged"],
                     detail_target_rows=detail_summary["target_rows"],
                     detail_completed=detail_summary["completed"],

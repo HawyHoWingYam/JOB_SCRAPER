@@ -97,6 +97,7 @@ class OfferTodayReconciledListingStagingSink:
         self.skip_existing = bool(skip_existing)
         self.rows_staged = 0
         self.rows_seen = 0
+        self.raw_job_ids_collected = 0
         self.rows_created = 0
         self.skipped_existing = 0
         self.stage_calls = 0
@@ -153,6 +154,9 @@ class OfferTodayReconciledListingStagingSink:
             skip_existing=self.skip_existing,
         )
         self.rows_seen += int(result.job_ids_seen)
+        self.raw_job_ids_collected += int(
+            getattr(result, "raw_job_ids_seen", 0) or 0
+        )
         self.rows_staged += int(result.rows_staged)
         self.rows_created += int(result.rows_created)
         self.skipped_existing += int(result.skipped_existing)

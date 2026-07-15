@@ -53,6 +53,7 @@ class ListingBatchPersistResult:
     new_source_job_ids: tuple[str, ...] = ()
     repair_source_job_ids: tuple[str, ...] = ()
     duplicate_source_job_ids: tuple[str, ...] = ()
+    raw_job_ids_seen: int = 0
 
     @property
     def rows_staged(self) -> int:
@@ -384,6 +385,10 @@ class CrawlJobRuntime:
         try:
             normalized_source = str(source_site).strip().lower()
             batch_payloads = [dict(payload or {}) for payload in payloads]
+            raw_job_ids_seen = sum(
+                bool(str(payload.get("source_job_id") or "").strip())
+                for payload in batch_payloads
+            )
             ordered_job_ids = self._ordered_distinct_source_job_ids(batch_payloads)
             seen_job_ids = set(ordered_job_ids)
             is_offertoday = normalized_source == "offertoday"
@@ -677,6 +682,7 @@ class CrawlJobRuntime:
                 crawl_job_id=crawl_job_id,
                 source_site=normalized_source,
                 skipped_existing_delta=skipped_existing,
+                raw_job_ids_delta=raw_job_ids_seen,
             )
             if is_offertoday:
                 self.crawl_job_repository.append_event(
@@ -719,6 +725,7 @@ class CrawlJobRuntime:
                         "created_source_job_ids": created_source_job_ids,
                         "rows_created": rows_created,
                         "job_ids_seen": len(ordered_job_ids),
+                        "raw_job_ids_seen": raw_job_ids_seen,
                         "skipped_existing": skipped_existing,
                     },
                     emitted_by="offertoday-crawl",
@@ -743,6 +750,7 @@ class CrawlJobRuntime:
                 new_source_job_ids=new_source_job_ids,
                 repair_source_job_ids=repair_source_job_ids,
                 duplicate_source_job_ids=duplicate_source_job_ids,
+                raw_job_ids_seen=raw_job_ids_seen,
             )
         except Exception:
             db.rollback()
@@ -1370,6 +1378,7 @@ class CrawlJobRuntime:
         crawl_job_id,
         source_site: str,
         skipped_existing_delta: int,
+        raw_job_ids_delta: int = 0,
     ) -> None:
         counts = self.crawl_job_listing_repository.count_detail_statuses(
             db,
@@ -1382,24 +1391,30 @@ class CrawlJobRuntime:
         skipped_existing_total = int(existing_metrics.get("jobs_skipped_existing") or 0) + int(
             skipped_existing_delta or 0
         )
+        raw_job_ids_total = int(existing_metrics.get("raw_job_ids_collected") or 0) + int(
+            raw_job_ids_delta or 0
+        )
+        metrics_patch = {
+            "listings_staged": listings_staged,
+            "detail_pending": int(counts.get("pending", 0)),
+            "detail_running": int(counts.get("running", 0)),
+            "detail_completed": int(counts.get("completed", 0)),
+            "detail_failed": int(counts.get("failed", 0)),
+            "detail_manual_action_required": int(counts.get("manual_action_required", 0)),
+            "detail_terminal_unavailable": int(
+                counts.get("terminal_unavailable", 0)
+            ),
+            "detail_identity_conflict": int(
+                counts.get("identity_conflict", 0)
+            ),
+            "jobs_skipped_existing": skipped_existing_total,
+        }
+        if raw_job_ids_delta or "raw_job_ids_collected" in existing_metrics:
+            metrics_patch["raw_job_ids_collected"] = raw_job_ids_total
         self.crawl_job_repository.merge_metrics(
             db,
             crawl_job_id=crawl_job_id,
-            metrics_patch={
-                "listings_staged": listings_staged,
-                "detail_pending": int(counts.get("pending", 0)),
-                "detail_running": int(counts.get("running", 0)),
-                "detail_completed": int(counts.get("completed", 0)),
-                "detail_failed": int(counts.get("failed", 0)),
-                "detail_manual_action_required": int(counts.get("manual_action_required", 0)),
-                "detail_terminal_unavailable": int(
-                    counts.get("terminal_unavailable", 0)
-                ),
-                "detail_identity_conflict": int(
-                    counts.get("identity_conflict", 0)
-                ),
-                "jobs_skipped_existing": skipped_existing_total,
-            },
+            metrics_patch=metrics_patch,
             auto_commit=False,
         )
 

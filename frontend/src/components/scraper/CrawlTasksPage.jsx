@@ -27,7 +27,7 @@ import './CrawlTasksPage.css';
 
 const API_BASE = apiPath('');
 const PAGE_SIZE = 10;
-const AUTO_REFRESH_MS = 10000;
+export const AUTO_REFRESH_MS = 60_000;
 const DEFAULT_FILTERS = {
   status: 'all',
   sourceSite: 'all',
@@ -101,11 +101,6 @@ function formatCount(value) {
   return Number(value || 0).toLocaleString();
 }
 
-function normalizeNonNegativeCount(value) {
-  const count = Number(value || 0);
-  return Number.isFinite(count) ? Math.max(count, 0) : 0;
-}
-
 function formatCountPair(currentValue, totalValue) {
   const normalizedTotal = Number(totalValue || 0);
   if (Number.isFinite(normalizedTotal) && normalizedTotal > 0) {
@@ -116,7 +111,25 @@ function formatCountPair(currentValue, totalValue) {
 }
 
 function resolveRequestedCrawlPhase(task) {
-  return `${task?.request_payload?.crawl_phase || task?.crawl_phase || ''}`.trim().toLowerCase();
+  const requestedPhase = `${task?.request_payload?.crawl_phase || task?.crawl_phase || ''}`
+    .trim()
+    .toLowerCase();
+  if (requestedPhase) {
+    return requestedPhase;
+  }
+
+  // Older snapshots expose only the numeric progress phase. Keep those
+  // detail tasks in the detail layout without treating ingest/full as a new
+  // supported crawl phase.
+  const snapshotPhase = Number(task?.phase);
+  if (snapshotPhase === 2) {
+    return 'detail';
+  }
+  if (snapshotPhase === 1) {
+    return 'listing';
+  }
+
+  return '';
 }
 
 function isCompletedListingTask(task) {
@@ -125,70 +138,34 @@ function isCompletedListingTask(task) {
     && Boolean(task?.listing_completed);
 }
 
-function buildDistinctDetailMetricSummary(task) {
-  const normalizedSourceSite = `${task?.source_site || ''}`.trim().toLowerCase();
-  if (
-    normalizedSourceSite !== 'offertoday'
-    || task?.detail_distinct_target_total === null
-    || task?.detail_distinct_target_total === undefined
-  ) {
-    return null;
-  }
-
-  const targetTotal = Number(task.detail_distinct_target_total);
-  if (!Number.isFinite(targetTotal) || targetTotal < 0) {
-    return null;
-  }
-
-  const succeeded = normalizeNonNegativeCount(task.detail_distinct_succeeded);
-  const terminal = normalizeNonNegativeCount(task.detail_distinct_terminal_unavailable);
-  const reconciled = normalizeNonNegativeCount(task.detail_distinct_reconciled);
-  const failed = normalizeNonNegativeCount(task.detail_distinct_failed);
-  const remaining = normalizeNonNegativeCount(task.detail_distinct_remaining);
-  const summary = [
-    `Fetched ${formatCount(succeeded)} / ${formatCount(targetTotal)}`,
-  ];
-
-  if (terminal > 0) {
-    summary.push(`Terminal ${formatCount(terminal)}`);
-  }
-  if (reconciled > 0) {
-    summary.push(`Reconciled ${formatCount(reconciled)}`);
-  }
-  if (failed > 0) {
-    summary.push(`Failed ${formatCount(failed)}`);
-  }
-  summary.push(`Remaining ${formatCount(remaining)}`);
-  return summary;
-}
-
-function buildMetricSummary(task) {
-  const distinctDetailSummary = buildDistinctDetailMetricSummary(task);
-  if (distinctDetailSummary) {
-    return distinctDetailSummary;
-  }
-
+function buildListingMetricSummary(task) {
   const summary = [];
   const normalizedSourceSite = `${task?.source_site || ''}`.trim().toLowerCase();
   const jobIdsCollected = Number(task?.job_ids_collected || 0);
+  const rawJobIdsCollected = task?.raw_job_ids_collected;
   const detailTargetRows = Number(task?.detail_target_rows || 0);
-  const jobsSaved = Number(task?.jobs_saved || 0);
   const listingsStaged = Number(task?.listings_staged || 0);
   const currentPage = Number(task?.current_page || 0);
   const totalPages = Number(task?.total_pages || 0);
-  const failedItems = Number(task?.detail_run_failed || task?.ingest_items_failed || 0);
-  const completedListingTask = isCompletedListingTask(task);
 
   if (jobIdsCollected > 0) {
     summary.push(`IDs ${formatCount(jobIdsCollected)}`);
   }
 
-  if (detailTargetRows > 0) {
-    summary.push(`${completedListingTask ? 'Ready for detail' : 'Queue'} ${formatCount(detailTargetRows)}`);
+  if (
+    rawJobIdsCollected !== null
+    && rawJobIdsCollected !== undefined
+    && Number(rawJobIdsCollected) > 0
+  ) {
+    summary.push(`Raw IDs ${formatCount(rawJobIdsCollected)}`);
   }
 
   if (listingsStaged > 0) {
-    summary.push(`Staged ${formatCount(listingsStaged)}`);
+    summary.push(`Staged listings ${formatCount(listingsStaged)}`);
+  }
+
+  if (detailTargetRows > 0) {
+    summary.push(`Detail queue ${formatCount(detailTargetRows)}`);
   }
 
   if (currentPage > 0 || totalPages > 0) {
@@ -200,12 +177,43 @@ function buildMetricSummary(task) {
     }
   }
 
+  if (summary.length === 0) {
+    summary.push('Metrics pending');
+  }
+
+  return summary;
+}
+
+function buildDetailMetricSummary(task) {
+  const summary = [];
+  const detailTargetRows = Number(task?.detail_target_rows || 0);
+  const detailFetched = Number(
+    task?.detail_fetched
+      ?? Math.max(
+        Number(task?.detail_completed || 0) - Number(task?.detail_reconciled_rows || 0),
+        0,
+      )
+  );
+  const jobsSaved = Number(task?.jobs_saved || 0);
+  const detailFailed = Number(
+    task?.detail_failed_count
+      ?? task?.detail_failed
+      ?? task?.detail_run_failed
+      ?? task?.ingest_items_failed
+      ?? 0
+  );
+
+  if (detailTargetRows > 0) {
+    summary.push(`Detail targets ${formatCount(detailTargetRows)}`);
+  }
+  if (detailFetched > 0) {
+    summary.push(`Fetched ${formatCount(detailFetched)}`);
+  }
   if (jobsSaved > 0) {
     summary.push(`Saved ${formatCount(jobsSaved)}`);
   }
-
-  if (failedItems > 0) {
-    summary.push(`Failed ${formatCount(failedItems)}`);
+  if (detailFailed > 0) {
+    summary.push(`Failed ${formatCount(detailFailed)}`);
   }
 
   if (summary.length === 0) {
@@ -213,6 +221,12 @@ function buildMetricSummary(task) {
   }
 
   return summary;
+}
+
+function buildMetricSummary(task) {
+  return resolveRequestedCrawlPhase(task) === 'detail'
+    ? buildDetailMetricSummary(task)
+    : buildListingMetricSummary(task);
 }
 
 function buildScopeHint(task) {
@@ -545,7 +559,7 @@ export default function CrawlTasksPage() {
               <div className="crawl-tasks-page-copy">Page {pagination.page} of {pageCount}</div>
             </div>
             <div className="crawl-tasks-page-copy">
-              {isLoading ? 'Refreshing task list' : 'Auto refresh every 10s'}
+              {isLoading ? 'Refreshing task list' : 'Auto refresh every 1 min'}
             </div>
           </div>
 

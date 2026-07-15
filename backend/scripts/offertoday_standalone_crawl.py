@@ -866,6 +866,9 @@ def _listing_metrics(result, staging_sink) -> dict[str, Any]:
         "listing_capped_condition_count": len(capped_condition_ids),
         "listing_capped_condition_ids": list(capped_condition_ids),
         "distinct_it_result_ids": len(accepted_ids),
+        "raw_job_ids_collected": int(
+            getattr(staging_sink, "raw_job_ids_collected", 0) or 0
+        ),
         "supplemental_rows_observed": int(
             getattr(result, "supplemental_rows_observed", 0) or 0
         ),
@@ -964,6 +967,7 @@ async def _run_listing_phase(
                 blocked_url=exc.blocked_url,
                 cumulative_pages=observation_sink.successful_page_count,
                 cumulative_job_ids=staging_sink.rows_seen,
+                cumulative_raw_job_ids=staging_sink.raw_job_ids_collected,
                 cumulative_listings_staged=staging_sink.rows_created,
             )
         )
@@ -982,6 +986,7 @@ async def _run_listing_phase(
                 conditions=len(conditions),
                 pages_processed=observation_sink.successful_page_count,
                 job_ids_collected=staging_sink.rows_seen,
+                raw_job_ids_collected=staging_sink.raw_job_ids_collected,
                 listings_staged=staging_sink.rows_created,
                 jobs_skipped_existing=staging_sink.skipped_existing,
             )
@@ -998,6 +1003,7 @@ async def _run_listing_phase(
                 error_type=type(exc).__name__,
                 cumulative_pages=observation_sink.successful_page_count,
                 cumulative_job_ids=staging_sink.rows_seen,
+                cumulative_raw_job_ids=staging_sink.raw_job_ids_collected,
                 cumulative_listings_staged=staging_sink.rows_created,
             )
         )
@@ -1016,6 +1022,7 @@ async def _run_listing_phase(
                 conditions=len(conditions),
                 pages_processed=observation_sink.successful_page_count,
                 job_ids_collected=staging_sink.rows_seen,
+                raw_job_ids_collected=staging_sink.raw_job_ids_collected,
                 listings_staged=staging_sink.rows_created,
                 jobs_skipped_existing=staging_sink.skipped_existing,
             )
@@ -1064,6 +1071,7 @@ async def _run_listing_phase(
                     blocked_url=manual_payload.get("blocked_url"),
                     cumulative_pages=evidence["pages_observed"],
                     cumulative_job_ids=len(result.accepted_job_ids),
+                    cumulative_raw_job_ids=staging_sink.raw_job_ids_collected,
                     cumulative_listings_staged=staging_sink.rows_created,
                 )
             )
@@ -1094,6 +1102,7 @@ async def _run_listing_phase(
                 conditions=len(conditions),
                 pages_processed=evidence["pages_observed"],
                 job_ids_collected=len(result.accepted_job_ids),
+                raw_job_ids_collected=staging_sink.raw_job_ids_collected,
                 listings_staged=staging_sink.rows_created,
                 jobs_skipped_existing=staging_sink.skipped_existing,
             )
@@ -1117,6 +1126,7 @@ async def _run_listing_phase(
                 for outcome in result.condition_outcomes
             ),
             "job_ids_collected": len(result.accepted_job_ids),
+            "raw_job_ids_collected": int(staging_sink.raw_job_ids_collected),
             "listings_staged": int(staging_sink.rows_created),
         },
     )

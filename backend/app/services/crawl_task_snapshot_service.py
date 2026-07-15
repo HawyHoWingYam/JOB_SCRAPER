@@ -679,6 +679,15 @@ def build_crawl_task_snapshot(
 
     metrics = crawl_job.metrics if isinstance(crawl_job.metrics, dict) else {}
     normalized_source_site = str(crawl_job.source_site or "").strip().lower()
+    raw_job_ids_values = (
+        event_payload.get("raw_job_ids_collected"),
+        metrics.get("raw_job_ids_collected"),
+    )
+    raw_job_ids_collected = (
+        _max_count(*raw_job_ids_values)
+        if any(value is not None for value in raw_job_ids_values)
+        else None
+    )
     job_ids_collected = _max_count(
         event_payload.get("job_ids_collected"),
         metrics.get("job_ids_collected", 0),
@@ -792,11 +801,27 @@ def build_crawl_task_snapshot(
             metrics.get("detail_run_manual_action_required", 0),
         )
     )
+    detail_reconciled_rows = _to_int(
+        event_payload.get(
+            "detail_reconciled_rows",
+            metrics.get("detail_reconciled_rows", 0),
+        )
+    )
     detail_distinct_progress = (
         _project_distinct_detail_progress(events)
         if normalized_source_site == "offertoday"
         else None
     )
+    if detail_distinct_progress is not None:
+        detail_fetched = _to_int(detail_distinct_progress["detail_distinct_succeeded"])
+        detail_failed_count = _to_int(detail_distinct_progress["detail_distinct_failed"])
+    else:
+        detail_fetched = max(detail_completed - detail_reconciled_rows, 0)
+        detail_failed_count = _max_count(
+            detail_failed,
+            detail_run_failed,
+            ingest_items_failed,
+        )
     ai_run_id = event_payload.get("ai_run_id") or metrics.get("ai_run_id")
     ai_completed_items = _to_int(
         event_payload.get("ai_completed_items", metrics.get("ai_completed_items", 0))
@@ -912,6 +937,7 @@ def build_crawl_task_snapshot(
         "current_page": event_payload.get("current_page") or metrics.get("current_page"),
         "total_pages": event_payload.get("total_pages") or metrics.get("total_pages"),
         "job_ids_collected": job_ids_collected,
+        "raw_job_ids_collected": raw_job_ids_collected,
         "jobs_scraped": jobs_scraped,
         "total_jobs": total_jobs,
         "jobs_saved": jobs_saved,
@@ -926,6 +952,9 @@ def build_crawl_task_snapshot(
         "detail_run_completed": detail_run_completed,
         "detail_run_failed": detail_run_failed,
         "detail_run_manual_action_required": detail_run_manual_action_required,
+        "detail_reconciled_rows": detail_reconciled_rows,
+        "detail_fetched": detail_fetched,
+        "detail_failed_count": detail_failed_count,
         **(
             detail_distinct_progress
             or {
