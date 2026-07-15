@@ -340,3 +340,36 @@ Raised and completed GitHub issue #6; replaced the flat Task Detail manual-actio
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Restore Crawl Tasks recovery buttons
+
+**Date**: 2026-07-15
+**Task**: Restore Crawl Tasks recovery buttons
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Fixed Crawl Tasks manual-action projection to preserve resumable recovery metadata across later progress events, added regression coverage and backend contract documentation, verified the live OfferToday recovery buttons without resuming the task, and opened GitHub issue #7 for tracking.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b1b49ef3` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

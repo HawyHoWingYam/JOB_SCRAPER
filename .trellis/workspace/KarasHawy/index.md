@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
+- **Total Sessions**: 11
 - **Last Active**: 2026-07-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~342 | Active |
+| `journal-1.md` | ~375 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-07-15 | Restore Crawl Tasks recovery buttons | `b1b49ef3` | `codex/offertoday-it-coverage-20260702` |
 | 10 | 2026-07-15 | Guide manual-action task recovery | `eedb732d` | `codex/offertoday-it-coverage-20260702` |
 | 9 | 2026-07-15 | OfferToday global detail backlog recovery | `57b0525e` | `codex/offertoday-it-coverage-20260702` |
 | 8 | 2026-07-15 | Archive superseded OfferToday parent | `cebe7815` | `codex/offertoday-it-coverage-20260702` |
