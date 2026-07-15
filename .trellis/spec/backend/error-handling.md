@@ -104,6 +104,22 @@ Recovery is operator-driven. While paused, no worker polls the source and no
 automatic resume occurs. The operator changes/clears the public IP/network,
 confirms access, and clicks Resume for the same crawl-job ID.
 
+#### Crawl Tasks recovery projection
+
+`build_crawl_task_snapshot(...)` treats the ordered event history as the
+manual-action source of truth. When the persisted crawl-job status is
+`manual_action_required`, it projects and normalizes the newest
+`crawl.manual_action_required` event even if a later progress or segment event
+is the job's overall latest event. This keeps `manual_action.resume_supported`
+and `manual_action.reuse_open_browser_supported` available to the frontend.
+
+The projection must not expose an older manual action after the crawl leaves
+`manual_action_required`; completed, cancelled, failed, or resumed tasks do not
+show stale recovery controls. Browser defaults may be supplied only for sources
+that actually share the configured JobsDB/CTGoodJobs headed browser. OfferToday
+must preserve its event-provided Edge/profile metadata and must not inherit
+JobsDB-only defaults.
+
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
@@ -119,6 +135,9 @@ confirms access, and clicks Resume for the same crawl-job ID.
 | Resume attempted from `failed`/`running` | Reject; only `manual_action_required` is resumable |
 | Resume capability explicitly false | Reject without changing crawl state |
 | Operator has not clicked Resume | Issue zero new source requests |
+| Manual action followed by a progress/segment event while still paused | Snapshot projects the newest manual-action event and keeps recovery controls available |
+| Historical manual action followed by completion/resume | Snapshot returns `manual_action=null`; no stale recovery controls |
+| OfferToday legacy event lacks browser fields | Do not synthesize JobsDB browser/profile values; reusable-browser support remains false |
 
 ### 5. Good / Base / Bad Cases
 
@@ -131,6 +150,12 @@ confirms access, and clicks Resume for the same crawl-job ID.
   the operator to change IP and disables valid retry behavior.
 - **Bad:** A paused worker polls every few seconds and resumes itself. This
   violates explicit operator control and can immediately re-trigger a block.
+- **Good:** A paused detail task emits `crawl.detail_segment` after
+  `crawl.manual_action_required`; Crawl Tasks still renders the normalized
+  recovery buttons from the manual-action event.
+- **Bad:** Crawl Tasks reads manual-action fields only from the overall latest
+  event, so a later bookkeeping event hides recovery controls while the task is
+  still resumable.
 
 ### 6. Tests Required
 
@@ -143,6 +168,9 @@ confirms access, and clicks Resume for the same crawl-job ID.
 - `frontend/src/components/scraper/ipBlockGuidance.test.js` covers source-aware
   operator guidance; production build proves both Crawl Tasks and Scrape
   Progress consume the helper.
+- `backend/tests/test_crawl_task_snapshot_service.py` covers later-event
+  ordering, stale recovery suppression after completion, and source-correct
+  browser default projection.
 - Synthetic responses are required for CTGoodJobs/JobsDB block tests. Do not
   deliberately ban the live public IP. Live OfferToday resume verification
   requires an actual operator IP change and explicit Resume.
@@ -184,3 +212,28 @@ if evidence and evidence.classification in {"ip_blocked", "waf_challenge"}:
 
 The source adapter owns positive evidence; the shared manual-action layer owns
 the pause/resume payload and operator guidance.
+
+#### Wrong: project only the overall latest event
+
+```python
+raw_manual_action = _event_manual_action(latest_event)
+```
+
+A later segment/progress event can be valid while the persisted task remains
+paused, so this drops a still-current recovery contract.
+
+#### Correct: select by state and event kind
+
+```python
+manual_action_event = None
+if crawl_job.status == "manual_action_required":
+    manual_action_event = (
+        latest_event
+        if latest_event_type == "crawl.manual_action_required"
+        else _latest_event_of_type(events, "crawl.manual_action_required")
+    )
+raw_manual_action = _event_manual_action(manual_action_event)
+```
+
+The persisted state prevents stale controls; the event-kind lookup preserves
+the active recovery contract across later bookkeeping events.

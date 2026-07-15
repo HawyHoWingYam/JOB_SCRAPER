@@ -9,10 +9,16 @@ from app.services.crawl_task_snapshot_service import build_crawl_task_snapshot
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
 
 
-def _crawl_job(*, metrics=None, request_payload=None, source_site="jobsdb"):
+def _crawl_job(
+    *,
+    metrics=None,
+    request_payload=None,
+    source_site="jobsdb",
+    status="completed",
+):
     return SimpleNamespace(
         id="crawl-task",
-        status="completed",
+        status=status,
         source_site=source_site,
         trigger_type="manual",
         schedule_id=None,
@@ -131,3 +137,117 @@ def test_snapshot_projects_detail_segment_and_backlog_metrics() -> None:
     assert snapshot["detail_backlog_manual_action_required"] == 11
     assert snapshot["detail_backlog_remaining"] == 7431
     assert snapshot["detail_continuation_state"] == "continuing"
+
+
+def test_snapshot_preserves_resumable_manual_action_after_later_progress_event() -> None:
+    manual_action_event = _event(
+        {
+            "request_payload": {
+                "crawl_phase": "detail",
+                "crawl_mode": "headless",
+            },
+            "manual_action": {
+                "action_type": "session_recovery",
+                "source_site": "offertoday",
+                "stage": "detail",
+                "classification": "ip_blocked",
+                "blocked_url": "https://www.offertoday.com/hk/search",
+                "resume_supported": True,
+                "reuse_open_browser_supported": True,
+                "browser_channel": "msedge",
+                "browser_profile_path": "C:/profiles/offertoday",
+                "preferred_resume_strategy": "reuse_open_browser",
+            },
+        },
+        event_type="crawl.manual_action_required",
+    )
+    later_progress_event = _event(
+        {
+            "continuation_state": "manual_action_required",
+            "detail_backlog_remaining": 5919,
+        },
+        event_type="crawl.detail_segment",
+    )
+
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(
+            source_site="offertoday",
+            status="manual_action_required",
+            request_payload={"crawl_phase": "detail", "crawl_mode": "headless"},
+        ),
+        later_progress_event,
+        now=NOW,
+        events=[manual_action_event, later_progress_event],
+    )
+
+    manual_action = snapshot["manual_action"]
+    assert manual_action["action_type"] == "session_recovery"
+    assert manual_action["source_site"] == "offertoday"
+    assert manual_action["stage"] == "detail"
+    assert manual_action["classification"] == "ip_blocked"
+    assert manual_action["resume_supported"] is True
+    assert manual_action["reuse_open_browser_supported"] is True
+    assert manual_action["browser_channel"] == "msedge"
+    assert manual_action["browser_profile_path"] == "C:/profiles/offertoday"
+    assert manual_action["preferred_resume_strategy"] == "reuse_open_browser"
+    assert manual_action["resume_context"]["crawl_phase"] == "detail"
+    assert manual_action["resume_context"]["crawl_mode"] == "headless"
+
+
+def test_snapshot_does_not_expose_stale_manual_action_after_completion() -> None:
+    manual_action_event = _event(
+        {
+            "manual_action": {
+                "action_type": "session_recovery",
+                "classification": "ip_blocked",
+                "resume_supported": True,
+            }
+        },
+        event_type="crawl.manual_action_required",
+    )
+    completed_event = _event({}, event_type="crawl.completed")
+
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(status="completed"),
+        completed_event,
+        now=NOW,
+        events=[manual_action_event, completed_event],
+    )
+
+    assert snapshot["manual_action"] is None
+
+
+def test_snapshot_does_not_inject_jobsdb_browser_defaults_for_offertoday(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.crawl_task_snapshot_service.settings.jobsdb_headed_browser_channel",
+        "jobsdb-browser",
+    )
+    monkeypatch.setattr(
+        "app.services.crawl_task_snapshot_service.settings.jobsdb_headed_browser_user_data_dir",
+        "C:/profiles/jobsdb",
+    )
+    manual_action_event = _event(
+        {
+            "manual_action": {
+                "action_type": "session_recovery",
+                "source_site": "offertoday",
+                "classification": "ip_blocked",
+                "resume_supported": True,
+            }
+        },
+        event_type="crawl.manual_action_required",
+    )
+
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(source_site="offertoday", status="manual_action_required"),
+        manual_action_event,
+        now=NOW,
+        events=[manual_action_event],
+    )
+
+    manual_action = snapshot["manual_action"]
+    assert "browser_channel" not in manual_action
+    assert "browser_profile_path" not in manual_action
+    assert manual_action["reuse_open_browser_supported"] is False

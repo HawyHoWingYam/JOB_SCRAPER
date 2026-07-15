@@ -649,14 +649,40 @@ def build_crawl_task_snapshot(
         else {}
     )
     request_payload = event_payload.get("request_payload") or crawl_job.request_payload or {}
-    raw_manual_action = _event_manual_action(latest_event)
+    manual_action_event = None
+    if crawl_job.status == "manual_action_required":
+        manual_action_event = (
+            latest_event
+            if latest_event_type == "crawl.manual_action_required"
+            else _latest_event_of_type(events, "crawl.manual_action_required")
+        )
+    manual_action_event_payload = (
+        manual_action_event.payload
+        if manual_action_event and isinstance(manual_action_event.payload, dict)
+        else {}
+    )
+    manual_action_request_payload = (
+        manual_action_event_payload.get("request_payload") or request_payload
+    )
+    raw_manual_action = _event_manual_action(manual_action_event)
+    source_uses_shared_headed_browser_defaults = str(
+        crawl_job.source_site or ""
+    ).strip().lower() in {"jobsdb", "ctgoodjobs"}
     manual_action = (
         normalize_manual_action_payload(
             raw_manual_action,
             source_site=crawl_job.source_site,
-            request_payload=request_payload,
-            default_browser_channel=settings.jobsdb_headed_browser_channel,
-            default_browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
+            request_payload=manual_action_request_payload,
+            default_browser_channel=(
+                settings.jobsdb_headed_browser_channel
+                if source_uses_shared_headed_browser_defaults
+                else None
+            ),
+            default_browser_profile_path=(
+                settings.jobsdb_headed_browser_user_data_dir
+                if source_uses_shared_headed_browser_defaults
+                else None
+            ),
         )
         if raw_manual_action
         else None
