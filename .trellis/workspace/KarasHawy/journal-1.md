@@ -307,3 +307,36 @@ Made empty OfferToday detail batch scope recover the global eligible backlog, ad
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Guide manual-action task recovery
+
+**Date**: 2026-07-15
+**Task**: Guide manual-action task recovery
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Raised and completed GitHub issue #6; replaced the flat Task Detail manual-action controls with a capability-driven Helper-Browser-Resume flow, automatic connectivity polling, explicit side effects, warned Fresh fallback, collapsed diagnostics, and confirmed dangerous actions. Verified focused ESLint, production build, 114 frontend tests, diff check, and a live local browser smoke; preserved unrelated dirty work.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `eedb732d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
