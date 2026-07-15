@@ -241,3 +241,36 @@ Added cross-source raw listing Job ID metrics, unified Crawl Tasks listing/detai
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Archive superseded OfferToday parent
+
+**Date**: 2026-07-15
+**Task**: Archive superseded OfferToday parent
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Archived the superseded 07-13-offertoday-completeness-stability Trellis task after the Crawl Tasks metrics work was committed. Left Bootstrap Guidelines in progress and unrelated dirty files untouched.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cebe7815` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

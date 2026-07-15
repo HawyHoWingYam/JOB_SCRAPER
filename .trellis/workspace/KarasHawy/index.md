@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-07-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~243 | Active |
+| `journal-1.md` | ~276 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-15 | Archive superseded OfferToday parent | `cebe7815` | `codex/offertoday-it-coverage-20260702` |
 | 7 | 2026-07-15 | Crawl Tasks raw ID metrics | `cebe7815` | `codex/offertoday-it-coverage-20260702` |
 | 6 | 2026-07-15 | Cross-source IP-block recovery and crawl observability | `39195543`, `b27e5557`, `c83eae62` | `codex/offertoday-it-coverage-20260702` |
 | 5 | 2026-07-15 | Stabilize crawl tasks and OfferToday detail scope | `180271c7`, `8f6e0347` | `codex/offertoday-it-coverage-20260702` |
