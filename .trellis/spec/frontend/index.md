@@ -21,6 +21,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
 | [Scraper Pacing Settings UI](./scraper-pacing-settings-ui.md) | Settings cards, API round trips, Direct Override summary, and active-task warning | Active |
+| [Crawl Task Pacing Snapshot UI](./crawl-task-pacing-snapshot-ui.md) | Detail-task startup snapshot rendering and cancellation lifecycle controls | Active |
 
 ---
 

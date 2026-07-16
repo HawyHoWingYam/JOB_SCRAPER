@@ -56,6 +56,9 @@ build_detail_pacing_controller(...) -> DetailPacingController | None
   the next attempt but is not projected as a UI pacing parameter.
 - Historical tasks without a valid snapshot project `detail_pacing=null`.
   Never substitute current global settings into task history.
+- Crawl Task projection validates `detail_pacing` only when the stored startup
+  payload declares `crawl_phase=detail`. Listing tasks always project null even
+  if a malformed or legacy producer placed a pacing object in the payload.
 - Attempt 1 is immediate. Before later attempts, a completed burst replaces
   the ordinary random interval with the burst pause. Pacing happens before
   each actual detail transport attempt, including CTGoodJobs and OfferToday
@@ -82,6 +85,7 @@ contain several `manual_action_required` rows for one source.
 | different source active detail task | dispatch may proceed |
 | listing or schedule-backed dispatch | no snapshot and no detail conflict query |
 | invalid or absent historical snapshot | `detail_pacing=null` |
+| listing task contains `detail_pacing` | project `detail_pacing=null` |
 | listing payload seen by active-count query | excluded from `active_detail_task_count` |
 | cancellation during a pacing wait | stop before the next outbound request |
 
@@ -111,7 +115,7 @@ contain several `manual_action_required` rows for one source.
 - CTGoodJobs and OfferToday retry tests assert one controller admission per
   fetch attempt and no listing admission.
 - `test_crawl_task_snapshot_service.py`: valid snapshot, historical null,
-  malformed null, and hidden attempt counter.
+  malformed null, listing exclusion, and hidden attempt counter.
 
 ### 7. Wrong vs Correct
 
