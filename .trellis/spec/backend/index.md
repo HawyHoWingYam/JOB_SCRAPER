@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Cross-source crawl cadence, correlation, bounded fields, and secret-safe URLs | Active |
 | [Crawl Task Detail Metrics](./crawl-task-detail-metrics.md) | Cross-source detail denominators, outcomes, remaining work, and UI projection | Active |
+| [Manual Job Detail Pacing](./scraper-detail-pacing.md) | Source settings, immutable task snapshots, dispatch exclusion, and per-attempt pacing | Active |
 | [OfferToday Production Crawl](./offertoday-production-crawl.md) | Cursor listing, partial caps, bound detail scope, distinct progress, and hard-stop contracts | Active |
 | [OfferToday Research Artifacts](./offertoday-research-artifacts.md) | Historical artifact parent, verification, replay, and exit-code contracts | Preserved |
 
