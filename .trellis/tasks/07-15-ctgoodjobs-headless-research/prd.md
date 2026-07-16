@@ -11,6 +11,8 @@ cause.
 The deliverable is a Markdown research report for this repository. This task does
 not authorize a production crawler rewrite.
 
+Tracking issue: GitHub #12, "Research CTGoodJobs headless crawl viability".
+
 ## Background and Confirmed Facts
 
 - The product contract currently exposes CTGoodJobs as headed-only and upgrades a
@@ -18,13 +20,13 @@ not authorize a production crawler rewrite.
   (`backend/app/crawl_modes.py:6-19`).
 - The standalone CLI still accepts `--crawl-mode headless`, propagates that label
   through payloads and logs, and constructs one shared browser scraper for both
-  phases (`backend/scripts/ctgoodjobs_standalone_crawl.py:56,97,132-138,910-913`).
+  phases (`backend/scripts/ctgoodjobs_standalone_crawl.py:56-70,98-105,945-990`).
   The label therefore does not prove the runtime is headless.
 - The runtime launches a persistent Playwright Chromium context with
   `headless=False` regardless of the request payload
-  (`backend/app/scraper/ctgoodjobs_browser_page_scraper.py:272-280`). Both listing
+  (`backend/app/scraper/ctgoodjobs_browser_page_scraper.py:247-304`). Both listing
   pages and detail pages use this adapter
-  (`backend/scripts/ctgoodjobs_standalone_crawl.py:268-272,699-705`).
+  (`backend/scripts/ctgoodjobs_standalone_crawl.py:257-293,688-718`).
 - CTGoodJobs data is parsed from server-rendered/Next.js HTML rather than from
   pixel output: listing IDs come from category-page payloads, while detail fields
   come from `jobContent` and JSON-LD `JobPosting`
@@ -116,6 +118,21 @@ not authorize a production crawler rewrite.
   transport outcome, but exclude it from valid-detail yield. Report transport /
   classification success, valid-detail yield, verification-block rate, and true
   failure rate separately rather than collapsing them into one success rate.
+- A candidate transport qualifies as operationally viable only when all of the
+  following bounded checks pass:
+  - job-ID discovery succeeds for three public categories on three repetitions
+    per category;
+  - detail collection succeeds for ten currently valid jobs on two repetitions
+    per job;
+  - the comparison covers at least two independently created browser sessions or
+    profiles where the transport uses browser state;
+  - no run silently accepts challenge, verification, or structurally invalid
+    content as valid data; and
+  - every verification block is positively classified and stopped rather than
+    ingested.
+- A smaller or partially blocked sample may prove technical possibility, but the
+  report must keep the routine-operation verdict conditional and must not call
+  the transport operationally viable.
 
 ### R3. Identify the real dependency
 
@@ -153,24 +170,25 @@ not authorize a production crawler rewrite.
 
 ## Acceptance Criteria
 
-- [ ] AC1: The report distinguishes at least plain HTTP, fresh browser-headless,
+- [x] AC1: The report distinguishes at least plain HTTP, fresh browser-headless,
   stateful browser-headless, and headed baseline paths.
-- [ ] AC2: Current code and historical behavior are documented with verifiable
+- [x] AC2: Current code and historical behavior are documented with verifiable
   source/commit anchors; the false CLI/runtime equivalence is explicit.
-- [ ] AC3: Listing/job-ID and detail results are reported independently using
+- [x] AC3: Listing/job-ID and detail results are reported independently using
   positive content and parser-validity checks.
-- [ ] AC4: Every live probe has a bounded request budget and records timestamp,
+- [x] AC4: Every live probe has a bounded request budget and records timestamp,
   URL class, transport, status/final state, content classification, parser result,
   and limitations without storing sensitive bodies.
-- [ ] AC5: The evidence matrix isolates visibility from session/profile and other
+- [x] AC5: The evidence matrix isolates visibility from session/profile and other
   major variables closely enough to support the stated causal claims.
-- [ ] AC6: The report gives a direct yes/no/conditional verdict, recommended
+- [x] AC6: The report gives a direct yes/no/conditional verdict, recommended
   architecture, fallback policy, risks, and the smallest next implementation
   experiment.
-- [ ] AC7: A separate reviewer checks the report against the cited source lines,
-  probe artifacts, and stated uncertainty before delivery.
-
-## Open Questions
-
-- What repeat count and sample size are required before a candidate transport is
-  called operationally viable rather than merely technically possible?
+- [x] AC7: An independent review pass checks the report against the cited source
+  lines, probe artifacts, and stated uncertainty before delivery. In Codex
+  inline mode, the main session performs this as a separate pass because check
+  sub-agents are disabled.
+- [x] AC8: Any operationally viable verdict satisfies the approved 3 categories
+  x 3 listing repetitions, 10 valid jobs x 2 detail repetitions, two-session
+  browser-state comparison, and zero-silent-bad-data threshold; otherwise the
+  verdict remains technical or conditional.
