@@ -127,6 +127,28 @@ class CrawlJobRepository:
             == "detail"
         ]
 
+    def count_active_manual_detail_jobs(
+        self,
+        db: Session,
+        *,
+        statuses: set[str] | frozenset[str],
+    ) -> int:
+        rows = (
+            db.query(CrawlJob.request_payload)
+            .filter(
+                CrawlJob.trigger_type == "manual",
+                CrawlJob.schedule_id.is_(None),
+                CrawlJob.status.in_(statuses),
+            )
+            .all()
+        )
+        return sum(
+            1
+            for row in rows
+            if str((row.request_payload or {}).get("crawl_phase") or "").lower()
+            == "detail"
+        )
+
     def record_runtime_event(
         self,
         db: Session,

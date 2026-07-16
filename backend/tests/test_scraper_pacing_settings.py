@@ -1,9 +1,12 @@
 import pytest
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models.scraper_pacing_settings import ScraperPacingSettings
+from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.schemas.scraper_pacing import DetailPacingConfig
 from app.services.scraper_pacing_settings_service import (
     DEFAULT_DETAIL_PACING,
@@ -100,3 +103,20 @@ def test_schema_rejects_unknown_fields():
             burst_pause_seconds=30,
             unexpected=True,
         )
+
+
+def test_active_manual_detail_count_ignores_listing_payloads():
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = [
+        SimpleNamespace(request_payload={"crawl_phase": "detail"}),
+        SimpleNamespace(request_payload={"crawl_phase": "listing"}),
+        SimpleNamespace(request_payload={"crawl_phase": "DETAIL"}),
+        SimpleNamespace(request_payload={}),
+    ]
+
+    count = CrawlJobRepository().count_active_manual_detail_jobs(
+        db,
+        statuses=frozenset({"running", "cancelling"}),
+    )
+
+    assert count == 2

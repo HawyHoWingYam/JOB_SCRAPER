@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { createElement, useEffect, useState } from "react";
 import {
   AlertTriangle,
   BrainCircuit,
@@ -8,10 +8,12 @@ import {
   KeyRound,
   Layers3,
   Save,
+  Settings2,
   ShieldCheck,
   FlaskConical,
 } from "lucide-react";
 import { apiPath } from "../../api/base";
+import ScraperPacingSettings from "./ScraperPacingSettings";
 import "./AISettingsPage.css";
 
 const PROFILE_LABELS = {
@@ -412,11 +414,11 @@ function buildProfileTestFeedback(profileKey, payload) {
   };
 }
 
-function SummaryCard({ icon: Icon, label, value, hint, tone = "default" }) {
+function SummaryCard({ icon, label, value, hint, tone = "default" }) {
   return (
     <article className={`ai-settings-summary-card glass-panel tone-${tone}`}>
       <div className="ai-settings-summary-icon">
-        <Icon size={18} />
+        {createElement(icon, { size: 18 })}
       </div>
       <div className="ai-settings-summary-copy">
         <span>{label}</span>
@@ -724,7 +726,7 @@ function ProfileSection({
   );
 }
 
-export default function AISettingsPage() {
+function AIRuntimeSettings() {
   const [settingsPayload, setSettingsPayload] = useState(null);
   const [formState, setFormState] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1182,5 +1184,44 @@ export default function AISettingsPage() {
         </section>
       </form>
     </section>
+  );
+}
+
+export default function AISettingsPage({
+  initialSection = "ai-runtime",
+  onOpenCrawlTasks,
+}) {
+  const [activeSection, setActiveSection] = useState(initialSection);
+
+  useEffect(() => {
+    setActiveSection(initialSection);
+  }, [initialSection]);
+
+  return (
+    <div className="settings-page-shell">
+      <nav className="settings-section-nav glass-panel" aria-label="Settings sections">
+        <button
+          type="button"
+          className={activeSection === "ai-runtime" ? "active" : ""}
+          aria-current={activeSection === "ai-runtime" ? "page" : undefined}
+          onClick={() => setActiveSection("ai-runtime")}
+        >
+          <BrainCircuit size={17} /> AI Runtime
+        </button>
+        <button
+          type="button"
+          className={activeSection === "scraper-pacing" ? "active" : ""}
+          aria-current={activeSection === "scraper-pacing" ? "page" : undefined}
+          onClick={() => setActiveSection("scraper-pacing")}
+        >
+          <Settings2 size={17} /> Scraper Pacing
+        </button>
+      </nav>
+      {activeSection === "scraper-pacing" ? (
+        <ScraperPacingSettings onOpenCrawlTasks={onOpenCrawlTasks} />
+      ) : (
+        <AIRuntimeSettings />
+      )}
+    </div>
   );
 }

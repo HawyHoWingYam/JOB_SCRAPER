@@ -328,6 +328,19 @@ describe("AISettingsPage", () => {
         return mockJsonResponse(currentSettingsPayload);
       }
 
+      if (url.includes("/api/v1/settings/scraper-pacing")) {
+        return mockJsonResponse({
+          items: ["jobsdb", "ctgoodjobs", "offertoday"].map((source_site) => ({
+            source_site,
+            interval_min_seconds: 1,
+            interval_max_seconds: 3,
+            burst_size: 20,
+            burst_pause_seconds: 30,
+          })),
+          active_detail_task_count: 0,
+        });
+      }
+
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
   });
@@ -384,6 +397,18 @@ describe("AISettingsPage", () => {
     expect(screen.getByText(/comp\.\.\.9999/i)).toBeInTheDocument();
     expect(screen.queryByText(/configured provider/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/degraded state/i)).not.toBeInTheDocument();
+  });
+
+  it("navigates between AI Runtime and Scraper Pacing settings sections", async () => {
+    const user = userEvent.setup();
+    render(<AISettingsPage />);
+    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+
+    await user.click(screen.getByRole("button", { name: "Scraper Pacing" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Scraper Pacing" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "AI Runtime" }));
+    expect(await screen.findByRole("heading", { level: 1, name: /ai runtime/i })).toBeInTheDocument();
   });
 
   it("renders provider cards, field labels, and custom api format options from the provider catalog payload", async () => {

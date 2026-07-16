@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.ai.llm_client import refresh_llm_status, reset_client
+from app.crawl_cancellation import ACTIVE_MANUAL_DETAIL_STATUSES
 from app.database import get_db
+from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.services.ai_provider_catalog import build_ai_provider_catalog
 from app.services.ai_runtime_settings_service import (
     AIRuntimeSettingsService,
@@ -31,8 +33,15 @@ router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 def get_scraper_pacing_settings(db: Session = Depends(get_db)):
     service = ScraperPacingSettingsService(db)
     rows = service.list_settings()
+    active_detail_task_count = CrawlJobRepository().count_active_manual_detail_jobs(
+        db,
+        statuses=ACTIVE_MANUAL_DETAIL_STATUSES,
+    )
     db.commit()
-    return {"items": [serialize_scraper_pacing_row(row) for row in rows]}
+    return {
+        "items": [serialize_scraper_pacing_row(row) for row in rows],
+        "active_detail_task_count": active_detail_task_count,
+    }
 
 
 @router.put(

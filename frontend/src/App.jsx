@@ -23,8 +23,13 @@ function resolveInitialView() {
 
 function App() {
   const [activeView, setActiveView] = useState(resolveInitialView);
+  const [settingsSection, setSettingsSection] = useState('ai-runtime');
   const navigateToAI = () => setActiveView('ai');
   const navigateToCrawlTasks = () => setActiveView('crawl-tasks');
+  const navigateToScraperPacing = () => {
+    setSettingsSection('scraper-pacing');
+    setActiveView('settings');
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -65,11 +70,17 @@ function App() {
             {activeView === 'add-job' && <AddJobPage />}
             {activeView === 'companies' && <CompaniesPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
-            {activeView === 'settings' && <AISettingsPage />}
+            {activeView === 'settings' && (
+              <AISettingsPage
+                initialSection={settingsSection}
+                onOpenCrawlTasks={navigateToCrawlTasks}
+              />
+            )}
             {activeView === 'scheduler' && (
               <ScheduleManager
                 onNavigateToAI={navigateToAI}
                 onNavigateToCrawlTasks={navigateToCrawlTasks}
+                onNavigateToScraperPacing={navigateToScraperPacing}
               />
             )}
             {activeView === 'crawl-tasks' && <CrawlTasksPage />}

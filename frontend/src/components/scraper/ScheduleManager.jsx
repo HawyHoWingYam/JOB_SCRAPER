@@ -2,11 +2,13 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Zap, AlertTriangle, CalendarClock, X } from 'lucide-react';
 import { apiFetchJson } from '../../api/client';
 import { API_BASE_URL, apiPath } from '../../api/base';
+import { loadScraperPacingSettings } from '../../api/scraperPacing';
 import { createMonitoringId, logError } from '../../monitoring';
 import ScheduleForm from './ScheduleForm';
 import ScheduleList from './ScheduleList';
 import ScheduleHistory from './ScheduleHistory';
 import ScrapeProgressPanel from './ScrapeProgressPanel';
+import ScraperPacingSummary from './ScraperPacingSummary';
 import { getCrawlModeOptionsForSource, resolveDefaultCrawlMode } from './crawlMode';
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
 import { sourceRequiresExternalHeadedWorker } from './headedRuntime';
@@ -371,7 +373,7 @@ function buildImmediateRunModeCopy(form) {
     };
 }
 
-function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
+function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToScraperPacing }) {
     // State
     const [schedules, setSchedules] = useState([]);
     const [categories, setCategories] = useState([]);
@@ -379,6 +381,11 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
     const sourceCatalog = capabilities?.sources ?? EMPTY_SOURCE_CATALOG;
     const [listingBatches, setListingBatches] = useState([]);
     const [currentSourceSite, setCurrentSourceSite] = useState('jobsdb');
+    const [scraperPacingState, setScraperPacingState] = useState({
+        items: [],
+        loading: false,
+        error: null,
+    });
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
     const [showForm, setShowForm] = useState(false);
@@ -453,6 +460,37 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
     useEffect(() => {
         syncImmediateFormWithSourceDefaults();
     }, [syncImmediateFormWithSourceDefaults]);
+
+    useEffect(() => {
+        if (!showImmediateScrape || immediateForm.crawl_phase !== 'detail') {
+            return undefined;
+        }
+
+        let cancelled = false;
+        setScraperPacingState((current) => ({ ...current, loading: true, error: null }));
+        void loadScraperPacingSettings()
+            .then((payload) => {
+                if (!cancelled) {
+                    setScraperPacingState({
+                        items: Array.isArray(payload?.items) ? payload.items : [],
+                        loading: false,
+                        error: null,
+                    });
+                }
+            })
+            .catch((requestError) => {
+                if (!cancelled) {
+                    setScraperPacingState({
+                        items: [],
+                        loading: false,
+                        error: requestError instanceof Error ? requestError.message : 'Failed to load saved pacing',
+                    });
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [immediateForm.crawl_phase, showImmediateScrape]);
 
     const handleImmediateScrapeToggle = () => {
         if (!showImmediateScrape) {
@@ -1008,6 +1046,9 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
         headedWorkerStatus,
     );
     const immediateRunModeCopy = buildImmediateRunModeCopy(immediateForm);
+    const selectedScraperPacing = scraperPacingState.items.find(
+        (item) => item.source_site === currentSourceSite,
+    ) || null;
 
     return (
         <div className="scheduler-container">
@@ -1189,6 +1230,16 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks }) {
                             ))}
                         </div>
                     </div>
+
+                    {immediateForm.crawl_phase === 'detail' ? (
+                        <ScraperPacingSummary
+                            settings={selectedScraperPacing}
+                            sourceSite={currentSourceSite}
+                            loading={scraperPacingState.loading}
+                            error={scraperPacingState.error}
+                            onOpenSettings={onNavigateToScraperPacing}
+                        />
+                    ) : null}
 
                     <div className={`override-readiness-panel ${immediateRunReadiness.isReady ? 'ready' : 'blocked'}`}>
                         <span className="scheduler-panel-kicker">{immediateRunReadiness.statusLabel}</span>

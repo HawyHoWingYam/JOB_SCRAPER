@@ -4,6 +4,9 @@ from __future__ import annotations
 CANCELLABLE_CRAWL_JOB_STATUSES = frozenset(
     {"queued", "dispatching", "running", "manual_action_required"}
 )
+ACTIVE_MANUAL_DETAIL_STATUSES = frozenset(
+    {*CANCELLABLE_CRAWL_JOB_STATUSES, "cancelling"}
+)
 CANCELLATION_PROTECTED_STATUSES = frozenset({"cancelling", "cancelled"})
 TERMINAL_CRAWL_JOB_STATUSES = frozenset({"completed", "failed", "cancelled"})
 

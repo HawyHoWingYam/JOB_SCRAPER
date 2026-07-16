@@ -3,7 +3,7 @@
   "name": "scraper-pacing-settings-ui",
   "title": "Design scraper pacing settings UI",
   "description": "Reorganize Settings and add independent source pacing cards plus a read-only Direct Override summary.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

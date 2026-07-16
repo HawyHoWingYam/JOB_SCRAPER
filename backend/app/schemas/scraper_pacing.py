@@ -28,3 +28,4 @@ class ScraperPacingSettingsResponse(DetailPacingConfig):
 
 class ScraperPacingSettingsListResponse(BaseModel):
     items: list[ScraperPacingSettingsResponse]
+    active_detail_task_count: int = Field(ge=0)

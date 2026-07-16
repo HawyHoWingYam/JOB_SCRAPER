@@ -27,15 +27,15 @@ Direct Override.
 
 ## Acceptance Criteria
 
-- [ ] Settings sections are navigable and preserve existing AI Runtime behavior.
-- [ ] Three cards render correct values, ranges, units, defaults, and independent
+- [x] Settings sections are navigable and preserve existing AI Runtime behavior.
+- [x] Three cards render correct values, ranges, units, defaults, and independent
       save/reset/dirty/error states.
-- [ ] Invalid local values block save with accessible feedback; backend 422
+- [x] Invalid local values block save with accessible feedback; backend 422
       feedback is also rendered.
-- [ ] Active detail count/warning/link are accurate and do not block save.
-- [ ] Direct Override renders a read-only source summary/link and no duplicate
+- [x] Active detail count/warning/link are accurate and do not block save.
+- [x] Direct Override renders a read-only source summary/link and no duplicate
       pacing inputs.
-- [ ] Focused interaction/accessibility tests and full frontend build pass.
+- [x] Focused interaction/accessibility tests and full frontend build pass.
 
 ## Dependencies
 

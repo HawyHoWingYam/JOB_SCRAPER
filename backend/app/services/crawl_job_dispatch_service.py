@@ -7,7 +7,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.crawl_cancellation import can_request_cancellation
+from app.crawl_cancellation import (
+    ACTIVE_MANUAL_DETAIL_STATUSES,
+    can_request_cancellation,
+)
 from app.crawl_phases import resolve_crawl_phase, resolve_detail_statuses
 from app.crawl_modes import normalize_source_site, resolve_crawl_mode
 from app.messaging.outbox_publisher import OutboxPublisher
@@ -37,15 +40,6 @@ RESUME_CONTEXT_EVENT_TYPES = {
     "crawl.manual_action_required",
     "crawl.requested",
 }
-
-ACTIVE_MANUAL_DETAIL_STATUSES = {
-    "queued",
-    "dispatching",
-    "running",
-    "manual_action_required",
-    "cancelling",
-}
-
 
 class ActiveManualDetailCrawlConflict(RuntimeError):
     pass
