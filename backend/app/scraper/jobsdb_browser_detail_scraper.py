@@ -17,6 +17,7 @@ from app.scraper.manual_action import (
     RESUME_STRATEGY_FRESH_PROFILE,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
     build_session_recovery_manual_action,
+    resolve_manual_action_cdp_connect_host,
 )
 from app.sources.jobsdb.parsers import parse_detail_page as parse_jobsdb_detail_page
 
@@ -220,32 +221,38 @@ class JobsDBBrowserDetailScraper:
             raise self._build_reuse_open_browser_unavailable_error(
                 message="No reusable browser session is available for this automation profile. Open the manual browser again or choose Fresh Profile."
             )
+        cdp_host = settings.manual_action_cdp_host or settings.manual_action_helper_host
+        cdp_connect_host = resolve_manual_action_cdp_connect_host(cdp_host)
 
         logger.info(
-            "manual_action_attach_attempt",
-            extra={
-                "crawl_job_id": self.request_payload.get("crawl_job_id"),
-                "strategy": self.resume_strategy,
-                "source_site": "jobsdb",
-                "debug_port": session.debug_port,
-            },
+            build_scrape_log_event(
+                "manual_action_attach_attempt",
+                source="jobsdb",
+                crawl_job_id=self.request_payload.get("crawl_job_id"),
+                strategy=self.resume_strategy,
+                cdp_host=cdp_host,
+                cdp_connect_host=cdp_connect_host,
+                debug_port=session.debug_port,
+            )
         )
         try:
             self._sync_browser = self._sync_playwright.chromium.connect_over_cdp(
-                f"http://127.0.0.1:{session.debug_port}"
+                f"http://{cdp_connect_host}:{session.debug_port}"
             )
         except ManualActionRequiredError:
             raise
         except Exception as exc:
             logger.info(
-                "manual_action_attach_failure",
-                extra={
-                    "crawl_job_id": self.request_payload.get("crawl_job_id"),
-                    "strategy": self.resume_strategy,
-                    "source_site": "jobsdb",
-                    "debug_port": session.debug_port,
-                    "error": str(exc),
-                },
+                build_scrape_log_event(
+                    "manual_action_attach_failure",
+                    source="jobsdb",
+                    crawl_job_id=self.request_payload.get("crawl_job_id"),
+                    strategy=self.resume_strategy,
+                    cdp_host=cdp_host,
+                    cdp_connect_host=cdp_connect_host,
+                    debug_port=session.debug_port,
+                    error_type=type(exc).__name__,
+                )
             )
             raise self._build_reuse_open_browser_unavailable_error(
                 message="The reusable browser session is unavailable. Reopen the manual browser or choose Fresh Profile."
@@ -253,14 +260,16 @@ class JobsDBBrowserDetailScraper:
         self._sync_context = self._sync_browser.contexts[0] if self._sync_browser.contexts else None
         if self._sync_context is None:
             logger.info(
-                "manual_action_attach_failure",
-                extra={
-                    "crawl_job_id": self.request_payload.get("crawl_job_id"),
-                    "strategy": self.resume_strategy,
-                    "source_site": "jobsdb",
-                    "debug_port": session.debug_port,
-                    "error": "Attached browser exposes no reusable context",
-                },
+                build_scrape_log_event(
+                    "manual_action_attach_failure",
+                    source="jobsdb",
+                    crawl_job_id=self.request_payload.get("crawl_job_id"),
+                    strategy=self.resume_strategy,
+                    cdp_host=cdp_host,
+                    cdp_connect_host=cdp_connect_host,
+                    debug_port=session.debug_port,
+                    reason="attached_browser_has_no_context",
+                )
             )
             raise self._build_reuse_open_browser_unavailable_error(
                 message="The reusable browser session is unavailable. Reopen the manual browser or choose Fresh Profile."
@@ -270,13 +279,15 @@ class JobsDBBrowserDetailScraper:
         self._sync_page = self._sync_context.pages[0] if self._sync_context.pages else self._sync_context.new_page()
         self._sync_page.wait_for_timeout(1500)
         logger.info(
-            "manual_action_attach_success",
-            extra={
-                "crawl_job_id": self.request_payload.get("crawl_job_id"),
-                "strategy": self.resume_strategy,
-                "source_site": "jobsdb",
-                "debug_port": session.debug_port,
-            },
+            build_scrape_log_event(
+                "manual_action_attach_success",
+                source="jobsdb",
+                crawl_job_id=self.request_payload.get("crawl_job_id"),
+                strategy=self.resume_strategy,
+                cdp_host=cdp_host,
+                cdp_connect_host=cdp_connect_host,
+                debug_port=session.debug_port,
+            )
         )
 
     def _stop_sync_runtime(self) -> None:

@@ -59,6 +59,9 @@ beforeEach(() => {
     if (`${url}`.includes("/health")) {
       return { status: "ok" };
     }
+    if (`${url}`.includes("/events")) {
+      return { events: [], total: 0 };
+    }
     return {
       items: [listingTask],
       total: 1,
@@ -226,6 +229,136 @@ describe("CrawlTasksPage metric summaries", () => {
 });
 
 describe("CrawlTasksPage manual-action helper health", () => {
+  it("keeps both resume actions disabled while an accepted attempt is unresolved", async () => {
+    const manualTask = {
+      crawl_job_id: "jobsdb-pending-recovery-task",
+      status: "manual_action_required",
+      source_site: "jobsdb",
+      crawl_mode: "headless",
+      manual_action: {
+        resume_supported: true,
+        reuse_open_browser_supported: true,
+      },
+    };
+    apiFetchJson.mockImplementation(async (url) => {
+      if (`${url}`.includes("/capabilities")) {
+        return { manual_actions: {} };
+      }
+      if (`${url}`.includes("/health")) {
+        return { status: "ok" };
+      }
+      if (`${url}`.includes("/manual-actions/reuse-status")) {
+        return { available: true, status: "live" };
+      }
+      if (`${url}`.includes("/events")) {
+        return {
+          events: [
+            {
+              sequence_no: 8,
+              event_type: "crawl.resume_requested",
+              created_at: "2026-07-16T00:35:00Z",
+              payload: { strategy: "reuse_open_browser" },
+            },
+          ],
+          total: 1,
+        };
+      }
+      return { items: [manualTask], total: 1, page: 1, page_size: 10 };
+    });
+
+    render(<CrawlTasksPage />);
+
+    expect(
+      await screen.findByText(/waiting for the crawl outcome/i),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByTestId("crawl-task-resume-open-browser"),
+    ).toBeDisabled();
+    expect(screen.getByTestId("crawl-task-resume-fresh")).toBeDisabled();
+  });
+
+  it("shows a pending resume and persists the returned manual-action outcome", async () => {
+    let resolveResume;
+    let recoveryEvents = [];
+    const resumePromise = new Promise((resolve) => {
+      resolveResume = resolve;
+    });
+    const manualTask = {
+      crawl_job_id: "jobsdb-recovery-task",
+      status: "manual_action_required",
+      source_site: "jobsdb",
+      crawl_mode: "headless",
+      manual_action: {
+        resume_supported: true,
+        reuse_open_browser_supported: true,
+      },
+      updated_at: "2026-07-16T00:35:03Z",
+    };
+    apiFetchJson.mockImplementation(async (url) => {
+      if (`${url}`.includes("/capabilities")) {
+        return { manual_actions: {} };
+      }
+      if (`${url}`.includes("/health")) {
+        return { status: "ok" };
+      }
+      if (`${url}`.includes("/manual-actions/reuse-status")) {
+        return { available: true, status: "live" };
+      }
+      if (`${url}`.includes("/events")) {
+        return { events: recoveryEvents, total: recoveryEvents.length };
+      }
+      if (`${url}`.includes("/resume")) {
+        await resumePromise;
+        recoveryEvents = [
+          {
+            sequence_no: 8,
+            event_type: "crawl.resume_requested",
+            created_at: "2026-07-16T00:35:00Z",
+            payload: { strategy: "reuse_open_browser" },
+          },
+          {
+            sequence_no: 11,
+            event_type: "crawl.manual_action_required",
+            created_at: "2026-07-16T00:35:03Z",
+            payload: {
+              manual_action: {
+                stage: "reuse_open_browser_unavailable",
+                classification: "human_verification",
+                message: "The reusable browser session is unavailable.",
+              },
+            },
+          },
+        ];
+        return { status: "dispatching" };
+      }
+      return { items: [manualTask], total: 1, page: 1, page_size: 10 };
+    });
+
+    render(<CrawlTasksPage />);
+    const resumeButton = await screen.findByTestId(
+      "crawl-task-resume-open-browser",
+    );
+    const freshButton = screen.getByTestId("crawl-task-resume-fresh");
+
+    fireEvent.click(resumeButton);
+    expect(
+      await screen.findByText("Resume request in progress..."),
+    ).toBeInTheDocument();
+    expect(resumeButton).toBeDisabled();
+    expect(freshButton).toBeDisabled();
+
+    resolveResume({ status: "dispatching" });
+
+    const attempt = await screen.findByTestId("crawl-task-recovery-attempt");
+    expect(attempt).toHaveTextContent("Resume #8");
+    expect(attempt).toHaveTextContent("reuse open browser");
+    expect(attempt).toHaveTextContent("reuse open browser unavailable");
+    expect(attempt).toHaveTextContent("human verification");
+    expect(attempt).toHaveTextContent(
+      "The reusable browser session is unavailable.",
+    );
+  });
+
   it("guides helper recovery without automatically opening a browser or resuming", async () => {
     let helperOnline = false;
     let browserConnected = false;

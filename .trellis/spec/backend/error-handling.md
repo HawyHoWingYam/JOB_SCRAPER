@@ -43,6 +43,8 @@ normalize_manual_action_payload(
     default_browser_channel=None,
     default_browser_profile_path=None,
 ) -> dict[str, Any]
+
+resolve_manual_action_cdp_connect_host(configured_host: str | None) -> str
 ```
 
 The only product continuation endpoint is explicit:
@@ -104,6 +106,28 @@ Recovery is operator-driven. While paused, no worker polls the source and no
 automatic resume occurs. The operator changes/clears the public IP/network,
 confirms access, and clicks Resume for the same crawl-job ID.
 
+#### Reusable-browser transport and attempt feedback
+
+Every browser adapter connecting from Docker to a browser opened on the Windows
+host must resolve `settings.manual_action_cdp_host` (falling back to
+`settings.manual_action_helper_host`) through
+`resolve_manual_action_cdp_connect_host(...)` before `connect_over_cdp`. Never
+hard-code `127.0.0.1` in a container-side adapter: inside Docker it addresses
+the container, not the operator browser.
+
+Attach attempt, success, and failure records use `build_scrape_log_event()` and
+include `source`, `crawl_job_id`, `strategy`, configured `cdp_host`, resolved
+`cdp_connect_host`, and `debug_port`. Failures include only a bounded
+`error_type` or reason; raw exception text and browser/session data are not
+logged. An attach failure remains `reuse_open_browser_unavailable` and consumes
+no detail target.
+
+Crawl Tasks derives the latest explicit recovery attempt from the tail of the
+existing event endpoint: newest `crawl.resume_requested`, followed by the first
+later `crawl.manual_action_required` outcome when present. An unresolved attempt
+disables both Resume strategies. Helper/browser connectivity never initiates a
+resume by itself.
+
 #### Crawl Tasks recovery projection
 
 `build_crawl_task_snapshot(...)` treats the ordered event history as the
@@ -138,6 +162,10 @@ JobsDB-only defaults.
 | Manual action followed by a progress/segment event while still paused | Snapshot projects the newest manual-action event and keeps recovery controls available |
 | Historical manual action followed by completion/resume | Snapshot returns `manual_action=null`; no stale recovery controls |
 | OfferToday legacy event lacks browser fields | Do not synthesize JobsDB browser/profile values; reusable-browser support remains false |
+| Container adapter resolves configured CDP host | Connect to the resolved host and registered debug port |
+| CDP attach raises or exposes no context | Emit bounded attach failure; return resumable `reuse_open_browser_unavailable`; consume zero targets |
+| Latest resume event has no later outcome | Show accepted/waiting feedback and disable both Resume actions |
+| Later manual-action event resolves the attempt | Show its stage/classification/message and permit another explicit action |
 
 ### 5. Good / Base / Bad Cases
 
@@ -156,6 +184,10 @@ JobsDB-only defaults.
 - **Bad:** Crawl Tasks reads manual-action fields only from the overall latest
   event, so a later bookkeeping event hides recovery controls while the task is
   still resumable.
+- **Good:** JobsDB in Docker resolves `host.docker.internal`, attaches to the
+  registered host-browser debug port, and continues the same target scope.
+- **Bad:** The helper reports connected, so the frontend automatically resumes
+  or allows repeated Resume clicks before the previous event has an outcome.
 
 ### 6. Tests Required
 
@@ -174,6 +206,13 @@ JobsDB-only defaults.
 - Synthetic responses are required for CTGoodJobs/JobsDB block tests. Do not
   deliberately ban the live public IP. Live OfferToday resume verification
   requires an actual operator IP change and explicit Resume.
+- `backend/tests/test_jobsdb_browser_detail_scraper.py` proves the configured and
+  resolved CDP host reaches `connect_over_cdp`, structured success fields are
+  visible in formatted logs, and attach failure stays resumable.
+- `frontend/src/components/scraper/recoveryAttemptUtils.test.js` and
+  `CrawlTasksPage.test.jsx` cover attempt ordering, durable returned outcome,
+  local request pending state, and disabled repeated Resume actions while the
+  event-derived attempt is unresolved.
 
 ### 7. Wrong vs Correct
 
@@ -237,6 +276,33 @@ raw_manual_action = _event_manual_action(manual_action_event)
 
 The persisted state prevents stale controls; the event-kind lookup preserves
 the active recovery contract across later bookkeeping events.
+
+#### Wrong: container-local CDP and invisible log extras
+
+```python
+logger.info("manual_action_attach_attempt", extra={"debug_port": port})
+browser = chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+```
+
+Default container logs may omit `LogRecord.extra`, and loopback cannot reach the
+host browser.
+
+#### Correct: resolved host and formatted bounded fields
+
+```python
+configured_host = settings.manual_action_cdp_host or settings.manual_action_helper_host
+connect_host = resolve_manual_action_cdp_connect_host(configured_host)
+logger.info(
+    build_scrape_log_event(
+        "manual_action_attach_attempt",
+        source="jobsdb",
+        cdp_host=configured_host,
+        cdp_connect_host=connect_host,
+        debug_port=port,
+    )
+)
+browser = chromium.connect_over_cdp(f"http://{connect_host}:{port}")
+```
 
 ---
 

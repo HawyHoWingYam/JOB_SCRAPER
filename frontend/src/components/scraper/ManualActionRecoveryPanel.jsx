@@ -35,9 +35,22 @@ function buildPowerShellStartCommand(workdir, command) {
 
 function formatManualActionInstructions(value) {
   if (Array.isArray(value)) {
-    return value.map((item) => `${item}`.trim()).filter(Boolean).join(" ");
+    return value
+      .map((item) => `${item}`.trim())
+      .filter(Boolean)
+      .join(" ");
   }
   return `${value || ""}`.trim();
+}
+
+function formatRecoveryTimestamp(value) {
+  if (!value) {
+    return "time unavailable";
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? `${value}`
+    : parsed.toLocaleString("en-US");
 }
 
 function RecoveryStep({ label, state, current }) {
@@ -58,6 +71,8 @@ export default function ManualActionRecoveryPanel({
   task,
   capability,
   onTaskChanged,
+  recoveryAttempt,
+  recoveryAttemptError,
 }) {
   const resumeSupported = task?.manual_action?.resume_supported === true;
   const reuseSupported =
@@ -325,7 +340,23 @@ export default function ManualActionRecoveryPanel({
         ? "resume_with_open_browser"
         : "open_browser";
   const anyPending = actionState.pending !== null;
-  const instructions = formatManualActionInstructions(task?.manual_action?.instructions);
+  const resumePending = `${actionState.pending || ""}`.startsWith("resume_");
+  const recoveryOutcomePending = recoveryAttempt?.status === "pending";
+  const resumeDisabled = anyPending || recoveryOutcomePending;
+  const instructions = formatManualActionInstructions(
+    task?.manual_action?.instructions,
+  );
+  const recoveryStrategy = `${recoveryAttempt?.strategy || "unknown"}`.replace(
+    /_/g,
+    " ",
+  );
+  const recoveryStage = `${recoveryAttempt?.stage || "unknown"}`.replace(
+    /_/g,
+    " ",
+  );
+  const recoveryClassification = `${
+    recoveryAttempt?.classification || "unclassified"
+  }`.replace(/_/g, " ");
 
   return (
     <section
@@ -363,6 +394,49 @@ export default function ManualActionRecoveryPanel({
           </div>
         )}
       </div>
+
+      {resumePending && (
+        <div
+          className="crawl-tasks-banner crawl-tasks-banner-warning"
+          role="status"
+        >
+          Resume request in progress...
+        </div>
+      )}
+
+      {!resumePending && recoveryAttempt && (
+        <div
+          className="crawl-tasks-banner crawl-tasks-banner-warning"
+          data-testid="crawl-task-recovery-attempt"
+          role="status"
+        >
+          <strong>
+            Resume #{recoveryAttempt.sequenceNo} · {recoveryStrategy}
+          </strong>
+          {recoveryAttempt.status === "pending" ? (
+            <div>
+              Accepted {formatRecoveryTimestamp(recoveryAttempt.requestedAt)};
+              waiting for the crawl outcome.
+            </div>
+          ) : (
+            <div>
+              Returned to manual action{" "}
+              {formatRecoveryTimestamp(recoveryAttempt.outcomeAt)}:{" "}
+              {recoveryStage} · {recoveryClassification}
+              {recoveryAttempt.message ? ` — ${recoveryAttempt.message}` : ""}
+            </div>
+          )}
+        </div>
+      )}
+
+      {recoveryAttemptError && (
+        <div
+          className="crawl-tasks-banner crawl-tasks-banner-error"
+          role="alert"
+        >
+          Recovery attempt history unavailable: {recoveryAttemptError}
+        </div>
+      )}
 
       {reuseSupported ? (
         <div className="manual-action-primary-step">
@@ -431,7 +505,7 @@ export default function ManualActionRecoveryPanel({
                 type="button"
                 className="manual-action-primary-button"
                 data-testid="crawl-task-resume-open-browser"
-                disabled={anyPending}
+                disabled={resumeDisabled}
                 onClick={() =>
                   void runAction(
                     "resume_open_browser",
@@ -478,7 +552,7 @@ export default function ManualActionRecoveryPanel({
             type="button"
             className="manual-action-secondary-button"
             data-testid="crawl-task-resume-fresh"
-            disabled={anyPending}
+            disabled={resumeDisabled}
             onClick={() =>
               void runAction(
                 "resume_fresh",

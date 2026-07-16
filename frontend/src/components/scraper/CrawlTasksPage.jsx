@@ -21,8 +21,13 @@ import { formatCrawlModeLabel } from "./crawlMode";
 import { formatCrawlPhaseLabel } from "./crawlPhase";
 import { formatScraperSourceLabel } from "./listingBatchLabel";
 import { buildIpBlockGuidance } from "./ipBlockGuidance";
-import { cancelCrawlJob, resumeCrawlJob } from "./crawlTaskActions";
+import {
+  cancelCrawlJob,
+  getCrawlJobEvents,
+  resumeCrawlJob,
+} from "./crawlTaskActions";
 import ManualActionRecoveryPanel from "./ManualActionRecoveryPanel";
+import { deriveLatestRecoveryAttempt } from "./recoveryAttemptUtils";
 import "./CrawlTasksPage.css";
 
 const API_BASE = apiPath("");
@@ -367,7 +372,12 @@ export default function CrawlTasksPage() {
     notice: null,
   });
   const [manualActionCapability, setManualActionCapability] = useState(null);
+  const [selectedTaskEvents, setSelectedTaskEvents] = useState([]);
+  const [selectedTaskEventsTaskId, setSelectedTaskEventsTaskId] =
+    useState(null);
+  const [selectedTaskEventsError, setSelectedTaskEventsError] = useState(null);
   const latestLoadRef = useRef(0);
+  const latestEventsLoadRef = useRef(0);
 
   const selectedTask = useMemo(() => {
     return tasks.find((task) => task.crawl_job_id === selectedTaskId) || null;
@@ -377,6 +387,49 @@ export default function CrawlTasksPage() {
     Math.ceil((pagination.total || 0) / (pagination.pageSize || PAGE_SIZE)),
   );
   const manualActionGuidance = buildManualActionGuidance(selectedTask);
+  const recoveryAttempt = useMemo(
+    () =>
+      selectedTaskEventsTaskId === selectedTaskId
+        ? deriveLatestRecoveryAttempt(selectedTaskEvents)
+        : null,
+    [selectedTaskEvents, selectedTaskEventsTaskId, selectedTaskId],
+  );
+
+  const loadSelectedTaskEvents = useCallback(async (crawlJobId) => {
+    if (!crawlJobId) {
+      setSelectedTaskEvents([]);
+      setSelectedTaskEventsTaskId(null);
+      setSelectedTaskEventsError(null);
+      return;
+    }
+
+    const requestVersion = latestEventsLoadRef.current + 1;
+    latestEventsLoadRef.current = requestVersion;
+    try {
+      const payload = await getCrawlJobEvents(crawlJobId, 100);
+      if (latestEventsLoadRef.current !== requestVersion) {
+        return;
+      }
+      setSelectedTaskEvents(
+        Array.isArray(payload?.events) ? payload.events : [],
+      );
+      setSelectedTaskEventsTaskId(crawlJobId);
+      setSelectedTaskEventsError(null);
+    } catch (eventsError) {
+      if (latestEventsLoadRef.current !== requestVersion) {
+        return;
+      }
+      const detail = extractErrorMessage(
+        eventsError,
+        "Recovery attempt history is unavailable",
+      );
+      setSelectedTaskEventsError(detail);
+      logError("crawl_tasks.events_load_failed", {
+        crawlJobId,
+        detail,
+      });
+    }
+  }, []);
 
   const loadTasks = useCallback(
     async ({ reason = "refresh" } = {}) => {
@@ -455,6 +508,20 @@ export default function CrawlTasksPage() {
       window.clearInterval(intervalId);
     };
   }, [loadTasks]);
+
+  useEffect(() => {
+    void loadSelectedTaskEvents(selectedTaskId);
+    if (!selectedTaskId) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadSelectedTaskEvents(selectedTaskId);
+    }, AUTO_REFRESH_MS);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [loadSelectedTaskEvents, selectedTaskId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -544,8 +611,9 @@ export default function CrawlTasksPage() {
   const handleTaskChanged = useCallback(
     async (reason) => {
       await loadTasks({ reason });
+      await loadSelectedTaskEvents(selectedTask?.crawl_job_id);
     },
-    [loadTasks],
+    [loadSelectedTaskEvents, loadTasks, selectedTask],
   );
 
   const handleCancelTask = useCallback(() => {
@@ -804,6 +872,8 @@ export default function CrawlTasksPage() {
                   task={selectedTask}
                   capability={manualActionCapability}
                   onTaskChanged={handleTaskChanged}
+                  recoveryAttempt={recoveryAttempt}
+                  recoveryAttemptError={selectedTaskEventsError}
                 />
               ) : (
                 <div className="crawl-tasks-detail-actions">

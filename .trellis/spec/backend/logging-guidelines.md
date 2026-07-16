@@ -49,6 +49,11 @@ Do not create a second formatter for one source. Use
 `build_scrape_log_event()` so values have the same `EVENT key=value` shape and
 embedded newlines cannot forge records.
 
+Reusable-browser attach records follow the same rule. Attempt, success, and
+failure logs include configured `cdp_host`, resolved `cdp_connect_host`, and
+`debug_port` in the formatted message, not only as `LogRecord.extra`; container
+log collectors may not render arbitrary extra fields.
+
 #### Listing cadence
 
 For each source, emit:
@@ -128,6 +133,8 @@ separate fields, for example `classification=ip_blocked code=-1000035`.
 | URL contains query token | Log keeps scheme/host/path but omits query/fragment values |
 | Raw payload contains secret/body | Secret/body is absent from every emitted log string |
 | Unexpected executor exception | `SCRAPE_EXECUTOR_FAIL` with error type and correlation, then normal state transition |
+| Reusable-browser attach succeeds | Formatted attempt/success records expose configured and resolved host plus port |
+| Reusable-browser attach fails | Formatted failure uses bounded `error_type` or reason; no raw browser/session data |
 
 ### 5. Good / Base / Bad Cases
 
@@ -153,6 +160,9 @@ separate fields, for example `classification=ip_blocked code=-1000035`.
 - Run Ruff on every touched Python module, `compileall`, focused tests, frontend
   source-aware guidance tests/build, container log inspection, and
   `git diff --check`.
+- `backend/tests/test_jobsdb_browser_detail_scraper.py` asserts the formatted
+  attach success/failure strings contain crawl correlation and both CDP host
+  forms, rather than relying on invisible logger extras.
 
 ### 7. Wrong vs Correct
 
