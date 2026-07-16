@@ -547,3 +547,39 @@ Completed the bounded four-arm CTGoodJobs transport comparison: all 116 observat
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: Complete scraper pacing operator UI
+
+**Date**: 2026-07-16
+**Task**: Complete scraper pacing operator UI
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed and deployed the two remaining manual detail pacing UI tasks: independent per-source Settings cards and read-only Direct Override summary, plus phase-safe Crawl Tasks pacing snapshots and truthful cancelling actions. Backend 132 passed/1 skipped, frontend 131 passed, production build and scoped lint passed; Issue #10 was updated and unrelated dirty files were preserved.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d8654489` | (see git log) |
+| `4a99b219` | (see git log) |
+| `c7f41227` | (see git log) |
+| `88073520` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
