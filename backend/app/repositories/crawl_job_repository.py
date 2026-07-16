@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.schedule import ScheduleExecution
+from app.crawl_cancellation import runtime_transition_allowed
 from app.utils.time import utc_now
 
 _UNSET = object()
@@ -93,6 +94,14 @@ class CrawlJobRepository:
     def get_crawl_job_by_id(self, db: Session, crawl_job_id) -> CrawlJob | None:
         return db.query(CrawlJob).filter(CrawlJob.id == crawl_job_id).first()
 
+    def get_crawl_job_by_id_for_update(self, db: Session, crawl_job_id) -> CrawlJob | None:
+        return (
+            db.query(CrawlJob)
+            .filter(CrawlJob.id == crawl_job_id)
+            .with_for_update()
+            .one_or_none()
+        )
+
     def record_runtime_event(
         self,
         db: Session,
@@ -116,6 +125,19 @@ class CrawlJobRepository:
         )
         if crawl_job is None:
             raise ValueError(f"Crawl job not found: {crawl_job_id}")
+
+        if not runtime_transition_allowed(
+            current_status=crawl_job.status,
+            next_status=status,
+        ):
+            if metrics is not None:
+                crawl_job.metrics = self._merge_metrics(crawl_job.metrics, metrics)
+            if auto_commit:
+                db.commit()
+                db.refresh(crawl_job)
+            else:
+                db.flush()
+            return crawl_job
 
         crawl_job.status = status
         if started_at is not _UNSET:

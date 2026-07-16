@@ -34,6 +34,7 @@ from app.sources.offertoday.response_policy import (
     OfferTodayTransportError,
     classify_offertoday_response,
 )
+from app.services.crawl_cancellation_token import CrawlCancellationRequested
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,8 @@ class OfferTodayDetailPipeline:
                     encrypted_job_id=target.identity.encrypted_job_id,
                 )
                 raw_response = dict(fetched) if isinstance(fetched, dict) else None
+            except CrawlCancellationRequested:
+                raise
             except (OfferTodayTransportError, TimeoutError, ConnectionError) as exc:
                 transport_error = exc
             except Exception as exc:

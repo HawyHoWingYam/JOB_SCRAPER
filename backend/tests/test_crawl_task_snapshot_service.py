@@ -149,6 +149,23 @@ def test_snapshot_common_detail_metrics_are_numeric_zeros() -> None:
     assert snapshot["detail_remaining_count"] == 0
 
 
+def test_snapshot_projects_cancelling_as_live_operator_state() -> None:
+    cancel_requested = _event(
+        {"status": "cancelling"},
+        event_type="crawl.cancel_requested",
+    )
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(status="cancelling"),
+        cancel_requested,
+        now=NOW,
+        events=[cancel_requested],
+    )
+
+    assert snapshot["persisted_status"] == "cancelling"
+    assert snapshot["status"] == "cancelling"
+    assert snapshot["operator_state"] == "live"
+
+
 def test_offertoday_common_metrics_prefer_distinct_frozen_cohort() -> None:
     cohort = _event(
         {

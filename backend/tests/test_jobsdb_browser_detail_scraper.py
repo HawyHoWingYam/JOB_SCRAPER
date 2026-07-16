@@ -7,6 +7,7 @@ import pytest
 from app.scraper import jobsdb_browser_detail_scraper as jobsdb_browser_module
 from app.scraper.jobsdb_browser_detail_scraper import JobsDBBrowserDetailScraper
 from app.scraper.manual_action import ManualActionRequiredError
+from app.services.crawl_cancellation_token import CrawlCancellationRequested
 
 
 class _FakePage:
@@ -167,3 +168,45 @@ async def test_jobsdb_reuse_browser_keeps_attach_failure_resumable(
     assert "cdp_connect_host=127.0.0.3" in failure_message
     assert "debug_port=9444" in failure_message
     assert "error_type=ConnectionError" in failure_message
+
+
+def test_jobsdb_cancellation_gate_runs_immediately_before_navigation() -> None:
+    page = SimpleNamespace(
+        goto_calls=0,
+        goto=lambda *_args, **_kwargs: setattr(page, "goto_calls", page.goto_calls + 1),
+    )
+
+    class _CancelledToken:
+        @staticmethod
+        def raise_if_cancelled() -> None:
+            raise CrawlCancellationRequested("cancelled")
+
+    scraper = JobsDBBrowserDetailScraper(cancellation_token=_CancelledToken())
+    scraper._runtime_started = True
+    scraper._sync_page = page
+
+    with pytest.raises(CrawlCancellationRequested):
+        scraper._fetch_page_content_sync("https://hk.jobsdb.com/job/123")
+
+    assert page.goto_calls == 0
+
+
+def test_jobsdb_browser_settle_wait_checks_each_one_second_slice() -> None:
+    waits: list[int] = []
+
+    class _Token:
+        checks = 0
+
+        def raise_if_cancelled(self) -> None:
+            self.checks += 1
+            if self.checks == 2:
+                raise CrawlCancellationRequested("cancelled")
+
+    token = _Token()
+    scraper = JobsDBBrowserDetailScraper(cancellation_token=token)
+    scraper._sync_page = SimpleNamespace(wait_for_timeout=waits.append)
+
+    with pytest.raises(CrawlCancellationRequested):
+        scraper._wait_for_timeout_with_cancellation(3000)
+
+    assert waits == [1000]

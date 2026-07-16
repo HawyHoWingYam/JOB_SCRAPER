@@ -23,6 +23,7 @@ from app.database import SessionLocal
 from app.request_monitoring import install_request_monitoring
 from app.server_runtime import run_api_app
 from app.services.startup_recovery_service import StartupRecoveryService
+from app.services.crawl_job_execution_launcher import CrawlJobExecutionLauncher
 
 configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
@@ -38,6 +39,9 @@ def run_api_startup_recovery() -> dict[str, int]:
             recover_schedule_executions=True,
         )
         startup_db.commit()
+        summary["crawl_cancellations_supervised"] = (
+            CrawlJobExecutionLauncher().recover_pending_cancellations()
+        )
         return summary
     finally:
         startup_db.close()

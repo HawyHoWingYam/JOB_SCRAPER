@@ -10,7 +10,6 @@ import {
   ChevronRight,
   ExternalLink,
   RefreshCcw,
-  RotateCcw,
   Square,
 } from "lucide-react";
 import { apiPath } from "../../api/base";
@@ -21,11 +20,7 @@ import { formatCrawlModeLabel } from "./crawlMode";
 import { formatCrawlPhaseLabel } from "./crawlPhase";
 import { formatScraperSourceLabel } from "./listingBatchLabel";
 import { buildIpBlockGuidance } from "./ipBlockGuidance";
-import {
-  cancelCrawlJob,
-  getCrawlJobEvents,
-  resumeCrawlJob,
-} from "./crawlTaskActions";
+import { cancelCrawlJob, getCrawlJobEvents } from "./crawlTaskActions";
 import ManualActionRecoveryPanel from "./ManualActionRecoveryPanel";
 import { deriveLatestRecoveryAttempt } from "./recoveryAttemptUtils";
 import "./CrawlTasksPage.css";
@@ -33,6 +28,7 @@ import "./CrawlTasksPage.css";
 const API_BASE = apiPath("");
 const PAGE_SIZE = 10;
 export const AUTO_REFRESH_MS = 60_000;
+export const CANCELLATION_REFRESH_MS = 1_000;
 const DEFAULT_FILTERS = {
   status: "all",
   sourceSite: "all",
@@ -44,6 +40,7 @@ const STATUS_OPTIONS = [
   { value: "queued", label: "Queued" },
   { value: "dispatching", label: "Dispatching" },
   { value: "running", label: "Running" },
+  { value: "cancelling", label: "Cancelling" },
   { value: "manual_action_required", label: "Manual Action Required" },
   { value: "completed", label: "Completed" },
   { value: "failed", label: "Failed" },
@@ -345,6 +342,25 @@ function isManualActionTask(task) {
   );
 }
 
+const CANCELLABLE_STATUSES = new Set([
+  "queued",
+  "dispatching",
+  "running",
+  "manual_action_required",
+]);
+
+function canCancelTask(task) {
+  return (
+    (!task?.trigger_type || task.trigger_type === "manual") &&
+    !task?.schedule_id &&
+    CANCELLABLE_STATUSES.has(task?.status)
+  );
+}
+
+function isCancellingTask(task) {
+  return task?.status === "cancelling";
+}
+
 function extractErrorMessage(error, fallbackMessage) {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -387,6 +403,7 @@ export default function CrawlTasksPage() {
     Math.ceil((pagination.total || 0) / (pagination.pageSize || PAGE_SIZE)),
   );
   const manualActionGuidance = buildManualActionGuidance(selectedTask);
+  const hasCancellingTask = tasks.some(isCancellingTask);
   const recoveryAttempt = useMemo(
     () =>
       selectedTaskEventsTaskId === selectedTaskId
@@ -500,14 +517,17 @@ export default function CrawlTasksPage() {
   useEffect(() => {
     void loadTasks({ reason: "initial" });
 
-    const intervalId = window.setInterval(() => {
-      void loadTasks({ reason: "poll" });
-    }, AUTO_REFRESH_MS);
+    const intervalId = window.setInterval(
+      () => {
+        void loadTasks({ reason: "poll" });
+      },
+      hasCancellingTask ? CANCELLATION_REFRESH_MS : AUTO_REFRESH_MS,
+    );
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [loadTasks]);
+  }, [hasCancellingTask, loadTasks]);
 
   useEffect(() => {
     void loadSelectedTaskEvents(selectedTaskId);
@@ -617,7 +637,7 @@ export default function CrawlTasksPage() {
   );
 
   const handleCancelTask = useCallback(() => {
-    if (!selectedTask?.crawl_job_id) {
+    if (!selectedTask?.crawl_job_id || !canCancelTask(selectedTask)) {
       return;
     }
     const confirmed = window.confirm(
@@ -866,6 +886,13 @@ export default function CrawlTasksPage() {
                 </div>
               )}
 
+              {isCancellingTask(selectedTask) && (
+                <div className="crawl-tasks-banner crawl-tasks-banner-warning">
+                  Cancellation requested. Waiting for the crawler process to
+                  stop before this task becomes Cancelled.
+                </div>
+              )}
+
               {isManualActionTask(selectedTask) ? (
                 <ManualActionRecoveryPanel
                   key={selectedTask.crawl_job_id}
@@ -875,23 +902,7 @@ export default function CrawlTasksPage() {
                   recoveryAttempt={recoveryAttempt}
                   recoveryAttemptError={selectedTaskEventsError}
                 />
-              ) : (
-                <div className="crawl-tasks-detail-actions">
-                  <button
-                    type="button"
-                    data-testid="crawl-task-resume"
-                    disabled={actionState.pending !== null}
-                    onClick={() =>
-                      void runTaskAction("resume", "Resume task", () =>
-                        resumeCrawlJob(selectedTask.crawl_job_id),
-                      )
-                    }
-                  >
-                    <RotateCcw size={16} aria-hidden="true" />
-                    <span>Resume Task</span>
-                  </button>
-                </div>
-              )}
+              ) : null}
 
               {actionState.error && (
                 <div className="crawl-tasks-banner crawl-tasks-banner-error">
@@ -1005,21 +1016,31 @@ export default function CrawlTasksPage() {
                 </div>
               )}
 
-              <div className="crawl-tasks-danger-zone">
-                <div>
-                  <strong>Danger zone</strong>
-                  <p>Cancel this crawl only when it should not be resumed.</p>
+              {(canCancelTask(selectedTask) ||
+                isCancellingTask(selectedTask)) && (
+                <div className="crawl-tasks-danger-zone">
+                  <div>
+                    <strong>Danger zone</strong>
+                    <p>Cancel this crawl only when it should not be resumed.</p>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="crawl-task-cancel"
+                    disabled={
+                      actionState.pending !== null ||
+                      isCancellingTask(selectedTask)
+                    }
+                    onClick={handleCancelTask}
+                  >
+                    <Square size={16} aria-hidden="true" />
+                    <span>
+                      {isCancellingTask(selectedTask)
+                        ? "Cancelling Crawl Job"
+                        : "Cancel Crawl Job"}
+                    </span>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  data-testid="crawl-task-cancel"
-                  disabled={actionState.pending !== null}
-                  onClick={handleCancelTask}
-                >
-                  <Square size={16} aria-hidden="true" />
-                  <span>Cancel Crawl Job</span>
-                </button>
-              </div>
+              )}
             </>
           ) : (
             <div className="crawl-tasks-empty">

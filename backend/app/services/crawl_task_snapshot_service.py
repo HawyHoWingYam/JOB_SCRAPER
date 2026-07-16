@@ -12,7 +12,7 @@ from app.services.source_category_registry import get_source_category_registry
 from app.utils.time import utc_now
 
 TERMINAL_CRAWL_JOB_STATUSES = {"completed", "failed", "cancelled"}
-ACTIVE_CRAWL_JOB_STATUSES = {"queued", "running", "dispatching"}
+ACTIVE_CRAWL_JOB_STATUSES = {"queued", "running", "dispatching", "cancelling"}
 ACTIONABLE_CRAWL_JOB_STATUSES = {"manual_action_required"}
 RECENT_TERMINAL_WINDOW = timedelta(seconds=60)
 BACKLOG_VISIBLE_WINDOW = timedelta(minutes=30)
@@ -35,6 +35,7 @@ PROGRESS_CONTEXT_EVENT_TYPES = ACTIVITY_INTERVAL_EVENT_TYPES | {
     "waf.challenge",
     "waf.challenge_cleared",
     "crawl.ip_blocked",
+    "crawl.cancel_requested",
 } | DETAIL_PROGRESS_EVENT_TYPES
 
 

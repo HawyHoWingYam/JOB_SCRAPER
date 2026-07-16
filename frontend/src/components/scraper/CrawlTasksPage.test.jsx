@@ -12,7 +12,10 @@ import {
 import "@testing-library/jest-dom/vitest";
 import userEvent from "@testing-library/user-event";
 import { apiFetchJson } from "../../api/client";
-import CrawlTasksPage, { AUTO_REFRESH_MS } from "./CrawlTasksPage";
+import CrawlTasksPage, {
+  AUTO_REFRESH_MS,
+  CANCELLATION_REFRESH_MS,
+} from "./CrawlTasksPage";
 
 vi.mock("../../api/client", () => ({
   apiFetchJson: vi.fn(),
@@ -21,6 +24,8 @@ vi.mock("../../api/client", () => ({
 const listingTask = {
   crawl_job_id: "listing-task",
   status: "running",
+  trigger_type: "manual",
+  schedule_id: null,
   source_site: "jobsdb",
   crawl_mode: "headless",
   phase: 1,
@@ -367,6 +372,8 @@ describe("CrawlTasksPage manual-action helper health", () => {
       status: "manual_action_required",
       source_site: "offertoday",
       crawl_mode: "headed",
+      trigger_type: "manual",
+      schedule_id: null,
       request_payload: { crawl_phase: "detail" },
       manual_action: {
         resume_supported: true,
@@ -472,6 +479,55 @@ describe("CrawlTasksPage manual-action helper health", () => {
     expect(resumeRequest?.[1]?.body).toBe(
       JSON.stringify({ strategy: "reuse_open_browser" }),
     );
+  });
+
+  it("shows cancelling as pending shutdown and disables invalid actions", async () => {
+    const cancellingTask = {
+      ...listingTask,
+      crawl_job_id: "cancelling-task",
+      status: "cancelling",
+    };
+    const intervalSpy = vi.spyOn(window, "setInterval");
+    apiFetchJson.mockImplementation(async (url) => {
+      if (`${url}`.includes("/capabilities")) {
+        return { manual_actions: {} };
+      }
+      return { items: [cancellingTask], total: 1, page: 1, page_size: 10 };
+    });
+
+    render(<CrawlTasksPage />);
+
+    expect((await screen.findAllByText("cancelling")).length).toBeGreaterThan(
+      0,
+    );
+    expect(
+      screen.getByText(/Waiting for the crawler process to stop/i),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("crawl-task-cancel")).toBeDisabled();
+    expect(screen.queryByTestId("crawl-task-resume")).not.toBeInTheDocument();
+    expect(intervalSpy).toHaveBeenCalledWith(
+      expect.any(Function),
+      CANCELLATION_REFRESH_MS,
+    );
+  });
+
+  it("does not expose cancellation for terminal tasks", async () => {
+    apiFetchJson.mockImplementation(async (url) => {
+      if (`${url}`.includes("/capabilities")) {
+        return { manual_actions: {} };
+      }
+      return {
+        items: [{ ...listingTask, status: "completed" }],
+        total: 1,
+        page: 1,
+        page_size: 10,
+      };
+    });
+
+    render(<CrawlTasksPage />);
+
+    expect((await screen.findAllByText("completed")).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("crawl-task-cancel")).not.toBeInTheDocument();
   });
 
   it("keeps a simpler fresh-profile path for manual actions without browser reuse", async () => {

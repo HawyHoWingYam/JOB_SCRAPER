@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 import hashlib
 import json
@@ -40,6 +39,7 @@ from app.sources.offertoday.response_policy import (
     OfferTodayTransportError,
     classify_offertoday_response,
 )
+from app.services.crawl_cancellation_token import NoopCrawlCancellationToken
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,7 @@ class OfferTodayBrowserRuntime:
         user_data_dir: str | None = None,
         executable_path: str | None = None,
         navigation_timeout_ms: int | None = None,
+        cancellation_token=None,
     ) -> None:
         self.headed = headed
         self.auth_state_path = auth_state_path
@@ -108,6 +109,7 @@ class OfferTodayBrowserRuntime:
             if navigation_timeout_ms is not None
             else settings.offertoday_headed_navigation_timeout_ms
         )
+        self.cancellation_token = cancellation_token or NoopCrawlCancellationToken()
         self._playwright = None
         self._browser = None
         self._context = None
@@ -529,6 +531,7 @@ class OfferTodayBrowserRuntime:
     async def _warmup_page(self) -> None:
         if self._page is None:
             raise RuntimeError("OfferToday browser runtime was not initialized")
+        self.cancellation_token.raise_if_cancelled()
         await self._page.goto(
             f"{OFFERTODAY_BASE_URL}/hk/search",
             wait_until="domcontentloaded",
@@ -581,6 +584,7 @@ class OfferTodayBrowserRuntime:
             "}"
         )
         try:
+            self.cancellation_token.raise_if_cancelled()
             result = await self._page.evaluate(
                 script,
                 {"url": url, "options": fetch_options},
@@ -656,7 +660,7 @@ class OfferTodayBrowserRuntime:
             return current_url
 
         for delay_seconds in _FAILED_FETCH_URL_SETTLE_DELAYS_SECONDS:
-            await asyncio.sleep(delay_seconds)
+            await self.cancellation_token.sleep(delay_seconds)
             candidate_url = str(getattr(page, "url", "") or current_url)
             if candidate_url:
                 current_url = candidate_url

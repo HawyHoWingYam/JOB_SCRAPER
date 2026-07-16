@@ -32,7 +32,7 @@ class CategoryListScraper:
     BASE_URL = "https://hk.jobsdb.com/api/jobsearch/v5/search"
     PAGE_SIZE = 32  # Max allowed by API
 
-    def __init__(self):
+    def __init__(self, *, before_request=None, sleep=None):
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
             "Accept": "application/json",
@@ -40,6 +40,8 @@ class CategoryListScraper:
         }
         self.min_delay = getattr(settings, 'scrape_min_delay', 2.0)
         self.max_delay = getattr(settings, 'scrape_max_delay', 5.0)
+        self.before_request = before_request
+        self.sleep = sleep or asyncio.sleep
 
     async def fetch_page(
         self,
@@ -169,8 +171,12 @@ class CategoryListScraper:
             )
         )
 
+        before_request = self.before_request
+        effective_sleep = self.sleep
         async with httpx.AsyncClient(timeout=30.0) as client:
             # First request to get total count
+            if before_request is not None:
+                before_request()
             result = await self.fetch_page(classification_id, page, client)
             total_count = result.get("totalCount", 0)
 
@@ -197,6 +203,8 @@ class CategoryListScraper:
                     page=page,
                     total_pages=total_pages,
                 )
+            if before_request is not None:
+                before_request()
             result = await self.fetch_page(classification_id, page, client)
             jobs = result.get("data", [])
             if page_sink is not None:
@@ -219,7 +227,7 @@ class CategoryListScraper:
 
                 # Rate limiting
                 delay = random.uniform(self.min_delay, self.max_delay)
-                await asyncio.sleep(delay)
+                await effective_sleep(delay)
 
                 if on_page_start is not None:
                     await on_page_start(
@@ -228,6 +236,8 @@ class CategoryListScraper:
                         page=page,
                         total_pages=total_pages,
                     )
+                if before_request is not None:
+                    before_request()
                 result = await self.fetch_page(classification_id, page, client)
                 jobs = result.get("data", [])
 

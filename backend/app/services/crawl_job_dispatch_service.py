@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.crawl_cancellation import can_request_cancellation
 from app.crawl_phases import resolve_crawl_phase, resolve_detail_statuses
 from app.crawl_modes import normalize_source_site, resolve_crawl_mode
 from app.messaging.outbox_publisher import OutboxPublisher
@@ -14,6 +15,7 @@ from app.messaging.topics import STREAM_CRAWL_COMMANDS, STREAM_CRAWL_COMMANDS_HE
 from app.models.crawl_job import CrawlJob
 from app.models.schedule import ScrapeSchedule, ScheduleExecution
 from app.repositories.crawl_job_repository import CrawlJobRepository
+from app.repositories.crawl_job_execution_repository import CrawlJobExecutionRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.crawl_job_execution_launcher import CrawlJobExecutionLauncher
@@ -65,6 +67,7 @@ class CrawlJobDispatchService:
         self.outbox_publisher = outbox_publisher or OutboxPublisher()
         self.schedule_repository = schedule_repository or ScheduleRepository()
         self.execution_launcher = execution_launcher or CrawlJobExecutionLauncher()
+        self.execution_repository = CrawlJobExecutionRepository()
 
     def build_manual_request_payload(
         self,
@@ -267,16 +270,48 @@ class CrawlJobDispatchService:
         requested_by: str | None = None,
         reason: str = "Cancelled by API request.",
     ) -> CrawlJob:
-        crawl_job = self.crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
+        crawl_job = self.crawl_job_repository.get_crawl_job_by_id_for_update(
+            db, crawl_job_id
+        )
         if crawl_job is None:
             raise ValueError(f"Crawl job not found: {crawl_job_id}")
 
-        if crawl_job.status in {"completed", "failed", "cancelled"}:
+        if crawl_job.status == "cancelled":
+            return crawl_job
+        if crawl_job.status == "cancelling":
+            db.commit()
+            has_execution = self.execution_launcher.request_cancel(
+                crawl_job_id=crawl_job.id
+            )
+            if not has_execution:
+                self.execution_launcher.acknowledge_without_execution(
+                    crawl_job_id=crawl_job.id,
+                    reason=crawl_job.error_message or reason,
+                )
+                db.expire_all()
+                crawl_job = self.crawl_job_repository.get_crawl_job_by_id(
+                    db, crawl_job.id
+                )
+            else:
+                db.refresh(crawl_job)
+            return crawl_job
+        if not can_request_cancellation(
+            trigger_type=crawl_job.trigger_type,
+            status=crawl_job.status,
+            schedule_id=crawl_job.schedule_id,
+        ):
             raise RuntimeError(f"Crawl job cannot be cancelled from status '{crawl_job.status}'")
 
-        crawl_job.status = "cancelled"
-        crawl_job.completed_at = utc_now()
+        crawl_job.status = "cancelling"
+        crawl_job.completed_at = None
         crawl_job.error_message = reason
+        execution = self.execution_repository.get_latest_active_for_job(
+            db,
+            crawl_job.id,
+            for_update=True,
+        )
+        if execution is not None:
+            self.execution_repository.request_stop(execution)
 
         event_payload = {
             "crawl_job_id": str(crawl_job.id),
@@ -289,33 +324,32 @@ class CrawlJobDispatchService:
             "schedule_id": str(crawl_job.schedule_id) if crawl_job.schedule_id else None,
             "reason": reason,
             "requested_by": requested_by,
-            "status": crawl_job.status,
+            "status": "cancelling",
+            "execution_generation": (
+                str(execution.generation) if execution is not None else None
+            ),
         }
         self.crawl_job_repository.append_event(
             db,
             crawl_job_id=crawl_job.id,
-            event_type="crawl.cancelled",
+            event_type="crawl.cancel_requested",
             payload=event_payload,
             emitted_by=requested_by or "api",
             auto_commit=False,
         )
-        command_row = self.event_outbox_repository.enqueue(
-            db,
-            topic=self._resolve_command_topic(
-                source_site=crawl_job.source_site,
-                crawl_mode=(crawl_job.request_payload or {}).get("crawl_mode"),
-            ),
-            aggregate_type="crawl_job",
-            aggregate_id=str(crawl_job.id),
-            event_type="crawl.cancelled",
-            payload=event_payload,
-            auto_commit=False,
-        )
-
         db.commit()
         db.refresh(crawl_job)
-        self.outbox_publisher.publish_row(db, row=command_row)
-        self.outbox_publisher.publish_pending_batch(db, limit=100)
+        if execution is not None:
+            self.execution_launcher.request_cancel(crawl_job_id=crawl_job.id)
+        else:
+            self.execution_launcher.acknowledge_without_execution(
+                crawl_job_id=crawl_job.id,
+                reason=reason,
+            )
+            db.expire_all()
+            crawl_job = self.crawl_job_repository.get_crawl_job_by_id(
+                db, crawl_job.id
+            )
         return crawl_job
 
     def resume_crawl_job(

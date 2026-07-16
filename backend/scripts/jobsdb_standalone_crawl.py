@@ -35,6 +35,11 @@ from app.scraper.manual_action import (  # noqa: E402
     SUPPORTED_RESUME_STRATEGIES,
 )
 from app.services.crawl_job_runtime import CrawlJobRuntime, ListingBatchPersistResult  # noqa: E402
+from app.services.crawl_cancellation_token import (  # noqa: E402
+    CrawlCancellationRequested,
+    CrawlCancellationToken,
+    resolve_cancellation_token,
+)
 from app.sources.contracts import build_jobsdb_canonical_job  # noqa: E402
 from app.workers.run_ingest_worker import IngestWorkerService  # noqa: E402
 
@@ -45,6 +50,7 @@ DEFAULT_DETAIL_STATUSES = ["pending", "manual_action_required"]
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Standalone JobsDB crawler")
     parser.add_argument("--crawl-job-id", type=str, default="")
+    parser.add_argument("--execution-generation", type=str, default="")
     parser.add_argument("--category-ids", type=str, default="")
     parser.add_argument("--max-pages", type=int, default=1)
     parser.add_argument("--detail-limit", type=int, default=100)
@@ -161,6 +167,11 @@ def _build_manual_action_payload(
 
 async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatchPersistResult:
     scraper = CategoryListScraper()
+    cancellation_token = resolve_cancellation_token(args)
+    if hasattr(scraper, "before_request"):
+        scraper.before_request = cancellation_token.raise_if_cancelled
+    if hasattr(scraper, "sleep"):
+        scraper.sleep = cancellation_token.sleep
     phase_started_at = time.perf_counter()
     pages_processed = 0
     rows_created = 0
@@ -409,7 +420,8 @@ def _build_detail_scraper_request_payload(args) -> dict[str, Any]:
 async def _detail_scraper_context(args) -> AsyncIterator[Any]:
     if _should_use_headed_detail_scraper(args):
         async with JobsDBBrowserDetailScraper(
-            request_payload=_build_detail_scraper_request_payload(args)
+            request_payload=_build_detail_scraper_request_payload(args),
+            cancellation_token=resolve_cancellation_token(args),
         ) as scraper:
             yield scraper
         return
@@ -418,6 +430,7 @@ async def _detail_scraper_context(args) -> AsyncIterator[Any]:
 
 
 async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, int]:
+    cancellation_token = resolve_cancellation_token(args)
     phase_started_at = time.perf_counter()
     try:
         detail_targets = crawl_runtime.load_detail_targets(
@@ -496,6 +509,7 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
     try:
         async with _detail_scraper_context(args) as detail_scraper:
             for index, target in enumerate(detail_targets.targets, start=1):
+                cancellation_token.raise_if_cancelled()
                 item_started_at = time.perf_counter()
                 logger.info(
                     build_scrape_log_event(
@@ -518,6 +532,7 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                     detail_crawl_job_id=args.crawl_job_id,
                 )
                 try:
+                    cancellation_token.raise_if_cancelled()
                     detail = await detail_scraper.fetch_job_detail(target["source_job_id"])
                     if detail is None:
                         raise RuntimeError("JobsDB detail returned no payload")
@@ -574,6 +589,9 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                             cumulative_saved=counts["completed"],
                         )
                     )
+                except CrawlCancellationRequested:
+                    db.rollback()
+                    raise
                 except ManualActionRequiredError as exc:
                     db.rollback()
                     crawl_runtime.mark_detail_manual_action_required(
@@ -723,6 +741,10 @@ async def main(argv: Sequence[str] | None = None) -> int:
     args.crawl_job_id = str(args.crawl_job_id or uuid4())
     request_payload, source_site = _load_request_payload(args.crawl_job_id)
     _apply_request_payload_defaults(args, request_payload)
+    args.cancellation_token = CrawlCancellationToken(
+        crawl_job_id=args.crawl_job_id,
+        execution_generation=args.execution_generation or None,
+    )
     if str(source_site).strip().lower() != JOBSDB_SOURCE_SITE:
         logger.warning("JobsDB executor received source_site=%s; continuing with jobsdb runtime", source_site)
     logger.info(
@@ -742,6 +764,19 @@ async def main(argv: Sequence[str] | None = None) -> int:
     )
 
     crawl_runtime = CrawlJobRuntime()
+    try:
+        args.cancellation_token.raise_if_cancelled()
+    except CrawlCancellationRequested:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_EXECUTOR_CANCELLED",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase=args.crawl_phase,
+                crawl_mode=args.crawl_mode,
+            )
+        )
+        return 0
     crawl_runtime.mark_started(
         crawl_job_id=args.crawl_job_id,
         source_site=JOBSDB_SOURCE_SITE,
@@ -860,6 +895,17 @@ async def main(argv: Sequence[str] | None = None) -> int:
                 detail_target_rows=metrics["detail_target_rows"],
                 detail_completed=metrics["detail_completed"],
                 detail_failed=metrics["detail_failed"],
+            )
+        )
+        return 0
+    except CrawlCancellationRequested:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_EXECUTOR_CANCELLED",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase=args.crawl_phase,
+                crawl_mode=args.crawl_mode,
             )
         )
         return 0

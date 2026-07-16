@@ -20,6 +20,7 @@ from app.scraper.manual_action import (
     resolve_manual_action_cdp_connect_host,
 )
 from app.sources.jobsdb.parsers import parse_detail_page as parse_jobsdb_detail_page
+from app.services.crawl_cancellation_token import NoopCrawlCancellationToken
 
 
 PageContentFetcher = Callable[[str], Awaitable[str]]
@@ -39,6 +40,7 @@ class JobsDBBrowserDetailScraper:
         user_data_dir: str | None = None,
         executable_path: str | None = None,
         navigation_timeout_ms: int | None = None,
+        cancellation_token=None,
     ):
         self.request_payload = dict(request_payload or {})
         self.resume_strategy = self.request_payload.get("resume_strategy") or RESUME_STRATEGY_FRESH_PROFILE
@@ -52,6 +54,7 @@ class JobsDBBrowserDetailScraper:
             if navigation_timeout_ms is not None
             else settings.jobsdb_headed_navigation_timeout_ms
         )
+        self.cancellation_token = cancellation_token or NoopCrawlCancellationToken()
         self._executor: ThreadPoolExecutor | None = None
         self._runtime_started = False
         self._sync_playwright = None
@@ -151,6 +154,7 @@ class JobsDBBrowserDetailScraper:
         return detail
 
     async def _fetch_page_content(self, url: str) -> str:
+        self.cancellation_token.raise_if_cancelled()
         if self.page_content_fetcher is not None:
             self._last_response_status = None
             self._last_page_title = None
@@ -236,6 +240,7 @@ class JobsDBBrowserDetailScraper:
             )
         )
         try:
+            self.cancellation_token.raise_if_cancelled()
             self._sync_browser = self._sync_playwright.chromium.connect_over_cdp(
                 f"http://{cdp_connect_host}:{session.debug_port}"
             )
@@ -277,7 +282,7 @@ class JobsDBBrowserDetailScraper:
 
         self._sync_context.set_default_navigation_timeout(self.navigation_timeout_ms)
         self._sync_page = self._sync_context.pages[0] if self._sync_context.pages else self._sync_context.new_page()
-        self._sync_page.wait_for_timeout(1500)
+        self._wait_for_timeout_with_cancellation(1500)
         logger.info(
             build_scrape_log_event(
                 "manual_action_attach_success",
@@ -328,8 +333,9 @@ class JobsDBBrowserDetailScraper:
     def _fetch_page_content_sync(self, url: str) -> str:
         if not self._runtime_started:
             self._start_sync_runtime()
+        self.cancellation_token.raise_if_cancelled()
         response = self._sync_page.goto(url, wait_until="domcontentloaded")
-        self._sync_page.wait_for_timeout(3000)
+        self._wait_for_timeout_with_cancellation(3000)
         response_status = getattr(response, "status", None)
         self._last_response_status = (
             response_status if type(response_status) is int else None
@@ -337,6 +343,15 @@ class JobsDBBrowserDetailScraper:
         self._last_page_title = self._sync_page.title()
         self._last_page_url = str(getattr(self._sync_page, "url", url) or url)
         return self._sync_page.content()
+
+    def _wait_for_timeout_with_cancellation(self, timeout_ms: int) -> None:
+        remaining_ms = max(int(timeout_ms), 0)
+        while remaining_ms > 0:
+            self.cancellation_token.raise_if_cancelled()
+            slice_ms = min(remaining_ms, 1000)
+            self._sync_page.wait_for_timeout(slice_ms)
+            remaining_ms -= slice_ms
+        self.cancellation_token.raise_if_cancelled()
 
     def _looks_like_interstitial(self, html: str) -> bool:
         lowered_html = (html or "").lower()

@@ -8,6 +8,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.models.crawl_job import CrawlJob
+from app.models.crawl_job_execution import CrawlJobExecution
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.company_enrichment_run import CompanyEnrichmentRun, CompanyEnrichmentRunItem
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
@@ -189,9 +190,27 @@ class StartupRecoveryService:
         if "crawl_jobs" not in inspector.get_table_names():
             return 0
 
+        table_names = set(inspector.get_table_names())
+        managed_job_ids = set()
+        if "crawl_job_executions" in table_names:
+            managed_job_ids = {
+                row[0]
+                for row in self.db.query(CrawlJobExecution.crawl_job_id)
+                .filter(
+                    CrawlJobExecution.status.in_(
+                        ["launching", "running", "stop_requested"]
+                    )
+                )
+                .all()
+            }
+
+        active_query = self.db.query(CrawlJob).filter(
+            CrawlJob.status.in_(ACTIVE_CRAWL_JOB_STATUSES)
+        )
+        if managed_job_ids:
+            active_query = active_query.filter(CrawlJob.id.notin_(managed_job_ids))
         active_jobs = (
-            self.db.query(CrawlJob)
-            .filter(CrawlJob.status.in_(ACTIVE_CRAWL_JOB_STATUSES))
+            active_query
             .order_by(CrawlJob.created_at.asc(), CrawlJob.id.asc())
             .all()
         )
@@ -208,7 +227,6 @@ class StartupRecoveryService:
         recovery_records_by_job_id: dict[object, list[dict[str, object]]] = (
             defaultdict(list)
         )
-        table_names = set(inspector.get_table_names())
         if "crawl_job_listings" in table_names:
             running_listings = (
                 self.db.query(CrawlJobListing)

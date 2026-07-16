@@ -42,6 +42,11 @@ from app.services.crawl_job_runtime import (  # noqa: E402
     CrawlJobRuntime,
     OfferTodayListingIdentityConflictError,
 )
+from app.services.crawl_cancellation_token import (  # noqa: E402
+    CrawlCancellationRequested,
+    CrawlCancellationToken,
+    resolve_cancellation_token,
+)
 from app.services.offertoday_listing_staging_service import (  # noqa: E402
     OfferTodayReconciledListingStagingSink,
     build_offertoday_listing_staging_payload,
@@ -88,7 +93,14 @@ _IDENTITY_AUDIT_CLASSIFICATIONS = {
 }
 
 
-async def _check_and_handle_waf_challenge(page, *, headed: bool, crawl_job_id: str, db: Any) -> bool:
+async def _check_and_handle_waf_challenge(
+    page,
+    *,
+    headed: bool,
+    crawl_job_id: str,
+    db: Any,
+    cancellation_token=None,
+) -> bool:
     """Return True if a WAF challenge was detected (and handled or timed out)."""
     try:
         current_url = page.url
@@ -164,7 +176,10 @@ async def _check_and_handle_waf_challenge(page, *, headed: bool, crawl_job_id: s
                     db.rollback()
                 except Exception:
                     pass
-        await asyncio.sleep(1.5)
+        if cancellation_token is None:
+            await asyncio.sleep(1.5)
+        else:
+            await cancellation_token.sleep(1.5)
         return True
     except Exception as exc:
         logger.warning("WAF wait timed out or failed: %s", exc)
@@ -182,6 +197,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_PAGES_PER_CONDITION,
     )
     parser.add_argument("--crawl-job-id", type=str, default="")
+    parser.add_argument("--execution-generation", type=str, default="")
     parser.add_argument("--crawl-phase", choices=["full", "listing", "detail"], default="full")
     parser.add_argument("--source-listing-crawl-job-id", type=str, default="")
     parser.add_argument("--detail-limit", type=int, default=100)
@@ -612,10 +628,18 @@ def _production_listing_observation_payload(observation) -> dict[str, Any]:
 
 
 class CrawlJobListingObservationSink:
-    def __init__(self, *, crawl_runtime, crawl_job_id, crawl_mode: str) -> None:
+    def __init__(
+        self,
+        *,
+        crawl_runtime,
+        crawl_job_id,
+        crawl_mode: str,
+        cancellation_token=None,
+    ) -> None:
         self.crawl_runtime = crawl_runtime
         self.crawl_job_id = crawl_job_id
         self.crawl_mode = crawl_mode
+        self.cancellation_token = cancellation_token
         self._started_condition_ids: set[str] = set()
         self._success_latency_ms: dict[tuple[str, int], int] = {}
         self.page_attempt_count = 0
@@ -629,6 +653,8 @@ class CrawlJobListingObservationSink:
         attempt: int,
         max_attempts: int,
     ) -> None:
+        if self.cancellation_token is not None:
+            self.cancellation_token.raise_if_cancelled()
         if condition.condition_id not in self._started_condition_ids:
             self._started_condition_ids.add(condition.condition_id)
             logger.info(
@@ -949,6 +975,7 @@ async def _run_listing_phase(
     crawl_job_id,
     listing_runner=OfferTodayListingRunner,
 ) -> ProductionListingPhaseResult:
+    cancellation_token = resolve_cancellation_token(args)
     phase_started_at = time.perf_counter()
     crawl_mode = "headed" if args.headed else "headless"
     category_ids = _normalize_listing_category_ids(args.category_ids)
@@ -965,6 +992,7 @@ async def _run_listing_phase(
         crawl_runtime=crawl_runtime,
         crawl_job_id=crawl_job_id,
         crawl_mode=crawl_mode,
+        cancellation_token=cancellation_token,
     )
     staging_sink = OfferTodayCrawlStagingSink(
         crawl_runtime=crawl_runtime,
@@ -973,13 +1001,12 @@ async def _run_listing_phase(
         observation_sink=observation_sink,
         crawl_mode=crawl_mode,
     )
-    runner = (
-        listing_runner(browser_runtime)
-        if isinstance(listing_runner, type)
-        else listing_runner
-    )
+    runner = listing_runner(browser_runtime) if isinstance(listing_runner, type) else listing_runner
+    if hasattr(runner, "_sleep"):
+        runner._sleep = cancellation_token.sleep
 
     try:
+        cancellation_token.raise_if_cancelled()
         await browser_runtime.require_healthy_session()
         result = await runner.run(
             conditions=conditions,
@@ -1276,6 +1303,7 @@ async def _run_detail_phase(
     finalize_crawl: bool = True,
     segment_index: int = 1,
 ) -> OfferTodayDetailPhaseResult:
+    cancellation_token = resolve_cancellation_token(args)
     phase_started_at = time.perf_counter()
     crawl_phase = str(args.crawl_phase or "").strip().lower()
     crawl_mode = "headed" if args.headed else "headless"
@@ -1292,6 +1320,7 @@ async def _run_detail_phase(
 
     try:
         if crawl_phase == "detail":
+            cancellation_token.raise_if_cancelled()
             await browser_runtime.require_healthy_session()
         if detail_load_result is None:
             detail_load_result = crawl_runtime.load_detail_targets(
@@ -1575,6 +1604,7 @@ async def _run_detail_phase(
         )
 
     async def fetch_detail(*, job_id: str, encrypted_job_id: str):
+        cancellation_token.raise_if_cancelled()
         return await _fetch_detail_json_with_identifiers(
             browser_runtime,
             job_id=job_id,
@@ -1591,7 +1621,7 @@ async def _run_detail_phase(
             crawl_runtime=crawl_runtime,
             company_repository=CompanyRepository(),
             job_repository=JobRepository(),
-            sleep=asyncio.sleep,
+            sleep=cancellation_token.sleep,
             clock=time.monotonic,
             max_attempts=3,
             retry_delays_seconds=(1.0, 2.0),
@@ -1615,6 +1645,7 @@ async def _run_detail_phase(
             )
         )
     for index, runtime_target in enumerate(detail_load_result.targets, start=1):
+        cancellation_token.raise_if_cancelled()
         item_started_at = time.perf_counter()
         raw_source_job_id = str(
             runtime_target.get("source_job_id") or ""
@@ -1641,6 +1672,8 @@ async def _run_detail_phase(
                 fetch_detail=fetch_detail,
                 crawl_mode=crawl_mode,
             )
+        except CrawlCancellationRequested:
+            raise
         except Exception as exc:
             logger.warning(
                 build_scrape_log_event(
@@ -2141,6 +2174,10 @@ async def main() -> None:
     parser = _build_argument_parser()
     args = parser.parse_args()
     _apply_request_payload_defaults(args, _load_request_payload(args.crawl_job_id))
+    args.cancellation_token = CrawlCancellationToken(
+        crawl_job_id=args.crawl_job_id,
+        execution_generation=args.execution_generation or None,
+    )
     crawl_phase = str(args.crawl_phase or "full").strip().lower()
     logger.info(
         build_scrape_log_event(
@@ -2211,6 +2248,20 @@ async def main() -> None:
     detail_phase_result: OfferTodayDetailPhaseResult | None = None
 
     if args.crawl_job_id:
+        try:
+            args.cancellation_token.raise_if_cancelled()
+        except CrawlCancellationRequested:
+            logger.info(
+                build_scrape_log_event(
+                    "SCRAPE_EXECUTOR_CANCELLED",
+                    source="offertoday",
+                    crawl_job_id=args.crawl_job_id,
+                    crawl_phase=crawl_phase,
+                    crawl_mode="headed" if args.headed else "headless",
+                )
+            )
+            db.close()
+            return
         cj_id = args.crawl_job_id
         cj = db.query(CrawlJob).filter(CrawlJob.id == cj_id).first()
         if cj:
@@ -2269,19 +2320,25 @@ async def main() -> None:
                 getattr(args, "manual_action_browser_profile_path", "") or None
             )
 
+        args.cancellation_token.raise_if_cancelled()
         async with OfferTodayBrowserRuntime(
             headed=args.headed,
             auth_state_path=str(auth_state_path) if auth_state_path else None,
             resume_strategy=args.resume_strategy,
             browser_channel=reuse_browser_channel,
             user_data_dir=reuse_browser_profile_path,
+            cancellation_token=args.cancellation_token,
         ) as runtime:
             page = runtime._page
             if page is None:
                 raise RuntimeError("OfferToday browser runtime did not create a page")
 
             await _check_and_handle_waf_challenge(
-                page, headed=args.headed, crawl_job_id=cj_id, db=db
+                page,
+                headed=args.headed,
+                crawl_job_id=cj_id,
+                db=db,
+                cancellation_token=args.cancellation_token,
             )
             logger.info("Warmup complete (url=%s)", page.url)
 
@@ -2511,6 +2568,16 @@ async def main() -> None:
             )
             logger.info("Crawl job %s: completed", cj_id)
 
+    except CrawlCancellationRequested:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_EXECUTOR_CANCELLED",
+                source="offertoday",
+                crawl_job_id=cj_id,
+                crawl_phase=crawl_phase,
+                crawl_mode="headed" if args.headed else "headless",
+            )
+        )
     except OfferTodayListingIdentityConflictError as exc:
         logger.warning("Crawl paused for listing identity audit: %s", exc)
         if args.crawl_job_id:

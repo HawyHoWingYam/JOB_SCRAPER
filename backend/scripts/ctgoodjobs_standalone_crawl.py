@@ -36,6 +36,11 @@ from app.scraper.manual_action import (  # noqa: E402
     build_session_recovery_manual_action,
 )
 from app.services.crawl_job_runtime import CrawlJobRuntime  # noqa: E402
+from app.services.crawl_cancellation_token import (  # noqa: E402
+    CrawlCancellationRequested,
+    CrawlCancellationToken,
+    resolve_cancellation_token,
+)
 from app.sources.contracts import build_ctgoodjobs_canonical_job  # noqa: E402
 from app.workers.run_ingest_worker import (  # noqa: E402
     IngestWorkerService,
@@ -50,6 +55,7 @@ CONTENT_ANOMALY_REASONS = frozenset({"missing_job_content", "missing_company_ide
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Standalone CTGoodJobs crawler")
     parser.add_argument("--crawl-job-id", type=str, default="")
+    parser.add_argument("--execution-generation", type=str, default="")
     parser.add_argument("--category-ids", type=str, default="")
     parser.add_argument("--max-pages", type=int, default=1)
     parser.add_argument("--detail-limit", type=int, default=100)
@@ -226,6 +232,7 @@ async def _run_listing_phase_impl(
     totals: dict[str, int],
     current_page_context: dict[str, Any],
 ) -> dict[str, int]:
+    cancellation_token = resolve_cancellation_token(args)
     category_lookup = _categories_by_id()
 
     for category_id in args.category_ids:
@@ -265,6 +272,7 @@ async def _run_listing_phase_impl(
                     total_pages=int(args.max_pages),
                 )
             )
+            cancellation_token.raise_if_cancelled()
             html = await browser_scraper.fetch_page_html(
                 url,
                 stage="category_page",
@@ -466,6 +474,7 @@ async def _run_detail_phase(
     source_listing_crawl_job_id: str | None,
     detail_scope: str,
 ) -> dict[str, int]:
+    cancellation_token = resolve_cancellation_token(args)
     phase_started_at = time.perf_counter()
     try:
         detail_targets = crawl_runtime.load_detail_targets(
@@ -672,6 +681,7 @@ async def _run_detail_phase(
     category_lookup = _categories_by_id()
 
     for index, target in enumerate(detail_targets.targets, start=1):
+        cancellation_token.raise_if_cancelled()
         item_started_at = time.perf_counter()
         logger.info(
             build_scrape_log_event(
@@ -699,6 +709,7 @@ async def _run_detail_phase(
         ).strip()
         try:
             category = _resolve_category(category_lookup, category_id)
+            cancellation_token.raise_if_cancelled()
             html = await browser_scraper.fetch_page_html(
                 target["source_url"],
                 stage="detail_page",
@@ -762,6 +773,8 @@ async def _run_detail_phase(
                 target=target,
                 item_started_at=item_started_at,
             )
+        except CrawlCancellationRequested:
+            raise
         except CTGoodJobsTerminalUnavailableError as exc:
             last_content_anomaly_reason = None
             crawl_runtime.mark_detail_terminal_unavailable(
@@ -863,6 +876,10 @@ async def main(argv: Sequence[str] | None = None) -> int:
     args.crawl_job_id = str(args.crawl_job_id or uuid4())
     request_payload, source_site = _load_request_payload(args.crawl_job_id)
     _apply_request_payload_defaults(args, request_payload)
+    args.cancellation_token = CrawlCancellationToken(
+        crawl_job_id=args.crawl_job_id,
+        execution_generation=args.execution_generation or None,
+    )
     if str(source_site).strip().lower() != CTGOODJOBS_SOURCE_SITE:
         logger.warning(
             "CTGoodJobs executor received source_site=%s; continuing with ctgoodjobs runtime",
@@ -885,6 +902,19 @@ async def main(argv: Sequence[str] | None = None) -> int:
     )
 
     crawl_runtime = CrawlJobRuntime()
+    try:
+        args.cancellation_token.raise_if_cancelled()
+    except CrawlCancellationRequested:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_EXECUTOR_CANCELLED",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase=args.crawl_phase,
+                crawl_mode=args.crawl_mode,
+            )
+        )
+        return 0
     crawl_runtime.mark_started(
         crawl_job_id=args.crawl_job_id,
         source_site=CTGOODJOBS_SOURCE_SITE,
@@ -908,7 +938,11 @@ async def main(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
-        async with CTGoodJobsBrowserPageScraper(request_payload=_build_browser_request_payload(args)) as browser_scraper:
+        args.cancellation_token.raise_if_cancelled()
+        async with CTGoodJobsBrowserPageScraper(
+            request_payload=_build_browser_request_payload(args),
+            cancellation_token=args.cancellation_token,
+        ) as browser_scraper:
             if args.crawl_phase in {"full", "listing"}:
                 listing_summary = await _run_listing_phase(args, crawl_runtime, browser_scraper)
                 source_listing_crawl_job_id, detail_scope = _resolve_detail_scope(
@@ -998,6 +1032,17 @@ async def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
+    except CrawlCancellationRequested:
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_EXECUTOR_CANCELLED",
+                source=CTGOODJOBS_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase=args.crawl_phase,
+                crawl_mode=args.crawl_mode,
+            )
+        )
+        return 0
     except ManualActionRequiredError as exc:
         resume_crawl_phase = "detail" if args.crawl_phase == "detail" else "listing"
         resume_source_listing_crawl_job_id = source_listing_crawl_job_id
