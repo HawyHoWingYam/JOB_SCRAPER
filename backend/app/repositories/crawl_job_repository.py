@@ -102,6 +102,31 @@ class CrawlJobRepository:
             .one_or_none()
         )
 
+    def list_active_manual_detail_jobs_for_update(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+        statuses: set[str],
+    ) -> list[CrawlJob]:
+        rows = (
+            db.query(CrawlJob)
+            .filter(
+                CrawlJob.source_site == source_site,
+                CrawlJob.trigger_type == "manual",
+                CrawlJob.schedule_id.is_(None),
+                CrawlJob.status.in_(statuses),
+            )
+            .with_for_update()
+            .all()
+        )
+        return [
+            row
+            for row in rows
+            if str((row.request_payload or {}).get("crawl_phase") or "").lower()
+            == "detail"
+        ]
+
     def record_runtime_event(
         self,
         db: Session,

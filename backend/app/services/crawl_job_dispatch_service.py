@@ -21,6 +21,7 @@ from app.repositories.schedule_repository import ScheduleRepository
 from app.services.crawl_job_execution_launcher import CrawlJobExecutionLauncher
 from app.services.headed_crawl_runtime import ensure_headed_crawl_worker_available
 from app.services.source_catalog import resolve_default_max_pages
+from app.services.scraper_pacing_settings_service import ScraperPacingSettingsService
 from app.scraper.manual_action import (
     LEGACY_RESUME_STRATEGY_DEFAULT,
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
@@ -36,6 +37,18 @@ RESUME_CONTEXT_EVENT_TYPES = {
     "crawl.manual_action_required",
     "crawl.requested",
 }
+
+ACTIVE_MANUAL_DETAIL_STATUSES = {
+    "queued",
+    "dispatching",
+    "running",
+    "manual_action_required",
+    "cancelling",
+}
+
+
+class ActiveManualDetailCrawlConflict(RuntimeError):
+    pass
 
 
 def resolve_resume_detail_statuses(classification: str | None) -> list[str]:
@@ -138,22 +151,40 @@ class CrawlJobDispatchService:
         skip_existing: bool = False,
         requested_by: str | None = None,
     ) -> CrawlJobDispatchResult:
+        request_payload = self.build_manual_request_payload(
+            source_site=source_site,
+            crawl_phase=crawl_phase,
+            crawl_mode=crawl_mode,
+            category_ids=category_ids,
+            keywords=keywords,
+            max_pages=max_pages,
+            source_listing_crawl_job_id=source_listing_crawl_job_id,
+            detail_limit=detail_limit,
+            detail_statuses=detail_statuses,
+            skip_existing=skip_existing,
+        )
+        if request_payload["crawl_phase"] == "detail":
+            normalized_source = normalize_source_site(source_site)
+            pacing = ScraperPacingSettingsService(db).resolve(
+                normalized_source,
+                for_update=True,
+            )
+            conflicts = self.crawl_job_repository.list_active_manual_detail_jobs_for_update(
+                db,
+                source_site=normalized_source,
+                statuses=ACTIVE_MANUAL_DETAIL_STATUSES,
+            )
+            if conflicts:
+                raise ActiveManualDetailCrawlConflict(
+                    "An active manual Job Detail task already exists for "
+                    f"{normalized_source}: {conflicts[0].id}"
+                )
+            request_payload["detail_pacing"] = pacing.to_payload()
         return self.dispatch_crawl_job(
             db,
             source_site=source_site,
             trigger_type="manual",
-            request_payload=self.build_manual_request_payload(
-                source_site=source_site,
-                crawl_phase=crawl_phase,
-                crawl_mode=crawl_mode,
-                category_ids=category_ids,
-                keywords=keywords,
-                max_pages=max_pages,
-                source_listing_crawl_job_id=source_listing_crawl_job_id,
-                detail_limit=detail_limit,
-                detail_statuses=detail_statuses,
-                skip_existing=skip_existing,
-            ),
+            request_payload=request_payload,
             requested_by=requested_by,
         )
 

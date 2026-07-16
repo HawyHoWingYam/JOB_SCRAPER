@@ -23,7 +23,10 @@ from app.schemas.crawl_job import (
     CrawlTaskListResponse,
 )
 from app.services.crawl_request_validation import normalize_source_site, validate_category_ids_for_source_site
-from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
+from app.services.crawl_job_dispatch_service import (
+    ActiveManualDetailCrawlConflict,
+    CrawlJobDispatchService,
+)
 from app.services.crawl_task_snapshot_service import (
     PROGRESS_CONTEXT_EVENT_TYPES,
     build_crawl_task_snapshot,
@@ -232,6 +235,12 @@ async def create_crawl_job(
     except HeadedCrawlWorkerUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except ActiveManualDetailCrawlConflict as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
     response.headers["X-Crawl-Job-Id"] = str(dispatch_result.crawl_job.id)

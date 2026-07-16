@@ -49,3 +49,46 @@ async def test_ctgoodjobs_cancellation_is_not_wrapped_as_fetch_failure() -> None
             "https://www.ctgoodjobs.hk/job/123",
             stage="detail_page",
         )
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_paces_every_detail_retry_but_not_listing() -> None:
+    calls = 0
+
+    async def fetch(_url):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ConnectionError("retry")
+        return "<html><title>ordinary page</title></html>"
+
+    class _Pacing:
+        def __init__(self):
+            self.calls = 0
+
+        async def before_attempt(self):
+            self.calls += 1
+
+    class _Token:
+        @staticmethod
+        def raise_if_cancelled():
+            return None
+
+        @staticmethod
+        async def sleep(_seconds):
+            return None
+
+    pacing = _Pacing()
+    scraper = CTGoodJobsBrowserPageScraper(
+        page_content_fetcher=fetch,
+        cancellation_token=_Token(),
+        detail_pacing_controller=pacing,
+        max_attempts=2,
+    )
+
+    await scraper.fetch_page_html("https://example.test/detail", stage="detail_page")
+    assert pacing.calls == 2
+
+    calls = 1
+    await scraper.fetch_page_html("https://example.test/listing", stage="category_page")
+    assert pacing.calls == 2

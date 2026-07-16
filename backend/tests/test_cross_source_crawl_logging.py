@@ -623,6 +623,15 @@ async def test_offertoday_detail_retry_log_keeps_common_correlation_fields(
     async def no_sleep(_seconds: float) -> None:
         return None
 
+    class _Pacing:
+        def __init__(self):
+            self.calls = 0
+
+        async def before_attempt(self):
+            self.calls += 1
+
+    pacing = _Pacing()
+
     pipeline = OfferTodayDetailPipeline(
         session_factory=_FakeDb,
         crawl_runtime=runtime,
@@ -631,6 +640,7 @@ async def test_offertoday_detail_retry_log_keeps_common_correlation_fields(
         sleep=no_sleep,
         max_attempts=2,
         retry_delays_seconds=(0.0,),
+        detail_pacing_controller=pacing,
     )
 
     with caplog.at_level(
@@ -646,6 +656,7 @@ async def test_offertoday_detail_retry_log_keeps_common_correlation_fields(
 
     messages = _messages(caplog)
     assert fetch_calls == 2
+    assert pacing.calls == 2
     assert result.outcome is OfferTodayResponseKind.TRANSIENT_TRANSPORT
     assert messages.count("SCRAPE_DETAIL_RETRY") == 1
     assert "source=offertoday" in messages

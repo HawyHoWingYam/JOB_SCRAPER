@@ -40,6 +40,7 @@ from app.services.crawl_cancellation_token import (  # noqa: E402
     CrawlCancellationToken,
     resolve_cancellation_token,
 )
+from app.services.detail_pacing import build_detail_pacing_controller  # noqa: E402
 from app.sources.contracts import build_jobsdb_canonical_job  # noqa: E402
 from app.workers.run_ingest_worker import IngestWorkerService  # noqa: E402
 
@@ -108,6 +109,7 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     args.resume_strategy = str(request_payload.get("resume_strategy") or args.resume_strategy)
     args.skip_existing = bool(request_payload.get("skip_existing"))
     args.is_resume = bool(request_payload.get("is_resume"))
+    args.detail_pacing = request_payload.get("detail_pacing")
 
 
 def _resolve_source_listing_crawl_job_id(args) -> str:
@@ -125,7 +127,7 @@ def _build_listing_request_payload(args) -> dict[str, Any]:
 
 
 def _build_detail_request_payload(args) -> dict[str, Any]:
-    return {
+    payload = {
         "crawl_phase": "detail",
         "crawl_mode": args.crawl_mode,
         "source_listing_crawl_job_id": _resolve_source_listing_crawl_job_id(args),
@@ -134,6 +136,9 @@ def _build_detail_request_payload(args) -> dict[str, Any]:
         "detail_statuses": list(args.detail_statuses),
         "skip_existing": args.skip_existing,
     }
+    if isinstance(getattr(args, "detail_pacing", None), dict):
+        payload["detail_pacing"] = dict(args.detail_pacing)
+    return payload
 
 
 def _build_manual_action_payload(
@@ -431,6 +436,12 @@ async def _detail_scraper_context(args) -> AsyncIterator[Any]:
 
 async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, int]:
     cancellation_token = resolve_cancellation_token(args)
+    detail_pacing_controller = build_detail_pacing_controller(
+        request_payload={"detail_pacing": getattr(args, "detail_pacing", None)},
+        crawl_job_id=args.crawl_job_id,
+        crawl_runtime=crawl_runtime,
+        cancellation_owner=args,
+    )
     phase_started_at = time.perf_counter()
     try:
         detail_targets = crawl_runtime.load_detail_targets(
@@ -533,6 +544,8 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                 )
                 try:
                     cancellation_token.raise_if_cancelled()
+                    if detail_pacing_controller is not None:
+                        await detail_pacing_controller.before_attempt()
                     detail = await detail_scraper.fetch_job_detail(target["source_job_id"])
                     if detail is None:
                         raise RuntimeError("JobsDB detail returned no payload")

@@ -57,6 +57,7 @@ class CTGoodJobsBrowserPageScraper:
         navigation_timeout_ms: int | None = None,
         max_attempts: int = 3,
         cancellation_token=None,
+        detail_pacing_controller=None,
     ):
         self.request_payload = dict(request_payload or {})
         self.resume_strategy = self.request_payload.get("resume_strategy") or RESUME_STRATEGY_FRESH_PROFILE
@@ -72,6 +73,7 @@ class CTGoodJobsBrowserPageScraper:
         )
         self.max_attempts = max(1, int(max_attempts))
         self.cancellation_token = cancellation_token or NoopCrawlCancellationToken()
+        self.detail_pacing_controller = detail_pacing_controller
         self._executor: ThreadPoolExecutor | None = None
         self._runtime_started = False
         self._sync_playwright = None
@@ -119,6 +121,8 @@ class CTGoodJobsBrowserPageScraper:
 
         for attempt in range(self.max_attempts):
             try:
+                if stage == "detail_page" and self.detail_pacing_controller is not None:
+                    await self.detail_pacing_controller.before_attempt()
                 html = await self._fetch_page_content(url)
                 access_evidence = classify_public_access_evidence(
                     status_code=self._last_response_status,

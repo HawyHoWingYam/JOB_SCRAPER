@@ -7,15 +7,71 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.ai.llm_client import get_llm_client, get_llm_status, refresh_llm_status, reset_client
+from app.ai.llm_client import refresh_llm_status, reset_client
 from app.database import get_db
 from app.services.ai_provider_catalog import build_ai_provider_catalog
 from app.services.ai_runtime_settings_service import (
     AIRuntimeSettingsService,
     RuntimeSettingsValidationError,
 )
+from app.schemas.scraper_pacing import (
+    ScraperPacingSettingsListResponse,
+    ScraperPacingSettingsResponse,
+    ScraperPacingSettingsUpdate,
+)
+from app.services.scraper_pacing_settings_service import (
+    ScraperPacingSettingsService,
+    serialize_scraper_pacing_row,
+)
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
+
+
+@router.get("/scraper-pacing", response_model=ScraperPacingSettingsListResponse)
+def get_scraper_pacing_settings(db: Session = Depends(get_db)):
+    service = ScraperPacingSettingsService(db)
+    rows = service.list_settings()
+    db.commit()
+    return {"items": [serialize_scraper_pacing_row(row) for row in rows]}
+
+
+@router.put(
+    "/scraper-pacing/{source_site}",
+    response_model=ScraperPacingSettingsResponse,
+)
+def update_scraper_pacing_settings(
+    source_site: str,
+    request: ScraperPacingSettingsUpdate,
+    db: Session = Depends(get_db),
+):
+    service = ScraperPacingSettingsService(db)
+    try:
+        row = service.update(source_site, request.model_dump())
+        db.commit()
+        db.refresh(row)
+        return serialize_scraper_pacing_row(row)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/scraper-pacing/{source_site}/reset",
+    response_model=ScraperPacingSettingsResponse,
+)
+def reset_scraper_pacing_settings(
+    source_site: str,
+    db: Session = Depends(get_db),
+):
+    service = ScraperPacingSettingsService(db)
+    try:
+        row = service.reset(source_site)
+        db.commit()
+        db.refresh(row)
+        return serialize_scraper_pacing_row(row)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class AISettingsUpdateRequest(BaseModel):

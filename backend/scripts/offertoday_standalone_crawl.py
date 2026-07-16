@@ -47,6 +47,7 @@ from app.services.crawl_cancellation_token import (  # noqa: E402
     CrawlCancellationToken,
     resolve_cancellation_token,
 )
+from app.services.detail_pacing import build_detail_pacing_controller  # noqa: E402
 from app.services.offertoday_listing_staging_service import (  # noqa: E402
     OfferTodayReconciledListingStagingSink,
     build_offertoday_listing_staging_payload,
@@ -326,6 +327,7 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     args.manual_action_browser_profile_path = str(
         request_payload.get("manual_action_browser_profile_path") or ""
     ).strip()
+    args.detail_pacing = request_payload.get("detail_pacing")
 
 
 def _resolve_detail_scope(
@@ -398,6 +400,10 @@ def _build_runtime_request_payload(
         payload["detail_scope"] = resolved_scope
     if source_listing_crawl_job_id:
         payload["source_listing_crawl_job_id"] = source_listing_crawl_job_id
+    if crawl_phase == "detail" and isinstance(
+        getattr(args, "detail_pacing", None), dict
+    ):
+        payload["detail_pacing"] = dict(args.detail_pacing)
     return payload
 
 
@@ -1616,6 +1622,13 @@ async def _run_detail_phase(
         from app.repositories.company_repository import CompanyRepository
         from app.repositories.job_repository import JobRepository
 
+        detail_pacing_controller = build_detail_pacing_controller(
+            request_payload=request_payload,
+            crawl_job_id=crawl_job_id,
+            crawl_runtime=crawl_runtime,
+            cancellation_owner=args,
+            session_factory=SessionLocal,
+        )
         pipeline = OfferTodayDetailPipeline(
             session_factory=SessionLocal,
             crawl_runtime=crawl_runtime,
@@ -1625,6 +1638,7 @@ async def _run_detail_phase(
             clock=time.monotonic,
             max_attempts=3,
             retry_delays_seconds=(1.0, 2.0),
+            detail_pacing_controller=detail_pacing_controller,
         )
 
     total_targets = int(detail_load_result.target_rows)

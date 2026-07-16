@@ -364,3 +364,41 @@ def test_snapshot_does_not_inject_jobsdb_browser_defaults_for_offertoday(
     assert "browser_channel" not in manual_action
     assert "browser_profile_path" not in manual_action
     assert manual_action["reuse_open_browser_supported"] is False
+
+
+def test_snapshot_projects_recorded_detail_pacing_and_historical_null() -> None:
+    pacing = {
+        "interval_min_seconds": 1.0,
+        "interval_max_seconds": 3.0,
+        "burst_size": 20,
+        "burst_pause_seconds": 30.0,
+    }
+    recorded = build_crawl_task_snapshot(
+        _crawl_job(request_payload={"crawl_phase": "detail", "detail_pacing": pacing}),
+        None,
+        now=NOW,
+        events=[],
+    )
+    historical = build_crawl_task_snapshot(
+        _crawl_job(request_payload={"crawl_phase": "detail"}),
+        None,
+        now=NOW,
+        events=[],
+    )
+
+    assert recorded["detail_pacing"] == pacing
+    assert historical["detail_pacing"] is None
+    assert "detail_attempt_count" not in recorded
+
+    malformed = build_crawl_task_snapshot(
+        _crawl_job(
+            request_payload={
+                "crawl_phase": "detail",
+                "detail_pacing": {"interval_min_seconds": -1},
+            }
+        ),
+        None,
+        now=NOW,
+        events=[],
+    )
+    assert malformed["detail_pacing"] is None

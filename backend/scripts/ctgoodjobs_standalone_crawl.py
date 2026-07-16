@@ -41,6 +41,7 @@ from app.services.crawl_cancellation_token import (  # noqa: E402
     CrawlCancellationToken,
     resolve_cancellation_token,
 )
+from app.services.detail_pacing import build_detail_pacing_controller  # noqa: E402
 from app.sources.contracts import build_ctgoodjobs_canonical_job  # noqa: E402
 from app.workers.run_ingest_worker import (  # noqa: E402
     IngestWorkerService,
@@ -113,6 +114,7 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     args.skip_existing = bool(request_payload.get("skip_existing"))
     args.is_resume = bool(request_payload.get("is_resume"))
     args.resume_strategy = str(request_payload.get("resume_strategy") or args.resume_strategy)
+    args.detail_pacing = request_payload.get("detail_pacing")
 
 
 def _categories_by_id() -> dict[str, Any]:
@@ -192,7 +194,7 @@ def _build_detail_request_payload(
     *,
     source_listing_crawl_job_id: str | None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "crawl_phase": "detail",
         "crawl_mode": args.crawl_mode,
         "source_listing_crawl_job_id": source_listing_crawl_job_id,
@@ -201,6 +203,9 @@ def _build_detail_request_payload(
         "detail_statuses": list(args.detail_statuses),
         "skip_existing": args.skip_existing,
     }
+    if isinstance(getattr(args, "detail_pacing", None), dict):
+        payload["detail_pacing"] = dict(args.detail_pacing)
+    return payload
 
 
 async def _persist_ctgoodjobs_job(*, canonical_job: dict[str, Any]):
@@ -939,9 +944,16 @@ async def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         args.cancellation_token.raise_if_cancelled()
+        detail_pacing_controller = build_detail_pacing_controller(
+            request_payload={"detail_pacing": getattr(args, "detail_pacing", None)},
+            crawl_job_id=args.crawl_job_id,
+            crawl_runtime=crawl_runtime,
+            cancellation_owner=args,
+        )
         async with CTGoodJobsBrowserPageScraper(
             request_payload=_build_browser_request_payload(args),
             cancellation_token=args.cancellation_token,
+            detail_pacing_controller=detail_pacing_controller,
         ) as browser_scraper:
             if args.crawl_phase in {"full", "listing"}:
                 listing_summary = await _run_listing_phase(args, crawl_runtime, browser_scraper)

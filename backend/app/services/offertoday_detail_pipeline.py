@@ -117,6 +117,7 @@ class OfferTodayDetailPipeline:
         clock=time.perf_counter,
         max_attempts: int = 3,
         retry_delays_seconds: tuple[float, ...] = (1.0, 2.0),
+        detail_pacing_controller=None,
     ) -> None:
         self.session_factory = session_factory
         self.crawl_runtime = crawl_runtime
@@ -128,6 +129,7 @@ class OfferTodayDetailPipeline:
         self.retry_delays_seconds = tuple(
             max(float(delay), 0.0) for delay in retry_delays_seconds
         )
+        self.detail_pacing_controller = detail_pacing_controller
 
     async def process_target(
         self,
@@ -151,6 +153,8 @@ class OfferTodayDetailPipeline:
             raw_response: dict[str, Any] | None = None
             transport_error: Exception | None = None
             try:
+                if self.detail_pacing_controller is not None:
+                    await self.detail_pacing_controller.before_attempt()
                 fetched = await fetch_detail(
                     job_id=target.identity.job_id,
                     encrypted_job_id=target.identity.encrypted_job_id,

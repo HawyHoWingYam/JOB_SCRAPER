@@ -12,6 +12,7 @@ from app.services.crawl_request_validation import (
     normalize_source_site,
     validate_crawl_request,
 )
+from app.schemas.scraper_pacing import DetailPacingConfig
 
 
 class CrawlJobCreateRequest(BaseModel):
@@ -129,6 +130,7 @@ class CrawlTaskListItemSchema(BaseModel):
     issue_stage: str | None = None
     latest_issue_text: str | None = None
     request_payload: dict | None = None
+    detail_pacing: DetailPacingConfig | None = None
     listing_completed: bool = False
     listing_partial: bool = False
     listing_condition_count: int = 0

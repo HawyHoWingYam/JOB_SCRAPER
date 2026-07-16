@@ -8,6 +8,7 @@ from app.crawl_modes import resolve_crawl_mode
 from app.database import SessionLocal
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.scraper.manual_action import normalize_manual_action_payload
+from app.schemas.scraper_pacing import DetailPacingConfig
 from app.services.source_category_registry import get_source_category_registry
 from app.utils.time import utc_now
 
@@ -650,6 +651,15 @@ def build_crawl_task_snapshot(
         else {}
     )
     request_payload = event_payload.get("request_payload") or crawl_job.request_payload or {}
+    raw_detail_pacing = request_payload.get("detail_pacing")
+    try:
+        detail_pacing = (
+            DetailPacingConfig.model_validate(raw_detail_pacing).model_dump()
+            if isinstance(raw_detail_pacing, dict)
+            else None
+        )
+    except ValueError:
+        detail_pacing = None
     manual_action_event = None
     if crawl_job.status == "manual_action_required":
         manual_action_event = (
@@ -1048,6 +1058,7 @@ def build_crawl_task_snapshot(
         "trigger_type": crawl_job.trigger_type,
         "schedule_id": str(crawl_job.schedule_id) if crawl_job.schedule_id else None,
         "request_payload": request_payload,
+        "detail_pacing": detail_pacing,
         "queued_at": crawl_job.queued_at.isoformat() if crawl_job.queued_at else None,
         "started_at": crawl_job.started_at.isoformat() if crawl_job.started_at else None,
         "completed_at": crawl_job.completed_at.isoformat() if crawl_job.completed_at else None,

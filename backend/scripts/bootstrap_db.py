@@ -21,6 +21,18 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
 
     # Then run migration ALTER TABLE / UPDATE statements for existing DBs
     with db_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO scraper_pacing_settings ("
+                "source_site, interval_min_seconds, interval_max_seconds, "
+                "burst_size, burst_pause_seconds, updated_at"
+                ") VALUES "
+                "('jobsdb', 1, 3, 20, 30, CURRENT_TIMESTAMP), "
+                "('ctgoodjobs', 1, 3, 20, 30, CURRENT_TIMESTAMP), "
+                "('offertoday', 1, 3, 20, 30, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (source_site) DO NOTHING"
+            )
+        )
         connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_mode VARCHAR(32)"))
         connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS crawl_phase VARCHAR(32)"))
         connection.execute(text("ALTER TABLE scrape_schedules ADD COLUMN IF NOT EXISTS detail_limit INTEGER"))

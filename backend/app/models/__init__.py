@@ -22,6 +22,7 @@ from app.models.company_enrichment_run import (
     CompanyEnrichmentRunItem,
 )
 from app.models.app_runtime_settings import AppRuntimeSettings
+from app.models.scraper_pacing_settings import ScraperPacingSettings
 
 __all__ = [
     "Company", "CrawlJob", "CrawlJobEvent", "CrawlJobExecution", "CrawlJobListing", "CrawlRun", "EventOutbox", "Job", "JobEmbedding",
@@ -31,5 +32,5 @@ __all__ = [
     "SkillReviewCandidate",
     "EnrichmentRun", "EnrichmentRunItem",
     "CompanyEnrichmentRun", "CompanyEnrichmentRunItem",
-    "AppRuntimeSettings",
+    "AppRuntimeSettings", "ScraperPacingSettings",
 ]
