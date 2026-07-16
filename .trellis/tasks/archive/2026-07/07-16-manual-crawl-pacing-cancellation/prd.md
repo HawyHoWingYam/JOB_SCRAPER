@@ -132,28 +132,28 @@ also stated in the child artifacts.
 
 ## Acceptance Criteria
 
-- [ ] AC1: Manual listing behavior and scheduled crawls are unchanged by pacing.
-- [ ] AC2: Each source can save, validate, reset, and independently resolve its
+- [x] AC1: Manual listing behavior and scheduled crawls are unchanged by pacing.
+- [x] AC2: Each source can save, validate, reset, and independently resolve its
       detail pacing settings using the agreed defaults and safety ranges.
-- [ ] AC3: A newly dispatched detail task persists an immutable effective
+- [x] AC3: A newly dispatched detail task persists an immutable effective
       pacing snapshot; settings edits do not change it, and manual-action Resume
       retains its snapshot and attempt position.
-- [ ] AC4: Detail requests remain serial and follow the first-immediate,
+- [x] AC4: Detail requests remain serial and follow the first-immediate,
       ordinary-interval, burst-replacement, retry-counting, and no-final-pause
       rules under deterministic tests.
-- [ ] AC5: A second active detail task for the same source is rejected with a
+- [x] AC5: A second active detail task for the same source is rejected with a
       clear API/UI message; other sources may run concurrently.
-- [ ] AC6: Cancel transitions through `cancelling`, prevents further outbound
+- [x] AC6: Cancel transitions through `cancelling`, prevents further outbound
       requests, stops the execution cooperatively or by 30-second forced process
       termination, and emits `cancelled` only after stop acknowledgement.
-- [ ] AC7: Cancellation preserves committed work, leaves listing truthfully
+- [x] AC7: Cancellation preserves committed work, leaves listing truthfully
       partial, leaves unprocessed detail rows eligible, and cannot be resumed.
-- [ ] AC8: Settings and Crawl Tasks render the approved information hierarchy,
+- [x] AC8: Settings and Crawl Tasks render the approved information hierarchy,
       safety ranges, task snapshot, and cancellation controls without countdown
       or runtime pacing counters.
-- [ ] AC9: Historical detail tasks display `Not recorded` and never borrow the
+- [x] AC9: Historical detail tasks display `Not recorded` and never borrow the
       current settings.
-- [ ] AC10: Backend focused/full tests, frontend tests, production build, and
+- [x] AC10: Backend focused/full tests, frontend tests, production build, and
       migration upgrade/downgrade checks pass before rollout.
 
 ## Out of Scope
