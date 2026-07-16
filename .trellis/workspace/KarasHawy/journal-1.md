@@ -443,3 +443,38 @@ Resolved JobsDB Docker-to-host CDP attachment, added durable Crawl Tasks recover
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Reliable manual crawl cancellation
+
+**Date**: 2026-07-16
+**Task**: Reliable manual crawl cancellation
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented and deployed acknowledged two-phase cancellation for manual listing/detail crawls, durable execution ownership and restart supervision, cross-source request gates, Crawl Tasks UX, tests, and code-spec. Permanently stopped the active JobsDB detail task before backend deployment.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `20a4f10f` | (see git log) |
+| `8c72cb86` | (see git log) |
+| `2fd9f2be` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
