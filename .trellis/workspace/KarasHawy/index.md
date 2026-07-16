@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
-- **Last Active**: 2026-07-15
+- **Total Sessions**: 13
+- **Last Active**: 2026-07-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~411 | Active |
+| `journal-1.md` | ~445 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-07-16 | Fix JobsDB reusable-browser recovery | `2390d4ec`, `3481a272` | `codex/offertoday-it-coverage-20260702` |
 | 12 | 2026-07-15 | Harden CTGoodJobs recovery and crawl task metrics | `ad950cc0`, `38af8cec`, `6c49b6b9`, `8876896d` | `codex/offertoday-it-coverage-20260702` |
 | 11 | 2026-07-15 | Restore Crawl Tasks recovery buttons | `b1b49ef3` | `codex/offertoday-it-coverage-20260702` |
 | 10 | 2026-07-15 | Guide manual-action task recovery | `eedb732d` | `codex/offertoday-it-coverage-20260702` |

@@ -409,3 +409,37 @@ Paused CTGoodJobs immediately on verification evidence, added conservative unava
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Fix JobsDB reusable-browser recovery
+
+**Date**: 2026-07-16
+**Task**: Fix JobsDB reusable-browser recovery
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Resolved JobsDB Docker-to-host CDP attachment, added durable Crawl Tasks recovery-attempt feedback and repeat-click protection, verified live recovery and healthy rebuilt services, and documented the browser transport/logging contracts.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2390d4ec` | (see git log) |
+| `3481a272` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
