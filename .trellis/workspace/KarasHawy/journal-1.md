@@ -512,3 +512,38 @@ Implemented and deployed source-specific manual Job Detail pacing for JobsDB, CT
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Complete CTGoodJobs headless viability research
+
+**Date**: 2026-07-16
+**Task**: Complete CTGoodJobs headless viability research
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed the bounded four-arm CTGoodJobs transport comparison: all 116 observations were parser-valid across plain HTTP, fresh headless, stateful headless, and headed baseline. Documented plain HTTP as the recommended follow-up canary, preserved explicit operator-driven WAF recovery, updated and closed GitHub Issue #12, and left production behavior unchanged.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `561e317f` | (see git log) |
+| `d8fce3af` | (see git log) |
+| `cd10adc8` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
