@@ -16,7 +16,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
-| [Error Handling](./error-handling.md) | Positive IP evidence, manual-action pause, and explicit same-task resume | Active |
+| [Error Handling](./error-handling.md) | IP/manual-action recovery plus acknowledged manual crawl cancellation | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Cross-source crawl cadence, correlation, bounded fields, and secret-safe URLs | Active |
 | [Crawl Task Detail Metrics](./crawl-task-detail-metrics.md) | Cross-source detail denominators, outcomes, remaining work, and UI projection | Active |

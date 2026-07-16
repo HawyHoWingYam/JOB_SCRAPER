@@ -410,3 +410,131 @@ else:
 
 The bounded circuit breaker contains an unknown page-shape incident without
 claiming it is an IP block, WAF challenge, or expired job.
+
+---
+
+## Scenario: Acknowledged manual crawl cancellation
+
+### 1. Scope / Trigger
+
+Use this contract when adding or changing Cancel behavior for manual listing or
+detail `CrawlJob` executions. Scheduled crawls remain outside this flow.
+
+### 2. Signatures
+
+```http
+POST /api/v1/crawl-jobs/{crawl_job_id}/cancel
+```
+
+```text
+queued | dispatching | running | manual_action_required
+  -> cancelling + crawl.cancel_requested
+  -> cancelled + crawl.cancelled     # only after execution stop is confirmed
+```
+
+```python
+CrawlCancellationToken.raise_if_cancelled() -> None
+CrawlCancellationToken.sleep(seconds: float) -> None
+CrawlJobExecutionLauncher.request_cancel(*, crawl_job_id) -> bool
+CrawlJobExecutionLauncher.recover_pending_cancellations() -> int
+```
+
+Durable process ownership is stored in `crawl_job_executions`. Each row carries
+`crawl_job_id`, a UUID `generation`, PID, process create time, full command,
+launcher instance, heartbeat/stop/exit timestamps, exit code, and execution
+status. The generation is passed as `--execution-generation` and
+`CRAWL_JOB_EXECUTION_GENERATION`.
+
+### 3. Contracts
+
+- Cancel is permanent and idempotent. `cancelled` tasks cannot Resume.
+- `cancelling` means shutdown is pending; it must never claim that the worker is
+  gone. `cancelled` is written only after no process remains.
+- Workers check persisted cancellation immediately before each outbound
+  listing/detail request. Controlled waits are split into slices of at most one
+  second. An in-flight request may finish; no later request may start.
+- Cooperative shutdown has 30 seconds. The supervisor then terminates the
+  process tree and confirms exit before acknowledgement.
+- PID is never sufficient ownership evidence. Validate process create time,
+  crawl-job ID, execution generation, and the stored command before signalling.
+  An unverifiable live PID remains `cancelling`; it is not treated as exited.
+- API restart re-reads every `cancelling` task. Active generations are moved to
+  `stop_requested` and supervised; tasks with no active execution are
+  acknowledged without relaunching.
+- Late worker transitions to running/completed/failed/manual-action cannot
+  overwrite `cancelling` or `cancelled`.
+- Keep committed/staged output. Cancelled listing metrics are partial and not
+  naturally complete. Only detail rows owned by the task and still `running`
+  return to `pending`; settled rows remain unchanged.
+- Browser adapters own the final pre-navigation gate. A caller-only check is
+  insufficient because cancellation can arrive between the caller and `goto`,
+  `evaluate(fetch)`, or an adapter retry.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Queued/manual-action task has no active execution | Emit request event, then acknowledge `cancelled`; never launch |
+| Active worker exits during grace period | Record execution exit, then acknowledge cancellation |
+| Worker remains alive for 30 seconds | Terminate descendants and parent; acknowledge only after confirmed exit |
+| PID create time or command differs | Treat as reused/unowned PID; never signal it |
+| PID exists but identity access is denied | Keep `cancelling`; never infer process exit |
+| API restarts after cancel intent commit | Recover supervision from the database generation |
+| Popen or PID registration fails | Stop any created process; mark execution launch failed; settle CrawlJob as failed or cancelled |
+| Scheduled task requests Cancel | Reject without state or event changes |
+| Late worker reports failure/completion | Preserve cancelling/cancelled state; metrics may still merge |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** A detail request finishes after Cancel, the next adapter gate raises,
+  the worker exits, remaining owned `running` rows return to `pending`, and the
+  UI changes from Cancelling to Cancelled.
+- **Base:** A queued task has no execution row and reaches Cancelled immediately
+  with ordered request/acknowledgement events.
+- **Bad:** The API writes Cancelled immediately while Playwright continues
+  fetching more jobs.
+- **Bad:** Startup recovery trusts a reused PID or acknowledges an access-denied
+  PID as already exited.
+
+### 6. Tests Required
+
+- State tests cover cancellable/manual-only inputs and protected late
+  transitions.
+- Dispatch tests cover queued/no-execution acknowledgement, repeated Cancel,
+  scheduled rejection, and request-before-acknowledgement event order.
+- Launcher tests cover generation command propagation, create-time/command PID
+  validation, unverifiable identity, 30-second escalation, process-tree kill,
+  launch cleanup, and restart recovery.
+- Token/adapter tests assert one-second-or-shorter sleep slices and zero
+  navigation/fetch calls after the final cancellation gate for JobsDB,
+  CTGoodJobs, and OfferToday.
+- Cancellation-service tests assert listing partialness, settled-output
+  preservation, owned-running detail recovery, and idempotent events.
+- Snapshot/frontend tests assert Cancelling filtering/polling, disabled repeated
+  Cancel, no terminal Cancel, and no Resume for cancelled tasks.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+crawl_job.status = "cancelled"
+db.commit()
+process.terminate()  # PID alone; exit not confirmed
+```
+
+This publishes a false terminal state and can signal an unrelated reused PID.
+
+#### Correct
+
+```python
+crawl_job.status = "cancelling"
+append_event("crawl.cancel_requested")
+request_stop(execution_generation)
+
+if validated_owned_process_has_exited(execution_generation):
+    acknowledge_cancelled(crawl_job_id, execution_generation)
+```
+
+The durable generation owns process validation, restart recovery, and the only
+transition that may publish `crawl.cancelled`.
