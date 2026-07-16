@@ -478,3 +478,37 @@ Implemented and deployed acknowledged two-phase cancellation for manual listing/
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: Source-specific manual detail pacing
+
+**Date**: 2026-07-16
+**Task**: Source-specific manual detail pacing
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented and deployed source-specific manual Job Detail pacing for JobsDB, CTGoodJobs, and OfferToday: persisted settings and APIs, immutable task snapshots, atomic same-source dispatch exclusion, cancellation-aware per-attempt pacing across retries, cumulative Resume position, task projection, PostgreSQL migration/bootstrap/race verification, and backend code-spec documentation.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4bd3c791` | (see git log) |
+| `0caac176` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
