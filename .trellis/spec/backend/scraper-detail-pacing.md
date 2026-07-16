@@ -36,6 +36,11 @@ build_detail_pacing_controller(...) -> DetailPacingController | None
 
 - The supported persisted rows are exactly `jobsdb`, `ctgoodjobs`, and
   `offertoday`; each source is updated independently.
+- The settings GET response is
+  `{items: ScraperPacingSettingsResponse[], active_detail_task_count: int}`.
+  The count includes only schedule-less manual detail tasks in `queued`,
+  `dispatching`, `running`, `manual_action_required`, or `cancelling`; listing
+  payloads and scheduled tasks are excluded.
 - Defaults are 1-3 seconds, burst size 20, and burst pause 30 seconds.
   Both Alembic upgrade and `scripts/bootstrap_db.py` seed missing rows.
   Bootstrap uses `ON CONFLICT DO NOTHING` and must never overwrite an operator
@@ -77,6 +82,7 @@ contain several `manual_action_required` rows for one source.
 | different source active detail task | dispatch may proceed |
 | listing or schedule-backed dispatch | no snapshot and no detail conflict query |
 | invalid or absent historical snapshot | `detail_pacing=null` |
+| listing payload seen by active-count query | excluded from `active_detail_task_count` |
 | cancellation during a pacing wait | stop before the next outbound request |
 
 ### 5. Good / Base / Bad Cases
@@ -93,7 +99,8 @@ contain several `manual_action_required` rows for one source.
 ### 6. Tests Required
 
 - `test_scraper_pacing_settings.py`: exact sources/defaults, independent
-  update/reset, all safety boundaries, and unknown fields.
+  update/reset, all safety boundaries, unknown fields, and detail-only active
+  task counting.
 - `test_scraper_pacing_migration.py`: exact three-row seed and downgrade.
 - `test_scraper_pacing_dispatch.py`: snapshot immutability, conflict statuses,
   and listing exclusion.
