@@ -26,14 +26,14 @@ adopted and make cancellation status/actions truthful.
 
 ## Acceptance Criteria
 
-- [ ] Snapshot API returns the typed pacing object, explicit historical-null
+- [x] Snapshot API returns the typed pacing object, explicit historical-null
       behavior, and `cancelling` lifecycle consistently.
-- [ ] Detail Pacing card renders only the three approved parameters with correct
+- [x] Detail Pacing card renders only the three approved parameters with correct
       units and historical wording.
-- [ ] Cancel/Resume/status/filter behavior matches backend lifecycle for all
+- [x] Cancel/Resume/status/filter behavior matches backend lifecycle for all
       terminal and non-terminal states.
-- [ ] No countdown or pacing runtime counter appears.
-- [ ] Backend snapshot tests, frontend Crawl Tasks tests, full frontend tests,
+- [x] No countdown or pacing runtime counter appears.
+- [x] Backend snapshot tests, frontend Crawl Tasks tests, full frontend tests,
       and production build pass.
 
 ## Dependencies

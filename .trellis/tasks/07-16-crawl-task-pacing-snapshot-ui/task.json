@@ -3,7 +3,7 @@
   "name": "crawl-task-pacing-snapshot-ui",
   "title": "Show effective pacing in Crawl Tasks",
   "description": "Project and display each detail task's effective pacing snapshot and truthful cancellation lifecycle.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

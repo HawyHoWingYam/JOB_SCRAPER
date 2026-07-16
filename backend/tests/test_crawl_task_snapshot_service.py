@@ -402,3 +402,13 @@ def test_snapshot_projects_recorded_detail_pacing_and_historical_null() -> None:
         events=[],
     )
     assert malformed["detail_pacing"] is None
+
+    listing = build_crawl_task_snapshot(
+        _crawl_job(
+            request_payload={"crawl_phase": "listing", "detail_pacing": pacing}
+        ),
+        None,
+        now=NOW,
+        events=[],
+    )
+    assert listing["detail_pacing"] is None

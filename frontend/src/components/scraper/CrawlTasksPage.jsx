@@ -15,6 +15,7 @@ import {
 import { apiPath } from "../../api/base";
 import { fetchCapabilities } from "../../api/capabilities";
 import { apiFetchJson } from "../../api/client";
+import { formatPacingInterval } from "../../api/scraperPacing";
 import { createMonitoringId, logError, logInfo } from "../../monitoring";
 import { formatCrawlModeLabel } from "./crawlMode";
 import { formatCrawlPhaseLabel } from "./crawlPhase";
@@ -139,6 +140,43 @@ function isCompletedListingTask(task) {
     task?.status === "completed" &&
     resolveRequestedCrawlPhase(task) === "listing" &&
     Boolean(task?.listing_completed)
+  );
+}
+
+function DetailPacingCard({ task }) {
+  if (resolveRequestedCrawlPhase(task) !== "detail") {
+    return null;
+  }
+
+  const pacing = task?.detail_pacing;
+  return (
+    <section className="crawl-task-pacing-card" data-testid="crawl-task-detail-pacing">
+      <div>
+        <p className="crawl-task-pacing-eyebrow">Task startup snapshot</p>
+        <h3>Detail Pacing</h3>
+      </div>
+      {pacing ? (
+        <dl className="crawl-task-pacing-values">
+          <div>
+            <dt>Random interval</dt>
+            <dd>{formatPacingInterval(pacing)}</dd>
+          </div>
+          <div>
+            <dt>Burst</dt>
+            <dd>{pacing.burst_size} attempts</dd>
+          </div>
+          <div>
+            <dt>Burst pause</dt>
+            <dd>{pacing.burst_pause_seconds} seconds</dd>
+          </div>
+        </dl>
+      ) : (
+        <div className="crawl-task-pacing-empty">
+          <strong>Not recorded</strong>
+          <p>This historical detail task has no saved pacing snapshot.</p>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -951,6 +989,8 @@ export default function CrawlTasksPage() {
                   </dd>
                 </div>
               </dl>
+
+              <DetailPacingCard task={selectedTask} />
 
               <div className="crawl-tasks-detail-block">
                 <div className="crawl-tasks-detail-label">Issue Class</div>

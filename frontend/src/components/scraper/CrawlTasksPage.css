@@ -406,6 +406,54 @@
     word-break: break-word;
 }
 
+.crawl-task-pacing-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    border: 1px solid rgba(106, 165, 255, 0.28);
+    border-radius: var(--radius-md);
+    background: rgba(106, 165, 255, 0.06);
+    padding: var(--space-3);
+}
+
+.crawl-task-pacing-card h3,
+.crawl-task-pacing-card p,
+.crawl-task-pacing-values {
+    margin: 0;
+}
+
+.crawl-task-pacing-eyebrow,
+.crawl-task-pacing-values dt {
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.crawl-task-pacing-values {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-3);
+}
+
+.crawl-task-pacing-values dd {
+    margin: var(--space-1) 0 0;
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+    font-weight: 700;
+}
+
+.crawl-task-pacing-empty {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    color: var(--color-text-secondary);
+}
+
+.crawl-task-pacing-empty p {
+    font-size: var(--text-sm);
+}
+
 .crawl-tasks-detail-block {
     display: flex;
     flex-direction: column;
@@ -452,7 +500,8 @@
     }
 
     .crawl-tasks-filters,
-    .crawl-tasks-detail-grid {
+    .crawl-tasks-detail-grid,
+    .crawl-task-pacing-values {
         grid-template-columns: minmax(0, 1fr);
     }
 }

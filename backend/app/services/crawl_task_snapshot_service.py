@@ -651,7 +651,12 @@ def build_crawl_task_snapshot(
         else {}
     )
     request_payload = event_payload.get("request_payload") or crawl_job.request_payload or {}
-    raw_detail_pacing = request_payload.get("detail_pacing")
+    requested_crawl_phase = str(request_payload.get("crawl_phase") or "").strip().lower()
+    raw_detail_pacing = (
+        request_payload.get("detail_pacing")
+        if requested_crawl_phase == "detail"
+        else None
+    )
     try:
         detail_pacing = (
             DetailPacingConfig.model_validate(raw_detail_pacing).model_dump()

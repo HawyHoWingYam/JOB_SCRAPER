@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import userEvent from "@testing-library/user-event";
@@ -137,6 +138,13 @@ describe("CrawlTasksPage metric summaries", () => {
           detail_remaining_count: 0,
           detail_unavailable_count: 1,
           detail_manual_action_count: 1,
+          request_payload: { crawl_phase: "detail" },
+          detail_pacing: {
+            interval_min_seconds: 1,
+            interval_max_seconds: 3,
+            burst_size: 20,
+            burst_pause_seconds: 30,
+          },
           updated_at: "2026-07-15T12:00:00Z",
         },
       ],
@@ -153,9 +161,57 @@ describe("CrawlTasksPage metric summaries", () => {
     expect(screen.getByText("Remaining 0")).toBeInTheDocument();
     expect(screen.getByText("Unavailable 1")).toBeInTheDocument();
     expect(screen.getByText("Manual action 1")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Detail Pacing" })).toBeInTheDocument();
+    expect(screen.getByText("1-3 seconds")).toBeInTheDocument();
+    expect(screen.getByText("20 attempts")).toBeInTheDocument();
+    expect(screen.getByText("30 seconds")).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("crawl-task-detail-pacing")).queryByText(
+        /countdown|attempt count|waiting/i,
+      ),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("crawl-task-detail-metrics")).toHaveTextContent(
       "Detail targets 4 | Fetched 3 | Saved 2 | Failed 1 | Remaining 0 | Unavailable 1 | Manual action 1",
     );
+  });
+
+  it("shows historical detail pacing as not recorded and hides pacing for listing tasks", async () => {
+    apiFetchJson.mockResolvedValueOnce({
+      items: [{
+        ...listingTask,
+        crawl_job_id: "historical-detail",
+        phase: 2,
+        request_payload: { crawl_phase: "detail" },
+        detail_pacing: null,
+      }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+    });
+    render(<CrawlTasksPage />);
+
+    expect(await screen.findByRole("heading", { name: "Detail Pacing" })).toBeInTheDocument();
+    expect(screen.getByText("Not recorded")).toBeInTheDocument();
+
+    cleanup();
+    apiFetchJson.mockResolvedValueOnce({
+      items: [{
+        ...listingTask,
+        request_payload: { crawl_phase: "listing" },
+        detail_pacing: {
+          interval_min_seconds: 1,
+          interval_max_seconds: 3,
+          burst_size: 20,
+          burst_pause_seconds: 30,
+        },
+      }],
+      total: 1,
+      page: 1,
+      page_size: 10,
+    });
+    render(<CrawlTasksPage />);
+    await screen.findByTestId("crawl-task-row-listing-task");
+    expect(screen.queryByTestId("crawl-task-detail-pacing")).not.toBeInTheDocument();
   });
 
   it("renders observed zero values for every common detail metric", async () => {
@@ -505,10 +561,12 @@ describe("CrawlTasksPage manual-action helper health", () => {
     ).toBeInTheDocument();
     expect(screen.getByTestId("crawl-task-cancel")).toBeDisabled();
     expect(screen.queryByTestId("crawl-task-resume")).not.toBeInTheDocument();
-    expect(intervalSpy).toHaveBeenCalledWith(
-      expect.any(Function),
-      CANCELLATION_REFRESH_MS,
-    );
+    await waitFor(() => {
+      expect(intervalSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        CANCELLATION_REFRESH_MS,
+      );
+    });
   });
 
   it("does not expose cancellation for terminal tasks", async () => {
