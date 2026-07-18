@@ -18,11 +18,12 @@ from app.sources.offertoday.completeness import is_complete_offertoday_job
 from app.utils.time import utc_now
 
 AI_RESTART_MESSAGE = "Service restarted before AI enrichment run could finish."
+AI_STOP_RESTART_MESSAGE = "Stopped by operator; service restarted while in-flight items were finishing."
 COMPANY_RESTART_MESSAGE = "Service restarted before company enrichment run could finish."
 CRAWL_JOB_RESTART_MESSAGE = "Service restarted before crawl job could finish."
 SCHEDULE_RESTART_MESSAGE = "Service restarted before scheduled scrape execution could finish."
 ACTIVE_SCHEDULE_EXECUTION_STATUSES = ("pending", "running", "ai_running")
-ACTIVE_AI_RUN_STATUSES = ("pending", "running")
+ACTIVE_AI_RUN_STATUSES = ("pending", "running", "stopping")
 ACTIVE_COMPANY_RUN_STATUSES = ("pending", "running")
 # Manual-action-required crawl jobs are intentionally left resumable and must not
 # be collapsed into startup recovery failures.
@@ -107,10 +108,47 @@ class StartupRecoveryService:
                 continue
             completed_items = 0
             failed_items = 0
+            cancelled_items = 0
+
+            if run.status == "stopping":
+                for item in items:
+                    if item.status == "completed":
+                        completed_items += 1
+                        continue
+                    if item.status == "failed":
+                        failed_items += 1
+                        continue
+                    if item.status == "cancelled":
+                        cancelled_items += 1
+                        continue
+
+                    item.status = "cancelled"
+                    item.error_message = AI_STOP_RESTART_MESSAGE
+                    item.started_at = item.started_at or timestamp
+                    item.completed_at = item.completed_at or timestamp
+                    cancelled_items += 1
+
+                run.status = "cancelled"
+                run.pending_items = 0
+                run.completed_items = completed_items
+                run.failed_items = failed_items
+                run.cancelled_items = cancelled_items
+                run.started_at = run.started_at or timestamp
+                run.completed_at = timestamp
+                run.current_job_title = None
+                run.error_message = AI_STOP_RESTART_MESSAGE
+                recovered_runs += 1
+                continue
 
             for item in items:
                 if item.status == "completed":
                     completed_items += 1
+                    continue
+                if item.status == "failed":
+                    failed_items += 1
+                    continue
+                if item.status == "cancelled":
+                    cancelled_items += 1
                     continue
 
                 item.status = "failed"
@@ -123,6 +161,7 @@ class StartupRecoveryService:
             run.pending_items = 0
             run.completed_items = completed_items
             run.failed_items = failed_items
+            run.cancelled_items = cancelled_items
             run.started_at = run.started_at or timestamp
             run.completed_at = timestamp
             run.current_job_title = None

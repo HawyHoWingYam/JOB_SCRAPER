@@ -4,13 +4,14 @@ AI Enrichment API Endpoints
 
 import asyncio
 import logging
-from typing import Any, List, Literal, Optional
+from datetime import date
+from typing import List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 from app.database import SessionLocal, get_db
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
@@ -21,16 +22,98 @@ from app.models.job_subcategory import JobSubcategory
 from app.models.skill import Skill
 from app.models.skill_technology import SkillTechnology
 from app.schemas import JobDetailSchema
-from app.services.enrichment_run_service import EnrichmentRunService
+from app.services.enrichment_run_service import (
+    ActiveEnrichmentRunError,
+    EnrichmentRunService,
+    PendingJobFilters,
+)
 from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
+from app.services.source_catalog import list_supported_source_sites
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
-ACTIVE_AI_RUN_STATUSES = {"pending", "running"}
+ACTIVE_AI_RUN_STATUSES = {"pending", "running", "stopping"}
+MAX_PENDING_RUN_LIMIT = 5000
 
 
 class EnrichRequest(BaseModel):
-    limit: int = 100
+    limit: int = Field(default=100, ge=1, le=MAX_PENDING_RUN_LIMIT)
+    all_pending_acknowledged: bool = False
+
+    @model_validator(mode="after")
+    def require_acknowledgement(self):
+        if not self.all_pending_acknowledged:
+            raise ValueError("all_pending_acknowledged must be true")
+        return self
+
+
+class PendingFiltersRequest(BaseModel):
+    source_sites: List[str] = Field(default_factory=list)
+    source_classification_names: List[str] = Field(default_factory=list)
+    source_subclassification_names: List[str] = Field(default_factory=list)
+    posted_date_from: Optional[date] = None
+    posted_date_to: Optional[date] = None
+
+    @field_validator(
+        "source_sites",
+        "source_classification_names",
+        "source_subclassification_names",
+        mode="before",
+    )
+    @classmethod
+    def normalize_values(cls, value):
+        values = value if isinstance(value, list) else []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in values:
+            text_value = str(item or "").strip().lower()
+            if text_value and text_value not in seen:
+                seen.add(text_value)
+                normalized.append(text_value)
+        return normalized
+
+    @field_validator("source_sites")
+    @classmethod
+    def validate_sources(cls, value: List[str]) -> List[str]:
+        supported = set(list_supported_source_sites())
+        unsupported = [source for source in value if source not in supported]
+        if unsupported:
+            raise ValueError(f"Unsupported source site(s): {', '.join(unsupported)}")
+        return value
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        if (
+            self.posted_date_from is not None
+            and self.posted_date_to is not None
+            and self.posted_date_from > self.posted_date_to
+        ):
+            raise ValueError("posted_date_from must be on or before posted_date_to")
+        return self
+
+    def to_service_filters(self) -> PendingJobFilters:
+        return PendingJobFilters(
+            source_sites=tuple(self.source_sites),
+            source_classification_names=tuple(self.source_classification_names),
+            source_subclassification_names=tuple(self.source_subclassification_names),
+            posted_date_from=self.posted_date_from,
+            posted_date_to=self.posted_date_to,
+        )
+
+
+class PendingSelectionRequest(BaseModel):
+    filters: PendingFiltersRequest = Field(default_factory=PendingFiltersRequest)
+    limit: int = Field(default=100, ge=1, le=MAX_PENDING_RUN_LIMIT)
+    all_pending_acknowledged: bool = False
+
+    @model_validator(mode="after")
+    def validate_scope(self):
+        service_filters = self.filters.to_service_filters()
+        if not service_filters.has_constraints and not self.all_pending_acknowledged:
+            raise ValueError(
+                "Select at least one filter or acknowledge running all pending jobs"
+            )
+        return self
 
 
 class QueryRunRequest(BaseModel):
@@ -41,10 +124,23 @@ class QueryRunRequest(BaseModel):
 
 
 class CreateRunRequest(BaseModel):
-    mode: Literal["pending", "batch", "query"] = "pending"
-    limit: Optional[int] = None
-    job_ids: Optional[List[UUID]] = None
+    mode: Literal["pending", "query"] = "pending"
+    filters: PendingFiltersRequest = Field(default_factory=PendingFiltersRequest)
+    limit: int = Field(default=100, ge=1, le=MAX_PENDING_RUN_LIMIT)
+    all_pending_acknowledged: bool = False
     query: Optional[QueryRunRequest] = None
+
+    @model_validator(mode="after")
+    def validate_mode_payload(self):
+        if self.mode == "pending":
+            PendingSelectionRequest(
+                filters=self.filters,
+                limit=self.limit,
+                all_pending_acknowledged=self.all_pending_acknowledged,
+            )
+        elif self.query is None:
+            raise ValueError("query is required for query mode")
+        return self
 
 
 def _derive_last_failed_job_titles(db: Session, run_ids: list[str]) -> dict[str, Optional[str]]:
@@ -97,9 +193,10 @@ def _serialize_run(
         int(run.total_items or 0)
         - int(run.pending_items or 0)
         - int(run.completed_items or 0)
-        - int(run.failed_items or 0),
+        - int(run.failed_items or 0)
+        - int(getattr(run, "cancelled_items", 0) or 0),
         0,
-    ) if str(run.status or "").lower() in {"pending", "running"} else 0
+    ) if str(run.status or "").lower() in ACTIVE_AI_RUN_STATUSES else 0
     failed_items = int(run.failed_items or 0)
     resolved_failed_title = None
     if failed_items > 0:
@@ -117,9 +214,15 @@ def _serialize_run(
         "pending_items": run.pending_items,
         "completed_items": run.completed_items,
         "failed_items": run.failed_items,
+        "cancelled_items": int(getattr(run, "cancelled_items", 0) or 0),
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "created_at": run.created_at.isoformat() if run.created_at else None,
+        "stop_requested_at": (
+            run.stop_requested_at.isoformat()
+            if getattr(run, "stop_requested_at", None)
+            else None
+        ),
         "current_job_title": getattr(run, "current_job_title", None),
         "latest_started_job_title": getattr(run, "current_job_title", None),
         "in_progress_items": in_progress_items,
@@ -148,7 +251,7 @@ def _serialize_runs(runs: list[EnrichmentRun], db: Optional[Session] = None) -> 
         pending_gate_map = {
             run.id: service.describe_pending_gate(run)
             for run in runs
-            if str(getattr(run, "status", "") or "").lower() == "pending"
+            if str(getattr(run, "status", "") or "").lower() in {"waiting", "pending"}
         }
     return [
         _serialize_run(
@@ -192,6 +295,7 @@ def _publish_run_request(
 
 
 async def _wait_for_terminal_run(run_id: str) -> EnrichmentRun:
+    """Wait for internal synchronous workflows such as manual job creation."""
     while True:
         wait_db = SessionLocal()
         try:
@@ -206,6 +310,7 @@ async def _wait_for_terminal_run(run_id: str) -> EnrichmentRun:
 
 
 def _load_job_snapshot(job_id: UUID) -> dict:
+    """Load the enriched job projection for the internal manual-job workflow."""
     snapshot_db = SessionLocal()
     try:
         job = (
@@ -230,6 +335,17 @@ def _load_job_snapshot(job_id: UUID) -> dict:
         snapshot_db.close()
 
 
+def _active_run_conflict(exc: ActiveEnrichmentRunError) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"code": "active_run_exists", "run_id": exc.run_id},
+    )
+
+
+def _normalized_pending_payload(request: PendingSelectionRequest) -> dict:
+    return request.filters.model_dump(mode="json")
+
+
 @router.post("/enrich")
 async def start_enrichment(
     request: EnrichRequest,
@@ -241,11 +357,18 @@ async def start_enrichment(
     except ProfileRuntimeNotReadyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    run = EnrichmentRunService(db).create_manual_pending_run(limit=request.limit)
+    service = EnrichmentRunService(db)
+    try:
+        run = service.create_manual_pending_run(
+            limit=request.limit,
+            filters=PendingJobFilters(),
+        )
+    except ActiveEnrichmentRunError as exc:
+        raise _active_run_conflict(exc) from exc
     if run is None:
         return {"task_id": None, "run_id": None, "status": "no_jobs"}
 
-    _publish_run_request(db, service=EnrichmentRunService(db), run_id=run.id)
+    _publish_run_request(db, service=service, run_id=run.id)
     return {"task_id": run.id, "run_id": run.id, "status": "queued"}
 
 
@@ -284,6 +407,58 @@ async def get_ai_overview(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/pending/filter-options")
+async def get_pending_filter_options(db: Session = Depends(get_db)):
+    """Return the current pending candidate hierarchy for local cascading filters."""
+    rows = EnrichmentRunService(db).get_pending_filter_options()
+    hierarchy: dict[str, dict[str, set[str]]] = {}
+    for row in rows:
+        source = str(row.get("source_site") or "").strip().lower()
+        classification = str(row.get("source_classification_name") or "").strip()
+        subclassification = str(row.get("source_subclassification_name") or "").strip()
+        if not source:
+            continue
+        classifications = hierarchy.setdefault(source, {})
+        subclassifications = classifications.setdefault(classification, set())
+        if subclassification:
+            subclassifications.add(subclassification)
+
+    return {
+        "sources": [
+            {
+                "source_site": source,
+                "classifications": [
+                    {
+                        "name": classification,
+                        "subclassifications": sorted(subclassifications),
+                    }
+                    for classification, subclassifications in classifications.items()
+                    if classification
+                ],
+            }
+            for source, classifications in hierarchy.items()
+        ]
+    }
+
+
+@router.post("/pending/preview")
+async def preview_pending_enrichment(
+    request: PendingSelectionRequest,
+    db: Session = Depends(get_db),
+):
+    """Preview the current filtered pending selection without reserving jobs."""
+    filters = request.filters.to_service_filters()
+    preview = EnrichmentRunService(db).preview_pending_jobs(
+        filters=filters,
+        limit=request.limit,
+    )
+    return {
+        **preview,
+        "filters": _normalized_pending_payload(request),
+        "all_pending_acknowledgement_required": not filters.has_constraints,
+    }
+
+
 @router.post("/runs")
 async def create_enrichment_run(
     request: CreateRunRequest,
@@ -297,26 +472,23 @@ async def create_enrichment_run(
 
     service = EnrichmentRunService(db)
 
-    if request.mode == "pending":
-        run = service.create_manual_pending_run(limit=request.limit)
-    elif request.mode == "batch":
-        if not request.job_ids:
-            raise HTTPException(status_code=400, detail="job_ids are required for batch mode")
-        run = service.create_manual_batch_run([str(job_id) for job_id in request.job_ids])
-    elif request.mode == "query":
-        if request.query is None:
-            raise HTTPException(status_code=400, detail="query is required for query mode")
-        try:
+    try:
+        if request.mode == "pending":
+            run = service.create_manual_pending_run(
+                limit=request.limit,
+                filters=request.filters.to_service_filters(),
+            )
+        else:
             run = service.create_manual_query_run(
                 review_candidate_names=request.query.review_candidate_names,
                 polluted_skill_names=request.query.polluted_skill_names,
                 source_subclassification_names=request.query.source_subclassification_names,
                 scope=request.query.scope,
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    else:
-        raise HTTPException(status_code=400, detail="Unsupported run mode")
+    except ActiveEnrichmentRunError as exc:
+        raise _active_run_conflict(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if run is None:
         return {"status": "empty", "run": None}
@@ -379,6 +551,8 @@ async def retry_failed_enrichment_run(
     service = EnrichmentRunService(db)
     try:
         run = service.create_retry_run_from_failed_items(run_id)
+    except ActiveEnrichmentRunError as exc:
+        raise _active_run_conflict(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if run is None:
@@ -388,26 +562,17 @@ async def retry_failed_enrichment_run(
     return _serialize_single_run(run, db)
 
 
-@router.post("/enrich-job/{job_id}")
-async def enrich_single_job(job_id: UUID, db: Session = Depends(get_db)):
-    """Enrich a single job through the worker-owned run pipeline."""
-    try:
-        ensure_profile_runtime_ready("jobs")
-    except ProfileRuntimeNotReadyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    job = db.query(Job).filter(Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
+@router.post("/runs/{run_id}/stop")
+async def stop_enrichment_run(run_id: str, db: Session = Depends(get_db)):
+    """Request cooperative stop and return the updated run projection."""
     service = EnrichmentRunService(db)
-    run = service.create_manual_single_job_run(str(job_id))
-    _publish_run_request(db, service=service, run_id=run.id)
-    terminal_run = await _wait_for_terminal_run(run.id)
-    return {
-        "run": _serialize_single_run(terminal_run, db),
-        "job": _load_job_snapshot(job_id),
-    }
+    run = service.request_stop(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    db.commit()
+    OutboxPublisher().publish_pending_batch(db, limit=100)
+    db.refresh(run)
+    return _serialize_single_run(run, db)
 
 
 @router.get("/stats")

@@ -7,8 +7,8 @@ from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.database import Base, engine
-import app.models  # noqa: F401  # Ensure all ORM models are registered on Base.metadata.
+from app.database import Base, engine  # noqa: E402
+import app.models  # noqa: E402,F401  # Ensure all ORM models are registered on Base.metadata.
 
 
 def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
@@ -21,6 +21,61 @@ def bootstrap_database(*, db_engine=engine, metadata=Base.metadata) -> None:
 
     # Then run migration ALTER TABLE / UPDATE statements for existing DBs
     with db_engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE enrichment_runs "
+                "ADD COLUMN IF NOT EXISTS cancelled_items INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE enrichment_runs "
+                "ADD COLUMN IF NOT EXISTS stop_requested_at TIMESTAMP"
+            )
+        )
+        connection.execute(
+            text(
+                "WITH ranked_active AS ("
+                "SELECT id, row_number() OVER ("
+                "ORDER BY COALESCE(started_at, created_at) DESC, created_at DESC, id DESC"
+                ") AS active_rank FROM enrichment_runs "
+                "WHERE status IN ('pending', 'running', 'stopping')"
+                "), duplicate_active AS ("
+                "SELECT id FROM ranked_active WHERE active_rank > 1"
+                ") UPDATE enrichment_run_items SET "
+                "status = 'failed', "
+                "error_message = 'Recovered duplicate active run before single-active enforcement', "
+                "started_at = COALESCE(started_at, CURRENT_TIMESTAMP), "
+                "completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP) "
+                "WHERE run_id IN (SELECT id FROM duplicate_active) "
+                "AND status IN ('pending', 'running')"
+            )
+        )
+        connection.execute(
+            text(
+                "WITH ranked_active AS ("
+                "SELECT id, row_number() OVER ("
+                "ORDER BY COALESCE(started_at, created_at) DESC, created_at DESC, id DESC"
+                ") AS active_rank FROM enrichment_runs "
+                "WHERE status IN ('pending', 'running', 'stopping')"
+                ") UPDATE enrichment_runs SET "
+                "status = CASE WHEN completed_items > 0 "
+                "THEN 'completed_with_failures' ELSE 'failed' END, "
+                "pending_items = 0, "
+                "failed_items = GREATEST(failed_items, total_items - completed_items), "
+                "completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP), "
+                "current_job_title = NULL, "
+                "error_message = 'Recovered duplicate active run before single-active enforcement' "
+                "WHERE id IN (SELECT id FROM ranked_active WHERE active_rank > 1)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_enrichment_runs_one_active "
+                "ON enrichment_runs ((1)) "
+                "WHERE status IN ('pending', 'running', 'stopping')"
+            )
+        )
         connection.execute(
             text(
                 "INSERT INTO scraper_pacing_settings ("

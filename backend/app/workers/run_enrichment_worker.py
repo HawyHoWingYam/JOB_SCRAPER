@@ -82,7 +82,23 @@ class EnrichmentWorkerService:
             await self._handle_progress_message(message)
         processed += len(progress_messages)
 
+        self._run_maintenance()
         return processed
+
+    def _run_maintenance(self) -> None:
+        """Promote retained automatic work and republish durable requests."""
+        db = self.session_factory()
+        try:
+            EnrichmentRunService(db).request_ready_pending_runs(
+                source_service="enrichment-worker-maintenance",
+            )
+            db.commit()
+            self.outbox_publisher.publish_pending_batch(db, limit=100)
+        except Exception:
+            db.rollback()
+            logger.exception("enrichment worker maintenance sweep failed")
+        finally:
+            db.close()
 
     async def _handle_lifecycle_message(self, message: StreamMessage | Any) -> None:
         event = message.event

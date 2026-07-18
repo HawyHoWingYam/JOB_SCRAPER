@@ -1,11 +1,11 @@
 import uuid
 import asyncio
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import date, timedelta
 import re
 from typing import Dict, Iterable, List, Optional
 
-from sqlalchemy import and_, case, func, or_, text
+from sqlalchemy import and_, case, func, text
 from sqlalchemy.orm import Session
 
 from app.messaging.topics import STREAM_JOB_LIFECYCLE
@@ -25,7 +25,10 @@ from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.utils.time import utc_now
 from app.workers.event_types import INGEST_ITEM_SETTLED_EVENT_TYPE
 
-ACTIVE_RUN_STATUSES = ("pending", "running")
+ACTIVE_RUN_STATUSES = ("pending", "running", "stopping")
+TERMINAL_RUN_STATUSES = ("completed", "completed_with_failures", "failed", "cancelled")
+RESERVED_RUN_STATUSES = ("waiting", *ACTIVE_RUN_STATUSES)
+ACTIVE_SLOT_LOCK_KEY = "job_scraper:enrichment_run:active_slot"
 _REVIEW_KEY_PATTERN = re.compile(r"[^a-z0-9+#./\-\s]+")
 _LOOKUP_KEY_PATTERN = re.compile(r"[^a-z0-9]+")
 
@@ -64,6 +67,31 @@ class CrawlAutoRunAppendResult:
         return getattr(self.run, name)
 
 
+@dataclass(frozen=True)
+class PendingJobFilters:
+    source_sites: tuple[str, ...] = ()
+    source_classification_names: tuple[str, ...] = ()
+    source_subclassification_names: tuple[str, ...] = ()
+    posted_date_from: date | None = None
+    posted_date_to: date | None = None
+
+    @property
+    def has_constraints(self) -> bool:
+        return bool(
+            self.source_sites
+            or self.source_classification_names
+            or self.source_subclassification_names
+            or self.posted_date_from
+            or self.posted_date_to
+        )
+
+
+class ActiveEnrichmentRunError(RuntimeError):
+    def __init__(self, run_id: str):
+        self.run_id = run_id
+        super().__init__(f"Enrichment run {run_id} already owns the active slot")
+
+
 class EnrichmentRunService:
     """Persist enrichment runs and their items."""
 
@@ -76,14 +104,107 @@ class EnrichmentRunService:
         return (
             self.db.query(*entities)
             .filter(
-                Job.is_deleted == False,
+                Job.is_deleted.is_(False),
                 Job.source_classification_id.isnot(None),
                 Job.source_classification_id != "",
             )
         )
 
+    def _acquire_active_slot_lock(self) -> None:
+        if self.db.get_bind().dialect.name == "postgresql":
+            self.db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+                {"lock_key": ACTIVE_SLOT_LOCK_KEY},
+            )
+
+    def get_active_run(self) -> Optional[EnrichmentRun]:
+        return (
+            self.db.query(EnrichmentRun)
+            .filter(EnrichmentRun.status.in_(ACTIVE_RUN_STATUSES))
+            .order_by(EnrichmentRun.created_at.asc(), EnrichmentRun.id.asc())
+            .first()
+        )
+
+    def _require_active_slot(self) -> None:
+        self._acquire_active_slot_lock()
+        active_run = self.get_active_run()
+        if active_run is not None:
+            raise ActiveEnrichmentRunError(active_run.id)
+
+    def _reserved_job_exists(self):
+        return (
+            self.db.query(EnrichmentRunItem.id)
+            .join(EnrichmentRun, EnrichmentRun.id == EnrichmentRunItem.run_id)
+            .filter(
+                EnrichmentRunItem.job_id == Job.id,
+                EnrichmentRun.status.in_(RESERVED_RUN_STATUSES),
+                EnrichmentRunItem.status.in_(("pending", "running")),
+            )
+            .exists()
+        )
+
+    def _query_pending_candidates(self, *entities, filters: PendingJobFilters | None = None):
+        normalized = filters or PendingJobFilters()
+        query = self._query_ai_actionable_jobs(*entities).filter(
+            Job.ai_enriched_at.is_(None),
+            ~self._reserved_job_exists(),
+        )
+        if normalized.source_sites:
+            query = query.filter(func.lower(Job.source_site).in_(normalized.source_sites))
+        if normalized.source_classification_names:
+            query = query.filter(
+                func.lower(Job.source_classification_name).in_(
+                    normalized.source_classification_names
+                )
+            )
+        if normalized.source_subclassification_names:
+            query = query.filter(
+                func.lower(Job.source_subclassification_name).in_(
+                    normalized.source_subclassification_names
+                )
+            )
+        if normalized.posted_date_from is not None:
+            query = query.filter(func.date(Job.posted_date) >= normalized.posted_date_from)
+        if normalized.posted_date_to is not None:
+            query = query.filter(func.date(Job.posted_date) <= normalized.posted_date_to)
+        return query
+
+    def preview_pending_jobs(self, *, filters: PendingJobFilters, limit: int) -> dict[str, int]:
+        matching_count = int(
+            self._query_pending_candidates(func.count(Job.id), filters=filters).scalar()
+            or 0
+        )
+        return {
+            "matching_pending_count": matching_count,
+            "effective_item_count": min(matching_count, max(1, int(limit))),
+        }
+
+    def get_pending_filter_options(self) -> list[dict[str, str | None]]:
+        rows = (
+            self._query_pending_candidates(
+                Job.source_site,
+                Job.source_classification_name,
+                Job.source_subclassification_name,
+            )
+            .distinct()
+            .order_by(
+                Job.source_site.asc(),
+                Job.source_classification_name.asc(),
+                Job.source_subclassification_name.asc(),
+            )
+            .all()
+        )
+        return [
+            {
+                "source_site": source_site,
+                "source_classification_name": classification_name,
+                "source_subclassification_name": subclassification_name,
+            }
+            for source_site, classification_name, subclassification_name in rows
+        ]
+
     def get_job_queue_counts(self) -> dict[str, int]:
-        total_jobs, enriched_jobs, eligible_enriched_jobs, pending_jobs = (
+        total_jobs, enriched_jobs, eligible_enriched_jobs, eligible_unenriched_jobs = (
             self.db.query(
                 func.count(Job.id),
                 func.count(Job.ai_enriched_at),
@@ -120,10 +241,15 @@ class EnrichmentRunService:
                     0,
                 ),
             )
-            .filter(Job.is_deleted == False)
+            .filter(Job.is_deleted.is_(False))
             .one()
         )
-        ai_eligible_jobs = int((eligible_enriched_jobs or 0) + (pending_jobs or 0))
+        pending_jobs = int(
+            self._query_pending_candidates(func.count(Job.id)).scalar() or 0
+        )
+        ai_eligible_jobs = int(
+            (eligible_enriched_jobs or 0) + (eligible_unenriched_jobs or 0)
+        )
         total_jobs = int(total_jobs or 0)
         return {
             "total_jobs": total_jobs,
@@ -136,7 +262,13 @@ class EnrichmentRunService:
 
     def create_post_scrape_run(self, job_ids: List[str]) -> EnrichmentRun:
         """Persist a post-scrape run for internal `jobs.id` UUID values."""
-        return self._create_run(source_type="post_scrape", job_ids=job_ids)
+        self._acquire_active_slot_lock()
+        initial_status = "waiting" if self.get_active_run() is not None else "pending"
+        return self._create_run(
+            source_type="post_scrape",
+            job_ids=job_ids,
+            initial_status=initial_status,
+        )
 
     def _create_run(
         self,
@@ -144,6 +276,7 @@ class EnrichmentRunService:
         job_ids: List[str],
         *,
         trigger_crawl_job_id: str | uuid.UUID | None = None,
+        initial_status: str = "pending",
     ) -> EnrichmentRun:
         """Persist a run and its pending items for internal `jobs.id` UUID values."""
         normalized_job_ids = [str(job_id) for job_id in job_ids]
@@ -151,12 +284,13 @@ class EnrichmentRunService:
         run = EnrichmentRun(
             source_type=source_type,
             trigger_crawl_job_id=uuid.UUID(str(trigger_crawl_job_id)) if trigger_crawl_job_id else None,
-            status="pending",
+            status=initial_status,
             job_ids=normalized_job_ids,
             total_items=item_count,
             pending_items=item_count,
             completed_items=0,
             failed_items=0,
+            cancelled_items=0,
         )
         self.db.add(run)
         self.db.flush()
@@ -181,15 +315,10 @@ class EnrichmentRunService:
 
         return self.create_post_scrape_run(job_ids=job_ids)
 
-    def create_manual_batch_run(self, job_ids: List[str]) -> Optional[EnrichmentRun]:
-        """Create a manually requested run for an explicit job ID batch."""
-        if not job_ids:
-            return None
-        return self._create_run(source_type="manual_batch", job_ids=job_ids)
-
-    def create_manual_single_job_run(self, job_id: str) -> EnrichmentRun:
-        """Create a worker-owned run for a single explicitly requested job."""
-        return self._create_run(source_type="manual_single", job_ids=[job_id])
+    def create_manual_job_run(self, job_id: str) -> EnrichmentRun:
+        """Create the internal run used by the manual-job creation workflow."""
+        self._require_active_slot()
+        return self._create_run(source_type="manual_job_create", job_ids=[job_id])
 
     def create_manual_query_run(
         self,
@@ -200,6 +329,7 @@ class EnrichmentRunService:
         scope: str = "all",
     ) -> Optional[EnrichmentRun]:
         """Create a manual run from governance-oriented selectors."""
+        self._require_active_slot()
         job_ids = self._select_manual_query_job_ids(
             review_candidate_names=review_candidate_names,
             polluted_skill_names=polluted_skill_names,
@@ -210,12 +340,16 @@ class EnrichmentRunService:
             return None
         return self._create_run(source_type="manual_query", job_ids=job_ids)
 
-    def create_manual_pending_run(self, limit: Optional[int] = None) -> Optional[EnrichmentRun]:
-        """Create a manual run from globally pending unenriched jobs."""
-        query = (
-            self._query_ai_actionable_jobs(Job.id)
-            .filter(Job.ai_enriched_at.is_(None))
-            .order_by(Job.created_at.asc(), Job.id.asc())
+    def create_manual_pending_run(
+        self,
+        limit: Optional[int] = None,
+        *,
+        filters: PendingJobFilters | None = None,
+    ) -> Optional[EnrichmentRun]:
+        """Create a manual run from filtered pending unenriched jobs."""
+        self._require_active_slot()
+        query = self._query_pending_candidates(Job.id, filters=filters).order_by(
+            Job.created_at.asc(), Job.id.asc()
         )
         if limit is not None:
             query = query.limit(limit)
@@ -249,6 +383,7 @@ class EnrichmentRunService:
                 source_type="crawl_auto",
                 job_ids=[],
                 trigger_crawl_job_id=crawl_job_uuid,
+                initial_status="waiting",
             )
             run.total_items = 0
             run.pending_items = 0
@@ -268,7 +403,7 @@ class EnrichmentRunService:
         if existing_item is not None:
             return CrawlAutoRunAppendResult(run=run, action="duplicate")
 
-        if run.status != "pending":
+        if run.status not in {"waiting", "pending"}:
             return CrawlAutoRunAppendResult(
                 run=run,
                 action="skipped_terminal",
@@ -326,6 +461,7 @@ class EnrichmentRunService:
         return True
 
     def request_ready_pending_runs(self, *, source_service: str = "enrichment-worker") -> int:
+        self.promote_next_ready_waiting_run(source_service=source_service)
         pending_runs = (
             self.db.query(EnrichmentRun)
             .filter(EnrichmentRun.status == "pending")
@@ -340,6 +476,32 @@ class EnrichmentRunService:
             if self.request_run_execution(run.id, source_service=source_service):
                 requested_count += 1
         return requested_count
+
+    def promote_next_ready_waiting_run(
+        self,
+        *,
+        source_service: str = "enrichment-worker",
+    ) -> Optional[EnrichmentRun]:
+        """Promote the oldest ready automatic run when the active slot is free."""
+        self._acquire_active_slot_lock()
+        if self.get_active_run() is not None:
+            return None
+
+        waiting_runs = (
+            self.db.query(EnrichmentRun)
+            .filter(EnrichmentRun.status == "waiting")
+            .order_by(EnrichmentRun.created_at.asc(), EnrichmentRun.id.asc())
+            .all()
+        )
+        for run in waiting_runs:
+            gate = self.describe_pending_gate(run)
+            if gate is None or gate.get("reason") != "queued_for_execution":
+                continue
+            run.status = "pending"
+            self.db.flush()
+            self.request_run_execution(run.id, source_service=source_service)
+            return run
+        return None
 
     def request_crawl_auto_run_if_ready(self, crawl_job_id: str) -> bool:
         crawl_job_uuid = uuid.UUID(str(crawl_job_id))
@@ -356,7 +518,9 @@ class EnrichmentRunService:
             return False
         if gate["reason"] != "queued_for_execution":
             return False
-
+        if run.status == "waiting":
+            promoted = self.promote_next_ready_waiting_run()
+            return promoted is not None and promoted.id == run.id
         return self.request_run_execution(run.id, source_service="enrichment-worker")
 
     def describe_pending_gate(
@@ -365,7 +529,7 @@ class EnrichmentRunService:
         *,
         crawl_job: CrawlJob | None = None,
     ) -> Dict[str, object] | None:
-        if str(run.status or "").lower() != "pending" or run.started_at is not None:
+        if str(run.status or "").lower() not in {"waiting", "pending"} or run.started_at is not None:
             return None
 
         if not run.total_items:
@@ -482,7 +646,7 @@ class EnrichmentRunService:
 
         query = self.db.query(Job.id).filter(
             Job.id.in_(selected_job_ids),
-            Job.is_deleted == False,
+            Job.is_deleted.is_(False),
             Job.source_classification_id.isnot(None),
             Job.source_classification_id != "",
         )
@@ -597,59 +761,21 @@ class EnrichmentRunService:
         return query.all()
 
     def list_runs_for_monitor(self) -> List[EnrichmentRun]:
-        """Return the compact run slice needed by the two-card monitor."""
-        ordered_runs = (
-            self.db.query(
-                EnrichmentRun.id.label("run_id"),
-                func.row_number().over(
-                    order_by=(
-                        EnrichmentRun.created_at.desc(),
-                        EnrichmentRun.id.desc(),
-                    )
-                ).label("overall_pos"),
-                case(
-                    (EnrichmentRun.status.in_(ACTIVE_RUN_STATUSES), 1),
-                    else_=0,
-                ).label("is_active"),
-            )
-            .subquery()
-        )
-        ranked_runs = (
-            self.db.query(
-                ordered_runs.c.run_id,
-                ordered_runs.c.overall_pos,
-                func.min(
-                    case(
-                        (ordered_runs.c.is_active == 1, ordered_runs.c.overall_pos),
-                        else_=None,
-                    )
-                ).over().label("active_pos"),
-            )
-            .subquery()
-        )
-
-        active_pos = ranked_runs.c.active_pos
-        overall_pos = ranked_runs.c.overall_pos
-
-        return (
+        """Return active + latest terminal, or the two latest terminal runs."""
+        active_run = self.get_active_run()
+        terminal_limit = 1 if active_run is not None else 2
+        terminal_runs = (
             self.db.query(EnrichmentRun)
-            .join(ranked_runs, ranked_runs.c.run_id == EnrichmentRun.id)
-            .filter(
-                or_(
-                    and_(active_pos.is_(None), overall_pos <= 2),
-                    and_(active_pos == 1, overall_pos <= 2),
-                    and_(
-                        active_pos > 1,
-                        or_(
-                            overall_pos == active_pos - 1,
-                            overall_pos == active_pos,
-                        ),
-                    ),
-                )
+            .filter(EnrichmentRun.status.in_(TERMINAL_RUN_STATUSES))
+            .order_by(
+                EnrichmentRun.completed_at.desc(),
+                EnrichmentRun.created_at.desc(),
+                EnrichmentRun.id.desc(),
             )
-            .order_by(overall_pos.asc())
+            .limit(terminal_limit)
             .all()
         )
+        return ([active_run] if active_run is not None else []) + terminal_runs
 
     def list_run_items(
         self,
@@ -699,6 +825,10 @@ class EnrichmentRunService:
         run = self.get_run(run_id)
         if run is None:
             return None
+        if run.status == "stopping":
+            return self._finalize_stopping_run(run, error_message=error_message)
+        if run.status in TERMINAL_RUN_STATUSES:
+            return run
 
         items = self.list_run_items(run_id)
         completed_items = 0
@@ -742,11 +872,15 @@ class EnrichmentRunService:
         run.pending_items = 0
         run.completed_items = completed_items
         run.failed_items = failed_items
+        run.cancelled_items = 0
         if run.started_at is None:
             run.started_at = timestamp
         run.completed_at = latest_failure_timestamp
         run.current_job_title = None
         run.error_message = error_message
+        self._sync_linked_crawl_job_ai_metrics(run)
+        self.db.flush()
+        self.promote_next_ready_waiting_run()
         self.db.flush()
         return run
 
@@ -760,6 +894,7 @@ class EnrichmentRunService:
         timestamp = utc_now()
         completed_items = 0
         failed_items = 0
+        cancelled_items = 0
 
         for item in items:
             if item.status == "completed":
@@ -774,16 +909,71 @@ class EnrichmentRunService:
             if item.started_at is None:
                 item.started_at = timestamp
             item.completed_at = timestamp
+            cancelled_items += 1
 
         run.status = "cancelled"
         run.pending_items = 0
         run.completed_items = completed_items
         run.failed_items = failed_items
+        run.cancelled_items = cancelled_items
         if run.started_at is None:
             run.started_at = timestamp
         run.completed_at = timestamp
         run.current_job_title = None
         run.error_message = error_message
+        self._sync_linked_crawl_job_ai_metrics(run)
+        self.db.flush()
+        self.promote_next_ready_waiting_run()
+        self.db.flush()
+        return run
+
+    def request_stop(self, run_id: str) -> Optional[EnrichmentRun]:
+        run = (
+            self.db.query(EnrichmentRun)
+            .filter(EnrichmentRun.id == run_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if run is None or run.status in TERMINAL_RUN_STATUSES:
+            return run
+        if run.status in {"waiting", "pending"}:
+            return self.cancel_run(run.id, "Stopped by operator")
+        if run.status == "running":
+            run.status = "stopping"
+            run.stop_requested_at = utc_now()
+            run.error_message = "Stop requested by operator; in-flight items are finishing"
+            self.db.flush()
+        return run
+
+    def _finalize_stopping_run(
+        self,
+        run: EnrichmentRun,
+        *,
+        error_message: str = "Stopped by operator",
+    ) -> EnrichmentRun:
+        items = self.list_run_items(run.id)
+        timestamp = utc_now()
+        for item in items:
+            if item.status != "pending":
+                continue
+            item.status = "cancelled"
+            item.error_message = error_message
+            item.started_at = item.started_at or timestamp
+            item.completed_at = timestamp
+
+        self.db.flush()
+        counts = self._count_items_by_status(run.id)
+        run.status = "cancelled"
+        run.pending_items = 0
+        run.completed_items = counts["completed"]
+        run.failed_items = counts["failed"]
+        run.cancelled_items = counts["cancelled"]
+        run.completed_at = timestamp
+        run.current_job_title = None
+        run.error_message = error_message
+        self._sync_linked_crawl_job_ai_metrics(run)
+        self.db.flush()
+        self.promote_next_ready_waiting_run()
         self.db.flush()
         return run
 
@@ -859,7 +1049,7 @@ class EnrichmentRunService:
                 latest_item_per_job.c.row_number == 1,
                 latest_item_per_job.c.status == "failed",
                 Job.ai_enriched_at.is_(None),
-                Job.is_deleted == False,
+                Job.is_deleted.is_(False),
             )
             .scalar()
             or 0
@@ -868,7 +1058,13 @@ class EnrichmentRunService:
     def _compute_in_progress_items(self, run: EnrichmentRun) -> int:
         if run.status not in ACTIVE_RUN_STATUSES:
             return 0
-        in_progress = run.total_items - run.pending_items - run.completed_items - run.failed_items
+        in_progress = (
+            run.total_items
+            - run.pending_items
+            - run.completed_items
+            - run.failed_items
+            - run.cancelled_items
+        )
         return max(in_progress, 0)
 
     def _sync_linked_crawl_job_ai_metrics(self, run: EnrichmentRun) -> None:
@@ -895,12 +1091,19 @@ class EnrichmentRunService:
             "pending_items": run.pending_items,
             "completed_items": run.completed_items,
             "failed_items": run.failed_items,
+            "cancelled_items": run.cancelled_items,
             "current_job_title": run.current_job_title,
             "in_progress_items": self._compute_in_progress_items(run),
         }
 
     def _count_items_by_status(self, run_id: str) -> Dict[str, int]:
-        counts = {"pending": 0, "running": 0, "completed": 0, "failed": 0}
+        counts = {
+            "pending": 0,
+            "running": 0,
+            "completed": 0,
+            "failed": 0,
+            "cancelled": 0,
+        }
         rows = (
             self.db.query(
                 EnrichmentRunItem.status,
@@ -944,26 +1147,64 @@ class EnrichmentRunService:
         ).first()
         return row[0] if row else None
 
-    def _update_item_started(self, run_id: str, item_id: str, job_title: Optional[str]) -> Dict[str, object]:
+    def _update_item_started(
+        self,
+        run_id: str,
+        item_id: str,
+        job_title: Optional[str],
+    ) -> Optional[Dict[str, object]]:
         timestamp = utc_now()
-        run = self.db.query(EnrichmentRun).filter(EnrichmentRun.id == run_id).one()
-        item = self.db.query(EnrichmentRunItem).filter(EnrichmentRunItem.id == item_id).one()
+        run = (
+            self.db.query(EnrichmentRun)
+            .filter(EnrichmentRun.id == run_id)
+            .with_for_update()
+            .one()
+        )
+        item = (
+            self.db.query(EnrichmentRunItem)
+            .filter(EnrichmentRunItem.id == item_id)
+            .with_for_update()
+            .one()
+        )
+        if run.status != "running" or item.status != "pending":
+            self.db.commit()
+            return None
 
         item.status = "running"
         item.started_at = item.started_at or timestamp
         run.current_job_title = job_title
         run.error_message = None
+        self.db.flush()
         counts = self._count_items_by_status(run_id)
         run.pending_items = counts["pending"]
         run.completed_items = counts["completed"]
         run.failed_items = counts["failed"]
+        run.cancelled_items = counts["cancelled"]
         self.db.commit()
         return self._serialize_run_progress(run_id)
 
-    def _update_item_finished(self, run_id: str, item_id: str, result: Dict[str, object]) -> Dict[str, object]:
+    def _update_item_finished(
+        self,
+        run_id: str,
+        item_id: str,
+        result: Dict[str, object],
+    ) -> Optional[Dict[str, object]]:
         timestamp = utc_now()
-        run = self.db.query(EnrichmentRun).filter(EnrichmentRun.id == run_id).one()
-        item = self.db.query(EnrichmentRunItem).filter(EnrichmentRunItem.id == item_id).one()
+        run = (
+            self.db.query(EnrichmentRun)
+            .filter(EnrichmentRun.id == run_id)
+            .with_for_update()
+            .one()
+        )
+        item = (
+            self.db.query(EnrichmentRunItem)
+            .filter(EnrichmentRunItem.id == item_id)
+            .with_for_update()
+            .one()
+        )
+        if run.status not in {"running", "stopping"} or item.status != "running":
+            self.db.commit()
+            return None
 
         if result.get("status") == "success":
             item.status = "completed"
@@ -975,10 +1216,12 @@ class EnrichmentRunService:
 
         item.completed_at = timestamp
 
+        self.db.flush()
         counts = self._count_items_by_status(run_id)
         run.completed_items = counts["completed"]
         run.failed_items = counts["failed"]
         run.pending_items = counts["pending"]
+        run.cancelled_items = counts["cancelled"]
         run.current_job_title = self._resolve_latest_running_job_title(run_id)
         self._sync_linked_crawl_job_ai_metrics(run)
         self.db.commit()
@@ -1038,12 +1281,8 @@ class EnrichmentRunService:
             self._sync_linked_crawl_job_ai_metrics(run)
             self.db.commit()
         if not claim:
-            now = utc_now()
-            run.status = "running"
-            run.started_at = run.started_at or now
-            run.completed_at = None
-            run.error_message = None
-            run.current_job_title = None
+            if run.status != "running":
+                return run
             self._sync_linked_crawl_job_ai_metrics(run)
             self.db.commit()
 
@@ -1061,7 +1300,9 @@ class EnrichmentRunService:
                         return
 
                     job_title = self._get_job_title(item.job_id)
-                    self._update_item_started(run_id, item.id, job_title)
+                    if self._update_item_started(run_id, item.id, job_title) is None:
+                        item_queue.task_done()
+                        return
 
                     try:
                         result = await service.enrich_job_id(item.job_id)
@@ -1078,64 +1319,41 @@ class EnrichmentRunService:
             workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(items) or 1))]
             await asyncio.gather(*workers)
         except Exception as exc:
-            timestamp = utc_now()
             error_message = str(exc)
-            latest_failure_timestamp = timestamp
-            items = (
-                self.db.query(EnrichmentRunItem)
-                .filter(EnrichmentRunItem.run_id == run_id)
-                .order_by(EnrichmentRunItem.position.asc())
-                .all()
-            )
-            running_items = [item for item in items if item.status == "running"]
-            pending_items = [item for item in items if item.status == "pending"]
-
-            for item in pending_items:
-                item.status = "failed"
-                item.error_message = error_message
-                item.started_at = item.started_at or timestamp
-                item.completed_at = timestamp
-
-            for offset, item in enumerate(running_items, start=1):
-                failure_timestamp = timestamp + timedelta(microseconds=offset)
-                item.status = "failed"
-                item.error_message = error_message
-                item.started_at = item.started_at or timestamp
-                item.completed_at = failure_timestamp
-                latest_failure_timestamp = failure_timestamp
-
-            completed_items = sum(item.status == "completed" for item in items)
-            failed_items = sum(item.status == "failed" for item in items)
-
-            run.status = "failed" if completed_items == 0 else "completed_with_failures"
-            run.pending_items = 0
-            run.completed_items = completed_items
-            run.failed_items = failed_items
-            run.completed_at = latest_failure_timestamp
-            run.current_job_title = None
-            run.error_message = error_message
-            self._sync_linked_crawl_job_ai_metrics(run)
-
+            self.db.rollback()
+            self.mark_run_failed(run_id, error_message)
             self.db.commit()
             raise
 
         self.db.expire_all()
         run = self.db.query(EnrichmentRun).filter(EnrichmentRun.id == run_id).one()
-        completed_items = run.completed_items
-        failed_items = run.failed_items
+        if run.status == "stopping":
+            run = self._finalize_stopping_run(run)
+            self.db.commit()
+            return run
+        if run.status in TERMINAL_RUN_STATUSES:
+            return run
+
+        counts = self._count_items_by_status(run_id)
+        completed_items = counts["completed"]
+        failed_items = counts["failed"]
         run.status = "completed" if failed_items == 0 else "completed_with_failures"
         run.pending_items = 0
         run.completed_items = completed_items
         run.failed_items = failed_items
+        run.cancelled_items = counts["cancelled"]
         run.current_job_title = None
         run.error_message = None if failed_items == 0 else f"{failed_items} item(s) failed"
         run.completed_at = utc_now()
         self._sync_linked_crawl_job_ai_metrics(run)
+        self.db.flush()
+        self.promote_next_ready_waiting_run()
         self.db.commit()
         return run
 
     def create_retry_run_from_failed_items(self, run_id: str) -> Optional[EnrichmentRun]:
         """Create a new retry run from failed items in an earlier run."""
+        self._require_active_slot()
         failed_item_rows = (
             self.db.query(
                 EnrichmentRun.id.label("run_id"),

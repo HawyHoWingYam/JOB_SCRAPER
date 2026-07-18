@@ -19,9 +19,9 @@ from app.config import settings
 from app.models import Job, Company, Skill
 from app.models.job_skill import JobSkill
 from app.models.job_skill_mention import JobSkillMention
-from app.models import SkillTechnology, SkillCategory, JobSubcategory, JobCategory, JobDomain
+from app.models import SkillTechnology, SkillCategory, JobSubcategory, JobCategory
 from app.schemas import JobSchema, JobCreateSchema, ManualJobCreateSchema, JobDetailSchema, JobTaxonomySchema
-from app.services.enrichment_run_service import EnrichmentRunService
+from app.services.enrichment_run_service import ActiveEnrichmentRunError, EnrichmentRunService
 from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
 from app.schemas.job_search import (
     JobSearchRequestSchema,
@@ -965,6 +965,11 @@ async def create_manual_job(
     db: Session = Depends(get_db),
 ):
     """Create a manually entered job and trigger AI enrichment."""
+    try:
+        ensure_profile_runtime_ready("jobs")
+    except ProfileRuntimeNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     # Generate a unique job_id for manual jobs
     manual_job_id = f"manual:{uuid_lib.uuid4()}"
 
@@ -987,21 +992,21 @@ async def create_manual_job(
         experience_max_years=job_data.experience_max_years,
     )
     db.add(db_job)
-    db.commit()
-    db.refresh(db_job)
-
-    # Trigger AI enrichment through the worker pipeline
-    try:
-        ensure_profile_runtime_ready("jobs")
-    except ProfileRuntimeNotReadyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.flush()
 
     service = EnrichmentRunService(db)
-    run = service.create_manual_single_job_run(str(db_job.id))
+    try:
+        run = service.create_manual_job_run(str(db_job.id))
+    except ActiveEnrichmentRunError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "active_run_exists", "run_id": exc.run_id},
+        ) from exc
     _publish_run_request(db, service=service, run_id=run.id)
 
     # Wait for enrichment to complete
-    terminal_run = await _wait_for_terminal_run(run.id)
+    await _wait_for_terminal_run(run.id)
 
     # Return enriched job snapshot with company + skills
     snapshot = _load_job_snapshot(db_job.id)
