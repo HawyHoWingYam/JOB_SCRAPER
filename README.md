@@ -47,6 +47,10 @@ The default `backend-api` image only supports the lexical search baseline. Seman
 
 ## Runtime Notes
 
+- Job Intelligence governance is a trusted-local, single-operator feature with
+  no login, Bearer token, or RBAC. Never expose its decision routes to an
+  untrusted network; `local-operator` audit attribution and CORS are not
+  authentication. See [Job Intelligence foundation](backend/docs/job-intelligence-foundation.md).
 - Docker API containers now default to stable non-reload startup. This avoids `watchfiles` crashes on bind-mounted `/app` volumes while keeping the app behavior unchanged.
 - To opt into live reload for any API container, set `UVICORN_RELOAD=true`. If Docker-mounted file watching is still unstable, also set `UVICORN_RELOAD_FORCE_POLLING=true`.
 - If `UVICORN_RELOAD` is unset, direct `python -m app.main`, `python -m app.retrieval_main`, and `python -m app.recommendation_main` runs still fall back to `DEBUG`.
