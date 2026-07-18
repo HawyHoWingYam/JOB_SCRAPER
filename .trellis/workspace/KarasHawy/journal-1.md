@@ -686,3 +686,37 @@ Implemented immutable versioned Source Catalog persistence, validation and guard
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: Implement Job Intelligence foundation
+
+**Date**: 2026-07-18
+**Task**: Implement Job Intelligence foundation
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented immutable governance revisions, typed provenance and decision contracts, atomic local-operator decisions with idempotency, optimistic concurrency, append-only audit, existing outbox integration, deterministic seed validation, audit pagination, worker isolation, PostgreSQL migration tests, and trusted-local deployment documentation.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `58fa16ae` | (see git log) |
+| `159abbbb` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
+- **Total Sessions**: 21
 - **Last Active**: 2026-07-18
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~688 | Active |
+| `journal-1.md` | ~722 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 21 | 2026-07-18 | Implement Job Intelligence foundation | `58fa16ae`, `159abbbb` | `codex/offertoday-it-coverage-20260702` |
 | 20 | 2026-07-18 | Authoritative Source Catalog runtime | `476a9993`, `d66fc820`, `9e9c5497` | `codex/offertoday-it-coverage-20260702` |
 | 19 | 2026-07-18 | OfferToday taxonomy exclusion repair | `d6673750` | `codex/offertoday-it-coverage-20260702` |
 | 18 | 2026-07-18 | AI enrichment monitoring-first console | `13818adb`, `86bc03b7`, `53ab4ddc` | `codex/offertoday-it-coverage-20260702` |
