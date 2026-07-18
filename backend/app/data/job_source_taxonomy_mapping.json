@@ -513,10 +513,58 @@
     "default_path": ["Administration & Office Support", "General", "General"],
     "subcategory_hints": {}
   },
+  "offertoday:103000": {
+    "source_name": "Advertising & Media",
+    "allowed_domains": ["Advertising, Arts & Media"],
+    "default_path": ["Advertising, Arts & Media", "General", "General"],
+    "subcategory_hints": {}
+  },
   "offertoday:104000": {
     "source_name": "Banking & Financial Services",
     "allowed_domains": ["Banking & Financial Services"],
     "default_path": ["Banking & Financial Services", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:105000": {
+    "source_name": "Customer Service",
+    "allowed_domains": ["Call Centre & Customer Service"],
+    "default_path": ["Call Centre & Customer Service", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:106000": {
+    "source_name": "CEO & General Management",
+    "allowed_domains": ["CEO & General Management"],
+    "default_path": ["CEO & General Management", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:107000": {
+    "source_name": "Community Services",
+    "allowed_domains": ["Community Services & Development"],
+    "default_path": ["Community Services & Development", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:108000": {
+    "source_name": "Construction",
+    "allowed_domains": ["Construction"],
+    "default_path": ["Construction", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:109000": {
+    "source_name": "Consulting",
+    "allowed_domains": ["Consulting & Strategy"],
+    "default_path": ["Consulting & Strategy", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:110000": {
+    "source_name": "Design",
+    "allowed_domains": ["Design & Architecture"],
+    "default_path": ["Design & Architecture", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:111000": {
+    "source_name": "Education",
+    "allowed_domains": ["Education & Training"],
+    "default_path": ["Education & Training", "General", "General"],
     "subcategory_hints": {}
   },
   "offertoday:112000": {
@@ -525,10 +573,40 @@
     "default_path": ["Engineering", "General", "General"],
     "subcategory_hints": {}
   },
+  "offertoday:116000": {
+    "source_name": "Hospitality & Catering & Tourism",
+    "allowed_domains": ["Hospitality & Tourism"],
+    "default_path": ["Hospitality & Tourism", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:117000": {
+    "source_name": "Human Resources & Recruitment",
+    "allowed_domains": ["Human Resources & Recruitment"],
+    "default_path": ["Human Resources & Recruitment", "General", "General"],
+    "subcategory_hints": {}
+  },
   "offertoday:115000": {
     "source_name": "Healthcare & Medical",
     "allowed_domains": ["Healthcare & Medical"],
     "default_path": ["Healthcare & Medical", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:119000": {
+    "source_name": "Insurance",
+    "allowed_domains": ["Insurance & Superannuation"],
+    "default_path": ["Insurance & Superannuation", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:120000": {
+    "source_name": "Legal",
+    "allowed_domains": ["Legal"],
+    "default_path": ["Legal", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:121000": {
+    "source_name": "Manufacturing & Logistics",
+    "allowed_domains": ["Manufacturing, Transport & Logistics"],
+    "default_path": ["Manufacturing, Transport & Logistics", "General", "General"],
     "subcategory_hints": {}
   },
   "offertoday:118000": {
@@ -543,10 +621,34 @@
     "default_path": ["Marketing & Communications", "General", "General"],
     "subcategory_hints": {}
   },
+  "offertoday:124000": {
+    "source_name": "Real Estate & Property",
+    "allowed_domains": ["Real Estate & Property"],
+    "default_path": ["Real Estate & Property", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:125000": {
+    "source_name": "Retail & Consumer Products",
+    "allowed_domains": ["Retail & Consumer Products"],
+    "default_path": ["Retail & Consumer Products", "General", "General"],
+    "subcategory_hints": {}
+  },
   "offertoday:126000": {
     "source_name": "Sales",
     "allowed_domains": ["Sales"],
     "default_path": ["Sales", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:127000": {
+    "source_name": "Science & Technology",
+    "allowed_domains": ["Science & Technology"],
+    "default_path": ["Science & Technology", "General", "General"],
+    "subcategory_hints": {}
+  },
+  "offertoday:130000": {
+    "source_name": "Trades & Services",
+    "allowed_domains": ["Trades & Services"],
+    "default_path": ["Trades & Services", "General", "General"],
     "subcategory_hints": {}
   }
 }

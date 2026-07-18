@@ -16,7 +16,7 @@ import '../Dashboard.css';
 import './AIEnrichmentPage.css';
 
 const ACTIVE_RUN_STATUSES = new Set(['pending', 'running', 'stopping']);
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', 'failed', 'cancelled']);
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', 'completed_with_exclusions', 'failed', 'cancelled']);
 const DEGRADED_PLACEHOLDER = 'Unavailable';
 const REFRESH_REQUEST_TIMEOUT_MS = 8000;
 const FILTER_PREVIEW_DEBOUNCE_MS = 350;
@@ -149,6 +149,9 @@ function getRunStatusTone(status) {
     return 'success';
   }
   if (normalized === 'completed_with_failures') {
+    return 'warning';
+  }
+  if (normalized === 'completed_with_exclusions') {
     return 'warning';
   }
   if (normalized === 'failed') {
@@ -723,7 +726,17 @@ export default function AIEnrichmentPage() {
       }
 
       setAllPendingAcknowledged(false);
-      setActionMessage(`Filtered run submitted for ${Number(preview?.effective_item_count || normalizedLimit).toLocaleString()} jobs.`);
+      const payload = await response.json();
+      const excludedCount = Number(payload?.excluded_items || preview?.excluded_item_count || 0);
+      const selectedCount = Number(payload?.total_items || preview?.selected_item_count || normalizedLimit);
+      const effectiveCount = Number(
+        preview?.effective_item_count ?? Math.max(selectedCount - excludedCount, 0),
+      );
+      setActionMessage(
+        excludedCount > 0
+          ? `Filtered run submitted for ${effectiveCount.toLocaleString()} jobs; ${excludedCount.toLocaleString()} excluded by taxonomy.`
+          : `Filtered run submitted for ${effectiveCount.toLocaleString()} jobs.`,
+      );
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (err) {
       setActionError(err.message);
@@ -935,9 +948,27 @@ export default function AIEnrichmentPage() {
                   : previewError
                     ? previewError
                     : preview
-                      ? `${Number(preview.matching_pending_count || 0).toLocaleString()} match · ${Number(preview.effective_item_count || 0).toLocaleString()} will run`
+                      ? `${Number(preview.matching_pending_count || 0).toLocaleString()} match · ${Number(preview.effective_item_count || 0).toLocaleString()} will run${Number(preview.excluded_item_count || 0) > 0 ? ` · ${Number(preview.excluded_item_count).toLocaleString()} excluded` : ''}`
                       : 'Choose filters to preview the run.'}
               </div>
+
+              {Number(preview?.excluded_item_count || 0) > 0 && (
+                <div className="ai-exclusion-panel" data-testid="pending-exclusion-details">
+                  <strong>{Number(preview.excluded_item_count).toLocaleString()} jobs will be excluded before execution.</strong>
+                  <ul>
+                    {(preview.excluded_items || []).map((detail) => (
+                      <li key={`${detail.source_classification_id || 'missing'}-${detail.reason}`}>
+                        <span>
+                          {detail.source_classification_name || 'Unnamed source category'}
+                          {detail.source_classification_id ? ` (${detail.source_classification_id})` : ''}
+                          {' · '}{Number(detail.count || 0).toLocaleString()} jobs
+                        </span>
+                        <small>{detail.reason || 'Unsupported source taxonomy'}</small>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <div className="ai-actions-row">
                 <button type="button" className="ai-primary-button" disabled={!canLaunch} onClick={runPendingEnrichment}>
@@ -993,7 +1024,8 @@ export default function AIEnrichmentPage() {
 
                   const processedItems = Number(run.completed_items || 0)
                     + Number(run.failed_items || 0)
-                    + Number(run.cancelled_items || 0);
+                    + Number(run.cancelled_items || 0)
+                    + Number(run.excluded_items || 0);
                   const totalItems = Number(run.total_items || 0);
                   const remainingItems = Number.isFinite(Number(run.pending_items))
                     ? Number(run.pending_items)
@@ -1001,6 +1033,8 @@ export default function AIEnrichmentPage() {
                   const normalizedStatus = normalizeRunStatus(run.status);
                   const statusTone = getRunStatusTone(normalizedStatus);
                   const active = isActiveRun(run);
+                  const excludedItems = Number(run.excluded_items || 0);
+                  const excludedDetails = Array.isArray(run.excluded_details) ? run.excluded_details : [];
                   const inProgressItems = Number.isFinite(Number(run.in_progress_items))
                     ? Number(run.in_progress_items)
                     : (active ? Math.max(0, totalItems - remainingItems - processedItems) : 0);
@@ -1063,6 +1097,7 @@ export default function AIEnrichmentPage() {
                         <span><CheckCircle2 size={14} /> Succeeded {run.completed_items}</span>
                         <span><AlertTriangle size={14} /> Failed {run.failed_items}</span>
                         <span><Square size={14} /> Cancelled {Number(run.cancelled_items || 0)}</span>
+                        <span>Excluded {excludedItems}</span>
                         <span>Remaining {remainingItems}</span>
                       </div>
 
@@ -1099,6 +1134,18 @@ export default function AIEnrichmentPage() {
                             </span>
                           </div>
                         </div>
+                      ) : normalizedStatus === 'completed_with_exclusions' ? (
+                        <div className="ai-run-summary ai-run-summary-terminal">
+                          <div className="ai-run-summary-title">Completed with exclusions</div>
+                          <div className="ai-run-summary-body ai-run-summary-stack">
+                            <span>Succeeded {Number(run.completed_items || 0)}</span>
+                            <span>Excluded {excludedItems}</span>
+                            <span>Completed at {completedIso || '-'}</span>
+                            <span>
+                              Duration {durationSeconds === null ? '-' : formatDurationShort(durationSeconds)}
+                            </span>
+                          </div>
+                        </div>
                       ) : normalizedStatus === 'cancelled' ? (
                         <div className="ai-run-summary ai-run-summary-terminal">
                           <div className="ai-run-summary-title">Cancelled summary</div>
@@ -1113,6 +1160,7 @@ export default function AIEnrichmentPage() {
                           <div className="ai-run-summary-title">Failure summary</div>
                           <div className="ai-run-summary-body ai-run-summary-stack">
                             <span>Failure count {Number(run.failed_items || 0)}</span>
+                            {excludedItems > 0 && <span>Excluded {excludedItems}</span>}
                             {run.last_failed_job_title && (
                               <span>Last failed {run.last_failed_job_title}</span>
                             )}
@@ -1120,6 +1168,24 @@ export default function AIEnrichmentPage() {
                               <span>{run.error_message}</span>
                             )}
                           </div>
+                        </div>
+                      )}
+
+                      {excludedDetails.length > 0 && (
+                        <div className="ai-run-summary ai-exclusion-panel" data-testid="run-exclusion-details">
+                          <div className="ai-run-summary-title">Excluded by taxonomy</div>
+                          <ul>
+                            {excludedDetails.map((detail, detailIndex) => (
+                              <li key={`${detail.source_classification_id || 'missing'}-${detail.reason || 'reason'}-${detailIndex}`}>
+                                <span>
+                                  {detail.source_classification_name || 'Unnamed source category'}
+                                  {detail.source_classification_id ? ` (${detail.source_classification_id})` : ''}
+                                  {' · '}{Number(detail.count || 0).toLocaleString()} jobs
+                                </span>
+                                <small>{detail.reason || 'Unsupported source taxonomy'}</small>
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       )}
 

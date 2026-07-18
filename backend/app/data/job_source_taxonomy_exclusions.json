@@ -1,0 +1,26 @@
+{
+  "offertoday:113000": {
+    "source_name": "Farming",
+    "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+  },
+  "offertoday:114000": {
+    "source_name": "Government",
+    "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+  },
+  "offertoday:123000": {
+    "source_name": "Natural Energy",
+    "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+  },
+  "offertoday:128000": {
+    "source_name": "Self Employment",
+    "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+  },
+  "offertoday:129000": {
+    "source_name": "Sport",
+    "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+  },
+  "offertoday:999000": {
+    "source_name": "Other",
+    "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+  }
+}

@@ -27,6 +27,7 @@ class EnrichmentRun(Base):
     completed_items = Column(Integer, nullable=False, default=0)
     failed_items = Column(Integer, nullable=False, default=0)
     cancelled_items = Column(Integer, nullable=False, default=0)
+    excluded_items = Column(Integer, nullable=False, default=0)
     started_at = Column(DateTime, nullable=True)
     stop_requested_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)

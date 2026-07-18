@@ -49,6 +49,23 @@ const completedRun = {
   failed_items: 0,
 };
 
+const excludedRun = {
+  ...completedRun,
+  id: 'run-excluded-1',
+  status: 'completed_with_exclusions',
+  total_items: 4,
+  completed_items: 2,
+  excluded_items: 2,
+  excluded_details: [
+    {
+      source_classification_id: 'offertoday:113000',
+      source_classification_name: 'Farming',
+      count: 2,
+      reason: 'No defensible internal taxonomy domain is available for this OfferToday source category.',
+    },
+  ],
+};
+
 function jsonResponse(payload, status = 200) {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
@@ -145,6 +162,18 @@ describe('AIEnrichmentPage', () => {
     const cards = await screen.findAllByTestId('run-monitor-card');
     expect(within(cards[0]).getByText('run-failed-3')).toBeInTheDocument();
     expect(within(cards[1]).getByText('run-completed-2')).toBeInTheDocument();
+  });
+
+  it('shows exclusions as a terminal outcome and keeps them out of retry actions', async () => {
+    installFetch({ overviewPayload: { ...overview, active_runs: 0 }, runs: [excludedRun] });
+    render(<AIEnrichmentPage />);
+
+    const card = within((await screen.findAllByTestId('run-monitor-card'))[0]);
+    expect(card.getByText('completed_with_exclusions')).toBeInTheDocument();
+    expect(card.getAllByText('Excluded 2')).toHaveLength(2);
+    expect(card.getByText(/Farming \(offertoday:113000\)/)).toBeInTheDocument();
+    expect(card.getByText(/No defensible internal taxonomy domain/)).toBeInTheDocument();
+    expect(card.queryByRole('button', { name: /Retry failed/i })).not.toBeInTheDocument();
   });
 
   it('renders empty placeholders to keep exactly two slots', async () => {

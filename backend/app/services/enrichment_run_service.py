@@ -22,11 +22,18 @@ from app.models.skill_technology import SkillTechnology
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
+from app.services.job_taxonomy_registry import get_job_taxonomy_registry
 from app.utils.time import utc_now
 from app.workers.event_types import INGEST_ITEM_SETTLED_EVENT_TYPE
 
 ACTIVE_RUN_STATUSES = ("pending", "running", "stopping")
-TERMINAL_RUN_STATUSES = ("completed", "completed_with_failures", "failed", "cancelled")
+TERMINAL_RUN_STATUSES = (
+    "completed",
+    "completed_with_failures",
+    "completed_with_exclusions",
+    "failed",
+    "cancelled",
+)
 RESERVED_RUN_STATUSES = ("waiting", *ACTIVE_RUN_STATUSES)
 ACTIVE_SLOT_LOCK_KEY = "job_scraper:enrichment_run:active_slot"
 _REVIEW_KEY_PATTERN = re.compile(r"[^a-z0-9+#./\-\s]+")
@@ -99,6 +106,7 @@ class EnrichmentRunService:
         self.db = db
         self.crawl_job_repository = CrawlJobRepository()
         self.event_outbox_repository = EventOutboxRepository()
+        self.taxonomy_registry = get_job_taxonomy_registry()
 
     def _query_ai_actionable_jobs(self, *entities):
         return (
@@ -169,15 +177,71 @@ class EnrichmentRunService:
             query = query.filter(func.date(Job.posted_date) <= normalized.posted_date_to)
         return query
 
-    def preview_pending_jobs(self, *, filters: PendingJobFilters, limit: int) -> dict[str, int]:
+    def preview_pending_jobs(self, *, filters: PendingJobFilters, limit: int) -> dict[str, object]:
         matching_count = int(
             self._query_pending_candidates(func.count(Job.id), filters=filters).scalar()
             or 0
         )
+        selected_jobs = self._select_pending_jobs(filters=filters, limit=limit)
+        supported_jobs, excluded_jobs, excluded_items = self._preflight_jobs(selected_jobs)
         return {
             "matching_pending_count": matching_count,
-            "effective_item_count": min(matching_count, max(1, int(limit))),
+            "selected_item_count": len(selected_jobs),
+            "effective_item_count": len(supported_jobs),
+            "excluded_item_count": len(excluded_jobs),
+            "excluded_items": excluded_items,
         }
+
+    def _select_pending_jobs(
+        self,
+        *,
+        filters: PendingJobFilters,
+        limit: Optional[int],
+    ) -> list[Job]:
+        query = self._query_pending_candidates(Job, filters=filters).order_by(
+            Job.created_at.asc(), Job.id.asc()
+        )
+        if limit is not None:
+            query = query.limit(limit)
+        return query.all()
+
+    def _preflight_jobs(
+        self,
+        jobs: list[Job],
+    ) -> tuple[list[Job], list[Job], list[dict[str, object]]]:
+        supported_jobs: list[Job] = []
+        excluded_jobs: list[Job] = []
+        grouped: dict[tuple[str | None, str | None, str], dict[str, object]] = {}
+
+        for job in jobs:
+            handling = self.taxonomy_registry.get_handling(
+                job.source_classification_id,
+                job.source_classification_name,
+            )
+            if handling.status == "mapped":
+                supported_jobs.append(job)
+                continue
+
+            excluded_jobs.append(job)
+            key = (
+                handling.source_classification_id,
+                handling.source_classification_name,
+                handling.reason or "Unsupported source taxonomy",
+            )
+            group = grouped.setdefault(
+                key,
+                {
+                    "source_classification_id": handling.source_classification_id,
+                    "source_classification_name": handling.source_classification_name,
+                    "count": 0,
+                    "reason": handling.reason or "Unsupported source taxonomy",
+                    "job_ids": [],
+                },
+            )
+            group["count"] = int(group["count"]) + 1
+            group["job_ids"].append(str(job.id))
+
+        return supported_jobs, excluded_jobs, list(grouped.values())
 
     def get_pending_filter_options(self) -> list[dict[str, str | None]]:
         rows = (
@@ -277,20 +341,32 @@ class EnrichmentRunService:
         *,
         trigger_crawl_job_id: str | uuid.UUID | None = None,
         initial_status: str = "pending",
+        excluded_reasons_by_job_id: dict[str, str] | None = None,
     ) -> EnrichmentRun:
         """Persist a run and its pending items for internal `jobs.id` UUID values."""
         normalized_job_ids = [str(job_id) for job_id in job_ids]
         item_count = len(normalized_job_ids)
+        excluded_reasons = excluded_reasons_by_job_id or {}
+        excluded_count = sum(
+            1 for job_id in normalized_job_ids if job_id in excluded_reasons
+        )
+        pending_count = item_count - excluded_count
+        effective_status = initial_status
+        if excluded_count and pending_count == 0 and initial_status in {"pending", "waiting"}:
+            effective_status = "completed_with_exclusions"
+        completed_at = utc_now() if effective_status == "completed_with_exclusions" else None
         run = EnrichmentRun(
             source_type=source_type,
             trigger_crawl_job_id=uuid.UUID(str(trigger_crawl_job_id)) if trigger_crawl_job_id else None,
-            status=initial_status,
+            status=effective_status,
             job_ids=normalized_job_ids,
             total_items=item_count,
-            pending_items=item_count,
+            pending_items=pending_count,
             completed_items=0,
             failed_items=0,
             cancelled_items=0,
+            excluded_items=excluded_count,
+            completed_at=completed_at,
         )
         self.db.add(run)
         self.db.flush()
@@ -301,7 +377,8 @@ class EnrichmentRunService:
                     run_id=run.id,
                     job_id=uuid.UUID(job_id),
                     position=position,
-                    status="pending",
+                    status=("excluded" if job_id in excluded_reasons else "pending"),
+                    error_message=excluded_reasons.get(job_id),
                 )
             )
 
@@ -348,16 +425,24 @@ class EnrichmentRunService:
     ) -> Optional[EnrichmentRun]:
         """Create a manual run from filtered pending unenriched jobs."""
         self._require_active_slot()
-        query = self._query_pending_candidates(Job.id, filters=filters).order_by(
-            Job.created_at.asc(), Job.id.asc()
-        )
-        if limit is not None:
-            query = query.limit(limit)
-
-        job_ids = [str(row.id) for row in query.all()]
-        if not job_ids:
+        selected_jobs = self._select_pending_jobs(filters=filters, limit=limit)
+        if not selected_jobs:
             return None
-        return self._create_run(source_type="manual_pending", job_ids=job_ids)
+        _, excluded_jobs, _ = self._preflight_jobs(selected_jobs)
+        excluded_reasons_by_job_id = {}
+        for job in excluded_jobs:
+            handling = self.taxonomy_registry.get_handling(
+                job.source_classification_id,
+                job.source_classification_name,
+            )
+            excluded_reasons_by_job_id[str(job.id)] = (
+                handling.reason or "Unsupported source taxonomy"
+            )
+        return self._create_run(
+            source_type="manual_pending",
+            job_ids=[str(job.id) for job in selected_jobs],
+            excluded_reasons_by_job_id=excluded_reasons_by_job_id,
+        )
 
     def get_crawl_auto_run(self, crawl_job_id: str) -> Optional[EnrichmentRun]:
         crawl_job_uuid = uuid.UUID(str(crawl_job_id))
@@ -390,6 +475,7 @@ class EnrichmentRunService:
             run.completed_items = 0
             run.failed_items = 0
             run.job_ids = []
+            run.excluded_items = 0
             self.db.flush()
 
         existing_item = (
@@ -833,6 +919,7 @@ class EnrichmentRunService:
         items = self.list_run_items(run_id)
         completed_items = 0
         failed_items = 0
+        excluded_items = 0
         timestamp = utc_now()
         latest_failure_timestamp = timestamp
         running_items = [item for item in items if item.status == "running"]
@@ -850,6 +937,10 @@ class EnrichmentRunService:
                 if item.completed_at is None:
                     item.completed_at = timestamp
                 failed_items += 1
+                continue
+
+            if item.status == "excluded":
+                excluded_items += 1
         for item in pending_items:
             item.status = "failed"
             item.error_message = error_message
@@ -868,11 +959,17 @@ class EnrichmentRunService:
             failed_items += 1
             latest_failure_timestamp = failure_timestamp
 
-        run.status = "failed" if completed_items == 0 else "completed_with_failures"
+        if failed_items > 0:
+            run.status = "failed" if completed_items == 0 else "completed_with_failures"
+        elif excluded_items > 0:
+            run.status = "completed_with_exclusions"
+        else:
+            run.status = "failed"
         run.pending_items = 0
         run.completed_items = completed_items
         run.failed_items = failed_items
         run.cancelled_items = 0
+        run.excluded_items = excluded_items
         if run.started_at is None:
             run.started_at = timestamp
         run.completed_at = latest_failure_timestamp
@@ -895,6 +992,7 @@ class EnrichmentRunService:
         completed_items = 0
         failed_items = 0
         cancelled_items = 0
+        excluded_items = 0
 
         for item in items:
             if item.status == "completed":
@@ -902,6 +1000,9 @@ class EnrichmentRunService:
                 continue
             if item.status == "failed":
                 failed_items += 1
+                continue
+            if item.status == "excluded":
+                excluded_items += 1
                 continue
 
             item.status = "cancelled"
@@ -916,6 +1017,7 @@ class EnrichmentRunService:
         run.completed_items = completed_items
         run.failed_items = failed_items
         run.cancelled_items = cancelled_items
+        run.excluded_items = excluded_items
         if run.started_at is None:
             run.started_at = timestamp
         run.completed_at = timestamp
@@ -968,6 +1070,7 @@ class EnrichmentRunService:
         run.completed_items = counts["completed"]
         run.failed_items = counts["failed"]
         run.cancelled_items = counts["cancelled"]
+        run.excluded_items = counts["excluded"]
         run.completed_at = timestamp
         run.current_job_title = None
         run.error_message = error_message
@@ -1002,7 +1105,11 @@ class EnrichmentRunService:
         last_completed_run = (
             self.db.query(EnrichmentRun)
             .filter(
-                EnrichmentRun.status.in_(["completed", "completed_with_failures"])
+                EnrichmentRun.status.in_([
+                    "completed",
+                    "completed_with_failures",
+                    "completed_with_exclusions",
+                ])
             )
             .order_by(
                 EnrichmentRun.completed_at.desc(),
@@ -1059,11 +1166,12 @@ class EnrichmentRunService:
         if run.status not in ACTIVE_RUN_STATUSES:
             return 0
         in_progress = (
-            run.total_items
-            - run.pending_items
-            - run.completed_items
-            - run.failed_items
-            - run.cancelled_items
+            int(run.total_items or 0)
+            - int(run.pending_items or 0)
+            - int(run.completed_items or 0)
+            - int(run.failed_items or 0)
+            - int(run.cancelled_items or 0)
+            - int(run.excluded_items or 0)
         )
         return max(in_progress, 0)
 
@@ -1092,6 +1200,7 @@ class EnrichmentRunService:
             "completed_items": run.completed_items,
             "failed_items": run.failed_items,
             "cancelled_items": run.cancelled_items,
+            "excluded_items": run.excluded_items,
             "current_job_title": run.current_job_title,
             "in_progress_items": self._compute_in_progress_items(run),
         }
@@ -1103,6 +1212,7 @@ class EnrichmentRunService:
             "completed": 0,
             "failed": 0,
             "cancelled": 0,
+            "excluded": 0,
         }
         rows = (
             self.db.query(
@@ -1180,6 +1290,7 @@ class EnrichmentRunService:
         run.completed_items = counts["completed"]
         run.failed_items = counts["failed"]
         run.cancelled_items = counts["cancelled"]
+        run.excluded_items = counts["excluded"]
         self.db.commit()
         return self._serialize_run_progress(run_id)
 
@@ -1222,6 +1333,7 @@ class EnrichmentRunService:
         run.failed_items = counts["failed"]
         run.pending_items = counts["pending"]
         run.cancelled_items = counts["cancelled"]
+        run.excluded_items = counts["excluded"]
         run.current_job_title = self._resolve_latest_running_job_title(run_id)
         self._sync_linked_crawl_job_ai_metrics(run)
         self.db.commit()
@@ -1237,6 +1349,7 @@ class EnrichmentRunService:
             "source_type": run.source_type,
             "trigger_crawl_job_id": str(run.trigger_crawl_job_id) if run.trigger_crawl_job_id else None,
             "total_items": int(run.total_items or 0),
+            "excluded_items": int(run.excluded_items or 0),
         }
 
     def _enqueue_job_enriched_event(self, *, run: EnrichmentRun, item: EnrichmentRunItem) -> None:
@@ -1274,6 +1387,7 @@ class EnrichmentRunService:
         items = (
             self.db.query(EnrichmentRunItem)
             .filter(EnrichmentRunItem.run_id == run.id)
+            .filter(EnrichmentRunItem.status == "pending")
             .order_by(EnrichmentRunItem.position.asc())
             .all()
         )
@@ -1302,7 +1416,7 @@ class EnrichmentRunService:
                     job_title = self._get_job_title(item.job_id)
                     if self._update_item_started(run_id, item.id, job_title) is None:
                         item_queue.task_done()
-                        return
+                        continue
 
                     try:
                         result = await service.enrich_job_id(item.job_id)
@@ -1337,11 +1451,18 @@ class EnrichmentRunService:
         counts = self._count_items_by_status(run_id)
         completed_items = counts["completed"]
         failed_items = counts["failed"]
-        run.status = "completed" if failed_items == 0 else "completed_with_failures"
+        excluded_items = counts["excluded"]
+        if failed_items > 0:
+            run.status = "completed_with_failures"
+        elif excluded_items > 0:
+            run.status = "completed_with_exclusions"
+        else:
+            run.status = "completed"
         run.pending_items = 0
         run.completed_items = completed_items
         run.failed_items = failed_items
         run.cancelled_items = counts["cancelled"]
+        run.excluded_items = excluded_items
         run.current_job_title = None
         run.error_message = None if failed_items == 0 else f"{failed_items} item(s) failed"
         run.completed_at = utc_now()

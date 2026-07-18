@@ -7,7 +7,13 @@ from sqlalchemy import UUID, create_engine
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 
-from app.api.ai import CreateRunRequest, PendingSelectionRequest, router
+from app.api.ai import (
+    CreateRunRequest,
+    PendingSelectionRequest,
+    _run_execution_result,
+    _serialize_single_run,
+    router,
+)
 from app.models.company import Company
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
@@ -57,6 +63,7 @@ def make_job(
     *,
     job_id,
     source_site="jobsdb",
+    source_classification_id=None,
     classification="Information Technology",
     subclassification="Software Engineering",
     posted_date=datetime(2026, 7, 18, 12, 0),
@@ -71,7 +78,11 @@ def make_job(
         source_job_id=f"source-{job_id}",
         company_id=company.id,
         title=f"Title {job_id[-4:]}",
-        source_classification_id="6281" if classification else None,
+        source_classification_id=(
+            source_classification_id
+            if source_classification_id is not None
+            else ("6281" if classification else None)
+        ),
         source_classification_name=classification,
         source_subclassification_id="6282" if subclassification else None,
         source_subclassification_name=subclassification,
@@ -127,6 +138,85 @@ def test_pending_request_normalizes_values_and_enforces_safe_scope():
         CreateRunRequest.model_validate({"mode": "batch", "job_ids": [str(uuid.uuid4())]})
 
 
+def test_pending_preview_and_create_separate_unsupported_taxonomy_items(db, company):
+    supported = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000101",
+        source_site="offertoday",
+        source_classification_id="offertoday:103000",
+        classification="Advertising & Media",
+    )
+    excluded = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000102",
+        source_site="offertoday",
+        source_classification_id="offertoday:113000",
+        classification="Farming",
+    )
+
+    service = EnrichmentRunService(db)
+    preview = service.preview_pending_jobs(filters=PendingJobFilters(), limit=50)
+
+    assert preview["matching_pending_count"] == 2
+    assert preview["effective_item_count"] == 1
+    assert preview["excluded_item_count"] == 1
+    assert preview["excluded_items"] == [
+        {
+            "source_classification_id": "offertoday:113000",
+            "source_classification_name": "Farming",
+            "count": 1,
+            "reason": "No defensible internal taxonomy domain is available for this OfferToday source category.",
+            "job_ids": [str(excluded.id)],
+        }
+    ]
+
+    run = service.create_manual_pending_run(limit=50)
+    items = service.list_run_items(run.id)
+    item_by_job_id = {item.job_id: item for item in items}
+
+    assert run.total_items == 2
+    assert run.pending_items == 1
+    assert run.excluded_items == 1
+    assert item_by_job_id[supported.id].status == "pending"
+    assert item_by_job_id[excluded.id].status == "excluded"
+    assert item_by_job_id[excluded.id].error_message
+
+    serialized = _serialize_single_run(run, db)
+    assert serialized["excluded_items"] == 1
+    assert serialized["excluded_details"] == [
+        {
+            "source_classification_id": "offertoday:113000",
+            "source_classification_name": "Farming",
+            "count": 1,
+            "reason": "No defensible internal taxonomy domain is available for this OfferToday source category.",
+            "job_ids": [str(excluded.id)],
+        }
+    ]
+
+
+def test_all_unsupported_pending_items_do_not_start_a_worker_run(db, company):
+    job = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000103",
+        source_site="offertoday",
+        source_classification_id="offertoday:129000",
+        classification="Sport",
+    )
+
+    run = EnrichmentRunService(db).create_manual_pending_run(limit=50)
+
+    assert run.status == "completed_with_exclusions"
+    assert run.total_items == 1
+    assert run.pending_items == 0
+    assert run.excluded_items == 1
+    assert run.items[0].job_id == job.id
+    assert run.items[0].status == "excluded"
+    assert _run_execution_result(run, requested=False) == "no_supported_items"
+
+
 def test_public_routes_expose_filtered_controls_and_remove_single_job_endpoint():
     route_paths = {(route.path, method) for route in router.routes for method in route.methods}
     assert ("/api/v1/ai/pending/filter-options", "GET") in route_paths
@@ -170,7 +260,10 @@ def test_filters_use_or_within_fields_and_and_across_fields_with_inclusive_dates
     service = EnrichmentRunService(db)
     assert service.preview_pending_jobs(filters=filters, limit=50) == {
         "matching_pending_count": 1,
+        "selected_item_count": 1,
         "effective_item_count": 1,
+        "excluded_item_count": 0,
+        "excluded_items": [],
     }
     run = service.create_manual_pending_run(limit=50, filters=filters)
     assert run.job_ids == [str(matching.id)]

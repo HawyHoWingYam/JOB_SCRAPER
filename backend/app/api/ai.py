@@ -5,7 +5,7 @@ AI Enrichment API Endpoints
 import asyncio
 import logging
 from datetime import date
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, TypedDict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,12 +28,21 @@ from app.services.enrichment_run_service import (
     PendingJobFilters,
 )
 from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
+from app.services.job_taxonomy_registry import get_job_taxonomy_registry
 from app.services.source_catalog import list_supported_source_sites
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
 ACTIVE_AI_RUN_STATUSES = {"pending", "running", "stopping"}
 MAX_PENDING_RUN_LIMIT = 5000
+
+
+class ExcludedDetail(TypedDict):
+    source_classification_id: str | None
+    source_classification_name: str | None
+    count: int
+    reason: str
+    job_ids: list[str]
 
 
 class EnrichRequest(BaseModel):
@@ -182,19 +191,80 @@ def _derive_last_failed_job_title(db: Session, run_id: str) -> Optional[str]:
     return _derive_last_failed_job_titles(db, [run_id]).get(run_id)
 
 
+def _derive_excluded_details(
+    db: Session,
+    run_ids: list[str],
+) -> dict[str, list[ExcludedDetail]]:
+    """Group excluded items by source category and preflight reason."""
+    if not run_ids:
+        return {}
+
+    grouped: dict[tuple[str, str | None, str | None, str], ExcludedDetail] = {}
+    rows = (
+        db.query(
+            EnrichmentRunItem.run_id,
+            EnrichmentRunItem.job_id,
+            Job.source_classification_id,
+            Job.source_classification_name,
+            EnrichmentRunItem.error_message,
+        )
+        .join(Job, Job.id == EnrichmentRunItem.job_id)
+        .filter(
+            EnrichmentRunItem.run_id.in_(run_ids),
+            EnrichmentRunItem.status == "excluded",
+        )
+        .order_by(EnrichmentRunItem.run_id.asc(), EnrichmentRunItem.position.asc())
+        .all()
+    )
+    for run_id, job_id, source_id, source_name, error_message in rows:
+        normalized_source_id = str(source_id) if source_id is not None else None
+        normalized_source_name = str(source_name) if source_name is not None else None
+        handling = get_job_taxonomy_registry().get_handling(
+            normalized_source_id,
+            normalized_source_name,
+        )
+        normalized_source_id = handling.source_classification_id
+        normalized_source_name = handling.source_classification_name
+        reason = str(
+            error_message
+            or handling.reason
+            or "Unsupported source taxonomy"
+        )
+        key = (str(run_id), normalized_source_id, normalized_source_name, reason)
+        group = grouped.setdefault(
+            key,
+            {
+                "source_classification_id": normalized_source_id,
+                "source_classification_name": normalized_source_name,
+                "count": 0,
+                "reason": reason,
+                "job_ids": [],
+            },
+        )
+        group["count"] = int(group["count"]) + 1
+        group["job_ids"].append(str(job_id))
+
+    details: dict[str, list[ExcludedDetail]] = {}
+    for (run_id, _source_id, _source_name, _reason), detail in grouped.items():
+        details.setdefault(run_id, []).append(detail)
+    return details
+
+
 def _serialize_run(
     run: EnrichmentRun,
     db: Optional[Session] = None,
     *,
     last_failed_job_titles: Optional[dict[str, Optional[str]]] = None,
     pending_gate: Optional[dict[str, object]] = None,
+    excluded_details: Optional[list[ExcludedDetail]] = None,
 ) -> dict:
     in_progress_items = max(
         int(run.total_items or 0)
         - int(run.pending_items or 0)
         - int(run.completed_items or 0)
         - int(run.failed_items or 0)
-        - int(getattr(run, "cancelled_items", 0) or 0),
+        - int(getattr(run, "cancelled_items", 0) or 0)
+        - int(getattr(run, "excluded_items", 0) or 0),
         0,
     ) if str(run.status or "").lower() in ACTIVE_AI_RUN_STATUSES else 0
     failed_items = int(run.failed_items or 0)
@@ -215,6 +285,8 @@ def _serialize_run(
         "completed_items": run.completed_items,
         "failed_items": run.failed_items,
         "cancelled_items": int(getattr(run, "cancelled_items", 0) or 0),
+        "excluded_items": int(getattr(run, "excluded_items", 0) or 0),
+        "excluded_details": excluded_details or [],
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "created_at": run.created_at.isoformat() if run.created_at else None,
@@ -243,10 +315,12 @@ def _serialize_run(
 
 def _serialize_runs(runs: list[EnrichmentRun], db: Optional[Session] = None) -> list[dict]:
     failed_title_map: Optional[dict[str, Optional[str]]] = None
+    excluded_details_map: dict[str, list[ExcludedDetail]] = {}
     pending_gate_map: dict[str, dict[str, object] | None] = {}
     if db is not None:
         failed_run_ids = [run.id for run in runs if int(getattr(run, "failed_items", 0) or 0) > 0]
         failed_title_map = _derive_last_failed_job_titles(db, failed_run_ids)
+        excluded_details_map = _derive_excluded_details(db, [run.id for run in runs])
         service = EnrichmentRunService(db)
         pending_gate_map = {
             run.id: service.describe_pending_gate(run)
@@ -259,6 +333,7 @@ def _serialize_runs(runs: list[EnrichmentRun], db: Optional[Session] = None) -> 
             db,
             last_failed_job_titles=failed_title_map,
             pending_gate=pending_gate_map.get(run.id),
+            excluded_details=excluded_details_map.get(run.id),
         )
         for run in runs
     ]
@@ -288,10 +363,23 @@ def _publish_run_request(
     service: EnrichmentRunService,
     run_id: str,
     source_service: str = "ai-api",
-) -> None:
-    service.request_run_execution(run_id, source_service=source_service)
+) -> bool:
+    requested = service.request_run_execution(run_id, source_service=source_service)
     db.commit()
-    OutboxPublisher().publish_pending_batch(db, limit=100)
+    if requested:
+        OutboxPublisher().publish_pending_batch(db, limit=100)
+    return requested
+
+
+def _run_execution_result(run: EnrichmentRun, requested: bool) -> str:
+    if requested:
+        return "queued"
+    if (
+        int(run.total_items or 0) > 0
+        and int(getattr(run, "excluded_items", 0) or 0) == int(run.total_items or 0)
+    ):
+        return "no_supported_items"
+    return "not_dispatched"
 
 
 async def _wait_for_terminal_run(run_id: str) -> EnrichmentRun:
@@ -368,8 +456,16 @@ async def start_enrichment(
     if run is None:
         return {"task_id": None, "run_id": None, "status": "no_jobs"}
 
-    _publish_run_request(db, service=service, run_id=run.id)
-    return {"task_id": run.id, "run_id": run.id, "status": "queued"}
+    requested = _publish_run_request(db, service=service, run_id=run.id)
+    db.refresh(run)
+    return {
+        "task_id": run.id,
+        "run_id": run.id,
+        "status": _run_execution_result(run, requested),
+        "run_status": run.status,
+        "total_items": int(run.total_items or 0),
+        "excluded_items": int(getattr(run, "excluded_items", 0) or 0),
+    }
 
 
 @router.get("/status/{task_id}")
@@ -379,7 +475,12 @@ async def get_enrichment_status(task_id: str, db: Session = Depends(get_db)):
     if run is None:
         raise HTTPException(status_code=404, detail="Task not found")
     payload = _serialize_single_run(run, db)
-    payload["progress"] = run.completed_items + run.failed_items
+    payload["progress"] = (
+        int(run.completed_items or 0)
+        + int(run.failed_items or 0)
+        + int(getattr(run, "cancelled_items", 0) or 0)
+        + int(getattr(run, "excluded_items", 0) or 0)
+    )
     payload["total"] = run.total_items
     return payload
 
@@ -493,9 +594,12 @@ async def create_enrichment_run(
     if run is None:
         return {"status": "empty", "run": None}
 
-    _publish_run_request(db, service=service, run_id=run.id)
+    requested = _publish_run_request(db, service=service, run_id=run.id)
     db.refresh(run)
-    return _serialize_single_run(run, db)
+    payload = _serialize_single_run(run, db)
+    payload["execution_dispatched"] = requested
+    payload["execution_result"] = _run_execution_result(run, requested)
+    return payload
 
 
 @router.get("/runs")
