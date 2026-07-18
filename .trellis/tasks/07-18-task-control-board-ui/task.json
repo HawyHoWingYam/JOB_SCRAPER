@@ -1,0 +1,31 @@
+{
+  "id": "task-control-board-ui",
+  "name": "task-control-board-ui",
+  "title": "Improve Task Control Board UI",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-18",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-18-source-catalog-runtime-correctness",
+    "07-18-versioned-crawl-scope",
+    "07-18-task-control-board-wizard-ui",
+    "07-18-source-catalog-governance-ui"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
