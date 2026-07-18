@@ -618,3 +618,36 @@ Implemented filtered oldest-first AI enrichment runs, global single-active sched
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: OfferToday taxonomy exclusion repair
+
+**Date**: 2026-07-18
+**Task**: OfferToday taxonomy exclusion repair
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed OfferToday taxonomy coverage and preflight exclusions. Unsupported source classifications are persisted as excluded run items, omitted from worker dispatch and retries, exposed through API/UI with category IDs, names, counts, and reasons. Added migration, regression tests, frontend monitoring, and updated backend/frontend specs.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d6673750` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
