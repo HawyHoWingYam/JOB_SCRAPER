@@ -583,3 +583,38 @@ Completed and deployed the two remaining manual detail pacing UI tasks: independ
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: AI enrichment monitoring-first console
+
+**Date**: 2026-07-18
+**Task**: AI enrichment monitoring-first console
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented filtered oldest-first AI enrichment runs, global single-active scheduling with retained waiting work, cooperative Stop, two-slot monitoring, and the monitoring-first responsive console; added backend/frontend contracts and regression coverage.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `13818adb` | (see git log) |
+| `86bc03b7` | (see git log) |
+| `53ab4ddc` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
