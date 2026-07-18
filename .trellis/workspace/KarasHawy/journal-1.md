@@ -19,7 +19,12 @@ Implemented and verified Tasks 1-8, executed the authorized live Phase B bake-of
 
 ### Main Changes
 
-- Detailed change bullets were not supplied; see the summary above.
+- Added the shared Job Intelligence foundation Module, PostgreSQL models, and
+  Alembic migration for immutable revisions, append-only audit, and idempotency.
+- Added atomic decision execution over the existing outbox, stable audit
+  pagination/schema, deterministic seed validation, and worker isolation guards.
+- Recorded trusted-local deployment, future authentication wrapper, legacy
+  compatibility, rollback, and backend database code-spec contracts.
 
 ### Git Commits
 
@@ -30,7 +35,12 @@ Implemented and verified Tasks 1-8, executed the authorized live Phase B bake-of
 
 ### Testing
 
-- Validation was not recorded for this session.
+- 21 PostgreSQL-backed foundation tests passed; targeted ruff, black, and mypy
+  passed.
+- Disposable-PostgreSQL migration upgrade, direct immutability-trigger checks,
+  and downgrade passed without touching the development corpus.
+- All 28 backend test files passed individually: 196 passed and 1 optional test
+  skipped. Repository-wide static checks remain red only on pre-existing files.
 
 ### Status
 
