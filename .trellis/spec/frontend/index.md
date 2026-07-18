@@ -23,6 +23,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Scraper Pacing Settings UI](./scraper-pacing-settings-ui.md) | Settings cards, API round trips, Direct Override summary, and active-task warning | Active |
 | [Crawl Task Pacing Snapshot UI](./crawl-task-pacing-snapshot-ui.md) | Detail-task startup snapshot rendering and cancellation lifecycle controls | Active |
 | [AI Enrichment Operations Console](./ai-enrichment-console.md) | Monitoring-first two-slot UI, filtered preview, persistence, retry, and cooperative Stop | Active |
+| [Source Job Attribute Contracts](../backend/source-job-attributes.md) | Cross-layer filter options, compatibility seam, and code-authoritative Source Job Attribute reads | Active |
 
 ---
 
