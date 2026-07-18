@@ -6,7 +6,11 @@ from app.models.crawl_run import CrawlRun
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
 from app.models.job_embedding import JobEmbedding
-from app.models.schedule import ScrapeSchedule, ScheduleExecution, SchedulerRuntimeHeartbeat
+from app.models.schedule import (
+    ScrapeSchedule,
+    ScheduleExecution,
+    SchedulerRuntimeHeartbeat,
+)
 from app.models.skill_category import SkillCategory
 from app.models.skill_technology import SkillTechnology
 from app.models.skill import Skill
@@ -31,17 +35,47 @@ from app.models.source_catalog import (
     SourceCatalogRevision,
     SourceCatalogValidationRun,
 )
+from app.models.governance import (
+    GovernanceAuditEvent,
+    GovernanceIdempotencyRecord,
+    GovernanceRevision,
+)
 
 __all__ = [
-    "Company", "CrawlJob", "CrawlJobEvent", "CrawlJobExecution", "CrawlJobListing", "CrawlRun", "EventOutbox", "Job", "JobEmbedding",
-    "ScrapeSchedule", "ScheduleExecution", "SchedulerRuntimeHeartbeat",
-    "SkillCategory", "SkillTechnology", "Skill",
-    "JobDomain", "JobCategory", "JobSubcategory", "JobSkill", "JobSkillMention",
+    "Company",
+    "CrawlJob",
+    "CrawlJobEvent",
+    "CrawlJobExecution",
+    "CrawlJobListing",
+    "CrawlRun",
+    "EventOutbox",
+    "Job",
+    "JobEmbedding",
+    "ScrapeSchedule",
+    "ScheduleExecution",
+    "SchedulerRuntimeHeartbeat",
+    "SkillCategory",
+    "SkillTechnology",
+    "Skill",
+    "JobDomain",
+    "JobCategory",
+    "JobSubcategory",
+    "JobSkill",
+    "JobSkillMention",
     "SkillReviewCandidate",
-    "EnrichmentRun", "EnrichmentRunItem",
-    "CompanyEnrichmentRun", "CompanyEnrichmentRunItem",
-    "AppRuntimeSettings", "ScraperPacingSettings",
-    "SourceCatalogActiveRevision", "SourceCatalogCandidate",
-    "SourceCatalogChangeReview", "SourceCatalogPublication",
-    "SourceCatalogRevision", "SourceCatalogValidationRun",
+    "EnrichmentRun",
+    "EnrichmentRunItem",
+    "CompanyEnrichmentRun",
+    "CompanyEnrichmentRunItem",
+    "AppRuntimeSettings",
+    "ScraperPacingSettings",
+    "SourceCatalogActiveRevision",
+    "SourceCatalogCandidate",
+    "SourceCatalogChangeReview",
+    "SourceCatalogPublication",
+    "SourceCatalogRevision",
+    "SourceCatalogValidationRun",
+    "GovernanceAuditEvent",
+    "GovernanceIdempotencyRecord",
+    "GovernanceRevision",
 ]

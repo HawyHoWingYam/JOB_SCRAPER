@@ -102,4 +102,5 @@ backend/tests/*
 !backend/tests/test_offertoday_quality.py
 !backend/tests/test_offertoday_standalone_crawl.py
 !backend/tests/test_source_catalog_*.py
+!backend/tests/test_job_intelligence_foundation.py
 docs/*

@@ -1,6 +1,15 @@
 from app.schemas.company import CompanySchema, CompanyCreateSchema
-from app.schemas.job import JobSchema, JobCreateSchema, ManualJobCreateSchema, JobDetailSchema, JobTaxonomySchema
-from app.schemas.recommendations import JobRecommendationSchema, JobRecommendationsResponse
+from app.schemas.job import (
+    JobSchema,
+    JobCreateSchema,
+    ManualJobCreateSchema,
+    JobDetailSchema,
+    JobTaxonomySchema,
+)
+from app.schemas.recommendations import (
+    JobRecommendationSchema,
+    JobRecommendationsResponse,
+)
 from app.schemas.job_search import (
     SearchClauseSchema,
     JobSearchFiltersSchema,
@@ -26,6 +35,10 @@ from app.schemas.stats import (
     DashboardCategorySourceBreakdownSchema,
     DashboardFallbackBucketSchema,
     DashboardOtherSpecificCategoriesSchema,
+)
+from app.schemas.job_intelligence import (
+    GovernanceAuditEventSchema,
+    GovernanceAuditPageSchema,
 )
 
 __all__ = [
@@ -58,4 +71,6 @@ __all__ = [
     "DashboardCategorySourceBreakdownSchema",
     "DashboardFallbackBucketSchema",
     "DashboardOtherSpecificCategoriesSchema",
+    "GovernanceAuditEventSchema",
+    "GovernanceAuditPageSchema",
 ]
