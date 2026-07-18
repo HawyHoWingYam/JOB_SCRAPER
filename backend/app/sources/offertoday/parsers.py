@@ -15,11 +15,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from app.job_intelligence.foundation import Provenance
+from app.job_intelligence.source_attributes import OfferTodaySourceEvidenceAdapter
 from app.sources.offertoday.detail_identity import (
     OfferTodayIdentityError,
     resolve_offertoday_listing_identity,
 )
 from app.sources.offertoday.quality import clean_description_text, normalize_tag_terms
+from app.utils.time import utc_now
 
 OFFERTODOAY_JOB_URL_TEMPLATE = "https://www.offertoday.com/hk/job/{encrypted_job_id}"
 
@@ -105,6 +108,20 @@ def parse_offertoday_listing_rows(
 def _parse_listing_job(raw: dict[str, Any]) -> dict[str, Any]:
     """Convert a single listing API item into the internal raw dict."""
     identity_fields = _normalized_identity_fields(raw)
+    source_attribute_evidence = OfferTodaySourceEvidenceAdapter().extract(
+        raw,
+        provenance=Provenance(
+            method="offertoday-listing-payload",
+            source_site="offertoday",
+            evidence_refs=(
+                {
+                    "kind": "listing-payload",
+                    "source_job_id": identity_fields["job_id"],
+                },
+            ),
+            captured_at=utc_now(),
+        ),
+    )
     return {
         "source_site": "offertoday",
         **identity_fields,
@@ -130,6 +147,7 @@ def _parse_listing_job(raw: dict[str, Any]) -> dict[str, Any]:
         "recruiter_title": str(raw.get("bossTitle") or "").strip(),
         "company_logo": str(raw.get("brandLogo") or "").strip(),
         "raw_data": dict(raw),
+        "source_attribute_evidence": source_attribute_evidence.to_payload(),
     }
 
 
@@ -147,6 +165,20 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
     description_html = str(data.get("jobDesc") or "").strip()
     description_text = clean_description_text(_strip_html(description_html))
     blocked_terms = {str(value).strip() for value in benefits if str(value).strip()}
+    source_attribute_evidence = OfferTodaySourceEvidenceAdapter().extract(
+        data,
+        provenance=Provenance(
+            method="offertoday-detail-payload",
+            source_site="offertoday",
+            evidence_refs=(
+                {
+                    "kind": "detail-payload",
+                    "source_job_id": identity.job_id,
+                },
+            ),
+            captured_at=utc_now(),
+        ),
+    )
     return {
         "source_site": "offertoday",
         "job_id": identity.job_id,
@@ -188,6 +220,7 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
         "work_permit_list": data.get("workPermitList") or [],
         "work_permit_desc": str(data.get("workPermitDesc") or "").strip(),
         "raw_data": dict(data),
+        "source_attribute_evidence": source_attribute_evidence.to_payload(),
     }
 
 

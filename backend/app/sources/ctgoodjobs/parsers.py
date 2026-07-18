@@ -5,7 +5,13 @@ import json
 import re
 from typing import Any
 
+from app.job_intelligence.foundation import Provenance
+from app.job_intelligence.source_attributes import (
+    CTGoodJobsSourceEvidenceAdapter,
+    SourceClassificationContext,
+)
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
+from app.utils.time import utc_now
 
 
 _TITLE_PATTERN = re.compile(r"<title>\s*(?P<title>.*?)\s*</title>", re.IGNORECASE | re.DOTALL)
@@ -614,6 +620,43 @@ def parse_detail_page(
         "source_classification_slug": source_classification_slug,
         "errors": errors,
     }
+    captured_at = utc_now()
+    source_attribute_evidence = CTGoodJobsSourceEvidenceAdapter().extract(
+        {
+            "jobContent": job_content,
+            "basicInfo": basic_info,
+            "jobPosting": job_posting or {},
+        },
+        provenance=Provenance(
+            method="ctgoodjobs-detail-payload",
+            source_site="ctgoodjobs",
+            evidence_refs=(
+                {
+                    "kind": "detail-payload",
+                    "source_job_id": str(job_id or ""),
+                },
+            ),
+            captured_at=captured_at,
+        ),
+        classification_context=SourceClassificationContext(
+            source_classification_id=source_classification_id,
+            label=source_classification_name,
+            source_catalog_revision=None,
+            provenance=Provenance(
+                method="crawl-context",
+                source_site="ctgoodjobs",
+                evidence_refs=(
+                    {
+                        "kind": "crawl-context",
+                        "source_classification_id": source_classification_id,
+                        "source_classification_slug": source_classification_slug,
+                    },
+                ),
+                captured_at=captured_at,
+            ),
+        ),
+    )
+    result["source_attribute_evidence"] = source_attribute_evidence.to_payload()
 
     required = [
         "job_id",

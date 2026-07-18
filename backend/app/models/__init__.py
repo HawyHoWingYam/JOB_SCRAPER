@@ -40,6 +40,14 @@ from app.models.governance import (
     GovernanceIdempotencyRecord,
     GovernanceRevision,
 )
+from app.models.source_job_attributes import (
+    EmploymentType,
+    JobEmploymentType,
+    JobSourceAttributeProjection,
+    JobSourceClassificationPath,
+    JobSourceClassificationPathNode,
+    JobSourceEmploymentLabel,
+)
 
 __all__ = [
     "Company",
@@ -78,4 +86,10 @@ __all__ = [
     "GovernanceAuditEvent",
     "GovernanceIdempotencyRecord",
     "GovernanceRevision",
+    "EmploymentType",
+    "JobEmploymentType",
+    "JobSourceAttributeProjection",
+    "JobSourceClassificationPath",
+    "JobSourceClassificationPathNode",
+    "JobSourceEmploymentLabel",
 ]

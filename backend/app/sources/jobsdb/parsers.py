@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-import re
 from html import unescape
 from typing import Any
 
+from app.job_intelligence.foundation import Provenance
+from app.job_intelligence.source_attributes import JobsDBSourceEvidenceAdapter
 from app.utils.time import utc_now
 
 
@@ -14,6 +15,20 @@ def _transform_job(raw_job: dict[str, Any]) -> dict[str, Any]:
     classifications = raw_job.get("classifications", [{}])
     work_arrangements = raw_job.get("workArrangements", {}).get("data", [])
     branding = raw_job.get("branding", {})
+    source_attribute_evidence = JobsDBSourceEvidenceAdapter().extract(
+        raw_job,
+        provenance=Provenance(
+            method="jobsdb-listing-payload",
+            source_site="jobsdb",
+            evidence_refs=(
+                {
+                    "kind": "listing-payload",
+                    "source_job_id": str(raw_job.get("id") or ""),
+                },
+            ),
+            captured_at=utc_now(),
+        ),
+    )
 
     return {
         "external_id": raw_job.get("id"),
@@ -43,6 +58,7 @@ def _transform_job(raw_job: dict[str, Any]) -> dict[str, Any]:
             if classifications else None
         ),
         "logo_url": branding.get("serpLogoUrl"),
+        "source_attribute_evidence": source_attribute_evidence.to_payload(),
     }
 
 
@@ -125,6 +141,34 @@ def parse_detail_redux_data(redux_data: dict[str, Any], job_id: str) -> dict[str
         advertiser = job.get("advertiser", {})
         advertiser_id = advertiser.get("id", "") if isinstance(advertiser, dict) else ""
         advertiser_name = advertiser.get("name", "") if isinstance(advertiser, dict) else ""
+        source_attribute_evidence = JobsDBSourceEvidenceAdapter().extract(
+            {
+                "classifications": [
+                    {
+                        "classification": {
+                            "id": classification_info.get("classificationId"),
+                            "description": classification_info.get("classification"),
+                        },
+                        "subclassification": {
+                            "id": classification_info.get("subClassificationId"),
+                            "description": classification_info.get("subClassification"),
+                        },
+                    }
+                ],
+                "workTypes": [work_type] if work_type else [],
+            },
+            provenance=Provenance(
+                method="jobsdb-detail-payload",
+                source_site="jobsdb",
+                evidence_refs=(
+                    {
+                        "kind": "detail-payload",
+                        "source_job_id": job_id,
+                    },
+                ),
+                captured_at=utc_now(),
+            ),
+        )
 
         return {
             "jobsdb_id": job_id,
@@ -145,6 +189,7 @@ def parse_detail_redux_data(redux_data: dict[str, Any], job_id: str) -> dict[str
             "advertiser_name": advertiser_name,
             "status": job.get("status", ""),
             "scraped_at": utc_now().isoformat(),
+            "source_attribute_evidence": source_attribute_evidence.to_payload(),
         }
     except (KeyError, TypeError):
         return None

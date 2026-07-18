@@ -105,6 +105,11 @@ class SourceCatalogRevision(Base):
     __table_args__ = (
         UniqueConstraint("source_site", "sequence", name="uq_source_catalog_revision_sequence"),
         UniqueConstraint("source_site", "fingerprint", name="uq_source_catalog_revision_fingerprint"),
+        UniqueConstraint(
+            "id",
+            "source_site",
+            name="uq_source_catalog_revision_id_source",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

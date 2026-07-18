@@ -106,6 +106,43 @@ class Job(Base):
         back_populates="job",
         cascade="all, delete-orphan",
     )
+    source_attribute_projection = relationship(
+        "JobSourceAttributeProjection",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        uselist=False,
+        passive_deletes=True,
+    )
+    source_classification_paths = relationship(
+        "JobSourceClassificationPath",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="JobSourceClassificationPath.source_order",
+        passive_deletes=True,
+    )
+    source_employment_labels = relationship(
+        "JobSourceEmploymentLabel",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="JobSourceEmploymentLabel.source_order",
+        passive_deletes=True,
+    )
+    employment_type_assignments = relationship(
+        "JobEmploymentType",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    @property
+    def employment_types(self):
+        return [
+            assignment.employment_type
+            for assignment in sorted(
+                self.employment_type_assignments,
+                key=lambda item: item.employment_type.sort_order,
+            )
+        ]
 
     @property
     def skills_list(self) -> List[str]:

@@ -74,6 +74,7 @@ class CanonicalScrapedJob:
     source_subclassification_name: str | None
     posted_date: str | None
     raw_data: dict[str, Any]
+    source_attribute_evidence: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -101,6 +102,7 @@ def build_jobsdb_canonical_job(
         source_subclassification_name=parsed_job.get("subclassification"),
         posted_date=parsed_job.get("listing_date"),
         raw_data=dict(parsed_job),
+        source_attribute_evidence=parsed_job.get("source_attribute_evidence"),
     )
 
 
@@ -129,6 +131,7 @@ def build_jobsdb_listing_canonical_job(
         source_subclassification_name=parsed_job.get("subclassification"),
         posted_date=parsed_job.get("listing_date"),
         raw_data=dict(parsed_job),
+        source_attribute_evidence=parsed_job.get("source_attribute_evidence"),
     )
 
 
@@ -263,6 +266,7 @@ def build_offertoday_canonical_job(
             or normalized_job.get("posted_at")
         ),
         raw_data=normalized_job,
+        source_attribute_evidence=normalized_job.get("source_attribute_evidence"),
     )
 
 
@@ -325,11 +329,6 @@ def build_offertoday_job_data(
         "salary_max": salary_max,
         "salary_currency": salary_currency,
         "location": canonical_job.location,
-        "employment_type": canonical_job.employment_type,
-        "source_classification_id": canonical_job.source_classification_id,
-        "source_classification_name": canonical_job.source_classification_name,
-        "source_subclassification_id": canonical_job.source_subclassification_id,
-        "source_subclassification_name": canonical_job.source_subclassification_name,
         "posted_date": posted_date,
         "raw_data": canonical_job.raw_data,
     }
@@ -380,4 +379,5 @@ def build_ctgoodjobs_canonical_job(parsed_job: dict[str, Any]) -> CanonicalScrap
         source_subclassification_name=parsed_job.get("source_subclassification_name"),
         posted_date=parsed_job.get("posted_date"),
         raw_data=dict(parsed_job),
+        source_attribute_evidence=parsed_job.get("source_attribute_evidence"),
     )
