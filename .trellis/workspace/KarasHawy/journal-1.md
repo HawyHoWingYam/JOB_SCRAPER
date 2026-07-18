@@ -651,3 +651,38 @@ Completed OfferToday taxonomy coverage and preflight exclusions. Unsupported sou
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: Authoritative Source Catalog runtime
+
+**Date**: 2026-07-18
+**Task**: Authoritative Source Catalog runtime
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented immutable versioned Source Catalog persistence, validation and guarded publication; aligned JobsDB, headed CTgoodjobs and OfferToday runtime requests with active published revisions; added deterministic tests and executable backend contracts without publishing production revisions.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `476a9993` | (see git log) |
+| `d66fc820` | (see git log) |
+| `9e9c5497` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
