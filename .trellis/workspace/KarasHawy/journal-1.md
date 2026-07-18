@@ -730,3 +730,46 @@ Implemented immutable governance revisions, typed provenance and decision contra
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: Complete Source Job Attributes
+
+**Date**: 2026-07-19
+**Task**: Complete Source Job Attributes
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented and verified governed Source Classification Paths, bounded Source Employment evidence, seven Employment Types, atomic projections, stable read/filter APIs, and a deterministic read-only rebuild inspector.
+
+### Main Changes
+
+- Added per-Source evidence adapters, additive PostgreSQL projection tables, catalog revision constraints, replacement idempotency, and bounded outbox provenance.
+- Integrated every collected-Job writer into one Job/projection/outbox transaction and retired the generic collected-Job POST/repository bypass.
+- Added complete API arrays and filters, FilterPanel compatibility, exported backend fixtures, rebuild diagnostics, architecture guards, and cross-layer code-specs.
+- Preserved legacy scalars as comparison/manual compatibility evidence only; no live migration, backfill, rebuild, or cutover was executed.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `043a0f08` | (see git log) |
+| `66b84f96` | (see git log) |
+| `0e419dae` | (see git log) |
+
+### Testing
+
+- Source Job Attribute backend suite: `51 passed`.
+- Full backend strategy, isolated per test file against a disposable PostgreSQL database: `247 passed, 1 skipped` across 34 files.
+- Frontend task tests: `12 passed`; production build passed. Full-suite-only AISettings loading interaction reproduced as an unrelated baseline, while its isolated file passed `17/17`.
+- Task-scoped Ruff, Black, mypy, ESLint, Alembic head, Trellis validation, and `git diff --check` passed.
+- Disposable migration upgrade/downgrade/re-upgrade and direct constraint rehearsal passed; no live corpus migration, rebuild, backfill, or cutover ran.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
