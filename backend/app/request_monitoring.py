@@ -12,6 +12,7 @@ IMPORTANT_REQUEST_PATH_PREFIXES = (
     "/api/v1/crawl-jobs",
     "/api/v1/scrape/progress",
     "/api/v1/schedules",
+    "/api/v1/source-catalogs",
 )
 EXCLUDED_REQUEST_SUMMARY_PATHS = {"/api/v1/scrape/progress/stream"}
 

@@ -23,6 +23,14 @@ from app.models.company_enrichment_run import (
 )
 from app.models.app_runtime_settings import AppRuntimeSettings
 from app.models.scraper_pacing_settings import ScraperPacingSettings
+from app.models.source_catalog import (
+    SourceCatalogActiveRevision,
+    SourceCatalogCandidate,
+    SourceCatalogChangeReview,
+    SourceCatalogPublication,
+    SourceCatalogRevision,
+    SourceCatalogValidationRun,
+)
 
 __all__ = [
     "Company", "CrawlJob", "CrawlJobEvent", "CrawlJobExecution", "CrawlJobListing", "CrawlRun", "EventOutbox", "Job", "JobEmbedding",
@@ -33,4 +41,7 @@ __all__ = [
     "EnrichmentRun", "EnrichmentRunItem",
     "CompanyEnrichmentRun", "CompanyEnrichmentRunItem",
     "AppRuntimeSettings", "ScraperPacingSettings",
+    "SourceCatalogActiveRevision", "SourceCatalogCandidate",
+    "SourceCatalogChangeReview", "SourceCatalogPublication",
+    "SourceCatalogRevision", "SourceCatalogValidationRun",
 ]
