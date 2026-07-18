@@ -4,19 +4,30 @@ import {
   BrainCircuit,
   CheckCircle2,
   Clock3,
+  Copy,
   LoaderCircle,
   Orbit,
   RefreshCcw,
   Sparkles,
+  Square,
 } from 'lucide-react';
 import { apiPath } from '../../api/base';
 import '../Dashboard.css';
 import './AIEnrichmentPage.css';
 
-const ACTIVE_RUN_STATUSES = new Set(['pending', 'running']);
+const ACTIVE_RUN_STATUSES = new Set(['pending', 'running', 'stopping']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', 'failed', 'cancelled']);
 const DEGRADED_PLACEHOLDER = 'Unavailable';
 const REFRESH_REQUEST_TIMEOUT_MS = 8000;
+const FILTER_PREVIEW_DEBOUNCE_MS = 350;
+const FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run:v1';
+const DEFAULT_FILTER_STATE = {
+  source_sites: [],
+  source_classification_names: [],
+  source_subclassification_names: [],
+  posted_date_from: '',
+  posted_date_to: '',
+};
 
 function normalizeRunStatus(value) {
   return String(value || '').toLowerCase();
@@ -114,15 +125,15 @@ function sortRunsNewestFirst(runList) {
 }
 
 function resolveMonitorSlots(sortedRuns) {
-  const newestActiveIndex = (sortedRuns || []).findIndex((run) => isActiveRun(run));
-  if (newestActiveIndex !== -1) {
+  const activeRun = (sortedRuns || []).find((run) => isActiveRun(run));
+  const terminalRuns = (sortedRuns || []).filter((run) => isTerminalRun(run));
+  if (activeRun) {
     return {
       hasActive: true,
-      slots: [sortedRuns[newestActiveIndex], sortedRuns[newestActiveIndex + 1] || null],
+      slots: [activeRun, terminalRuns[0] || null],
     };
   }
 
-  const terminalRuns = (sortedRuns || []).filter((run) => isTerminalRun(run));
   return {
     hasActive: false,
     slots: [terminalRuns[0] || null, terminalRuns[1] || null],
@@ -131,7 +142,7 @@ function resolveMonitorSlots(sortedRuns) {
 
 function getRunStatusTone(status) {
   const normalized = normalizeRunStatus(status);
-  if (normalized === 'pending' || normalized === 'running') {
+  if (ACTIVE_RUN_STATUSES.has(normalized)) {
     return 'active';
   }
   if (normalized === 'completed') {
@@ -146,6 +157,79 @@ function getRunStatusTone(status) {
   return 'muted';
 }
 
+function loadPersistedFilters() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(FILTER_STORAGE_KEY) || 'null');
+    const filters = parsed?.filters;
+    const limit = Number(parsed?.limit);
+    if (!filters || !Number.isInteger(limit) || limit < 1 || limit > 5000) {
+      return { filters: DEFAULT_FILTER_STATE, limit: '50' };
+    }
+    return {
+      filters: {
+        ...DEFAULT_FILTER_STATE,
+        ...Object.fromEntries(
+          Object.entries(filters).map(([key, value]) => [
+            key,
+            Array.isArray(DEFAULT_FILTER_STATE[key])
+              ? (Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [])
+              : (typeof value === 'string' ? value : ''),
+          ]),
+        ),
+      },
+      limit: String(limit),
+    };
+  } catch {
+    return { filters: DEFAULT_FILTER_STATE, limit: '50' };
+  }
+}
+
+function hasOrdinaryFilters(filters) {
+  return Boolean(
+    filters.source_sites.length
+    || filters.source_classification_names.length
+    || filters.source_subclassification_names.length
+    || filters.posted_date_from
+    || filters.posted_date_to,
+  );
+}
+
+function SearchableMultiSelect({ label, options, values, onChange }) {
+  const [search, setSearch] = useState('');
+  const visibleOptions = options.filter((option) => option.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <fieldset className="ai-multi-select">
+      <legend>{label}</legend>
+      <input
+        aria-label={`Search ${label}`}
+        type="search"
+        placeholder={`Search ${label.toLowerCase()}`}
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+      />
+      <div className="ai-multi-options">
+        {visibleOptions.length === 0 && <span className="ai-empty-option">No options</span>}
+        {visibleOptions.map((option) => (
+          <label key={option}>
+            <input
+              type="checkbox"
+              checked={values.includes(option)}
+              onChange={() => onChange(
+                values.includes(option)
+                  ? values.filter((value) => value !== option)
+                  : [...values, option],
+              )}
+            />
+            <span>{option}</span>
+          </label>
+        ))}
+      </div>
+      {values.length > 0 && <small>{values.length} selected</small>}
+    </fieldset>
+  );
+}
+
 function describeActiveRunFocus({
   status,
   inProgressItems,
@@ -155,6 +239,14 @@ function describeActiveRunFocus({
   pendingGateProgress,
 }) {
   const normalizedStatus = normalizeRunStatus(status);
+
+  if (normalizedStatus === 'stopping') {
+    return {
+      label: 'Stop status',
+      value: 'Stopping after in-flight jobs',
+      detail: 'No new jobs will start.',
+    };
+  }
 
   if (inProgressItems > 0) {
     return {
@@ -232,37 +324,20 @@ function withRequestTimeout(promise, label) {
   });
 }
 
-function formatDisplayValue(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value.toLocaleString();
-  }
-
-  return String(value);
-}
-
-function SummaryCard({ label, value, icon, tone = 'default' }) {
-  const IconComponent = icon;
-
-  return (
-    <article className={`stat-card glass-panel ai-tone-${tone}`}>
-      <div className={`stat-icon-wrapper ${tone}-glow`}>
-        <IconComponent size={24} className="stat-icon" />
-      </div>
-      <div className="stat-info">
-        <div className="stat-value">{formatDisplayValue(value)}</div>
-        <div className="stat-label">{label}</div>
-      </div>
-    </article>
-  );
-}
-
 export default function AIEnrichmentPage() {
+  const persistedFilters = useRef(loadPersistedFilters()).current;
   const [overview, setOverview] = useState(null);
   const [hasLoadedOverview, setHasLoadedOverview] = useState(false);
   const [runs, setRuns] = useState([]);
   const [hasLoadedRuns, setHasLoadedRuns] = useState(false);
-  const [pendingLimit, setPendingLimit] = useState('50');
-  const [targetJobId, setTargetJobId] = useState('');
+  const [pendingLimit, setPendingLimit] = useState(persistedFilters.limit);
+  const [filters, setFilters] = useState(persistedFilters.filters);
+  const [filterHierarchy, setFilterHierarchy] = useState([]);
+  const [filterOptionsError, setFilterOptionsError] = useState(null);
+  const [allPendingAcknowledged, setAllPendingAcknowledged] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState(null);
@@ -282,42 +357,46 @@ export default function AIEnrichmentPage() {
   const refreshQueuedRef = useRef(false);
   const mountedRef = useRef(true);
   const wasPageVisibleRef = useRef(typeof document === 'undefined' ? true : !document.hidden);
+  const previewControllerRef = useRef(null);
+  const skipNextPersistRef = useRef(false);
   const sortedRuns = sortRunsNewestFirst(runs);
   const overviewPendingJobs = Number(overview?.pending_jobs || 0);
-  const overviewEnrichedJobs = Number(overview?.enriched_jobs || 0);
-  const overviewEligibleEnrichedJobs = Number(
-    overview?.eligible_enriched_jobs ?? overview?.enriched_jobs ?? 0,
-  );
-  const overviewTotalJobs = Number(overview?.total_jobs || 0);
-  const overviewAiEligibleJobs = Number(
-    overview?.ai_eligible_jobs || (overviewPendingJobs + overviewEligibleEnrichedJobs),
-  );
-  const overviewIneligibleJobs = Number(
-    overview?.ineligible_jobs || Math.max(overviewTotalJobs - overviewAiEligibleJobs, 0),
-  );
+  const overviewAiEligibleJobs = Number(overview?.ai_eligible_jobs || 0);
   const overviewFailedJobs = Number(overview?.failed_jobs ?? overview?.failed_items ?? 0);
   const visibleActiveRunsCount = sortedRuns.filter((run) => isActiveRun(run)).length;
   const overviewActiveRunsCount = Number(overview?.active_runs ?? overview?.running_runs ?? 0);
   const isBootstrapPolling = hasConsoleData && (!hasLoadedOverview || !hasLoadedRuns);
   const shouldPollRuns = isBootstrapPolling || overviewActiveRunsCount > 0 || (!hasLoadedOverview && visibleActiveRunsCount > 0);
   const pendingJobsDisplay = hasLoadedOverview ? overviewPendingJobs : DEGRADED_PLACEHOLDER;
+  const eligibleJobsDisplay = hasLoadedOverview ? overviewAiEligibleJobs : DEGRADED_PLACEHOLDER;
   const failedJobsDisplay = hasLoadedOverview ? overviewFailedJobs : DEGRADED_PLACEHOLDER;
   const activeRunsDisplay = hasLoadedOverview ? overviewActiveRunsCount : DEGRADED_PLACEHOLDER;
-  const lastCompletedDisplay = hasLoadedOverview
-    ? overview?.last_completed_run?.id || 'No completed run yet'
-    : DEGRADED_PLACEHOLDER;
-  const backlogWindowDisplay = hasLoadedOverview
-    ? (overviewAiEligibleJobs > 0
-      ? `${overviewPendingJobs.toLocaleString()} of ${overviewAiEligibleJobs.toLocaleString()} AI-eligible jobs`
-      : 'No AI-eligible jobs currently available for enrichment')
-    : DEGRADED_PLACEHOLDER;
-  const failureCountDisplay = hasLoadedOverview ? `${overviewFailedJobs.toLocaleString()} jobs` : DEGRADED_PLACEHOLDER;
-  const activeRunsRibbonDisplay = hasLoadedOverview ? `${overviewActiveRunsCount.toLocaleString()} runs` : DEGRADED_PLACEHOLDER;
-  const ineligibleQueueDisplay = hasLoadedOverview && overviewIneligibleJobs > 0
-    ? `${overviewIneligibleJobs.toLocaleString()} acquired jobs are outside the AI queue.`
-    : null;
+  const pendingEligibleDisplay = hasLoadedOverview
+    ? `${overviewPendingJobs.toLocaleString()} / ${overviewAiEligibleJobs.toLocaleString()}`
+    : `${pendingJobsDisplay} / ${eligibleJobsDisplay}`;
   const { hasActive: monitorHasActive, slots: monitorSlots } = resolveMonitorSlots(sortedRuns);
-  const retryTargetRun = monitorSlots.find((run) => isRetryableTerminalRun(run)) || null;
+  const activeRun = monitorSlots.find((run) => isActiveRun(run)) || null;
+  const ordinaryFiltersSelected = hasOrdinaryFilters(filters);
+  const normalizedLimit = Math.min(5000, Math.max(1, Number(pendingLimit) || 1));
+  const canPreview = ordinaryFiltersSelected || allPendingAcknowledged;
+  const canLaunch = !submitting
+    && !activeRun
+    && !previewLoading
+    && !previewError
+    && Number(preview?.effective_item_count || 0) > 0;
+  const sourceOptions = filterHierarchy.map((source) => source.source_site);
+  const selectedSources = filters.source_sites.length > 0
+    ? filterHierarchy.filter((source) => filters.source_sites.includes(source.source_site))
+    : filterHierarchy;
+  const classificationOptions = [...new Set(
+    selectedSources.flatMap((source) => source.classifications.map((item) => item.name)),
+  )].sort();
+  const subclassificationOptions = [...new Set(
+    selectedSources.flatMap((source) => source.classifications
+      .filter((item) => filters.source_classification_names.length === 0
+        || filters.source_classification_names.includes(item.name))
+      .flatMap((item) => item.subclassifications)),
+  )].sort();
 
   useEffect(() => {
     hasConsoleDataRef.current = hasConsoleData;
@@ -329,6 +408,96 @@ export default function AIEnrichmentPage() {
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (skipNextPersistRef.current) {
+      skipNextPersistRef.current = false;
+      return;
+    }
+    try {
+      window.localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify({
+        filters,
+        limit: normalizedLimit,
+      }));
+    } catch {
+      // Storage is a convenience; private mode or quota errors must not block operations.
+    }
+  }, [filters, normalizedLimit]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(apiPath('/ai/pending/filter-options'))
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Filter options request failed with ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((payload) => {
+        if (!cancelled) {
+          setFilterHierarchy(Array.isArray(payload.sources) ? payload.sources : []);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setFilterOptionsError(error.message);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    previewControllerRef.current?.abort();
+    if (!canPreview) {
+      setPreview(null);
+      setPreviewLoading(false);
+      setPreviewError(null);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    previewControllerRef.current = controller;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(apiPath('/ai/pending/preview'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            filters: {
+              ...filters,
+              posted_date_from: filters.posted_date_from || null,
+              posted_date_to: filters.posted_date_to || null,
+            },
+            limit: normalizedLimit,
+            all_pending_acknowledged: allPendingAcknowledged,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`Preview request failed with ${response.status}`);
+        }
+        const payload = await response.json();
+        if (!controller.signal.aborted) {
+          setPreview(payload);
+          setPreviewLoading(false);
+        }
+      } catch (error) {
+        if (error.name !== 'AbortError' && !controller.signal.aborted) {
+          setPreviewError(error.message);
+          setPreviewLoading(false);
+        }
+      }
+    }, FILTER_PREVIEW_DEBOUNCE_MS);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [allPendingAcknowledged, canPreview, filters, normalizedLimit]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -514,11 +683,18 @@ export default function AIEnrichmentPage() {
   }, [hasConsoleData, isPageVisible, loading, shouldPollRuns]);
 
   async function runPendingEnrichment() {
+    if (!ordinaryFiltersSelected && !allPendingAcknowledged) {
+      setActionError('Select at least one filter or acknowledge all pending jobs.');
+      return;
+    }
+    if (!ordinaryFiltersSelected && !window.confirm('Run the oldest pending jobs across every source and classification?')) {
+      return;
+    }
+
     try {
       setSubmitting(true);
       setActionError(null);
       setActionMessage(null);
-      const normalizedLimit = Math.max(1, Number(pendingLimit) || 1);
       setPendingLimit(String(normalizedLimit));
 
       const response = await fetch(apiPath('/ai/runs'), {
@@ -529,14 +705,25 @@ export default function AIEnrichmentPage() {
         body: JSON.stringify({
           mode: 'pending',
           limit: normalizedLimit,
+          filters: {
+            ...filters,
+            posted_date_from: filters.posted_date_from || null,
+            posted_date_to: filters.posted_date_to || null,
+          },
+          all_pending_acknowledged: allPendingAcknowledged,
         }),
       });
 
       if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        if (response.status === 409 && payload?.detail?.code === 'active_run_exists') {
+          throw new Error(`Another run is active: ${payload.detail.run_id}`);
+        }
         throw new Error(`Run request failed with ${response.status}`);
       }
 
-      setActionMessage(`AI backlog run submitted for up to ${normalizedLimit.toLocaleString()} AI-eligible pending jobs.`);
+      setAllPendingAcknowledged(false);
+      setActionMessage(`Filtered run submitted for ${Number(preview?.effective_item_count || normalizedLimit).toLocaleString()} jobs.`);
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (err) {
       setActionError(err.message);
@@ -545,10 +732,8 @@ export default function AIEnrichmentPage() {
     }
   }
 
-  async function runTargetJobEnrichment() {
-    const normalizedJobId = targetJobId.trim();
-    if (!normalizedJobId) {
-      setActionError('Target job UUID is required.');
+  async function retryFailedItems(run) {
+    if (!run) {
       return;
     }
 
@@ -557,41 +742,7 @@ export default function AIEnrichmentPage() {
       setActionError(null);
       setActionMessage(null);
 
-      const response = await fetch(apiPath('/ai/runs'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          mode: 'batch',
-          job_ids: [normalizedJobId],
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Job run request failed with ${response.status}`);
-      }
-
-      setActionMessage(`AI job run submitted for ${normalizedJobId}.`);
-      fetchAIConsole({ queueAfterInFlight: true });
-    } catch (err) {
-      setActionError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function retryFailedItems() {
-    if (!retryTargetRun) {
-      return;
-    }
-
-    try {
-      setSubmitting(true);
-      setActionError(null);
-      setActionMessage(null);
-
-      const response = await fetch(apiPath('/ai/runs/' + retryTargetRun.id + '/retry-failed'), {
+      const response = await fetch(apiPath('/ai/runs/' + run.id + '/retry-failed'), {
         method: 'POST',
       });
 
@@ -599,13 +750,86 @@ export default function AIEnrichmentPage() {
         throw new Error(`Retry request failed with ${response.status}`);
       }
 
-      setActionMessage(`Retry run created from ${retryTargetRun.id}.`);
+      setActionMessage(`Retry run created from ${run.id}.`);
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (err) {
       setActionError(err.message);
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function stopRun(run) {
+    if (!window.confirm('Stop this run? Jobs already in flight may still finish and be saved.')) {
+      return;
+    }
+    try {
+      setSubmitting(true);
+      setActionError(null);
+      const response = await fetch(apiPath(`/ai/runs/${run.id}/stop`), { method: 'POST' });
+      if (!response.ok) {
+        throw new Error(`Stop request failed with ${response.status}`);
+      }
+      setActionMessage(`Stop requested for ${run.id}.`);
+      fetchAIConsole({ queueAfterInFlight: true });
+    } catch (error) {
+      setActionError(error.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function copyRunId(runId) {
+    try {
+      await window.navigator.clipboard?.writeText?.(runId);
+      setActionMessage(`Copied run UUID ${runId}.`);
+    } catch {
+      setActionError('Unable to copy the run UUID.');
+    }
+  }
+
+  function resetFilters() {
+    skipNextPersistRef.current = true;
+    setFilters(DEFAULT_FILTER_STATE);
+    setPendingLimit('50');
+    setAllPendingAcknowledged(false);
+    setPreview(null);
+    try {
+      window.localStorage.removeItem(FILTER_STORAGE_KEY);
+    } catch {
+      // Ignore unavailable storage; in-memory controls are already reset.
+    }
+  }
+
+  function updateSources(sourceSites) {
+    const relevantSources = sourceSites.length > 0
+      ? filterHierarchy.filter((source) => sourceSites.includes(source.source_site))
+      : filterHierarchy;
+    const allowedClassifications = new Set(
+      relevantSources.flatMap((source) => source.classifications.map((item) => item.name)),
+    );
+    const allowedSubclassifications = new Set(
+      relevantSources.flatMap((source) => source.classifications.flatMap((item) => item.subclassifications)),
+    );
+    setFilters((current) => ({
+      ...current,
+      source_sites: sourceSites,
+      source_classification_names: current.source_classification_names.filter((value) => allowedClassifications.has(value)),
+      source_subclassification_names: current.source_subclassification_names.filter((value) => allowedSubclassifications.has(value)),
+    }));
+  }
+
+  function updateClassifications(classifications) {
+    const allowedSubclassifications = new Set(
+      selectedSources.flatMap((source) => source.classifications
+        .filter((item) => classifications.length === 0 || classifications.includes(item.name))
+        .flatMap((item) => item.subclassifications)),
+    );
+    setFilters((current) => ({
+      ...current,
+      source_classification_names: classifications,
+      source_subclassification_names: current.source_subclassification_names.filter((value) => allowedSubclassifications.has(value)),
+    }));
   }
 
   return (
@@ -614,7 +838,7 @@ export default function AIEnrichmentPage() {
         <div>
           <h2>AI Enrichment</h2>
           <p className="subtitle">
-            Auto-chain runs after scrape persistence, and keep this console for queue control, backlog sweeps, and quick retry launches.
+            Monitor enrichment runs and launch an oldest-first filtered batch.
           </p>
         </div>
       </header>
@@ -636,52 +860,55 @@ export default function AIEnrichmentPage() {
       {!loading && hasConsoleData && (
         <>
           {refreshError && <div className="ai-status-banner ai-status-error">{refreshError}</div>}
-          <div className="stats-grid">
-            <SummaryCard
-              label="Pending AI-Eligible Jobs"
-              value={pendingJobsDisplay}
-              icon={BrainCircuit}
-              tone="purple"
-            />
-            <SummaryCard
-              label="Active Runs"
-              value={activeRunsDisplay}
-              icon={Orbit}
-              tone="blue"
-            />
-            <SummaryCard
-              label="Failed Jobs"
-              value={failedJobsDisplay}
-              icon={AlertTriangle}
-              tone="green"
-            />
+          <div className="ai-metric-strip glass-panel" aria-label="AI enrichment summary">
+            <div><BrainCircuit size={18} /><span>Pending / eligible</span><strong>{pendingEligibleDisplay}</strong></div>
+            <div><Orbit size={18} /><span>Active runs</span><strong>{activeRunsDisplay}</strong></div>
+            <div><AlertTriangle size={18} /><span>Failed jobs</span><strong>{failedJobsDisplay}</strong></div>
           </div>
 
           <div className="ai-console-grid">
-            <section className="chart-wrapper glass-panel ai-console-panel">
+            <section className="chart-wrapper glass-panel ai-console-panel ai-filter-panel">
               <div className="ai-console-header">
                 <div>
-                  <h3>Queue Overview</h3>
+                  <h3>Filtered Run</h3>
                   <p className="ai-console-copy">
-                    Scrapes auto-chain into AI by default. Use manual actions here for backlog sweeps and recovery.
+                    Select a slice of the pending queue. Jobs launch oldest first.
                   </p>
                 </div>
-                <div className="ai-last-run">
-                  <span className="ai-last-run-label">Last Completed</span>
-                  <strong>{lastCompletedDisplay}</strong>
-                </div>
               </div>
 
-              <div className="ai-backlog-guidance">
-                <span className="ai-ribbon-label">AI backlog run</span>
-                <p>
-                  Processes up to the pending limit from AI-eligible jobs without AI insights, then writes summaries, skills, taxonomy, and experience fields back to Job Browser.
-                </p>
-                <strong>{backlogWindowDisplay} waiting for AI enrichment</strong>
-                {ineligibleQueueDisplay && <p>{ineligibleQueueDisplay}</p>}
+              <div className="ai-filter-grid">
+                <SearchableMultiSelect
+                  label="Sources"
+                  options={sourceOptions}
+                  values={filters.source_sites}
+                  onChange={updateSources}
+                />
+                <SearchableMultiSelect
+                  label="Classifications"
+                  options={classificationOptions}
+                  values={filters.source_classification_names}
+                  onChange={updateClassifications}
+                />
+                <SearchableMultiSelect
+                  label="Subclassifications"
+                  options={subclassificationOptions}
+                  values={filters.source_subclassification_names}
+                  onChange={(value) => setFilters((current) => ({ ...current, source_subclassification_names: value }))}
+                />
               </div>
 
-              <div className="ai-actions-row">
+              {filterOptionsError && <div className="ai-status-banner ai-status-error">{filterOptionsError}</div>}
+
+              <div className="ai-date-limit-grid">
+                <label className="ai-input-group" htmlFor="posted-date-from">
+                  <span>Posted from</span>
+                  <input id="posted-date-from" type="date" value={filters.posted_date_from} onChange={(event) => setFilters((current) => ({ ...current, posted_date_from: event.target.value }))} />
+                </label>
+                <label className="ai-input-group" htmlFor="posted-date-to">
+                  <span>Posted to</span>
+                  <input id="posted-date-to" type="date" value={filters.posted_date_to} onChange={(event) => setFilters((current) => ({ ...current, posted_date_to: event.target.value }))} />
+                </label>
                 <label className="ai-input-group" htmlFor="pending-limit">
                   <span>Pending Limit</span>
                   <input
@@ -693,75 +920,46 @@ export default function AIEnrichmentPage() {
                     onChange={(event) => setPendingLimit(event.target.value)}
                   />
                 </label>
+              </div>
 
-                <button type="button" className="ai-primary-button" disabled={submitting} onClick={runPendingEnrichment}>
-                  <Sparkles size={16} />
-                  <span>Run Pending</span>
-                </button>
+              {!ordinaryFiltersSelected && (
+                <label className="ai-all-pending-check">
+                  <input type="checkbox" checked={allPendingAcknowledged} onChange={(event) => setAllPendingAcknowledged(event.target.checked)} />
+                  <span>I understand this will select from all pending AI-eligible jobs.</span>
+                </label>
+              )}
 
-                <button
-                  type="button"
-                  className="ai-secondary-button"
-                  disabled={submitting || !retryTargetRun}
-                  onClick={retryFailedItems}
-                >
-                  <RefreshCcw size={16} />
-                  <span>Retry Failed</span>
-                </button>
+              <div className="ai-preview-summary" aria-live="polite">
+                {previewLoading
+                  ? 'Calculating preview…'
+                  : previewError
+                    ? previewError
+                    : preview
+                      ? `${Number(preview.matching_pending_count || 0).toLocaleString()} match · ${Number(preview.effective_item_count || 0).toLocaleString()} will run`
+                      : 'Choose filters to preview the run.'}
               </div>
 
               <div className="ai-actions-row">
-                <label className="ai-input-group ai-input-group-wide" htmlFor="target-job-id">
-                  <span>Target Job UUID</span>
-                  <input
-                    id="target-job-id"
-                    type="text"
-                    value={targetJobId}
-                    onChange={(event) => setTargetJobId(event.target.value)}
-                  />
-                </label>
-
-                <button type="button" className="ai-primary-button" disabled={submitting} onClick={runTargetJobEnrichment}>
+                <button type="button" className="ai-primary-button" disabled={!canLaunch} onClick={runPendingEnrichment}>
                   <Sparkles size={16} />
-                  <span>Run Job</span>
+                  <span>Run {Number(preview?.effective_item_count || 0).toLocaleString()} filtered jobs</span>
                 </button>
-              </div>
-
-              {retryTargetRun && (
-                <div className="ai-retry-target">
-                  <span className="ai-ribbon-label">Retry Target</span>
-                  <strong>{retryTargetRun.id}</strong>
-                  <p>
-                    Latest failed run queued for operator retry. The detailed workbench is removed to keep this console focused on orchestration.
-                  </p>
-                </div>
-              )}
-
-              <div className="ai-queue-ribbon">
-                <div>
-                  <span className="ai-ribbon-label">Backlog Window</span>
-                  <strong>{backlogWindowDisplay}</strong>
-                </div>
-                <div>
-                  <span className="ai-ribbon-label">Failure Count</span>
-                  <strong>{failureCountDisplay}</strong>
-                </div>
-                <div>
-                  <span className="ai-ribbon-label">Active Runs</span>
-                  <strong>{activeRunsRibbonDisplay}</strong>
-                </div>
+                <button type="button" className="ai-secondary-button" disabled={submitting} onClick={resetFilters}>
+                  <RefreshCcw size={16} />
+                  <span>Reset</span>
+                </button>
               </div>
 
               {actionMessage && <div className="ai-status-banner ai-status-success">{actionMessage}</div>}
               {actionError && <div className="ai-status-banner ai-status-error">{actionError}</div>}
             </section>
 
-            <section className="chart-wrapper glass-panel ai-console-panel">
+            <section className="chart-wrapper glass-panel ai-console-panel ai-monitor-panel">
               <div className="ai-console-header">
                 <div>
                   <h3>Run Monitor</h3>
                   <p className="ai-console-copy">
-                    Persisted runs show the true orchestration state instead of transient in-memory tasks.
+                    Active plus latest terminal, or the latest two terminal runs.
                   </p>
                 </div>
               </div>
@@ -793,7 +991,9 @@ export default function AIEnrichmentPage() {
                     );
                   }
 
-                  const processedItems = Number(run.completed_items || 0) + Number(run.failed_items || 0);
+                  const processedItems = Number(run.completed_items || 0)
+                    + Number(run.failed_items || 0)
+                    + Number(run.cancelled_items || 0);
                   const totalItems = Number(run.total_items || 0);
                   const remainingItems = Number.isFinite(Number(run.pending_items))
                     ? Number(run.pending_items)
@@ -833,7 +1033,12 @@ export default function AIEnrichmentPage() {
                       <div className="ai-run-topline">
                         <div>
                           <div className="ai-run-slot-title">{slotTitle}</div>
-                          <div className="ai-run-id">{run.id}</div>
+                          <div className="ai-run-id-row">
+                            <span className="ai-run-id">{run.id}</span>
+                            <button type="button" className="ai-icon-button" aria-label={`Copy run UUID ${run.id}`} onClick={() => copyRunId(run.id)}>
+                              <Copy size={14} />
+                            </button>
+                          </div>
                           <div className="ai-run-source">{run.source_type}</div>
                         </div>
                         <div className={`ai-run-status-badge ai-run-status-${statusTone}`}>{normalizedStatus}</div>
@@ -857,6 +1062,8 @@ export default function AIEnrichmentPage() {
                         <span><Clock3 size={14} /> Processed {processedItems}</span>
                         <span><CheckCircle2 size={14} /> Succeeded {run.completed_items}</span>
                         <span><AlertTriangle size={14} /> Failed {run.failed_items}</span>
+                        <span><Square size={14} /> Cancelled {Number(run.cancelled_items || 0)}</span>
+                        <span>Remaining {remainingItems}</span>
                       </div>
 
                       {active && (
@@ -892,6 +1099,15 @@ export default function AIEnrichmentPage() {
                             </span>
                           </div>
                         </div>
+                      ) : normalizedStatus === 'cancelled' ? (
+                        <div className="ai-run-summary ai-run-summary-terminal">
+                          <div className="ai-run-summary-title">Cancelled summary</div>
+                          <div className="ai-run-summary-body ai-run-summary-stack">
+                            <span>Succeeded {Number(run.completed_items || 0)}</span>
+                            <span>Failed {Number(run.failed_items || 0)}</span>
+                            <span>Cancelled {Number(run.cancelled_items || 0)}</span>
+                          </div>
+                        </div>
                       ) : (
                         <div className="ai-run-summary ai-run-summary-terminal">
                           <div className="ai-run-summary-title">Failure summary</div>
@@ -903,10 +1119,27 @@ export default function AIEnrichmentPage() {
                             {run.error_message && (
                               <span>{run.error_message}</span>
                             )}
-                            <span>Retry available via queue controls.</span>
                           </div>
                         </div>
                       )}
+
+                      <div className="ai-run-actions">
+                        {active && normalizeRunStatus(run.status) !== 'stopping' && (
+                          <button type="button" className="ai-secondary-button" disabled={submitting} onClick={() => stopRun(run)}>
+                            <Square size={14} /> Stop
+                          </button>
+                        )}
+                        {normalizeRunStatus(run.status) === 'stopping' && (
+                          <button type="button" className="ai-secondary-button" disabled>
+                            <LoaderCircle className="spinner" size={14} /> Stopping
+                          </button>
+                        )}
+                        {isRetryableTerminalRun(run) && (
+                          <button type="button" className="ai-secondary-button" disabled={submitting || Boolean(activeRun)} onClick={() => retryFailedItems(run)}>
+                            <RefreshCcw size={14} /> Retry failed jobs ({Number(run.failed_items || 0)})
+                          </button>
+                        )}
+                      </div>
                     </article>
                   );
                 })}
