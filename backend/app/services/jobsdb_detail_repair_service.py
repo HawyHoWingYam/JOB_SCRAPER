@@ -4,6 +4,10 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.job_intelligence.source_attributes import (
+    SourceJobAttributeEvidence,
+    SourceJobAttributes,
+)
 from app.models import Job
 from app.utils.data_mapper import parse_listing_date, parse_salary_range
 
@@ -15,7 +19,7 @@ class JobsDBDetailRepairService:
     def list_candidate_jobs(self, *, limit: int = 100) -> list[Job]:
         return (
             self.db.query(Job)
-            .filter(Job.source_site == "jobsdb", Job.is_deleted == False)
+            .filter(Job.source_site == "jobsdb", Job.is_deleted.is_(False))
             .order_by(Job.updated_at.desc(), Job.created_at.desc())
             .limit(limit)
             .all()
@@ -44,12 +48,7 @@ class JobsDBDetailRepairService:
             job.description = description
         if parsed_detail.get("title"):
             job.title = parsed_detail["title"]
-        job.source_classification_id = parsed_detail.get("classification_id")
-        job.source_classification_name = parsed_detail.get("classification")
-        job.source_subclassification_id = parsed_detail.get("subclassification_id")
-        job.source_subclassification_name = parsed_detail.get("subclassification")
         job.location = parsed_detail.get("location")
-        job.employment_type = parsed_detail.get("work_type")
         job.salary_range = salary_range
         job.salary_min = salary_min
         job.salary_max = salary_max
@@ -60,6 +59,14 @@ class JobsDBDetailRepairService:
         existing_raw.update(parsed_detail)
         job.raw_data = existing_raw
         job.updated_at = datetime.utcnow()
+
+        source_attribute_payload = parsed_detail.get("source_attribute_evidence")
+        if source_attribute_payload is None:
+            raise ValueError("JobsDB repaired detail has no Source Job Attribute evidence")
+        SourceJobAttributes(self.db).project(
+            job.id,
+            SourceJobAttributeEvidence.from_payload(source_attribute_payload),
+        )
 
     def iter_repair_candidates(self, *, limit: int = 100) -> list[Job]:
         return [job for job in self.list_candidate_jobs(limit=limit) if self.is_degraded_job(job)]

@@ -11,11 +11,16 @@ from typing import Any
 from sqlalchemy import and_, exists, or_
 from sqlalchemy.orm import Session, joinedload
 
+from app.job_intelligence.source_attributes import (
+    SourceJobAttributeEvidence,
+    SourceJobAttributes,
+)
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.job import Job
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.crawl_job_repository import CrawlJobRepository
+from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.job_repository import JobRepository
 from app.sources.contracts import (
     CanonicalScrapedJob,
@@ -70,6 +75,7 @@ class OfferTodayJobRepairService:
         job_repository: JobRepository | None = None,
         crawl_job_listing_repository: CrawlJobListingRepository | None = None,
         crawl_job_repository: CrawlJobRepository | None = None,
+        event_outbox_repository: EventOutboxRepository | None = None,
     ) -> None:
         self.db = db
         self.company_repository = company_repository or CompanyRepository()
@@ -80,6 +86,9 @@ class OfferTodayJobRepairService:
         self.crawl_job_repository = crawl_job_repository
         if self.crawl_job_repository is None and db is not None:
             self.crawl_job_repository = CrawlJobRepository()
+        self.event_outbox_repository = (
+            event_outbox_repository or EventOutboxRepository()
+        )
         self._cached_identity_authority_index: (
             OfferTodayIdentityAuthorityIndex | None
         ) = None
@@ -300,6 +309,19 @@ class OfferTodayJobRepairService:
             job_data,
             skip_existing=False,
             auto_commit=False,
+        )
+        if canonical.source_attribute_evidence is None:
+            raise ValueError(
+                "OfferToday canonical repair has no Source Job Attribute evidence"
+            )
+        SourceJobAttributes(
+            self.db,
+            outbox_repository=self.event_outbox_repository,
+        ).project(
+            repaired_job.id,
+            SourceJobAttributeEvidence.from_payload(
+                canonical.source_attribute_evidence
+            ),
         )
 
         listing_attached = False

@@ -11,6 +11,10 @@ from typing import Any
 from app.config import settings
 from app.database import SessionLocal
 from app.logging_config import configure_logging
+from app.job_intelligence.source_attributes import (
+    SourceJobAttributeEvidence,
+    SourceJobAttributes,
+)
 from app.messaging.event_envelope import build_event_envelope
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.redis_stream_bus import RedisStreamBus, StreamMessage
@@ -158,6 +162,7 @@ class IngestWorkerService:
             skip_existing=skip_existing,
             auto_commit=False,
         )
+        self.project_source_attributes(db, job, canonical_job)
         if listing_id is not None:
             self.crawl_job_listing_repository.attach_published_job(
                 db,
@@ -236,6 +241,27 @@ class IngestWorkerService:
             source_site=source_site,
             source_job_id=source_job_id,
         )
+
+    def project_source_attributes(self, db, job, canonical_job: dict[str, Any]):
+        source_attribute_payload = canonical_job.get("source_attribute_evidence")
+        if source_attribute_payload is None:
+            raise InvalidIngestPayloadError(
+                "missing_source_attribute_evidence",
+                "Canonical collected Job has no Source Job Attribute evidence",
+            )
+        try:
+            source_attribute_evidence = SourceJobAttributeEvidence.from_payload(
+                source_attribute_payload
+            )
+            return SourceJobAttributes(
+                db,
+                outbox_repository=self.event_outbox_repository,
+            ).project(job.id, source_attribute_evidence)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidIngestPayloadError(
+                "invalid_source_attribute_evidence",
+                f"Invalid Source Job Attribute evidence: {exc}",
+            ) from exc
 
     def _resolve_skip_existing(self, db, *, crawl_job_id: str | None) -> bool:
         if not crawl_job_id:
@@ -414,11 +440,6 @@ class IngestWorkerService:
             "salary_max": salary_max,
             "salary_currency": salary_currency,
             "location": canonical_job.get("location"),
-            "employment_type": canonical_job.get("employment_type"),
-            "source_classification_id": canonical_job.get("source_classification_id"),
-            "source_classification_name": canonical_job.get("source_classification_name"),
-            "source_subclassification_id": canonical_job.get("source_subclassification_id"),
-            "source_subclassification_name": canonical_job.get("source_subclassification_name"),
             "posted_date": self._parse_optional_datetime(canonical_job.get("posted_date")),
             "raw_data": canonical_job.get("raw_data"),
         }

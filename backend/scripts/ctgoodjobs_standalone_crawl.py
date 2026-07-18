@@ -240,6 +240,7 @@ async def _persist_ctgoodjobs_job(*, canonical_job: dict[str, Any]):
             skip_existing=False,
             auto_commit=False,
         )
+        ingest_service.project_source_attributes(db, saved_job, canonical_job)
         db.commit()
         return saved_job.id
     finally:
@@ -700,6 +701,8 @@ async def _run_detail_phase(
                 detail_limit=args.detail_limit,
             )
         )
+        log_detail_done("empty")
+        return counts
     category_lookup = _categories_by_id()
 
     for index, target in enumerate(detail_targets.targets, start=1):

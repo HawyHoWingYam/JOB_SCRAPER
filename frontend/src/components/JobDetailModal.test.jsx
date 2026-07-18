@@ -30,6 +30,43 @@ function createJobPayload(overrides = {}) {
     ai_enriched_at: '2026-04-15T12:34:56Z',
     source_classification_name: 'Information & Communication Technology',
     source_subclassification_name: 'Platform Engineering',
+    source_classification_paths: [
+      {
+        id: '10000000-0000-0000-0000-000000000001',
+        source_site: 'jobsdb',
+        source_order: 0,
+        nodes: [
+          {
+            source_position: 0,
+            native_depth: 0,
+            source_classification_id: 'jobsdb:6281',
+            native_id: '6281',
+            label: 'Information & Communication Technology',
+          },
+        ],
+        is_primary: false,
+        primary_basis: null,
+        catalog_revision: null,
+        provenance_limited: true,
+        provenance: { method: 'jobsdb-listing-payload' },
+      },
+    ],
+    employment_types: [
+      { code: 'full_time', label: 'Full-time', sort_order: 1 },
+    ],
+    source_employment_labels: [
+      {
+        id: '20000000-0000-0000-0000-000000000001',
+        source_site: 'jobsdb',
+        source_order: 0,
+        raw_code: null,
+        raw_label: 'Full-time',
+        normalized_lookup_key: 'full-time',
+        mapped_type_code: 'full_time',
+        mapping_id: 'jobsdb-label-v1:full-time',
+        provenance: { method: 'jobsdb-listing-payload' },
+      },
+    ],
     experience_level: 'mid_level',
     experience_min_years: 3,
     experience_max_years: 5,

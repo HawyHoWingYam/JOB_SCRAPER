@@ -261,7 +261,7 @@ async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatc
                 "source_classification_id": classification_by_native[category_id],
                 "source_classification_name": None,
                 "listing_page": page,
-                "listing_payload": {},
+                "listing_payload": dict(job),
             }
             for job in jobs
             if (source_job_id := str(job.get("id") or "").strip())
@@ -536,9 +536,35 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                 detail_limit=args.detail_limit,
             )
         )
+        logger.info(
+            build_scrape_log_event(
+                "SCRAPE_DETAIL_DONE",
+                source=JOBSDB_SOURCE_SITE,
+                crawl_job_id=args.crawl_job_id,
+                crawl_phase="detail",
+                crawl_mode=args.crawl_mode,
+                source_listing_crawl_job_id=(
+                    _resolve_source_listing_crawl_job_id(args)
+                ),
+                outcome="completed",
+                elapsed_ms=max(
+                    int((time.perf_counter() - phase_started_at) * 1000),
+                    0,
+                ),
+                detail_selected_rows=counts["selected_rows"],
+                detail_skipped_existing_rows=counts["skipped_existing_rows"],
+                detail_target_rows=0,
+                processed=0,
+                succeeded=0,
+                failed=0,
+                manual_action_required=0,
+                saved=0,
+            )
+        )
+        return counts
     company_repository = CompanyRepository()
     job_repository = JobRepository()
-    ingest_service = IngestWorkerService()
+    ingest_service = None
     db = SessionLocal()
     phase_outcome = "completed"
 
@@ -579,6 +605,8 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                         detail,
                         source_url=target["source_url"],
                     ).to_dict()
+                    if ingest_service is None:
+                        ingest_service = IngestWorkerService()
                     company_data = ingest_service._build_company_data(canonical)
                     company, _ = company_repository.upsert_company(db, company_data, auto_commit=False)
                     job_data = ingest_service._build_job_data(canonical, company.id)
@@ -587,6 +615,11 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                         job_data,
                         skip_existing=False,
                         auto_commit=False,
+                    )
+                    ingest_service.project_source_attributes(
+                        db,
+                        saved_job,
+                        canonical,
                     )
                     db.commit()
                     published_job_id = saved_job.id

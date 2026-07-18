@@ -9,6 +9,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.job_intelligence.source_attributes import (
+    SourceJobAttributeEvidence,
+    SourceJobAttributes,
+)
+from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.scraper.log_events import build_scrape_log_event
 from app.sources.contracts import (
     build_offertoday_canonical_job,
@@ -118,6 +123,7 @@ class OfferTodayDetailPipeline:
         max_attempts: int = 3,
         retry_delays_seconds: tuple[float, ...] = (1.0, 2.0),
         detail_pacing_controller=None,
+        event_outbox_repository: EventOutboxRepository | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.crawl_runtime = crawl_runtime
@@ -130,6 +136,9 @@ class OfferTodayDetailPipeline:
             max(float(delay), 0.0) for delay in retry_delays_seconds
         )
         self.detail_pacing_controller = detail_pacing_controller
+        self.event_outbox_repository = (
+            event_outbox_repository or EventOutboxRepository()
+        )
 
     async def process_target(
         self,
@@ -512,6 +521,19 @@ class OfferTodayDetailPipeline:
                 job_data,
                 skip_existing=False,
                 auto_commit=False,
+            )
+            if canonical_job.source_attribute_evidence is None:
+                raise ValueError(
+                    "OfferToday canonical detail has no Source Job Attribute evidence"
+                )
+            SourceJobAttributes(
+                db,
+                outbox_repository=self.event_outbox_repository,
+            ).project(
+                published_job.id,
+                SourceJobAttributeEvidence.from_payload(
+                    canonical_job.source_attribute_evidence
+                ),
             )
             self.crawl_runtime.transition_detail_completed(
                 db,

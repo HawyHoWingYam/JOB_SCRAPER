@@ -7,11 +7,12 @@ from datetime import date
 from io import StringIO
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import and_, false, func, not_, or_
 from typing import Literal, Optional, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from app.database import get_db
+from app.job_intelligence.source_attributes import SourceJobAttributes
 from app.api.job_search_parser import parse_search_expression, SearchExpressionError
 from app.api.job_search_query import apply_parsed_clauses
 from app.api.ai import _publish_run_request, _wait_for_terminal_run, _load_job_snapshot
@@ -20,7 +21,13 @@ from app.models import Job, Company, Skill
 from app.models.job_skill import JobSkill
 from app.models.job_skill_mention import JobSkillMention
 from app.models import SkillTechnology, SkillCategory, JobSubcategory, JobCategory
+from app.models.source_job_attributes import (
+    EmploymentType,
+    JobEmploymentType,
+    JobSourceClassificationPath,
+)
 from app.schemas import JobSchema, JobCreateSchema, ManualJobCreateSchema, JobDetailSchema, JobTaxonomySchema
+from app.schemas.job import EmploymentTypeSchema, SourceClassificationPathSchema
 from app.services.enrichment_run_service import ActiveEnrichmentRunError, EnrichmentRunService
 from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
 from app.schemas.job_search import (
@@ -84,6 +91,21 @@ JOB_SEARCH_EXPORT_FIELDNAMES = [
 ]
 
 
+def _source_attribute_load_options(*, include_labels: bool = False):
+    options = [
+        selectinload(Job.source_classification_paths).options(
+            selectinload(JobSourceClassificationPath.nodes),
+            joinedload(JobSourceClassificationPath.source_catalog_revision),
+        ),
+        selectinload(Job.employment_type_assignments).joinedload(
+            JobEmploymentType.employment_type
+        ),
+    ]
+    if include_labels:
+        options.append(selectinload(Job.source_employment_labels))
+    return tuple(options)
+
+
 # Response schemas for search
 class JobWithCompanySchema(BaseModel):
     """Job with company name for search results."""
@@ -101,6 +123,10 @@ class JobWithCompanySchema(BaseModel):
     job_taxonomy: Optional[JobTaxonomySchema] = None
     company_name: Optional[str] = None
     posted_date: Optional[str] = None
+    source_classification_paths: List[SourceClassificationPathSchema] = Field(
+        default_factory=list
+    )
+    employment_types: List[EmploymentTypeSchema] = Field(default_factory=list)
 
 class JobSearchResponse(BaseModel):
     """Paginated job search response."""
@@ -128,12 +154,26 @@ class LocationHierarchyItem(BaseModel):
     districts: List[str]
 
 
+class EmploymentTypeOption(BaseModel):
+    code: str
+    label: str
+    order: int
+
+
+class SourceClassificationOption(BaseModel):
+    id: str
+    label: str
+    source: str
+    path: str
+
+
 class FilterOptionsResponse(BaseModel):
     """Available filter options."""
     locations: List[str]
     regions: List[str]
     location_hierarchy: List[LocationHierarchyItem]
-    employment_types: List[str]
+    employment_types: List[EmploymentTypeOption]
+    source_classifications: List[SourceClassificationOption]
     industries: List[str]
 
 
@@ -338,8 +378,11 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
         query = query.filter(Job.source_site == filters.source_site)
     if filters.location and not filters.region and not filters.district:
         query = query.filter(Job.location.ilike(f"%{filters.location}%"))
-    if filters.employment_type:
-        query = query.filter(Job.employment_type == filters.employment_type)
+    query = SourceJobAttributes(query.session).build_filters(
+        query,
+        source_classification_ids=filters.source_classification_ids or [],
+        employment_type_codes=filters.employment_type_codes or [],
+    )
     if filters.industry:
         query = query.filter(Company.industry == filters.industry)
     if filters.posted_date_from:
@@ -471,8 +514,10 @@ def _summarize_layer(layer: JobSearchLayerSchema) -> JobSearchLayerSummarySchema
         parts.append(f"Source: {SOURCE_SITE_LABELS.get(filters.source_site, filters.source_site)}")
     if filters.industry:
         parts.append(f"Industry: {filters.industry}")
-    if filters.employment_type:
-        parts.append(f"Job type: {filters.employment_type}")
+    if filters.employment_type_codes:
+        parts.append(
+            "Employment Types: " + ", ".join(filters.employment_type_codes)
+        )
 
     return JobSearchLayerSummarySchema(
         client_id=layer.client_id,
@@ -487,6 +532,7 @@ def _build_query_from_scope(db: Session, scope: JobSearchScopeSchema):
         joinedload(Job.job_skills).joinedload(JobSkill.skill),
         joinedload(Job.company),
         joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
+        *_source_attribute_load_options(),
     )
 
     for layer in scope.layers:
@@ -504,6 +550,8 @@ def _build_legacy_scope(
     region: Optional[str],
     district: Optional[str],
     employment_type: Optional[str],
+    source_classification_ids: Optional[List[str]],
+    employment_type_codes: Optional[List[str]],
     industry: Optional[str],
     posted_date_from: Optional[date],
     posted_date_to: Optional[date],
@@ -530,6 +578,8 @@ def _build_legacy_scope(
                     region=region,
                     district=district,
                     employment_type=employment_type,
+                    source_classification_ids=source_classification_ids,
+                    employment_type_codes=employment_type_codes,
                     industry=industry,
                     posted_date_from=posted_date_from,
                     posted_date_to=posted_date_to,
@@ -599,7 +649,9 @@ def _build_search_response_from_results(
             subcategory_id=job.subcategory_id,
             job_taxonomy=job.job_taxonomy,
             company_name=company.name if company else None,
-            posted_date=job.posted_date.isoformat() if job.posted_date else None
+            posted_date=job.posted_date.isoformat() if job.posted_date else None,
+            source_classification_paths=job.source_classification_paths,
+            employment_types=job.employment_types,
         ))
 
     total_pages = (total + page_size - 1) // page_size
@@ -792,7 +844,14 @@ async def list_jobs(
     db: Session = Depends(get_db),
 ):
     """List all jobs with pagination."""
-    jobs = db.query(Job).filter(Job.is_deleted.is_(False)).offset(skip).limit(limit).all()
+    jobs = (
+        db.query(Job)
+        .options(*_source_attribute_load_options())
+        .filter(Job.is_deleted.is_(False))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     return jobs
 
 
@@ -807,6 +866,14 @@ async def search_jobs(
     region: Optional[str] = Query(None, description="Filter by normalized region"),
     district: Optional[str] = Query(None, description="Filter by normalized district"),
     employment_type: Optional[str] = Query(None, description="Filter by employment type"),
+    source_classification_ids: Optional[List[str]] = Query(
+        None,
+        description="Filter by Source Classification identities",
+    ),
+    employment_type_codes: Optional[List[str]] = Query(
+        None,
+        description="Filter by governed Employment Type codes",
+    ),
     industry: Optional[str] = Query(None, description="Filter by industry"),
     posted_date_from: Optional[date] = Query(None, description="Filter by posted date from"),
     posted_date_to: Optional[date] = Query(None, description="Filter by posted date to"),
@@ -833,6 +900,8 @@ async def search_jobs(
         region=region,
         district=district,
         employment_type=employment_type,
+        source_classification_ids=source_classification_ids,
+        employment_type_codes=employment_type_codes,
         industry=industry,
         posted_date_from=posted_date_from,
         posted_date_to=posted_date_to,
@@ -899,12 +968,47 @@ async def get_filter_options(db: Session = Depends(get_db)):
         Job.location != ""
     ).distinct().all()
 
-    # Get unique employment types
-    employment_types = db.query(Job.employment_type).filter(
-        Job.is_deleted.is_(False),
-        Job.employment_type.isnot(None),
-        Job.employment_type != ""
-    ).distinct().all()
+    employment_types = (
+        db.query(EmploymentType)
+        .join(
+            JobEmploymentType,
+            JobEmploymentType.employment_type_code == EmploymentType.code,
+        )
+        .join(Job, Job.id == JobEmploymentType.job_id)
+        .filter(Job.is_deleted.is_(False))
+        .distinct()
+        .order_by(EmploymentType.sort_order)
+        .all()
+    )
+
+    classification_paths = (
+        db.query(JobSourceClassificationPath)
+        .options(joinedload(JobSourceClassificationPath.nodes))
+        .join(Job, Job.id == JobSourceClassificationPath.job_id)
+        .filter(Job.is_deleted.is_(False))
+        .order_by(
+            JobSourceClassificationPath.source_site,
+            JobSourceClassificationPath.source_order,
+        )
+        .all()
+    )
+    source_classifications: list[SourceClassificationOption] = []
+    seen_classification_ids: set[str] = set()
+    for path in classification_paths:
+        breadcrumb: list[str] = []
+        for node in path.nodes:
+            breadcrumb.append(node.label)
+            if node.source_classification_id in seen_classification_ids:
+                continue
+            seen_classification_ids.add(node.source_classification_id)
+            source_classifications.append(
+                SourceClassificationOption(
+                    id=node.source_classification_id,
+                    label=node.label,
+                    source=path.source_site,
+                    path=" / ".join(breadcrumb),
+                )
+            )
 
     # Get unique industries from companies
     industries = db.query(Company.industry).filter(
@@ -919,7 +1023,15 @@ async def get_filter_options(db: Session = Depends(get_db)):
         locations=raw_locations,
         regions=REGION_ORDER,
         location_hierarchy=_build_location_hierarchy(raw_locations),
-        employment_types=[et[0] for et in employment_types if et[0]],
+        employment_types=[
+            EmploymentTypeOption(
+                code=item.code,
+                label=item.label,
+                order=item.sort_order,
+            )
+            for item in employment_types
+        ],
+        source_classifications=source_classifications,
         industries=[ind[0] for ind in industries if ind[0]]
     )
 
@@ -936,6 +1048,7 @@ async def get_job(job_id: UUID, db: Session = Depends(get_db)):
             .joinedload(Skill.technology)
             .joinedload(SkillTechnology.category),
             joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
+            *_source_attribute_load_options(include_labels=True),
         )
         .filter(Job.id == job_id, Job.is_deleted.is_(False))
         .first()
@@ -945,18 +1058,22 @@ async def get_job(job_id: UUID, db: Session = Depends(get_db)):
     return job
 
 
-@router.post("", response_model=JobSchema)
-async def create_job(job: JobCreateSchema, db: Session = Depends(get_db)):
-    """Create a new job."""
-    existing = db.query(Job).filter(Job.job_id == job.job_id).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Job already exists")
-
-    db_job = Job(**job.dict())
-    db.add(db_job)
-    db.commit()
-    db.refresh(db_job)
-    return db_job
+@router.post("", response_model=JobSchema, deprecated=True)
+async def create_job(
+    _job: JobCreateSchema,
+    _db: Session = Depends(get_db),
+):
+    """Reject the retired collected-Job bypass; use source ingestion or manual."""
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "COLLECTED_JOB_CREATE_RETIRED",
+            "message": (
+                "Collected Jobs must be written through a source ingestion path; "
+                "use POST /api/v1/jobs/manual for manually entered Jobs."
+            ),
+        },
+    )
 
 
 @router.post("/manual", response_model=JobDetailSchema)

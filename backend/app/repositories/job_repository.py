@@ -17,6 +17,16 @@ from app.utils.source_identity import normalize_source_site
 
 logger = logging.getLogger(__name__)
 
+_LEGACY_SOURCE_ATTRIBUTE_FIELDS = frozenset(
+    {
+        "employment_type",
+        "source_classification_id",
+        "source_classification_name",
+        "source_subclassification_id",
+        "source_subclassification_name",
+    }
+)
+
 
 class JobRepository:
     """Repository for Job database operations."""
@@ -28,6 +38,14 @@ class JobRepository:
         skip_existing: bool = False,
         auto_commit: bool = True,
     ) -> tuple[Job, str]:
+        forbidden_fields = sorted(
+            _LEGACY_SOURCE_ATTRIBUTE_FIELDS.intersection(job_data)
+        )
+        if forbidden_fields:
+            raise ValueError(
+                "source-aware upsert cannot write legacy Source Job Attribute "
+                f"fields: {', '.join(forbidden_fields)}"
+            )
         source_site = normalize_source_site(job_data.get("source_site"))
         source_job_id = str(job_data.get("source_job_id") or "").strip()
         if not source_job_id:
@@ -42,7 +60,14 @@ class JobRepository:
             source_job_id=source_job_id,
         )
         if existing is None:
-            return self.create_job(db, normalized_data, auto_commit=auto_commit), "created"
+            return (
+                self._create_source_job(
+                    db,
+                    normalized_data,
+                    auto_commit=auto_commit,
+                ),
+                "created",
+            )
         if skip_existing:
             return existing, "skipped"
 
@@ -71,25 +96,8 @@ class JobRepository:
         skip_existing: bool = False,
         auto_commit: bool = True,
     ) -> tuple[Job, str]:
-        """
-        Create or update job (upsert pattern).
-
-        Args:
-            db: SQLAlchemy session
-            job_data: Job data dict
-            skip_existing: If True, skip existing jobs instead of updating
-
-        Returns:
-            (Job, action: str) - Job instance and action taken: "created", "updated", or "skipped"
-        """
-        existing = self.get_job_by_job_id(db, job_data["job_id"])
-
-        if existing:
-            if skip_existing:
-                return existing, "skipped"
-            return self.update_job(db, existing.id, job_data, auto_commit=auto_commit), "updated"
-        else:
-            return self.create_job(db, job_data, auto_commit=auto_commit), "created"
+        """Reject the retired generic writer; collected Jobs use source identity."""
+        raise ValueError("generic Job writes are retired; use upsert_source_job")
 
     def get_existing_job_ids(self, db: Session, job_ids: List[str]) -> set[str]:
         """
@@ -105,7 +113,7 @@ class JobRepository:
         try:
             results = db.query(Job.job_id).filter(
                 Job.job_id.in_(job_ids),
-                Job.is_deleted == False
+                Job.is_deleted.is_(False),
             ).all()
             return {row.job_id for row in results}
         except Exception as e:
@@ -126,7 +134,7 @@ class JobRepository:
         try:
             return (
                 db.query(Job)
-                .filter(Job.job_id == job_id, Job.is_deleted == False)
+                .filter(Job.job_id == job_id, Job.is_deleted.is_(False))
                 .first()
             )
         except Exception as e:
@@ -146,7 +154,7 @@ class JobRepository:
                 .filter(
                     Job.source_site == normalize_source_site(source_site),
                     Job.source_job_id == str(source_job_id).strip(),
-                    Job.is_deleted == False,
+                    Job.is_deleted.is_(False),
                 )
                 .first()
             )
@@ -178,7 +186,7 @@ class JobRepository:
                 .filter(
                     Job.source_site == normalized_source_site,
                     Job.source_job_id.in_(normalized_source_job_ids),
-                    Job.is_deleted == False,
+                    Job.is_deleted.is_(False),
                 )
                 .all()
             )
@@ -196,8 +204,14 @@ class JobRepository:
     def create_job(
         self, db: Session, job_data: Dict[str, Any], auto_commit: bool = True
     ) -> Job:
+        """Reject the retired generic writer; collected Jobs use source identity."""
+        raise ValueError("generic Job writes are retired; use upsert_source_job")
+
+    def _create_source_job(
+        self, db: Session, job_data: Dict[str, Any], auto_commit: bool = True
+    ) -> Job:
         """
-        Create a new job.
+        Create a Job after ``upsert_source_job`` validates source-owned fields.
 
         Args:
             db: SQLAlchemy session
@@ -217,10 +231,6 @@ class JobRepository:
                 company_id=job_data.get("company_id"),
                 title=job_data.get("title"),
                 description=job_data.get("description"),
-                source_classification_id=job_data.get("source_classification_id"),
-                source_classification_name=job_data.get("source_classification_name"),
-                source_subclassification_id=job_data.get("source_subclassification_id"),
-                source_subclassification_name=job_data.get("source_subclassification_name"),
                 experience_min_years=job_data.get("experience_min_years"),
                 experience_max_years=job_data.get("experience_max_years"),
                 salary_range=job_data.get("salary_range"),
@@ -228,7 +238,6 @@ class JobRepository:
                 salary_max=job_data.get("salary_max"),
                 salary_currency=job_data.get("salary_currency"),
                 location=job_data.get("location"),
-                employment_type=job_data.get("employment_type"),
                 ai_summary=job_data.get("ai_summary"),
                 posted_date=job_data.get("posted_date"),
                 raw_data=job_data.get("raw_data"),
@@ -276,6 +285,14 @@ class JobRepository:
         Returns:
             Updated Job instance
         """
+        forbidden_fields = sorted(
+            _LEGACY_SOURCE_ATTRIBUTE_FIELDS.intersection(job_data)
+        )
+        if forbidden_fields:
+            raise ValueError(
+                "generic Job update cannot write legacy Source Job Attribute "
+                f"fields: {', '.join(forbidden_fields)}"
+            )
         try:
             job = db.query(Job).filter(Job.id == job_id).first()
             if not job:

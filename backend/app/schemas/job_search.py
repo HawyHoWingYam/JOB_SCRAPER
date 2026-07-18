@@ -1,8 +1,22 @@
 from datetime import date
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Literal, Optional, List
 
+from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
+
 SourceSiteFilter = Literal["jobsdb", "ctgoodjobs", "offertoday"]
+EmploymentTypeCode = Literal[
+    "full_time",
+    "part_time",
+    "permanent",
+    "contract",
+    "temporary",
+    "internship",
+    "freelance",
+]
+_EMPLOYMENT_TYPE_CODE_BY_LABEL = {
+    label.casefold(): code for code, label, _sort_order in EMPLOYMENT_TYPE_SEEDS
+}
 
 
 class SearchClauseSchema(BaseModel):
@@ -16,6 +30,8 @@ class JobSearchFiltersSchema(BaseModel):
     region: Optional[str] = None
     district: Optional[str] = None
     employment_type: Optional[str] = None
+    source_classification_ids: Optional[List[str]] = None
+    employment_type_codes: Optional[List[EmploymentTypeCode]] = None
     industry: Optional[str] = None
     posted_date_from: Optional[date] = None
     posted_date_to: Optional[date] = None
@@ -55,6 +71,51 @@ class JobSearchFiltersSchema(BaseModel):
             normalized = value.strip().lower()
             return normalized or None
         return value
+
+    @field_validator("source_classification_ids", mode="before")
+    @classmethod
+    def _validate_source_classification_ids(cls, value):
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("source_classification_ids must be an array")
+        normalized: list[str] = []
+        for raw_value in value:
+            classification_id = str(raw_value or "").strip()
+            prefix, separator, token = classification_id.partition(":")
+            if (
+                separator != ":"
+                or prefix not in {"jobsdb", "ctgoodjobs", "offertoday"}
+                or not token
+                or not token[0].isalnum()
+                or any(
+                    not (character.isalnum() or character in {".", "_", "-"})
+                    for character in token
+                )
+            ):
+                raise ValueError(
+                    f"Invalid Source Classification identity: {classification_id}"
+                )
+            if classification_id not in normalized:
+                normalized.append(classification_id)
+        return normalized or None
+
+    @model_validator(mode="after")
+    def _translate_legacy_employment_type(self):
+        legacy_label = str(self.employment_type or "").strip()
+        if not legacy_label:
+            self.employment_type = None
+            return self
+        legacy_code = _EMPLOYMENT_TYPE_CODE_BY_LABEL.get(legacy_label.casefold())
+        if legacy_code is None:
+            raise ValueError(
+                "employment_type must be one recognized Employment Type label"
+            )
+        codes = list(self.employment_type_codes or [])
+        if legacy_code not in codes:
+            codes.append(legacy_code)
+        self.employment_type_codes = codes
+        return self
 
 
 class JobSearchLayerSchema(BaseModel):

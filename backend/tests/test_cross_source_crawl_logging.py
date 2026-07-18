@@ -718,6 +718,7 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
     caplog,
 ) -> None:
     runtime = _OneTargetRuntime(source_site="jobsdb")
+    projection_calls = []
 
     class FakeDetailScraper:
         async def fetch_job_detail(self, _source_job_id):
@@ -737,6 +738,9 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
 
         def _build_job_data(self, canonical, _company_id):
             return dict(canonical)
+
+        def project_source_attributes(self, _db, job, canonical):
+            projection_calls.append((job.id, dict(canonical)))
 
     class FakeCompanyRepository:
         def upsert_company(self, *_args, **_kwargs):
@@ -775,6 +779,18 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
 
     messages = _messages(caplog)
     assert result["completed"] == 1
+    assert projection_calls == [
+        (
+            "published-1",
+            {
+                "raw_data": {
+                    "title": "Engineer",
+                    "description": "full-job-description-secret",
+                    "cookie": "cookie-secret",
+                }
+            },
+        )
+    ]
     assert messages.count("SCRAPE_DETAIL_ITEM_START") == 1
     assert messages.count("SCRAPE_DETAIL_ITEM_OK") == 1
     assert messages.count("SCRAPE_DETAIL_DONE") == 1

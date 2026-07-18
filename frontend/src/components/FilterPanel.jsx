@@ -27,6 +27,25 @@ function selectedSubcategoryLabel(filters, filterOptions) {
     return match?.name || selectedId;
 }
 
+function normalizeEmploymentTypeOption(option) {
+    if (typeof option === 'string') {
+        return { key: `legacy:${option}`, label: option, value: option };
+    }
+    if (
+        option
+        && typeof option === 'object'
+        && typeof option.code === 'string'
+        && typeof option.label === 'string'
+    ) {
+        return {
+            key: `code:${option.code}`,
+            label: option.label,
+            value: option.label,
+        };
+    }
+    return null;
+}
+
 function FilterPanel({
     filters,
     onFilterChange,
@@ -44,6 +63,9 @@ function FilterPanel({
             [field]: value,
         });
     };
+    const employmentTypeOptions = (filterOptions.employment_types || [])
+        .map(normalizeEmploymentTypeOption)
+        .filter(Boolean);
 
     const activeFilters = [
         filters.source_site && `Source: ${formatSourceLabel(filters.source_site)}`,
@@ -133,8 +155,8 @@ function FilterPanel({
                             disabled={isLoading}
                         >
                             <option value="">All Job Types</option>
-                            {filterOptions.employment_types.map((type) => (
-                                <option key={type} value={type}>{type}</option>
+                            {employmentTypeOptions.map((option) => (
+                                <option key={option.key} value={option.value}>{option.label}</option>
                             ))}
                         </select>
                     </label>

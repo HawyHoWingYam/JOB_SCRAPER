@@ -1,0 +1,143 @@
+{
+  "job_id": "fixture-job-1",
+  "company_id": "30000000-0000-0000-0000-000000000001",
+  "title": "Platform Engineer",
+  "description": "Build platform services.",
+  "subcategory_id": null,
+  "source_classification_id": null,
+  "source_classification_name": null,
+  "source_subclassification_id": null,
+  "source_subclassification_name": null,
+  "ai_summary": null,
+  "salary_range": null,
+  "location": "Hong Kong",
+  "employment_type": null,
+  "posted_date": "2026-07-18T08:00:00Z",
+  "id": "40000000-0000-0000-0000-000000000001",
+  "created_at": "2026-07-18T08:05:00Z",
+  "updated_at": "2026-07-18T08:05:00Z",
+  "job_taxonomy": null,
+  "source_classification_paths": [
+    {
+      "id": "50000000-0000-0000-0000-000000000001",
+      "source_site": "jobsdb",
+      "source_order": 0,
+      "nodes": [
+        {
+          "source_position": 0,
+          "native_depth": 0,
+          "source_classification_id": "jobsdb:6281",
+          "native_id": "6281",
+          "label": "Information Technology"
+        },
+        {
+          "source_position": 1,
+          "native_depth": 1,
+          "source_classification_id": "jobsdb:6287",
+          "native_id": "6287",
+          "label": "Developers and Programmers"
+        }
+      ],
+      "is_primary": false,
+      "primary_basis": null,
+      "catalog_revision": null,
+      "provenance_limited": true,
+      "provenance": {
+        "captured_at": "2026-07-18T08:00:00+00:00",
+        "evidence_refs": [
+          {
+            "kind": "listing-payload",
+            "source_job_id": "fixture-job-1"
+          }
+        ],
+        "mapping_id": null,
+        "method": "jobsdb-listing-payload",
+        "model_name": null,
+        "model_provider": null,
+        "model_version": null,
+        "source_revision": null,
+        "source_site": "jobsdb"
+      }
+    }
+  ],
+  "employment_types": [
+    {
+      "code": "full_time",
+      "label": "Full-time",
+      "sort_order": 1
+    },
+    {
+      "code": "permanent",
+      "label": "Permanent",
+      "sort_order": 3
+    }
+  ],
+  "original_job_url": "https://hk.jobsdb.com/job/fixture-job-1",
+  "company_name": "Fixture Company",
+  "company_industry": null,
+  "company_ai_description": null,
+  "ai_enriched_at": null,
+  "experience_min_years": null,
+  "experience_max_years": null,
+  "experience_level": null,
+  "experience_summary": null,
+  "experience_evidence": null,
+  "expiry_date": null,
+  "is_expired": false,
+  "skills": [],
+  "provisional_skills": [],
+  "source_employment_labels": [
+    {
+      "id": "60000000-0000-0000-0000-000000000001",
+      "source_site": "jobsdb",
+      "source_order": 0,
+      "raw_code": null,
+      "raw_label": "Full-time",
+      "normalized_lookup_key": "full-time",
+      "mapped_type_code": "full_time",
+      "mapping_id": "jobsdb-label-v1:full-time",
+      "provenance": {
+        "captured_at": "2026-07-18T08:00:00+00:00",
+        "evidence_refs": [
+          {
+            "kind": "listing-payload",
+            "source_job_id": "fixture-job-1"
+          }
+        ],
+        "mapping_id": null,
+        "method": "jobsdb-listing-payload",
+        "model_name": null,
+        "model_provider": null,
+        "model_version": null,
+        "source_revision": null,
+        "source_site": "jobsdb"
+      }
+    },
+    {
+      "id": "60000000-0000-0000-0000-000000000002",
+      "source_site": "jobsdb",
+      "source_order": 1,
+      "raw_code": null,
+      "raw_label": "Permanent",
+      "normalized_lookup_key": "permanent",
+      "mapped_type_code": "permanent",
+      "mapping_id": "jobsdb-label-v1:permanent",
+      "provenance": {
+        "captured_at": "2026-07-18T08:00:00+00:00",
+        "evidence_refs": [
+          {
+            "kind": "listing-payload",
+            "source_job_id": "fixture-job-1"
+          }
+        ],
+        "mapping_id": null,
+        "method": "jobsdb-listing-payload",
+        "model_name": null,
+        "model_provider": null,
+        "model_version": null,
+        "source_revision": null,
+        "source_site": "jobsdb"
+      }
+    }
+  ]
+}

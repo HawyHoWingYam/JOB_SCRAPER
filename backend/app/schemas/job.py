@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 from uuid import UUID
 
@@ -52,6 +52,60 @@ class JobTaxonomySchema(BaseModel):
     path: str
 
 
+class SourceCatalogRevisionSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    source_site: str
+    revision_id: UUID
+    fingerprint: str
+
+
+class SourceClassificationNodeSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    source_position: int
+    native_depth: int
+    source_classification_id: str
+    native_id: str
+    label: str
+
+
+class SourceClassificationPathSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    source_site: str
+    source_order: int
+    nodes: list[SourceClassificationNodeSchema] = Field(default_factory=list)
+    is_primary: bool
+    primary_basis: Optional[str] = None
+    catalog_revision: Optional[SourceCatalogRevisionSchema] = None
+    provenance_limited: bool
+    provenance: dict[str, Any]
+
+
+class EmploymentTypeSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    code: str
+    label: str
+    sort_order: int
+
+
+class SourceEmploymentLabelSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    source_site: str
+    source_order: int
+    raw_code: Optional[str] = None
+    raw_label: Optional[str] = None
+    normalized_lookup_key: Optional[str] = None
+    mapped_type_code: Optional[str] = None
+    mapping_id: Optional[str] = None
+    provenance: dict[str, Any]
+
+
 class JobSchema(JobCreateSchema):
     """Schema for job response."""
 
@@ -61,6 +115,10 @@ class JobSchema(JobCreateSchema):
     created_at: datetime
     updated_at: datetime
     job_taxonomy: Optional[JobTaxonomySchema] = None
+    source_classification_paths: list[SourceClassificationPathSchema] = Field(
+        default_factory=list
+    )
+    employment_types: list[EmploymentTypeSchema] = Field(default_factory=list)
 
 
 class JobDetailSchema(JobSchema):
@@ -80,6 +138,9 @@ class JobDetailSchema(JobSchema):
     is_expired: Optional[bool] = None
     skills: list[str] = Field(default_factory=list)
     provisional_skills: list[str] = Field(default_factory=list)
+    source_employment_labels: list[SourceEmploymentLabelSchema] = Field(
+        default_factory=list
+    )
 
     @field_serializer("ai_enriched_at")
     def serialize_ai_enriched_at(self, value: Optional[datetime]) -> Optional[str]:
