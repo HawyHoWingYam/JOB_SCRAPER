@@ -42,6 +42,35 @@ from scripts import jobsdb_standalone_crawl as jobsdb_crawl
 from scripts import offertoday_standalone_crawl as offertoday_crawl
 
 
+def _published_jobsdb_plan(*_args, **_kwargs):
+    return SimpleNamespace(
+        entries=(
+            SimpleNamespace(
+                node=SimpleNamespace(classification_id="jobsdb:1200"),
+                target=SimpleNamespace(payload={"native_id": 1200}),
+            ),
+        )
+    )
+
+
+def _published_offertoday_plan(*_args, **_kwargs):
+    return SimpleNamespace(
+        entries=(
+            SimpleNamespace(
+                node=SimpleNamespace(classification_id="offertoday:118000"),
+                target=SimpleNamespace(
+                    payload={
+                        "category_code": 118000,
+                        "keyword": "",
+                        "endpoint": "browse",
+                        "rcd_type": 7,
+                    }
+                ),
+            ),
+        )
+    )
+
+
 class _RedirectingOfferTodayPage:
     def __init__(self, final_url: str) -> None:
         self.url = "https://www.offertoday.com/hk/search"
@@ -322,7 +351,14 @@ async def test_offertoday_listing_ip_block_stops_without_retry_and_preserves_url
 
 
 @pytest.mark.asyncio
-async def test_offertoday_listing_resumes_same_task_after_preflight_ip_stop() -> None:
+async def test_offertoday_listing_resumes_same_task_after_preflight_ip_stop(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        offertoday_crawl,
+        "load_published_query_plan",
+        _published_offertoday_plan,
+    )
     blocked_url = (
         "https://www.offertoday.com/web/passport/cm/verify.html?"
         "code=-1000035&gateway=otd"
@@ -723,6 +759,9 @@ async def test_jobsdb_standalone_resume_replays_committed_pages_idempotently(
             return {"job_ids": ["job-1", "job-2", "job-3"]}
 
     monkeypatch.setattr(jobsdb_crawl, "CategoryListScraper", FakeCategoryScraper)
+    monkeypatch.setattr(
+        jobsdb_crawl, "load_published_query_plan", _published_jobsdb_plan
+    )
     runtime = _IdempotentListingRuntime()
     args = SimpleNamespace(
         crawl_job_id="jobsdb-resume-task",

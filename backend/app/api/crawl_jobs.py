@@ -7,7 +7,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
 
 from app.crawl_phases import resolve_crawl_phase
 from app.database import get_db
@@ -22,7 +21,7 @@ from app.schemas.crawl_job import (
     CrawlJobSchema,
     CrawlTaskListResponse,
 )
-from app.services.crawl_request_validation import normalize_source_site, validate_category_ids_for_source_site
+from app.services.crawl_request_validation import normalize_source_site, validate_published_category_ids
 from app.services.crawl_job_dispatch_service import (
     ActiveManualDetailCrawlConflict,
     CrawlJobDispatchService,
@@ -32,7 +31,7 @@ from app.services.crawl_task_snapshot_service import (
     build_crawl_task_snapshot,
 )
 from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
-from app.services.source_category_registry import get_source_category_registry
+from app.source_catalog.errors import SourceCatalogError
 from app.services.source_catalog import is_supported_source_site, resolve_default_max_pages
 from app.utils.time import utc_now
 
@@ -75,45 +74,24 @@ def _raise_action_http_error(exc: Exception) -> None:
     raise exc
 
 
-async def _validate_ctgoodjobs_category_ids_exist(category_ids: list[str] | None) -> None:
-    try:
-        registry = get_source_category_registry()
-        categories = await run_in_threadpool(registry.list_categories, source_site="ctgoodjobs")
-    except Exception as exc:
-        logger.error("CTgoodjobs registry unavailable during crawl job validation: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="CTgoodjobs category registry unavailable",
-        ) from exc
-
-    supported_ids = {str(category["id"]) for category in categories}
-    unknown_ids = sorted(
-        {
-            str(category_id)
-            for category_id in (category_ids or [])
-            if str(category_id) not in supported_ids
-        }
-    )
-    if unknown_ids:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unknown CTgoodjobs category_ids: {', '.join(unknown_ids)}",
-        )
-
-
 async def _validate_effective_category_ids(
     source_site: str | None,
     category_ids: list[int | str] | None,
+    db: Session,
 ) -> None:
     try:
-        validate_category_ids_for_source_site(source_site, category_ids)
+        validate_published_category_ids(db, source_site, category_ids)
+    except SourceCatalogError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+                if exc.code in {"CATALOG_NOT_PUBLISHED", "SOURCE_CLASSIFICATION_UNKNOWN"}
+                else status.HTTP_422_UNPROCESSABLE_ENTITY
+            ),
+            detail=exc.to_detail(),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-
-    if normalize_source_site(source_site) == "offertoday":
-        pass
-    elif normalize_source_site(source_site) == "ctgoodjobs":
-        await _validate_ctgoodjobs_category_ids_exist(category_ids)
 
 
 def _build_crawl_request_created_log_message(
@@ -168,6 +146,7 @@ async def create_crawl_job(
         await _validate_effective_category_ids(
             effective_source_site,
             getattr(schedule, "category_ids", None),
+            db,
         )
         try:
             dispatch_result = dispatch_service.dispatch_schedule_crawl_job(
@@ -215,7 +194,9 @@ async def create_crawl_job(
         )
 
     if request.category_ids:
-        await _validate_effective_category_ids(effective_source_site, request.category_ids)
+        await _validate_effective_category_ids(
+            effective_source_site, request.category_ids, db
+        )
 
     try:
         dispatch_result = dispatch_service.dispatch_manual_crawl_job(

@@ -34,6 +34,35 @@ from scripts import jobsdb_standalone_crawl as jobsdb_crawl
 from scripts import offertoday_standalone_crawl as offertoday_crawl
 
 
+def _published_jobsdb_plan(*_args, **_kwargs):
+    return SimpleNamespace(
+        entries=(
+            SimpleNamespace(
+                node=SimpleNamespace(classification_id="jobsdb:1200"),
+                target=SimpleNamespace(payload={"native_id": 1200}),
+            ),
+        )
+    )
+
+
+def _published_offertoday_plan(*_args, **_kwargs):
+    return SimpleNamespace(
+        entries=(
+            SimpleNamespace(
+                node=SimpleNamespace(classification_id="offertoday:118000"),
+                target=SimpleNamespace(
+                    payload={
+                        "category_code": 118000,
+                        "keyword": "",
+                        "endpoint": "browse",
+                        "rcd_type": 7,
+                    }
+                ),
+            ),
+        )
+    )
+
+
 class _EmptyTargets:
     selected_rows = 0
     skipped_existing_rows = 0
@@ -235,6 +264,9 @@ async def test_jobsdb_listing_logs_page_stage_and_terminal_summary(
             return {"job_ids": ["jobsdb-secret-listing-id"]}
 
     monkeypatch.setattr(jobsdb_crawl, "CategoryListScraper", FakeCategoryScraper)
+    monkeypatch.setattr(
+        jobsdb_crawl, "load_published_query_plan", _published_jobsdb_plan
+    )
     args = SimpleNamespace(
         crawl_job_id="jobsdb-listing-task",
         crawl_mode="headless",
@@ -326,8 +358,14 @@ async def test_ctgoodjobs_listing_logs_page_stage_and_terminal_summary(
 
 @pytest.mark.asyncio
 async def test_offertoday_empty_listing_logs_start_stage_and_terminal_summary(
+    monkeypatch,
     caplog,
 ) -> None:
+    monkeypatch.setattr(
+        offertoday_crawl,
+        "load_published_query_plan",
+        _published_offertoday_plan,
+    )
     class HealthyBrowser:
         async def require_healthy_session(self) -> None:
             return None
@@ -430,8 +468,14 @@ async def test_offertoday_empty_listing_logs_start_stage_and_terminal_summary(
 
 @pytest.mark.asyncio
 async def test_offertoday_listing_ip_block_logs_manual_and_terminal_summary(
+    monkeypatch,
     caplog,
 ) -> None:
+    monkeypatch.setattr(
+        offertoday_crawl,
+        "load_published_query_plan",
+        _published_offertoday_plan,
+    )
     blocked_url = (
         "https://www.offertoday.com/web/passport/cm/verify.html?"
         "code=-1000035&gateway=otd"

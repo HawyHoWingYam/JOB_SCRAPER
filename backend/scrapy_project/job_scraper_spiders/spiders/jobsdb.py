@@ -14,6 +14,9 @@ from typing import Any, AsyncIterable
 import scrapy
 from scrapy.http import Response
 
+from app.source_catalog.runtime import load_published_query_plan
+from app.sources.jobsdb.request import build_jobsdb_search_url
+
 from job_scraper_spiders.items import CrawlProgressItem, JobDetailItem, ListingItem
 from job_scraper_spiders.parsers.jobsdb_parser import (
     parse_detail_html,
@@ -50,7 +53,7 @@ class JobsdbSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
 
         cats = str(kwargs.get("category_ids", "") or "")
-        self._category_ids = [c.strip() for c in cats.split(",") if c.strip().isdigit()]
+        self._category_ids = [c.strip() for c in cats.split(",") if c.strip()]
         mp = str(kwargs.get("max_pages", "10") or "10")
         try:
             self._max_pages = int(mp)
@@ -65,10 +68,17 @@ class JobsdbSpider(scrapy.Spider):
 
     def start_requests(self) -> AsyncIterable[scrapy.Request]:
         """Start with listing API requests for each category."""
-        for cat_id in self._category_ids:
+        plan = load_published_query_plan("jobsdb", self._category_ids)
+        for entry in plan.entries:
+            cat_id = entry.node.classification_id
+            native_id = int(entry.target.payload["native_id"])
             for page in range(1, self._max_pages + 1):
                 yield scrapy.Request(
-                    url=JOBSDB_API_URL,
+                    url=build_jobsdb_search_url(
+                        native_id,
+                        page=page,
+                        page_size=JOBSDB_PAGE_SIZE,
+                    ),
                     method="GET",
                     headers=_DEFAULT_HEADERS,
                     meta={"category_id": cat_id, "page": page},

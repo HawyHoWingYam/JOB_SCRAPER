@@ -3,20 +3,16 @@ Schedule API Routes - CRUD endpoints for scheduled scraping tasks.
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
-from typing import List
 from uuid import UUID
 
-logger = logging.getLogger(__name__)
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
 
 from app.api.crawl_jobs import _build_crawl_request_created_log_message
 from app.crawl_phases import resolve_crawl_phase
 from app.database import get_db
 from app.repositories.schedule_repository import ScheduleRepository
 from app.schemas.crawl_job import CrawlJobSchema
-from app.services.source_category_registry import get_source_category_registry
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.schemas.schedule import (
     ScheduleSchema,
@@ -29,54 +25,38 @@ from app.schemas.schedule import (
 )
 from app.services.crawl_request_validation import (
     normalize_source_site,
-    validate_category_ids_for_source_site,
+    validate_published_category_ids,
 )
+from app.source_catalog.errors import SourceCatalogError
 from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
 from app.services.source_catalog import is_supported_source_site, resolve_default_max_pages
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 repository = ScheduleRepository()
 crawl_job_dispatch_service = CrawlJobDispatchService()
 
 
-async def _validate_ctgoodjobs_category_ids_exist(category_ids: list[str] | None) -> None:
-    """Validate CTgoodjobs category ids against the current registry."""
+async def _validate_effective_category_ids(
+    source_site: str | None,
+    category_ids: list[int | str] | None,
+    db: Session,
+) -> None:
+    """Validate source-aware category ids against the published revision."""
     try:
-        registry = get_source_category_registry()
-        categories = await run_in_threadpool(registry.list_categories, source_site="ctgoodjobs")
-    except Exception as exc:
-        logger.error("CTgoodjobs registry unavailable during category validation: %s", exc)
+        validate_published_category_ids(db, source_site, category_ids)
+    except SourceCatalogError as exc:
         raise HTTPException(
-            status_code=503,
-            detail="CTgoodjobs category registry unavailable",
+            status_code=(
+                404
+                if exc.code in {"CATALOG_NOT_PUBLISHED", "SOURCE_CLASSIFICATION_UNKNOWN"}
+                else 422
+            ),
+            detail=exc.to_detail(),
         ) from exc
-
-    supported_ids = {str(category["id"]) for category in categories}
-    unknown_ids = sorted(
-        {
-            str(category_id)
-            for category_id in (category_ids or [])
-            if str(category_id) not in supported_ids
-        }
-    )
-    if unknown_ids:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unknown CTgoodjobs category_ids: {', '.join(unknown_ids)}",
-        )
-
-
-async def _validate_effective_category_ids(source_site: str | None, category_ids: list[int | str] | None) -> None:
-    """Validate source-aware category ids and registry-backed CTgoodjobs existence."""
-    try:
-        validate_category_ids_for_source_site(source_site, category_ids)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    if normalize_source_site(source_site) == "offertoday":
-        pass
-    elif normalize_source_site(source_site) == "ctgoodjobs":
-        await _validate_ctgoodjobs_category_ids_exist(category_ids)
 
 
 @router.get("", response_model=ScheduleListResponse)
@@ -109,6 +89,11 @@ async def run_immediate_scrape(
         raise HTTPException(
             status_code=400,
             detail="Unsupported source_site for execution",
+        )
+
+    if request.category_ids:
+        await _validate_effective_category_ids(
+            effective_source_site, request.category_ids, db
         )
 
     try:
@@ -150,7 +135,7 @@ async def create_schedule(
     db: Session = Depends(get_db)
 ):
     """Create a new schedule."""
-    await _validate_effective_category_ids(data.source_site, data.category_ids)
+    await _validate_effective_category_ids(data.source_site, data.category_ids, db)
     return repository.create_schedule(db, data.model_dump())
 
 
@@ -177,7 +162,9 @@ async def update_schedule(
     else:
         effective_category_ids = getattr(current_schedule, "category_ids", None)
 
-    await _validate_effective_category_ids(effective_source_site, effective_category_ids)
+    await _validate_effective_category_ids(
+        effective_source_site, effective_category_ids, db
+    )
 
     schedule = repository.update_schedule(db, schedule_id, update_data)
     if schedule is None:
@@ -215,6 +202,7 @@ async def toggle_schedule(
             await _validate_effective_category_ids(
                 getattr(current_schedule, "source_site", "jobsdb"),
                 getattr(current_schedule, "category_ids", None),
+                db,
             )
         except HTTPException as exc:
             if exc.status_code != 422:
@@ -263,6 +251,7 @@ async def run_schedule_now(
     await _validate_effective_category_ids(
         effective_source_site,
         getattr(schedule, "category_ids", None),
+        db,
     )
 
     try:

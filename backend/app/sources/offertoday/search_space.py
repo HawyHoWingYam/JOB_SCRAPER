@@ -224,6 +224,7 @@ def expand_offertoday_category_ids(
     category_ids: Sequence[int] | None,
     *,
     default_to_it: bool = True,
+    expand_roots: bool = True,
 ) -> list[int]:
     """Expand the category search scope to the full IT family when requested."""
     input_ids = _normalize_category_ids(category_ids)
@@ -234,7 +235,9 @@ def expand_offertoday_category_ids(
     seen: set[int] = set()
     for category_id in input_ids:
         category_group = (
-            OFFERTODAY_IT_CATEGORY_CODES if category_id == 118000 else (category_id,)
+            OFFERTODAY_IT_CATEGORY_CODES
+            if expand_roots and category_id == 118000
+            else (category_id,)
         )
         for resolved_category_id in category_group:
             if resolved_category_id in seen:
@@ -286,6 +289,7 @@ def build_offertoday_listing_conditions(
     endpoint: Literal["search", "browse"] = "search",
     category_endpoint: Literal["search", "browse"] | None = None,
     rcd_type: int | None = 7,
+    expand_category_roots: bool = True,
 ) -> list[OfferTodayListingCondition]:
     """Build the ordered, page-independent OfferToday listing conditions."""
     normalized_category_ids = _normalize_category_ids(category_ids)
@@ -318,6 +322,7 @@ def build_offertoday_listing_conditions(
         for category_id in expand_offertoday_category_ids(
             normalized_category_ids,
             default_to_it=default_to_it,
+            expand_roots=expand_category_roots,
         )
     ]
 

@@ -69,7 +69,10 @@ def validate_category_ids_for_source_site(
     normalized_source_site = normalize_source_site(source_site)
     if normalized_source_site == "offertoday":
         if category_ids:
-            if any(type(category_id) is not int for category_id in category_ids):
+            if any(
+                not isinstance(category_id, int) or isinstance(category_id, bool)
+                for category_id in category_ids
+            ):
                 raise ValueError("OfferToday category_ids must be integers (job function codes)")
         return
     if normalized_source_site == "ctgoodjobs" and not category_ids:
@@ -77,7 +80,10 @@ def validate_category_ids_for_source_site(
     if not category_ids:
         return
     if normalized_source_site == "jobsdb":
-        if any(type(category_id) is not int for category_id in category_ids):
+        if any(
+            not isinstance(category_id, int) or isinstance(category_id, bool)
+            for category_id in category_ids
+        ):
             raise ValueError("JobsDB category_ids must be integers")
     if normalized_source_site == "ctgoodjobs":
         if any(
@@ -85,3 +91,20 @@ def validate_category_ids_for_source_site(
             for category_id in category_ids
         ):
             raise ValueError("CTGoodJobs category_ids must be strings with the ctgoodjobs: prefix")
+
+
+def validate_published_category_ids(
+    db,
+    source_site: str | None,
+    category_ids: Sequence[CategoryId] | None,
+) -> None:
+    """Validate primitive compatibility IDs against the one active revision."""
+
+    validate_category_ids_for_source_site(source_site, category_ids)
+    if not category_ids:
+        return
+    from app.services.source_catalog_service import SourceCatalogService
+
+    SourceCatalogService(db).validate_classifications(
+        normalize_source_site(source_site), category_ids
+    )

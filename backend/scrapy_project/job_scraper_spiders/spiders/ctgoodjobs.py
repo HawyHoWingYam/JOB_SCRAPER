@@ -15,8 +15,9 @@ from scrapy.http import Response
 
 from app.scraper.ctgoodjobs.category_registry import (
     CTGOODJOBS_BASE_URL,
-    get_static_ctgoodjobs_categories,
 )
+from app.scraper.ctgoodjobs.list_scraper import category_page_url
+from app.source_catalog.runtime import load_published_query_plan
 from job_scraper_spiders.downloaders.ctgoodjobs_proxy_middleware import (  # noqa: F401 — register middleware
     CtgoodjobsProxyMiddleware,
 )
@@ -41,6 +42,14 @@ class CtgoodjobsSpider(scrapy.Spider):
 
     name = "ctgoodjobs"
     allowed_domains = ["ctgoodjobs.hk", "jobs.ctgoodjobs.hk"]
+    custom_settings = {
+        "DOWNLOAD_HANDLERS": {
+            "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+            "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+        },
+        "TWISTED_REACTOR": "twisted.internet.asyncioreactor.AsyncioSelectorReactor",
+        "PLAYWRIGHT_LAUNCH_OPTIONS": {"headless": False},
+    }
 
     # Spider arguments
     category_ids: str = ""  # comma-separated source_classification_ids
@@ -64,26 +73,18 @@ class CtgoodjobsSpider(scrapy.Spider):
         self._detail_done: int = 0
         self._detail_total: int = 0
 
-        # Build category map for metadata
-        self._cat_map: dict[str, dict[str, str]] = {}
-        for cat in get_static_ctgoodjobs_categories():
-            self._cat_map[cat.source_classification_id] = {
-                "name": cat.name,
-                "slug": cat.slug,
-            }
-
     def start_requests(self) -> AsyncIterable[scrapy.Request]:
         """Start with category listing page requests."""
-        for cat_id in self._category_ids:
-            cat_info = self._cat_map.get(cat_id, {})
-            cat_name = cat_info.get("name", cat_id)
-            slug = cat_info.get("slug", cat_id)
+        plan = load_published_query_plan("ctgoodjobs", self._category_ids)
+        for entry in plan.entries:
+            cat_id = entry.node.classification_id
+            cat_name = entry.node.native_label
+            slug = str(entry.node.source_metadata.get("slug") or "")
+            url_path = str(entry.target.payload["url_path"])
+            base_url = f"{CTGOODJOBS_BASE_URL}{url_path}"
 
             for page in range(1, self._max_pages + 1):
-                if page == 1:
-                    url = f"{CTGOODJOBS_BASE_URL}/jobs/{slug}"
-                else:
-                    url = f"{CTGOODJOBS_BASE_URL}/jobs/{slug}?page={page}"
+                url = category_page_url(base_url, page=page)
 
                 yield scrapy.Request(
                     url=url,
@@ -95,6 +96,11 @@ class CtgoodjobsSpider(scrapy.Spider):
                         "slug": slug,
                         "page": page,
                         "url": url,
+                    },
+                    meta={
+                        "playwright": True,
+                        "source_catalog_revision_id": str(plan.revision_id),
+                        "source_catalog_fingerprint": plan.revision_fingerprint,
                     },
                     dont_filter=True,
                 )

@@ -18,6 +18,7 @@ from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.categories import JOBSDB_CATEGORIES, get_category_by_id, get_category_name
 from app.scraper.log_events import build_scrape_log_event
 from app.scraper.manual_action import build_session_recovery_manual_action
+from app.sources.jobsdb.request import build_jobsdb_search_params
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -50,15 +51,11 @@ class CategoryListScraper:
         client: Optional[httpx.AsyncClient] = None
     ) -> Dict[str, Any]:
         """Fetch a single page of job listings for a category."""
-        params = {
-            "siteKey": "HK-Main",
-            "sourcesystem": "houston",
-            "classification": classification_id,
-            "pageSize": self.PAGE_SIZE,
-            "page": page,
-            "locale": "en-HK",
-            "sortmode": "ListedDate",
-        }
+        params = build_jobsdb_search_params(
+            classification_id,
+            page=page,
+            page_size=self.PAGE_SIZE,
+        )
 
         should_close = client is None
         if client is None:

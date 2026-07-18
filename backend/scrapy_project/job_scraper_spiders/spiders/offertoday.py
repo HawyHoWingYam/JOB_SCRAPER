@@ -17,6 +17,7 @@ from typing import Any, Iterable
 import scrapy
 from scrapy.http import Response
 
+from app.source_catalog.runtime import load_published_query_plan
 from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, OFFERTODAY_LISTING_BROWSE_URL, build_offertoday_listing_payload
 from app.sources.offertoday.search_space import build_offertoday_listing_queries
 from job_scraper_spiders.items import CrawlProgressItem, JobDetailItem, ListingItem
@@ -59,11 +60,24 @@ class OfferTodaySpider(scrapy.Spider):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._category_ids: list[int] = []
+        self._category_ids: list[int | str] = []
 
         cats = str(kwargs.get("category_ids", "") or "")
         if cats:
-            self._category_ids = [int(c.strip()) for c in cats.split(",") if c.strip().isdigit()]
+            for raw_category_id in cats.split(","):
+                category_id = raw_category_id.strip()
+                if not category_id:
+                    continue
+                if category_id.isdigit():
+                    self._category_ids.append(int(category_id))
+                    continue
+                prefix, separator, native_id = category_id.partition(":")
+                if separator and prefix == "offertoday" and native_id.isdigit():
+                    self._category_ids.append(category_id)
+                    continue
+                raise ValueError(
+                    f"Invalid OfferToday Source Classification ID: {category_id}"
+                )
 
         self._keywords = str(kwargs.get("keywords", "") or "")
 
@@ -91,10 +105,37 @@ class OfferTodaySpider(scrapy.Spider):
         self._detail_phase_started = False
 
     def _build_listing_tasks(self) -> list[dict[str, Any]]:
+        category_ids = self._category_ids
+        if category_ids and self._keywords.strip():
+            plan = load_published_query_plan("offertoday", category_ids)
+            validated_native_ids = [
+                int(entry.target.payload["category_code"]) for entry in plan.entries
+            ]
+            return build_offertoday_listing_queries(
+                validated_native_ids,
+                keywords=self._keywords,
+                max_pages_per_query=self._max_pages_val,
+                default_to_it=False,
+            )
+        if category_ids:
+            plan = load_published_query_plan("offertoday", category_ids)
+            return [
+                {
+                    "search_family": "catalog_category",
+                    "category_id": int(entry.target.payload["category_code"]),
+                    "keyword": str(entry.target.payload["keyword"]),
+                    "endpoint": str(entry.target.payload["endpoint"]),
+                    "rcd_type": int(entry.target.payload["rcd_type"]),
+                    "page": page,
+                }
+                for entry in plan.entries
+                for page in range(1, self._max_pages_val + 1)
+            ]
         return build_offertoday_listing_queries(
-            self._category_ids,
+            category_ids,
             keywords=self._keywords or None,
             max_pages_per_query=self._max_pages_val,
+            default_to_it=not bool(category_ids),
         )
 
     def start_requests(self) -> Iterable[scrapy.Request]:
@@ -140,6 +181,7 @@ class OfferTodaySpider(scrapy.Spider):
             category_id=task["category_id"],
             keyword=task["keyword"],
             page=task["page"],
+            rcd_type=task.get("rcd_type", 7),
         )
         # Use browse endpoint for category-only queries (no keyword) per task hint
         listing_url = (
@@ -154,12 +196,29 @@ class OfferTodaySpider(scrapy.Spider):
             body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             callback=self._parse_listing_response,
             errback=self._on_listing_failed,
-            cb_kwargs=task,
+            cb_kwargs={
+                "category_id": task["category_id"],
+                "keyword": task["keyword"],
+                "page": task["page"],
+                "search_family": task["search_family"],
+            },
             dont_filter=True,
         )
 
-    def _build_listing_payload(self, *, category_id: int, keyword: str, page: int) -> dict[str, Any]:
-        return build_offertoday_listing_payload(category_id=category_id, keyword=keyword, page=page)
+    def _build_listing_payload(
+        self,
+        *,
+        category_id: int,
+        keyword: str,
+        page: int,
+        rcd_type: int | None = 7,
+    ) -> dict[str, Any]:
+        return build_offertoday_listing_payload(
+            category_id=category_id,
+            keyword=keyword,
+            page=page,
+            rcd_type=rcd_type,
+        )
 
     def _parse_listing_response(
         self,

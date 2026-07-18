@@ -3,12 +3,47 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.config import settings
 from app.database import SessionLocal
 from app.models.app_runtime_settings import AppRuntimeSettings
 from app.services.headed_crawl_runtime import get_headed_crawl_worker_status
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.services.source_catalog import build_source_catalog
+from app.repositories.source_catalog_repository import SourceCatalogRepository
+
+
+def _source_catalog_health() -> dict[str, dict[str, Any]]:
+    db = SessionLocal()
+    repository = SourceCatalogRepository()
+    try:
+        health: dict[str, dict[str, Any]] = {}
+        for source_site in build_source_catalog():
+            revision = repository.get_active_revision(db, source_site=source_site)
+            health[source_site] = {
+                "published": revision is not None,
+                "revision_id": str(revision.id) if revision is not None else None,
+                "sequence": revision.sequence if revision is not None else None,
+                "fingerprint": (
+                    revision.fingerprint[:12] if revision is not None else None
+                ),
+            }
+        return health
+    except SQLAlchemyError as exc:
+        return {
+            source_site: {
+                "published": False,
+                "revision_id": None,
+                "sequence": None,
+                "fingerprint": None,
+                "reason": "catalog_health_unavailable",
+                "error_type": type(exc).__name__,
+            }
+            for source_site in build_source_catalog()
+        }
+    finally:
+        db.close()
 
 
 def get_profile_runtime_metadata(scope: str) -> Any:
@@ -97,6 +132,7 @@ def _host_manual_action_helper_capability() -> dict[str, Any]:
 
 
 def _source_capabilities() -> dict[str, dict[str, Any]]:
+    catalog_health = _source_catalog_health()
     capabilities = {
         source_site: {
             "available": True,
@@ -110,6 +146,7 @@ def _source_capabilities() -> dict[str, dict[str, Any]]:
             "supported_crawl_modes": entry["supported_crawl_modes"],
             "default_crawl_mode": entry["default_crawl_mode"],
             "default_max_pages": entry["default_max_pages"],
+            "source_catalog": catalog_health[source_site],
         }
         for source_site, entry in build_source_catalog().items()
     }

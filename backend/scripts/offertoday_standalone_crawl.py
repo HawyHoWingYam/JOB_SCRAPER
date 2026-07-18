@@ -61,6 +61,7 @@ from app.repositories.crawl_job_repository import CrawlJobRepository  # noqa: E4
 from app.sources.offertoday.listing_runner import (  # noqa: E402
     ListingRetryPolicy,
     ListingStopPolicy,
+    OfferTodayListingCondition,
     OfferTodayListingRunner,
     listing_observation_to_payload,
 )
@@ -71,6 +72,7 @@ from app.sources.offertoday.search_space import (  # noqa: E402
     build_offertoday_listing_conditions,
     normalize_offertoday_keywords,
 )
+from app.source_catalog.runtime import load_published_query_plan  # noqa: E402
 from app.sources.offertoday.response_policy import (  # noqa: E402
     OfferTodayResponseKind,
 )
@@ -368,7 +370,7 @@ def _build_runtime_request_payload(
     source_listing_crawl_job_id: str | None,
     detail_scope: str | None = None,
 ) -> dict[str, Any]:
-    category_ids = _normalize_listing_category_ids(args.category_ids)
+    category_ids = _parse_catalog_classification_ids(args.category_ids)
     detail_statuses = _normalize_detail_statuses(args.detail_statuses)
     payload: dict[str, Any] = {
         "crawl_phase": crawl_phase,
@@ -423,7 +425,7 @@ def _build_manual_action_payload(
     resume_context: dict[str, Any] = {
         "crawl_phase": crawl_phase,
         "crawl_mode": "headed" if args.headed else "headless",
-        "category_ids": _normalize_listing_category_ids(args.category_ids),
+        "category_ids": _parse_catalog_classification_ids(args.category_ids),
         "skip_existing": bool(args.skip_existing),
         "resume_strategy": str(args.resume_strategy or RESUME_STRATEGY_FRESH_PROFILE),
     }
@@ -608,6 +610,73 @@ def _normalize_listing_category_ids(value: Any) -> list[int]:
         if text.isdigit():
             normalized.append(int(text))
     return normalized
+
+
+def _parse_catalog_classification_ids(value: Any) -> list[int | str]:
+    raw_values = str(value or "").split(",") if isinstance(value, str) else value or []
+    parsed: list[int | str] = []
+    for raw_value in raw_values:
+        text = str(raw_value).strip()
+        if not text:
+            continue
+        if text.isdigit():
+            parsed.append(int(text))
+            continue
+        prefix, separator, native_id = text.partition(":")
+        if separator and prefix == "offertoday" and native_id.isdigit():
+            parsed.append(text)
+            continue
+        raise ValueError(f"Invalid OfferToday Source Classification ID: {text}")
+    return parsed
+
+
+def _resolve_published_listing_category_ids(value: Any) -> list[int]:
+    category_ids = _parse_catalog_classification_ids(value)
+    if not category_ids:
+        return []
+    plan = load_published_query_plan("offertoday", category_ids)
+    return [int(entry.target.payload["category_code"]) for entry in plan.entries]
+
+
+def _build_request_listing_conditions(
+    category_value: Any,
+    *,
+    keywords: list[str],
+) -> list[OfferTodayListingCondition]:
+    category_ids = _parse_catalog_classification_ids(category_value)
+    if category_ids and keywords:
+        plan = load_published_query_plan("offertoday", category_ids)
+        validated_native_ids = [
+            int(entry.target.payload["category_code"]) for entry in plan.entries
+        ]
+        return build_offertoday_listing_conditions(
+            validated_native_ids,
+            keywords=keywords,
+            default_to_it=False,
+            endpoint="search",
+            category_endpoint="search",
+            rcd_type=None,
+        )
+    if not category_ids:
+        return build_offertoday_listing_conditions(
+            [],
+            keywords=keywords or None,
+            default_to_it=True,
+            endpoint="search",
+            category_endpoint="search",
+            rcd_type=None,
+        )
+    plan = load_published_query_plan("offertoday", category_ids)
+    return [
+        OfferTodayListingCondition(
+            search_family="catalog_category",
+            category_id=int(entry.target.payload["category_code"]),
+            keyword=str(entry.target.payload["keyword"]),
+            endpoint=str(entry.target.payload["endpoint"]),
+            rcd_type=int(entry.target.payload["rcd_type"]),
+        )
+        for entry in plan.entries
+    ]
 
 
 def _normalize_detail_statuses(value: Any) -> list[str]:
@@ -984,15 +1053,11 @@ async def _run_listing_phase(
     cancellation_token = resolve_cancellation_token(args)
     phase_started_at = time.perf_counter()
     crawl_mode = "headed" if args.headed else "headless"
-    category_ids = _normalize_listing_category_ids(args.category_ids)
+    category_ids = _parse_catalog_classification_ids(args.category_ids)
     keywords = normalize_offertoday_keywords(args.keywords)
-    conditions = build_offertoday_listing_conditions(
-        category_ids,
-        keywords=keywords or None,
-        default_to_it=True,
-        endpoint="search",
-        category_endpoint="search",
-        rcd_type=None,
+    conditions = _build_request_listing_conditions(
+        args.category_ids,
+        keywords=keywords,
     )
     observation_sink = CrawlJobListingObservationSink(
         crawl_runtime=crawl_runtime,
@@ -2210,7 +2275,7 @@ async def main() -> None:
         )
     )
 
-    category_ids = [int(c.strip()) for c in args.category_ids.split(",") if c.strip().isdigit()]
+    category_ids = _resolve_published_listing_category_ids(args.category_ids)
     keywords = normalize_offertoday_keywords(args.keywords)
     if args.check or args.smoke_test:
         exit_code = await _run_runtime_probe(
@@ -2227,13 +2292,9 @@ async def main() -> None:
 
     page_limit_per_query = min(args.max_pages, MAX_PAGES_GLOBAL)
     listing_conditions = (
-        build_offertoday_listing_conditions(
-            category_ids,
-            keywords=keywords or None,
-            default_to_it=True,
-            endpoint="search",
-            category_endpoint="search",
-            rcd_type=None,
+        _build_request_listing_conditions(
+            args.category_ids,
+            keywords=keywords,
         )
         if crawl_phase != "detail"
         else []

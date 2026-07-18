@@ -42,6 +42,7 @@ from app.services.crawl_cancellation_token import (  # noqa: E402
 )
 from app.services.detail_pacing import build_detail_pacing_controller  # noqa: E402
 from app.sources.contracts import build_jobsdb_canonical_job  # noqa: E402
+from app.source_catalog.runtime import load_published_query_plan  # noqa: E402
 from app.workers.run_ingest_worker import IngestWorkerService  # noqa: E402
 
 JOBSDB_SOURCE_SITE = "jobsdb"
@@ -80,8 +81,26 @@ def _load_request_payload(crawl_job_id: str) -> tuple[dict[str, Any], str]:
         db.close()
 
 
-def _parse_category_ids(raw_value: str) -> list[int]:
-    return [int(value.strip()) for value in str(raw_value or "").split(",") if value.strip().isdigit()]
+def _parse_category_ids(raw_value) -> list[int | str]:
+    raw_items = (
+        str(raw_value or "").split(",")
+        if isinstance(raw_value, str)
+        else raw_value or []
+    )
+    category_ids: list[int | str] = []
+    for raw_item in raw_items:
+        value = str(raw_item).strip()
+        if not value:
+            continue
+        if value.isdigit():
+            category_ids.append(int(value))
+            continue
+        prefix, separator, native_id = value.partition(":")
+        if separator and prefix == "jobsdb" and native_id.isdigit():
+            category_ids.append(value)
+            continue
+        raise ValueError(f"Invalid JobsDB Source Classification ID: {value}")
+    return category_ids
 
 
 def _parse_detail_statuses(raw_value: str) -> list[str]:
@@ -93,7 +112,7 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     if not request_payload:
         return
 
-    args.category_ids = [int(value) for value in (request_payload.get("category_ids") or [])]
+    args.category_ids = _parse_category_ids(request_payload.get("category_ids") or [])
     args.max_pages = int(request_payload.get("max_pages") or args.max_pages)
     args.detail_limit = int(request_payload.get("detail_limit") or args.detail_limit)
     args.crawl_mode = str(request_payload.get("crawl_mode") or args.crawl_mode)
@@ -171,6 +190,12 @@ def _build_manual_action_payload(
 
 
 async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatchPersistResult:
+    query_plan = load_published_query_plan(JOBSDB_SOURCE_SITE, args.category_ids)
+    native_category_ids = [int(entry.target.payload["native_id"]) for entry in query_plan.entries]
+    classification_by_native = {
+        int(entry.target.payload["native_id"]): str(entry.node.classification_id)
+        for entry in query_plan.entries
+    }
     scraper = CategoryListScraper()
     cancellation_token = resolve_cancellation_token(args)
     if hasattr(scraper, "before_request"):
@@ -233,7 +258,7 @@ async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatc
             {
                 "source_job_id": source_job_id,
                 "source_url": f"https://hk.jobsdb.com/job/{source_job_id}",
-                "source_classification_id": str(category_id),
+                "source_classification_id": classification_by_native[category_id],
                 "source_classification_name": None,
                 "listing_page": page,
                 "listing_payload": {},
@@ -309,7 +334,7 @@ async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatc
         )
 
     try:
-        for category_id in args.category_ids:
+        for category_id in native_category_ids:
             logger.info(
                 build_scrape_log_event(
                     "SCRAPE_LISTING_CATEGORY_START",

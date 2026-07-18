@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import dataclass
 import logging
 from pathlib import Path
 import sys
@@ -24,7 +25,7 @@ from app.database import SessionLocal  # noqa: E402
 from app.repositories.company_repository import CompanyRepository  # noqa: E402
 from app.repositories.crawl_job_repository import CrawlJobRepository  # noqa: E402
 from app.repositories.job_repository import JobRepository  # noqa: E402
-from app.scraper.ctgoodjobs.category_registry import get_static_ctgoodjobs_categories  # noqa: E402
+from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL  # noqa: E402
 from app.scraper.ctgoodjobs.detail_scraper import parse_detail_page  # noqa: E402
 from app.scraper.ctgoodjobs.list_scraper import category_page_url, parse_category_page  # noqa: E402
 from app.scraper.ctgoodjobs.merge import merge_ctgoodjobs_job  # noqa: E402
@@ -43,6 +44,7 @@ from app.services.crawl_cancellation_token import (  # noqa: E402
 )
 from app.services.detail_pacing import build_detail_pacing_controller  # noqa: E402
 from app.sources.contracts import build_ctgoodjobs_canonical_job  # noqa: E402
+from app.source_catalog.runtime import load_published_scope_query_plan  # noqa: E402
 from app.workers.run_ingest_worker import (  # noqa: E402
     IngestWorkerService,
     InvalidIngestPayloadError,
@@ -60,7 +62,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--category-ids", type=str, default="")
     parser.add_argument("--max-pages", type=int, default=1)
     parser.add_argument("--detail-limit", type=int, default=100)
-    parser.add_argument("--crawl-mode", choices=["headless", "headed"], default="headed")
+    parser.add_argument("--crawl-mode", choices=["headed"], default="headed")
     parser.add_argument("--crawl-phase", choices=["full", "listing", "detail"], default="full")
     parser.add_argument("--source-listing-crawl-job-id", type=str, default="")
     parser.add_argument("--detail-statuses", type=str, default="pending,manual_action_required")
@@ -117,15 +119,30 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     args.detail_pacing = request_payload.get("detail_pacing")
 
 
-def _categories_by_id() -> dict[str, Any]:
-    categories = {}
-    for category in get_static_ctgoodjobs_categories():
-        source_id = str(getattr(category, "source_classification_id", "") or "").strip()
-        raw_id = str(getattr(category, "ctgoodjobs_id", "") or "").strip()
-        if source_id:
-            categories[source_id] = category
-        if raw_id:
-            categories[raw_id] = category
+@dataclass(frozen=True)
+class _PublishedCTGoodJobsCategory:
+    source_classification_id: str
+    ctgoodjobs_id: str
+    name: str
+    slug: str
+    url: str
+
+
+def _categories_by_id() -> dict[str, _PublishedCTGoodJobsCategory]:
+    plan = load_published_scope_query_plan("ctgoodjobs", mode="all")
+    categories: dict[str, _PublishedCTGoodJobsCategory] = {}
+    for entry in plan.entries:
+        classification_id = str(entry.node.classification_id or "").strip()
+        if not classification_id:
+            continue
+        url_path = str(entry.target.payload.get("url_path") or "")
+        categories[classification_id] = _PublishedCTGoodJobsCategory(
+            source_classification_id=classification_id,
+            ctgoodjobs_id=str(entry.target.payload.get("native_id") or ""),
+            name=entry.node.native_label,
+            slug=str(entry.node.source_metadata.get("slug") or ""),
+            url=f"{CTGOODJOBS_BASE_URL}{url_path}",
+        )
     return categories
 
 
@@ -881,6 +898,8 @@ async def main(argv: Sequence[str] | None = None) -> int:
     args.crawl_job_id = str(args.crawl_job_id or uuid4())
     request_payload, source_site = _load_request_payload(args.crawl_job_id)
     _apply_request_payload_defaults(args, request_payload)
+    if str(args.crawl_mode).strip().lower() != "headed":
+        raise RuntimeError("CTgoodjobs supports headed crawl mode only")
     args.cancellation_token = CrawlCancellationToken(
         crawl_job_id=args.crawl_job_id,
         execution_generation=args.execution_generation or None,

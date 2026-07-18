@@ -1,166 +1,42 @@
-"""Source-aware category registry.
+"""Published Source Catalog compatibility projection.
 
-Task 2 scope:
-- JobsDB categories are served from the existing in-repo registry.
-- CTgoodjobs categories are parsed via the existing research probe parser.
-- CTgoodjobs registry fetch is protected by a simple in-memory TTL cache to avoid
-  live-fetching on every API request.
+This adapter intentionally performs no source discovery, network fetch, TTL
+fallback, or static executable lookup. Governance discovery lives behind the
+Source Catalog candidate API; runtime readers see only the active revision.
 """
 
 from __future__ import annotations
 
-import asyncio
-import time
-from dataclasses import dataclass
-from typing import Any, Literal
+from collections.abc import Callable
+from typing import Any
 
-from app.scraper.categories import get_all_categories
-from app.scraper.ctgoodjobs.category_registry import (
-    CTGOODJOBS_BASE_URL,
-    get_static_ctgoodjobs_categories,
-    parse_category_registry,
-)
-from app.scraper.ctgoodjobs.list_scraper import fetch_category_page_html
-from app.scraper.offertoday.category_registry import get_all_offertoday_categories
-
-SourceSite = Literal["jobsdb", "ctgoodjobs", "offertoday"]
+from app.database import SessionLocal
+from app.services.source_catalog_service import SourceCatalogService
 
 
 def _normalize_source_site(value: str | None) -> str:
     return (value or "jobsdb").strip().lower()
 
 
-def _fetch_ctgoodjobs_registry_html() -> str:
-    """Fetch CTgoodjobs registry HTML.
-
-    Kept as a standalone function so tests can monkeypatch it to avoid network.
-    """
-
-    return asyncio.run(fetch_category_page_html(f"{CTGOODJOBS_BASE_URL}/jobs"))
-
-
-def _has_running_event_loop() -> bool:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return False
-    return True
-
-
-@dataclass
-class _TtlCache:
-    ttl_s: float
-    loaded_at_s: float | None = None
-    value: Any | None = None
-
-    def get(self) -> Any | None:
-        if self.loaded_at_s is None:
-            return None
-        if (time.time() - self.loaded_at_s) >= self.ttl_s:
-            return None
-        return self.value
-
-    def set(self, value: Any) -> None:
-        self.value = value
-        self.loaded_at_s = time.time()
-
-
 class SourceCategoryRegistry:
-    def __init__(self, *, ctgoodjobs_ttl_s: float = 60.0 * 60.0):
-        self._jobsdb_categories: list[dict[str, Any]] | None = None
-        self._ctgoodjobs_cache = _TtlCache(ttl_s=ctgoodjobs_ttl_s)
-        self._ctgoodjobs_last_value: list[dict[str, Any]] | None = None
-        self._offertoday_categories: list[dict[str, Any]] | None = None
+    def __init__(
+        self,
+        *,
+        session_factory: Callable[[], Any] = SessionLocal,
+        ctgoodjobs_ttl_s: float | None = None,
+    ) -> None:
+        # Kept only for constructor compatibility; authority is revision-based,
+        # so a TTL would make atomic publication observably stale.
+        del ctgoodjobs_ttl_s
+        self._session_factory = session_factory
 
     def list_categories(self, *, source_site: str | None = None) -> list[dict[str, Any]]:
         normalized = _normalize_source_site(source_site)
-        if normalized == "jobsdb":
-            if isinstance(self._jobsdb_categories, list):
-                return self._jobsdb_categories
-
-            payload = [
-                {
-                    "id": cat.id,
-                    "name": cat.name,
-                    "slug": cat.slug,
-                    "source_site": "jobsdb",
-                }
-                for cat in get_all_categories()
-            ]
-            self._jobsdb_categories = payload
-            return payload
-
-        if normalized == "offertoday":
-            if isinstance(self._offertoday_categories, list):
-                return self._offertoday_categories
-            payload = get_all_offertoday_categories()
-            self._offertoday_categories = payload
-            return payload
-
-        if normalized == "ctgoodjobs":
-            cached = self._ctgoodjobs_cache.get()
-            if isinstance(cached, list):
-                return cached
-
-            if _has_running_event_loop():
-                if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
-                    return self._ctgoodjobs_last_value
-                payload = self._static_ctgoodjobs_payload()
-                self._ctgoodjobs_last_value = payload
-                return payload
-
-            try:
-                html = _fetch_ctgoodjobs_registry_html()
-            except Exception:
-                if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
-                    return self._ctgoodjobs_last_value
-                payload = self._static_ctgoodjobs_payload()
-                self._ctgoodjobs_last_value = payload
-                return payload
-            if not html.strip():
-                if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
-                    return self._ctgoodjobs_last_value
-                payload = self._static_ctgoodjobs_payload()
-                self._ctgoodjobs_last_value = payload
-                return payload
-
-            registry = parse_category_registry(html)
-            if not registry:
-                if isinstance(self._ctgoodjobs_last_value, list) and self._ctgoodjobs_last_value:
-                    return self._ctgoodjobs_last_value
-                payload = self._static_ctgoodjobs_payload()
-                self._ctgoodjobs_last_value = payload
-                return payload
-
-            payload = [
-                {
-                    "id": category.source_classification_id,
-                    "name": category.name,
-                    "slug": category.slug,
-                    "source_site": "ctgoodjobs",
-                }
-                for category in registry
-            ]
-            if not payload:
-                # Defensive: don't cache/return an "empty success" payload.
-                raise RuntimeError("CTgoodjobs registry produced empty payload")
-            self._ctgoodjobs_cache.set(payload)
-            self._ctgoodjobs_last_value = payload
-            return payload
-
-        raise ValueError(f"Unsupported source_site: {normalized}")
-
-    @staticmethod
-    def _static_ctgoodjobs_payload() -> list[dict[str, Any]]:
-        return [
-            {
-                "id": category.source_classification_id,
-                "name": category.name,
-                "slug": category.slug,
-                "source_site": "ctgoodjobs",
-            }
-            for category in get_static_ctgoodjobs_categories()
-        ]
+        db = self._session_factory()
+        try:
+            return SourceCatalogService(db).get_legacy_categories(normalized)
+        finally:
+            db.close()
 
 
 _registry: SourceCategoryRegistry | None = None
