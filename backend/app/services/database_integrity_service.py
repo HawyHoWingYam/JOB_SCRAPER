@@ -20,7 +20,16 @@ from app.models import (
     ScheduleExecution,
     Skill,
     SkillCategory,
+    SkillCandidate,
+    SkillTaxonomyActiveRevision,
+    SkillTaxonomyRelease,
     SkillTechnology,
+    GovernedJobSkill,
+    GovernedJobSkillMention,
+    GovernedSkill,
+    GovernedSkillAlias,
+    GovernedSkillCategory,
+    GovernedSkillTechnology,
 )
 from app.utils.time import utc_now
 
@@ -33,6 +42,18 @@ TAXONOMY_SEED_MODELS = (
     ("skill_categories", SkillCategory),
     ("skill_technologies", SkillTechnology),
     ("skills", Skill),
+)
+
+GOVERNED_SKILL_MODELS = (
+    ("skill_taxonomy_releases", SkillTaxonomyRelease),
+    ("skill_taxonomy_active_revisions", SkillTaxonomyActiveRevision),
+    ("governed_skill_categories", GovernedSkillCategory),
+    ("governed_skill_technologies", GovernedSkillTechnology),
+    ("governed_skills", GovernedSkill),
+    ("governed_skill_aliases", GovernedSkillAlias),
+    ("skill_candidates", SkillCandidate),
+    ("governed_job_skill_mentions", GovernedJobSkillMention),
+    ("governed_job_skills", GovernedJobSkill),
 )
 
 ADVISORY_SCHEMA_EXPECTATIONS = (
@@ -85,7 +106,9 @@ def _coerce_int(value: Any) -> int:
 
 
 def _isoformat_or_none(value: Any) -> str | None:
-    return value.isoformat() if value is not None and hasattr(value, "isoformat") else None
+    return (
+        value.isoformat() if value is not None and hasattr(value, "isoformat") else None
+    )
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -103,7 +126,9 @@ def _age_seconds(reference_time: datetime, value: datetime | None) -> int:
     return max(int((reference_time - normalized).total_seconds()), 0)
 
 
-def _ratio(numerator: int, denominator: int, *, empty_value: float = 0.0) -> float | None:
+def _ratio(
+    numerator: int, denominator: int, *, empty_value: float = 0.0
+) -> float | None:
     if denominator <= 0:
         return empty_value if numerator <= 0 else None
     return round(numerator / denominator, 2)
@@ -117,7 +142,9 @@ def _table_exists(table_name: str, observed_tables: set[str]) -> bool:
     return table_name in observed_tables
 
 
-def _safe_group_counts(db: Any, model: Any, column: Any, *, observed_tables: set[str]) -> dict[str, int]:
+def _safe_group_counts(
+    db: Any, model: Any, column: Any, *, observed_tables: set[str]
+) -> dict[str, int]:
     if not _table_exists(model.__tablename__, observed_tables):
         return {}
     try:
@@ -145,7 +172,9 @@ def _safe_count(db: Any, model: Any, *criteria: Any, observed_tables: set[str]) 
         return 0
 
 
-def _load_schema_summary(db: Any, expected_tables: Iterable[str] | None) -> dict[str, Any]:
+def _load_schema_summary(
+    db: Any, expected_tables: Iterable[str] | None
+) -> dict[str, Any]:
     inspector = inspect(db.get_bind())
     observed_tables = sorted(inspector.get_table_names())
     expected = sorted(set(expected_tables or _default_expected_tables()))
@@ -155,7 +184,9 @@ def _load_schema_summary(db: Any, expected_tables: Iterable[str] | None) -> dict
     missing_columns: list[str] = []
     for table_name in sorted(set(expected) & set(observed_tables)):
         try:
-            column_names = sorted(str(column.get("name")) for column in inspector.get_columns(table_name))
+            column_names = sorted(
+                str(column.get("name")) for column in inspector.get_columns(table_name)
+            )
         except SQLAlchemyError:
             column_names = []
         observed_columns[table_name] = column_names
@@ -175,7 +206,9 @@ def _load_schema_summary(db: Any, expected_tables: Iterable[str] | None) -> dict
     }
 
 
-def _has_foreign_key(inspector: Any, table_name: str, columns: list[str], referred_table: str) -> bool:
+def _has_foreign_key(
+    inspector: Any, table_name: str, columns: list[str], referred_table: str
+) -> bool:
     try:
         foreign_keys = inspector.get_foreign_keys(table_name)
     except SQLAlchemyError:
@@ -215,7 +248,11 @@ def _has_embedding_ann_index(inspector: Any, table_name: str) -> bool:
         columns = {str(column).lower() for column in (index.get("column_names") or [])}
         if "embedding" not in columns:
             continue
-        if "hnsw" in name or "ivfflat" in name or name == "ix_job_embeddings_embedding_hnsw":
+        if (
+            "hnsw" in name
+            or "ivfflat" in name
+            or name == "ix_job_embeddings_embedding_hnsw"
+        ):
             return True
     return False
 
@@ -239,7 +276,10 @@ def _load_advisory_findings(db: Any, observed_tables: set[str]) -> list[dict[str
             )
         elif kind == "unique_constraint":
             present = _has_unique_constraint(inspector, table_name, columns)
-        elif kind == "index" and expectation["id"] == "job_embeddings_embedding_ann_index":
+        elif (
+            kind == "index"
+            and expectation["id"] == "job_embeddings_embedding_ann_index"
+        ):
             present = _has_embedding_ann_index(inspector, table_name)
 
         if not present:
@@ -290,7 +330,7 @@ def _load_staging_summary(db: Any, observed_tables: set[str]) -> dict[str, Any]:
     published_jobs = _safe_count(
         db,
         Job,
-        Job.is_deleted == False,
+        Job.is_deleted.is_(False),
         observed_tables=observed_tables,
     )
     return {
@@ -311,9 +351,10 @@ def _load_duplicate_summary(db: Any, observed_tables: set[str]) -> dict[str, Any
     }
 
     if "jobs" in observed_tables:
-        rows = db.execute(
-            text(
-                """
+        rows = (
+            db.execute(
+                text(
+                    """
                 SELECT source_site, source_job_id, COUNT(*) AS duplicate_count
                 FROM jobs
                 WHERE source_site IS NOT NULL AND source_job_id IS NOT NULL
@@ -322,8 +363,11 @@ def _load_duplicate_summary(db: Any, observed_tables: set[str]) -> dict[str, Any
                 ORDER BY duplicate_count DESC, source_site ASC, source_job_id ASC
                 LIMIT 10
                 """
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         summary["jobs_source_key_duplicate_groups"] = len(rows)
         summary["jobs_source_key_examples"] = [
             {
@@ -335,9 +379,10 @@ def _load_duplicate_summary(db: Any, observed_tables: set[str]) -> dict[str, Any
         ]
 
     if "crawl_job_listings" in observed_tables:
-        rows = db.execute(
-            text(
-                """
+        rows = (
+            db.execute(
+                text(
+                    """
                 SELECT crawl_job_id, source_site, source_job_id, COUNT(*) AS duplicate_count
                 FROM crawl_job_listings
                 WHERE crawl_job_id IS NOT NULL
@@ -348,8 +393,11 @@ def _load_duplicate_summary(db: Any, observed_tables: set[str]) -> dict[str, Any
                 ORDER BY duplicate_count DESC, crawl_job_id ASC, source_site ASC, source_job_id ASC
                 LIMIT 10
                 """
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         summary["crawl_job_listings_source_key_duplicate_groups"] = len(rows)
         summary["crawl_job_listings_source_key_examples"] = [
             {
@@ -364,8 +412,12 @@ def _load_duplicate_summary(db: Any, observed_tables: set[str]) -> dict[str, Any
     return summary
 
 
-def _load_outbox_summary(db: Any, observed_tables: set[str], reference_time: datetime) -> dict[str, Any]:
-    status_counts = _safe_group_counts(db, EventOutbox, EventOutbox.status, observed_tables=observed_tables)
+def _load_outbox_summary(
+    db: Any, observed_tables: set[str], reference_time: datetime
+) -> dict[str, Any]:
+    status_counts = _safe_group_counts(
+        db, EventOutbox, EventOutbox.status, observed_tables=observed_tables
+    )
     if not _table_exists(EventOutbox.__tablename__, observed_tables):
         return {
             "status_counts": status_counts,
@@ -389,29 +441,192 @@ def _load_outbox_summary(db: Any, observed_tables: set[str], reference_time: dat
         "status_counts": status_counts,
         "retrying_rows": int(retrying_rows),
         "max_attempts": _coerce_int(max_attempts),
-        "oldest_pending_age_seconds": _age_seconds(reference_time, oldest_pending_created_at),
+        "oldest_pending_age_seconds": _age_seconds(
+            reference_time, oldest_pending_created_at
+        ),
     }
 
 
 def _load_taxonomy_summary(db: Any, observed_tables: set[str]) -> dict[str, Any]:
     seed_counts: dict[str, int] = {}
     for table_name, model in TAXONOMY_SEED_MODELS:
-        seed_counts[table_name] = _safe_count(db, model, observed_tables=observed_tables)
+        seed_counts[table_name] = _safe_count(
+            db, model, observed_tables=observed_tables
+        )
     empty = [table_name for table_name, count in seed_counts.items() if count == 0]
-    return {
+    legacy_seed = {
         "seed_table_counts": seed_counts,
         "empty_seed_tables": empty,
         "all_seed_tables_empty": len(empty) == len(seed_counts),
     }
+    return {
+        **legacy_seed,
+        "legacy_seed": legacy_seed,
+        "governed_skill": _load_governed_skill_summary(db, observed_tables),
+    }
+
+
+def _load_governed_skill_summary(
+    db: Any,
+    observed_tables: set[str],
+) -> dict[str, Any]:
+    table_counts = {
+        table_name: _safe_count(db, model, observed_tables=observed_tables)
+        for table_name, model in GOVERNED_SKILL_MODELS
+    }
+    missing_tables = [
+        table_name
+        for table_name, _ in GOVERNED_SKILL_MODELS
+        if table_name not in observed_tables
+    ]
+    summary: dict[str, Any] = {
+        "available": not missing_tables,
+        "missing_tables": missing_tables,
+        "table_counts": table_counts,
+        "release_status_counts": _safe_group_counts(
+            db,
+            SkillTaxonomyRelease,
+            SkillTaxonomyRelease.status,
+            observed_tables=observed_tables,
+        ),
+        "active_revision": None,
+        "release_count_mismatches": [],
+        "resolved_candidates_without_audit": 0,
+        "operator_skills_without_audit": 0,
+        "operator_aliases_without_audit": 0,
+        "integrity_issues": [],
+    }
+    if missing_tables:
+        return summary
+
+    release_count_mismatches: list[dict[str, Any]] = []
+    releases = (
+        db.query(SkillTaxonomyRelease)
+        .order_by(
+            SkillTaxonomyRelease.created_at.asc(),
+            SkillTaxonomyRelease.revision_id.asc(),
+        )
+        .all()
+    )
+    for release in releases:
+        if release.status != "ready":
+            continue
+        expected = {
+            "categories": int(release.expected_category_count),
+            "technologies": int(release.expected_technology_count),
+            "skills": int(release.expected_skill_count),
+            "aliases": int(release.expected_alias_count),
+        }
+        actual = {
+            "categories": _safe_count(
+                db,
+                GovernedSkillCategory,
+                GovernedSkillCategory.revision_id == release.revision_id,
+                observed_tables=observed_tables,
+            ),
+            "technologies": _safe_count(
+                db,
+                GovernedSkillTechnology,
+                GovernedSkillTechnology.revision_id == release.revision_id,
+                observed_tables=observed_tables,
+            ),
+            "skills": _safe_count(
+                db,
+                GovernedSkill,
+                GovernedSkill.revision_id == release.revision_id,
+                GovernedSkill.origin == "seed",
+                observed_tables=observed_tables,
+            ),
+            "aliases": _safe_count(
+                db,
+                GovernedSkillAlias,
+                GovernedSkillAlias.taxonomy_revision_id == release.revision_id,
+                GovernedSkillAlias.source != "operator",
+                observed_tables=observed_tables,
+            ),
+        }
+        if actual != expected:
+            release_count_mismatches.append(
+                {
+                    "revision_id": str(release.revision_id),
+                    "expected": expected,
+                    "actual": actual,
+                }
+            )
+
+    active = db.get(SkillTaxonomyActiveRevision, "skill-taxonomy")
+    if active is not None:
+        release = db.get(SkillTaxonomyRelease, active.revision_id)
+        valid = bool(
+            release is not None
+            and release.status == "ready"
+            and release.content_hash == active.content_hash
+        )
+        summary["active_revision"] = {
+            "revision_id": str(active.revision_id),
+            "content_hash": active.content_hash,
+            "lock_version": int(active.lock_version),
+            "state": "ready" if valid else "invalid",
+        }
+        if not valid:
+            summary["integrity_issues"].append(
+                "active revision does not identify a matching ready release"
+            )
+
+    summary["release_count_mismatches"] = release_count_mismatches
+    if release_count_mismatches:
+        summary["integrity_issues"].append(
+            f"{len(release_count_mismatches)} ready release(s) have seed count drift"
+        )
+
+    summary["resolved_candidates_without_audit"] = _safe_count(
+        db,
+        SkillCandidate,
+        SkillCandidate.status != "pending",
+        SkillCandidate.decision_audit_id.is_(None),
+        observed_tables=observed_tables,
+    )
+    summary["operator_skills_without_audit"] = _safe_count(
+        db,
+        GovernedSkill,
+        GovernedSkill.origin == "operator",
+        GovernedSkill.created_by_audit_id.is_(None),
+        observed_tables=observed_tables,
+    )
+    summary["operator_aliases_without_audit"] = _safe_count(
+        db,
+        GovernedSkillAlias,
+        GovernedSkillAlias.source == "operator",
+        GovernedSkillAlias.created_by_audit_id.is_(None),
+        observed_tables=observed_tables,
+    )
+    for key, label in (
+        ("resolved_candidates_without_audit", "resolved Candidates"),
+        ("operator_skills_without_audit", "operator-created Skills"),
+        ("operator_aliases_without_audit", "operator-created aliases"),
+    ):
+        count = int(summary[key])
+        if count:
+            summary["integrity_issues"].append(
+                f"{count} {label} are missing governance audit references"
+            )
+    return summary
 
 
 def _load_embedding_summary(db: Any, observed_tables: set[str]) -> dict[str, Any]:
-    total_jobs = _safe_count(db, Job, Job.is_deleted == False, observed_tables=observed_tables)
+    total_jobs = _safe_count(
+        db,
+        Job,
+        Job.is_deleted.is_(False),
+        observed_tables=observed_tables,
+    )
     current_embeddings = _safe_count(db, JobEmbedding, observed_tables=observed_tables)
     missing_current_embeddings = max(total_jobs - current_embeddings, 0)
     vector_index_present = False
     if "job_embeddings" in observed_tables:
-        vector_index_present = _has_embedding_ann_index(inspect(db.get_bind()), "job_embeddings")
+        vector_index_present = _has_embedding_ann_index(
+            inspect(db.get_bind()), "job_embeddings"
+        )
     return {
         "total_jobs": total_jobs,
         "current_embeddings": current_embeddings,
@@ -421,7 +636,9 @@ def _load_embedding_summary(db: Any, observed_tables: set[str]) -> dict[str, Any
     }
 
 
-def _load_enrichment_counter_drift(db: Any, observed_tables: set[str]) -> dict[str, int]:
+def _load_enrichment_counter_drift(
+    db: Any, observed_tables: set[str]
+) -> dict[str, int]:
     visible_without_distinct = 0
     usage_without_distinct = 0
     for _, model in TAXONOMY_SEED_MODELS:
@@ -430,7 +647,7 @@ def _load_enrichment_counter_drift(db: Any, observed_tables: set[str]) -> dict[s
         visible_without_distinct += _safe_count(
             db,
             model,
-            model.is_filter_visible == True,
+            model.is_filter_visible.is_(True),
             model.distinct_job_count == 0,
             observed_tables=observed_tables,
         )
@@ -452,7 +669,10 @@ def _load_scheduler_integrity(db: Any, observed_tables: set[str]) -> dict[str, i
         return {"executions_missing_request_payload_snapshot": 0}
     inspector = inspect(db.get_bind())
     try:
-        column_names = {str(column.get("name")) for column in inspector.get_columns(ScheduleExecution.__tablename__)}
+        column_names = {
+            str(column.get("name"))
+            for column in inspector.get_columns(ScheduleExecution.__tablename__)
+        }
     except SQLAlchemyError:
         column_names = set()
     if "request_payload_snapshot" not in column_names:
@@ -489,28 +709,42 @@ def _derive_status_and_issues(
     missing_columns = list(schema.get("missing_expected_columns") or [])
     if missing_columns:
         critical = True
-        issues.append(f"missing expected database columns: {', '.join(missing_columns)}")
+        issues.append(
+            f"missing expected database columns: {', '.join(missing_columns)}"
+        )
 
-    duplicate_job_groups = _coerce_int(duplicates.get("jobs_source_key_duplicate_groups"))
+    duplicate_job_groups = _coerce_int(
+        duplicates.get("jobs_source_key_duplicate_groups")
+    )
     if duplicate_job_groups:
         critical = True
-        issues.append(f"jobs has {duplicate_job_groups} duplicate source job key groups")
+        issues.append(
+            f"jobs has {duplicate_job_groups} duplicate source job key groups"
+        )
 
-    duplicate_listing_groups = _coerce_int(duplicates.get("crawl_job_listings_source_key_duplicate_groups"))
+    duplicate_listing_groups = _coerce_int(
+        duplicates.get("crawl_job_listings_source_key_duplicate_groups")
+    )
     if duplicate_listing_groups:
         critical = True
-        issues.append(f"crawl_job_listings has {duplicate_listing_groups} duplicate staged source key groups")
+        issues.append(
+            f"crawl_job_listings has {duplicate_listing_groups} duplicate staged source key groups"
+        )
 
     staged_unpublished = _coerce_int(staging.get("staged_unpublished_rows"))
     if staged_unpublished:
         degraded = True
-        issues.append(f"crawl_job_listings has {staged_unpublished} staged rows without published_job_id")
+        issues.append(
+            f"crawl_job_listings has {staged_unpublished} staged rows without published_job_id"
+        )
 
     for status_name in ("pending", "failed", "manual_action_required"):
         count = _coerce_int(detail_status_counts.get(status_name))
         if count:
             degraded = True
-            issues.append(f"crawl_job_listings detail_status {status_name} has {count} rows")
+            issues.append(
+                f"crawl_job_listings detail_status {status_name} has {count} rows"
+            )
 
     outbox_counts = dict(outbox.get("status_counts") or {})
     for status_name in ("pending", "failed"):
@@ -527,13 +761,26 @@ def _derive_status_and_issues(
         degraded = True
         issues.append("taxonomy seed tables are empty")
 
+    governed_skill_issues = list(
+        (taxonomy.get("governed_skill") or {}).get("integrity_issues") or []
+    )
+    if governed_skill_issues:
+        critical = True
+        issues.extend(
+            f"governed Skill integrity: {issue}" for issue in governed_skill_issues
+        )
+
     missing_embeddings = _coerce_int(embeddings.get("missing_current_embeddings"))
     if missing_embeddings:
         degraded = True
         issues.append(f"embeddings missing for {missing_embeddings} current jobs")
 
-    visible_drift = _coerce_int(enrichment_counter_drift.get("visible_nodes_without_distinct_job_count"))
-    usage_drift = _coerce_int(enrichment_counter_drift.get("usage_nodes_without_distinct_job_count"))
+    visible_drift = _coerce_int(
+        enrichment_counter_drift.get("visible_nodes_without_distinct_job_count")
+    )
+    usage_drift = _coerce_int(
+        enrichment_counter_drift.get("usage_nodes_without_distinct_job_count")
+    )
     if visible_drift or usage_drift:
         degraded = True
         issues.append(
@@ -541,10 +788,14 @@ def _derive_status_and_issues(
             f"(visible_without_distinct={visible_drift}, usage_without_distinct={usage_drift})"
         )
 
-    missing_snapshots = _coerce_int(scheduler.get("executions_missing_request_payload_snapshot"))
+    missing_snapshots = _coerce_int(
+        scheduler.get("executions_missing_request_payload_snapshot")
+    )
     if missing_snapshots:
         degraded = True
-        issues.append(f"schedule_executions has {missing_snapshots} rows missing request_payload_snapshot")
+        issues.append(
+            f"schedule_executions has {missing_snapshots} rows missing request_payload_snapshot"
+        )
 
     status = "critical" if critical else "degraded" if degraded else "healthy"
     return status, issues

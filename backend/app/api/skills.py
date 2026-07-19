@@ -17,7 +17,7 @@ async def search_skills(q: str, limit: int = 10, db: Session = Depends(get_db)):
             {
                 "id": str(s.id),
                 "name": s.name,
-                "category": s.technology.category.name,
+                "category": s.category_name,
             }
             for s in skills
         ]

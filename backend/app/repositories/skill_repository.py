@@ -1,61 +1,54 @@
-from typing import List, Tuple
+from typing import TYPE_CHECKING, List
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, func
 
-from app.models.skill import Skill
-from app.models.skill_technology import SkillTechnology
-from app.models.skill_category import SkillCategory
-from app.utils.skill_taxonomy_policy import (
-    apply_governed_skill_category_filters,
-    apply_governed_skill_filters,
-)
+if TYPE_CHECKING:
+    from app.job_intelligence.skill_governance.read_model import GovernedSkillView
 
 
 class SkillRepository:
-    def get_or_create_skill(self, db: Session, *, technology_id, name: str) -> Tuple[Skill, bool]:
-        """Get or create a canonical skill under one technology."""
-        skill = db.query(Skill).filter(
-            and_(
-                Skill.technology_id == technology_id,
-                func.lower(Skill.name) == name.lower(),
-            )
-        ).first()
-        if skill:
-            return skill, False
+    def get_or_create_skill(self, *_args, **_kwargs):
+        """Retired: governed Skills are created only by a confirmed Candidate decision."""
 
-        skill = Skill(name=name, technology_id=technology_id)
-        db.add(skill)
-        db.flush()
-        return skill, True
-
-    def search_skills(self, db: Session, query: str, limit: int = 10) -> List[Skill]:
-        """Search skills for autocomplete"""
-        search_query = (
-            db.query(Skill)
-            .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
-            .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
-            .filter(Skill.name.ilike(f"%{query}%"))
+        raise RuntimeError(
+            "Direct Skill creation is retired; use SkillCandidateDecisionAdapter"
         )
 
-        search_query = apply_governed_skill_filters(search_query)
-
-        return search_query.order_by(Skill.popularity.desc(), Skill.name.asc()).limit(limit).all()
-
-    def get_skills_by_category(self, db: Session, category: str) -> List[Skill]:
-        """Get skills by category"""
-        skills_query = (
-            db.query(Skill)
-            .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
-            .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
-            .filter(SkillCategory.name == category)
+    def search_skills(
+        self,
+        db: Session,
+        query: str,
+        limit: int = 10,
+    ) -> List["GovernedSkillView"]:
+        from app.job_intelligence.skill_governance.read_model import (
+            SkillGovernanceReader,
         )
 
-        skills_query = apply_governed_skill_filters(skills_query)
+        return list(SkillGovernanceReader(db).search_skills(query, limit=limit))
 
-        return skills_query.order_by(Skill.popularity.desc(), Skill.name.asc()).all()
+    def get_skills_by_category(
+        self,
+        db: Session,
+        category: str,
+    ) -> List["GovernedSkillView"]:
+        from app.job_intelligence.skill_governance.read_model import (
+            SkillGovernanceReader,
+        )
+
+        return [
+            skill
+            for category_view in SkillGovernanceReader(db).get_tree().categories
+            if category_view.name == category
+            for technology in category_view.technologies
+            for skill in technology.skills
+        ]
 
     def get_visible_categories(self, db: Session) -> List[str]:
         """Get governed skill categories suitable for user-facing filters."""
-        query = db.query(SkillCategory.name).distinct()
-        query = apply_governed_skill_category_filters(query)
-        return [row[0] for row in query.order_by(SkillCategory.name.asc()).all()]
+        from app.job_intelligence.skill_governance.read_model import (
+            SkillGovernanceReader,
+        )
+
+        return [
+            category.name
+            for category in SkillGovernanceReader(db).get_tree().categories
+        ]

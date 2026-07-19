@@ -11,6 +11,8 @@ from app.api import (
     jobs,
     recommendations,
     settings,
+    skill_governance,
+    skills,
 )
 
 router = APIRouter()
@@ -19,6 +21,8 @@ router = APIRouter()
 router.include_router(health.router)
 router.include_router(job_intelligence.router, prefix="/api/v1")
 router.include_router(company_industries.router, prefix="/api/v1")
+router.include_router(skill_governance.router, prefix="/api/v1")
+router.include_router(skills.router, prefix="/api/v1")
 router.include_router(jobs.router, prefix="/api/v1")
 router.include_router(companies.router, prefix="/api/v1")
 router.include_router(crawl_jobs.router, prefix="/api/v1")

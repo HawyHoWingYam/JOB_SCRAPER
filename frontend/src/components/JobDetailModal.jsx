@@ -272,7 +272,12 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   const originalJobUrl = job?.original_job_url || null;
   const aiStateMessage = job ? getAiStateMessage(job) : null;
   const expiryLabel = job ? getExpiryLabel(job) : null;
-  const hasProvisionalSkills = Boolean(job?.provisional_skills?.length);
+  const unreviewedSkillNames = Array.isArray(job?.unreviewed_skill_mentions)
+    ? job.unreviewed_skill_mentions
+      .map((mention) => mention?.raw_name)
+      .filter(Boolean)
+    : (job?.provisional_skills || []);
+  const hasUnreviewedSkillMentions = unreviewedSkillNames.length > 0;
 
   return (
     <div className="modal-overlay" onClick={handleOverlayClick}>
@@ -343,7 +348,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                 ) : (
                   <p className="modal-empty">
                     {job.ai_enriched_at
-                      ? (hasProvisionalSkills
+                      ? (hasUnreviewedSkillMentions
                         ? 'No governed skills matched yet'
                         : 'No technical skills extracted from this posting')
                       : getAwaitingAiCopy()}
@@ -351,10 +356,13 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                 )}
               </div>
 
-              {hasProvisionalSkills && (
+              {hasUnreviewedSkillMentions && (
                 <div className="modal-subsection">
-                  <h4>Provisional Skills</h4>
-                  <SkillTags skills={job.provisional_skills} />
+                  <h4>Unreviewed Skill Mentions</h4>
+                  <p className="modal-evidence-note">
+                    Secondary evidence awaiting human taxonomy review.
+                  </p>
+                  <SkillTags skills={unreviewedSkillNames} />
                 </div>
               )}
 

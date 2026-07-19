@@ -19,14 +19,21 @@ class EmbeddingDocumentBuilder:
     def __init__(self, *, description_excerpt_chars: int = 2000):
         self.description_excerpt_chars = max(1, int(description_excerpt_chars))
 
-    def build_for_job(self, job) -> EmbeddingDocument:
+    def build_for_job(
+        self,
+        job,
+        *,
+        governed_skill_names: Iterable[str] | None = None,
+    ) -> EmbeddingDocument:
         sections: list[str] = []
 
         title = self._clean_text(getattr(job, "title", None))
         if title:
             sections.append(f"Title: {title}")
 
-        company_name = self._clean_text(getattr(getattr(job, "company", None), "name", None))
+        company_name = self._clean_text(
+            getattr(getattr(job, "company", None), "name", None)
+        )
         if company_name:
             sections.append(f"Company: {company_name}")
 
@@ -38,11 +45,13 @@ class EmbeddingDocumentBuilder:
         if ai_summary:
             sections.append(f"AI Summary: {ai_summary}")
 
-        skills = self._build_skills(job)
+        skills = self._build_skills(job, governed_skill_names=governed_skill_names)
         if skills:
             sections.append(f"Skills: {' | '.join(skills)}")
 
-        description_excerpt = self._build_description_excerpt(getattr(job, "description", None))
+        description_excerpt = self._build_description_excerpt(
+            getattr(job, "description", None)
+        )
         if description_excerpt:
             sections.append(f"Description: {description_excerpt}")
 
@@ -60,13 +69,20 @@ class EmbeddingDocumentBuilder:
         ]
         return " | ".join(part for part in parts if part)
 
-    def _build_skills(self, job) -> list[str]:
+    def _build_skills(
+        self,
+        job,
+        *,
+        governed_skill_names: Iterable[str] | None,
+    ) -> list[str]:
         names: set[str] = set()
-        for mention in getattr(job, "job_skill_mentions", []) or []:
-            if getattr(mention, "resolution", None) != "match_existing":
-                continue
-            skill = getattr(mention, "skill", None)
-            name = self._clean_text(getattr(skill, "name", None))
+        raw_names = (
+            governed_skill_names
+            if governed_skill_names is not None
+            else (getattr(job, "skills", []) or [])
+        )
+        for raw_name in raw_names:
+            name = self._clean_text(raw_name)
             if not name:
                 continue
             names.add(name)

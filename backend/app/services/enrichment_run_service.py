@@ -2,24 +2,25 @@ import uuid
 import asyncio
 from dataclasses import dataclass
 from datetime import date, timedelta
-import re
 from typing import Dict, Iterable, List, Optional, TypedDict
 
 from sqlalchemy import and_, case, func, text
 from sqlalchemy.orm import Session
 
 from app.job_intelligence.canonical_taxonomy import CanonicalTaxonomyPreflight
+from app.job_intelligence.skill_governance.normalization import (
+    normalize_exact_skill_key,
+)
 from app.messaging.topics import STREAM_JOB_LIFECYCLE
 from app.models.crawl_job import CrawlJob
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.event_outbox import EventOutbox
-from app.models.job_skill import JobSkill
-from app.models.job_skill_mention import JobSkillMention
 from app.models.job import Job
-from app.models.skill import Skill
-from app.models.skill_category import SkillCategory
-from app.models.skill_review_candidate import SkillReviewCandidate
-from app.models.skill_technology import SkillTechnology
+from app.models.skill_governance import (
+    GovernedJobSkillMention,
+    SkillCandidate,
+    SkillTaxonomyActiveRevision,
+)
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
@@ -36,28 +37,6 @@ TERMINAL_RUN_STATUSES = (
 )
 RESERVED_RUN_STATUSES = ("waiting", *ACTIVE_RUN_STATUSES)
 ACTIVE_SLOT_LOCK_KEY = "job_scraper:enrichment_run:active_slot"
-_REVIEW_KEY_PATTERN = re.compile(r"[^a-z0-9+#./\-\s]+")
-_LOOKUP_KEY_PATTERN = re.compile(r"[^a-z0-9]+")
-
-
-def _normalize_unicode(value: str) -> str:
-    text_value = str(value or "").strip()
-    for dash in ("\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"):
-        text_value = text_value.replace(dash, "-")
-    return re.sub(r"\s+", " ", text_value)
-
-
-def _normalize_lookup_key(value: str) -> str:
-    text_value = _normalize_unicode(value).lower().strip()
-    text_value = _LOOKUP_KEY_PATTERN.sub(" ", text_value)
-    return re.sub(r"\s+", " ", text_value).strip()
-
-
-def _normalize_review_candidate_key(value: str) -> str:
-    text_value = _normalize_unicode(value).lower().strip()
-    text_value = _REVIEW_KEY_PATTERN.sub(" ", text_value)
-    text_value = re.sub(r"\s*([+#./-])\s*", r"\1", text_value)
-    return re.sub(r"\s+", " ", text_value).strip()
 
 
 @dataclass(frozen=True)
@@ -726,42 +705,32 @@ class EnrichmentRunService:
         source_subclassification_names: Optional[List[str]],
         scope: str,
     ) -> list[str]:
-        normalized_review_names = self._normalize_selector_values(
-            review_candidate_names,
-            normalizer=_normalize_review_candidate_key,
+        # ``polluted_skill_names`` remains an input-only compatibility alias.
+        # Both selectors now resolve against governed pending Candidates.
+        normalized_candidate_names = self._normalize_selector_values(
+            [*(review_candidate_names or []), *(polluted_skill_names or [])],
+            normalizer=normalize_exact_skill_key,
         )
-        normalized_polluted_names = self._normalize_selector_values(
-            polluted_skill_names,
-            normalizer=_normalize_lookup_key,
-        )
-        if not normalized_review_names and not normalized_polluted_names:
+        if not normalized_candidate_names:
             raise ValueError("At least one query selector is required")
 
         if scope not in {"all", "enriched_only"}:
             raise ValueError(f"Unsupported query scope: {scope}")
 
         selected_job_ids: set[uuid.UUID] = set()
-        review_candidate_ids = self._find_review_candidate_ids(normalized_review_names)
+        review_candidate_ids = self._find_review_candidate_ids(
+            normalized_candidate_names
+        )
         if review_candidate_ids:
             selected_job_ids.update(
                 job_id
                 for (job_id,) in (
-                    self.db.query(JobSkillMention.job_id)
+                    self.db.query(GovernedJobSkillMention.job_id)
                     .filter(
-                        JobSkillMention.review_candidate_id.in_(review_candidate_ids),
-                        JobSkillMention.resolution == "review_candidate",
+                        GovernedJobSkillMention.candidate_id.in_(review_candidate_ids),
+                        GovernedJobSkillMention.resolution == "review_candidate",
+                        GovernedJobSkillMention.status == "active",
                     )
-                    .all()
-                )
-            )
-
-        polluted_skill_ids = self._find_polluted_skill_ids(normalized_polluted_names)
-        if polluted_skill_ids:
-            selected_job_ids.update(
-                job_id
-                for (job_id,) in (
-                    self.db.query(JobSkill.job_id)
-                    .filter(JobSkill.skill_id.in_(polluted_skill_ids))
                     .all()
                 )
             )
@@ -811,34 +780,21 @@ class EnrichmentRunService:
     def _find_review_candidate_ids(self, normalized_names: set[str]) -> set[uuid.UUID]:
         if not normalized_names:
             return set()
-
-        return {
-            candidate.id
-            for candidate in self.db.query(
-                SkillReviewCandidate.id,
-                SkillReviewCandidate.normalized_name,
-            ).all()
-            if _normalize_review_candidate_key(candidate.normalized_name or "")
-            in normalized_names
-        }
-
-    def _find_polluted_skill_ids(self, normalized_names: set[str]) -> set[uuid.UUID]:
-        if not normalized_names:
+        active = self.db.get(SkillTaxonomyActiveRevision, "skill-taxonomy")
+        if active is None:
             return set()
 
         return {
-            skill.id
-            for skill in (
-                self.db.query(Skill)
-                .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
-                .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+            candidate_id
+            for (candidate_id,) in (
+                self.db.query(SkillCandidate.id)
                 .filter(
-                    func.lower(SkillCategory.name) == "other",
-                    func.lower(SkillTechnology.name) == "general",
+                    SkillCandidate.taxonomy_revision_id == active.revision_id,
+                    SkillCandidate.status == "pending",
+                    SkillCandidate.normalized_key.in_(normalized_names),
                 )
                 .all()
             )
-            if _normalize_lookup_key(skill.name) in normalized_names
         }
 
     def get_run(self, run_id: str) -> Optional[EnrichmentRun]:

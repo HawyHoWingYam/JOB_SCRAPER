@@ -1018,6 +1018,8 @@ def test_job_detail_schema_serializes_complete_source_attribute_arrays(
     source_attribute_db.expire_all()
     reloaded = source_attribute_db.get(Job, job.id)
     set_committed_value(reloaded, "job_skill_mentions", [])
+    set_committed_value(reloaded, "governed_job_skills", [])
+    set_committed_value(reloaded, "governed_skill_mentions", [])
 
     payload = JobDetailSchema.model_validate(reloaded).model_dump(mode="json")
 

@@ -21,15 +21,15 @@ from app.job_intelligence.canonical_taxonomy import (
     EvaluationResult,
 )
 from app.job_intelligence.foundation import Provenance, normalized_content_hash
+from app.job_intelligence.skill_governance import (
+    SkillExtractionContext,
+    SkillGovernance,
+    SkillGovernanceReader,
+)
 from app.job_intelligence.source_attributes import SourceJobAttributes
 from app.models.job import Job
-from app.models import Skill, SkillReviewCandidate
 from app.database import SessionLocal
-from app.repositories.job_skill_mention_repository import JobSkillMentionRepository
-from app.repositories.job_skill_repository import JobSkillRepository
 from app.services.job_role_mode import resolve_job_role_mode
-from app.services.skill_normalizer import SkillNormalizer
-from app.services.taxonomy_visibility_service import get_taxonomy_visibility_service
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,6 @@ class AIEnrichmentService:
 
     def __init__(self):
         self.insight_extractor = get_job_insight_extractor()
-        self.visibility_service = get_taxonomy_visibility_service()
         self.batch_size = 10
 
     async def enrich_job(self, job: Job, db: Session) -> Dict[str, Any]:
@@ -48,7 +47,6 @@ class AIEnrichmentService:
         results: Dict[str, Any] = {"job_id": str(job.id), "status": "success"}
 
         try:
-            skill_normalizer = SkillNormalizer(db)
             role_mode = resolve_job_role_mode(
                 title=job.title,
                 source_subclassification_name=job.source_subclassification_name or "",
@@ -72,7 +70,7 @@ class AIEnrichmentService:
                 return results
 
             category_candidates = classifier_context.to_prompt_payload()
-            skill_candidates = skill_normalizer.get_taxonomy_candidate_slice(
+            skill_candidates = SkillGovernanceReader(db).get_prompt_candidate_slice(
                 job.title,
                 description=job.description or "",
                 source_subclassification_name=job.source_subclassification_name,
@@ -86,6 +84,7 @@ class AIEnrichmentService:
             )
 
             classification = insight.get("classification") or {}
+            llm_status = get_llm_status("jobs")
             results["classification"] = classification
             extracted_skills = insight.get("skills") or []
             results["skills"] = {
@@ -96,7 +95,7 @@ class AIEnrichmentService:
             classifier_output = self._canonical_classifier_output(
                 classification,
                 context=classifier_context,
-                llm_status=get_llm_status("jobs"),
+                llm_status=llm_status,
             )
             evaluation = canonical_taxonomy.evaluate(
                 job.id,
@@ -117,121 +116,42 @@ class AIEnrichmentService:
             job.experience_summary = experience.get("summary")
             job.experience_evidence = experience.get("evidence")
 
-            # Update relational tables
-            mention_repo = JobSkillMentionRepository()
-            job_skill_repo = JobSkillRepository()
-            existing_skill_ids = {
-                job_skill.skill_id
-                for job_skill in job_skill_repo.get_job_skills(db, job.id)
-            }
-            previous_mentions = mention_repo.get_mentions_for_job(db, job.id)
-            affected_candidate_ids = {
-                mention.review_candidate_id
-                for mention in previous_mentions
-                if mention.review_candidate_id is not None
-            }
-            mention_repo.delete_mentions_for_job(db, job.id)
-            current_matched_skill_ids = set()
-
-            for extracted_skill in extracted_skills:
-                decision = skill_normalizer.resolve_extracted_skill(
-                    extracted_skill,
-                    role_mode=role_mode,
-                )
-                action = decision.get("action")
-                raw_name = ""
-                if isinstance(extracted_skill, dict):
-                    raw_name = str(
-                        extracted_skill.get("name")
-                        or extracted_skill.get("skill")
-                        or extracted_skill.get("raw_name")
-                        or extracted_skill.get("normalized_name")
-                        or ""
-                    ).strip()
-                elif isinstance(extracted_skill, str):
-                    raw_name = extracted_skill.strip()
-
-                if action == "generic_tag":
-                    generic_tag = str(decision.get("generic_tag") or "").strip()
-                    mention_repo.create_mention(
-                        db,
-                        job_id=job.id,
-                        raw_name=raw_name or generic_tag,
-                        normalized_name=generic_tag,
-                        resolution="generic_tag",
-                        generic_tag=generic_tag,
-                        confidence=insight.get("confidence"),
-                    )
-                    continue
-
-                if action == "review_candidate":
-                    candidate = skill_normalizer.register_review_candidate(
-                        raw_name=str(decision.get("raw_name") or ""),
-                        normalized_name=str(decision.get("normalized_name") or ""),
-                        job_id=job.id,
-                        suggested_category=decision.get("suggested_category"),
-                        suggested_technology=decision.get("suggested_technology"),
-                        description=job.description or "",
-                        source_subclassification_name=job.source_subclassification_name,
-                    )
-                    mention_repo.create_mention(
-                        db,
-                        job_id=job.id,
-                        raw_name=raw_name or str(decision.get("raw_name") or ""),
-                        normalized_name=candidate.normalized_name,
-                        resolution="review_candidate",
-                        review_candidate_id=candidate.id,
-                        confidence=insight.get("confidence"),
-                    )
-                    affected_candidate_ids.add(candidate.id)
-                    continue
-
-                if action != "match_existing":
-                    continue
-
-                skill_id = decision["skill_id"]
-                current_matched_skill_ids.add(skill_id)
-                skill = db.query(Skill).filter_by(id=skill_id).first()
-                mention_repo.create_mention(
-                    db,
-                    job_id=job.id,
-                    raw_name=raw_name or str(decision.get("skill_name") or ""),
-                    normalized_name=str(decision.get("skill_name") or ""),
-                    resolution="match_existing",
-                    skill_id=skill_id,
-                    confidence=insight.get("confidence"),
-                )
-
-                job_skill_repo.create_job_skill(
-                    db,
-                    job_id=job.id,
-                    skill_id=skill_id,
-                    source="ai",
-                    confidence=insight.get("confidence"),
-                )
-
-                if skill is not None:
-                    self.visibility_service.record_skill_usage(
-                        skill,
-                        is_distinct_job=skill_id not in existing_skill_ids,
-                    )
-                existing_skill_ids.add(skill_id)
-
-            job_skill_repo.delete_obsolete_job_skills(
-                db,
+            skill_projection = SkillGovernance(db).extract(
                 job.id,
-                keep_skill_ids=current_matched_skill_ids,
-                source="ai",
+                extracted_skills,
+                SkillExtractionContext(
+                    source="ai-extraction",
+                    confidence=insight.get("confidence"),
+                    provenance={
+                        "method": "constrained-ai-extraction",
+                        "model_provider": llm_status.get("active_provider"),
+                        "model_name": llm_status.get("active_model"),
+                        "model_version": llm_status.get("model_version"),
+                        "content_hash": normalized_content_hash(extracted_skills),
+                    },
+                ),
             )
-            for candidate_id in affected_candidate_ids:
-                candidate = (
-                    db.query(SkillReviewCandidate).filter_by(id=candidate_id).first()
-                )
-                if candidate is None:
-                    continue
-                candidate.occurrence_count = (
-                    mention_repo.count_jobs_for_review_candidate(db, candidate_id)
-                )
+            results["skill_projection"] = {
+                "taxonomy_revision_id": str(skill_projection.taxonomy_revision_id),
+                "changed": skill_projection.changed,
+                "mentions": [
+                    {
+                        "id": str(mention.id),
+                        "resolution": mention.resolution,
+                        "skill_id": (
+                            str(mention.skill_id)
+                            if mention.skill_id is not None
+                            else None
+                        ),
+                        "candidate_id": (
+                            str(mention.candidate_id)
+                            if mention.candidate_id is not None
+                            else None
+                        ),
+                    }
+                    for mention in skill_projection.mentions
+                ],
+            }
             db.commit()
 
         except LLMUpstreamError as e:

@@ -23,6 +23,7 @@ function createJobPayload(overrides = {}) {
     employment_type: 'Full-time',
     skills: ['Python', 'FastAPI'],
     provisional_skills: [],
+    unreviewed_skill_mentions: [],
     ai_summary: 'Builds internal platform services and backend APIs.',
     job_taxonomy: {
       path: 'Information & Communication Technology / Software Development / Backend Development',
@@ -176,19 +177,51 @@ describe('JobDetailModal', () => {
     expect(screen.getByText('No explicit experience requirement found in the posting')).toBeInTheDocument();
   });
 
-  it('renders provisional skills separately when governed skills are unavailable', async () => {
+  it('renders unreviewed skill mentions as secondary evidence and ignores legacy generic/rejected labels', async () => {
     renderModalWithPayload(
       createJobPayload({
         skills: [],
-        provisional_skills: ['Google Suite', 'Zoom'],
+        provisional_skills: ['Generic Tag', 'Rejected Evidence'],
+        unreviewed_skill_mentions: [
+          {
+            id: '60000000-0000-0000-0000-000000000001',
+            label: 'Unreviewed Skill Mention',
+            raw_name: 'Rust',
+            normalized_key: 'rust',
+            candidate_id: '70000000-0000-0000-0000-000000000001',
+            candidate_version: 1,
+            source: 'ai-extraction',
+            confidence: 0.82,
+            provenance: { run_id: 'fixture-run' },
+            deep_link: '/api/v1/job-intelligence/governance/skills/candidates/70000000-0000-0000-0000-000000000001',
+            created_at: '2026-07-19T08:00:00Z',
+            updated_at: '2026-07-19T08:00:00Z',
+          },
+        ],
       }),
     );
 
     expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /provisional skills/i })).toBeInTheDocument();
-    expect(screen.getByText('Google Suite')).toBeInTheDocument();
-    expect(screen.getByText('Zoom')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /unreviewed skill mentions/i })).toBeInTheDocument();
+    expect(screen.getByText('Rust')).toBeInTheDocument();
+    expect(screen.getByText(/secondary evidence awaiting human taxonomy review/i)).toBeInTheDocument();
+    expect(screen.queryByText('Generic Tag')).not.toBeInTheDocument();
+    expect(screen.queryByText('Rejected Evidence')).not.toBeInTheDocument();
     expect(screen.getByText('No governed skills matched yet')).toBeInTheDocument();
+  });
+
+  it('keeps the legacy provisional skills fallback for older detail responses', async () => {
+    renderModalWithPayload(
+      createJobPayload({
+        skills: [],
+        provisional_skills: ['Google Suite'],
+        unreviewed_skill_mentions: undefined,
+      }),
+    );
+
+    expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /unreviewed skill mentions/i })).toBeInTheDocument();
+    expect(screen.getByText('Google Suite')).toBeInTheDocument();
   });
 
   it('prefers a normalized numeric experience label over free-text summary text', async () => {

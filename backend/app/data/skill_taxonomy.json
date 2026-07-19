@@ -1,4 +1,21 @@
 {
+  "schema_version": 1,
+  "release_key": "skills-2026-07-19-v1",
+  "expected_counts": {
+    "categories": 8,
+    "technologies": 33,
+    "skills": 91
+  },
+  "source": {
+    "kind": "project-curated",
+    "title": "JOB_SCRAPER governed Skill taxonomy",
+    "effective_date": "2026-07-19",
+    "documents": [
+      "skill_taxonomy.json",
+      "skill_curation_rules.json",
+      "skill_backfill_curations.json"
+    ]
+  },
   "categories": [
     {
       "name": "Frontend",
@@ -6,36 +23,159 @@
         {
           "name": "Markup",
           "skills": [
-            {"name": "HTML", "aliases": ["html", "html5"]}
-          ]
+            {
+              "name": "HTML",
+              "aliases": [
+                "html",
+                "html5"
+              ],
+              "code": "frontend.markup.html",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "frontend.markup",
+          "order": 0,
+          "is_active": true
         },
         {
           "name": "JavaScript",
           "skills": [
-            {"name": "JavaScript", "aliases": ["js"]},
-            {"name": "React", "aliases": ["react", "reactjs", "react.js"]},
-            {"name": "Vue.js", "aliases": ["vue", "vuejs", "vue.js"]},
-            {"name": "Angular", "aliases": ["angular", "angularjs"]},
-            {"name": "Next.js", "aliases": ["nextjs", "next"]},
-            {"name": "Svelte", "aliases": ["svelte", "sveltejs"]}
-          ]
+            {
+              "name": "JavaScript",
+              "aliases": [
+                "js"
+              ],
+              "code": "frontend.javascript.javascript",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "React",
+              "aliases": [
+                "react",
+                "reactjs",
+                "react.js"
+              ],
+              "code": "frontend.javascript.react",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "Vue.js",
+              "aliases": [
+                "vue",
+                "vuejs",
+                "vue.js"
+              ],
+              "code": "frontend.javascript.vue-js",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "Angular",
+              "aliases": [
+                "angular",
+                "angularjs"
+              ],
+              "code": "frontend.javascript.angular",
+              "order": 3,
+              "is_active": true
+            },
+            {
+              "name": "Next.js",
+              "aliases": [
+                "nextjs",
+                "next"
+              ],
+              "code": "frontend.javascript.next-js",
+              "order": 4,
+              "is_active": true
+            },
+            {
+              "name": "Svelte",
+              "aliases": [
+                "svelte",
+                "sveltejs"
+              ],
+              "code": "frontend.javascript.svelte",
+              "order": 5,
+              "is_active": true
+            }
+          ],
+          "code": "frontend.javascript",
+          "order": 1,
+          "is_active": true
         },
         {
           "name": "CSS",
           "skills": [
-            {"name": "Tailwind CSS", "aliases": ["tailwind", "tailwindcss"]},
-            {"name": "Sass", "aliases": ["sass", "scss"]},
-            {"name": "Bootstrap", "aliases": ["bootstrap"]},
-            {"name": "Material UI", "aliases": ["mui", "material-ui"]}
-          ]
+            {
+              "name": "Tailwind CSS",
+              "aliases": [
+                "tailwind",
+                "tailwindcss"
+              ],
+              "code": "frontend.css.tailwind-css",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Sass",
+              "aliases": [
+                "sass",
+                "scss"
+              ],
+              "code": "frontend.css.sass",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "Bootstrap",
+              "aliases": [
+                "bootstrap"
+              ],
+              "code": "frontend.css.bootstrap",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "Material UI",
+              "aliases": [
+                "mui",
+                "material-ui"
+              ],
+              "code": "frontend.css.material-ui",
+              "order": 3,
+              "is_active": true
+            }
+          ],
+          "code": "frontend.css",
+          "order": 2,
+          "is_active": true
         },
         {
           "name": "TypeScript",
           "skills": [
-            {"name": "TypeScript", "aliases": ["typescript", "ts"]}
-          ]
+            {
+              "name": "TypeScript",
+              "aliases": [
+                "typescript",
+                "ts"
+              ],
+              "code": "frontend.typescript.typescript",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "frontend.typescript",
+          "order": 3,
+          "is_active": true
         }
-      ]
+      ],
+      "code": "frontend",
+      "order": 0,
+      "is_active": true
     },
     {
       "name": "Backend",
@@ -43,50 +183,203 @@
         {
           "name": "API Development",
           "skills": [
-            {"name": "API Development", "aliases": ["api"]},
-            {"name": "RESTful APIs", "aliases": ["restful api", "restful apis"]},
-            {"name": "API Integration", "aliases": ["api integration"]}
-          ]
+            {
+              "name": "API Development",
+              "aliases": [
+                "api"
+              ],
+              "code": "backend.api-development.api-development",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "RESTful APIs",
+              "aliases": [
+                "restful api",
+                "restful apis"
+              ],
+              "code": "backend.api-development.restful-apis",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "API Integration",
+              "aliases": [
+                "api integration"
+              ],
+              "code": "backend.api-development.api-integration",
+              "order": 2,
+              "is_active": true
+            }
+          ],
+          "code": "backend.api-development",
+          "order": 0,
+          "is_active": true
         },
         {
           "name": ".NET",
           "skills": [
-            {"name": ".NET", "aliases": ["dotnet", ".net core", ".net framework"]},
-            {"name": "C#", "aliases": ["c sharp", "c-sharp"]}
-          ]
+            {
+              "name": ".NET",
+              "aliases": [
+                "dotnet",
+                ".net core",
+                ".net framework"
+              ],
+              "code": "backend.net.net",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "C#",
+              "aliases": [
+                "c sharp",
+                "c-sharp"
+              ],
+              "code": "backend.net.c-sharp",
+              "order": 1,
+              "is_active": true
+            }
+          ],
+          "code": "backend.net",
+          "order": 1,
+          "is_active": true
         },
         {
           "name": "Python",
           "skills": [
-            {"name": "Python", "aliases": []},
-            {"name": "Django", "aliases": ["django"]},
-            {"name": "FastAPI", "aliases": ["fastapi", "fast-api"]},
-            {"name": "Flask", "aliases": ["flask"]}
-          ]
+            {
+              "name": "Python",
+              "aliases": [],
+              "code": "backend.python.python",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Django",
+              "aliases": [
+                "django"
+              ],
+              "code": "backend.python.django",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "FastAPI",
+              "aliases": [
+                "fastapi",
+                "fast-api"
+              ],
+              "code": "backend.python.fastapi",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "Flask",
+              "aliases": [
+                "flask"
+              ],
+              "code": "backend.python.flask",
+              "order": 3,
+              "is_active": true
+            }
+          ],
+          "code": "backend.python",
+          "order": 2,
+          "is_active": true
         },
         {
           "name": "Node.js",
           "skills": [
-            {"name": "Node.js", "aliases": ["nodejs"]},
-            {"name": "Express.js", "aliases": ["express", "expressjs"]},
-            {"name": "NestJS", "aliases": ["nestjs", "nest"]}
-          ]
+            {
+              "name": "Node.js",
+              "aliases": [
+                "nodejs"
+              ],
+              "code": "backend.node-js.node-js",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Express.js",
+              "aliases": [
+                "express",
+                "expressjs"
+              ],
+              "code": "backend.node-js.express-js",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "NestJS",
+              "aliases": [
+                "nestjs",
+                "nest"
+              ],
+              "code": "backend.node-js.nestjs",
+              "order": 2,
+              "is_active": true
+            }
+          ],
+          "code": "backend.node-js",
+          "order": 3,
+          "is_active": true
         },
         {
           "name": "Java",
           "skills": [
-            {"name": "Java", "aliases": []},
-            {"name": "Spring Boot", "aliases": ["spring", "springboot"]},
-            {"name": "Hibernate", "aliases": ["hibernate"]}
-          ]
+            {
+              "name": "Java",
+              "aliases": [],
+              "code": "backend.java.java",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Spring Boot",
+              "aliases": [
+                "spring",
+                "springboot"
+              ],
+              "code": "backend.java.spring-boot",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "Hibernate",
+              "aliases": [
+                "hibernate"
+              ],
+              "code": "backend.java.hibernate",
+              "order": 2,
+              "is_active": true
+            }
+          ],
+          "code": "backend.java",
+          "order": 4,
+          "is_active": true
         },
         {
           "name": "PHP",
           "skills": [
-            {"name": "PHP", "aliases": ["php"]}
-          ]
+            {
+              "name": "PHP",
+              "aliases": [
+                "php"
+              ],
+              "code": "backend.php.php",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "backend.php",
+          "order": 5,
+          "is_active": true
         }
-      ]
+      ],
+      "code": "backend",
+      "order": 1,
+      "is_active": true
     },
     {
       "name": "Database",
@@ -94,19 +387,80 @@
         {
           "name": "SQL",
           "skills": [
-            {"name": "PostgreSQL", "aliases": ["postgres", "postgresql"]},
-            {"name": "MySQL", "aliases": ["mysql"]},
-            {"name": "SQL Server", "aliases": ["mssql", "sqlserver"]}
-          ]
+            {
+              "name": "PostgreSQL",
+              "aliases": [
+                "postgres",
+                "postgresql"
+              ],
+              "code": "database.sql.postgresql",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "MySQL",
+              "aliases": [
+                "mysql"
+              ],
+              "code": "database.sql.mysql",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "SQL Server",
+              "aliases": [
+                "mssql",
+                "sqlserver"
+              ],
+              "code": "database.sql.sql-server",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "Oracle",
+              "aliases": [
+                "oracle"
+              ],
+              "code": "database.sql.oracle",
+              "order": 3,
+              "is_active": true
+            }
+          ],
+          "code": "database.sql",
+          "order": 0,
+          "is_active": true
         },
         {
           "name": "NoSQL",
           "skills": [
-            {"name": "MongoDB", "aliases": ["mongodb", "mongo"]},
-            {"name": "Redis", "aliases": ["redis"]}
-          ]
+            {
+              "name": "MongoDB",
+              "aliases": [
+                "mongodb",
+                "mongo"
+              ],
+              "code": "database.nosql.mongodb",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Redis",
+              "aliases": [
+                "redis"
+              ],
+              "code": "database.nosql.redis",
+              "order": 1,
+              "is_active": true
+            }
+          ],
+          "code": "database.nosql",
+          "order": 1,
+          "is_active": true
         }
-      ]
+      ],
+      "code": "database",
+      "order": 2,
+      "is_active": true
     },
     {
       "name": "Data",
@@ -114,30 +468,139 @@
         {
           "name": "Business Intelligence",
           "skills": [
-            {"name": "Business Intelligence", "aliases": ["business intelligence", "bi"]},
-            {"name": "Power BI", "aliases": ["powerbi", "power bi"]},
-            {"name": "Tableau", "aliases": ["tableau"]},
-            {"name": "SSIS", "aliases": ["ssis", "sql server integration services"]},
-            {"name": "SSRS", "aliases": ["ssrs", "sql server reporting services"]},
-            {"name": "SSAS", "aliases": ["ssas", "sql server analysis services"]},
-            {"name": "DAX", "aliases": ["dax"]},
-            {"name": "Excel Power Query", "aliases": ["excel power query", "power query"]}
-          ]
+            {
+              "name": "Business Intelligence",
+              "aliases": [
+                "business intelligence",
+                "bi"
+              ],
+              "code": "data.business-intelligence.business-intelligence",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Power BI",
+              "aliases": [
+                "powerbi",
+                "power bi"
+              ],
+              "code": "data.business-intelligence.power-bi",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "Tableau",
+              "aliases": [
+                "tableau"
+              ],
+              "code": "data.business-intelligence.tableau",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "SSIS",
+              "aliases": [
+                "ssis",
+                "sql server integration services"
+              ],
+              "code": "data.business-intelligence.ssis",
+              "order": 3,
+              "is_active": true
+            },
+            {
+              "name": "SSRS",
+              "aliases": [
+                "ssrs",
+                "sql server reporting services"
+              ],
+              "code": "data.business-intelligence.ssrs",
+              "order": 4,
+              "is_active": true
+            },
+            {
+              "name": "SSAS",
+              "aliases": [
+                "ssas",
+                "sql server analysis services"
+              ],
+              "code": "data.business-intelligence.ssas",
+              "order": 5,
+              "is_active": true
+            },
+            {
+              "name": "DAX",
+              "aliases": [
+                "dax"
+              ],
+              "code": "data.business-intelligence.dax",
+              "order": 6,
+              "is_active": true
+            },
+            {
+              "name": "Excel Power Query",
+              "aliases": [
+                "excel power query",
+                "power query"
+              ],
+              "code": "data.business-intelligence.excel-power-query",
+              "order": 7,
+              "is_active": true
+            }
+          ],
+          "code": "data.business-intelligence",
+          "order": 0,
+          "is_active": true
         },
         {
           "name": "Machine Learning",
           "skills": [
-            {"name": "Machine Learning", "aliases": ["ml", "machine learning"]},
-            {"name": "Jupyter Notebook", "aliases": ["jupyter notebook", "jupyter notebooks"]}
-          ]
+            {
+              "name": "Machine Learning",
+              "aliases": [
+                "ml",
+                "machine learning"
+              ],
+              "code": "data.machine-learning.machine-learning",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Jupyter Notebook",
+              "aliases": [
+                "jupyter notebook",
+                "jupyter notebooks"
+              ],
+              "code": "data.machine-learning.jupyter-notebook",
+              "order": 1,
+              "is_active": true
+            }
+          ],
+          "code": "data.machine-learning",
+          "order": 1,
+          "is_active": true
         },
         {
           "name": "Graph Databases",
           "skills": [
-            {"name": "Neo4j", "aliases": ["neo4j", "neo 4j"]}
-          ]
+            {
+              "name": "Neo4j",
+              "aliases": [
+                "neo4j",
+                "neo 4j"
+              ],
+              "code": "data.graph-databases.neo4j",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "data.graph-databases",
+          "order": 2,
+          "is_active": true
         }
-      ]
+      ],
+      "code": "data",
+      "order": 3,
+      "is_active": true
     },
     {
       "name": "Platforms",
@@ -145,17 +608,53 @@
         {
           "name": "Collaboration",
           "skills": [
-            {"name": "Google Workspace", "aliases": ["google workspace", "google suite"]},
-            {"name": "Zoom", "aliases": ["zoom", "zoom meetings"]}
-          ]
+            {
+              "name": "Google Workspace",
+              "aliases": [
+                "google workspace",
+                "google suite"
+              ],
+              "code": "platforms.collaboration.google-workspace",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Zoom",
+              "aliases": [
+                "zoom",
+                "zoom meetings"
+              ],
+              "code": "platforms.collaboration.zoom",
+              "order": 1,
+              "is_active": true
+            }
+          ],
+          "code": "platforms.collaboration",
+          "order": 0,
+          "is_active": true
         },
         {
           "name": "Education Platforms",
           "skills": [
-            {"name": "ManageBac", "aliases": ["managebac", "manage bac"]}
-          ]
+            {
+              "name": "ManageBac",
+              "aliases": [
+                "managebac",
+                "manage bac"
+              ],
+              "code": "platforms.education-platforms.managebac",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "platforms.education-platforms",
+          "order": 1,
+          "is_active": true
         }
-      ]
+      ],
+      "code": "platforms",
+      "order": 4,
+      "is_active": true
     },
     {
       "name": "Product & Delivery",
@@ -163,39 +662,180 @@
         {
           "name": "Product Management",
           "skills": [
-            {"name": "Product Management", "aliases": ["product management"]},
-            {"name": "Roadmapping", "aliases": ["roadmapping", "roadmap"]},
-            {"name": "User Journey Mapping", "aliases": ["user journey mapping"]},
-            {"name": "Market Analysis", "aliases": ["market analysis"]},
-            {"name": "KPI Tracking", "aliases": ["kpi tracking", "kpi", "kpis"]}
-          ]
+            {
+              "name": "Product Management",
+              "aliases": [
+                "product management"
+              ],
+              "code": "product-and-delivery.product-management.product-management",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Roadmapping",
+              "aliases": [
+                "roadmapping",
+                "roadmap"
+              ],
+              "code": "product-and-delivery.product-management.roadmapping",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "User Journey Mapping",
+              "aliases": [
+                "user journey mapping"
+              ],
+              "code": "product-and-delivery.product-management.user-journey-mapping",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "Market Analysis",
+              "aliases": [
+                "market analysis"
+              ],
+              "code": "product-and-delivery.product-management.market-analysis",
+              "order": 3,
+              "is_active": true
+            },
+            {
+              "name": "KPI Tracking",
+              "aliases": [
+                "kpi tracking",
+                "kpi",
+                "kpis"
+              ],
+              "code": "product-and-delivery.product-management.kpi-tracking",
+              "order": 4,
+              "is_active": true
+            }
+          ],
+          "code": "product-and-delivery.product-management",
+          "order": 0,
+          "is_active": true
         },
         {
           "name": "Business Analysis",
           "skills": [
-            {"name": "Business Analysis", "aliases": ["business analysis"]},
-            {"name": "Requirements Gathering", "aliases": ["requirements gathering"]},
-            {"name": "Requirements Analysis", "aliases": ["requirements analysis"]},
-            {"name": "Functional Specifications", "aliases": ["functional specifications", "functional spec", "functional specs"]}
-          ]
+            {
+              "name": "Business Analysis",
+              "aliases": [
+                "business analysis"
+              ],
+              "code": "product-and-delivery.business-analysis.business-analysis",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Requirements Gathering",
+              "aliases": [
+                "requirements gathering"
+              ],
+              "code": "product-and-delivery.business-analysis.requirements-gathering",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "Requirements Analysis",
+              "aliases": [
+                "requirements analysis"
+              ],
+              "code": "product-and-delivery.business-analysis.requirements-analysis",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "Functional Specifications",
+              "aliases": [
+                "functional specifications",
+                "functional spec",
+                "functional specs"
+              ],
+              "code": "product-and-delivery.business-analysis.functional-specifications",
+              "order": 3,
+              "is_active": true
+            }
+          ],
+          "code": "product-and-delivery.business-analysis",
+          "order": 1,
+          "is_active": true
         },
         {
           "name": "Ways of Working",
           "skills": [
-            {"name": "Agile", "aliases": ["agile"]},
-            {"name": "Scrum", "aliases": ["scrum"]},
-            {"name": "Stakeholder Management", "aliases": ["stakeholder management"]},
-            {"name": "User Acceptance Testing", "aliases": ["uat", "user acceptance testing"]}
-          ]
+            {
+              "name": "Agile",
+              "aliases": [
+                "agile"
+              ],
+              "code": "product-and-delivery.ways-of-working.agile",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Scrum",
+              "aliases": [
+                "scrum"
+              ],
+              "code": "product-and-delivery.ways-of-working.scrum",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "Stakeholder Management",
+              "aliases": [
+                "stakeholder management"
+              ],
+              "code": "product-and-delivery.ways-of-working.stakeholder-management",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "User Acceptance Testing",
+              "aliases": [
+                "uat",
+                "user acceptance testing"
+              ],
+              "code": "product-and-delivery.ways-of-working.user-acceptance-testing",
+              "order": 3,
+              "is_active": true
+            }
+          ],
+          "code": "product-and-delivery.ways-of-working",
+          "order": 2,
+          "is_active": true
         },
         {
           "name": "Collaboration Tools",
           "skills": [
-            {"name": "Jira", "aliases": ["jira"]},
-            {"name": "Confluence", "aliases": ["confluence"]}
-          ]
+            {
+              "name": "Jira",
+              "aliases": [
+                "jira"
+              ],
+              "code": "product-and-delivery.collaboration-tools.jira",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Confluence",
+              "aliases": [
+                "confluence"
+              ],
+              "code": "product-and-delivery.collaboration-tools.confluence",
+              "order": 1,
+              "is_active": true
+            }
+          ],
+          "code": "product-and-delivery.collaboration-tools",
+          "order": 3,
+          "is_active": true
         }
-      ]
+      ],
+      "code": "product-and-delivery",
+      "order": 5,
+      "is_active": true
     },
     {
       "name": "Support & Operations",
@@ -203,13 +843,54 @@
         {
           "name": "Service & Support",
           "skills": [
-            {"name": "Help Desk Support", "aliases": ["help desk support", "service desk", "helpdesk"]},
-            {"name": "Application Support", "aliases": ["application support", "app support"]},
-            {"name": "Incident Management", "aliases": ["incident management"]},
-            {"name": "Troubleshooting", "aliases": ["troubleshooting"]}
-          ]
+            {
+              "name": "Help Desk Support",
+              "aliases": [
+                "help desk support",
+                "service desk",
+                "helpdesk"
+              ],
+              "code": "support-and-operations.service-and-support.help-desk-support",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Application Support",
+              "aliases": [
+                "application support",
+                "app support"
+              ],
+              "code": "support-and-operations.service-and-support.application-support",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "Incident Management",
+              "aliases": [
+                "incident management"
+              ],
+              "code": "support-and-operations.service-and-support.incident-management",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "Troubleshooting",
+              "aliases": [
+                "troubleshooting"
+              ],
+              "code": "support-and-operations.service-and-support.troubleshooting",
+              "order": 3,
+              "is_active": true
+            }
+          ],
+          "code": "support-and-operations.service-and-support",
+          "order": 0,
+          "is_active": true
         }
-      ]
+      ],
+      "code": "support-and-operations",
+      "order": 6,
+      "is_active": true
     },
     {
       "name": "DevOps",
@@ -217,81 +898,320 @@
         {
           "name": "DevOps Practices",
           "skills": [
-            {"name": "DevOps", "aliases": ["devops"]}
-          ]
+            {
+              "name": "DevOps",
+              "aliases": [
+                "devops"
+              ],
+              "code": "devops.devops-practices.devops",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "devops.devops-practices",
+          "order": 0,
+          "is_active": true
         },
         {
           "name": "Containers",
           "skills": [
-            {"name": "Docker", "aliases": ["docker"]},
-            {"name": "Kubernetes", "aliases": ["k8s", "kubernetes"]}
-          ]
+            {
+              "name": "Docker",
+              "aliases": [
+                "docker"
+              ],
+              "code": "devops.containers.docker",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Kubernetes",
+              "aliases": [
+                "k8s",
+                "kubernetes"
+              ],
+              "code": "devops.containers.kubernetes",
+              "order": 1,
+              "is_active": true
+            }
+          ],
+          "code": "devops.containers",
+          "order": 1,
+          "is_active": true
         },
         {
           "name": "CI/CD",
           "skills": [
-            {"name": "CI/CD", "aliases": ["cicd"]},
-            {"name": "Jenkins", "aliases": ["jenkins"]},
-            {"name": "GitHub Actions", "aliases": ["github-actions", "gh-actions"]}
-          ]
+            {
+              "name": "CI/CD",
+              "aliases": [
+                "cicd"
+              ],
+              "code": "devops.ci-cd.ci-cd",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Jenkins",
+              "aliases": [
+                "jenkins"
+              ],
+              "code": "devops.ci-cd.jenkins",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "GitHub Actions",
+              "aliases": [
+                "github-actions",
+                "gh-actions"
+              ],
+              "code": "devops.ci-cd.github-actions",
+              "order": 2,
+              "is_active": true
+            }
+          ],
+          "code": "devops.ci-cd",
+          "order": 2,
+          "is_active": true
         },
         {
           "name": "Cloud Platforms",
           "skills": [
-            {"name": "AWS", "aliases": ["amazon web services"]},
-            {"name": "Azure", "aliases": ["microsoft azure"]},
-            {"name": "Microsoft 365", "aliases": ["office 365", "m365"]}
-          ]
+            {
+              "name": "AWS",
+              "aliases": [
+                "amazon web services"
+              ],
+              "code": "devops.cloud-platforms.aws",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Azure",
+              "aliases": [
+                "microsoft azure"
+              ],
+              "code": "devops.cloud-platforms.azure",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "Microsoft 365",
+              "aliases": [
+                "office 365",
+                "m365"
+              ],
+              "code": "devops.cloud-platforms.microsoft-365",
+              "order": 2,
+              "is_active": true
+            }
+          ],
+          "code": "devops.cloud-platforms",
+          "order": 3,
+          "is_active": true
         },
         {
           "name": "Operating Systems",
           "skills": [
-            {"name": "Linux", "aliases": ["linux"]},
-            {"name": "Windows", "aliases": ["windows", "microsoft windows"]},
-            {"name": "Windows Server", "aliases": ["windows server"]},
-            {"name": "UNIX", "aliases": ["unix"]}
-          ]
+            {
+              "name": "Linux",
+              "aliases": [
+                "linux"
+              ],
+              "code": "devops.operating-systems.linux",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Windows",
+              "aliases": [
+                "windows",
+                "microsoft windows"
+              ],
+              "code": "devops.operating-systems.windows",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "Windows Server",
+              "aliases": [
+                "windows server"
+              ],
+              "code": "devops.operating-systems.windows-server",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "UNIX",
+              "aliases": [
+                "unix"
+              ],
+              "code": "devops.operating-systems.unix",
+              "order": 3,
+              "is_active": true
+            }
+          ],
+          "code": "devops.operating-systems",
+          "order": 4,
+          "is_active": true
         },
         {
           "name": "Security",
           "skills": [
-            {"name": "Cybersecurity", "aliases": ["cybersecurity", "cyber security"]},
-            {"name": "Firewalls", "aliases": ["firewalls"]}
-          ]
+            {
+              "name": "Cybersecurity",
+              "aliases": [
+                "cybersecurity",
+                "cyber security"
+              ],
+              "code": "devops.security.cybersecurity",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Firewalls",
+              "aliases": [
+                "firewalls"
+              ],
+              "code": "devops.security.firewalls",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "PCI DSS",
+              "aliases": [
+                "pci dss",
+                "pci-dss"
+              ],
+              "code": "devops.security.pci-dss",
+              "order": 2,
+              "is_active": true
+            }
+          ],
+          "code": "devops.security",
+          "order": 5,
+          "is_active": true
         },
         {
           "name": "Version Control",
           "skills": [
-            {"name": "Git", "aliases": ["git"]}
-          ]
+            {
+              "name": "Git",
+              "aliases": [
+                "git"
+              ],
+              "code": "devops.version-control.git",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "devops.version-control",
+          "order": 6,
+          "is_active": true
         },
         {
           "name": "Infrastructure as Code",
           "skills": [
-            {"name": "Terraform", "aliases": ["terraform"]}
-          ]
+            {
+              "name": "Terraform",
+              "aliases": [
+                "terraform"
+              ],
+              "code": "devops.infrastructure-as-code.terraform",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "devops.infrastructure-as-code",
+          "order": 7,
+          "is_active": true
         },
         {
           "name": "Identity & Access",
           "skills": [
-            {"name": "Active Directory", "aliases": ["active directory"]}
-          ]
+            {
+              "name": "Active Directory",
+              "aliases": [
+                "active directory"
+              ],
+              "code": "devops.identity-and-access.active-directory",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "devops.identity-and-access",
+          "order": 8,
+          "is_active": true
         },
         {
           "name": "Virtualization",
           "skills": [
-            {"name": "VMware", "aliases": ["vmware"]}
-          ]
+            {
+              "name": "VMware",
+              "aliases": [
+                "vmware"
+              ],
+              "code": "devops.virtualization.vmware",
+              "order": 0,
+              "is_active": true
+            }
+          ],
+          "code": "devops.virtualization",
+          "order": 9,
+          "is_active": true
         },
         {
           "name": "Networking",
           "skills": [
-            {"name": "Networking", "aliases": ["networking"]},
-            {"name": "Network Engineering", "aliases": ["network engineering"]},
-            {"name": "VPN", "aliases": ["vpn"]}
-          ]
+            {
+              "name": "Networking",
+              "aliases": [
+                "networking"
+              ],
+              "code": "devops.networking.networking",
+              "order": 0,
+              "is_active": true
+            },
+            {
+              "name": "Network Engineering",
+              "aliases": [
+                "network engineering"
+              ],
+              "code": "devops.networking.network-engineering",
+              "order": 1,
+              "is_active": true
+            },
+            {
+              "name": "VPN",
+              "aliases": [
+                "vpn"
+              ],
+              "code": "devops.networking.vpn",
+              "order": 2,
+              "is_active": true
+            },
+            {
+              "name": "Wi-Fi",
+              "aliases": [
+                "wifi",
+                "wi fi",
+                "wi-fi",
+                "wi‑fi"
+              ],
+              "code": "devops.networking.wi-fi",
+              "order": 3,
+              "is_active": true
+            }
+          ],
+          "code": "devops.networking",
+          "order": 10,
+          "is_active": true
         }
-      ]
+      ],
+      "code": "devops",
+      "order": 7,
+      "is_active": true
     }
   ]
 }

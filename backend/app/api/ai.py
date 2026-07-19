@@ -17,10 +17,8 @@ from app.messaging.outbox_publisher import OutboxPublisher
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job_category import JobCategory
 from app.models.job import Job
-from app.models.job_skill_mention import JobSkillMention
 from app.models.job_subcategory import JobSubcategory
-from app.models.skill import Skill
-from app.models.skill_technology import SkillTechnology
+from app.models.skill_governance import GovernedJobSkill, GovernedJobSkillMention
 from app.schemas import JobDetailSchema
 from app.services.enrichment_run_service import (
     ActiveEnrichmentRunError,
@@ -416,10 +414,10 @@ def _load_job_snapshot(job_id: UUID) -> dict:
             snapshot_db.query(Job)
             .options(
                 joinedload(Job.company),
-                joinedload(Job.job_skill_mentions)
-                .joinedload(JobSkillMention.skill)
-                .joinedload(Skill.technology)
-                .joinedload(SkillTechnology.category),
+                joinedload(Job.governed_job_skills).joinedload(GovernedJobSkill.skill),
+                joinedload(Job.governed_skill_mentions).joinedload(
+                    GovernedJobSkillMention.candidate
+                ),
                 joinedload(Job.subcategory)
                 .joinedload(JobSubcategory.category)
                 .joinedload(JobCategory.domain),

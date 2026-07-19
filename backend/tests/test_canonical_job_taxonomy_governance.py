@@ -2830,11 +2830,11 @@ def test_ai_enrichment_uses_canonical_candidates_and_fails_closed_without_model_
                 "confidence": 0.97,
             }
 
-    class _FakeSkillNormalizer:
+    class _FakeSkillGovernanceReader:
         def __init__(self, _db):
             pass
 
-        def get_taxonomy_candidate_slice(self, *_args, **_kwargs):
+        def get_prompt_candidate_slice(self, *_args, **_kwargs):
             return {
                 "existing_categories": [],
                 "existing_technologies": [],
@@ -2843,22 +2843,17 @@ def test_ai_enrichment_uses_canonical_candidates_and_fails_closed_without_model_
                 "suppressed_review_terms": [],
             }
 
-    class _FakeMentionRepository:
-        def get_mentions_for_job(self, _db, _job_id):
-            return []
+    class _FakeSkillProjection:
+        taxonomy_revision_id = taxonomy_revision.revision_id
+        changed = False
+        mentions = ()
 
-        def delete_mentions_for_job(self, _db, _job_id):
-            return None
+    class _FakeSkillGovernance:
+        def __init__(self, _db):
+            pass
 
-        def count_jobs_for_review_candidate(self, _db, _candidate_id):
-            return 0
-
-    class _FakeJobSkillRepository:
-        def get_job_skills(self, _db, _job_id):
-            return []
-
-        def delete_obsolete_job_skills(self, *_args, **_kwargs):
-            return 0
+        def extract(self, *_args, **_kwargs):
+            return _FakeSkillProjection()
 
     class _ForbiddenLegacyNormalizer:
         def __init__(self, *_args, **_kwargs):
@@ -2871,23 +2866,13 @@ def test_ai_enrichment_uses_canonical_candidates_and_fails_closed_without_model_
     )
     monkeypatch.setattr(
         enrichment_module,
-        "get_taxonomy_visibility_service",
-        lambda: object(),
+        "SkillGovernanceReader",
+        _FakeSkillGovernanceReader,
     )
     monkeypatch.setattr(
         enrichment_module,
-        "SkillNormalizer",
-        _FakeSkillNormalizer,
-    )
-    monkeypatch.setattr(
-        enrichment_module,
-        "JobSkillMentionRepository",
-        _FakeMentionRepository,
-    )
-    monkeypatch.setattr(
-        enrichment_module,
-        "JobSkillRepository",
-        _FakeJobSkillRepository,
+        "SkillGovernance",
+        _FakeSkillGovernance,
     )
     monkeypatch.setattr(
         enrichment_module,
@@ -3012,26 +2997,11 @@ def test_ai_enrichment_blocking_mapping_creates_review_without_calling_llm(
             calls += 1
             raise AssertionError("blocking canonical evidence crossed the LLM boundary")
 
-    class _FakeSkillNormalizer:
-        def __init__(self, _db):
-            pass
-
     monkeypatch.setattr(
         enrichment_module,
         "get_job_insight_extractor",
         lambda: _ForbiddenInsightExtractor(),
     )
-    monkeypatch.setattr(
-        enrichment_module,
-        "get_taxonomy_visibility_service",
-        lambda: object(),
-    )
-    monkeypatch.setattr(
-        enrichment_module,
-        "SkillNormalizer",
-        _FakeSkillNormalizer,
-    )
-
     result = asyncio.run(
         enrichment_module.AIEnrichmentService().enrich_job(
             job,

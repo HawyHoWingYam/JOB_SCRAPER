@@ -10,17 +10,14 @@ from sqlalchemy.orm import joinedload
 from app.models.company import Company
 from app.models.job import Job
 from app.models.job_embedding import JobEmbedding
-from app.models.job_skill_mention import JobSkillMention
 from app.models.job_subcategory import JobSubcategory
 from app.models.job_category import JobCategory
-from app.models.job_domain import JobDomain
+from app.job_intelligence.skill_governance import SkillGovernanceReader
 
 
 def _tokenize(value: str | None) -> set[str]:
     return {
-        token
-        for token in re.split(r"[^a-z0-9]+", str(value or "").lower())
-        if token
+        token for token in re.split(r"[^a-z0-9]+", str(value or "").lower()) if token
     }
 
 
@@ -93,25 +90,32 @@ class JobRecommendationService:
         if source_embedding is None:
             return []
 
+        skill_reader = SkillGovernanceReader(self.db)
         source_skills = {
-            skill.strip().lower()
-            for skill in getattr(source_job, "skills", []) or []
-            if str(skill).strip()
+            skill.name.strip().lower()
+            for skill in skill_reader.get_job_state(source_job.id).skills
+            if skill.name.strip()
         }
         source_taxonomy_path = getattr(source_job, "job_taxonomy_path", None)
         source_vector = list(source_embedding.embedding)
 
         ranked: list[tuple[float, float, float, Job, Company | None]] = []
         top_n = max(limit * 10, 50)
-        for job, company, embedding_row in self._load_top_candidates(job_id, source_vector, top_n):
+        for job, company, embedding_row in self._load_top_candidates(
+            job_id, source_vector, top_n
+        ):
             candidate_skills = {
-                skill.strip().lower()
-                for skill in getattr(job, "skills", []) or []
-                if str(skill).strip()
+                skill.name.strip().lower()
+                for skill in skill_reader.get_job_state(job.id).skills
+                if skill.name.strip()
             }
-            semantic_score = _cosine_similarity(source_vector, list(embedding_row.embedding))
+            semantic_score = _cosine_similarity(
+                source_vector, list(embedding_row.embedding)
+            )
             skill_overlap_score = _skill_overlap_score(source_skills, candidate_skills)
-            taxonomy_score = _taxonomy_score(source_taxonomy_path, getattr(job, "job_taxonomy_path", None))
+            taxonomy_score = _taxonomy_score(
+                source_taxonomy_path, getattr(job, "job_taxonomy_path", None)
+            )
             freshness_score = _freshness_score(getattr(job, "posted_date", None))
             combined_score = (
                 (semantic_score * 0.65)
@@ -134,7 +138,8 @@ class JobRecommendationService:
                 entry[0],
                 entry[1],
                 entry[2],
-                getattr(entry[3], "posted_date", None) or datetime.min.replace(tzinfo=UTC),
+                getattr(entry[3], "posted_date", None)
+                or datetime.min.replace(tzinfo=UTC),
                 getattr(entry[3], "title", "") or "",
             ),
             reverse=True,
@@ -152,25 +157,39 @@ class JobRecommendationService:
             deduped.append(entry)
 
         recommendations = []
-        for combined_score, semantic_score, freshness_score, job, company in deduped[:limit]:
+        for combined_score, semantic_score, freshness_score, job, company in deduped[
+            :limit
+        ]:
             candidate_skills = {
-                skill.strip().lower()
-                for skill in getattr(job, "skills", []) or []
-                if str(skill).strip()
+                skill.name.strip().lower()
+                for skill in skill_reader.get_job_state(job.id).skills
+                if skill.name.strip()
             }
             recommendations.append(
                 {
                     "id": job.id,
                     "job_id": job.job_id,
                     "title": job.title,
-                    "company_name": company.name if company else getattr(job, "company_name", None),
+                    "company_name": company.name
+                    if company
+                    else getattr(job, "company_name", None),
                     "location": job.location,
                     "employment_type": job.employment_type,
-                    "posted_date": job.posted_date.isoformat() if job.posted_date else None,
+                    "posted_date": job.posted_date.isoformat()
+                    if job.posted_date
+                    else None,
                     "job_taxonomy": job.job_taxonomy,
                     "semantic_score": round(semantic_score, 4),
-                    "skill_overlap_score": round(_skill_overlap_score(source_skills, candidate_skills), 4),
-                    "taxonomy_score": round(_taxonomy_score(source_taxonomy_path, getattr(job, "job_taxonomy_path", None)), 4),
+                    "skill_overlap_score": round(
+                        _skill_overlap_score(source_skills, candidate_skills), 4
+                    ),
+                    "taxonomy_score": round(
+                        _taxonomy_score(
+                            source_taxonomy_path,
+                            getattr(job, "job_taxonomy_path", None),
+                        ),
+                        4,
+                    ),
                     "freshness_score": round(freshness_score, 4),
                     "combined_score": round(combined_score, 4),
                 }
@@ -183,8 +202,9 @@ class JobRecommendationService:
             self.db.query(Job)
             .options(
                 joinedload(Job.company),
-                joinedload(Job.job_skill_mentions).joinedload(JobSkillMention.skill),
-                joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
+                joinedload(Job.subcategory)
+                .joinedload(JobSubcategory.category)
+                .joinedload(JobCategory.domain),
             )
             .filter(Job.id == job_id, Job.is_deleted.is_(False))
             .one_or_none()
@@ -197,7 +217,9 @@ class JobRecommendationService:
             .one_or_none()
         )
 
-    def _load_top_candidates(self, excluded_job_id: UUID, source_vector: list[float], top_n: int):
+    def _load_top_candidates(
+        self, excluded_job_id: UUID, source_vector: list[float], top_n: int
+    ):
         """Return top-N candidates ordered by cosine similarity using pgvector."""
         stmt = (
             select(Job, Company, JobEmbedding)
@@ -205,8 +227,9 @@ class JobRecommendationService:
             .join(JobEmbedding, JobEmbedding.job_id == Job.id)
             .options(
                 joinedload(Job.company),
-                joinedload(Job.job_skill_mentions).joinedload(JobSkillMention.skill),
-                joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
+                joinedload(Job.subcategory)
+                .joinedload(JobSubcategory.category)
+                .joinedload(JobCategory.domain),
             )
             .filter(Job.id != excluded_job_id, Job.is_deleted.is_(False))
             .order_by(JobEmbedding.embedding.cosine_distance(source_vector))
@@ -219,8 +242,9 @@ class JobRecommendationService:
             self.db.query(Job)
             .options(
                 joinedload(Job.company),
-                joinedload(Job.job_skill_mentions).joinedload(JobSkillMention.skill),
-                joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
+                joinedload(Job.subcategory)
+                .joinedload(JobSubcategory.category)
+                .joinedload(JobCategory.domain),
             )
             .filter(Job.id == job_id, Job.is_deleted.is_(False))
             .one_or_none()
@@ -240,8 +264,9 @@ class JobRecommendationService:
             .join(JobEmbedding, JobEmbedding.job_id == Job.id)
             .options(
                 joinedload(Job.company),
-                joinedload(Job.job_skill_mentions).joinedload(JobSkillMention.skill),
-                joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
+                joinedload(Job.subcategory)
+                .joinedload(JobSubcategory.category)
+                .joinedload(JobCategory.domain),
             )
             .filter(Job.id != excluded_job_id, Job.is_deleted.is_(False))
             .all()

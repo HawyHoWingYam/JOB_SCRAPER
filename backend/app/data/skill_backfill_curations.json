@@ -1,4 +1,6 @@
 {
+  "schema_version": 1,
+  "taxonomy_release_key": "skills-2026-07-19-v1",
   "minimum_distinct_jobs": 100,
   "entries": {
     "python": {
@@ -439,7 +441,7 @@
     "jira": {
       "action": "merge",
       "target": {
-        "category": "Platforms",
+        "category": "Product & Delivery",
         "technology": "Collaboration Tools",
         "skill": "Jira"
       }
@@ -447,7 +449,7 @@
     "confluence": {
       "action": "merge",
       "target": {
-        "category": "Platforms",
+        "category": "Product & Delivery",
         "technology": "Collaboration Tools",
         "skill": "Confluence"
       }

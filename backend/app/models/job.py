@@ -16,7 +16,6 @@ from datetime import datetime, UTC
 import json
 from typing import Any, List, Optional
 from app.database import Base
-from app.utils.skill_taxonomy_policy import is_governed_visible_skill_instance
 from app.utils.source_identity import derive_source_job_id, normalize_source_site
 import uuid
 
@@ -65,10 +64,17 @@ class Job(Base):
             index=True,
         )
     )
-    company_id = Column(UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False, index=True)
+    company_id = Column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=False, index=True
+    )
     title = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
-    subcategory_id = Column(UUID(as_uuid=True), ForeignKey("job_subcategories.id"), nullable=True, index=True)
+    subcategory_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("job_subcategories.id"),
+        nullable=True,
+        index=True,
+    )
     source_classification_id = Column(String(50), nullable=True, index=True)
     source_classification_name = Column(String(255), nullable=True, index=True)
     source_subclassification_id = Column(String(50), nullable=True, index=True)
@@ -87,7 +93,7 @@ class Job(Base):
     salary_range = Column(String(255), nullable=True)
     salary_min = Column(Integer, nullable=True, index=True)
     salary_max = Column(Integer, nullable=True, index=True)
-    salary_currency = Column(String(10), default='HKD', nullable=True)
+    salary_currency = Column(String(10), default="HKD", nullable=True)
     location = Column(String(255), nullable=True)
     employment_type = Column(String(100), nullable=True)
     raw_data = Column(JSON, nullable=True)
@@ -100,11 +106,25 @@ class Job(Base):
     # Relationships
     company = relationship("Company", back_populates="jobs")
     subcategory = relationship("JobSubcategory", back_populates="jobs")
-    job_skills = relationship("JobSkill", back_populates="job", cascade="all, delete-orphan")
+    job_skills = relationship(
+        "JobSkill", back_populates="job", cascade="all, delete-orphan"
+    )
     job_skill_mentions = relationship(
         "JobSkillMention",
         back_populates="job",
         cascade="all, delete-orphan",
+    )
+    governed_job_skills = relationship(
+        "GovernedJobSkill",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    governed_skill_mentions = relationship(
+        "GovernedJobSkillMention",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     source_attribute_projection = relationship(
         "JobSourceAttributeProjection",
@@ -146,27 +166,25 @@ class Job(Base):
 
     @property
     def skills_list(self) -> List[str]:
-        """Return governed canonical skills derived from match-existing mentions."""
+        """Return governed Skill names from the revision-bound projection."""
         names: list[str] = []
         seen: set[str] = set()
 
-        mentions = sorted(
-            self.job_skill_mentions,
-            key=lambda mention: (
-                mention.created_at or datetime.min,
-                mention.raw_name or "",
-                str(mention.id),
+        projections = sorted(
+            self.governed_job_skills,
+            key=lambda projection: (
+                projection.created_at or datetime.min,
+                projection.skill.name if projection.skill is not None else "",
+                str(projection.id),
             ),
         )
-        for mention in mentions:
-            if mention.resolution != "match_existing" or mention.skill is None:
+        for projection in projections:
+            if projection.skill is None or not projection.skill.is_active:
                 continue
-            if not is_governed_visible_skill_instance(mention.skill):
+            if projection.skill.name in seen:
                 continue
-            if mention.skill.name in seen:
-                continue
-            seen.add(mention.skill.name)
-            names.append(mention.skill.name)
+            seen.add(projection.skill.name)
+            names.append(projection.skill.name)
 
         return names
 
@@ -182,7 +200,7 @@ class Job(Base):
         seen: set[str] = set()
 
         mentions = sorted(
-            self.job_skill_mentions,
+            self.governed_skill_mentions,
             key=lambda mention: (
                 mention.created_at or datetime.min,
                 mention.raw_name or "",
@@ -190,11 +208,16 @@ class Job(Base):
             ),
         )
         for mention in mentions:
-            if mention.resolution != "review_candidate":
+            if (
+                mention.status != "active"
+                or mention.resolution != "review_candidate"
+                or mention.candidate is None
+                or mention.candidate.status != "pending"
+            ):
                 continue
 
-            display_name = str(mention.raw_name or mention.normalized_name or "").strip()
-            key = str(mention.normalized_name or display_name).strip().lower()
+            display_name = str(mention.raw_name or mention.normalized_key or "").strip()
+            key = str(mention.normalized_key or display_name).strip().lower()
             if not display_name or not key or key in seen:
                 continue
             seen.add(key)
@@ -222,7 +245,11 @@ class Job(Base):
     @property
     def job_taxonomy(self) -> Optional[dict[str, Any]]:
         subcategory = self.subcategory
-        if subcategory is None or subcategory.category is None or subcategory.category.domain is None:
+        if (
+            subcategory is None
+            or subcategory.category is None
+            or subcategory.category.domain is None
+        ):
             return None
 
         category = subcategory.category
@@ -273,7 +300,7 @@ class Job(Base):
 
     def _strip_source_prefix(self, job_id: str, source_site: str) -> str:
         prefix = f"{source_site}:"
-        return job_id[len(prefix):] if job_id.startswith(prefix) else job_id
+        return job_id[len(prefix) :] if job_id.startswith(prefix) else job_id
 
     @property
     def experience_evidence(self) -> Optional[list[str]]:

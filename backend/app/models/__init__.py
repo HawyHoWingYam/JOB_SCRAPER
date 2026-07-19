@@ -71,6 +71,17 @@ from app.models.company_industry import (
     CompanyIndustryTaxonomyRelease,
     SourceIndustryMapping,
 )
+from app.models.skill_governance import (
+    GovernedJobSkill,
+    GovernedJobSkillMention,
+    GovernedSkill,
+    GovernedSkillAlias,
+    GovernedSkillCategory,
+    GovernedSkillTechnology,
+    SkillCandidate,
+    SkillTaxonomyActiveRevision,
+    SkillTaxonomyRelease,
+)
 
 __all__ = [
     "Company",
@@ -134,4 +145,13 @@ __all__ = [
     "CompanyIndustryTaxonomyNode",
     "CompanyIndustryTaxonomyRelease",
     "SourceIndustryMapping",
+    "GovernedJobSkill",
+    "GovernedJobSkillMention",
+    "GovernedSkill",
+    "GovernedSkillAlias",
+    "GovernedSkillCategory",
+    "GovernedSkillTechnology",
+    "SkillCandidate",
+    "SkillTaxonomyActiveRevision",
+    "SkillTaxonomyRelease",
 ]

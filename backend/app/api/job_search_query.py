@@ -1,9 +1,13 @@
-from sqlalchemy import func, literal, or_, select
+from sqlalchemy import and_, func, literal, or_, select
 
 from app.api.job_search_parser import ParsedSearchClause
 from app.models import Job, Company
-from app.models.job_skill import JobSkill
-from app.models.skill import Skill
+from app.models.skill_governance import (
+    GovernedJobSkill,
+    GovernedSkill,
+    GovernedSkillAlias,
+    SkillTaxonomyActiveRevision,
+)
 
 _NORMALIZED_SPACE_CHARS = (
     "\n",
@@ -56,17 +60,45 @@ def _normalized_column(column):
 def _build_skill_name_exists_clause(clause: ParsedSearchClause):
     if clause.clause_type == "broad":
         pattern = f"%{clause.value}%"
-        condition = Skill.name.ilike(pattern)
+        condition = or_(
+            GovernedSkill.name.ilike(pattern),
+            GovernedSkillAlias.raw_alias.ilike(pattern),
+        )
     else:
         normalized_value = normalize_search_text(clause.value)
         pattern = f"% {normalized_value} %"
-        condition = _normalized_column(Skill.name).like(pattern)
+        condition = or_(
+            _normalized_column(GovernedSkill.name).like(pattern),
+            _normalized_column(GovernedSkillAlias.raw_alias).like(pattern),
+        )
 
     return (
-        select(JobSkill.job_id)
-        .join(Skill, JobSkill.skill_id == Skill.id)
+        select(GovernedJobSkill.job_id)
+        .join(
+            SkillTaxonomyActiveRevision,
+            and_(
+                SkillTaxonomyActiveRevision.singleton_key == "skill-taxonomy",
+                SkillTaxonomyActiveRevision.revision_id
+                == GovernedJobSkill.taxonomy_revision_id,
+            ),
+        )
+        .join(
+            GovernedSkill,
+            and_(
+                GovernedJobSkill.skill_id == GovernedSkill.id,
+                GovernedJobSkill.taxonomy_revision_id == GovernedSkill.revision_id,
+                GovernedSkill.is_active.is_(True),
+            ),
+        )
+        .join(
+            GovernedSkillAlias,
+            and_(
+                GovernedSkillAlias.skill_id == GovernedSkill.id,
+                GovernedSkillAlias.taxonomy_revision_id == GovernedSkill.revision_id,
+            ),
+        )
         .where(
-            JobSkill.job_id == Job.id,
+            GovernedJobSkill.job_id == Job.id,
             condition,
         )
         .exists()

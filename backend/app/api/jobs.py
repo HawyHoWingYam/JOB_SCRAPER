@@ -13,23 +13,45 @@ from typing import Literal, Optional, List
 from pydantic import BaseModel, ConfigDict, Field
 from app.database import get_db
 from app.job_intelligence.source_attributes import SourceJobAttributes
+from app.job_intelligence.skill_governance import (
+    SkillGovernanceReadError,
+    SkillGovernanceReader,
+)
 from app.api.job_search_parser import parse_search_expression, SearchExpressionError
 from app.api.job_search_query import apply_parsed_clauses
 from app.api.ai import _publish_run_request, _wait_for_terminal_run, _load_job_snapshot
 from app.config import settings
-from app.models import Job, Company, Skill
-from app.models.job_skill import JobSkill
-from app.models.job_skill_mention import JobSkillMention
-from app.models import SkillTechnology, SkillCategory, JobSubcategory, JobCategory
+from app.models import Job, Company
+from app.models import JobSubcategory, JobCategory
+from app.models.skill_governance import (
+    GovernedJobSkill,
+    GovernedJobSkillMention,
+    GovernedSkill,
+    GovernedSkillCategory,
+    GovernedSkillTechnology,
+    SkillTaxonomyActiveRevision,
+)
 from app.models.source_job_attributes import (
     EmploymentType,
     JobEmploymentType,
     JobSourceClassificationPath,
 )
-from app.schemas import JobSchema, JobCreateSchema, ManualJobCreateSchema, JobDetailSchema, JobTaxonomySchema
+from app.schemas import (
+    JobSchema,
+    JobCreateSchema,
+    ManualJobCreateSchema,
+    JobDetailSchema,
+    JobTaxonomySchema,
+)
 from app.schemas.job import EmploymentTypeSchema, SourceClassificationPathSchema
-from app.services.enrichment_run_service import ActiveEnrichmentRunError, EnrichmentRunService
-from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
+from app.services.enrichment_run_service import (
+    ActiveEnrichmentRunError,
+    EnrichmentRunService,
+)
+from app.services.ai_runtime_settings_service import (
+    ensure_profile_runtime_ready,
+    ProfileRuntimeNotReadyError,
+)
 from app.schemas.job_search import (
     JobSearchRequestSchema,
     JobSearchFiltersSchema,
@@ -51,7 +73,6 @@ from app.utils.location_normalizer import (
     SPECIAL_REGION_VALUES,
     normalize_location,
 )
-from app.utils.skill_taxonomy_policy import apply_governed_skill_filters
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 JOB_SEARCH_EXPORT_MAX_ROWS = 10000
@@ -128,8 +149,10 @@ class JobWithCompanySchema(BaseModel):
     )
     employment_types: List[EmploymentTypeSchema] = Field(default_factory=list)
 
+
 class JobSearchResponse(BaseModel):
     """Paginated job search response."""
+
     jobs: List[JobWithCompanySchema]
     total: int
     page: int
@@ -169,6 +192,7 @@ class SourceClassificationOption(BaseModel):
 
 class FilterOptionsResponse(BaseModel):
     """Available filter options."""
+
     locations: List[str]
     regions: List[str]
     location_hierarchy: List[LocationHierarchyItem]
@@ -178,7 +202,9 @@ class FilterOptionsResponse(BaseModel):
 
 
 def _build_location_hierarchy(raw_locations: List[str]) -> List[LocationHierarchyItem]:
-    districts_by_region = {region: set() for region in REGION_ORDER}
+    districts_by_region: dict[str, set[str]] = {
+        region: set() for region in REGION_ORDER
+    }
 
     for raw_location in raw_locations:
         normalized = normalize_location(raw_location)
@@ -213,8 +239,7 @@ def _recognized_non_other_location(column):
     if exact_values:
         clauses.append(column.in_(exact_values))
     clauses.extend(
-        _location_matches_district(column, district)
-        for district in DISTRICT_TO_REGION
+        _location_matches_district(column, district) for district in DISTRICT_TO_REGION
     )
     return or_(*clauses) if clauses else false()
 
@@ -368,6 +393,50 @@ def _coerce_uuid_list(values: Optional[List[str]]) -> List[UUID]:
     return coerced
 
 
+def _join_active_skill_projection(query):
+    return (
+        query.join(
+            GovernedJobSkill,
+            GovernedJobSkill.job_id == Job.id,
+        )
+        .join(
+            SkillTaxonomyActiveRevision,
+            and_(
+                SkillTaxonomyActiveRevision.singleton_key == "skill-taxonomy",
+                SkillTaxonomyActiveRevision.revision_id
+                == GovernedJobSkill.taxonomy_revision_id,
+            ),
+        )
+        .join(
+            GovernedSkill,
+            and_(
+                GovernedSkill.id == GovernedJobSkill.skill_id,
+                GovernedSkill.revision_id == GovernedJobSkill.taxonomy_revision_id,
+            ),
+        )
+        .join(
+            GovernedSkillTechnology,
+            and_(
+                GovernedSkillTechnology.id == GovernedSkill.technology_id,
+                GovernedSkillTechnology.revision_id == GovernedSkill.revision_id,
+            ),
+        )
+        .join(
+            GovernedSkillCategory,
+            and_(
+                GovernedSkillCategory.id == GovernedSkillTechnology.category_id,
+                GovernedSkillCategory.revision_id
+                == GovernedSkillTechnology.revision_id,
+            ),
+        )
+        .filter(
+            GovernedSkill.is_active.is_(True),
+            GovernedSkillTechnology.is_active.is_(True),
+            GovernedSkillCategory.is_active.is_(True),
+        )
+    )
+
+
 def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     _validate_experience_query_window(
         filters.experience_years_from,
@@ -389,7 +458,10 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
         query = query.filter(func.date(Job.posted_date) >= filters.posted_date_from)
     if filters.posted_date_to:
         query = query.filter(func.date(Job.posted_date) <= filters.posted_date_to)
-    if filters.experience_years_from is not None or filters.experience_years_to is not None:
+    if (
+        filters.experience_years_from is not None
+        or filters.experience_years_to is not None
+    ):
         query_window = _build_experience_query_window(
             experience_years_from=filters.experience_years_from,
             experience_years_to=filters.experience_years_to,
@@ -415,77 +487,41 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
 
     if skill_ids:
         query = (
-            query.join(
-                JobSkillMention,
-                and_(
-                    JobSkillMention.job_id == Job.id,
-                    JobSkillMention.resolution == "match_existing",
-                    JobSkillMention.skill_id.isnot(None),
-                ),
-            )
-            .join(Skill, JobSkillMention.skill_id == Skill.id)
-            .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
-            .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+            _join_active_skill_projection(query)
+            .filter(GovernedSkill.id.in_(skill_ids))
+            .distinct()
         )
-        query = apply_governed_skill_filters(query).filter(Skill.id.in_(skill_ids)).distinct()
     elif technology_ids:
         query = (
-            query.join(
-                JobSkillMention,
-                and_(
-                    JobSkillMention.job_id == Job.id,
-                    JobSkillMention.resolution == "match_existing",
-                    JobSkillMention.skill_id.isnot(None),
-                ),
-            )
-            .join(Skill, JobSkillMention.skill_id == Skill.id)
-            .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
-            .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+            _join_active_skill_projection(query)
+            .filter(GovernedSkill.technology_id.in_(technology_ids))
+            .distinct()
         )
-        query = apply_governed_skill_filters(query).filter(
-            Skill.technology_id.in_(technology_ids)
-        ).distinct()
     elif skill_category_ids:
         query = (
-            query.join(
-                JobSkillMention,
-                and_(
-                    JobSkillMention.job_id == Job.id,
-                    JobSkillMention.resolution == "match_existing",
-                    JobSkillMention.skill_id.isnot(None),
-                ),
-            )
-            .join(Skill, JobSkillMention.skill_id == Skill.id)
-            .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
-            .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+            _join_active_skill_projection(query)
+            .filter(GovernedSkillTechnology.category_id.in_(skill_category_ids))
+            .distinct()
         )
-        query = apply_governed_skill_filters(query).filter(
-            SkillTechnology.category_id.in_(skill_category_ids)
-        ).distinct()
     elif filters.skills:
         query = (
-            query.join(
-                JobSkillMention,
-                and_(
-                    JobSkillMention.job_id == Job.id,
-                    JobSkillMention.resolution == "match_existing",
-                    JobSkillMention.skill_id.isnot(None),
-                ),
-            )
-            .join(Skill, JobSkillMention.skill_id == Skill.id)
-            .join(SkillTechnology, Skill.technology_id == SkillTechnology.id)
-            .join(SkillCategory, SkillTechnology.category_id == SkillCategory.id)
+            _join_active_skill_projection(query)
+            .filter(GovernedSkill.name.in_(filters.skills))
+            .distinct()
         )
-        query = apply_governed_skill_filters(query).filter(
-            Skill.name.in_(filters.skills)
-        ).distinct()
 
     if subcategory_ids:
         query = query.filter(Job.subcategory_id.in_(subcategory_ids))
     elif job_category_ids:
-        query = query.join(JobSubcategory).filter(JobSubcategory.category_id.in_(job_category_ids))
+        query = query.join(JobSubcategory).filter(
+            JobSubcategory.category_id.in_(job_category_ids)
+        )
     elif domain_ids:
-        query = query.join(JobSubcategory).join(JobCategory).filter(JobCategory.domain_id.in_(domain_ids))
+        query = (
+            query.join(JobSubcategory)
+            .join(JobCategory)
+            .filter(JobCategory.domain_id.in_(domain_ids))
+        )
 
     if filters.district:
         query = query.filter(_location_matches_district(Job.location, filters.district))
@@ -511,13 +547,13 @@ def _summarize_layer(layer: JobSearchLayerSchema) -> JobSearchLayerSummarySchema
 
     filters = layer.structured_filters
     if filters.source_site:
-        parts.append(f"Source: {SOURCE_SITE_LABELS.get(filters.source_site, filters.source_site)}")
+        parts.append(
+            f"Source: {SOURCE_SITE_LABELS.get(filters.source_site, filters.source_site)}"
+        )
     if filters.industry:
         parts.append(f"Industry: {filters.industry}")
     if filters.employment_type_codes:
-        parts.append(
-            "Employment Types: " + ", ".join(filters.employment_type_codes)
-        )
+        parts.append("Employment Types: " + ", ".join(filters.employment_type_codes))
 
     return JobSearchLayerSummarySchema(
         client_id=layer.client_id,
@@ -526,17 +562,24 @@ def _summarize_layer(layer: JobSearchLayerSchema) -> JobSearchLayerSummarySchema
 
 
 def _build_query_from_scope(db: Session, scope: JobSearchScopeSchema):
-    query = db.query(Job, Company).join(
-        Company, Job.company_id == Company.id
-    ).filter(Job.is_deleted.is_(False)).options(
-        joinedload(Job.job_skills).joinedload(JobSkill.skill),
-        joinedload(Job.company),
-        joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
-        *_source_attribute_load_options(),
+    query = (
+        db.query(Job, Company)
+        .join(Company, Job.company_id == Company.id)
+        .filter(Job.is_deleted.is_(False))
+        .options(
+            selectinload(Job.governed_job_skills).joinedload(GovernedJobSkill.skill),
+            joinedload(Job.company),
+            joinedload(Job.subcategory)
+            .joinedload(JobSubcategory.category)
+            .joinedload(JobCategory.domain),
+            *_source_attribute_load_options(),
+        )
     )
 
     for layer in scope.layers:
-        query = apply_parsed_clauses(query, parse_search_expression(layer.text_expression))
+        query = apply_parsed_clauses(
+            query, parse_search_expression(layer.text_expression)
+        )
         query = _apply_structured_filters(query, layer.structured_filters)
 
     return query
@@ -638,21 +681,25 @@ def _build_search_response_from_results(
 ):
     jobs = []
     for job, company in results:
-        jobs.append(JobWithCompanySchema(
-            id=job.id,
-            job_id=job.job_id,
-            title=job.title,
-            description=job.description[:200] + "..." if job.description and len(job.description) > 200 else job.description,
-            location=job.location,
-            salary_range=job.salary_range,
-            employment_type=job.employment_type,
-            subcategory_id=job.subcategory_id,
-            job_taxonomy=job.job_taxonomy,
-            company_name=company.name if company else None,
-            posted_date=job.posted_date.isoformat() if job.posted_date else None,
-            source_classification_paths=job.source_classification_paths,
-            employment_types=job.employment_types,
-        ))
+        jobs.append(
+            JobWithCompanySchema(
+                id=job.id,
+                job_id=job.job_id,
+                title=job.title,
+                description=job.description[:200] + "..."
+                if job.description and len(job.description) > 200
+                else job.description,
+                location=job.location,
+                salary_range=job.salary_range,
+                employment_type=job.employment_type,
+                subcategory_id=job.subcategory_id,
+                job_taxonomy=job.job_taxonomy,
+                company_name=company.name if company else None,
+                posted_date=job.posted_date.isoformat() if job.posted_date else None,
+                source_classification_paths=job.source_classification_paths,
+                employment_types=job.employment_types,
+            )
+        )
 
     total_pages = (total + page_size - 1) // page_size
     return JobSearchResponse(
@@ -680,7 +727,7 @@ def _raw_data_mapping(value) -> dict:
 
 def _strip_source_prefix(job_id: str, source_site: str) -> str:
     prefix = f"{source_site}:"
-    return job_id[len(prefix):] if job_id.startswith(prefix) else job_id
+    return job_id[len(prefix) :] if job_id.startswith(prefix) else job_id
 
 
 def _build_original_job_url(job) -> str:
@@ -730,18 +777,25 @@ def _build_export_rows_from_results(results):
                 "employment_type": job.employment_type or "",
                 "posted_date": job.posted_date.isoformat() if job.posted_date else "",
                 "expiry_date": job.expiry_date or "",
-                "is_expired": "" if job.is_expired is None else str(job.is_expired).lower(),
+                "is_expired": ""
+                if job.is_expired is None
+                else str(job.is_expired).lower(),
                 "salary_range": job.salary_range or "",
                 "salary_min": "" if job.salary_min is None else str(job.salary_min),
                 "salary_max": "" if job.salary_max is None else str(job.salary_max),
                 "salary_currency": job.salary_currency or "",
                 "source_classification_name": job.source_classification_name or "",
-                "source_subclassification_name": job.source_subclassification_name or "",
+                "source_subclassification_name": job.source_subclassification_name
+                or "",
                 "job_taxonomy_path": job.job_taxonomy_path or "",
                 "ai_summary": job.ai_summary or "",
                 "experience_level": job.experience_level or "",
-                "experience_min_years": "" if job.experience_min_years is None else str(job.experience_min_years),
-                "experience_max_years": "" if job.experience_max_years is None else str(job.experience_max_years),
+                "experience_min_years": ""
+                if job.experience_min_years is None
+                else str(job.experience_min_years),
+                "experience_max_years": ""
+                if job.experience_max_years is None
+                else str(job.experience_max_years),
                 "experience_summary": job.experience_summary or "",
                 "skills": " | ".join(job.skills),
                 "company_ai_description": company.ai_description if company else "",
@@ -790,8 +844,7 @@ async def _search_via_retrieval_api(
 ) -> JobSearchResponse:
     payload = request.model_dump(mode="json")
     payload["layer_summaries"] = [
-        layer_summary.model_dump(mode="json")
-        for layer_summary in layer_summaries
+        layer_summary.model_dump(mode="json") for layer_summary in layer_summaries
     ]
 
     client = RetrievalClient(base_url=settings.retrieval_api_url)
@@ -865,7 +918,9 @@ async def search_jobs(
     location: Optional[str] = Query(None, description="Filter by location"),
     region: Optional[str] = Query(None, description="Filter by normalized region"),
     district: Optional[str] = Query(None, description="Filter by normalized district"),
-    employment_type: Optional[str] = Query(None, description="Filter by employment type"),
+    employment_type: Optional[str] = Query(
+        None, description="Filter by employment type"
+    ),
     source_classification_ids: Optional[List[str]] = Query(
         None,
         description="Filter by Source Classification identities",
@@ -875,17 +930,37 @@ async def search_jobs(
         description="Filter by governed Employment Type codes",
     ),
     industry: Optional[str] = Query(None, description="Filter by industry"),
-    posted_date_from: Optional[date] = Query(None, description="Filter by posted date from"),
-    posted_date_to: Optional[date] = Query(None, description="Filter by posted date to"),
-    experience_years_from: Optional[int] = Query(None, ge=0, description="Filter by minimum required experience years"),
-    experience_years_to: Optional[int] = Query(None, ge=0, description="Filter by maximum required experience years"),
+    posted_date_from: Optional[date] = Query(
+        None, description="Filter by posted date from"
+    ),
+    posted_date_to: Optional[date] = Query(
+        None, description="Filter by posted date to"
+    ),
+    experience_years_from: Optional[int] = Query(
+        None, ge=0, description="Filter by minimum required experience years"
+    ),
+    experience_years_to: Optional[int] = Query(
+        None, ge=0, description="Filter by maximum required experience years"
+    ),
     skills: Optional[List[str]] = Query(None, description="Filter by skills"),
-    skill_ids: Optional[List[str]] = Query(None, description="Filter by skill IDs (L3)"),
-    technology_ids: Optional[List[str]] = Query(None, description="Filter by technology IDs (L2)"),
-    skill_category_ids: Optional[List[str]] = Query(None, description="Filter by skill category IDs (L1)"),
-    subcategory_ids: Optional[List[str]] = Query(None, description="Filter by job subcategory IDs (L3)"),
-    job_category_ids: Optional[List[str]] = Query(None, description="Filter by job category IDs (L2)"),
-    domain_ids: Optional[List[str]] = Query(None, description="Filter by job domain IDs (L1)"),
+    skill_ids: Optional[List[str]] = Query(
+        None, description="Filter by skill IDs (L3)"
+    ),
+    technology_ids: Optional[List[str]] = Query(
+        None, description="Filter by technology IDs (L2)"
+    ),
+    skill_category_ids: Optional[List[str]] = Query(
+        None, description="Filter by skill category IDs (L1)"
+    ),
+    subcategory_ids: Optional[List[str]] = Query(
+        None, description="Filter by job subcategory IDs (L3)"
+    ),
+    job_category_ids: Optional[List[str]] = Query(
+        None, description="Filter by job category IDs (L2)"
+    ),
+    domain_ids: Optional[List[str]] = Query(
+        None, description="Filter by job domain IDs (L1)"
+    ),
     salary_min: Optional[int] = Query(None, ge=0, description="Minimum salary (HKD)"),
     salary_max: Optional[int] = Query(None, ge=0, description="Maximum salary (HKD)"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -962,11 +1037,12 @@ async def export_jobs_search_scope(
 async def get_filter_options(db: Session = Depends(get_db)):
     """Get available filter options from existing jobs."""
     # Get unique locations
-    locations = db.query(Job.location).filter(
-        Job.is_deleted.is_(False),
-        Job.location.isnot(None),
-        Job.location != ""
-    ).distinct().all()
+    locations = (
+        db.query(Job.location)
+        .filter(Job.is_deleted.is_(False), Job.location.isnot(None), Job.location != "")
+        .distinct()
+        .all()
+    )
 
     employment_types = (
         db.query(EmploymentType)
@@ -1011,11 +1087,16 @@ async def get_filter_options(db: Session = Depends(get_db)):
             )
 
     # Get unique industries from companies
-    industries = db.query(Company.industry).filter(
-        Company.is_deleted.is_(False),
-        Company.industry.isnot(None),
-        Company.industry != ""
-    ).distinct().all()
+    industries = (
+        db.query(Company.industry)
+        .filter(
+            Company.is_deleted.is_(False),
+            Company.industry.isnot(None),
+            Company.industry != "",
+        )
+        .distinct()
+        .all()
+    )
 
     raw_locations = [loc[0] for loc in locations if loc[0]]
 
@@ -1032,7 +1113,7 @@ async def get_filter_options(db: Session = Depends(get_db)):
             for item in employment_types
         ],
         source_classifications=source_classifications,
-        industries=[ind[0] for ind in industries if ind[0]]
+        industries=[ind[0] for ind in industries if ind[0]],
     )
 
 
@@ -1043,11 +1124,13 @@ async def get_job(job_id: UUID, db: Session = Depends(get_db)):
         db.query(Job)
         .options(
             joinedload(Job.company),
-            joinedload(Job.job_skill_mentions)
-            .joinedload(JobSkillMention.skill)
-            .joinedload(Skill.technology)
-            .joinedload(SkillTechnology.category),
-            joinedload(Job.subcategory).joinedload(JobSubcategory.category).joinedload(JobCategory.domain),
+            selectinload(Job.governed_job_skills).joinedload(GovernedJobSkill.skill),
+            selectinload(Job.governed_skill_mentions).joinedload(
+                GovernedJobSkillMention.candidate
+            ),
+            joinedload(Job.subcategory)
+            .joinedload(JobSubcategory.category)
+            .joinedload(JobCategory.domain),
             *_source_attribute_load_options(include_labels=True),
         )
         .filter(Job.id == job_id, Job.is_deleted.is_(False))
@@ -1055,7 +1138,25 @@ async def get_job(job_id: UUID, db: Session = Depends(get_db)):
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    detail = JobDetailSchema.model_validate(job).model_dump(mode="python")
+    try:
+        skill_state = SkillGovernanceReader(db).get_job_state(job.id)
+    except SkillGovernanceReadError as exc:
+        if exc.code == "SKILL_TAXONOMY_NOT_ACTIVE":
+            detail["skills"] = []
+            detail["provisional_skills"] = []
+            detail["unreviewed_skill_mentions"] = []
+        else:
+            raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
+    else:
+        detail["skills"] = [skill.name for skill in skill_state.skills]
+        detail["provisional_skills"] = [
+            mention.raw_name for mention in skill_state.unreviewed_skill_mentions
+        ]
+        detail["unreviewed_skill_mentions"] = [
+            mention.to_payload() for mention in skill_state.unreviewed_skill_mentions
+        ]
+    return JobDetailSchema.model_validate(detail)
 
 
 @router.post("", response_model=JobSchema, deprecated=True)

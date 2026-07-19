@@ -5,14 +5,13 @@ import json
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from difflib import SequenceMatcher
 from sqlalchemy.orm import Session
 
 from app.models.skill import Skill
 from app.models.skill_category import SkillCategory
-from app.models.skill_review_candidate import SkillReviewCandidate
 from app.models.skill_technology import SkillTechnology
 
 
@@ -108,7 +107,9 @@ class SkillNormalizer:
 
         suppressed_review_terms = rules.get("suppressed_review_terms", [])
         rules["suppressed_review_terms"] = [
-            str(value).strip() for value in suppressed_review_terms if str(value).strip()
+            str(value).strip()
+            for value in suppressed_review_terms
+            if str(value).strip()
         ]
         rules["suppressed_review_terms_lookup"] = {
             self._normalize_lookup_key(value)
@@ -117,7 +118,9 @@ class SkillNormalizer:
         }
 
         technical_hints = rules.get("technical_hint_keywords", [])
-        rules["technical_hint_keywords"] = [str(value).lower() for value in technical_hints]
+        rules["technical_hint_keywords"] = [
+            str(value).lower() for value in technical_hints
+        ]
         return rules
 
     def _load_cache(self):
@@ -187,7 +190,9 @@ class SkillNormalizer:
         )
 
     def _is_review_only_term(self, name: str) -> bool:
-        return self._normalize_lookup_key(name) in self._rules.get("review_only_terms_lookup", set())
+        return self._normalize_lookup_key(name) in self._rules.get(
+            "review_only_terms_lookup", set()
+        )
 
     def _is_suppressed_review_term(self, name: str) -> bool:
         return self._normalize_lookup_key(name) in self._rules.get(
@@ -201,7 +206,9 @@ class SkillNormalizer:
     ) -> bool:
         if not role_mode:
             return False
-        return self._normalize_lookup_key(name) in self._ROLE_MODE_CANONICAL_OVERRIDES.get(
+        return self._normalize_lookup_key(
+            name
+        ) in self._ROLE_MODE_CANONICAL_OVERRIDES.get(
             role_mode,
             set(),
         )
@@ -298,7 +305,9 @@ class SkillNormalizer:
         )
         kind = str(payload.get("kind") or "").strip().lower()
         generic_label = self.canonicalize_generic_tag(canonical_name)
-        if (kind == "generic" or generic_label is not None) and not allow_canonical_override:
+        if (
+            kind == "generic" or generic_label is not None
+        ) and not allow_canonical_override:
             generic_tag = generic_label or canonical_name
             return {
                 "action": "generic_tag",
@@ -306,7 +315,10 @@ class SkillNormalizer:
                 "generic_tag_key": self.normalize_generic_tag_key(generic_tag),
             }
 
-        if self._is_suppressed_review_term(canonical_name) and not allow_canonical_override:
+        if (
+            self._is_suppressed_review_term(canonical_name)
+            and not allow_canonical_override
+        ):
             return {
                 "action": "reject",
                 "reason": "suppressed_review_term",
@@ -341,13 +353,16 @@ class SkillNormalizer:
 
         existing_skill = self._find_cached_skill(canonical_name)
         if hinted_name and (
-            existing_skill is None or self._is_polluted_other_general_auto_skill(existing_skill)
+            existing_skill is None
+            or self._is_polluted_other_general_auto_skill(existing_skill)
         ):
             hinted_skill = self._find_cached_skill(hinted_name)
             if hinted_skill is not None:
                 existing_skill = hinted_skill
 
-        if existing_skill is not None and self._is_polluted_other_general_auto_skill(existing_skill):
+        if existing_skill is not None and self._is_polluted_other_general_auto_skill(
+            existing_skill
+        ):
             for lookup_name in lookup_names:
                 canonical_skill = self._find_non_polluted_duplicate_for_key(lookup_name)
                 if canonical_skill is not None:
@@ -357,8 +372,9 @@ class SkillNormalizer:
         if existing_skill is None:
             existing_skill = self._fuzzy_match(canonical_name)
 
-        if existing_skill is not None and not self._is_polluted_other_general_auto_skill(
-            existing_skill
+        if (
+            existing_skill is not None
+            and not self._is_polluted_other_general_auto_skill(existing_skill)
         ):
             return {
                 "action": "match_existing",
@@ -384,7 +400,9 @@ class SkillNormalizer:
         }
 
     def _is_generic_term(self, name: str) -> bool:
-        return self._normalize_lookup_key(name) in self._rules.get("generic_terms_lookup", set())
+        return self._normalize_lookup_key(name) in self._rules.get(
+            "generic_terms_lookup", set()
+        )
 
     def _looks_technical(self, name: str, payload: Dict[str, Any]) -> bool:
         resolution = str(payload.get("resolution") or "").strip().lower()
@@ -397,7 +415,8 @@ class SkillNormalizer:
 
         lowered = name.lower()
         return any(
-            keyword in lowered for keyword in self._rules.get("technical_hint_keywords", [])
+            keyword in lowered
+            for keyword in self._rules.get("technical_hint_keywords", [])
         )
 
     def _fuzzy_match(self, name: str) -> Optional[Skill]:
@@ -413,7 +432,11 @@ class SkillNormalizer:
 
         best_ratio = 0.0
         best_id = None
-        cache = self._exact_skill_cache if symbol_sensitive else self._normalized_skill_cache
+        cache = (
+            self._exact_skill_cache
+            if symbol_sensitive
+            else self._normalized_skill_cache
+        )
 
         for cached_name, skill_id in cache.items():
             ratio = SequenceMatcher(None, normalized_name, cached_name).ratio()
@@ -429,58 +452,6 @@ class SkillNormalizer:
         if best_id is None:
             return None
         return self.db.query(Skill).filter_by(id=best_id).first()
-
-    def register_review_candidate(
-        self,
-        *,
-        raw_name: str,
-        normalized_name: str,
-        job_id: Optional[uuid.UUID] = None,
-        suggested_category: Optional[str] = None,
-        suggested_technology: Optional[str] = None,
-        description: str = "",
-        source_subclassification_name: Optional[str] = None,
-    ) -> SkillReviewCandidate:
-        resolved_category = suggested_category
-        resolved_technology = suggested_technology
-        if not resolved_category or not resolved_technology:
-            inferred_category, inferred_technology = self.infer_taxonomy_hints(
-                raw_name or normalized_name,
-                description=description,
-                source_subclassification_name=source_subclassification_name,
-            )
-            resolved_category = resolved_category or inferred_category
-            resolved_technology = resolved_technology or inferred_technology
-
-        normalized_lookup = self.normalize_review_candidate_key(normalized_name or raw_name)
-        if not normalized_lookup:
-            normalized_lookup = self._normalize_lookup_key(normalized_name or raw_name)
-        candidate = (
-            self.db.query(SkillReviewCandidate)
-            .filter_by(normalized_name=normalized_lookup)
-            .first()
-        )
-        if candidate is None:
-            candidate = SkillReviewCandidate(
-                raw_name=raw_name,
-                normalized_name=normalized_lookup,
-                suggested_category=resolved_category,
-                suggested_technology=resolved_technology,
-                first_seen_job_id=job_id,
-                last_seen_job_id=job_id,
-            )
-            self.db.add(candidate)
-            self.db.flush()
-            return candidate
-
-        candidate.raw_name = raw_name
-        candidate.last_seen_job_id = job_id
-        if resolved_category:
-            candidate.suggested_category = resolved_category
-        if resolved_technology:
-            candidate.suggested_technology = resolved_technology
-        self.db.flush()
-        return candidate
 
     def normalize_skill(self, name: str) -> Tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
         """
@@ -523,7 +494,9 @@ class SkillNormalizer:
             return ("Database", "SQL")
         if any(x in name_lower for x in ["mongo", "redis"]):
             return ("Database", "NoSQL")
-        if any(x in name_lower for x in ["business intelligence", "power bi", "tableau"]):
+        if any(
+            x in name_lower for x in ["business intelligence", "power bi", "tableau"]
+        ):
             return ("Data", "Business Intelligence")
 
         if any(x in name_lower for x in ["docker", "kubernetes", "k8s"]):
@@ -536,9 +509,15 @@ class SkillNormalizer:
             return ("DevOps", "Identity & Access")
         if any(x in name_lower for x in ["vmware", "virtualization"]):
             return ("DevOps", "Virtualization")
-        if any(x in name_lower for x in ["windows server", "windows", "linux", "unix", "operating system"]):
+        if any(
+            x in name_lower
+            for x in ["windows server", "windows", "linux", "unix", "operating system"]
+        ):
             return ("DevOps", "Operating Systems")
-        if any(x in name_lower for x in ["cybersecurity", "cyber security", "firewall", "security"]):
+        if any(
+            x in name_lower
+            for x in ["cybersecurity", "cyber security", "firewall", "security"]
+        ):
             return ("DevOps", "Security")
         if any(x in name_lower for x in ["network", "vpn", "tcp ip", "tcp/ip"]):
             return ("DevOps", "Networking")
@@ -551,7 +530,9 @@ class SkillNormalizer:
         return re.search(rf"(?<!\w){re.escape(lookup_key)}(?!\w)", text) is not None
 
     def _find_contextual_skill_match(self, *values: Optional[str]) -> Optional[Skill]:
-        normalized_text = self._normalize_lookup_key(" ".join(str(value or "") for value in values))
+        normalized_text = self._normalize_lookup_key(
+            " ".join(str(value or "") for value in values)
+        )
         if not normalized_text:
             return None
 
@@ -575,19 +556,27 @@ class SkillNormalizer:
 
         return best_skill
 
-    def _terms_in_context(self, rule_name: str, *values: Optional[str], limit: int = 10) -> list[str]:
-        normalized_text = self._normalize_lookup_key(" ".join(str(value or "") for value in values))
+    def _terms_in_context(
+        self, rule_name: str, *values: Optional[str], limit: int = 10
+    ) -> list[str]:
+        normalized_text = self._normalize_lookup_key(
+            " ".join(str(value or "") for value in values)
+        )
         if not normalized_text:
             return []
 
         matches = [
             term
             for term in self._rules.get(rule_name, [])
-            if self._contains_lookup_key(normalized_text, self._normalize_lookup_key(term))
+            if self._contains_lookup_key(
+                normalized_text, self._normalize_lookup_key(term)
+            )
         ]
         return matches[:limit]
 
-    def _review_only_terms_in_context(self, *values: Optional[str], limit: int = 10) -> list[str]:
+    def _review_only_terms_in_context(
+        self, *values: Optional[str], limit: int = 10
+    ) -> list[str]:
         return self._terms_in_context("review_only_terms", *values, limit=limit)
 
     def _suppressed_review_terms_in_context(
@@ -608,8 +597,9 @@ class SkillNormalizer:
         existing_skill = None
         if not self._is_review_only_term(canonical_name):
             existing_skill = self._find_cached_skill(canonical_name)
-        if existing_skill is not None and not self._is_polluted_other_general_auto_skill(
-            existing_skill
+        if (
+            existing_skill is not None
+            and not self._is_polluted_other_general_auto_skill(existing_skill)
         ):
             return (
                 existing_skill.technology.category.name,
@@ -637,7 +627,13 @@ class SkillNormalizer:
             return role_mode_hint
 
         hint_source = " ".join(
-            value for value in [canonical_name, description, source_subclassification_name or ""] if value
+            value
+            for value in [
+                canonical_name,
+                description,
+                source_subclassification_name or "",
+            ]
+            if value
         )
         category_hint, technology_hint = self._infer_hierarchy(hint_source)
         if category_hint == "Other" and technology_hint == "General":
@@ -657,11 +653,20 @@ class SkillNormalizer:
             return None
 
         haystack = " ".join(
-            [str(title or ""), str(description or ""), str(source_subclassification_name or "")]
+            [
+                str(title or ""),
+                str(description or ""),
+                str(source_subclassification_name or ""),
+            ]
         ).lower()
-        if any(keyword in haystack for keyword in ("support", "service desk", "help desk", "incident")):
+        if any(
+            keyword in haystack
+            for keyword in ("support", "service desk", "help desk", "incident")
+        ):
             return ("Support & Operations", "Service & Support")
-        if any(keyword in haystack for keyword in ("analyst", "analysis", "requirements")):
+        if any(
+            keyword in haystack for keyword in ("analyst", "analysis", "requirements")
+        ):
             return ("Product & Delivery", "Business Analysis")
         if any(keyword in haystack for keyword in ("jira", "confluence")):
             return ("Product & Delivery", "Collaboration Tools")
@@ -699,15 +704,21 @@ class SkillNormalizer:
         )
         if category_hint is None or technology_hint is None:
             category_hint, technology_hint = ("Other", "General")
-        categories = self.db.query(SkillCategory).filter(SkillCategory.name != "Other").all()
+        categories = (
+            self.db.query(SkillCategory).filter(SkillCategory.name != "Other").all()
+        )
 
         hinted_category = None
         if has_specific_hint:
-            hinted_category = self.db.query(SkillCategory).filter_by(name=category_hint).first()
+            hinted_category = (
+                self.db.query(SkillCategory).filter_by(name=category_hint).first()
+            )
         if hinted_category:
-            technologies = self.db.query(SkillTechnology).filter_by(
-                category_id=hinted_category.id
-            ).all()
+            technologies = (
+                self.db.query(SkillTechnology)
+                .filter_by(category_id=hinted_category.id)
+                .all()
+            )
         else:
             technologies = (
                 self.db.query(SkillTechnology)
@@ -718,15 +729,19 @@ class SkillNormalizer:
 
         hinted_technology = None
         if hinted_category and has_specific_hint:
-            hinted_technology = self.db.query(SkillTechnology).filter_by(
-                category_id=hinted_category.id,
-                name=technology_hint,
-            ).first()
+            hinted_technology = (
+                self.db.query(SkillTechnology)
+                .filter_by(
+                    category_id=hinted_category.id,
+                    name=technology_hint,
+                )
+                .first()
+            )
 
         if hinted_technology:
-            skills = self.db.query(Skill).filter_by(
-                technology_id=hinted_technology.id
-            ).all()
+            skills = (
+                self.db.query(Skill).filter_by(technology_id=hinted_technology.id).all()
+            )
         else:
             skills = [
                 skill
@@ -738,7 +753,9 @@ class SkillNormalizer:
             "category_hint": category_hint,
             "technology_hint": technology_hint,
             "existing_categories": [category.name for category in categories[:limit]],
-            "existing_technologies": [technology.name for technology in technologies[:limit]],
+            "existing_technologies": [
+                technology.name for technology in technologies[:limit]
+            ],
             "existing_skills": [skill.name for skill in skills[:limit]],
             "review_only_terms": self._review_only_terms_in_context(
                 title,
@@ -771,14 +788,3 @@ class SkillNormalizer:
             "technology": skill.technology.name,
             "category": skill.technology.category.name,
         }
-
-
-_normalizer_instance = None
-
-
-def get_skill_normalizer(db: Session) -> SkillNormalizer:
-    """Get or create skill normalizer singleton."""
-    global _normalizer_instance
-    if _normalizer_instance is None:
-        _normalizer_instance = SkillNormalizer(db)
-    return _normalizer_instance

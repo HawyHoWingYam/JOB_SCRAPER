@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from importlib import import_module
 import logging
 from typing import Any
 from uuid import UUID
@@ -12,14 +13,19 @@ from app.database import SessionLocal
 from app.logging_config import configure_logging
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.redis_stream_bus import RedisStreamBus, StreamMessage
-from app.messaging.topics import STREAM_JOB_EMBEDDING, STREAM_JOB_LIFECYCLE
-from app.models import Job, JobEmbedding, JobSkillMention
+from app.messaging.topics import (
+    STREAM_JOB_EMBEDDING,
+    STREAM_JOB_INTELLIGENCE_PROJECTIONS,
+    STREAM_JOB_LIFECYCLE,
+)
+from app.models import Job, JobEmbedding
+from app.job_intelligence.skill_governance import SkillGovernanceReader
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.job_embedding_repository import JobEmbeddingRepository
 from app.services.embedding_document_builder import EmbeddingDocumentBuilder
 
 try:
-    from sentence_transformers import SentenceTransformer
+    SentenceTransformer = import_module("sentence_transformers").SentenceTransformer
 except Exception:  # pragma: no cover - optional import gate
     SentenceTransformer = None
 
@@ -60,28 +66,51 @@ class EmbeddingWorkerService:
         self.session_factory = session_factory or SessionLocal
         self.embedding_model = embedding_model or _build_default_embedding_model()
         self.document_builder = document_builder or EmbeddingDocumentBuilder()
-        self.event_outbox_repository = event_outbox_repository or EventOutboxRepository()
-        self.job_embedding_repository = job_embedding_repository or JobEmbeddingRepository()
+        self.event_outbox_repository = (
+            event_outbox_repository or EventOutboxRepository()
+        )
+        self.job_embedding_repository = (
+            job_embedding_repository or JobEmbeddingRepository()
+        )
         self.embedding_model_name = embedding_model_name
         self.embedding_version = embedding_version
         self.bus.ensure_group(STREAM_JOB_LIFECYCLE, self.group_name)
+        self.bus.ensure_group(
+            STREAM_JOB_INTELLIGENCE_PROJECTIONS,
+            self.group_name,
+        )
 
     async def run_once(self) -> int:
-        messages = self.bus.consume_group(
-            STREAM_JOB_LIFECYCLE,
-            self.group_name,
-            self.consumer_name,
-            count=10,
-            block_ms=100,
-        )
-        for message in messages:
-            await self._handle_message(message)
-        return len(messages)
+        consumed: list[tuple[str, Any]] = []
+        for topic, block_ms in (
+            (STREAM_JOB_LIFECYCLE, 100),
+            (STREAM_JOB_INTELLIGENCE_PROJECTIONS, 1),
+        ):
+            messages = self.bus.consume_group(
+                topic,
+                self.group_name,
+                self.consumer_name,
+                count=10,
+                block_ms=block_ms,
+            )
+            consumed.extend((topic, message) for message in messages)
+        for topic, message in consumed:
+            await self._handle_message(message, topic=topic)
+        return len(consumed)
 
-    async def _handle_message(self, message: StreamMessage | Any) -> None:
+    async def _handle_message(
+        self,
+        message: StreamMessage | Any,
+        *,
+        topic: str = STREAM_JOB_LIFECYCLE,
+    ) -> None:
         event = message.event
-        if event.event_type not in {"job.ingested", "job.enriched"}:
-            self.bus.ack(STREAM_JOB_LIFECYCLE, self.group_name, message.message_id)
+        if event.event_type not in {
+            "job.ingested",
+            "job.enriched",
+            "job.skill_projection_changed",
+        }:
+            self.bus.ack(topic, self.group_name, message.message_id)
             return
 
         db = self.session_factory()
@@ -92,7 +121,6 @@ class EmbeddingWorkerService:
                 db.query(Job)
                 .options(
                     joinedload(Job.company),
-                    joinedload(Job.job_skill_mentions).joinedload(JobSkillMention.skill),
                 )
                 .filter(Job.id == job_id)
                 .one_or_none()
@@ -100,10 +128,21 @@ class EmbeddingWorkerService:
             if job is None:
                 raise ValueError(f"Job not found for embedding: {job_id}")
 
-            document = self.document_builder.build_for_job(job)
-            existing = db.query(JobEmbedding).filter(JobEmbedding.job_id == job.id).one_or_none()
-            if existing is not None and existing.document_hash == document.document_hash:
-                self.bus.ack(STREAM_JOB_LIFECYCLE, self.group_name, message.message_id)
+            skill_state = SkillGovernanceReader(db).get_job_state(job.id)
+            document = self.document_builder.build_for_job(
+                job,
+                governed_skill_names=(skill.name for skill in skill_state.skills),
+            )
+            existing = (
+                db.query(JobEmbedding)
+                .filter(JobEmbedding.job_id == job.id)
+                .one_or_none()
+            )
+            if (
+                existing is not None
+                and existing.document_hash == document.document_hash
+            ):
+                self.bus.ack(topic, self.group_name, message.message_id)
                 return
 
             embedding = self.embedding_model.encode(
@@ -142,12 +181,15 @@ class EmbeddingWorkerService:
             self.outbox_publisher.publish_pending_batch(db, limit=100)
         except Exception:
             db.rollback()
-            logger.exception("embedding worker failed for event_id=%s", getattr(event, "event_id", None))
+            logger.exception(
+                "embedding worker failed for event_id=%s",
+                getattr(event, "event_id", None),
+            )
             raise
         finally:
             db.close()
 
-        self.bus.ack(STREAM_JOB_LIFECYCLE, self.group_name, message.message_id)
+        self.bus.ack(topic, self.group_name, message.message_id)
 
 
 async def main() -> None:

@@ -19,13 +19,14 @@ from sqlalchemy.orm import joinedload
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 load_dotenv(os.path.join(os.path.dirname(__file__), "../../.env"), override=True)
 
-from app.database import SessionLocal
-from app.models.job import Job
-from app.models.job_skill_mention import JobSkillMention
-from app.models.job_subcategory import JobSubcategory
-from app.models.skill import Skill
-from app.models.skill_technology import SkillTechnology
-from app.services.ai_enrichment_service import get_ai_enrichment_service
+from app.database import SessionLocal  # noqa: E402
+from app.models.job import Job  # noqa: E402
+from app.models.job_subcategory import JobSubcategory  # noqa: E402
+from app.models.skill_governance import (  # noqa: E402
+    GovernedJobSkill,
+    GovernedJobSkillMention,
+)
+from app.services.ai_enrichment_service import get_ai_enrichment_service  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,7 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Only include the specified job UUIDs. Repeatable.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Preview target jobs without calling AI or writing data")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview target jobs without calling AI or writing data",
+    )
     parser.add_argument(
         "--include-enriched",
         action="store_true",
@@ -70,7 +75,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.5,
         help="Delay between jobs during live enrichment runs",
     )
-    parser.add_argument("--source-site", help="Only include jobs from the specified source site")
+    parser.add_argument(
+        "--source-site", help="Only include jobs from the specified source site"
+    )
     parser.add_argument(
         "--source-subclassification",
         help="Only include jobs with the specified source sub-classification name",
@@ -136,10 +143,10 @@ def _build_candidate_query(db, *, include_enriched: bool):
     query = (
         db.query(Job)
         .options(
-            joinedload(Job.job_skill_mentions)
-            .joinedload(JobSkillMention.skill)
-            .joinedload(Skill.technology)
-            .joinedload(SkillTechnology.category),
+            joinedload(Job.governed_job_skills).joinedload(GovernedJobSkill.skill),
+            joinedload(Job.governed_skill_mentions).joinedload(
+                GovernedJobSkillMention.candidate
+            ),
             joinedload(Job.subcategory).joinedload(JobSubcategory.category),
         )
         .filter(
@@ -147,7 +154,9 @@ def _build_candidate_query(db, *, include_enriched: bool):
             Job.source_classification_id.isnot(None),
             Job.source_classification_id != "",
         )
-        .order_by(Job.ai_enriched_at.isnot(None).asc(), Job.created_at.asc(), Job.id.asc())
+        .order_by(
+            Job.ai_enriched_at.isnot(None).asc(), Job.created_at.asc(), Job.id.asc()
+        )
     )
     if not include_enriched:
         query = query.filter(Job.ai_enriched_at.is_(None))
@@ -155,21 +164,31 @@ def _build_candidate_query(db, *, include_enriched: bool):
 
 
 def _count_fragment_hits(text: str, fragments: list[str] | None) -> int:
-    normalized_fragments = [fragment.strip().lower() for fragment in (fragments or []) if fragment.strip()]
+    normalized_fragments = [
+        fragment.strip().lower() for fragment in (fragments or []) if fragment.strip()
+    ]
     if not normalized_fragments:
         return 0
     return sum(1 for fragment in normalized_fragments if fragment in text)
 
 
-def _matches_any_fragment(text: str, fragments: list[str] | None, *, min_hits: int = 1) -> bool:
-    normalized_fragments = [fragment.strip().lower() for fragment in (fragments or []) if fragment.strip()]
+def _matches_any_fragment(
+    text: str, fragments: list[str] | None, *, min_hits: int = 1
+) -> bool:
+    normalized_fragments = [
+        fragment.strip().lower() for fragment in (fragments or []) if fragment.strip()
+    ]
     if not normalized_fragments:
         return True
-    return _count_fragment_hits(text, normalized_fragments) >= max(1, int(min_hits or 1))
+    return _count_fragment_hits(text, normalized_fragments) >= max(
+        1, int(min_hits or 1)
+    )
 
 
 def _matches_no_fragments(text: str, fragments: list[str] | None) -> bool:
-    normalized_fragments = [fragment.strip().lower() for fragment in (fragments or []) if fragment.strip()]
+    normalized_fragments = [
+        fragment.strip().lower() for fragment in (fragments or []) if fragment.strip()
+    ]
     if not normalized_fragments:
         return True
     return all(fragment not in text for fragment in normalized_fragments)
@@ -272,7 +291,11 @@ def _collect_signal_profile(job: Job) -> dict[str, object]:
 
     if infra_title_hits and not backend_title_hits:
         bucket = "infra-devops"
-    elif len(devtestops_hits) >= 3 and len(infra_tool_hits) >= 2 and not backend_title_hits:
+    elif (
+        len(devtestops_hits) >= 3
+        and len(infra_tool_hits) >= 2
+        and not backend_title_hits
+    ):
         bucket = "devtestops"
     elif backend_title_hits or len(backend_delivery_hits) >= 3:
         bucket = "backend-platform"
@@ -328,11 +351,15 @@ def _build_audit_row(job: Job) -> dict[str, object]:
         "category_name": current_taxonomy.get("category_name"),
         "subcategory_name": current_taxonomy.get("subcategory_name"),
         "source_site": str(getattr(job, "source_site", "") or ""),
-        "source_subclassification_name": str(getattr(job, "source_subclassification_name", "") or ""),
-        "description_preview": _build_description_preview(getattr(job, "description", None)),
+        "source_subclassification_name": str(
+            getattr(job, "source_subclassification_name", "") or ""
+        ),
+        "description_preview": _build_description_preview(
+            getattr(job, "description", None)
+        ),
         "governed_skill_count": len(job.skills),
         "provisional_skill_count": len(job.provisional_skills),
-        "mention_count": len(job.job_skill_mentions or []),
+        "mention_count": len(job.governed_skill_mentions or []),
         "skills": list(job.skills or []),
         "provisional_skills": list(job.provisional_skills or []),
         "suggested_action": _suggest_review_action(profile),
@@ -340,7 +367,12 @@ def _build_audit_row(job: Job) -> dict[str, object]:
     }
 
 
-def _write_json_report(*, output_file: str, audit_rows: list[dict[str, object]], bucket_summary: dict[str, int]) -> None:
+def _write_json_report(
+    *,
+    output_file: str,
+    audit_rows: list[dict[str, object]],
+    bucket_summary: dict[str, int],
+) -> None:
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -348,7 +380,9 @@ def _write_json_report(*, output_file: str, audit_rows: list[dict[str, object]],
         "bucket_summary": dict(bucket_summary),
         "jobs": audit_rows,
     }
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _write_csv_report(*, output_file: str, audit_rows: list[dict[str, object]]) -> None:
@@ -387,7 +421,9 @@ def _write_csv_report(*, output_file: str, audit_rows: list[dict[str, object]]) 
                     "job_id": row.get("job_id"),
                     "title": row.get("title"),
                     "source_site": row.get("source_site"),
-                    "source_subclassification_name": row.get("source_subclassification_name"),
+                    "source_subclassification_name": row.get(
+                        "source_subclassification_name"
+                    ),
                     "taxonomy_path": row.get("taxonomy_path"),
                     "category_name": row.get("category_name"),
                     "subcategory_name": row.get("subcategory_name"),
@@ -398,18 +434,35 @@ def _write_csv_report(*, output_file: str, audit_rows: list[dict[str, object]]) 
                     "provisional_skill_count": row.get("provisional_skill_count"),
                     "mention_count": row.get("mention_count"),
                     "skills": " | ".join(row.get("skills") or []),
-                    "provisional_skills": " | ".join(row.get("provisional_skills") or []),
+                    "provisional_skills": " | ".join(
+                        row.get("provisional_skills") or []
+                    ),
                     "signal_bucket": profile.get("bucket"),
-                    "signal_title_infra": " | ".join(profile.get("infra_title_hits") or []),
-                    "signal_title_backend": " | ".join(profile.get("backend_title_hits") or []),
-                    "signal_infra_tools": " | ".join(profile.get("infra_tool_hits") or []),
-                    "signal_devtestops": " | ".join(profile.get("devtestops_hits") or []),
-                    "signal_backend_delivery": " | ".join(profile.get("backend_delivery_hits") or []),
+                    "signal_title_infra": " | ".join(
+                        profile.get("infra_title_hits") or []
+                    ),
+                    "signal_title_backend": " | ".join(
+                        profile.get("backend_title_hits") or []
+                    ),
+                    "signal_infra_tools": " | ".join(
+                        profile.get("infra_tool_hits") or []
+                    ),
+                    "signal_devtestops": " | ".join(
+                        profile.get("devtestops_hits") or []
+                    ),
+                    "signal_backend_delivery": " | ".join(
+                        profile.get("backend_delivery_hits") or []
+                    ),
                 }
             )
 
 
-def _write_report(*, output_file: str, audit_rows: list[dict[str, object]], bucket_summary: dict[str, int]) -> None:
+def _write_report(
+    *,
+    output_file: str,
+    audit_rows: list[dict[str, object]],
+    bucket_summary: dict[str, int],
+) -> None:
     output_path = Path(output_file)
     if output_path.suffix.lower() == ".csv":
         _write_csv_report(output_file=output_file, audit_rows=audit_rows)
@@ -443,7 +496,7 @@ def _job_matches_filters(
 ) -> bool:
     governed_count = len(job.skills)
     provisional_count = len(job.provisional_skills)
-    mention_count = len(job.job_skill_mentions or [])
+    mention_count = len(job.governed_skill_mentions or [])
     normalized_title = str(job.title or "").lower()
     normalized_description = str(job.description or "").lower()
 
@@ -451,23 +504,46 @@ def _job_matches_filters(
         return False
     if max_governed_skills is not None and governed_count > max_governed_skills:
         return False
-    if rerun_below_governed_skills is not None and governed_count >= rerun_below_governed_skills:
+    if (
+        rerun_below_governed_skills is not None
+        and governed_count >= rerun_below_governed_skills
+    ):
         return False
-    if max_provisional_skills is not None and provisional_count > max_provisional_skills:
+    if (
+        max_provisional_skills is not None
+        and provisional_count > max_provisional_skills
+    ):
         return False
     if require_no_mentions and mention_count > 0:
         return False
-    if source_site and str(getattr(job, "source_site", "") or "").strip().lower() != source_site.strip().lower():
+    if (
+        source_site
+        and str(getattr(job, "source_site", "") or "").strip().lower()
+        != source_site.strip().lower()
+    ):
         return False
-    if source_subclassification and str(getattr(job, "source_subclassification_name", "") or "").strip() != source_subclassification:
+    if (
+        source_subclassification
+        and str(getattr(job, "source_subclassification_name", "") or "").strip()
+        != source_subclassification
+    ):
         return False
 
     current_taxonomy = getattr(job, "job_taxonomy", None) or {}
-    if current_category and str(current_taxonomy.get("category_name") or "").strip() != current_category:
+    if (
+        current_category
+        and str(current_taxonomy.get("category_name") or "").strip() != current_category
+    ):
         return False
-    if current_subcategory and str(current_taxonomy.get("subcategory_name") or "").strip() != current_subcategory:
+    if (
+        current_subcategory
+        and str(current_taxonomy.get("subcategory_name") or "").strip()
+        != current_subcategory
+    ):
         return False
-    if not _matches_any_fragment(normalized_title, title_contains, min_hits=min_title_fragment_hits):
+    if not _matches_any_fragment(
+        normalized_title, title_contains, min_hits=min_title_fragment_hits
+    ):
         return False
     if not _matches_no_fragments(normalized_title, title_not_contains):
         return False
@@ -479,7 +555,10 @@ def _job_matches_filters(
         return False
     if not _matches_no_fragments(normalized_description, description_not_contains):
         return False
-    if signal_buckets and str(_collect_signal_profile(job)["bucket"]) not in signal_buckets:
+    if (
+        signal_buckets
+        and str(_collect_signal_profile(job)["bucket"]) not in signal_buckets
+    ):
         return False
     return True
 
@@ -512,7 +591,9 @@ async def batch_enrich(
     db = db_factory()
 
     try:
-        normalized_job_ids = {str(job_id).strip() for job_id in (job_ids or []) if str(job_id).strip()}
+        normalized_job_ids = {
+            str(job_id).strip() for job_id in (job_ids or []) if str(job_id).strip()
+        }
         normalized_signal_buckets = {
             str(bucket).strip()
             for bucket in (signal_buckets or [])
@@ -582,7 +663,7 @@ async def batch_enrich(
                 f"[{idx}/{total}] Processing: {job.id} | {_safe_console_text(job.title)} | "
                 f"taxonomy={current_taxonomy.get('path') or 'None'} | "
                 f"governed={len(job.skills)} provisional={len(job.provisional_skills)} "
-                f"mentions={len(job.job_skill_mentions or [])} | "
+                f"mentions={len(job.governed_skill_mentions or [])} | "
                 f"{_format_signal_profile(profile)}"
             )
             result = await service.enrich_job(job, db)
@@ -606,7 +687,12 @@ async def batch_enrich(
         print(f"  Total: {total}")
         print(f"  Success: {success_count}")
         print(f"  Errors: {error_count}")
-        return {"total": total, "success": success_count, "errors": error_count, "dry_run": False}
+        return {
+            "total": total,
+            "success": success_count,
+            "errors": error_count,
+            "dry_run": False,
+        }
 
     except Exception as exc:
         print(f"Fatal error: {exc}")

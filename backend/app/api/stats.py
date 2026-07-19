@@ -15,12 +15,14 @@ from app.models.job import Job
 from app.models.job_category import JobCategory
 from app.models.job_domain import JobDomain
 from app.models.job_subcategory import JobSubcategory
-from app.models.skill import Skill
-from app.models.job_skill_mention import JobSkillMention
-from app.models.skill_technology import SkillTechnology
-from app.models.skill_category import SkillCategory
+from app.models.skill_governance import (
+    GovernedJobSkill,
+    GovernedSkill,
+    GovernedSkillCategory,
+    GovernedSkillTechnology,
+    SkillTaxonomyActiveRevision,
+)
 from app.services.enrichment_run_service import EnrichmentRunService
-from app.utils.skill_taxonomy_policy import apply_governed_skill_filters
 from app.schemas.stats import (
     DashboardCategoryStatsSchema,
     DashboardCategoryItemSchema,
@@ -53,19 +55,43 @@ def get_skill_dashboard_bucket(skill_name: str, category_name: str) -> str | Non
 
     # DevOps: sub-bucket by keyword match
     if category == "DevOps":
-        if any(token in name for token in (
-            "azure", "aws", "kubernetes", "docker", "ci/cd",
-            "microsoft 365", "jenkins", "github actions",
-        )):
+        if any(
+            token in name
+            for token in (
+                "azure",
+                "aws",
+                "kubernetes",
+                "docker",
+                "ci/cd",
+                "microsoft 365",
+                "jenkins",
+                "github actions",
+            )
+        ):
             return "Platform & Cloud"
-        if any(token in name for token in (
-            "linux", "windows server", "windows", "network",
-            "vpn", "active directory", "unix", "vmware",
-        )):
+        if any(
+            token in name
+            for token in (
+                "linux",
+                "windows server",
+                "windows",
+                "network",
+                "vpn",
+                "active directory",
+                "unix",
+                "vmware",
+            )
+        ):
             return "Systems & Network"
-        if any(token in name for token in (
-            "firewall", "cybersecurity", "security", "identity",
-        )):
+        if any(
+            token in name
+            for token in (
+                "firewall",
+                "cybersecurity",
+                "security",
+                "identity",
+            )
+        ):
             return "Security & Identity"
         return "Infrastructure"
 
@@ -91,32 +117,51 @@ async def get_overview(db: Session = Depends(get_db)) -> Dict[str, Any]:
 @router.get("/skills")
 async def get_skill_stats(
     limit: int = 20,
-    category: str = None,
-    db: Session = Depends(get_db)
+    category: str | None = None,
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Get top skills by frequency using governed canonical skill mentions."""
-    query = db.query(
-        Skill.name,
-        SkillCategory.name.label("category"),
-        func.count(func.distinct(JobSkillMention.job_id)).label("count")
-    ).join(
-        JobSkillMention,
-        JobSkillMention.skill_id == Skill.id,
-    ).join(
-        SkillTechnology,
-        Skill.technology_id == SkillTechnology.id,
-    ).join(
-        SkillCategory,
-        SkillTechnology.category_id == SkillCategory.id,
-    ).filter(
-        JobSkillMention.resolution == "match_existing",
-        JobSkillMention.skill_id.isnot(None),
-    ).group_by(Skill.id, Skill.name, SkillCategory.name)
-
-    query = apply_governed_skill_filters(query)
+    query = (
+        db.query(
+            GovernedSkill.name,
+            GovernedSkillCategory.name.label("category"),
+            func.count(func.distinct(GovernedJobSkill.job_id)).label("count"),
+        )
+        .join(
+            GovernedSkillTechnology,
+            (GovernedSkill.technology_id == GovernedSkillTechnology.id)
+            & (GovernedSkill.revision_id == GovernedSkillTechnology.revision_id),
+        )
+        .join(
+            GovernedSkillCategory,
+            (GovernedSkillTechnology.category_id == GovernedSkillCategory.id)
+            & (
+                GovernedSkillTechnology.revision_id == GovernedSkillCategory.revision_id
+            ),
+        )
+        .join(
+            GovernedJobSkill,
+            (GovernedJobSkill.skill_id == GovernedSkill.id)
+            & (GovernedJobSkill.taxonomy_revision_id == GovernedSkill.revision_id),
+        )
+        .join(
+            SkillTaxonomyActiveRevision,
+            (SkillTaxonomyActiveRevision.singleton_key == "skill-taxonomy")
+            & (
+                SkillTaxonomyActiveRevision.revision_id
+                == GovernedJobSkill.taxonomy_revision_id
+            ),
+        )
+        .filter(
+            GovernedSkill.is_active.is_(True),
+            GovernedSkillTechnology.is_active.is_(True),
+            GovernedSkillCategory.is_active.is_(True),
+        )
+        .group_by(GovernedSkill.id, GovernedSkill.name, GovernedSkillCategory.name)
+    )
 
     if category:
-        query = query.filter(SkillCategory.name == category)
+        query = query.filter(GovernedSkillCategory.name == category)
 
     results = query.order_by(desc("count")).limit(limit).all()
 
@@ -144,29 +189,32 @@ async def get_category_stats(db: Session = Depends(get_db)) -> List[Dict[str, An
         + JobSubcategory.name
     ).label("category")
 
-    results = db.query(
-        category_label,
-        func.count(Job.id).label("count")
-    ).outerjoin(
-        JobSubcategory,
-        Job.subcategory_id == JobSubcategory.id,
-    ).outerjoin(
-        JobCategory,
-        JobSubcategory.category_id == JobCategory.id,
-    ).outerjoin(
-        JobDomain,
-        JobCategory.domain_id == JobDomain.id,
-    ).filter(
-        Job.is_deleted.is_(False),
-        Job.subcategory_id.isnot(None),
-        category_label.isnot(None),
-        category_label != "",
-    ).group_by(category_label).order_by(desc("count")).all()
+    results = (
+        db.query(category_label, func.count(Job.id).label("count"))
+        .outerjoin(
+            JobSubcategory,
+            Job.subcategory_id == JobSubcategory.id,
+        )
+        .outerjoin(
+            JobCategory,
+            JobSubcategory.category_id == JobCategory.id,
+        )
+        .outerjoin(
+            JobDomain,
+            JobCategory.domain_id == JobDomain.id,
+        )
+        .filter(
+            Job.is_deleted.is_(False),
+            Job.subcategory_id.isnot(None),
+            category_label.isnot(None),
+            category_label != "",
+        )
+        .group_by(category_label)
+        .order_by(desc("count"))
+        .all()
+    )
 
-    return [
-        {"category": cat, "count": count}
-        for cat, count in results
-    ]
+    return [{"category": cat, "count": count} for cat, count in results]
 
 
 @router.get("/categories/dashboard", response_model=DashboardCategoryStatsSchema)
@@ -180,53 +228,64 @@ async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[st
         + JobSubcategory.name
     ).label("category")
 
-    results = db.query(
-        category_label,
-        JobDomain.name.label("domain_name"),
-        JobCategory.name.label("category_name"),
-        JobSubcategory.name.label("subcategory_name"),
-        Job.source_site.label("source_site"),
-        Job.source_subclassification_name.label("source_subclassification_name"),
-        func.count(Job.id).label("count"),
-    ).outerjoin(
-        JobSubcategory,
-        Job.subcategory_id == JobSubcategory.id,
-    ).outerjoin(
-        JobCategory,
-        JobSubcategory.category_id == JobCategory.id,
-    ).outerjoin(
-        JobDomain,
-        JobCategory.domain_id == JobDomain.id,
-    ).filter(
-        Job.is_deleted.is_(False),
-        Job.subcategory_id.isnot(None),
-        category_label.isnot(None),
-        category_label != "",
-    ).group_by(
-        category_label,
-        JobDomain.name,
-        JobCategory.name,
-        JobSubcategory.name,
-        Job.source_site,
-        Job.source_subclassification_name,
-    ).all()
+    results = (
+        db.query(
+            category_label,
+            JobDomain.name.label("domain_name"),
+            JobCategory.name.label("category_name"),
+            JobSubcategory.name.label("subcategory_name"),
+            Job.source_site.label("source_site"),
+            Job.source_subclassification_name.label("source_subclassification_name"),
+            func.count(Job.id).label("count"),
+        )
+        .outerjoin(
+            JobSubcategory,
+            Job.subcategory_id == JobSubcategory.id,
+        )
+        .outerjoin(
+            JobCategory,
+            JobSubcategory.category_id == JobCategory.id,
+        )
+        .outerjoin(
+            JobDomain,
+            JobCategory.domain_id == JobDomain.id,
+        )
+        .filter(
+            Job.is_deleted.is_(False),
+            Job.subcategory_id.isnot(None),
+            category_label.isnot(None),
+            category_label != "",
+        )
+        .group_by(
+            category_label,
+            JobDomain.name,
+            JobCategory.name,
+            JobSubcategory.name,
+            Job.source_site,
+            Job.source_subclassification_name,
+        )
+        .all()
+    )
 
-    grouped_specific: dict[str, dict[str, Any]] = defaultdict(lambda: {
-        "count": 0,
-        "path": "",
-        "label": "",
-    })
-    fallback_counts: dict[str, dict[str, Any]] = defaultdict(lambda: {
-        "count": 0,
-        "path": "",
-        "label": "",
-        "source_breakdown": defaultdict(int),
-    })
+    grouped_specific: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "count": 0,
+            "path": "",
+            "label": "",
+        }
+    )
+    fallback_counts: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "count": 0,
+            "path": "",
+            "label": "",
+            "source_breakdown": defaultdict(int),
+        }
+    )
 
     for row in results:
         path = row.category or ""
         count = int(row.count or 0)
-        domain_name = row.domain_name or ""
         category_name = row.category_name or ""
         subcategory_name = row.subcategory_name or ""
         is_fallback = category_name == "General" or subcategory_name == "General"
@@ -266,7 +325,9 @@ async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[st
             path=item["path"],
             label=item["label"],
             count=item["count"],
-            share_of_specific=round((item["count"] / specific_total) * 100) if specific_total else 0,
+            share_of_specific=round((item["count"] / specific_total) * 100)
+            if specific_total
+            else 0,
         ).model_dump(mode="json")
         for item in visible_specific_items
     ]
@@ -276,7 +337,9 @@ async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[st
             path=item["path"],
             label=item["label"],
             count=item["count"],
-            share_of_categorized=round((item["count"] / categorized_total) * 100) if categorized_total else 0,
+            share_of_categorized=round((item["count"] / categorized_total) * 100)
+            if categorized_total
+            else 0,
             source_breakdown=[
                 DashboardCategorySourceBreakdownSchema(
                     source_site=source_site,
@@ -305,7 +368,9 @@ async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[st
         "other_specific_categories": DashboardOtherSpecificCategoriesSchema(
             count=other_specific_count,
             bucket_count=other_specific_bucket_count,
-            share_of_specific=round((other_specific_count / specific_total) * 100) if specific_total else 0,
+            share_of_specific=round((other_specific_count / specific_total) * 100)
+            if specific_total
+            else 0,
         ).model_dump(mode="json"),
         "fallback_buckets": fallback_buckets,
     }

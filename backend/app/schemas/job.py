@@ -3,6 +3,8 @@ from typing import Any, Optional
 from datetime import datetime
 from uuid import UUID
 
+from app.schemas.skill_governance import SkillUnreviewedMentionSchema
+
 
 class JobCreateSchema(BaseModel):
     """Schema for creating a new job."""
@@ -138,6 +140,9 @@ class JobDetailSchema(JobSchema):
     is_expired: Optional[bool] = None
     skills: list[str] = Field(default_factory=list)
     provisional_skills: list[str] = Field(default_factory=list)
+    unreviewed_skill_mentions: list[SkillUnreviewedMentionSchema] = Field(
+        default_factory=list
+    )
     source_employment_labels: list[SourceEmploymentLabelSchema] = Field(
         default_factory=list
     )
