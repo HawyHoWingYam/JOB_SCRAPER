@@ -820,3 +820,72 @@ Implemented governed canonical taxonomy releases and reviewed Source mappings, f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: Complete Company Industry governance
+
+**Date**: 2026-07-19
+**Task**: Complete Company Industry governance
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented immutable HSIC V2.0 Company Industry releases, evidence-governed assignments/reviews/mappings, stable APIs, read-only rebuild tooling, PostgreSQL guards, contamination removal, and full backend verification.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0f159b63` | (see git log) |
+| `8a85bc46` | (see git log) |
+| `72a9935d` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 25: Complete Skill governance
+
+**Date**: 2026-07-19
+**Task**: Complete Skill governance
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented immutable governed Skill releases, deterministic Skill Mentions and Candidates, human-only transactional decisions, governed consumer projections, Job Detail secondary evidence, PostgreSQL guards, read-only rebuild tooling, and full backend/frontend verification.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4937f521` | (see git log) |
+| `74af3904` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
