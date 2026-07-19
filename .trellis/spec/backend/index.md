@@ -29,6 +29,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Source Job Attributes](./source-job-attributes.md) | Source-owned classification paths, governed Employment Types, atomic projection, APIs, and rebuild evidence | Active |
 | [Canonical Job Taxonomy Governance](./canonical-job-taxonomy.md) | Stable governed releases, reviewed Source mappings, assignments/reviews, canonical reads, and dry-run rebuild | Active |
 | [Company Industry Governance](./company-industry.md) | Immutable HSIC V2.0 releases, company-owned evidence, reviewed mappings, assignments/reviews, reads, and dry-run rebuild | Active |
+| [Skill Governance](./skill-governance.md) | Immutable Skill releases, deterministic Mentions/Candidates, human decisions, governed projections, and secondary evidence | Active |
 
 ---
 
