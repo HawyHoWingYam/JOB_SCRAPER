@@ -10,9 +10,10 @@ from app.job_intelligence.company_industry import (
     CompanyIndustryEvidence,
 )
 from app.job_intelligence.foundation import Provenance
+from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.models import Company
 from app.models.company_enrichment_run import CompanyEnrichmentRunItem
-from app.schemas import CompanySchema, CompanyCreateSchema
+from app.schemas import CompanyCreateSchema, CompanyProductSchema, CompanySchema
 from app.services.company_enrichment_service import CompanyEnrichmentService
 from app.utils.time import utc_now
 from app.services.company_enrichment_run_service import CompanyEnrichmentRunService
@@ -21,10 +22,24 @@ from app.services.ai_runtime_settings_service import ensure_profile_runtime_read
 router = APIRouter(prefix="/companies", tags=["companies"])
 
 
+def _company_product_response(
+    db: Session,
+    company: Company,
+    *,
+    product_payload: dict[str, object] | None = None,
+) -> CompanyProductSchema:
+    payload = CompanySchema.model_validate(company).model_dump(mode="python")
+    payload.update(
+        product_payload
+        or JobIntelligenceProductReadModel(db).get_company_detail(company.id)
+    )
+    return CompanyProductSchema.model_validate(payload)
+
+
 class CompanyListResponse(BaseModel):
     """Paginated company listing response."""
 
-    items: list[CompanySchema]
+    items: list[CompanyProductSchema]
     total: int
     page: int
     page_size: int
@@ -238,8 +253,18 @@ async def list_companies(
         total = query.count()
     total_pages = (total + page_size - 1) // page_size if total else 0
 
+    product_payloads = JobIntelligenceProductReadModel(db).get_company_details(
+        [company.id for company in companies]
+    )
     return {
-        "items": companies,
+        "items": [
+            _company_product_response(
+                db,
+                company,
+                product_payload=product_payloads[company.id],
+            )
+            for company in companies
+        ],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -247,7 +272,7 @@ async def list_companies(
     }
 
 
-@router.get("/{company_id}", response_model=CompanySchema)
+@router.get("/{company_id}", response_model=CompanyProductSchema)
 async def get_company(company_id: UUID, db: Session = Depends(get_db)):
     """Get a specific company by ID."""
     company = db.query(Company).filter(
@@ -255,7 +280,7 @@ async def get_company(company_id: UUID, db: Session = Depends(get_db)):
     ).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
-    return company
+    return _company_product_response(db, company)
 
 
 @router.post("", response_model=CompanySchema)

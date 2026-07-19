@@ -1,6 +1,9 @@
-import { render, screen } from '@testing-library/react';
+import { useState } from 'react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import productFixture from '../fixtures/job_intelligence_product_surfaces.json';
 import JobDetailModal from './JobDetailModal';
 
 function mockJsonResponse(payload) {
@@ -12,7 +15,8 @@ function mockJsonResponse(payload) {
 
 function createJobPayload(overrides = {}) {
   return {
-    id: 'job-1',
+    // Keep every mocked detail response anchored to the backend-validated contract.
+    ...productFixture.job_detail,
     job_id: 'platform-engineer-123',
     title: 'Senior Platform Engineer',
     company_name: 'Acme Health',
@@ -81,6 +85,26 @@ function createJobPayload(overrides = {}) {
   };
 }
 
+function createSkillState(overrides = {}) {
+  return {
+    ...productFixture.job_detail.skill_state,
+    skills: [],
+    unreviewed_skill_mentions: [],
+    ...overrides,
+  };
+}
+
+function createUnassignedCanonicalState(overrides = {}) {
+  return {
+    job_id: productFixture.job_detail.id,
+    state: 'unassigned',
+    assignment: null,
+    reasons: [],
+    review_item_refs: [],
+    ...overrides,
+  };
+}
+
 function renderModalWithPayload(payload) {
   globalThis.fetch = vi.fn(() => mockJsonResponse(payload));
 
@@ -129,6 +153,82 @@ describe('JobDetailModal', () => {
     vi.restoreAllMocks();
   });
 
+  it('opens as a named modal dialog and moves focus inside it', async () => {
+    renderModalWithPayload(createJobPayload());
+
+    const dialog = await screen.findByRole('dialog', {
+      name: /senior platform engineer/i,
+    });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole('button', { name: 'Close job details' })).toHaveFocus();
+  });
+
+  it('traps keyboard focus, closes with Escape, and restores the opener focus', async () => {
+    const user = userEvent.setup();
+    globalThis.fetch = vi.fn(() => mockJsonResponse(createJobPayload()));
+
+    function JobDetailHarness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>Open job details</button>
+          {open && (
+            <JobDetailModal
+              jobId="job-1"
+              apiUrl="http://localhost:8000"
+              onClose={() => setOpen(false)}
+            />
+          )}
+        </>
+      );
+    }
+
+    render(<JobDetailHarness />);
+    const opener = screen.getByRole('button', { name: 'Open job details' });
+    await user.click(opener);
+
+    const closeButton = screen.getByRole('button', { name: 'Close job details' });
+    const lastLink = await screen.findByRole('link', { name: 'Open Skill Candidates' });
+    lastLink.focus();
+    await user.tab();
+    expect(closeButton).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(lastLink).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  it('announces the job detail loading state', () => {
+    globalThis.fetch = vi.fn(() => new Promise(() => {}));
+
+    render(
+      <JobDetailModal
+        jobId="job-1"
+        apiUrl="http://localhost:8000"
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading job details…');
+  });
+
+  it('announces a job detail request failure', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: false }));
+
+    render(
+      <JobDetailModal
+        jobId="missing-job"
+        apiUrl="http://localhost:8000"
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Job not found');
+  });
+
   it('renders company name, salary range, relational skills, and ai summary from the detail API', async () => {
     renderModalWithPayload(createJobPayload());
 
@@ -140,11 +240,163 @@ describe('JobDetailModal', () => {
     expect(screen.getByText(/builds internal platform services/i)).toBeInTheDocument();
   });
 
+  it('renders backend-owned governed Job Intelligence states without legacy fallback', async () => {
+    renderModalWithPayload(productFixture.job_detail);
+
+    const roleEvidence = await screen.findByRole('region', { name: 'Role Evidence' });
+    expect(roleEvidence).toHaveTextContent('Full-time');
+    expect(roleEvidence).toHaveTextContent('Permanent');
+    expect(roleEvidence).toHaveTextContent(
+      'Information Technology / Developers and Programmers',
+    );
+    expect(roleEvidence).toHaveTextContent('Not declared Primary');
+
+    const canonical = screen.getByRole('region', {
+      name: 'Canonical Job Taxonomy',
+    });
+    expect(canonical).toHaveTextContent(
+      'Technology / Software Development / Backend Development',
+    );
+    expect(canonical).toHaveTextContent('Assignment method: Constrained AI');
+    expect(within(canonical).getByRole('link', { name: 'Open Job Taxonomy Review' }))
+      .toHaveAttribute('href', '#job-intelligence/job-taxonomy');
+
+    const industries = screen.getByRole('region', { name: 'Company Industries' });
+    expect(industries).toHaveTextContent('J · Information and communications');
+    expect(industries).toHaveTextContent('Primary Company Industry');
+    expect(within(industries).getByRole('link', { name: 'Open Company Industries' }))
+      .toHaveAttribute('href', '#job-intelligence/company-industries');
+
+    expect(screen.queryByText('Legacy evidence only')).not.toBeInTheDocument();
+    expect(screen.queryByText('Legacy / AI / Category')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review Rust' })).toHaveAttribute(
+      'href',
+      '#job-intelligence/skill-candidates?item=80000000-0000-0000-0000-000000000010',
+    );
+  });
+
+  it('summarizes an explicit Primary Company Industry as Primary + N', async () => {
+    renderModalWithPayload({
+      ...productFixture.job_detail,
+      company_industries: productFixture.companies[0].company_industries,
+    });
+
+    const industries = await screen.findByRole('region', { name: 'Company Industries' });
+    expect(industries).toHaveTextContent('Primary Company Industry +1');
+    expect(industries).toHaveTextContent('J · Information and communications');
+    expect(industries).toHaveTextContent('K · Financial and insurance activities');
+  });
+
+  it('does not infer a Primary Company Industry from assignment order', async () => {
+    renderModalWithPayload({
+      ...productFixture.job_detail,
+      company_industries: {
+        ...productFixture.companies[0].company_industries,
+        assignments: productFixture.companies[0].company_industries.assignments.map(
+          (assignment) => ({ ...assignment, is_primary: false, primary_basis: null }),
+        ),
+      },
+    });
+
+    const industries = await screen.findByRole('region', { name: 'Company Industries' });
+    expect(industries).not.toHaveTextContent('Primary Company Industry');
+    expect(within(industries).getAllByText('Additional Company Industry')).toHaveLength(2);
+  });
+
+  it('renders Unassigned and review states as read-only governance links', async () => {
+    renderModalWithPayload({
+      ...productFixture.job_detail,
+      canonical_taxonomy: {
+        job_id: productFixture.job_detail.id,
+        state: 'unassigned',
+        assignment: null,
+        reasons: ['classifier_provenance_missing'],
+        review_item_refs: [
+          {
+            id: '91000000-0000-0000-0000-000000000099',
+            status: 'active',
+            version: 3,
+            decision_audit_id: null,
+            deep_link: '/api/v1/job-intelligence/governance/job-taxonomy/review-items/91000000-0000-0000-0000-000000000099',
+          },
+        ],
+      },
+      company_industries: {
+        company_id: productFixture.job_detail.company_id,
+        assignments: [],
+        review_item_refs: [
+          {
+            id: '93000000-0000-0000-0000-000000000099',
+            status: 'active',
+            reason: 'unmapped_source_label',
+            version: 2,
+            decision_audit_id: null,
+            deep_link: '/api/v1/job-intelligence/governance/company-industries/review-items/93000000-0000-0000-0000-000000000099',
+          },
+        ],
+      },
+    });
+
+    const canonical = await screen.findByRole('region', {
+      name: 'Canonical Job Taxonomy',
+    });
+    expect(canonical).toHaveTextContent('Unassigned Canonical Taxonomy');
+    expect(canonical).toHaveTextContent('Classifier Provenance Missing');
+    expect(within(canonical).getByRole('link', { name: 'Open review item' }))
+      .toHaveAttribute(
+        'href',
+        '#job-intelligence/job-taxonomy?item=91000000-0000-0000-0000-000000000099',
+      );
+
+    const industries = screen.getByRole('region', { name: 'Company Industries' });
+    expect(industries).toHaveTextContent('No governed Company Industry assignment');
+    expect(within(industries).getByRole('link', { name: 'Open Industry review item' }))
+      .toHaveAttribute(
+        'href',
+        '#job-intelligence/company-industries?item=93000000-0000-0000-0000-000000000099',
+      );
+    expect(screen.queryByRole('button', { name: /assign|reject|approve/i }))
+      .not.toBeInTheDocument();
+  });
+
+  it('shows governed domains as unavailable without consulting legacy values', async () => {
+    renderModalWithPayload({
+      ...productFixture.job_detail,
+      canonical_taxonomy: null,
+      company_industries: null,
+      job_intelligence_availability: {
+        ...productFixture.job_detail.job_intelligence_availability,
+        canonical_taxonomy: {
+          available: false,
+          unavailable_code: 'CANONICAL_TAXONOMY_NOT_ACTIVE',
+        },
+        company_industries: {
+          available: false,
+          unavailable_code: 'COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE',
+        },
+      },
+    });
+
+    const canonical = await screen.findByRole('region', {
+      name: 'Canonical Job Taxonomy',
+    });
+    expect(canonical).toHaveTextContent(
+      'Unavailable (CANONICAL_TAXONOMY_NOT_ACTIVE)',
+    );
+    const industries = screen.getByRole('region', { name: 'Company Industries' });
+    expect(industries).toHaveTextContent(
+      'Unavailable (COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE)',
+    );
+    expect(screen.queryByText('Legacy evidence only')).not.toBeInTheDocument();
+  });
+
   it('shows explicit unenriched ai states when enrichment has not run yet', async () => {
     renderModalWithPayload(
       createJobPayload({
         ai_enriched_at: null,
         skills: [],
+        unreviewed_skill_mentions: [],
+        skill_state: createSkillState(),
         ai_summary: null,
         job_taxonomy: null,
         experience_level: null,
@@ -163,8 +415,10 @@ describe('JobDetailModal', () => {
       createJobPayload({
         skills: [],
         provisional_skills: [],
+        skill_state: createSkillState(),
         ai_summary: null,
         job_taxonomy: null,
+        canonical_taxonomy: createUnassignedCanonicalState(),
         experience_level: 'not_specified',
         experience_summary: null,
       }),
@@ -173,7 +427,7 @@ describe('JobDetailModal', () => {
     expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
     expect(screen.getByText('No technical skills extracted from this posting')).toBeInTheDocument();
     expect(screen.getByText('No AI summary extracted from this posting')).toBeInTheDocument();
-    expect(screen.getByText('No governed job taxonomy assigned')).toBeInTheDocument();
+    expect(screen.getByText('Unassigned Canonical Taxonomy')).toBeInTheDocument();
     expect(screen.getByText('No explicit experience requirement found in the posting')).toBeInTheDocument();
   });
 
@@ -182,22 +436,25 @@ describe('JobDetailModal', () => {
       createJobPayload({
         skills: [],
         provisional_skills: ['Generic Tag', 'Rejected Evidence'],
-        unreviewed_skill_mentions: [
-          {
-            id: '60000000-0000-0000-0000-000000000001',
-            label: 'Unreviewed Skill Mention',
-            raw_name: 'Rust',
-            normalized_key: 'rust',
-            candidate_id: '70000000-0000-0000-0000-000000000001',
-            candidate_version: 1,
-            source: 'ai-extraction',
-            confidence: 0.82,
-            provenance: { run_id: 'fixture-run' },
-            deep_link: '/api/v1/job-intelligence/governance/skills/candidates/70000000-0000-0000-0000-000000000001',
-            created_at: '2026-07-19T08:00:00Z',
-            updated_at: '2026-07-19T08:00:00Z',
-          },
-        ],
+        unreviewed_skill_mentions: [],
+        skill_state: createSkillState({
+          unreviewed_skill_mentions: [
+            {
+              id: '60000000-0000-0000-0000-000000000001',
+              label: 'Unreviewed Skill Mention',
+              raw_name: 'Rust',
+              normalized_key: 'rust',
+              candidate_id: '70000000-0000-0000-0000-000000000001',
+              candidate_version: 1,
+              source: 'ai-extraction',
+              confidence: 0.82,
+              provenance: { run_id: 'fixture-run' },
+              deep_link: '/api/v1/job-intelligence/governance/skills/candidates/70000000-0000-0000-0000-000000000001',
+              created_at: '2026-07-19T08:00:00Z',
+              updated_at: '2026-07-19T08:00:00Z',
+            },
+          ],
+        }),
       }),
     );
 
@@ -216,6 +473,7 @@ describe('JobDetailModal', () => {
         skills: [],
         provisional_skills: ['Google Suite'],
         unreviewed_skill_mentions: undefined,
+        skill_state: null,
       }),
     );
 
@@ -234,21 +492,26 @@ describe('JobDetailModal', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('renders the new role and company context fields', async () => {
+  it('renders governed role evidence without promoting legacy scalar context', async () => {
     renderModalWithPayload(
       createJobPayload({
         job_id: '7f3a-platform-engineer',
         original_job_url: 'https://hk.jobsdb.com/job/7f3a-platform-engineer',
+        company_industries: {
+          company_id: productFixture.job_detail.company_id,
+          assignments: [],
+          review_item_refs: [],
+        },
       }),
     );
 
     expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
-    expect(screen.getByText('Source classification')).toBeInTheDocument();
+    expect(screen.getByText('Source Classification Paths')).toBeInTheDocument();
     expect(screen.getByText('Information & Communication Technology')).toBeInTheDocument();
-    expect(screen.getByText('Source sub-classification')).toBeInTheDocument();
-    expect(screen.getByText('Platform Engineering')).toBeInTheDocument();
-    expect(screen.getByText('Company industry')).toBeInTheDocument();
-    expect(screen.getByText('Healthcare Technology')).toBeInTheDocument();
+    expect(screen.queryByText('Platform Engineering')).not.toBeInTheDocument();
+    expect(screen.getByText('Company Industries')).toBeInTheDocument();
+    expect(screen.getByText('No governed Company Industry assignment')).toBeInTheDocument();
+    expect(screen.queryByText('Healthcare Technology')).not.toBeInTheDocument();
     expect(screen.getByText('Company AI description')).toBeInTheDocument();
     expect(screen.getByText('AI generated company blurb.')).toBeInTheDocument();
     expect(screen.getByText('Posted 2 days ago')).toBeInTheDocument();
@@ -280,25 +543,27 @@ describe('JobDetailModal', () => {
       createJobPayload(),
       [
         {
-          id: 'job-2',
-          job_id: 'platform-engineer-456',
-          title: 'Platform Backend Engineer',
-          company_name: 'Atlas Systems',
-          location: 'Hong Kong',
-          employment_type: 'Full-time',
-          posted_date: '2026-04-15T00:00:00Z',
+          ...productFixture.job_recommendations.recommendations[0],
+          employment_type: 'Legacy Contract',
           job_taxonomy: {
-            path: 'Information & Communication Technology / Software Development / Backend Development',
+            path: 'Legacy / AI / Category',
           },
-          combined_score: 0.97,
         },
       ],
     );
 
     expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: /related jobs/i })).toBeInTheDocument();
-    expect(screen.getByText('Platform Backend Engineer')).toBeInTheDocument();
-    expect(screen.getByText('Atlas Systems')).toBeInTheDocument();
+    expect(screen.getByText('Related Platform Engineer')).toBeInTheDocument();
+    expect(screen.getByText('Related Fixture Company')).toBeInTheDocument();
+    const relatedJobCard = screen.getByRole('article');
+    expect(relatedJobCard).toHaveTextContent('Full-time');
+    expect(relatedJobCard).toHaveTextContent('Permanent');
+    expect(relatedJobCard).toHaveTextContent(
+      'Technology / Software Development / Backend Development',
+    );
+    expect(relatedJobCard).not.toHaveTextContent('Legacy Contract');
+    expect(relatedJobCard).not.toHaveTextContent('Legacy / AI / Category');
   });
 
   it('does not invent a 0 percent related-job score when the recommendation score is missing', async () => {

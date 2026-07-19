@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BrainCircuit,
@@ -12,6 +12,7 @@ import {
   Square,
 } from 'lucide-react';
 import { apiPath } from '../../api/base';
+import { governanceHash } from '../jobIntelligence/governanceRoute';
 import '../Dashboard.css';
 import './AIEnrichmentPage.css';
 
@@ -20,11 +21,12 @@ const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', '
 const DEGRADED_PLACEHOLDER = 'Unavailable';
 const REFRESH_REQUEST_TIMEOUT_MS = 8000;
 const FILTER_PREVIEW_DEBOUNCE_MS = 350;
-const FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run:v1';
+const FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run:v2';
+const LEGACY_FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run:v1';
 const DEFAULT_FILTER_STATE = {
   source_sites: [],
-  source_classification_names: [],
-  source_subclassification_names: [],
+  source_classification_ids: [],
+  source_subclassification_ids: [],
   posted_date_from: '',
   posted_date_to: '',
 };
@@ -162,26 +164,38 @@ function getRunStatusTone(status) {
 
 function loadPersistedFilters() {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(FILTER_STORAGE_KEY) || 'null');
+    const current = window.localStorage.getItem(FILTER_STORAGE_KEY);
+    const legacy = current ? null : window.localStorage.getItem(LEGACY_FILTER_STORAGE_KEY);
+    const parsed = JSON.parse(current || legacy || 'null');
     const filters = parsed?.filters;
     const limit = Number(parsed?.limit);
     if (!filters || !Number.isInteger(limit) || limit < 1 || limit > 5000) {
       return { filters: DEFAULT_FILTER_STATE, limit: '50' };
     }
-    return {
+    const persistedFilters = {
       filters: {
         ...DEFAULT_FILTER_STATE,
         ...Object.fromEntries(
-          Object.entries(filters).map(([key, value]) => [
+          Object.keys(DEFAULT_FILTER_STATE).map((key) => [
             key,
             Array.isArray(DEFAULT_FILTER_STATE[key])
-              ? (Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [])
-              : (typeof value === 'string' ? value : ''),
+              ? (Array.isArray(filters[key])
+                ? filters[key].filter((item) => typeof item === 'string')
+                : [])
+              : (typeof filters[key] === 'string' ? filters[key] : ''),
           ]),
         ),
       },
       limit: String(limit),
     };
+    if (legacy) {
+      // v1 stored unqualified display names. Keep only fields whose identity is
+      // still unambiguous and let the operator reselect source-qualified paths.
+      persistedFilters.filters.source_classification_ids = [];
+      persistedFilters.filters.source_subclassification_ids = [];
+      persistedFilters.migratedLegacyStorage = true;
+    }
+    return persistedFilters;
   } catch {
     return { filters: DEFAULT_FILTER_STATE, limit: '50' };
   }
@@ -190,8 +204,8 @@ function loadPersistedFilters() {
 function hasOrdinaryFilters(filters) {
   return Boolean(
     filters.source_sites.length
-    || filters.source_classification_names.length
-    || filters.source_subclassification_names.length
+    || filters.source_classification_ids.length
+    || filters.source_subclassification_ids.length
     || filters.posted_date_from
     || filters.posted_date_to,
   );
@@ -199,7 +213,14 @@ function hasOrdinaryFilters(filters) {
 
 function SearchableMultiSelect({ label, options, values, onChange }) {
   const [search, setSearch] = useState('');
-  const visibleOptions = options.filter((option) => option.toLowerCase().includes(search.toLowerCase()));
+  const normalizedOptions = options.map((option) => (
+    typeof option === 'string'
+      ? { value: option, label: option }
+      : option
+  ));
+  const visibleOptions = normalizedOptions.filter((option) => (
+    option.label.toLowerCase().includes(search.toLowerCase())
+  ));
 
   return (
     <fieldset className="ai-multi-select">
@@ -214,17 +235,17 @@ function SearchableMultiSelect({ label, options, values, onChange }) {
       <div className="ai-multi-options">
         {visibleOptions.length === 0 && <span className="ai-empty-option">No options</span>}
         {visibleOptions.map((option) => (
-          <label key={option}>
+          <label key={option.value}>
             <input
               type="checkbox"
-              checked={values.includes(option)}
+              checked={values.includes(option.value)}
               onChange={() => onChange(
-                values.includes(option)
-                  ? values.filter((value) => value !== option)
-                  : [...values, option],
+                values.includes(option.value)
+                  ? values.filter((value) => value !== option.value)
+                  : [...values, option.value],
               )}
             />
-            <span>{option}</span>
+            <span>{option.label}</span>
           </label>
         ))}
       </div>
@@ -391,15 +412,23 @@ export default function AIEnrichmentPage() {
   const selectedSources = filters.source_sites.length > 0
     ? filterHierarchy.filter((source) => filters.source_sites.includes(source.source_site))
     : filterHierarchy;
-  const classificationOptions = [...new Set(
-    selectedSources.flatMap((source) => source.classifications.map((item) => item.name)),
-  )].sort();
-  const subclassificationOptions = [...new Set(
-    selectedSources.flatMap((source) => source.classifications
-      .filter((item) => filters.source_classification_names.length === 0
-        || filters.source_classification_names.includes(item.name))
-      .flatMap((item) => item.subclassifications)),
-  )].sort();
+  const classificationOptions = selectedSources.flatMap((source) => (
+    (source.classifications || [])
+      .filter((item) => item.id && item.name)
+      .map((item) => ({
+        value: item.id,
+        label: `${source.source_site} · ${item.name} (${item.id})`,
+      }))
+  )).sort((left, right) => left.label.localeCompare(right.label));
+  const subclassificationOptions = selectedSources.flatMap((source) => (
+    (source.classifications || [])
+      .filter((item) => filters.source_classification_ids.length === 0
+        || filters.source_classification_ids.includes(item.id))
+      .flatMap((item) => (item.subclassification_options || []).map((option) => ({
+        value: option.id,
+        label: `${source.source_site} · ${option.breadcrumb || option.name} (${option.id})`,
+      })))
+  )).sort((left, right) => left.label.localeCompare(right.label));
 
   useEffect(() => {
     hasConsoleDataRef.current = hasConsoleData;
@@ -422,10 +451,13 @@ export default function AIEnrichmentPage() {
         filters,
         limit: normalizedLimit,
       }));
+      if (persistedFilters.migratedLegacyStorage) {
+        window.localStorage.removeItem(LEGACY_FILTER_STORAGE_KEY);
+      }
     } catch {
       // Storage is a convenience; private mode or quota errors must not block operations.
     }
-  }, [filters, normalizedLimit]);
+  }, [filters, normalizedLimit, persistedFilters.migratedLegacyStorage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -517,7 +549,7 @@ export default function AIEnrichmentPage() {
     };
   }, []);
 
-  async function fetchAIConsole({ queueAfterInFlight = false } = {}) {
+  const fetchAIConsole = useCallback(async ({ queueAfterInFlight = false } = {}) => {
     if (refreshInFlightRef.current) {
       if (queueAfterInFlight) {
         refreshQueuedRef.current = true;
@@ -641,12 +673,11 @@ export default function AIEnrichmentPage() {
     });
 
     return refreshInFlightRef.current;
-  }
+  }, []);
 
   useEffect(() => {
     fetchAIConsole();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchAIConsole]);
 
   useEffect(() => {
     const wasPageVisible = wasPageVisibleRef.current;
@@ -683,7 +714,7 @@ export default function AIEnrichmentPage() {
     return () => {
       cancelled = true;
     };
-  }, [hasConsoleData, isPageVisible, loading, shouldPollRuns]);
+  }, [fetchAIConsole, hasConsoleData, isPageVisible, loading, shouldPollRuns]);
 
   async function runPendingEnrichment() {
     if (!ordinaryFiltersSelected && !allPendingAcknowledged) {
@@ -809,6 +840,7 @@ export default function AIEnrichmentPage() {
     setPreview(null);
     try {
       window.localStorage.removeItem(FILTER_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_FILTER_STORAGE_KEY);
     } catch {
       // Ignore unavailable storage; in-memory controls are already reset.
     }
@@ -819,29 +851,35 @@ export default function AIEnrichmentPage() {
       ? filterHierarchy.filter((source) => sourceSites.includes(source.source_site))
       : filterHierarchy;
     const allowedClassifications = new Set(
-      relevantSources.flatMap((source) => source.classifications.map((item) => item.name)),
+      relevantSources.flatMap((source) => (
+        (source.classifications || []).map((item) => item.id).filter(Boolean)
+      )),
     );
     const allowedSubclassifications = new Set(
-      relevantSources.flatMap((source) => source.classifications.flatMap((item) => item.subclassifications)),
+      relevantSources.flatMap((source) => (source.classifications || []).flatMap(
+        (item) => (item.subclassification_options || []).map((option) => option.id),
+      )),
     );
     setFilters((current) => ({
       ...current,
       source_sites: sourceSites,
-      source_classification_names: current.source_classification_names.filter((value) => allowedClassifications.has(value)),
-      source_subclassification_names: current.source_subclassification_names.filter((value) => allowedSubclassifications.has(value)),
+      source_classification_ids: current.source_classification_ids.filter((value) => allowedClassifications.has(value)),
+      source_subclassification_ids: current.source_subclassification_ids.filter((value) => allowedSubclassifications.has(value)),
     }));
   }
 
   function updateClassifications(classifications) {
     const allowedSubclassifications = new Set(
-      selectedSources.flatMap((source) => source.classifications
-        .filter((item) => classifications.length === 0 || classifications.includes(item.name))
-        .flatMap((item) => item.subclassifications)),
+      selectedSources.flatMap((source) => (source.classifications || [])
+        .filter((item) => classifications.length === 0 || classifications.includes(item.id))
+        .flatMap((item) => (
+          (item.subclassification_options || []).map((option) => option.id)
+        ))),
     );
     setFilters((current) => ({
       ...current,
-      source_classification_names: classifications,
-      source_subclassification_names: current.source_subclassification_names.filter((value) => allowedSubclassifications.has(value)),
+      source_classification_ids: classifications,
+      source_subclassification_ids: current.source_subclassification_ids.filter((value) => allowedSubclassifications.has(value)),
     }));
   }
 
@@ -898,19 +936,25 @@ export default function AIEnrichmentPage() {
                   onChange={updateSources}
                 />
                 <SearchableMultiSelect
-                  label="Classifications"
+                  label="Source Classifications"
                   options={classificationOptions}
-                  values={filters.source_classification_names}
+                  values={filters.source_classification_ids}
                   onChange={updateClassifications}
                 />
                 <SearchableMultiSelect
-                  label="Subclassifications"
+                  label="Source Subclassifications"
                   options={subclassificationOptions}
-                  values={filters.source_subclassification_names}
-                  onChange={(value) => setFilters((current) => ({ ...current, source_subclassification_names: value }))}
+                  values={filters.source_subclassification_ids}
+                  onChange={(value) => setFilters((current) => ({ ...current, source_subclassification_ids: value }))}
                 />
               </div>
 
+              {persistedFilters.migratedLegacyStorage && (
+                <div className="ai-status-banner ai-status-warning" role="status">
+                  Saved name-based Source Classification filters were cleared because
+                  duplicate labels cannot be migrated safely. Reselect source-qualified paths.
+                </div>
+              )}
               {filterOptionsError && <div className="ai-status-banner ai-status-error">{filterOptionsError}</div>}
 
               <div className="ai-date-limit-grid">
@@ -967,6 +1011,9 @@ export default function AIEnrichmentPage() {
                       </li>
                     ))}
                   </ul>
+                  <a className="ai-governance-link" href={governanceHash('job-taxonomy')}>
+                    Open Job Taxonomy Review
+                  </a>
                 </div>
               )}
 
@@ -1186,6 +1233,9 @@ export default function AIEnrichmentPage() {
                               </li>
                             ))}
                           </ul>
+                          <a className="ai-governance-link" href={governanceHash('job-taxonomy')}>
+                            Open Job Taxonomy Review
+                          </a>
                         </div>
                       )}
 

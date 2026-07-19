@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
+import { hashForView, resolveAppView } from './appRoute';
 import './App.css';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -10,19 +11,17 @@ const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage')
 const ScheduleManager = lazy(() => import('./components/scraper/ScheduleManager'));
 const CrawlTasksPage = lazy(() => import('./components/scraper/CrawlTasksPage'));
 const AddJobPage = lazy(() => import('./components/jobs/AddJobPage'));
-const VALID_VIEWS = new Set(['dashboard', 'jobs', 'add-job', 'companies', 'ai', 'settings', 'scheduler', 'crawl-tasks']);
-
-function resolveInitialView() {
-  if (typeof window === 'undefined') {
-    return 'dashboard';
-  }
-
-  const normalizedHash = window.location.hash.replace(/^#/, '').trim().toLowerCase();
-  return VALID_VIEWS.has(normalizedHash) ? normalizedHash : 'dashboard';
-}
+const JobIntelligenceGovernancePage = lazy(
+  () =>
+    import(
+      './components/jobIntelligence/JobIntelligenceGovernancePage'
+    ),
+);
 
 function App() {
-  const [activeView, setActiveView] = useState(resolveInitialView);
+  const [activeView, setActiveView] = useState(() =>
+    typeof window === 'undefined' ? 'dashboard' : resolveAppView(),
+  );
   const [settingsSection, setSettingsSection] = useState('ai-runtime');
   const navigateToAI = () => setActiveView('ai');
   const navigateToCrawlTasks = () => setActiveView('crawl-tasks');
@@ -37,7 +36,7 @@ function App() {
     }
 
     const handleHashChange = () => {
-      const nextView = resolveInitialView();
+      const nextView = resolveAppView();
       setActiveView((currentView) => (currentView === nextView ? currentView : nextView));
     };
 
@@ -52,9 +51,8 @@ function App() {
       return;
     }
 
-    const nextHash = `#${activeView}`;
-    if (window.location.hash !== nextHash) {
-      window.location.hash = nextHash;
+    if (resolveAppView(window.location.hash) !== activeView) {
+      window.location.hash = hashForView(activeView);
     }
   }, [activeView]);
 
@@ -69,6 +67,9 @@ function App() {
             {activeView === 'jobs' && <JobBrowser />}
             {activeView === 'add-job' && <AddJobPage />}
             {activeView === 'companies' && <CompaniesPage />}
+            {activeView === 'job-intelligence' && (
+              <JobIntelligenceGovernancePage />
+            )}
             {activeView === 'ai' && <AIEnrichmentPage />}
             {activeView === 'settings' && (
               <AISettingsPage

@@ -29,9 +29,11 @@ from app.job_intelligence.source_attributes import (
     SourceJobAttributeRebuildInspector,
     SourceJobAttributes,
 )
+from app.models.canonical_job_taxonomy import CANONICAL_JOB_TAXONOMY_TABLES
 from app.models.company import Company
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.event_outbox import EventOutbox
+from app.models.governance import GOVERNANCE_FOUNDATION_TABLES
 from app.models.job import Job
 from app.models.job_category import JobCategory
 from app.models.job_domain import JobDomain
@@ -66,9 +68,11 @@ def source_attribute_db():
         Job.__table__,
         CrawlJobListing.__table__,
         EventOutbox.__table__,
+        *GOVERNANCE_FOUNDATION_TABLES,
         SourceCatalogCandidate.__table__,
         SourceCatalogRevision.__table__,
         *SOURCE_JOB_ATTRIBUTE_TABLES,
+        *CANONICAL_JOB_TAXONOMY_TABLES,
     )
     Base.metadata.create_all(engine, tables=tables)
     db = sessionmaker(bind=engine)()

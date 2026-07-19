@@ -1,6 +1,17 @@
 import { createMonitoringId, logError } from '../monitoring';
 import { formatApiErrorDetail } from './errors';
 
+export class ApiRequestError extends Error {
+  constructor(message, { status, code = null, detail = null, requestId = null } = {}) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.code = code;
+    this.detail = detail;
+    this.requestId = requestId;
+  }
+}
+
 function mergeAbortSignals(callerSignal, timeoutSignal) {
   if (!callerSignal) {
     return { signal: timeoutSignal, cleanup: () => {} };
@@ -67,7 +78,15 @@ export async function apiFetchJson(url, options = {}) {
         durationMs: Date.now() - startedAt,
         detail: message,
       });
-      throw new Error(message);
+      throw new ApiRequestError(message, {
+        status: response.status,
+        code:
+          data?.detail && typeof data.detail === 'object'
+            ? data.detail.code || null
+            : null,
+        detail: data?.detail ?? null,
+        requestId: effectiveRequestId,
+      });
     }
 
     return data;

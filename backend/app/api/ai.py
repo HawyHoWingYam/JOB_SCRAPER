@@ -13,6 +13,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.database import SessionLocal, get_db
+from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job_category import JobCategory
@@ -58,6 +59,8 @@ class EnrichRequest(BaseModel):
 
 class PendingFiltersRequest(BaseModel):
     source_sites: List[str] = Field(default_factory=list)
+    source_classification_ids: List[str] = Field(default_factory=list)
+    source_subclassification_ids: List[str] = Field(default_factory=list)
     source_classification_names: List[str] = Field(default_factory=list)
     source_subclassification_names: List[str] = Field(default_factory=list)
     posted_date_from: Optional[date] = None
@@ -81,6 +84,39 @@ class PendingFiltersRequest(BaseModel):
                 normalized.append(text_value)
         return normalized
 
+    @field_validator(
+        "source_classification_ids",
+        "source_subclassification_ids",
+        mode="before",
+    )
+    @classmethod
+    def normalize_source_classification_ids(cls, value):
+        values = value if isinstance(value, list) else []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in values:
+            identity = str(item or "").strip()
+            if identity and identity not in seen:
+                seen.add(identity)
+                normalized.append(identity)
+        return normalized
+
+    @field_validator("source_classification_ids", "source_subclassification_ids")
+    @classmethod
+    def validate_source_classification_ids(cls, value: List[str]) -> List[str]:
+        supported = set(list_supported_source_sites())
+        invalid = []
+        for identity in value:
+            source_site, separator, native_id = identity.partition(":")
+            if not separator or source_site not in supported or not native_id:
+                invalid.append(identity)
+        if invalid:
+            raise ValueError(
+                "Source Classification IDs must be source-qualified: "
+                + ", ".join(invalid)
+            )
+        return value
+
     @field_validator("source_sites")
     @classmethod
     def validate_sources(cls, value: List[str]) -> List[str]:
@@ -103,6 +139,8 @@ class PendingFiltersRequest(BaseModel):
     def to_service_filters(self) -> PendingJobFilters:
         return PendingJobFilters(
             source_sites=tuple(self.source_sites),
+            source_classification_ids=tuple(self.source_classification_ids),
+            source_subclassification_ids=tuple(self.source_subclassification_ids),
             source_classification_names=tuple(self.source_classification_names),
             source_subclassification_names=tuple(self.source_subclassification_names),
             posted_date_from=self.posted_date_from,
@@ -427,7 +465,13 @@ def _load_job_snapshot(job_id: UUID) -> dict:
         )
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        return JobDetailSchema.model_validate(job).model_dump(mode="json")
+        detail = JobDetailSchema.model_validate(job).model_dump(mode="python")
+        detail.update(
+            JobIntelligenceProductReadModel(snapshot_db)
+            .get_job_detail(job_id=job.id, company_id=job.company_id)
+            .to_payload()
+        )
+        return JobDetailSchema.model_validate(detail).model_dump(mode="json")
     finally:
         snapshot_db.close()
 
@@ -521,32 +565,101 @@ async def get_ai_overview(db: Session = Depends(get_db)):
 async def get_pending_filter_options(db: Session = Depends(get_db)):
     """Return the current pending candidate hierarchy for local cascading filters."""
     rows = EnrichmentRunService(db).get_pending_filter_options()
-    hierarchy: dict[str, dict[str, set[str]]] = {}
+    hierarchy: dict[str, dict[str, object]] = {}
     for row in rows:
         source = str(row.get("source_site") or "").strip().lower()
-        classification = str(row.get("source_classification_name") or "").strip()
-        subclassification = str(row.get("source_subclassification_name") or "").strip()
-        if not source:
+        nodes = row.get("nodes")
+        if not source or not isinstance(nodes, list) or not nodes:
             continue
-        classifications = hierarchy.setdefault(source, {})
-        subclassifications = classifications.setdefault(classification, set())
-        if subclassification:
-            subclassifications.add(subclassification)
+
+        normalized_nodes = [
+            {
+                "id": str(node.get("source_classification_id") or "").strip(),
+                "name": str(node.get("label") or "").strip(),
+                "source_position": int(node.get("source_position") or 0),
+            }
+            for node in nodes
+            if isinstance(node, dict)
+            and str(node.get("source_classification_id") or "").strip()
+            and str(node.get("label") or "").strip()
+        ]
+        normalized_nodes.sort(key=lambda node: int(node["source_position"]))
+        if not normalized_nodes or int(normalized_nodes[0]["source_position"]) != 0:
+            continue
+
+        source_state = hierarchy.setdefault(
+            source,
+            {"classification_paths": {}, "classifications": {}},
+        )
+        path_key = tuple(str(node["id"]) for node in normalized_nodes)
+        source_state["classification_paths"].setdefault(
+            path_key,
+            {"nodes": normalized_nodes},
+        )
+
+        root = normalized_nodes[0]
+        classifications = source_state["classifications"]
+        classification = classifications.setdefault(
+            str(root["id"]),
+            {
+                "id": str(root["id"]),
+                "source_site": source,
+                "name": str(root["name"]),
+                "subclassifications": set(),
+                "subclassification_options": {},
+            },
+        )
+        for index, child in enumerate(normalized_nodes[1:], start=1):
+            breadcrumb = " / ".join(
+                str(node["name"]) for node in normalized_nodes[: index + 1]
+            )
+            classification["subclassifications"].add(str(child["name"]))
+            classification["subclassification_options"].setdefault(
+                str(child["id"]),
+                {
+                    "id": str(child["id"]),
+                    "source_site": source,
+                    "name": str(child["name"]),
+                    "breadcrumb": breadcrumb,
+                },
+            )
 
     return {
         "sources": [
             {
                 "source_site": source,
+                "classification_paths": sorted(
+                    source_state["classification_paths"].values(),
+                    key=lambda path: tuple(
+                        str(node["id"]) for node in path["nodes"]
+                    ),
+                ),
                 "classifications": [
                     {
-                        "name": classification,
-                        "subclassifications": sorted(subclassifications),
+                        "id": classification["id"],
+                        "source_site": classification["source_site"],
+                        "name": classification["name"],
+                        "subclassifications": sorted(
+                            classification["subclassifications"]
+                        ),
+                        "subclassification_options": sorted(
+                            classification["subclassification_options"].values(),
+                            key=lambda option: (
+                                str(option["name"]).casefold(),
+                                str(option["id"]),
+                            ),
+                        ),
                     }
-                    for classification, subclassifications in classifications.items()
-                    if classification
+                    for classification in sorted(
+                        source_state["classifications"].values(),
+                        key=lambda item: (
+                            str(item["name"]).casefold(),
+                            str(item["id"]),
+                        ),
+                    )
                 ],
             }
-            for source, classifications in hierarchy.items()
+            for source, source_state in sorted(hierarchy.items())
         ]
     }
 

@@ -1,7 +1,29 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { PlusCircle, Sparkles, Search, X, Loader, CheckCircle, AlertCircle } from 'lucide-react';
 import { apiPath } from '../../api/base';
+import { getCompanyIndustryDisplay } from '../companies/companyIndustryDisplay';
 import './AddJobPage.css';
+
+function canonicalTaxonomySummary(job) {
+  if (job?.job_intelligence_availability?.canonical_taxonomy?.available === false) {
+    return 'Unavailable';
+  }
+
+  const state = job?.canonical_taxonomy;
+  if (state?.state === 'unassigned') {
+    return 'Unassigned';
+  }
+
+  const breadcrumb = state?.assignment?.breadcrumb;
+  const labels = [
+    breadcrumb?.domain?.label,
+    breadcrumb?.category?.label,
+    breadcrumb?.subcategory?.label,
+  ].filter(Boolean);
+  return state?.state === 'assigned' && labels.length === 3
+    ? labels.join(' / ')
+    : 'Unknown';
+}
 
 function AddJobPage() {
   // Form state
@@ -12,7 +34,10 @@ function AddJobPage() {
   const [salaryMax, setSalaryMax] = useState('');
   const [salaryCurrency, setSalaryCurrency] = useState('HKD');
   const [location, setLocation] = useState('');
-  const [employmentType, setEmploymentType] = useState('');
+  const [employmentTypeCodes, setEmploymentTypeCodes] = useState([]);
+  const [employmentTypeOptions, setEmploymentTypeOptions] = useState([]);
+  const [employmentTypesLoading, setEmploymentTypesLoading] = useState(true);
+  const [employmentTypesError, setEmploymentTypesError] = useState('');
   const [postedDate, setPostedDate] = useState('');
   const [experienceMin, setExperienceMin] = useState('');
   const [experienceMax, setExperienceMax] = useState('');
@@ -142,6 +167,40 @@ function AddJobPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    setEmploymentTypesLoading(true);
+    setEmploymentTypesError('');
+
+    fetch(apiPath('/jobs/filters'), { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Failed to load governed Employment Types');
+        }
+        return response.json();
+      })
+      .then((payload) => {
+        if (!active) return;
+        setEmploymentTypeOptions(
+          Array.isArray(payload.employment_types) ? payload.employment_types : [],
+        );
+      })
+      .catch((error) => {
+        if (!active || error.name === 'AbortError') return;
+        setEmploymentTypeOptions([]);
+        setEmploymentTypesError(error.message);
+      })
+      .finally(() => {
+        if (active) setEmploymentTypesLoading(false);
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, []);
+
   const handleCreateCompany = async () => {
     if (!companySearch.trim()) return;
     setIsCreatingCompany(true);
@@ -187,7 +246,7 @@ function AddJobPage() {
     setSalaryMax('');
     setSalaryCurrency('HKD');
     setLocation('');
-    setEmploymentType('');
+    setEmploymentTypeCodes([]);
     setPostedDate('');
     setExperienceMin('');
     setExperienceMax('');
@@ -223,7 +282,7 @@ function AddJobPage() {
       salary_max: salaryMax.trim() ? Number(salaryMax) : null,
       salary_currency: salaryCurrency || 'HKD',
       location: location.trim() || null,
-      employment_type: employmentType.trim() || null,
+      employment_type_codes: employmentTypeCodes,
       posted_date: postedDate || null,
       experience_min_years: experienceMin.trim() ? Number(experienceMin) : null,
       experience_max_years: experienceMax.trim() ? Number(experienceMax) : null,
@@ -263,15 +322,6 @@ function AddJobPage() {
     }
   };
 
-  const EMPLOYMENT_TYPES = [
-    'Full-time',
-    'Part-time',
-    'Contract',
-    'Temporary',
-    'Internship',
-    'Freelance',
-  ];
-
   return (
     <div className="add-job-page">
       <section className="add-job-hero glass-panel">
@@ -285,7 +335,11 @@ function AddJobPage() {
       </section>
 
       {submitResult && (
-        <div className={`add-job-result glass-panel ${submitResult.type}`}>
+        <div
+          className={`add-job-result glass-panel ${submitResult.type}`}
+          role={submitResult.type === 'error' ? 'alert' : 'status'}
+          aria-live={submitResult.type === 'error' ? 'assertive' : 'polite'}
+        >
           {submitResult.type === 'success' ? (
             <CheckCircle size={20} />
           ) : (
@@ -294,6 +348,7 @@ function AddJobPage() {
           <span>{submitResult.message}</span>
           {submitResult.type === 'success' && (
             <button
+              type="button"
               className="add-job-reset-button"
               onClick={() => {
                 resetForm();
@@ -325,12 +380,18 @@ function AddJobPage() {
                 <span className="add-job-summary-value">{createdJob.ai_summary}</span>
               </div>
             )}
-            {createdJob.job_taxonomy && (
-              <div className="add-job-summary-field">
-                <span className="add-job-summary-label">Classification</span>
-                <span className="add-job-summary-value">{createdJob.job_taxonomy.path}</span>
-              </div>
-            )}
+            <div className="add-job-summary-field">
+              <span className="add-job-summary-label">Canonical Job Taxonomy</span>
+              <span className="add-job-summary-value">{canonicalTaxonomySummary(createdJob)}</span>
+            </div>
+            <div className="add-job-summary-field">
+              <span className="add-job-summary-label">Employment Types</span>
+              <span className="add-job-summary-value">
+                {createdJob.employment_types?.length > 0
+                  ? createdJob.employment_types.map((item) => item.label).join(', ')
+                  : 'Unknown'}
+              </span>
+            </div>
             {createdJob.skills?.length > 0 && (
               <div className="add-job-summary-field add-job-summary-full">
                 <span className="add-job-summary-label">Skills</span>
@@ -416,9 +477,9 @@ function AddJobPage() {
                         onClick={() => handleSelectCompany(company)}
                       >
                         <div className="add-job-suggestion-name">{company.name}</div>
-                        {company.industry && (
-                          <div className="add-job-suggestion-industry">{company.industry}</div>
-                        )}
+                        <div className="add-job-suggestion-industry">
+                          {getCompanyIndustryDisplay(company).summary}
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -458,7 +519,7 @@ function AddJobPage() {
                       />
                     </div>
                     <div className="add-job-field">
-                      <label className="add-job-label" htmlFor="new-company-industry">Industry</label>
+                      <label className="add-job-label" htmlFor="new-company-industry">Company Industry evidence</label>
                       <input
                         id="new-company-industry"
                         className="add-job-input"
@@ -468,6 +529,9 @@ function AddJobPage() {
                         placeholder="e.g. Information Technology"
                         disabled={isCreatingCompany}
                       />
+                      <p className="add-job-field-note">
+                        Free text is recorded as evidence for Company Industry review; it does not create an assignment.
+                      </p>
                     </div>
                     <div className="add-job-field">
                       <label className="add-job-label" htmlFor="new-company-location">Location</label>
@@ -521,9 +585,9 @@ function AddJobPage() {
               {selectedCompany && (
                 <div className="add-job-selected-company">
                   <span className="add-job-selected-company-name">{selectedCompany.name}</span>
-                  {selectedCompany.industry && (
-                    <span className="add-job-selected-company-industry">{selectedCompany.industry}</span>
-                  )}
+                  <span className="add-job-selected-company-industry">
+                    {getCompanyIndustryDisplay(selectedCompany).summary}
+                  </span>
                 </div>
               )}
             </div>
@@ -621,19 +685,26 @@ function AddJobPage() {
                 />
               </div>
               <div className="add-job-field add-job-field-md">
-                <label htmlFor="employment-type" className="add-job-label">Employment Type</label>
+                <label htmlFor="employment-types" className="add-job-label">Employment Types</label>
                 <select
-                  id="employment-type"
-                  className="add-job-select"
-                  value={employmentType}
-                  onChange={(e) => setEmploymentType(e.target.value)}
-                  disabled={isSubmitting}
+                  id="employment-types"
+                  className="add-job-select add-job-multi-select"
+                  multiple
+                  value={employmentTypeCodes}
+                  onChange={(event) => setEmploymentTypeCodes(
+                    Array.from(event.target.selectedOptions, (option) => option.value),
+                  )}
+                  disabled={isSubmitting || employmentTypesLoading || Boolean(employmentTypesError)}
                 >
-                  <option value="">-- Select --</option>
-                  {EMPLOYMENT_TYPES.map((type) => (
-                    <option key={type} value={type}>{type}</option>
+                  {employmentTypesLoading && <option disabled>Loading Employment Types...</option>}
+                  {employmentTypeOptions.map((option) => (
+                    <option key={option.code} value={option.code}>{option.label}</option>
                   ))}
                 </select>
+                <p className="add-job-field-note">Select zero or more governed Employment Types.</p>
+                {employmentTypesError && (
+                  <p className="add-job-field-error" role="status">{employmentTypesError}</p>
+                )}
               </div>
             </div>
           </div>

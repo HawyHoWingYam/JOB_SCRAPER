@@ -32,33 +32,6 @@ function resolveSharePercentage(explicitShare, value, total) {
   return Math.round((Number(value || 0) / total) * 100);
 }
 
-function formatFallbackInsight(bucket) {
-  if (!bucket?.source_breakdown?.length) {
-    return 'Fallback bucket includes jobs that could not be classified into a more specific governed path.';
-  }
-
-  const primary = bucket.source_breakdown[0];
-  const primaryShare = formatShare(primary.count, bucket.count);
-
-  if (primary.source_site === 'ctgoodjobs' && primary.source_subclassification_name == null) {
-    return `${primaryShare} of this fallback bucket comes from CTGoodJobs rows without a source subcategory.`;
-  }
-
-  if (primary.source_subclassification_name) {
-    return `${primaryShare} of this fallback bucket comes from ${primary.source_site || 'unknown source'} / ${primary.source_subclassification_name}.`;
-  }
-
-  return `${primaryShare} of this fallback bucket comes from ${primary.source_site || 'unknown source'} rows without a source subcategory.`;
-}
-
-function formatSourceBreakdownItem(item, total) {
-  const share = formatShare(item.count, total);
-  if (item.source_subclassification_name) {
-    return `${item.source_site || 'Unknown'} / ${item.source_subclassification_name}: ${item.count.toLocaleString()} (${share})`;
-  }
-  return `${item.source_site || 'Unknown'} / no source subcategory: ${item.count.toLocaleString()} (${share})`;
-}
-
 export default function CategoryChart({ totalJobs = 0 }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -98,8 +71,8 @@ export default function CategoryChart({ totalJobs = 0 }) {
       <div className="chart-container dashboard-category-chart">
         <div className="dashboard-chart-heading">
           <div>
-            <h3>Jobs by AI Category</h3>
-            <p>Specific categories are separated from fallback taxonomy buckets.</p>
+            <h3>Jobs by Canonical Job Taxonomy</h3>
+            <p>Only current accepted assignments from the active governed revision are included.</p>
           </div>
         </div>
         <div className="error-message">Failed to load categories: {error}</div>
@@ -109,49 +82,43 @@ export default function CategoryChart({ totalJobs = 0 }) {
 
   const categorizedTotal = Number(data?.categorized_total || 0);
   const specificTotal = Number(data?.specific_total || 0);
-  const fallbackTotal = Number(data?.fallback_total || 0);
   const topSpecificCategories = data?.top_specific_categories || [];
   const otherSpecificCategories = data?.other_specific_categories || {
     count: 0,
     bucket_count: 0,
     share_of_specific: 0,
   };
-  const fallbackBuckets = data?.fallback_buckets || [];
-  const primaryFallbackBucket = fallbackBuckets[0] || null;
 
   return (
     <div className="chart-container dashboard-category-chart">
       <div className="dashboard-chart-heading">
         <div>
-          <h3>Jobs by AI Category</h3>
-          <p>Specific categories are ranked separately so fallback taxonomy buckets do not distort the comparison view.</p>
+          <h3>Jobs by Canonical Job Taxonomy</h3>
+          <p>Only current accepted assignments from the active governed revision are included.</p>
         </div>
         <div className="dashboard-chart-badge">
-          {categorizedTotal.toLocaleString()} categorized
+          {categorizedTotal.toLocaleString()} accepted
         </div>
       </div>
 
-      {topSpecificCategories.length === 0 && fallbackBuckets.length === 0 ? (
-        <p className="chart-empty-state">No categorized jobs yet.</p>
+      {topSpecificCategories.length === 0 ? (
+        <p className="chart-empty-state">
+          No accepted Canonical Job Taxonomy assignments yet.
+        </p>
       ) : (
         <div className="category-chart-stack">
           <div className="category-chart-summary-grid">
             <div className="category-chart-summary-card">
-              <span>Specific categories</span>
+              <span>Accepted assignments</span>
               <strong>{specificTotal.toLocaleString()}</strong>
-              <small>{formatShare(specificTotal, categorizedTotal)} of categorized jobs</small>
-            </div>
-            <div className="category-chart-summary-card category-chart-summary-card-alert">
-              <span>Fallback buckets</span>
-              <strong>{fallbackTotal.toLocaleString()}</strong>
-              <small>{formatShare(fallbackTotal, categorizedTotal)} of categorized jobs</small>
+              <small>{formatShare(specificTotal, categorizedTotal)} of the accepted assignment set</small>
             </div>
           </div>
 
           <div className="category-chart-main-panel">
             <div className="category-chart-section-header">
-              <h4>Specific category mix</h4>
-              <p>Primary comparison view for governed non-fallback categories.</p>
+              <h4>Accepted Job Subcategory mix</h4>
+              <p>Unassigned, Unknown, raw, and fallback evidence is excluded from this ranking.</p>
             </div>
 
             <div className="category-chart-list">
@@ -172,7 +139,7 @@ export default function CategoryChart({ totalJobs = 0 }) {
                       <div className="category-chart-bar">
                         <span style={{ width: `${share}%`, backgroundColor: color }} />
                       </div>
-                      <small>{share}% of specific categories</small>
+                      <small>{share}% of accepted assignments</small>
                     </div>
 
                     <span className="category-chart-value">{Number(item.count || 0).toLocaleString()}</span>
@@ -204,7 +171,7 @@ export default function CategoryChart({ totalJobs = 0 }) {
                     </div>
                     <small>
                       {otherSpecificShare}% across{' '}
-                      {Number(otherSpecificCategories.bucket_count || 0)} categories
+                      {Number(otherSpecificCategories.bucket_count || 0)} Job Subcategories
                     </small>
                   </div>
                   <span className="category-chart-value">
@@ -218,50 +185,9 @@ export default function CategoryChart({ totalJobs = 0 }) {
             </div>
           </div>
 
-          {primaryFallbackBucket && (
-            <div className="category-fallback-panel">
-              {(() => {
-                const fallbackShare = resolveSharePercentage(
-                  primaryFallbackBucket.share_of_categorized,
-                  primaryFallbackBucket.count,
-                  categorizedTotal,
-                );
-
-                return (
-                  <>
-              <div className="category-chart-section-header">
-                <h4>Fallback diagnostic</h4>
-                <p>Fallback buckets are real taxonomy outputs, but they are tracked separately from the specific category ranking.</p>
-              </div>
-
-              <div className="category-fallback-highlight">
-                <div>
-                  <span className="category-fallback-label">{primaryFallbackBucket.label}</span>
-                  <strong>{Number(primaryFallbackBucket.count || 0).toLocaleString()}</strong>
-                  <small>{fallbackShare}% of categorized jobs</small>
-                </div>
-                <p>{formatFallbackInsight(primaryFallbackBucket)}</p>
-              </div>
-
-              <div className="category-fallback-breakdown">
-                {primaryFallbackBucket.source_breakdown.map((item) => (
-                  <div
-                    key={`${item.source_site || 'unknown'}-${item.source_subclassification_name || 'none'}`}
-                    className="category-fallback-breakdown-row"
-                  >
-                    <span>{formatSourceBreakdownItem(item, primaryFallbackBucket.count)}</span>
-                  </div>
-                ))}
-              </div>
-                  </>
-                );
-              })()}
-            </div>
-          )}
-
           {totalJobs > 0 && (
             <p className="category-chart-footnote">
-              {categorizedTotal.toLocaleString()} of {Number(totalJobs || 0).toLocaleString()} total jobs currently have a governed category path.
+              {categorizedTotal.toLocaleString()} of {Number(totalJobs || 0).toLocaleString()} total jobs currently have a current accepted Canonical Job Taxonomy assignment.
             </p>
           )}
         </div>

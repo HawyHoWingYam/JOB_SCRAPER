@@ -23,7 +23,7 @@ describe('CategoryChart', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders the dashboard category diagnostics without merging fallback buckets into other specific categories', async () => {
+  it('renders only accepted Canonical Job Taxonomy assignments and ignores legacy fallback payloads', async () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
 
@@ -72,12 +72,13 @@ describe('CategoryChart', () => {
     render(<CategoryChart totalJobs={7308} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Jobs by AI Category')).toBeInTheDocument();
+      expect(screen.getByText('Jobs by Canonical Job Taxonomy')).toBeInTheDocument();
     });
 
-    expect(screen.getByRole('heading', { name: /fallback diagnostic/i })).toBeInTheDocument();
-    expect(screen.getByText('General / General')).toBeInTheDocument();
-    expect(screen.getByText(/ctgoodjobs \/ no source subcategory/i)).toBeInTheDocument();
+    expect(screen.getByText('Accepted assignments')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /fallback diagnostic/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('General / General')).not.toBeInTheDocument();
+    expect(screen.queryByText(/ctgoodjobs \/ no source subcategory/i)).not.toBeInTheDocument();
     expect(screen.getByText(/other specific categories/i)).toBeInTheDocument();
     expect(screen.queryByText(/other categories/i)).not.toBeInTheDocument();
   });
@@ -124,8 +125,8 @@ describe('CategoryChart', () => {
       expect(screen.getByText('Backend Development')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('19% of specific categories')).toBeInTheDocument();
-    expect(screen.getByText(/81% across 12 categories/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/31% of categorized jobs/i).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('19% of accepted assignments')).toBeInTheDocument();
+    expect(screen.getByText(/81% across 12 Job Subcategories/i)).toBeInTheDocument();
+    expect(screen.queryByText(/31% of categorized jobs/i)).not.toBeInTheDocument();
   });
 });

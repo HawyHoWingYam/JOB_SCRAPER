@@ -139,5 +139,26 @@
         "source_site": "jobsdb"
       }
     }
-  ]
+  ],
+  "canonical_taxonomy": null,
+  "company_industries": null,
+  "skill_state": null,
+  "job_intelligence_availability": {
+    "source_attributes": {
+      "available": true,
+      "unavailable_code": null
+    },
+    "canonical_taxonomy": {
+      "available": false,
+      "unavailable_code": "CANONICAL_TAXONOMY_NOT_ACTIVE"
+    },
+    "company_industries": {
+      "available": false,
+      "unavailable_code": "COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE"
+    },
+    "skills": {
+      "available": false,
+      "unavailable_code": "SKILL_TAXONOMY_NOT_ACTIVE"
+    }
+  }
 }

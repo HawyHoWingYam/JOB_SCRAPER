@@ -1610,6 +1610,8 @@ def test_company_industry_backend_contract_fixture_roundtrips():
 
     assert parsed.model_dump(mode="json") == fixture
     assert parsed.tree.nodes[0].labels.zh_hant == "資訊及通訊"
+    assert parsed.child_tree.parent_id == parsed.tree.nodes[0].id
+    assert parsed.child_tree.nodes[0].level == "division"
     assert parsed.company_state.assignments[0].is_primary is True
     assert parsed.review_page.items[0].status == "active"
     assert parsed.mappings[0].approved_by == "local-operator"

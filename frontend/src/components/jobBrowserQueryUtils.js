@@ -1,9 +1,15 @@
 const EMPTY_QUERY = {
   search_query: '',
   source_site: '',
+  source_classification_ids: [],
   employment_type: '',
+  employment_type_codes: [],
   subcategory_ids: [],
+  canonical_subcategory_ids: [],
+  canonical_category_ids: [],
+  canonical_domain_ids: [],
   industry: '',
+  company_industry_node_ids: [],
   posted_date_from: '',
   posted_date_to: '',
   experience_years_from: '',
@@ -85,9 +91,21 @@ export function normalizeQueryForSubmit(query) {
     ...query,
     search_query: normalizeDraftKeyword(query?.search_query || ''),
     source_site: normalizeSourceSite(query?.source_site),
+    source_classification_ids: normalizeIdArray(
+      query?.source_classification_ids,
+    ),
     employment_type: normalizeValue(query?.employment_type),
+    employment_type_codes: normalizeIdArray(query?.employment_type_codes),
     subcategory_ids: normalizeIdArray(query?.subcategory_ids),
+    canonical_subcategory_ids: normalizeIdArray(
+      query?.canonical_subcategory_ids,
+    ),
+    canonical_category_ids: normalizeIdArray(query?.canonical_category_ids),
+    canonical_domain_ids: normalizeIdArray(query?.canonical_domain_ids),
     industry: normalizeValue(query?.industry),
+    company_industry_node_ids: normalizeIdArray(
+      query?.company_industry_node_ids,
+    ),
     posted_date_from: normalizeValue(query?.posted_date_from),
     posted_date_to: normalizeValue(query?.posted_date_to),
     experience_years_from: normalizeNumericString(query?.experience_years_from),
@@ -118,13 +136,41 @@ export function countPendingQueryChanges(appliedQuery, draftQuery) {
   if (applied.source_site !== draft.source_site) {
     count += 1;
   }
+  if (
+    JSON.stringify(applied.source_classification_ids) !==
+    JSON.stringify(draft.source_classification_ids)
+  ) {
+    count += 1;
+  }
   if (applied.employment_type !== draft.employment_type) {
+    count += 1;
+  }
+  if (
+    JSON.stringify(applied.employment_type_codes) !==
+    JSON.stringify(draft.employment_type_codes)
+  ) {
     count += 1;
   }
   if (JSON.stringify(applied.subcategory_ids) !== JSON.stringify(draft.subcategory_ids)) {
     count += 1;
   }
+  if (
+    JSON.stringify(applied.canonical_subcategory_ids) !==
+      JSON.stringify(draft.canonical_subcategory_ids) ||
+    JSON.stringify(applied.canonical_category_ids) !==
+      JSON.stringify(draft.canonical_category_ids) ||
+    JSON.stringify(applied.canonical_domain_ids) !==
+      JSON.stringify(draft.canonical_domain_ids)
+  ) {
+    count += 1;
+  }
   if (applied.industry !== draft.industry) {
+    count += 1;
+  }
+  if (
+    JSON.stringify(applied.company_industry_node_ids) !==
+    JSON.stringify(draft.company_industry_node_ids)
+  ) {
     count += 1;
   }
   if (

@@ -13,7 +13,13 @@ from app.job_intelligence.canonical_taxonomy import (
     CanonicalTaxonomyDecisionAdapter,
     CanonicalTaxonomyDecisionError,
 )
-from app.job_intelligence.foundation import DecisionCommand, GovernanceError
+from app.job_intelligence.foundation import (
+    AuditQuery,
+    AuditReader,
+    DecisionCommand,
+    GovernanceError,
+)
+from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.schemas.job_intelligence import (
     CanonicalJobStateSchema,
     CanonicalReviewItemSchema,
@@ -22,6 +28,10 @@ from app.schemas.job_intelligence import (
     CanonicalTaxonomyDecisionResultSchema,
     CanonicalTaxonomyRevisionSchema,
     CanonicalTaxonomyTreeSchema,
+    GovernanceAuditPageSchema,
+)
+from app.schemas.job_intelligence_product import (
+    JobIntelligenceGovernanceSummarySchema,
 )
 
 
@@ -63,6 +73,17 @@ def _decision_error(
     else:
         status_code = 422
     return HTTPException(status_code=status_code, detail=detail)
+
+
+@router.get(
+    "/governance/summary",
+    response_model=JobIntelligenceGovernanceSummarySchema,
+)
+def read_job_intelligence_governance_summary(
+    db: Session = Depends(get_db),
+) -> JobIntelligenceGovernanceSummarySchema:
+    payload = JobIntelligenceProductReadModel(db).get_governance_summary().to_payload()
+    return JobIntelligenceGovernanceSummarySchema.model_validate(payload)
 
 
 @router.get(
@@ -178,3 +199,33 @@ def decide_job_taxonomy_review_item(
             "replayed": result.replayed,
         }
     )
+
+
+@router.get(
+    "/governance/job-taxonomy/audit-events",
+    response_model=GovernanceAuditPageSchema,
+)
+def list_job_taxonomy_audit_events(
+    subject_id: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> GovernanceAuditPageSchema:
+    try:
+        page = AuditReader(db).list(
+            AuditQuery(
+                domain="job-taxonomy",
+                subject_type="job-taxonomy-review-item",
+                subject_id=subject_id,
+                cursor=cursor,
+                limit=limit,
+            )
+        )
+    except ValueError as exc:
+        raise _read_error(
+            CanonicalReadError(
+                "CANONICAL_AUDIT_CURSOR_INVALID",
+                str(exc),
+            )
+        ) from exc
+    return GovernanceAuditPageSchema.from_contract(page)

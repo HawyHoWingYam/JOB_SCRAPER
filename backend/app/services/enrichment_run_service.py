@@ -16,6 +16,10 @@ from app.models.crawl_job import CrawlJob
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
+from app.models.source_job_attributes import (
+    JobSourceClassificationPath,
+    JobSourceClassificationPathNode,
+)
 from app.models.skill_governance import (
     GovernedJobSkillMention,
     SkillCandidate,
@@ -56,6 +60,8 @@ class CrawlAutoRunAppendResult:
 @dataclass(frozen=True)
 class PendingJobFilters:
     source_sites: tuple[str, ...] = ()
+    source_classification_ids: tuple[str, ...] = ()
+    source_subclassification_ids: tuple[str, ...] = ()
     source_classification_names: tuple[str, ...] = ()
     source_subclassification_names: tuple[str, ...] = ()
     posted_date_from: date | None = None
@@ -65,6 +71,8 @@ class PendingJobFilters:
     def has_constraints(self) -> bool:
         return bool(
             self.source_sites
+            or self.source_classification_ids
+            or self.source_subclassification_ids
             or self.source_classification_names
             or self.source_subclassification_names
             or self.posted_date_from
@@ -150,6 +158,32 @@ class EnrichmentRunService:
         if normalized.source_sites:
             query = query.filter(
                 func.lower(Job.source_site).in_(normalized.source_sites)
+            )
+        if normalized.source_classification_ids:
+            query = query.filter(
+                Job.source_classification_paths.any(
+                    JobSourceClassificationPath.nodes.any(
+                        and_(
+                            JobSourceClassificationPathNode.source_position == 0,
+                            JobSourceClassificationPathNode.source_classification_id.in_(
+                                normalized.source_classification_ids
+                            ),
+                        )
+                    )
+                )
+            )
+        if normalized.source_subclassification_ids:
+            query = query.filter(
+                Job.source_classification_paths.any(
+                    JobSourceClassificationPath.nodes.any(
+                        and_(
+                            JobSourceClassificationPathNode.source_position > 0,
+                            JobSourceClassificationPathNode.source_classification_id.in_(
+                                normalized.source_subclassification_ids
+                            ),
+                        )
+                    )
+                )
             )
         if normalized.source_classification_names:
             query = query.filter(
@@ -249,29 +283,43 @@ class EnrichmentRunService:
 
         return supported_jobs, excluded_reasons, list(grouped.values())
 
-    def get_pending_filter_options(self) -> list[dict[str, str | None]]:
+    def get_pending_filter_options(self) -> list[dict[str, object]]:
+        candidate_ids = self._query_pending_candidates(Job.id).subquery()
         rows = (
-            self._query_pending_candidates(
-                Job.source_site,
-                Job.source_classification_name,
-                Job.source_subclassification_name,
+            self.db.query(
+                JobSourceClassificationPath.id,
+                JobSourceClassificationPath.source_site,
+                JobSourceClassificationPathNode.source_position,
+                JobSourceClassificationPathNode.source_classification_id,
+                JobSourceClassificationPathNode.label,
             )
-            .distinct()
+            .join(candidate_ids, candidate_ids.c.id == JobSourceClassificationPath.job_id)
+            .join(
+                JobSourceClassificationPathNode,
+                JobSourceClassificationPathNode.path_id
+                == JobSourceClassificationPath.id,
+            )
             .order_by(
-                Job.source_site.asc(),
-                Job.source_classification_name.asc(),
-                Job.source_subclassification_name.asc(),
+                JobSourceClassificationPath.source_site.asc(),
+                JobSourceClassificationPath.id.asc(),
+                JobSourceClassificationPathNode.source_position.asc(),
             )
             .all()
         )
-        return [
-            {
-                "source_site": source_site,
-                "source_classification_name": classification_name,
-                "source_subclassification_name": subclassification_name,
-            }
-            for source_site, classification_name, subclassification_name in rows
-        ]
+        paths: dict[str, dict[str, object]] = {}
+        for path_id, source_site, source_position, classification_id, label in rows:
+            path = paths.setdefault(
+                str(path_id),
+                {"source_site": source_site, "nodes": []},
+            )
+            path["nodes"].append(
+                {
+                    "source_position": int(source_position),
+                    "source_classification_id": classification_id,
+                    "label": label,
+                }
+            )
+        return list(paths.values())
 
     def get_job_queue_counts(self) -> dict[str, int]:
         total_jobs, enriched_jobs, eligible_enriched_jobs, eligible_unenriched_jobs = (

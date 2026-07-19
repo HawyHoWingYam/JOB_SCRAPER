@@ -127,6 +127,144 @@
     overflow-wrap: anywhere;
 }
 
+.dashboard-governance-panel {
+    display: grid;
+    gap: var(--space-5);
+    padding: var(--space-5);
+    background: var(--color-bg-secondary);
+}
+
+.dashboard-governance-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+}
+
+.dashboard-governance-header h3,
+.dashboard-governance-detail-grid h4 {
+    margin: var(--space-2) 0;
+}
+
+.dashboard-governance-header p:last-child,
+.dashboard-governance-detail-grid p {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+}
+
+.dashboard-governance-total {
+    flex: 0 0 auto;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid rgba(233, 185, 73, 0.3);
+    border-radius: var(--radius-full);
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+    font-weight: 800;
+}
+
+.dashboard-governance-metrics {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--space-3);
+}
+
+.dashboard-governance-metrics > div {
+    min-width: 0;
+    padding: var(--space-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-tertiary);
+}
+
+.dashboard-governance-metrics span,
+.dashboard-governance-metrics small {
+    display: block;
+    color: var(--color-text-secondary);
+    font-size: var(--text-xs);
+    line-height: 1.5;
+}
+
+.dashboard-governance-metrics span {
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.dashboard-governance-metrics strong {
+    display: block;
+    margin: var(--space-2) 0;
+    color: var(--color-text-primary);
+    font-size: var(--text-xl);
+}
+
+.dashboard-governance-detail-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--space-4);
+}
+
+.dashboard-governance-detail-grid > div,
+.dashboard-governance-detail-grid > nav {
+    padding: var(--space-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.dashboard-governance-reasons,
+.dashboard-governance-links {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.dashboard-governance-reasons li,
+.dashboard-governance-links a {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+}
+
+.dashboard-governance-links a {
+    border: 1px solid transparent;
+    text-decoration: none;
+}
+
+.dashboard-governance-links a:hover,
+.dashboard-governance-links a:focus-visible {
+    border-color: var(--color-primary);
+    color: var(--color-text-primary);
+}
+
+.dashboard-governance-links a:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+
+.dashboard-governance-reasons strong,
+.dashboard-governance-links strong {
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+    white-space: nowrap;
+}
+
+.dashboard-governance-degraded {
+    padding: var(--space-4);
+    border: 1px solid rgba(233, 185, 73, 0.3);
+    border-radius: var(--radius-md);
+    background: rgba(233, 185, 73, 0.08);
+    color: var(--color-text-secondary);
+}
+
 .dashboard-chart-heading {
     display: flex;
     justify-content: space-between;
@@ -335,8 +473,13 @@
 
 @media (max-width: 1120px) {
     .dashboard-command-grid,
-    .category-fallback-highlight {
+    .category-fallback-highlight,
+    .dashboard-governance-detail-grid {
         grid-template-columns: 1fr;
+    }
+
+    .dashboard-governance-metrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 }
 
@@ -350,5 +493,16 @@
 
     .dashboard-chart-heading {
         display: grid;
+    }
+
+    .dashboard-governance-header,
+    .dashboard-governance-reasons li,
+    .dashboard-governance-links a {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .dashboard-governance-metrics {
+        grid-template-columns: 1fr;
     }
 }

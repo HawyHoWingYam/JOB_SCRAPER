@@ -1,0 +1,779 @@
+{
+  "summary": {
+    "generated_at": "2026-07-19T12:00:00Z",
+    "trusted_local": {
+      "actor": "local-operator",
+      "authentication": "none",
+      "warning": "Trusted local operation only. Governance decision routes are not authenticated and must not be exposed to an untrusted network."
+    },
+    "total_pending": 6,
+    "areas": [
+      {
+        "key": "job_taxonomy",
+        "label": "Job Taxonomy Review",
+        "available": true,
+        "pending_count": 2,
+        "oldest_pending_at": "2026-07-18T08:00:00Z",
+        "active_revision_id": "10000000-0000-0000-0000-000000000001",
+        "unavailable_code": null,
+        "deep_link": "/job-intelligence/job-taxonomy"
+      },
+      {
+        "key": "skill_candidates",
+        "label": "Skill Candidates",
+        "available": true,
+        "pending_count": 3,
+        "oldest_pending_at": "2026-07-18T09:00:00Z",
+        "active_revision_id": "20000000-0000-0000-0000-000000000001",
+        "unavailable_code": null,
+        "deep_link": "/job-intelligence/skill-candidates"
+      },
+      {
+        "key": "company_industries",
+        "label": "Company Industries",
+        "available": true,
+        "pending_count": 1,
+        "oldest_pending_at": "2026-07-18T10:00:00Z",
+        "active_revision_id": "30000000-0000-0000-0000-000000000001",
+        "unavailable_code": null,
+        "deep_link": "/job-intelligence/company-industries"
+      }
+    ],
+    "coverage": {
+      "total_jobs": 12,
+      "jobs_with_source_classification_paths": 10,
+      "jobs_with_employment_types": 9,
+      "jobs_with_canonical_assignment": 7,
+      "jobs_without_canonical_assignment": 5,
+      "jobs_with_unassigned_canonical_state": 2,
+      "jobs_with_unknown_canonical_state": 3,
+      "canonical_unassigned_reasons": {
+        "classifier_provenance_missing": 3,
+        "unmapped_source_classification": 2
+      },
+      "jobs_with_governed_skills": 8,
+      "jobs_with_unreviewed_skill_mentions": 4,
+      "total_companies": 6,
+      "companies_with_governed_industries": 4,
+      "companies_without_governed_industries": 2
+    }
+  },
+  "canonical_audit": {
+    "items": [
+      {
+        "id": "40000000-0000-0000-0000-000000000001",
+        "domain": "job-taxonomy",
+        "subject_type": "job-taxonomy-review-item",
+        "subject_id": "50000000-0000-0000-0000-000000000001",
+        "action": "assign_existing_subcategory",
+        "actor": "local-operator",
+        "command_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "idempotency_key": "product-surfaces-fixture",
+        "before_summary": {
+          "status": "active"
+        },
+        "after_summary": {
+          "status": "assigned"
+        },
+        "evidence_refs": [
+          {
+            "kind": "source-classification-path",
+            "id": "jobsdb:6281"
+          }
+        ],
+        "correlation_id": "product-surfaces-fixture",
+        "created_at": "2026-07-19T11:00:00Z"
+      }
+    ],
+    "next_cursor": null
+  },
+  "job_filters": {
+    "locations": [
+      "Central"
+    ],
+    "regions": [
+      "Hong Kong Island"
+    ],
+    "location_hierarchy": [
+      {
+        "region": "Hong Kong Island",
+        "districts": [
+          "Central and Western"
+        ]
+      }
+    ],
+    "employment_types": [
+      {
+        "code": "full_time",
+        "label": "Full-time",
+        "order": 10
+      },
+      {
+        "code": "permanent",
+        "label": "Permanent",
+        "order": 30
+      }
+    ],
+    "source_classifications": [
+      {
+        "id": "jobsdb:6281",
+        "label": "Information Technology",
+        "source": "jobsdb",
+        "path": "Information Technology"
+      },
+      {
+        "id": "jobsdb:6287",
+        "label": "Developers and Programmers",
+        "source": "jobsdb",
+        "path": "Information Technology / Developers and Programmers"
+      }
+    ],
+    "industries": [
+      "Legacy Software evidence"
+    ]
+  },
+  "job_search": {
+    "jobs": [
+      {
+        "id": "40000000-0000-0000-0000-000000000010",
+        "job_id": "fixture-job-1",
+        "title": "Platform Engineer",
+        "description": "Build platform services.",
+        "location": "Hong Kong",
+        "salary_range": null,
+        "employment_type": "Legacy Contract",
+        "subcategory_id": "41000000-0000-0000-0000-000000000013",
+        "job_taxonomy": {
+          "domain_id": "41000000-0000-0000-0000-000000000011",
+          "domain_name": "Legacy",
+          "category_id": "41000000-0000-0000-0000-000000000012",
+          "category_name": "AI",
+          "subcategory_id": "41000000-0000-0000-0000-000000000013",
+          "subcategory_name": "Category",
+          "path": "Legacy / AI / Category"
+        },
+        "company_name": "Fixture Company",
+        "posted_date": "2026-07-18T08:00:00Z",
+        "source_classification_paths": [],
+        "employment_types": [
+          {
+            "code": "full_time",
+            "label": "Full-time",
+            "sort_order": 1
+          },
+          {
+            "code": "permanent",
+            "label": "Permanent",
+            "sort_order": 3
+          }
+        ],
+        "canonical_taxonomy": {
+          "job_id": "40000000-0000-0000-0000-000000000010",
+          "state": "assigned",
+          "assignment": {
+            "id": "90000000-0000-0000-0000-000000000010",
+            "job_id": "40000000-0000-0000-0000-000000000010",
+            "taxonomy_revision_id": "10000000-0000-0000-0000-000000000001",
+            "subcategory_id": "10000000-0000-0000-0000-000000000013",
+            "method": "constrained_ai",
+            "breadcrumb": {
+              "domain": {
+                "id": "10000000-0000-0000-0000-000000000011",
+                "code": "technology",
+                "label": "Technology"
+              },
+              "category": {
+                "id": "10000000-0000-0000-0000-000000000012",
+                "code": "software-development",
+                "label": "Software Development"
+              },
+              "subcategory": {
+                "id": "10000000-0000-0000-0000-000000000013",
+                "code": "backend-development",
+                "label": "Backend Development"
+              }
+            },
+            "version": 1,
+            "provenance": {
+              "evidence_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "source_evidence_refs": [
+                {
+                  "kind": "source-classification-path",
+                  "id": "jobsdb:6281"
+                }
+              ],
+              "mapping_revision_id": null,
+              "mapping_ids": [],
+              "model": {
+                "provider": "openai",
+                "name": "fixture-model",
+                "version": "2026-07-19"
+              },
+              "captured_at": "2026-07-19T09:00:00Z"
+            }
+          },
+          "reasons": [],
+          "review_item_refs": []
+        },
+        "canonical_taxonomy_availability": {
+          "available": true,
+          "unavailable_code": null
+        }
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000020",
+        "job_id": "fixture-job-2",
+        "title": "Evidence Analyst",
+        "description": null,
+        "location": "Kowloon",
+        "salary_range": null,
+        "employment_type": "Legacy Full-time",
+        "subcategory_id": null,
+        "job_taxonomy": {
+          "domain_id": "42000000-0000-0000-0000-000000000011",
+          "domain_name": "Legacy",
+          "category_id": "42000000-0000-0000-0000-000000000012",
+          "category_name": "Review",
+          "subcategory_id": "42000000-0000-0000-0000-000000000013",
+          "subcategory_name": "Category",
+          "path": "Legacy Review Category"
+        },
+        "company_name": "Review Company",
+        "posted_date": null,
+        "source_classification_paths": [],
+        "employment_types": [],
+        "canonical_taxonomy": {
+          "job_id": "40000000-0000-0000-0000-000000000020",
+          "state": "unassigned",
+          "assignment": null,
+          "reasons": [
+            "unmapped_source_classification"
+          ],
+          "review_item_refs": [
+            {
+              "id": "92000000-0000-0000-0000-000000000020",
+              "status": "active",
+              "version": 2,
+              "decision_audit_id": null,
+              "deep_link": "/job-intelligence/job-taxonomy?item_id=92000000-0000-0000-0000-000000000020"
+            }
+          ]
+        },
+        "canonical_taxonomy_availability": {
+          "available": true,
+          "unavailable_code": null
+        }
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000030",
+        "job_id": "fixture-job-3",
+        "title": "Operations Coordinator",
+        "description": null,
+        "location": null,
+        "salary_range": null,
+        "employment_type": "Legacy Temporary",
+        "subcategory_id": "43000000-0000-0000-0000-000000000013",
+        "job_taxonomy": {
+          "domain_id": "43000000-0000-0000-0000-000000000011",
+          "domain_name": "Legacy",
+          "category_id": "43000000-0000-0000-0000-000000000012",
+          "category_name": "Operations",
+          "subcategory_id": "43000000-0000-0000-0000-000000000013",
+          "subcategory_name": "Taxonomy",
+          "path": "Legacy Operations Taxonomy"
+        },
+        "company_name": "Legacy Company",
+        "posted_date": null,
+        "source_classification_paths": [],
+        "employment_types": [],
+        "canonical_taxonomy": null,
+        "canonical_taxonomy_availability": {
+          "available": false,
+          "unavailable_code": "CANONICAL_TAXONOMY_NOT_ACTIVE"
+        }
+      }
+    ],
+    "total": 3,
+    "page": 1,
+    "page_size": 24,
+    "total_pages": 1,
+    "applied_scope": {
+      "layers": []
+    },
+    "layer_summaries": []
+  },
+  "companies": [
+    {
+      "company_id": "fixture-company-1",
+      "name": "Fixture Company",
+      "industry": "Legacy evidence only",
+      "location": "Central",
+      "ai_description": "Builds governed platform products.",
+      "id": "30000000-0000-0000-0000-000000000010",
+      "created_at": "2026-07-18T08:00:00Z",
+      "updated_at": "2026-07-19T08:00:00Z",
+      "company_industries": {
+        "company_id": "30000000-0000-0000-0000-000000000010",
+        "assignments": [
+          {
+            "id": "30000000-0000-0000-0000-000000000012",
+            "taxonomy_revision_id": "30000000-0000-0000-0000-000000000001",
+            "node_id": "30000000-0000-0000-0000-000000000011",
+            "method": "authoritative_code",
+            "breadcrumb": [
+              {
+                "id": "30000000-0000-0000-0000-000000000011",
+                "code": "J",
+                "level": "section",
+                "labels": {
+                  "en": "Information and communications",
+                  "zh_hant": "資訊及通訊",
+                  "zh_hans": "资讯及通讯"
+                }
+              }
+            ],
+            "is_primary": true,
+            "primary_basis": "authoritative_source",
+            "version": 1,
+            "provenance": {
+              "method": "source-hsic-code"
+            }
+          },
+          {
+            "id": "30000000-0000-0000-0000-000000000013",
+            "taxonomy_revision_id": "30000000-0000-0000-0000-000000000001",
+            "node_id": "30000000-0000-0000-0000-000000000014",
+            "method": "operator",
+            "breadcrumb": [
+              {
+                "id": "30000000-0000-0000-0000-000000000014",
+                "code": "K",
+                "level": "section",
+                "labels": {
+                  "en": "Financial and insurance activities",
+                  "zh_hant": "金融及保險活動",
+                  "zh_hans": "金融及保险活动"
+                }
+              }
+            ],
+            "is_primary": false,
+            "primary_basis": null,
+            "version": 1,
+            "provenance": {
+              "method": "operator"
+            }
+          }
+        ],
+        "review_item_refs": []
+      },
+      "company_industry_availability": {
+        "available": true,
+        "unavailable_code": null
+      }
+    },
+    {
+      "company_id": "fixture-company-2",
+      "name": "Review Company",
+      "industry": "Legacy Retail evidence",
+      "location": "Kowloon",
+      "ai_description": null,
+      "id": "30000000-0000-0000-0000-000000000020",
+      "created_at": "2026-07-18T08:00:00Z",
+      "updated_at": "2026-07-19T08:00:00Z",
+      "company_industries": {
+        "company_id": "30000000-0000-0000-0000-000000000020",
+        "assignments": [],
+        "review_item_refs": [
+          {
+            "id": "33000000-0000-0000-0000-000000000020",
+            "status": "active",
+            "reason": "unmapped_source_label",
+            "version": 2,
+            "decision_audit_id": null,
+            "deep_link": "/api/v1/job-intelligence/governance/company-industries/review-items/33000000-0000-0000-0000-000000000020"
+          }
+        ]
+      },
+      "company_industry_availability": {
+        "available": true,
+        "unavailable_code": null
+      }
+    },
+    {
+      "company_id": "fixture-company-3",
+      "name": "Unavailable Company",
+      "industry": "Legacy Manufacturing evidence",
+      "location": null,
+      "ai_description": null,
+      "id": "30000000-0000-0000-0000-000000000030",
+      "created_at": "2026-07-18T08:00:00Z",
+      "updated_at": "2026-07-19T08:00:00Z",
+      "company_industries": null,
+      "company_industry_availability": {
+        "available": false,
+        "unavailable_code": "COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE"
+      }
+    }
+  ],
+  "job_detail": {
+    "job_id": "fixture-job-1",
+    "company_id": "30000000-0000-0000-0000-000000000010",
+    "title": "Platform Engineer",
+    "description": "Build platform services.",
+    "subcategory_id": null,
+    "source_classification_id": null,
+    "source_classification_name": null,
+    "source_subclassification_id": null,
+    "source_subclassification_name": null,
+    "ai_summary": null,
+    "salary_range": null,
+    "location": "Hong Kong",
+    "employment_type": null,
+    "posted_date": "2026-07-18T08:00:00Z",
+    "id": "40000000-0000-0000-0000-000000000010",
+    "created_at": "2026-07-18T08:05:00Z",
+    "updated_at": "2026-07-18T08:05:00Z",
+    "job_taxonomy": null,
+    "source_classification_paths": [
+      {
+        "id": "50000000-0000-0000-0000-000000000010",
+        "source_site": "jobsdb",
+        "source_order": 0,
+        "nodes": [
+          {
+            "source_position": 0,
+            "native_depth": 0,
+            "source_classification_id": "jobsdb:6281",
+            "native_id": "6281",
+            "label": "Information Technology"
+          },
+          {
+            "source_position": 1,
+            "native_depth": 1,
+            "source_classification_id": "jobsdb:6287",
+            "native_id": "6287",
+            "label": "Developers and Programmers"
+          }
+        ],
+        "is_primary": false,
+        "primary_basis": null,
+        "catalog_revision": null,
+        "provenance_limited": true,
+        "provenance": {
+          "method": "jobsdb-listing-payload",
+          "source_site": "jobsdb",
+          "captured_at": "2026-07-18T08:00:00Z"
+        }
+      }
+    ],
+    "employment_types": [
+      {
+        "code": "full_time",
+        "label": "Full-time",
+        "sort_order": 1
+      },
+      {
+        "code": "permanent",
+        "label": "Permanent",
+        "sort_order": 3
+      }
+    ],
+    "original_job_url": "https://hk.jobsdb.com/job/fixture-job-1",
+    "company_name": "Fixture Company",
+    "company_industry": "Legacy evidence only",
+    "company_ai_description": null,
+    "ai_enriched_at": null,
+    "experience_min_years": null,
+    "experience_max_years": null,
+    "experience_level": null,
+    "experience_summary": null,
+    "experience_evidence": null,
+    "expiry_date": null,
+    "is_expired": false,
+    "skills": [
+      "Python"
+    ],
+    "provisional_skills": [
+      "Rust"
+    ],
+    "unreviewed_skill_mentions": [
+      {
+        "id": "70000000-0000-0000-0000-000000000010",
+        "label": "Unreviewed Skill Mention",
+        "raw_name": "Rust",
+        "normalized_key": "rust",
+        "candidate_id": "80000000-0000-0000-0000-000000000010",
+        "candidate_version": 1,
+        "source": "ai-extraction",
+        "confidence": 0.8,
+        "provenance": {
+          "method": "ai-extraction"
+        },
+        "deep_link": "/job-intelligence/skill-candidates?candidate_id=80000000-0000-0000-0000-000000000010",
+        "created_at": "2026-07-19T10:00:00Z",
+        "updated_at": "2026-07-19T10:00:00Z"
+      }
+    ],
+    "source_employment_labels": [
+      {
+        "id": "60000000-0000-0000-0000-000000000010",
+        "source_site": "jobsdb",
+        "source_order": 0,
+        "raw_code": null,
+        "raw_label": "Full-time",
+        "normalized_lookup_key": "full-time",
+        "mapped_type_code": "full_time",
+        "mapping_id": "jobsdb-label-v1:full-time",
+        "provenance": {
+          "method": "jobsdb-listing-payload",
+          "source_site": "jobsdb"
+        }
+      },
+      {
+        "id": "60000000-0000-0000-0000-000000000011",
+        "source_site": "jobsdb",
+        "source_order": 1,
+        "raw_code": null,
+        "raw_label": "Permanent",
+        "normalized_lookup_key": "permanent",
+        "mapped_type_code": "permanent",
+        "mapping_id": "jobsdb-label-v1:permanent",
+        "provenance": {
+          "method": "jobsdb-listing-payload",
+          "source_site": "jobsdb"
+        }
+      }
+    ],
+    "canonical_taxonomy": {
+      "job_id": "40000000-0000-0000-0000-000000000010",
+      "state": "assigned",
+      "assignment": {
+        "id": "90000000-0000-0000-0000-000000000010",
+        "job_id": "40000000-0000-0000-0000-000000000010",
+        "taxonomy_revision_id": "10000000-0000-0000-0000-000000000001",
+        "subcategory_id": "10000000-0000-0000-0000-000000000013",
+        "method": "constrained_ai",
+        "breadcrumb": {
+          "domain": {
+            "id": "10000000-0000-0000-0000-000000000011",
+            "code": "technology",
+            "label": "Technology"
+          },
+          "category": {
+            "id": "10000000-0000-0000-0000-000000000012",
+            "code": "software-development",
+            "label": "Software Development"
+          },
+          "subcategory": {
+            "id": "10000000-0000-0000-0000-000000000013",
+            "code": "backend-development",
+            "label": "Backend Development"
+          }
+        },
+        "version": 1,
+        "provenance": {
+          "evidence_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "source_evidence_refs": [
+            {
+              "kind": "source-classification-path",
+              "id": "jobsdb:6281"
+            }
+          ],
+          "mapping_revision_id": null,
+          "mapping_ids": [],
+          "model": {
+            "provider": "openai",
+            "name": "fixture-model",
+            "version": "2026-07-19"
+          },
+          "captured_at": "2026-07-19T09:00:00Z"
+        }
+      },
+      "reasons": [],
+      "review_item_refs": []
+    },
+    "company_industries": {
+      "company_id": "30000000-0000-0000-0000-000000000010",
+      "assignments": [
+        {
+          "id": "30000000-0000-0000-0000-000000000012",
+          "taxonomy_revision_id": "30000000-0000-0000-0000-000000000001",
+          "node_id": "30000000-0000-0000-0000-000000000011",
+          "method": "authoritative_code",
+          "breadcrumb": [
+            {
+              "id": "30000000-0000-0000-0000-000000000011",
+              "code": "J",
+              "level": "section",
+              "labels": {
+                "en": "Information and communications",
+                "zh_hant": "資訊及通訊",
+                "zh_hans": "资讯及通讯"
+              }
+            }
+          ],
+          "is_primary": true,
+          "primary_basis": "authoritative_source",
+          "version": 1,
+          "provenance": {
+            "method": "source-hsic-code"
+          }
+        }
+      ],
+      "review_item_refs": []
+    },
+    "skill_state": {
+      "job_id": "40000000-0000-0000-0000-000000000010",
+      "taxonomy_revision_id": "20000000-0000-0000-0000-000000000001",
+      "skills": [
+        {
+          "id": "20000000-0000-0000-0000-000000000013",
+          "revision_id": "20000000-0000-0000-0000-000000000001",
+          "category": {
+            "id": "20000000-0000-0000-0000-000000000011",
+            "code": "programming",
+            "name": "Programming"
+          },
+          "technology": {
+            "id": "20000000-0000-0000-0000-000000000012",
+            "code": "python-ecosystem",
+            "name": "Python Ecosystem"
+          },
+          "code": "python",
+          "name": "Python",
+          "order": 1,
+          "origin": "seed",
+          "aliases": []
+        }
+      ],
+      "unreviewed_skill_mentions": [
+        {
+          "id": "70000000-0000-0000-0000-000000000010",
+          "label": "Unreviewed Skill Mention",
+          "raw_name": "Rust",
+          "normalized_key": "rust",
+          "candidate_id": "80000000-0000-0000-0000-000000000010",
+          "candidate_version": 1,
+          "source": "ai-extraction",
+          "confidence": 0.8,
+          "provenance": {
+            "method": "ai-extraction"
+          },
+          "deep_link": "/job-intelligence/skill-candidates?candidate_id=80000000-0000-0000-0000-000000000010",
+          "created_at": "2026-07-19T10:00:00Z",
+          "updated_at": "2026-07-19T10:00:00Z"
+        }
+      ]
+    },
+    "job_intelligence_availability": {
+      "source_attributes": {
+        "available": true,
+        "unavailable_code": null
+      },
+      "canonical_taxonomy": {
+        "available": true,
+        "unavailable_code": null
+      },
+      "company_industries": {
+        "available": true,
+        "unavailable_code": null
+      },
+      "skills": {
+        "available": true,
+        "unavailable_code": null
+      }
+    }
+  },
+  "job_recommendations": {
+    "source_job_id": "40000000-0000-0000-0000-000000000010",
+    "recommendations": [
+      {
+        "id": "40000000-0000-0000-0000-000000000040",
+        "job_id": "fixture-related-job-1",
+        "title": "Related Platform Engineer",
+        "company_name": "Related Fixture Company",
+        "location": "Hong Kong",
+        "employment_types": [
+          {
+            "code": "full_time",
+            "label": "Full-time",
+            "sort_order": 1
+          },
+          {
+            "code": "permanent",
+            "label": "Permanent",
+            "sort_order": 3
+          }
+        ],
+        "posted_date": "2026-07-19T08:00:00+00:00",
+        "canonical_taxonomy": {
+          "job_id": "40000000-0000-0000-0000-000000000040",
+          "state": "assigned",
+          "assignment": {
+            "id": "90000000-0000-0000-0000-000000000040",
+            "job_id": "40000000-0000-0000-0000-000000000040",
+            "taxonomy_revision_id": "10000000-0000-0000-0000-000000000001",
+            "subcategory_id": "10000000-0000-0000-0000-000000000013",
+            "method": "constrained_ai",
+            "breadcrumb": {
+              "domain": {
+                "id": "10000000-0000-0000-0000-000000000011",
+                "code": "technology",
+                "label": "Technology"
+              },
+              "category": {
+                "id": "10000000-0000-0000-0000-000000000012",
+                "code": "software-development",
+                "label": "Software Development"
+              },
+              "subcategory": {
+                "id": "10000000-0000-0000-0000-000000000013",
+                "code": "backend-development",
+                "label": "Backend Development"
+              }
+            },
+            "version": 1,
+            "provenance": {
+              "evidence_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "source_evidence_refs": [
+                {
+                  "kind": "source-classification-path",
+                  "id": "jobsdb:6281"
+                }
+              ],
+              "mapping_revision_id": null,
+              "mapping_ids": [],
+              "model": {
+                "provider": "openai",
+                "name": "fixture-model",
+                "version": "2026-07-19"
+              },
+              "captured_at": "2026-07-19T08:00:00Z"
+            }
+          },
+          "reasons": [],
+          "review_item_refs": []
+        },
+        "job_intelligence_availability": {
+          "source_attributes": {
+            "available": true,
+            "unavailable_code": null
+          },
+          "canonical_taxonomy": {
+            "available": true,
+            "unavailable_code": null
+          },
+          "skills": {
+            "available": true,
+            "unavailable_code": null
+          }
+        },
+        "semantic_score": 0.97,
+        "skill_overlap_score": 1.0,
+        "taxonomy_score": 1.0,
+        "freshness_score": 1.0,
+        "combined_score": 0.9805
+      }
+    ]
+  }
+}

@@ -3,11 +3,28 @@ import { Activity, Database, BrainCircuit, AlertTriangle, Clock3 } from 'lucide-
 import SkillChart from './charts/SkillChart';
 import CategoryChart from './charts/CategoryChart';
 import { apiPath } from '../api/base';
+import { fetchGovernanceSummary } from '../api/jobIntelligence';
 import './Dashboard.css';
+
+function humanizeGovernanceReason(value) {
+  const words = String(value || 'unknown')
+    .replaceAll('_', ' ')
+    .trim();
+  return words ? `${words.charAt(0).toUpperCase()}${words.slice(1)}` : 'Unknown';
+}
+
+function appHashForDeepLink(deepLink) {
+  const normalized = String(deepLink || '').trim();
+  if (!normalized) return '#job-intelligence/job-taxonomy';
+  if (normalized.startsWith('#')) return normalized;
+  return `#${normalized.replace(/^\/+/, '')}`;
+}
 
 export default function Dashboard({ onNavigateToAI }) {
   const [stats, setStats] = useState(null);
   const [aiOverview, setAiOverview] = useState(null);
+  const [governanceSummary, setGovernanceSummary] = useState(null);
+  const [governanceError, setGovernanceError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -15,8 +32,9 @@ export default function Dashboard({ onNavigateToAI }) {
     Promise.allSettled([
       fetch(apiPath('/stats/overview')),
       fetch(apiPath('/ai/overview')),
+      fetchGovernanceSummary(),
     ])
-      .then(async ([statsResult, aiOverviewResult]) => {
+      .then(async ([statsResult, aiOverviewResult, governanceResult]) => {
         if (statsResult.status !== 'fulfilled') {
           throw statsResult.reason;
         }
@@ -34,6 +52,16 @@ export default function Dashboard({ onNavigateToAI }) {
           if (aiOverviewResponse.ok) {
             aiOverviewPayload = await aiOverviewResponse.json();
           }
+        }
+
+        if (governanceResult.status === 'fulfilled') {
+          setGovernanceSummary(governanceResult.value);
+          setGovernanceError(null);
+        } else {
+          setGovernanceSummary(null);
+          setGovernanceError(
+            governanceResult.reason?.message || 'Governance summary unavailable',
+          );
         }
 
         setStats(statsPayload);
@@ -74,7 +102,6 @@ export default function Dashboard({ onNavigateToAI }) {
     ? (aiOverview?.failed_items == null ? null : Number(aiOverview.failed_items || 0))
     : Number(aiOverview.failed_jobs || 0);
   const totalJobs = Number(stats?.total_jobs || 0);
-  const enrichedJobs = Number(stats?.enriched_jobs || 0);
   const eligibleEnrichedJobs = Number(stats?.eligible_enriched_jobs ?? stats?.enriched_jobs ?? 0);
   const pendingEnrichment = Number(stats?.pending_enrichment || 0);
   const aiEligibleJobs = Number(stats?.ai_eligible_jobs || (eligibleEnrichedJobs + pendingEnrichment));
@@ -83,6 +110,10 @@ export default function Dashboard({ onNavigateToAI }) {
   const hasAiEligibleCohort = aiEligibleJobs > 0;
   const enrichmentCoverage = hasAiEligibleCohort ? Math.round((eligibleEnrichedJobs / aiEligibleJobs) * 100) : null;
   const queuePressure = hasAiEligibleCohort ? Math.round((pendingEnrichment / aiEligibleJobs) * 100) : null;
+  const governanceCoverage = governanceSummary?.coverage || null;
+  const governanceReasons = Object.entries(
+    governanceCoverage?.canonical_unassigned_reasons || {},
+  );
 
   return (
     <div className="dashboard-container">
@@ -221,6 +252,116 @@ export default function Dashboard({ onNavigateToAI }) {
           </div>
         </>
       )}
+
+      <section
+        className="dashboard-governance-panel glass-panel"
+        aria-label="Job Intelligence Governance"
+      >
+        <div className="dashboard-governance-header">
+          <div>
+            <p className="dashboard-panel-eyebrow">Governed Coverage</p>
+            <h3>Job Intelligence Governance</h3>
+            <p>
+              Accepted knowledge, explicit Unassigned states, Unknown gaps, and review backlogs.
+            </p>
+          </div>
+          {governanceSummary && (
+            <span className="dashboard-governance-total">
+              {Number(governanceSummary.total_pending || 0).toLocaleString()} pending
+            </span>
+          )}
+        </div>
+
+        {governanceError ? (
+          <div className="dashboard-governance-degraded" role="status">
+            Governance coverage is temporarily unavailable. Operational metrics remain current.
+          </div>
+        ) : governanceCoverage ? (
+          <>
+            <div className="dashboard-governance-metrics">
+              <div aria-label="Canonical assignments">
+                <span>Canonical assignments</span>
+                <strong>
+                  {Number(governanceCoverage.jobs_with_canonical_assignment || 0).toLocaleString()}
+                  {' of '}
+                  {Number(governanceCoverage.total_jobs || 0).toLocaleString()}
+                </strong>
+                <small>Accepted Canonical Job Taxonomy assignments</small>
+              </div>
+              <div aria-label="Unassigned jobs">
+                <span>Unassigned</span>
+                <strong>
+                  {Number(governanceCoverage.jobs_with_unassigned_canonical_state || 0).toLocaleString()}
+                </strong>
+                <small>Jobs with explicit review evidence and no accepted assignment</small>
+              </div>
+              <div aria-label="Unknown jobs">
+                <span>Unknown</span>
+                <strong>
+                  {Number(governanceCoverage.jobs_with_unknown_canonical_state || 0).toLocaleString()}
+                </strong>
+                <small>Jobs with neither an accepted assignment nor an active review state</small>
+              </div>
+              <div>
+                <span>Governed Skills</span>
+                <strong>
+                  {Number(governanceCoverage.jobs_with_governed_skills || 0).toLocaleString()}
+                  {' of '}
+                  {Number(governanceCoverage.total_jobs || 0).toLocaleString()}
+                </strong>
+                <small>Jobs with at least one governed Skill</small>
+              </div>
+              <div>
+                <span>Company Industries</span>
+                <strong>
+                  {Number(governanceCoverage.companies_with_governed_industries || 0).toLocaleString()}
+                  {' of '}
+                  {Number(governanceCoverage.total_companies || 0).toLocaleString()}
+                </strong>
+                <small>Companies with governed Industry assignments</small>
+              </div>
+            </div>
+
+            <div className="dashboard-governance-detail-grid">
+              <div>
+                <h4>Unassigned reasons</h4>
+                {governanceReasons.length > 0 ? (
+                  <ul className="dashboard-governance-reasons">
+                    {governanceReasons.map(([reason, count]) => (
+                      <li key={reason}>
+                        <span>{humanizeGovernanceReason(reason)}</span>
+                        <strong>{Number(count || 0).toLocaleString()} evidence flags</strong>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No active Unassigned reasons.</p>
+                )}
+              </div>
+
+              <nav aria-label="Governance review backlogs">
+                <h4>Review backlogs</h4>
+                <div className="dashboard-governance-links">
+                  {(governanceSummary.areas || []).map((area) => (
+                    <a key={area.key} href={appHashForDeepLink(area.deep_link)}>
+                      <span>{area.label}</span>
+                      <strong>
+                        {area.available
+                          ? `${Number(area.pending_count || 0).toLocaleString()} pending`
+                          : 'Unavailable'}
+                      </strong>
+                    </a>
+                  ))}
+                </div>
+              </nav>
+            </div>
+          </>
+        ) : (
+          <div className="dashboard-governance-degraded" role="status">
+            Loading governed coverage…
+          </div>
+        )}
+      </section>
 
       <div className="charts-grid">
         <div className="chart-wrapper glass-panel dashboard-chart-panel">

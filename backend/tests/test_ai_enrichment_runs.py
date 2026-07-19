@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from app.api.ai import (
     CreateRunRequest,
     PendingSelectionRequest,
+    get_pending_filter_options as get_pending_filter_options_endpoint,
     _run_execution_result,
     _serialize_single_run,
     router,
@@ -19,7 +20,11 @@ from app.job_intelligence.canonical_taxonomy import CanonicalTaxonomyPreflightRe
 from app.models.company import Company
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
-from app.models.source_job_attributes import JobSourceAttributeProjection
+from app.models.source_job_attributes import (
+    JobSourceAttributeProjection,
+    JobSourceClassificationPath,
+    JobSourceClassificationPathNode,
+)
 from app.services.enrichment_run_service import (
     ActiveEnrichmentRunError,
     EnrichmentRunService,
@@ -64,6 +69,8 @@ def db():
     Company.__table__.create(engine)
     Job.__table__.create(engine)
     JobSourceAttributeProjection.__table__.create(engine)
+    JobSourceClassificationPath.__table__.create(engine)
+    JobSourceClassificationPathNode.__table__.create(engine)
     EnrichmentRun.__table__.create(engine)
     EnrichmentRunItem.__table__.create(engine)
     session = sessionmaker(bind=engine)()
@@ -169,6 +176,34 @@ def make_run(db, *, run_id, status, created_at, completed_at=None, job_ids=None)
     return row
 
 
+def add_source_path(db, job, *nodes):
+    path = JobSourceClassificationPath(
+        job_id=job.id,
+        source_site=job.source_site,
+        source_order=0,
+        path_fingerprint=str(job.id).replace("-", "").ljust(64, "0"),
+        is_primary=False,
+        primary_basis=None,
+        provenance={"method": "test"},
+    )
+    db.add(path)
+    db.flush()
+    for position, (source_classification_id, label) in enumerate(nodes):
+        db.add(
+            JobSourceClassificationPathNode(
+                path_id=path.id,
+                source_site=job.source_site,
+                source_position=position,
+                native_depth=position,
+                source_classification_id=source_classification_id,
+                native_id=source_classification_id.split(":", 1)[1],
+                label=label,
+            )
+        )
+    db.flush()
+    return path
+
+
 def test_pending_request_normalizes_values_and_enforces_safe_scope():
     request = PendingSelectionRequest.model_validate(
         {
@@ -181,6 +216,26 @@ def test_pending_request_normalizes_values_and_enforces_safe_scope():
     )
     assert request.filters.source_sites == ["jobsdb"]
     assert request.filters.source_classification_names == ["information technology"]
+
+    qualified_request = PendingSelectionRequest.model_validate(
+        {
+            "filters": {
+                "source_classification_ids": [" jobsdb:6281 ", "jobsdb:6281"],
+                "source_subclassification_ids": ["jobsdb:6287"],
+            },
+            "limit": 25,
+        }
+    )
+    assert qualified_request.filters.source_classification_ids == ["jobsdb:6281"]
+    assert qualified_request.filters.source_subclassification_ids == ["jobsdb:6287"]
+
+    with pytest.raises(ValidationError):
+        PendingSelectionRequest.model_validate(
+            {
+                "filters": {"source_classification_ids": ["6281"]},
+                "limit": 25,
+            }
+        )
 
     with pytest.raises(ValidationError):
         PendingSelectionRequest(filters={}, limit=25)
@@ -398,6 +453,85 @@ def test_filters_use_or_within_fields_and_and_across_fields_with_inclusive_dates
     }
     run = service.create_manual_pending_run(limit=50, filters=filters)
     assert run.job_ids == [str(matching.id)]
+
+
+def test_source_qualified_filters_and_options_do_not_merge_duplicate_names(
+    db,
+    company,
+):
+    jobsdb_job = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000004",
+        source_site="jobsdb",
+        source_classification_id="legacy-jobsdb",
+        classification="Information Technology",
+        subclassification="Security",
+    )
+    add_source_path(
+        db,
+        jobsdb_job,
+        ("jobsdb:6281", "Information Technology"),
+        ("jobsdb:6287", "Security"),
+    )
+    ctgoodjobs_job = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000005",
+        source_site="ctgoodjobs",
+        source_classification_id="legacy-ctgoodjobs",
+        classification="Information Technology",
+        subclassification="Security",
+    )
+    add_source_path(
+        db,
+        ctgoodjobs_job,
+        ("ctgoodjobs:021", "Information Technology"),
+        ("ctgoodjobs:022", "Security"),
+    )
+
+    service = EnrichmentRunService(db)
+    jobsdb_preview = service.preview_pending_jobs(
+        filters=PendingJobFilters(source_classification_ids=("jobsdb:6281",)),
+        limit=50,
+    )
+    assert jobsdb_preview["matching_pending_count"] == 1
+    assert service._select_pending_jobs(
+        filters=PendingJobFilters(source_subclassification_ids=("ctgoodjobs:022",)),
+        limit=50,
+    ) == [ctgoodjobs_job]
+
+    payload = asyncio.run(get_pending_filter_options_endpoint(db))
+    sources = {source["source_site"]: source for source in payload["sources"]}
+    assert sources["jobsdb"]["classifications"] == [
+        {
+            "id": "jobsdb:6281",
+            "source_site": "jobsdb",
+            "name": "Information Technology",
+            "subclassifications": ["Security"],
+            "subclassification_options": [
+                {
+                    "id": "jobsdb:6287",
+                    "source_site": "jobsdb",
+                    "name": "Security",
+                    "breadcrumb": "Information Technology / Security",
+                }
+            ],
+        }
+    ]
+    assert sources["ctgoodjobs"]["classifications"][0]["id"] == "ctgoodjobs:021"
+    assert sources["ctgoodjobs"]["classification_paths"][0]["nodes"] == [
+        {
+            "id": "ctgoodjobs:021",
+            "name": "Information Technology",
+            "source_position": 0,
+        },
+        {
+            "id": "ctgoodjobs:022",
+            "name": "Security",
+            "source_position": 1,
+        },
+    ]
 
 
 def test_candidate_query_excludes_ineligible_enriched_deleted_and_reserved_jobs(

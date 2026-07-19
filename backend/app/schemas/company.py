@@ -3,6 +3,9 @@ from typing import Optional
 from datetime import datetime
 from uuid import UUID
 
+from app.schemas.company_industry import CompanyIndustryCompanyStateSchema
+from app.schemas.job import JobIntelligenceDomainAvailabilitySchema
+
 
 class CompanyCreateSchema(BaseModel):
     """Schema for creating a new company.
@@ -27,3 +30,10 @@ class CompanySchema(CompanyCreateSchema):
     id: UUID
     created_at: datetime
     updated_at: datetime
+
+
+class CompanyProductSchema(CompanySchema):
+    """Company response with scoped governed Industry state."""
+
+    company_industries: Optional[CompanyIndustryCompanyStateSchema]
+    company_industry_availability: JobIntelligenceDomainAvailabilitySchema

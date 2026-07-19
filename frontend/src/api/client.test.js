@@ -92,6 +92,37 @@ describe('api client', () => {
     await expect(apiFetchJson('/api/v1/capabilities')).rejects.toThrow('retrieval-api unavailable');
   });
 
+  it('preserves stable conflict metadata for governance reload handling', async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          detail: {
+            code: 'GOVERNANCE_DECISION_STALE_VERSION',
+            message: 'The review item changed',
+          },
+        }),
+      }),
+    );
+
+    const error = await apiFetchJson('/api/v1/job-intelligence/review').catch(
+      (caught) => caught,
+    );
+
+    expect(error).toMatchObject({
+      name: 'ApiRequestError',
+      message: 'The review item changed',
+      status: 409,
+      code: 'GOVERNANCE_DECISION_STALE_VERSION',
+      detail: {
+        code: 'GOVERNANCE_DECISION_STALE_VERSION',
+        message: 'The review item changed',
+      },
+      requestId: 'req-fixed',
+    });
+  });
+
   it('formats array details into readable messages', () => {
     expect(formatApiErrorDetail([{ msg: 'field required' }, { message: 'bad source' }])).toBe(
       'field required; bad source',

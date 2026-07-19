@@ -1,4 +1,4 @@
-from app.schemas.company import CompanySchema, CompanyCreateSchema
+from app.schemas.company import CompanyCreateSchema, CompanyProductSchema, CompanySchema
 from app.schemas.job import (
     JobSchema,
     JobCreateSchema,
@@ -44,6 +44,7 @@ from app.schemas.job_intelligence import (
 __all__ = [
     "CompanySchema",
     "CompanyCreateSchema",
+    "CompanyProductSchema",
     "JobSchema",
     "JobCreateSchema",
     "ManualJobCreateSchema",

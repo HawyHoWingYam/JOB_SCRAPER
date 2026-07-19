@@ -1,9 +1,27 @@
-from pydantic import BaseModel, ConfigDict, Field, field_serializer
-from typing import Any, Optional
+from collections.abc import Mapping
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import model_validator
+from typing import Any, Literal, Optional
 from datetime import datetime
 from uuid import UUID
 
-from app.schemas.skill_governance import SkillUnreviewedMentionSchema
+from app.schemas.company_industry import CompanyIndustryCompanyStateSchema
+from app.schemas.job_intelligence import CanonicalJobStateSchema
+from app.schemas.skill_governance import (
+    JobSkillStateSchema,
+    SkillUnreviewedMentionSchema,
+)
+
+
+EmploymentTypeCode = Literal[
+    "full_time",
+    "part_time",
+    "permanent",
+    "contract",
+    "temporary",
+    "internship",
+    "freelance",
+]
 
 
 class JobCreateSchema(BaseModel):
@@ -37,9 +55,23 @@ class ManualJobCreateSchema(BaseModel):
     salary_currency: Optional[str] = "HKD"
     location: Optional[str] = None
     employment_type: Optional[str] = None
+    employment_type_codes: list[EmploymentTypeCode] = Field(default_factory=list)
     posted_date: Optional[datetime] = None
     experience_min_years: Optional[int] = None
     experience_max_years: Optional[int] = None
+
+    @field_validator("employment_type_codes")
+    @classmethod
+    def _deduplicate_employment_type_codes(cls, values):
+        return list(dict.fromkeys(values))
+
+    @model_validator(mode="after")
+    def _keep_legacy_and_governed_employment_inputs_separate(self):
+        if str(self.employment_type or "").strip() and self.employment_type_codes:
+            raise ValueError(
+                "employment_type and employment_type_codes cannot be submitted together"
+            )
+        return self
 
 
 class JobTaxonomySchema(BaseModel):
@@ -108,6 +140,26 @@ class SourceEmploymentLabelSchema(BaseModel):
     provenance: dict[str, Any]
 
 
+class JobIntelligenceDomainAvailabilitySchema(BaseModel):
+    available: bool = False
+    unavailable_code: Optional[str] = "JOB_INTELLIGENCE_NOT_COMPOSED"
+
+
+class JobIntelligenceAvailabilitySchema(BaseModel):
+    source_attributes: JobIntelligenceDomainAvailabilitySchema = Field(
+        default_factory=JobIntelligenceDomainAvailabilitySchema
+    )
+    canonical_taxonomy: JobIntelligenceDomainAvailabilitySchema = Field(
+        default_factory=JobIntelligenceDomainAvailabilitySchema
+    )
+    company_industries: JobIntelligenceDomainAvailabilitySchema = Field(
+        default_factory=JobIntelligenceDomainAvailabilitySchema
+    )
+    skills: JobIntelligenceDomainAvailabilitySchema = Field(
+        default_factory=JobIntelligenceDomainAvailabilitySchema
+    )
+
+
 class JobSchema(JobCreateSchema):
     """Schema for job response."""
 
@@ -146,6 +198,30 @@ class JobDetailSchema(JobSchema):
     source_employment_labels: list[SourceEmploymentLabelSchema] = Field(
         default_factory=list
     )
+    canonical_taxonomy: Optional[CanonicalJobStateSchema] = None
+    company_industries: Optional[CompanyIndustryCompanyStateSchema] = None
+    skill_state: Optional[JobSkillStateSchema] = None
+    job_intelligence_availability: JobIntelligenceAvailabilitySchema = Field(
+        default_factory=JobIntelligenceAvailabilitySchema
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_composed_governed_states(cls, value):
+        if isinstance(value, Mapping):
+            required_fields = {
+                "canonical_taxonomy",
+                "company_industries",
+                "skill_state",
+                "job_intelligence_availability",
+            }
+            missing = sorted(required_fields - set(value))
+            if missing:
+                raise ValueError(
+                    "Job Detail is missing composed governed state fields: "
+                    + ", ".join(missing)
+                )
+        return value
 
     @field_serializer("ai_enriched_at")
     def serialize_ai_enriched_at(self, value: Optional[datetime]) -> Optional[str]:

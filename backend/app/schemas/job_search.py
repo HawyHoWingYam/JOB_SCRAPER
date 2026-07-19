@@ -1,19 +1,20 @@
 from datetime import date
-from pydantic import BaseModel, Field, field_validator, model_validator
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Literal, Optional, List
 
 from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
+from app.schemas.job import (
+    EmploymentTypeCode,
+    EmploymentTypeSchema,
+    JobIntelligenceDomainAvailabilitySchema,
+    JobTaxonomySchema,
+    SourceClassificationPathSchema,
+)
+from app.schemas.job_intelligence import CanonicalJobStateSchema
 
 SourceSiteFilter = Literal["jobsdb", "ctgoodjobs", "offertoday"]
-EmploymentTypeCode = Literal[
-    "full_time",
-    "part_time",
-    "permanent",
-    "contract",
-    "temporary",
-    "internship",
-    "freelance",
-]
 _EMPLOYMENT_TYPE_CODE_BY_LABEL = {
     label.casefold(): code for code, label, _sort_order in EMPLOYMENT_TYPE_SEEDS
 }
@@ -22,6 +23,33 @@ _EMPLOYMENT_TYPE_CODE_BY_LABEL = {
 class SearchClauseSchema(BaseModel):
     clause_type: str
     value: str
+
+
+class LocationHierarchyItem(BaseModel):
+    region: str
+    districts: List[str]
+
+
+class EmploymentTypeOption(BaseModel):
+    code: str
+    label: str
+    order: int
+
+
+class SourceClassificationOption(BaseModel):
+    id: str
+    label: str
+    source: str
+    path: str
+
+
+class FilterOptionsResponse(BaseModel):
+    locations: List[str]
+    regions: List[str]
+    location_hierarchy: List[LocationHierarchyItem]
+    employment_types: List[EmploymentTypeOption]
+    source_classifications: List[SourceClassificationOption]
+    industries: List[str]
 
 
 class JobSearchFiltersSchema(BaseModel):
@@ -41,6 +69,10 @@ class JobSearchFiltersSchema(BaseModel):
     skill_ids: Optional[List[str]] = None
     technology_ids: Optional[List[str]] = None
     skill_category_ids: Optional[List[str]] = None
+    canonical_subcategory_ids: Optional[List[str]] = None
+    canonical_category_ids: Optional[List[str]] = None
+    canonical_domain_ids: Optional[List[str]] = None
+    company_industry_node_ids: Optional[List[str]] = None
     subcategory_ids: Optional[List[str]] = None
     job_category_ids: Optional[List[str]] = None
     domain_ids: Optional[List[str]] = None
@@ -145,3 +177,39 @@ class JobSearchErrorSchema(BaseModel):
     message: str
     position: int
     token: str
+
+
+class JobWithCompanySchema(BaseModel):
+    """Governed Job Browser card contract."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: str
+    title: str
+    description: Optional[str] = None
+    location: Optional[str] = None
+    salary_range: Optional[str] = None
+    employment_type: Optional[str] = None
+    subcategory_id: Optional[UUID] = None
+    job_taxonomy: Optional[JobTaxonomySchema] = None
+    company_name: Optional[str] = None
+    posted_date: Optional[str] = None
+    source_classification_paths: List[SourceClassificationPathSchema] = Field(
+        default_factory=list
+    )
+    employment_types: List[EmploymentTypeSchema] = Field(default_factory=list)
+    canonical_taxonomy: Optional[CanonicalJobStateSchema]
+    canonical_taxonomy_availability: JobIntelligenceDomainAvailabilitySchema
+
+
+class JobSearchResponse(BaseModel):
+    """Paginated Job Browser response contract."""
+
+    jobs: List[JobWithCompanySchema]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    applied_scope: Optional[JobSearchScopeSchema] = None
+    layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None

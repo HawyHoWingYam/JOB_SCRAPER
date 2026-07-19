@@ -35,7 +35,9 @@ from app.services.skill_normalizer import normalize_exact_skill_key
 from app.services.database_integrity_service import _load_taxonomy_summary
 from app.services.enrichment_run_service import EnrichmentRunService
 from app.job_intelligence.foundation import DecisionCommand
+from app.models.canonical_job_taxonomy import CANONICAL_JOB_TAXONOMY_TABLES
 from app.models.company import Company
+from app.models.company_industry import COMPANY_INDUSTRY_TABLES
 from app.models.event_outbox import EventOutbox
 from app.models.governance import (
     GOVERNANCE_FOUNDATION_TABLES,
@@ -92,6 +94,8 @@ def skill_governance_db():
         *GOVERNANCE_FOUNDATION_TABLES,
         *SKILL_GOVERNANCE_TABLES,
         *SOURCE_JOB_ATTRIBUTE_TABLES,
+        *CANONICAL_JOB_TAXONOMY_TABLES,
+        *COMPANY_INDUSTRY_TABLES,
     )
     Base.metadata.drop_all(engine, tables=list(reversed(tables)), checkfirst=True)
     Base.metadata.create_all(engine, tables=list(tables))

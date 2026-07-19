@@ -159,6 +159,7 @@ class CompanyIndustryDecisionResultSchema(BaseModel):
 class CompanyIndustryFixtureSchema(BaseModel):
     revision: CompanyIndustryRevisionSchema
     tree: CompanyIndustryTreeSchema
+    child_tree: CompanyIndustryTreeSchema
     company_state: CompanyIndustryCompanyStateSchema
     review_page: CompanyIndustryReviewPageSchema
     mappings: list[SourceIndustryMappingSchema]

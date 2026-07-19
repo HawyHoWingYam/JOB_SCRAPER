@@ -96,6 +96,7 @@ class RetrievalService:
                 page_size=request.page_size,
                 applied_scope=request.scope,
                 layer_summaries=layer_summaries,
+                db=self.db,
             )
 
         raise ValueError(f"Unsupported retrieval_mode: {retrieval_mode}")

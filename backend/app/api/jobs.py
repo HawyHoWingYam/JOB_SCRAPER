@@ -7,16 +7,21 @@ from datetime import date
 from io import StringIO
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, joinedload, object_session, selectinload
 from sqlalchemy import and_, false, func, not_, or_
 from typing import Literal, Optional, List
-from pydantic import BaseModel, ConfigDict, Field
 from app.database import get_db
-from app.job_intelligence.source_attributes import SourceJobAttributes
-from app.job_intelligence.skill_governance import (
-    SkillGovernanceReadError,
-    SkillGovernanceReader,
+from app.job_intelligence.canonical_taxonomy import (
+    CanonicalJobTaxonomy,
+    CanonicalReadError,
+    CanonicalTaxonomyFilterQuery,
 )
+from app.job_intelligence.company_industry import (
+    CompanyIndustry,
+    CompanyIndustryReadError,
+)
+from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
+from app.job_intelligence.source_attributes import SourceJobAttributes
 from app.api.job_search_parser import parse_search_expression, SearchExpressionError
 from app.api.job_search_query import apply_parsed_clauses
 from app.api.ai import _publish_run_request, _wait_for_terminal_run, _load_job_snapshot
@@ -41,9 +46,7 @@ from app.schemas import (
     JobCreateSchema,
     ManualJobCreateSchema,
     JobDetailSchema,
-    JobTaxonomySchema,
 )
-from app.schemas.job import EmploymentTypeSchema, SourceClassificationPathSchema
 from app.services.enrichment_run_service import (
     ActiveEnrichmentRunError,
     EnrichmentRunService,
@@ -58,7 +61,13 @@ from app.schemas.job_search import (
     JobSearchLayerSchema,
     JobSearchScopeSchema,
     JobSearchLayerSummarySchema,
+    EmploymentTypeOption,
+    FilterOptionsResponse,
+    LocationHierarchyItem,
+    SourceClassificationOption,
     SourceSiteFilter,
+    JobSearchResponse,
+    JobWithCompanySchema,
 )
 from app.services.retrieval_client import (
     RetrievalClient,
@@ -127,78 +136,12 @@ def _source_attribute_load_options(*, include_labels: bool = False):
     return tuple(options)
 
 
-# Response schemas for search
-class JobWithCompanySchema(BaseModel):
-    """Job with company name for search results."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    job_id: str
-    title: str
-    description: Optional[str] = None
-    location: Optional[str] = None
-    salary_range: Optional[str] = None
-    employment_type: Optional[str] = None
-    subcategory_id: Optional[UUID] = None
-    job_taxonomy: Optional[JobTaxonomySchema] = None
-    company_name: Optional[str] = None
-    posted_date: Optional[str] = None
-    source_classification_paths: List[SourceClassificationPathSchema] = Field(
-        default_factory=list
-    )
-    employment_types: List[EmploymentTypeSchema] = Field(default_factory=list)
-
-
-class JobSearchResponse(BaseModel):
-    """Paginated job search response."""
-
-    jobs: List[JobWithCompanySchema]
-    total: int
-    page: int
-    page_size: int
-    total_pages: int
-    applied_scope: Optional[JobSearchScopeSchema] = None
-    layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None
-
-
 def _validate_scope_expressions(request: JobSearchRequestSchema) -> None:
     for layer in request.scope.layers:
         try:
             parse_search_expression(layer.text_expression)
         except SearchExpressionError as exc:
             raise HTTPException(status_code=422, detail=exc.to_dict()) from exc
-
-
-class LocationHierarchyItem(BaseModel):
-    """Available districts within a normalized region."""
-
-    region: str
-    districts: List[str]
-
-
-class EmploymentTypeOption(BaseModel):
-    code: str
-    label: str
-    order: int
-
-
-class SourceClassificationOption(BaseModel):
-    id: str
-    label: str
-    source: str
-    path: str
-
-
-class FilterOptionsResponse(BaseModel):
-    """Available filter options."""
-
-    locations: List[str]
-    regions: List[str]
-    location_hierarchy: List[LocationHierarchyItem]
-    employment_types: List[EmploymentTypeOption]
-    source_classifications: List[SourceClassificationOption]
-    industries: List[str]
 
 
 def _build_location_hierarchy(raw_locations: List[str]) -> List[LocationHierarchyItem]:
@@ -452,7 +395,7 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
         source_classification_ids=filters.source_classification_ids or [],
         employment_type_codes=filters.employment_type_codes or [],
     )
-    if filters.industry:
+    if filters.industry and not filters.company_industry_node_ids:
         query = query.filter(Company.industry == filters.industry)
     if filters.posted_date_from:
         query = query.filter(func.date(Job.posted_date) >= filters.posted_date_from)
@@ -481,9 +424,33 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     skill_ids = _coerce_uuid_list(filters.skill_ids)
     technology_ids = _coerce_uuid_list(filters.technology_ids)
     skill_category_ids = _coerce_uuid_list(filters.skill_category_ids)
-    subcategory_ids = _coerce_uuid_list(filters.subcategory_ids)
-    job_category_ids = _coerce_uuid_list(filters.job_category_ids)
-    domain_ids = _coerce_uuid_list(filters.domain_ids)
+    canonical_subcategory_ids = tuple(
+        dict.fromkeys(
+            _coerce_uuid_list(
+                list(filters.canonical_subcategory_ids or [])
+                + list(filters.subcategory_ids or [])
+            )
+        )
+    )
+    canonical_category_ids = tuple(
+        dict.fromkeys(
+            _coerce_uuid_list(
+                list(filters.canonical_category_ids or [])
+                + list(filters.job_category_ids or [])
+            )
+        )
+    )
+    canonical_domain_ids = tuple(
+        dict.fromkeys(
+            _coerce_uuid_list(
+                list(filters.canonical_domain_ids or [])
+                + list(filters.domain_ids or [])
+            )
+        )
+    )
+    company_industry_node_ids = tuple(
+        dict.fromkeys(_coerce_uuid_list(filters.company_industry_node_ids))
+    )
 
     if skill_ids:
         query = (
@@ -510,18 +477,43 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
             .distinct()
         )
 
-    if subcategory_ids:
-        query = query.filter(Job.subcategory_id.in_(subcategory_ids))
-    elif job_category_ids:
-        query = query.join(JobSubcategory).filter(
-            JobSubcategory.category_id.in_(job_category_ids)
-        )
-    elif domain_ids:
-        query = (
-            query.join(JobSubcategory)
-            .join(JobCategory)
-            .filter(JobCategory.domain_id.in_(domain_ids))
-        )
+    if (
+        canonical_subcategory_ids
+        or canonical_category_ids
+        or canonical_domain_ids
+    ):
+        try:
+            canonical_predicates = CanonicalJobTaxonomy(query.session).build_filters(
+                CanonicalTaxonomyFilterQuery(
+                    domain_ids=canonical_domain_ids,
+                    category_ids=canonical_category_ids,
+                    subcategory_ids=canonical_subcategory_ids,
+                )
+            )
+        except CanonicalReadError as exc:
+            raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
+        query = query.filter(*canonical_predicates)
+
+    if company_industry_node_ids:
+        try:
+            company_industry_predicate = CompanyIndustry(
+                query.session
+            ).build_company_filter(company_industry_node_ids)
+        except CompanyIndustryReadError as exc:
+            status_code = (
+                409
+                if exc.code
+                in {
+                    "COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE",
+                    "COMPANY_INDUSTRY_ACTIVE_REVISION_INVALID",
+                }
+                else 422
+            )
+            raise HTTPException(
+                status_code=status_code,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        query = query.filter(company_industry_predicate)
 
     if filters.district:
         query = query.filter(_location_matches_district(Job.location, filters.district))
@@ -667,6 +659,7 @@ def _build_search_response(
         page_size=page_size,
         applied_scope=applied_scope,
         layer_summaries=layer_summaries,
+        db=query.session,
     )
 
 
@@ -678,7 +671,16 @@ def _build_search_response_from_results(
     page_size: int,
     applied_scope: Optional[JobSearchScopeSchema] = None,
     layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None,
+    db: Session | None = None,
 ):
+    product_payloads: dict[UUID, dict[str, object]] = {}
+    if results:
+        product_db = db or object_session(results[0][0])
+        if product_db is None:
+            raise RuntimeError("Job search results are detached from their Session")
+        product_payloads = JobIntelligenceProductReadModel(
+            product_db
+        ).get_canonical_job_states([job.id for job, _company in results])
     jobs = []
     for job, company in results:
         jobs.append(
@@ -698,6 +700,7 @@ def _build_search_response_from_results(
                 posted_date=job.posted_date.isoformat() if job.posted_date else None,
                 source_classification_paths=job.source_classification_paths,
                 employment_types=job.employment_types,
+                **product_payloads[job.id],
             )
         )
 
@@ -1139,23 +1142,11 @@ async def get_job(job_id: UUID, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     detail = JobDetailSchema.model_validate(job).model_dump(mode="python")
-    try:
-        skill_state = SkillGovernanceReader(db).get_job_state(job.id)
-    except SkillGovernanceReadError as exc:
-        if exc.code == "SKILL_TAXONOMY_NOT_ACTIVE":
-            detail["skills"] = []
-            detail["provisional_skills"] = []
-            detail["unreviewed_skill_mentions"] = []
-        else:
-            raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
-    else:
-        detail["skills"] = [skill.name for skill in skill_state.skills]
-        detail["provisional_skills"] = [
-            mention.raw_name for mention in skill_state.unreviewed_skill_mentions
-        ]
-        detail["unreviewed_skill_mentions"] = [
-            mention.to_payload() for mention in skill_state.unreviewed_skill_mentions
-        ]
+    detail.update(
+        JobIntelligenceProductReadModel(db)
+        .get_job_detail(job_id=job.id, company_id=job.company_id)
+        .to_payload()
+    )
     return JobDetailSchema.model_validate(detail)
 
 
@@ -1191,6 +1182,26 @@ async def create_manual_job(
     # Generate a unique job_id for manual jobs
     manual_job_id = f"manual:{uuid_lib.uuid4()}"
 
+    employment_type_codes = list(job_data.employment_type_codes)
+    if employment_type_codes:
+        registry_rows = (
+            db.query(EmploymentType)
+            .filter(EmploymentType.code.in_(employment_type_codes))
+            .all()
+        )
+        registry_codes = {row.code for row in registry_rows}
+        missing_codes = [
+            code for code in employment_type_codes if code not in registry_codes
+        ]
+        if missing_codes:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "EMPLOYMENT_TYPE_REGISTRY_INCOMPLETE",
+                    "missing_codes": missing_codes,
+                },
+            )
+
     # Build the job object
     db_job = Job(
         job_id=manual_job_id,
@@ -1210,6 +1221,21 @@ async def create_manual_job(
         experience_max_years=job_data.experience_max_years,
     )
     db.add(db_job)
+    db.flush()
+
+    for employment_type_code in employment_type_codes:
+        db.add(
+            JobEmploymentType(
+                job_id=db_job.id,
+                employment_type_code=employment_type_code,
+                evidence_label_ids=[],
+                provenance={
+                    "method": "manual_operator_selection",
+                    "actor": "local-operator",
+                    "source": "add-job",
+                },
+            )
+        )
     db.flush()
 
     service = EnrichmentRunService(db)

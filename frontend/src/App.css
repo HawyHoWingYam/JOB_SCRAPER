@@ -341,6 +341,61 @@
   font-size: var(--text-sm);
 }
 
+.job-detail-modal .modal-inline-tags,
+.job-detail-modal .modal-governance-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.job-detail-modal .modal-contract-list {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.job-detail-modal .modal-contract-list.compact {
+  gap: var(--space-2);
+}
+
+.job-detail-modal .modal-contract-list li,
+.job-detail-modal .modal-contract-state {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-secondary);
+  overflow-wrap: anywhere;
+}
+
+.job-detail-modal .modal-contract-list li > span,
+.job-detail-modal .modal-contract-state p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.job-detail-modal .modal-contract-primary {
+  color: var(--color-text-primary) !important;
+  font-size: var(--text-sm) !important;
+  font-weight: 700;
+}
+
+.job-detail-modal .modal-governance-links {
+  margin-top: var(--space-3);
+}
+
+.job-detail-modal .modal-company-description {
+  margin-top: var(--space-4);
+}
+
+.job-detail-modal .modal-skill-review-link {
+  text-decoration: none;
+}
+
 .job-detail-modal .modal-meta {
   display: flex;
   flex-wrap: wrap;

@@ -66,6 +66,65 @@ const excludedRun = {
   ],
 };
 
+const sourceQualifiedFilterOptions = {
+  sources: [
+    {
+      source_site: 'jobsdb',
+      classification_paths: [
+        {
+          nodes: [
+            { id: 'jobsdb:6281', name: 'Information Technology', source_position: 0 },
+            { id: 'jobsdb:6287', name: 'Security', source_position: 1 },
+          ],
+        },
+      ],
+      classifications: [
+        {
+          id: 'jobsdb:6281',
+          source_site: 'jobsdb',
+          name: 'Information Technology',
+          subclassifications: ['Security'],
+          subclassification_options: [
+            {
+              id: 'jobsdb:6287',
+              source_site: 'jobsdb',
+              name: 'Security',
+              breadcrumb: 'Information Technology / Security',
+            },
+          ],
+        },
+      ],
+    },
+    {
+      source_site: 'ctgoodjobs',
+      classification_paths: [
+        {
+          nodes: [
+            { id: 'ctgoodjobs:021', name: 'Information Technology', source_position: 0 },
+            { id: 'ctgoodjobs:022', name: 'Security', source_position: 1 },
+          ],
+        },
+      ],
+      classifications: [
+        {
+          id: 'ctgoodjobs:021',
+          source_site: 'ctgoodjobs',
+          name: 'Information Technology',
+          subclassifications: ['Security'],
+          subclassification_options: [
+            {
+              id: 'ctgoodjobs:022',
+              source_site: 'ctgoodjobs',
+              name: 'Security',
+              breadcrumb: 'Information Technology / Security',
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
 function jsonResponse(payload, status = 200) {
   return Promise.resolve({
     ok: status >= 200 && status < 300,
@@ -74,11 +133,16 @@ function jsonResponse(payload, status = 200) {
   });
 }
 
-function installFetch({ overviewPayload = overview, runs = [activeRun, failedRun], previewCount = 12 } = {}) {
+function installFetch({
+  overviewPayload = overview,
+  runs = [activeRun, failedRun],
+  previewCount = 12,
+  filterOptions = null,
+} = {}) {
   globalThis.fetch = vi.fn((input, init = {}) => {
     const url = String(input);
     if (url.includes('/ai/pending/filter-options')) {
-      return jsonResponse({
+      return jsonResponse(filterOptions || {
         sources: [
           {
             source_site: 'jobsdb',
@@ -173,7 +237,10 @@ describe('AIEnrichmentPage', () => {
     expect(card.getAllByText('Excluded 2')).toHaveLength(2);
     expect(card.getByText(/Farming \(offertoday:113000\)/)).toBeInTheDocument();
     expect(card.getByText(/No defensible internal taxonomy domain/)).toBeInTheDocument();
+    expect(card.getByRole('link', { name: 'Open Job Taxonomy Review' }))
+      .toHaveAttribute('href', '#job-intelligence/job-taxonomy');
     expect(card.queryByRole('button', { name: /Retry failed/i })).not.toBeInTheDocument();
+    expect(card.queryByRole('button', { name: /assign|accept|reject/i })).not.toBeInTheDocument();
   });
 
   it('renders empty placeholders to keep exactly two slots', async () => {
@@ -201,6 +268,33 @@ describe('AIEnrichmentPage', () => {
     });
   });
 
+  it('submits source-qualified path IDs when different Sources reuse a label', async () => {
+    installFetch({
+      overviewPayload: { ...overview, active_runs: 0 },
+      runs: [completedRun],
+      filterOptions: sourceQualifiedFilterOptions,
+    });
+    const user = userEvent.setup();
+    render(<AIEnrichmentPage />);
+
+    await user.click(await screen.findByLabelText(
+      'jobsdb · Information Technology (jobsdb:6281)',
+    ));
+
+    await waitFor(() => {
+      const previewCall = globalThis.fetch.mock.calls
+        .filter(([url]) => String(url).includes('/ai/pending/preview'))
+        .at(-1);
+      expect(JSON.parse(previewCall[1].body).filters).toMatchObject({
+        source_classification_ids: ['jobsdb:6281'],
+        source_subclassification_ids: [],
+      });
+    });
+    expect(screen.getByLabelText(
+      'ctgoodjobs · Information Technology (ctgoodjobs:021)',
+    )).not.toBeChecked();
+  });
+
   it('requires ephemeral acknowledgement and confirmation for an all-pending run', async () => {
     installFetch({ overviewPayload: { ...overview, active_runs: 0 }, runs: [completedRun] });
     const user = userEvent.setup();
@@ -211,7 +305,7 @@ describe('AIEnrichmentPage', () => {
     await waitFor(() => expect(screen.getByText('12 match · 12 will run')).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: 'Run 12 filtered jobs' }));
     expect(window.confirm).toHaveBeenCalledOnce();
-    expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run:v1'))).not.toHaveProperty('all_pending_acknowledged');
+    expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run:v2'))).not.toHaveProperty('all_pending_acknowledged');
   });
 
   it('persists ordinary filters and Reset clears them', async () => {
@@ -219,13 +313,51 @@ describe('AIEnrichmentPage', () => {
     const user = userEvent.setup();
     const { unmount } = render(<AIEnrichmentPage />);
     await user.click(await screen.findByLabelText('jobsdb'));
-    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run:v1')).filters.source_sites).toEqual(['jobsdb']));
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run:v2')).filters.source_sites).toEqual(['jobsdb']));
     unmount();
 
     render(<AIEnrichmentPage />);
     expect(await screen.findByLabelText('jobsdb')).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Reset' }));
     expect(screen.getByLabelText('jobsdb')).not.toBeChecked();
+    expect(window.localStorage.getItem('ai-enrichment-filtered-run:v2')).toBeNull();
+    expect(window.localStorage.getItem('ai-enrichment-filtered-run:v1')).toBeNull();
+  });
+
+  it('migrates safe v1 fields and clears ambiguous name-based path filters', async () => {
+    window.localStorage.setItem('ai-enrichment-filtered-run:v1', JSON.stringify({
+      filters: {
+        source_sites: ['jobsdb', 'ctgoodjobs'],
+        source_classification_names: ['Information Technology'],
+        source_subclassification_names: ['Security'],
+        posted_date_from: '2026-07-01',
+      },
+      limit: 75,
+    }));
+    installFetch({
+      overviewPayload: { ...overview, active_runs: 0 },
+      runs: [completedRun],
+      filterOptions: sourceQualifiedFilterOptions,
+    });
+
+    render(<AIEnrichmentPage />);
+
+    expect(await screen.findByText(/saved name-based Source Classification filters were cleared/i))
+      .toBeInTheDocument();
+    await waitFor(() => {
+      const migrated = JSON.parse(
+        window.localStorage.getItem('ai-enrichment-filtered-run:v2'),
+      );
+      expect(migrated).toMatchObject({
+        filters: {
+          source_sites: ['jobsdb', 'ctgoodjobs'],
+          source_classification_ids: [],
+          source_subclassification_ids: [],
+          posted_date_from: '2026-07-01',
+        },
+        limit: 75,
+      });
+    });
     expect(window.localStorage.getItem('ai-enrichment-filtered-run:v1')).toBeNull();
   });
 

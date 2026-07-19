@@ -536,7 +536,7 @@ def test_operator_outbox_failure_rolls_back_assignment_review_audit_and_idempote
     }
 
 
-def test_canonical_read_contract_fixture_is_valid_and_live_consumers_are_not_switched():
+def test_canonical_read_contract_fixture_supports_product_reads_without_embedding_cutover():
     backend_root = Path(__file__).parents[1]
     fixture = json.loads(
         (
@@ -566,7 +566,8 @@ def test_canonical_read_contract_fixture_is_valid_and_live_consumers_are_not_swi
     )
     assert "canonical_taxonomy" not in live_embedding_worker
     assert "CanonicalJobTaxonomy" not in live_embedding_worker
-    assert "CanonicalTaxonomyFilterQuery" not in live_jobs_api
+    assert "CanonicalTaxonomyFilterQuery" in live_jobs_api
+    assert "Job.subcategory_id.in_(" not in live_jobs_api
 
 
 def _seed_read_state(db):

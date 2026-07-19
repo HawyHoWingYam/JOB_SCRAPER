@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Building2, MapPin, CalendarDays, BrainCircuit, ExternalLink, Activity } from 'lucide-react';
 import SearchBar from './SearchBar';
 import FilterPanel from './FilterPanel';
@@ -8,6 +8,10 @@ import { apiFetchJson } from '../api/client';
 import { API_BASE_URL, apiPath } from '../api/base';
 import { formatApiErrorDetail } from '../api/errors';
 import { fetchCapabilities } from '../api/capabilities';
+import {
+    fetchCanonicalTree,
+    fetchCompanyIndustryTree,
+} from '../api/jobIntelligence';
 import { createMonitoringId, logError } from '../monitoring';
 import {
     createEmptyJobBrowserLayer,
@@ -34,8 +38,29 @@ function hasQueryValue(value) {
     return value !== '' && value != null;
 }
 
-function getJobTaxonomyPath(job) {
-    return job?.job_taxonomy?.path || '';
+function getCanonicalTaxonomyLabel(job) {
+    if (job?.canonical_taxonomy_availability?.available === false) {
+        return 'Canonical Job Taxonomy: Unavailable';
+    }
+
+    const canonicalState = job?.canonical_taxonomy;
+    if (canonicalState?.state === 'unassigned') {
+        return 'Canonical Job Taxonomy: Unassigned';
+    }
+
+    const breadcrumb = canonicalState?.assignment?.breadcrumb;
+    if (canonicalState?.state === 'assigned' && breadcrumb) {
+        const labels = [
+            breadcrumb.domain?.label,
+            breadcrumb.category?.label,
+            breadcrumb.subcategory?.label,
+        ].filter(Boolean);
+        if (labels.length === 3) {
+            return `Canonical Job Taxonomy: ${labels.join(' / ')}`;
+        }
+    }
+
+    return 'Canonical Job Taxonomy: Unknown';
 }
 
 function formatFilterDate(value) {
@@ -103,6 +128,8 @@ function formatPendingChangesLabel(count) {
 }
 
 function JobBrowser() {
+    const searchRequestSequenceRef = useRef(0);
+    const searchAbortControllerRef = useRef(null);
     const [jobs, setJobs] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -114,8 +141,10 @@ function JobBrowser() {
     const [layerSummaries, setLayerSummaries] = useState([]);
     const [filterOptions, setFilterOptions] = useState({
         employment_types: [],
+        source_classifications: [],
+        canonical_taxonomy: { domains: [] },
+        company_industry_tree: { nodes: [] },
         industries: [],
-        job_subcategories: [],
     });
     const [pagination, setPagination] = useState({
         page: 1,
@@ -145,6 +174,16 @@ function JobBrowser() {
         commitScope = false,
         clearDraft = false,
     }) => {
+        const requestSequence = searchRequestSequenceRef.current + 1;
+        searchRequestSequenceRef.current = requestSequence;
+        searchAbortControllerRef.current?.abort();
+        const controller = new AbortController();
+        searchAbortControllerRef.current = controller;
+        const isLatestRequest = () => (
+            searchRequestSequenceRef.current === requestSequence
+            && !controller.signal.aborted
+        );
+
         setIsLoading(true);
         setError(null);
         setExportError('');
@@ -152,6 +191,7 @@ function JobBrowser() {
         try {
             const response = await fetch(apiPath('/jobs/search'), {
                 method: 'POST',
+                signal: controller.signal,
                 headers: {
                     'Content-Type': 'application/json',
                 },
@@ -163,8 +203,15 @@ function JobBrowser() {
                 }),
             });
 
+            if (!isLatestRequest()) {
+                return false;
+            }
+
             if (!response.ok) {
                 const payload = await response.json().catch(() => null);
+                if (!isLatestRequest()) {
+                    return false;
+                }
                 if (response.status === 422 && payload?.detail?.code === 'invalid_search_expression') {
                     setSearchError(payload.detail.message || 'Search expression is invalid.');
                     return false;
@@ -174,6 +221,9 @@ function JobBrowser() {
             }
 
             const data = await response.json();
+            if (!isLatestRequest()) {
+                return false;
+            }
             setJobs(data.jobs);
             setPagination((prev) => ({
                 ...prev,
@@ -194,20 +244,37 @@ function JobBrowser() {
             setSearchError('');
             return true;
         } catch (err) {
+            if (!isLatestRequest() || err?.name === 'AbortError') {
+                return false;
+            }
             setError(err.message);
             return false;
         } finally {
-            setIsLoading(false);
+            if (searchRequestSequenceRef.current === requestSequence) {
+                if (searchAbortControllerRef.current === controller) {
+                    searchAbortControllerRef.current = null;
+                }
+                setIsLoading(false);
+            }
         }
     };
 
     useEffect(() => {
         const fetchFilterOptions = async () => {
             const filtersRequestId = createMonitoringId('req');
-            const jobSubcategoriesRequestId = createMonitoringId('req');
-            const [filtersResult, jobSubcategoriesResult] = await Promise.allSettled([
+            const canonicalTreeRequestId = createMonitoringId('req');
+            const companyIndustryTreeRequestId = createMonitoringId('req');
+            const [
+                filtersResult,
+                canonicalTreeResult,
+                companyIndustryTreeResult,
+            ] = await Promise.allSettled([
                 apiFetchJson(apiPath('/jobs/filters'), { requestId: filtersRequestId }),
-                apiFetchJson(apiPath('/filters/job-subcategories'), { requestId: jobSubcategoriesRequestId }),
+                fetchCanonicalTree({ requestId: canonicalTreeRequestId }),
+                fetchCompanyIndustryTree(
+                    {},
+                    { requestId: companyIndustryTreeRequestId },
+                ),
             ]);
 
             let hasFailure = false;
@@ -221,14 +288,25 @@ function JobBrowser() {
                 });
             }
 
-            if (jobSubcategoriesResult.status === 'rejected') {
+            if (canonicalTreeResult.status === 'rejected') {
                 hasFailure = true;
                 logError('job_browser.filter_options_failed', {
-                    bootstrapTarget: 'job_subcategories',
-                    requestId: jobSubcategoriesRequestId,
-                    detail: jobSubcategoriesResult.reason instanceof Error
-                        ? jobSubcategoriesResult.reason.message
-                        : jobSubcategoriesResult.reason,
+                    bootstrapTarget: 'canonical_job_taxonomy',
+                    requestId: canonicalTreeRequestId,
+                    detail: canonicalTreeResult.reason instanceof Error
+                        ? canonicalTreeResult.reason.message
+                        : canonicalTreeResult.reason,
+                });
+            }
+
+            if (companyIndustryTreeResult.status === 'rejected') {
+                hasFailure = true;
+                logError('job_browser.filter_options_failed', {
+                    bootstrapTarget: 'company_industry',
+                    requestId: companyIndustryTreeRequestId,
+                    detail: companyIndustryTreeResult.reason instanceof Error
+                        ? companyIndustryTreeResult.reason.message
+                        : companyIndustryTreeResult.reason,
                 });
             }
 
@@ -238,7 +316,8 @@ function JobBrowser() {
 
             setFilterOptions({
                 ...filtersResult.value,
-                job_subcategories: jobSubcategoriesResult.value,
+                canonical_taxonomy: canonicalTreeResult.value,
+                company_industry_tree: companyIndustryTreeResult.value,
             });
         };
 
@@ -248,6 +327,11 @@ function JobBrowser() {
             page: 1,
             pageSize: pagination.pageSize,
         });
+        return () => {
+            searchRequestSequenceRef.current += 1;
+            searchAbortControllerRef.current?.abort();
+            searchAbortControllerRef.current = null;
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -538,6 +622,9 @@ function JobBrowser() {
                     datePreset={draftDatePreset}
                     validationError={dateValidationError}
                     pendingChangeCount={pendingChangeCount}
+                    loadCompanyIndustryChildren={(parentId) =>
+                        fetchCompanyIndustryTree({ parentId })
+                    }
                 />
             </div>
 
@@ -559,16 +646,18 @@ function JobBrowser() {
                     </div>
                 )}
 
-                {error && <div className="error-message glass-panel">System Error: {error}</div>}
-
-                {isLoading ? (
-                    <div className="loading-state">
-                        <Activity className="spinner" size={32} />
-                        <p>Querying Databanks...</p>
+                {error ? (
+                    <div className="error-message glass-panel" role="alert">
+                        System Error: {error}
+                    </div>
+                ) : isLoading ? (
+                    <div className="loading-state" role="status" aria-live="polite">
+                        <Activity className="spinner" size={32} aria-hidden="true" />
+                        <p>Querying jobs…</p>
                     </div>
                 ) : jobs.length === 0 ? (
-                    <div className="no-results glass-panel">
-                        <BrainCircuit size={48} className="empty-icon" />
+                    <div className="no-results glass-panel" role="status" aria-live="polite">
+                        <BrainCircuit size={48} className="empty-icon" aria-hidden="true" />
                         <h3>No Jobs Found</h3>
                         <p>Adjust your parameters to broaden the search.</p>
                     </div>
@@ -587,15 +676,20 @@ function JobBrowser() {
 
                         <div className="job-grid">
                             {jobs.map((job) => (
-                                <div
+                                <article
                                     key={job.id}
                                     className="job-card glass-panel"
-                                    onClick={() => setSelectedJobId(job.id)}
+                                    aria-label={`${job.title} at ${job.company_name}`}
                                 >
                                     <div className="job-card-header">
                                         <h3 className="job-title">{job.title}</h3>
-                                        <button type="button" className="view-btn">
-                                            <ExternalLink size={16} />
+                                        <button
+                                            type="button"
+                                            className="view-btn"
+                                            aria-label={`View ${job.title} at ${job.company_name}`}
+                                            onClick={() => setSelectedJobId(job.id)}
+                                        >
+                                            <ExternalLink size={16} aria-hidden="true" />
                                         </button>
                                     </div>
 
@@ -617,15 +711,21 @@ function JobBrowser() {
                                     </div>
 
                                     <div className="job-tags-area">
-                                        {job.employment_type && <span className="tag type-tag">{job.employment_type}</span>}
-                                        {getJobTaxonomyPath(job) && (
-                                            <span className="tag ai-tag">
-                                                <BrainCircuit size={12} />
-                                                {getJobTaxonomyPath(job)}
-                                            </span>
+                                        {job.employment_types?.length > 0 ? (
+                                            job.employment_types.map((employmentType) => (
+                                                <span key={employmentType.code} className="tag type-tag">
+                                                    {employmentType.label}
+                                                </span>
+                                            ))
+                                        ) : (
+                                            <span className="tag type-tag">Employment Type: Unknown</span>
                                         )}
+                                        <span className="tag ai-tag">
+                                            <BrainCircuit size={12} aria-hidden="true" />
+                                            {getCanonicalTaxonomyLabel(job)}
+                                        </span>
                                     </div>
-                                </div>
+                                </article>
                             ))}
                         </div>
 
