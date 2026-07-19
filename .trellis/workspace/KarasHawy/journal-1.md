@@ -63,7 +63,15 @@ Implemented deterministic no-live endpoint and partition research tooling, stric
 
 ### Main Changes
 
-- Detailed change bullets were not supplied; see the summary above.
+- Added explicit-code 25/63/198 canonical releases, reviewed Source mapping
+  authority, fail-closed assignment/review evaluation, and local-operator
+  decisions with audit/outbox atomicity.
+- Integrated canonical preflight into AI run preview/create/worker execution,
+  added versioned Job Intelligence reads/filters/embedding contracts, and
+  retired legacy taxonomy writer/registry authority.
+- Added migration count/content/pointer guards, complete multi-path policy
+  coverage, deterministic zero-write rebuild inspection, and backend response
+  fixtures.
 
 ### Git Commits
 
@@ -73,7 +81,11 @@ Implemented deterministic no-live endpoint and partition research tooling, stric
 
 ### Testing
 
-- Validation was not recorded for this session.
+- 37 backend test files passed in isolation: 308 passed, 1 existing optional
+  PostgreSQL pacing test skipped.
+- Task-scoped Ruff, Black, mypy, compileall, Alembic head/offline SQL, real
+  disposable PostgreSQL upgrade/downgrade/re-upgrade, Trellis task validation,
+  and `git diff --check` passed.
 
 ### Status
 
@@ -765,6 +777,41 @@ Implemented and verified governed Source Classification Paths, bounded Source Em
 - Frontend task tests: `12 passed`; production build passed. Full-suite-only AISettings loading interaction reproduced as an unrelated baseline, while its isolated file passed `17/17`.
 - Task-scoped Ruff, Black, mypy, ESLint, Alembic head, Trellis validation, and `git diff --check` passed.
 - Disposable migration upgrade/downgrade/re-upgrade and direct constraint rehearsal passed; no live corpus migration, rebuild, backfill, or cutover ran.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 23: Canonical Job Taxonomy governance
+
+**Date**: 2026-07-19
+**Task**: Canonical Job Taxonomy governance
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented governed canonical taxonomy releases and reviewed Source mappings, fail-closed assignment/review and AI preflight flows, versioned read/filter/embedding/rebuild contracts, PostgreSQL constraint guards, and full isolated verification.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f632395a` | (see git log) |
+| `fb078c16` | (see git log) |
+| `65a3b1f0` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
 
 ### Status
 

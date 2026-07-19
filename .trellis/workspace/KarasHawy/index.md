@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
+- **Total Sessions**: 23
 - **Last Active**: 2026-07-19
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~775 | Active |
+| `journal-1.md` | ~810 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-07-19 | Canonical Job Taxonomy governance | `f632395a`, `fb078c16`, `65a3b1f0` | `codex/offertoday-it-coverage-20260702` |
 | 22 | 2026-07-19 | Complete Source Job Attributes | `043a0f08`, `66b84f96`, `0e419dae` | `codex/offertoday-it-coverage-20260702` |
 | 21 | 2026-07-18 | Implement Job Intelligence foundation | `58fa16ae`, `159abbbb` | `codex/offertoday-it-coverage-20260702` |
 | 20 | 2026-07-18 | Authoritative Source Catalog runtime | `476a9993`, `d66fc820`, `9e9c5497` | `codex/offertoday-it-coverage-20260702` |
