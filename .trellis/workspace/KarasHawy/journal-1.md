@@ -119,7 +119,9 @@ Implemented cursor-correct search listing, partial page-cap continuation, bulk n
 
 ### Testing
 
-- Validation was not recorded for this session.
+- Frontend ESLint, all 26 files / 172 tests, and the Vite production build passed.
+- 137 relevant backend tests plus targeted Ruff, Black, mypy, and `compileall` passed.
+- Desktop and 500px narrow browser QA passed without console errors or document-level overflow.
 
 ### Status
 
@@ -877,6 +879,40 @@ Implemented immutable governed Skill releases, deterministic Skill Mentions and 
 |------|---------|
 | `4937f521` | (see git log) |
 | `74af3904` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 26: Complete Job Intelligence Product Surfaces
+
+**Date**: 2026-07-20
+**Task**: Complete Job Intelligence Product Surfaces
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Built the three-area Job Intelligence governance workspace and aligned Job Browser, Job Detail, Companies, Dashboard, Add Job, and AI Enrichment with governed read contracts. Verified frontend, backend contract, static, accessibility, responsive, and browser QA gates without live migration, activation, backfill, cutover, or production smoke.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a65be5ed` | (see git log) |
+| `0678e7fa` | (see git log) |
 
 ### Testing
 

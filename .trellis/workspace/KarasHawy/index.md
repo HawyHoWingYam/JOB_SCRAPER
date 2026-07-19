@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 25
-- **Last Active**: 2026-07-19
+- **Total Sessions**: 26
+- **Last Active**: 2026-07-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~891 | Active |
+| `journal-1.md` | ~925 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 26 | 2026-07-20 | Complete Job Intelligence Product Surfaces | `a65be5ed`, `0678e7fa` | `codex/offertoday-it-coverage-20260702` |
 | 25 | 2026-07-19 | Complete Skill governance | `4937f521`, `74af3904` | `codex/offertoday-it-coverage-20260702` |
 | 24 | 2026-07-19 | Complete Company Industry governance | `0f159b63`, `8a85bc46`, `72a9935d` | `codex/offertoday-it-coverage-20260702` |
 | 23 | 2026-07-19 | Canonical Job Taxonomy governance | `f632395a`, `fb078c16`, `65a3b1f0` | `codex/offertoday-it-coverage-20260702` |
