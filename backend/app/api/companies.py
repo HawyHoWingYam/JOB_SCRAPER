@@ -5,10 +5,16 @@ from sqlalchemy.orm import Session
 from uuid import UUID
 import uuid
 from app.database import SessionLocal, get_db
+from app.job_intelligence.company_industry import (
+    CompanyIndustry,
+    CompanyIndustryEvidence,
+)
+from app.job_intelligence.foundation import Provenance
 from app.models import Company
 from app.models.company_enrichment_run import CompanyEnrichmentRunItem
 from app.schemas import CompanySchema, CompanyCreateSchema
 from app.services.company_enrichment_service import CompanyEnrichmentService
+from app.utils.time import utc_now
 from app.services.company_enrichment_run_service import CompanyEnrichmentRunService
 from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
 
@@ -267,11 +273,38 @@ async def create_company(company: CompanyCreateSchema, db: Session = Depends(get
     if existing:
         raise HTTPException(status_code=400, detail="Company already exists")
 
-    db_company = Company(company_id=company_id, **company.model_dump(exclude={"company_id"}))
-    db.add(db_company)
-    db.commit()
-    db.refresh(db_company)
-    return db_company
+    try:
+        db_company = Company(
+            company_id=company_id,
+            **company.model_dump(exclude={"company_id"}),
+        )
+        db.add(db_company)
+        db.flush()
+        raw_industry = str(company.industry or "").strip()
+        if raw_industry:
+            CompanyIndustry(db).ingest_evidence(
+                db_company.id,
+                CompanyIndustryEvidence(
+                    evidence_kind="manual",
+                    raw_label=raw_industry,
+                    provenance=Provenance(
+                        method="manual-company-create",
+                        evidence_refs=(
+                            {
+                                "kind": "manual-company-industry",
+                                "company_id": str(db_company.id),
+                            },
+                        ),
+                        captured_at=utc_now(),
+                    ),
+                ),
+            )
+        db.commit()
+        db.refresh(db_company)
+        return db_company
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/{company_id}/enrich-description")

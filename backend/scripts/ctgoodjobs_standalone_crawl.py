@@ -233,6 +233,7 @@ async def _persist_ctgoodjobs_job(*, canonical_job: dict[str, Any]):
         job_repository = JobRepository()
         company_data = ingest_service._build_company_data(canonical_job)
         company, _ = company_repository.upsert_company(db, company_data, auto_commit=False)
+        ingest_service.project_company_industry(db, company, canonical_job)
         job_data = ingest_service._build_job_data(canonical_job, company.id)
         saved_job, _ = job_repository.upsert_source_job(
             db,

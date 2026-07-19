@@ -195,7 +195,6 @@ def map_scraped_company_to_db(scraped_job: Dict[str, Any]) -> Dict[str, Any]:
                 scraped_job.get("advertiser", {}).get("name") or
                 "Unknown Company"
             ),
-            "industry": scraped_job.get("classification_name") or scraped_job.get("classification"),
             "location": scraped_job.get("location"),
             "extra_data": {
                 "logo_url": scraped_job.get("logo_url"),
@@ -274,7 +273,7 @@ def map_scraped_job_to_db(
 def map_source_scraped_company_to_db(scraped_job: Dict[str, Any]) -> Dict[str, Any]:
     """Source-aware wrapper for company mapping.
 
-    JobsDB behavior must remain unchanged; CTgoodjobs may populate alternate keys.
+    Source job classifications are never Company Industry evidence.
     """
     company_data = map_scraped_company_to_db(scraped_job)
     source_site = scraped_job.get("source_site")
@@ -282,10 +281,6 @@ def map_source_scraped_company_to_db(scraped_job: Dict[str, Any]) -> Dict[str, A
         company_data["source_site"] = "ctgoodjobs"
         company_data["source_company_id"] = str(scraped_job.get("company_id") or "").strip() or None
         company_data["company_id"] = _namespace_ctgoodjobs_id(company_data.get("company_id"))
-        if not company_data.get("industry"):
-            industry = scraped_job.get("source_classification_name")
-            if isinstance(industry, str) and industry.strip():
-                company_data["industry"] = industry.strip()
     return company_data
 
 

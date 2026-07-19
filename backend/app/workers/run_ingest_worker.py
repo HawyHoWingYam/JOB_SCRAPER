@@ -15,6 +15,9 @@ from app.job_intelligence.source_attributes import (
     SourceJobAttributeEvidence,
     SourceJobAttributes,
 )
+from app.job_intelligence.company_industry import (
+    project_company_industry as project_company_industry_evidence,
+)
 from app.messaging.event_envelope import build_event_envelope
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.redis_stream_bus import RedisStreamBus, StreamMessage
@@ -154,6 +157,7 @@ class IngestWorkerService:
             company_data,
             auto_commit=False,
         )
+        self.project_company_industry(db, company, canonical_job)
 
         job_data = self._build_job_data(canonical_job, company.id)
         job, job_action = self.job_repository.upsert_source_job(
@@ -263,6 +267,20 @@ class IngestWorkerService:
                 f"Invalid Source Job Attribute evidence: {exc}",
             ) from exc
 
+    def project_company_industry(self, db, company, canonical_job: dict[str, Any]):
+        try:
+            return project_company_industry_evidence(
+                db,
+                company.id,
+                canonical_job,
+                outbox_repository=self.event_outbox_repository,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidIngestPayloadError(
+                "invalid_company_industry_evidence",
+                f"Invalid Company Industry evidence: {exc}",
+            ) from exc
+
     def _resolve_skip_existing(self, db, *, crawl_job_id: str | None) -> bool:
         if not crawl_job_id:
             return False
@@ -339,7 +357,6 @@ class IngestWorkerService:
             "source_company_id": source_company_id,
             "company_id": build_compat_company_id(source_site, source_company_id),
             "name": company_name,
-            "industry": canonical_job.get("source_classification_name"),
             "location": canonical_job.get("location"),
             "extra_data": {
                 "source_url": canonical_job.get("source_url"),

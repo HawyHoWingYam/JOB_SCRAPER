@@ -609,6 +609,7 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                         ingest_service = IngestWorkerService()
                     company_data = ingest_service._build_company_data(canonical)
                     company, _ = company_repository.upsert_company(db, company_data, auto_commit=False)
+                    ingest_service.project_company_industry(db, company, canonical)
                     job_data = ingest_service._build_job_data(canonical, company.id)
                     saved_job, _ = job_repository.upsert_source_job(
                         db,

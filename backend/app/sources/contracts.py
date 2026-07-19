@@ -291,7 +291,6 @@ def build_offertoday_company_data(
             canonical_job.source_site, source_company_id
         ),
         "name": company_name,
-        "industry": canonical_job.raw_data.get("company_industry"),
         "location": canonical_job.location,
         "extra_data": {
             "source_url": canonical_job.source_url,

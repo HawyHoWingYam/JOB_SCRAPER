@@ -719,6 +719,7 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
 ) -> None:
     runtime = _OneTargetRuntime(source_site="jobsdb")
     projection_calls = []
+    industry_projection_calls = []
 
     class FakeDetailScraper:
         async def fetch_job_detail(self, _source_job_id):
@@ -738,6 +739,9 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
 
         def _build_job_data(self, canonical, _company_id):
             return dict(canonical)
+
+        def project_company_industry(self, _db, company, canonical):
+            industry_projection_calls.append((company.id, dict(canonical)))
 
         def project_source_attributes(self, _db, job, canonical):
             projection_calls.append((job.id, dict(canonical)))
@@ -779,6 +783,18 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
 
     messages = _messages(caplog)
     assert result["completed"] == 1
+    assert industry_projection_calls == [
+        (
+            "company-1",
+            {
+                "raw_data": {
+                    "title": "Engineer",
+                    "description": "full-job-description-secret",
+                    "cookie": "cookie-secret",
+                }
+            },
+        )
+    ]
     assert projection_calls == [
         (
             "published-1",
