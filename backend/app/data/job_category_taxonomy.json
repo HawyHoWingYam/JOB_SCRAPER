@@ -1,216 +1,1814 @@
 {
+  "schema_version": 1,
+  "release_key": "canonical-job-taxonomy-v1",
+  "expected_counts": {
+    "domains": 25,
+    "categories": 63,
+    "subcategories": 198
+  },
   "domains": [
     {
-      "name": "Accounting",
+      "code": "accounting",
+      "label": "Accounting",
+      "order": 1,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Financial Accounting", "subcategories": ["Financial Accounting", "Accounts Payable", "Accounts Receivable"]},
-        {"name": "Audit & Tax", "subcategories": ["Audit", "Tax", "Compliance Reporting"]}
+        {
+          "code": "accounting.financial_accounting",
+          "label": "Financial Accounting",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "accounting.financial_accounting.financial_accounting",
+              "label": "Financial Accounting",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "accounting.financial_accounting.accounts_payable",
+              "label": "Accounts Payable",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "accounting.financial_accounting.accounts_receivable",
+              "label": "Accounts Receivable",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "accounting.audit_tax",
+          "label": "Audit & Tax",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "accounting.audit_tax.audit",
+              "label": "Audit",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "accounting.audit_tax.tax",
+              "label": "Tax",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "accounting.audit_tax.compliance_reporting",
+              "label": "Compliance Reporting",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Banking & Financial Services",
+      "code": "banking_financial_services",
+      "label": "Banking & Financial Services",
+      "order": 2,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Banking", "subcategories": ["Retail Banking", "Corporate Banking", "Private Banking"]},
-        {"name": "Investment & Markets", "subcategories": ["Investment Banking", "Asset Management", "Trading & Markets"]},
-        {"name": "Risk & Compliance", "subcategories": ["Risk Management", "Regulatory Compliance", "KYC & AML"]}
+        {
+          "code": "banking_financial_services.banking",
+          "label": "Banking",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "banking_financial_services.banking.retail_banking",
+              "label": "Retail Banking",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "banking_financial_services.banking.corporate_banking",
+              "label": "Corporate Banking",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "banking_financial_services.banking.private_banking",
+              "label": "Private Banking",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "banking_financial_services.investment_markets",
+          "label": "Investment & Markets",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "banking_financial_services.investment_markets.investment_banking",
+              "label": "Investment Banking",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "banking_financial_services.investment_markets.asset_management",
+              "label": "Asset Management",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "banking_financial_services.investment_markets.trading_markets",
+              "label": "Trading & Markets",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "banking_financial_services.risk_compliance",
+          "label": "Risk & Compliance",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "banking_financial_services.risk_compliance.risk_management",
+              "label": "Risk Management",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "banking_financial_services.risk_compliance.regulatory_compliance",
+              "label": "Regulatory Compliance",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "banking_financial_services.risk_compliance.kyc_aml",
+              "label": "KYC & AML",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Call Centre & Customer Service",
+      "code": "call_centre_customer_service",
+      "label": "Call Centre & Customer Service",
+      "order": 3,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Customer Service", "subcategories": ["Customer Service Representative", "Customer Success", "After-sales Support"]},
-        {"name": "Call Centre", "subcategories": ["Inbound Support", "Outbound Support", "Contact Centre Operations"]}
+        {
+          "code": "call_centre_customer_service.customer_service",
+          "label": "Customer Service",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "call_centre_customer_service.customer_service.customer_service_representative",
+              "label": "Customer Service Representative",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "call_centre_customer_service.customer_service.customer_success",
+              "label": "Customer Success",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "call_centre_customer_service.customer_service.after_sales_support",
+              "label": "After-sales Support",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "call_centre_customer_service.call_centre",
+          "label": "Call Centre",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "call_centre_customer_service.call_centre.inbound_support",
+              "label": "Inbound Support",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "call_centre_customer_service.call_centre.outbound_support",
+              "label": "Outbound Support",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "call_centre_customer_service.call_centre.contact_centre_operations",
+              "label": "Contact Centre Operations",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Construction",
+      "code": "construction",
+      "label": "Construction",
+      "order": 4,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Project Delivery", "subcategories": ["Project Management", "Site Coordination", "Construction Planning"]},
-        {"name": "Technical Construction", "subcategories": ["Quantity Surveying", "Building Services", "Site Engineering"]}
+        {
+          "code": "construction.project_delivery",
+          "label": "Project Delivery",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "construction.project_delivery.project_management",
+              "label": "Project Management",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "construction.project_delivery.site_coordination",
+              "label": "Site Coordination",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "construction.project_delivery.construction_planning",
+              "label": "Construction Planning",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "construction.technical_construction",
+          "label": "Technical Construction",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "construction.technical_construction.quantity_surveying",
+              "label": "Quantity Surveying",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "construction.technical_construction.building_services",
+              "label": "Building Services",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "construction.technical_construction.site_engineering",
+              "label": "Site Engineering",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Engineering",
+      "code": "engineering",
+      "label": "Engineering",
+      "order": 5,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Mechanical & Manufacturing", "subcategories": ["Mechanical Engineering", "Manufacturing Engineering", "Industrial Engineering"]},
-        {"name": "Electrical & Electronics", "subcategories": ["Electrical Engineering", "Electronics Engineering", "Automation Engineering"]},
-        {"name": "Civil & Structural", "subcategories": ["Civil Engineering", "Structural Engineering", "Geotechnical Engineering"]}
+        {
+          "code": "engineering.mechanical_manufacturing",
+          "label": "Mechanical & Manufacturing",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "engineering.mechanical_manufacturing.mechanical_engineering",
+              "label": "Mechanical Engineering",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "engineering.mechanical_manufacturing.manufacturing_engineering",
+              "label": "Manufacturing Engineering",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "engineering.mechanical_manufacturing.industrial_engineering",
+              "label": "Industrial Engineering",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "engineering.electrical_electronics",
+          "label": "Electrical & Electronics",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "engineering.electrical_electronics.electrical_engineering",
+              "label": "Electrical Engineering",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "engineering.electrical_electronics.electronics_engineering",
+              "label": "Electronics Engineering",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "engineering.electrical_electronics.automation_engineering",
+              "label": "Automation Engineering",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "engineering.civil_structural",
+          "label": "Civil & Structural",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "engineering.civil_structural.civil_engineering",
+              "label": "Civil Engineering",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "engineering.civil_structural.structural_engineering",
+              "label": "Structural Engineering",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "engineering.civil_structural.geotechnical_engineering",
+              "label": "Geotechnical Engineering",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Healthcare & Medical",
+      "code": "healthcare_medical",
+      "label": "Healthcare & Medical",
+      "order": 6,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Clinical Care", "subcategories": ["Clinical Care", "Nursing", "Medical Practitioner"]},
-        {"name": "Allied Health", "subcategories": ["Physiotherapy", "Pharmacy", "Diagnostic Services"]},
-        {"name": "Healthcare Operations", "subcategories": ["Medical Administration", "Clinic Operations", "Healthcare Support"]}
+        {
+          "code": "healthcare_medical.clinical_care",
+          "label": "Clinical Care",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "healthcare_medical.clinical_care.clinical_care",
+              "label": "Clinical Care",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "healthcare_medical.clinical_care.nursing",
+              "label": "Nursing",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "healthcare_medical.clinical_care.medical_practitioner",
+              "label": "Medical Practitioner",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "healthcare_medical.allied_health",
+          "label": "Allied Health",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "healthcare_medical.allied_health.physiotherapy",
+              "label": "Physiotherapy",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "healthcare_medical.allied_health.pharmacy",
+              "label": "Pharmacy",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "healthcare_medical.allied_health.diagnostic_services",
+              "label": "Diagnostic Services",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "healthcare_medical.healthcare_operations",
+          "label": "Healthcare Operations",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "healthcare_medical.healthcare_operations.medical_administration",
+              "label": "Medical Administration",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "healthcare_medical.healthcare_operations.clinic_operations",
+              "label": "Clinic Operations",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "healthcare_medical.healthcare_operations.healthcare_support",
+              "label": "Healthcare Support",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Hospitality & Tourism",
+      "code": "hospitality_tourism",
+      "label": "Hospitality & Tourism",
+      "order": 7,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Hotel Operations", "subcategories": ["Front Office", "Housekeeping", "Guest Relations"]},
-        {"name": "Food & Beverage", "subcategories": ["Restaurant Operations", "Kitchen Operations", "Bar Service"]},
-        {"name": "Travel Services", "subcategories": ["Travel Consulting", "Tour Operations", "Reservations"]}
+        {
+          "code": "hospitality_tourism.hotel_operations",
+          "label": "Hotel Operations",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "hospitality_tourism.hotel_operations.front_office",
+              "label": "Front Office",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "hospitality_tourism.hotel_operations.housekeeping",
+              "label": "Housekeeping",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "hospitality_tourism.hotel_operations.guest_relations",
+              "label": "Guest Relations",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "hospitality_tourism.food_beverage",
+          "label": "Food & Beverage",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "hospitality_tourism.food_beverage.restaurant_operations",
+              "label": "Restaurant Operations",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "hospitality_tourism.food_beverage.kitchen_operations",
+              "label": "Kitchen Operations",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "hospitality_tourism.food_beverage.bar_service",
+              "label": "Bar Service",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "hospitality_tourism.travel_services",
+          "label": "Travel Services",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "hospitality_tourism.travel_services.travel_consulting",
+              "label": "Travel Consulting",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "hospitality_tourism.travel_services.tour_operations",
+              "label": "Tour Operations",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "hospitality_tourism.travel_services.reservations",
+              "label": "Reservations",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Insurance & Superannuation",
+      "code": "insurance_superannuation",
+      "label": "Insurance & Superannuation",
+      "order": 8,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Claims & Underwriting", "subcategories": ["Claims", "Underwriting", "Policy Administration"]},
-        {"name": "Advisory & Broking", "subcategories": ["Insurance Advisory", "Brokerage", "Relationship Management"]}
+        {
+          "code": "insurance_superannuation.claims_underwriting",
+          "label": "Claims & Underwriting",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "insurance_superannuation.claims_underwriting.claims",
+              "label": "Claims",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "insurance_superannuation.claims_underwriting.underwriting",
+              "label": "Underwriting",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "insurance_superannuation.claims_underwriting.policy_administration",
+              "label": "Policy Administration",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "insurance_superannuation.advisory_broking",
+          "label": "Advisory & Broking",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "insurance_superannuation.advisory_broking.insurance_advisory",
+              "label": "Insurance Advisory",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "insurance_superannuation.advisory_broking.brokerage",
+              "label": "Brokerage",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "insurance_superannuation.advisory_broking.relationship_management",
+              "label": "Relationship Management",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Legal",
+      "code": "legal",
+      "label": "Legal",
+      "order": 9,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Legal Practice", "subcategories": ["Corporate Law", "Litigation", "Commercial Law"]},
-        {"name": "Legal Operations", "subcategories": ["Paralegal", "Compliance", "Company Secretarial"]}
+        {
+          "code": "legal.legal_practice",
+          "label": "Legal Practice",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "legal.legal_practice.corporate_law",
+              "label": "Corporate Law",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "legal.legal_practice.litigation",
+              "label": "Litigation",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "legal.legal_practice.commercial_law",
+              "label": "Commercial Law",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "legal.legal_operations",
+          "label": "Legal Operations",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "legal.legal_operations.paralegal",
+              "label": "Paralegal",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "legal.legal_operations.compliance",
+              "label": "Compliance",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "legal.legal_operations.company_secretarial",
+              "label": "Company Secretarial",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Real Estate & Property",
+      "code": "real_estate_property",
+      "label": "Real Estate & Property",
+      "order": 10,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Property Management", "subcategories": ["Property Management", "Facilities Management", "Building Operations"]},
-        {"name": "Sales & Leasing", "subcategories": ["Property Sales", "Leasing", "Real Estate Advisory"]}
+        {
+          "code": "real_estate_property.property_management",
+          "label": "Property Management",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "real_estate_property.property_management.property_management",
+              "label": "Property Management",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "real_estate_property.property_management.facilities_management",
+              "label": "Facilities Management",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "real_estate_property.property_management.building_operations",
+              "label": "Building Operations",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "real_estate_property.sales_leasing",
+          "label": "Sales & Leasing",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "real_estate_property.sales_leasing.property_sales",
+              "label": "Property Sales",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "real_estate_property.sales_leasing.leasing",
+              "label": "Leasing",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "real_estate_property.sales_leasing.real_estate_advisory",
+              "label": "Real Estate Advisory",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Science & Technology",
+      "code": "science_technology",
+      "label": "Science & Technology",
+      "order": 11,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Research", "subcategories": ["Scientific Research", "R&D", "Research Operations"]},
-        {"name": "Laboratory & Quality", "subcategories": ["Laboratory Science", "Quality Assurance", "Testing Services"]}
+        {
+          "code": "science_technology.research",
+          "label": "Research",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "science_technology.research.scientific_research",
+              "label": "Scientific Research",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "science_technology.research.r_d",
+              "label": "R&D",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "science_technology.research.research_operations",
+              "label": "Research Operations",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "science_technology.laboratory_quality",
+          "label": "Laboratory & Quality",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "science_technology.laboratory_quality.laboratory_science",
+              "label": "Laboratory Science",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "science_technology.laboratory_quality.quality_assurance",
+              "label": "Quality Assurance",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "science_technology.laboratory_quality.testing_services",
+              "label": "Testing Services",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Trades & Services",
+      "code": "trades_services",
+      "label": "Trades & Services",
+      "order": 12,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Field Services", "subcategories": ["Maintenance", "Installation", "Repair Services"]},
-        {"name": "Technical Trades", "subcategories": ["Electrical Trades", "Plumbing", "Automotive Services"]}
+        {
+          "code": "trades_services.field_services",
+          "label": "Field Services",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "trades_services.field_services.maintenance",
+              "label": "Maintenance",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "trades_services.field_services.installation",
+              "label": "Installation",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "trades_services.field_services.repair_services",
+              "label": "Repair Services",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "trades_services.technical_trades",
+          "label": "Technical Trades",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "trades_services.technical_trades.electrical_trades",
+              "label": "Electrical Trades",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "trades_services.technical_trades.plumbing",
+              "label": "Plumbing",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "trades_services.technical_trades.automotive_services",
+              "label": "Automotive Services",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Marketing & Communications",
+      "code": "marketing_communications",
+      "label": "Marketing & Communications",
+      "order": 13,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Digital Marketing", "subcategories": ["Performance Marketing", "Social Media Marketing", "SEO & SEM"]},
-        {"name": "Brand & Communications", "subcategories": ["Brand Marketing", "Corporate Communications", "PR"]},
-        {"name": "Content & Events", "subcategories": ["Content Marketing", "Event Marketing", "Campaign Management"]}
+        {
+          "code": "marketing_communications.digital_marketing",
+          "label": "Digital Marketing",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "marketing_communications.digital_marketing.performance_marketing",
+              "label": "Performance Marketing",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "marketing_communications.digital_marketing.social_media_marketing",
+              "label": "Social Media Marketing",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "marketing_communications.digital_marketing.seo_sem",
+              "label": "SEO & SEM",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "marketing_communications.brand_communications",
+          "label": "Brand & Communications",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "marketing_communications.brand_communications.brand_marketing",
+              "label": "Brand Marketing",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "marketing_communications.brand_communications.corporate_communications",
+              "label": "Corporate Communications",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "marketing_communications.brand_communications.pr",
+              "label": "PR",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "marketing_communications.content_events",
+          "label": "Content & Events",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "marketing_communications.content_events.content_marketing",
+              "label": "Content Marketing",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "marketing_communications.content_events.event_marketing",
+              "label": "Event Marketing",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "marketing_communications.content_events.campaign_management",
+              "label": "Campaign Management",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Retail & Consumer Products",
+      "code": "retail_consumer_products",
+      "label": "Retail & Consumer Products",
+      "order": 14,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Retail Operations", "subcategories": ["Store Operations", "Floor Management", "Customer Experience"]},
-        {"name": "Merchandising & Buying", "subcategories": ["Merchandising", "Buying", "Category Management"]}
+        {
+          "code": "retail_consumer_products.retail_operations",
+          "label": "Retail Operations",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "retail_consumer_products.retail_operations.store_operations",
+              "label": "Store Operations",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "retail_consumer_products.retail_operations.floor_management",
+              "label": "Floor Management",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "retail_consumer_products.retail_operations.customer_experience",
+              "label": "Customer Experience",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "retail_consumer_products.merchandising_buying",
+          "label": "Merchandising & Buying",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "retail_consumer_products.merchandising_buying.merchandising",
+              "label": "Merchandising",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "retail_consumer_products.merchandising_buying.buying",
+              "label": "Buying",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "retail_consumer_products.merchandising_buying.category_management",
+              "label": "Category Management",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Consulting & Strategy",
+      "code": "consulting_strategy",
+      "label": "Consulting & Strategy",
+      "order": 15,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Strategy Consulting", "subcategories": ["Corporate Strategy", "Market Analysis", "Growth Strategy"]},
-        {"name": "Operations Consulting", "subcategories": ["Business Transformation", "Process Improvement", "PMO"]}
+        {
+          "code": "consulting_strategy.strategy_consulting",
+          "label": "Strategy Consulting",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "consulting_strategy.strategy_consulting.corporate_strategy",
+              "label": "Corporate Strategy",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "consulting_strategy.strategy_consulting.market_analysis",
+              "label": "Market Analysis",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "consulting_strategy.strategy_consulting.growth_strategy",
+              "label": "Growth Strategy",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "consulting_strategy.operations_consulting",
+          "label": "Operations Consulting",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "consulting_strategy.operations_consulting.business_transformation",
+              "label": "Business Transformation",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "consulting_strategy.operations_consulting.process_improvement",
+              "label": "Process Improvement",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "consulting_strategy.operations_consulting.pmo",
+              "label": "PMO",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Manufacturing, Transport & Logistics",
+      "code": "manufacturing_transport_logistics",
+      "label": "Manufacturing, Transport & Logistics",
+      "order": 16,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Logistics", "subcategories": ["Logistics Coordination", "Transportation", "Warehouse Operations"]},
-        {"name": "Supply Chain", "subcategories": ["Supply Chain Planning", "Procurement", "Inventory Control"]},
-        {"name": "Manufacturing Operations", "subcategories": ["Production Planning", "Plant Operations", "Quality Control"]}
+        {
+          "code": "manufacturing_transport_logistics.logistics",
+          "label": "Logistics",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "manufacturing_transport_logistics.logistics.logistics_coordination",
+              "label": "Logistics Coordination",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "manufacturing_transport_logistics.logistics.transportation",
+              "label": "Transportation",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "manufacturing_transport_logistics.logistics.warehouse_operations",
+              "label": "Warehouse Operations",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "manufacturing_transport_logistics.supply_chain",
+          "label": "Supply Chain",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "manufacturing_transport_logistics.supply_chain.supply_chain_planning",
+              "label": "Supply Chain Planning",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "manufacturing_transport_logistics.supply_chain.procurement",
+              "label": "Procurement",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "manufacturing_transport_logistics.supply_chain.inventory_control",
+              "label": "Inventory Control",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "manufacturing_transport_logistics.manufacturing_operations",
+          "label": "Manufacturing Operations",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "manufacturing_transport_logistics.manufacturing_operations.production_planning",
+              "label": "Production Planning",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "manufacturing_transport_logistics.manufacturing_operations.plant_operations",
+              "label": "Plant Operations",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "manufacturing_transport_logistics.manufacturing_operations.quality_control",
+              "label": "Quality Control",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Education & Training",
+      "code": "education_training",
+      "label": "Education & Training",
+      "order": 17,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Teaching", "subcategories": ["Primary Education", "Secondary Education", "Higher Education"]},
-        {"name": "Training & Support", "subcategories": ["Corporate Training", "Curriculum Development", "Student Support"]}
+        {
+          "code": "education_training.teaching",
+          "label": "Teaching",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "education_training.teaching.primary_education",
+              "label": "Primary Education",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "education_training.teaching.secondary_education",
+              "label": "Secondary Education",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "education_training.teaching.higher_education",
+              "label": "Higher Education",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "education_training.training_support",
+          "label": "Training & Support",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "education_training.training_support.corporate_training",
+              "label": "Corporate Training",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "education_training.training_support.curriculum_development",
+              "label": "Curriculum Development",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "education_training.training_support.student_support",
+              "label": "Student Support",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Community Services & Development",
+      "code": "community_services_development",
+      "label": "Community Services & Development",
+      "order": 18,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Community Programs", "subcategories": ["Program Delivery", "NGO Operations", "Volunteer Coordination"]},
-        {"name": "Case & Support Services", "subcategories": ["Case Management", "Counselling Support", "Outreach Services"]}
+        {
+          "code": "community_services_development.community_programs",
+          "label": "Community Programs",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "community_services_development.community_programs.program_delivery",
+              "label": "Program Delivery",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "community_services_development.community_programs.ngo_operations",
+              "label": "NGO Operations",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "community_services_development.community_programs.volunteer_coordination",
+              "label": "Volunteer Coordination",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "community_services_development.case_support_services",
+          "label": "Case & Support Services",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "community_services_development.case_support_services.case_management",
+              "label": "Case Management",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "community_services_development.case_support_services.counselling_support",
+              "label": "Counselling Support",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "community_services_development.case_support_services.outreach_services",
+              "label": "Outreach Services",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Human Resources & Recruitment",
+      "code": "human_resources_recruitment",
+      "label": "Human Resources & Recruitment",
+      "order": 19,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "HR Operations", "subcategories": ["HR Management", "HR Business Partner", "HR Administration"]},
-        {"name": "Recruitment & Talent", "subcategories": ["Recruitment", "Talent Acquisition", "Employer Branding"]},
-        {"name": "HR Systems & Analytics", "subcategories": ["HRIS", "People Analytics", "Payroll Systems"]}
+        {
+          "code": "human_resources_recruitment.hr_operations",
+          "label": "HR Operations",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "human_resources_recruitment.hr_operations.hr_management",
+              "label": "HR Management",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "human_resources_recruitment.hr_operations.hr_business_partner",
+              "label": "HR Business Partner",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "human_resources_recruitment.hr_operations.hr_administration",
+              "label": "HR Administration",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "human_resources_recruitment.recruitment_talent",
+          "label": "Recruitment & Talent",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "human_resources_recruitment.recruitment_talent.recruitment",
+              "label": "Recruitment",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "human_resources_recruitment.recruitment_talent.talent_acquisition",
+              "label": "Talent Acquisition",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "human_resources_recruitment.recruitment_talent.employer_branding",
+              "label": "Employer Branding",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "human_resources_recruitment.hr_systems_analytics",
+          "label": "HR Systems & Analytics",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "human_resources_recruitment.hr_systems_analytics.hris",
+              "label": "HRIS",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "human_resources_recruitment.hr_systems_analytics.people_analytics",
+              "label": "People Analytics",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "human_resources_recruitment.hr_systems_analytics.payroll_systems",
+              "label": "Payroll Systems",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Administration & Office Support",
+      "code": "administration_office_support",
+      "label": "Administration & Office Support",
+      "order": 20,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Administrative Support", "subcategories": ["Administrative Assistant", "Executive Assistant", "Team Support"]},
-        {"name": "Office Operations", "subcategories": ["Office Management", "Reception", "Data Entry & Coordination"]}
+        {
+          "code": "administration_office_support.administrative_support",
+          "label": "Administrative Support",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "administration_office_support.administrative_support.administrative_assistant",
+              "label": "Administrative Assistant",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "administration_office_support.administrative_support.executive_assistant",
+              "label": "Executive Assistant",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "administration_office_support.administrative_support.team_support",
+              "label": "Team Support",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "administration_office_support.office_operations",
+          "label": "Office Operations",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "administration_office_support.office_operations.office_management",
+              "label": "Office Management",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "administration_office_support.office_operations.reception",
+              "label": "Reception",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "administration_office_support.office_operations.data_entry_coordination",
+              "label": "Data Entry & Coordination",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Design & Architecture",
+      "code": "design_architecture",
+      "label": "Design & Architecture",
+      "order": 21,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Graphic Design", "subcategories": ["Brand Design", "Visual Communication", "Motion Graphics"]},
-        {"name": "Product & UX Design", "subcategories": ["Product Design", "UX Design", "UI Design"]},
-        {"name": "Architecture & Interior", "subcategories": ["Architecture", "Interior Design", "Spatial Design"]}
+        {
+          "code": "design_architecture.graphic_design",
+          "label": "Graphic Design",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "design_architecture.graphic_design.brand_design",
+              "label": "Brand Design",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "design_architecture.graphic_design.visual_communication",
+              "label": "Visual Communication",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "design_architecture.graphic_design.motion_graphics",
+              "label": "Motion Graphics",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "design_architecture.product_ux_design",
+          "label": "Product & UX Design",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "design_architecture.product_ux_design.product_design",
+              "label": "Product Design",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "design_architecture.product_ux_design.ux_design",
+              "label": "UX Design",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "design_architecture.product_ux_design.ui_design",
+              "label": "UI Design",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "design_architecture.architecture_interior",
+          "label": "Architecture & Interior",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "design_architecture.architecture_interior.architecture",
+              "label": "Architecture",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "design_architecture.architecture_interior.interior_design",
+              "label": "Interior Design",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "design_architecture.architecture_interior.spatial_design",
+              "label": "Spatial Design",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Information & Communication Technology",
+      "code": "information_communication_technology",
+      "label": "Information & Communication Technology",
+      "order": 22,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Software Development", "subcategories": ["Backend Development", "Frontend Development", "Web Development", "Mobile Development", "Full Stack Development"]},
-        {"name": "Infrastructure & Support", "subcategories": ["Application Support", "Help Desk Support", "Systems Administration", "Network Engineering", "Solutions Architecture", "Solutions Consulting", "Technology Management"]},
-        {"name": "Data & Analytics", "subcategories": ["Data Analysis", "Data Engineering", "Machine Learning", "Business Intelligence"]},
-        {"name": "Product & Quality", "subcategories": ["Product Management", "Project Management", "QA Testing", "UI/UX Design", "Technical Documentation"]},
-        {"name": "Cybersecurity", "subcategories": ["Security Operations", "Application Security", "Governance Risk & Compliance"]}
+        {
+          "code": "information_communication_technology.software_development",
+          "label": "Software Development",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "information_communication_technology.software_development.backend_development",
+              "label": "Backend Development",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.software_development.frontend_development",
+              "label": "Frontend Development",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.software_development.web_development",
+              "label": "Web Development",
+              "order": 3,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.software_development.mobile_development",
+              "label": "Mobile Development",
+              "order": 4,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.software_development.full_stack_development",
+              "label": "Full Stack Development",
+              "order": 5,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "information_communication_technology.infrastructure_support",
+          "label": "Infrastructure & Support",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "information_communication_technology.infrastructure_support.application_support",
+              "label": "Application Support",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.infrastructure_support.help_desk_support",
+              "label": "Help Desk Support",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.infrastructure_support.systems_administration",
+              "label": "Systems Administration",
+              "order": 3,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.infrastructure_support.network_engineering",
+              "label": "Network Engineering",
+              "order": 4,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.infrastructure_support.solutions_architecture",
+              "label": "Solutions Architecture",
+              "order": 5,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.infrastructure_support.solutions_consulting",
+              "label": "Solutions Consulting",
+              "order": 6,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.infrastructure_support.technology_management",
+              "label": "Technology Management",
+              "order": 7,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "information_communication_technology.data_analytics",
+          "label": "Data & Analytics",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "information_communication_technology.data_analytics.data_analysis",
+              "label": "Data Analysis",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.data_analytics.data_engineering",
+              "label": "Data Engineering",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.data_analytics.machine_learning",
+              "label": "Machine Learning",
+              "order": 3,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.data_analytics.business_intelligence",
+              "label": "Business Intelligence",
+              "order": 4,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "information_communication_technology.product_quality",
+          "label": "Product & Quality",
+          "order": 4,
+          "subcategories": [
+            {
+              "code": "information_communication_technology.product_quality.product_management",
+              "label": "Product Management",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.product_quality.project_management",
+              "label": "Project Management",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.product_quality.qa_testing",
+              "label": "QA Testing",
+              "order": 3,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.product_quality.ui_ux_design",
+              "label": "UI/UX Design",
+              "order": 4,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.product_quality.technical_documentation",
+              "label": "Technical Documentation",
+              "order": 5,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "information_communication_technology.cybersecurity",
+          "label": "Cybersecurity",
+          "order": 5,
+          "subcategories": [
+            {
+              "code": "information_communication_technology.cybersecurity.security_operations",
+              "label": "Security Operations",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.cybersecurity.application_security",
+              "label": "Application Security",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "information_communication_technology.cybersecurity.governance_risk_compliance",
+              "label": "Governance Risk & Compliance",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Advertising, Arts & Media",
+      "code": "advertising_arts_media",
+      "label": "Advertising, Arts & Media",
+      "order": 23,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Creative Production", "subcategories": ["Art Direction", "Copywriting", "Media Production"]},
-        {"name": "Content & Editorial", "subcategories": ["Editorial", "Content Production", "Publishing"]},
-        {"name": "Media Planning", "subcategories": ["Media Buying", "Media Planning", "Campaign Traffic"]}
+        {
+          "code": "advertising_arts_media.creative_production",
+          "label": "Creative Production",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "advertising_arts_media.creative_production.art_direction",
+              "label": "Art Direction",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "advertising_arts_media.creative_production.copywriting",
+              "label": "Copywriting",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "advertising_arts_media.creative_production.media_production",
+              "label": "Media Production",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "advertising_arts_media.content_editorial",
+          "label": "Content & Editorial",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "advertising_arts_media.content_editorial.editorial",
+              "label": "Editorial",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "advertising_arts_media.content_editorial.content_production",
+              "label": "Content Production",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "advertising_arts_media.content_editorial.publishing",
+              "label": "Publishing",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "advertising_arts_media.media_planning",
+          "label": "Media Planning",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "advertising_arts_media.media_planning.media_buying",
+              "label": "Media Buying",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "advertising_arts_media.media_planning.media_planning",
+              "label": "Media Planning",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "advertising_arts_media.media_planning.campaign_traffic",
+              "label": "Campaign Traffic",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "Sales",
+      "code": "sales",
+      "label": "Sales",
+      "order": 24,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Business Development", "subcategories": ["New Business", "Channel Sales", "Partnerships"]},
-        {"name": "Account Management", "subcategories": ["Key Account Management", "Client Success", "Inside Sales"]},
-        {"name": "Retail Sales", "subcategories": ["Store Sales", "Luxury Retail", "Consumer Sales"]}
+        {
+          "code": "sales.business_development",
+          "label": "Business Development",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "sales.business_development.new_business",
+              "label": "New Business",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "sales.business_development.channel_sales",
+              "label": "Channel Sales",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "sales.business_development.partnerships",
+              "label": "Partnerships",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "sales.account_management",
+          "label": "Account Management",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "sales.account_management.key_account_management",
+              "label": "Key Account Management",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "sales.account_management.client_success",
+              "label": "Client Success",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "sales.account_management.inside_sales",
+              "label": "Inside Sales",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "sales.retail_sales",
+          "label": "Retail Sales",
+          "order": 3,
+          "subcategories": [
+            {
+              "code": "sales.retail_sales.store_sales",
+              "label": "Store Sales",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "sales.retail_sales.luxury_retail",
+              "label": "Luxury Retail",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "sales.retail_sales.consumer_sales",
+              "label": "Consumer Sales",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "CEO & General Management",
+      "code": "ceo_general_management",
+      "label": "CEO & General Management",
+      "order": 25,
       "categories": [
-        {"name": "General", "subcategories": ["General"]},
-        {"name": "Executive Leadership", "subcategories": ["Chief Executive", "General Management", "Business Leadership"]},
-        {"name": "Operations Leadership", "subcategories": ["Business Unit Management", "Regional Management", "Operational Leadership"]}
+        {
+          "code": "ceo_general_management.executive_leadership",
+          "label": "Executive Leadership",
+          "order": 1,
+          "subcategories": [
+            {
+              "code": "ceo_general_management.executive_leadership.chief_executive",
+              "label": "Chief Executive",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "ceo_general_management.executive_leadership.general_management",
+              "label": "General Management",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "ceo_general_management.executive_leadership.business_leadership",
+              "label": "Business Leadership",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        },
+        {
+          "code": "ceo_general_management.operations_leadership",
+          "label": "Operations Leadership",
+          "order": 2,
+          "subcategories": [
+            {
+              "code": "ceo_general_management.operations_leadership.business_unit_management",
+              "label": "Business Unit Management",
+              "order": 1,
+              "is_assignable": true
+            },
+            {
+              "code": "ceo_general_management.operations_leadership.regional_management",
+              "label": "Regional Management",
+              "order": 2,
+              "is_assignable": true
+            },
+            {
+              "code": "ceo_general_management.operations_leadership.operational_leadership",
+              "label": "Operational Leadership",
+              "order": 3,
+              "is_assignable": true
+            }
+          ]
+        }
       ]
     }
   ]

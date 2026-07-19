@@ -157,6 +157,14 @@ class GovernanceUnitOfWork:
             )
             self.db.add(audit)
             self.db.flush()
+            attach_audit_reference = getattr(
+                transition,
+                "attach_audit_reference",
+                None,
+            )
+            if attach_audit_reference is not None:
+                attach_audit_reference(self.db, subject, audit.id)
+                self.db.flush()
 
             for event in effect.outbox_events:
                 payload = {

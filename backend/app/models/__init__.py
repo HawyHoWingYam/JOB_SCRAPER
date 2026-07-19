@@ -48,6 +48,20 @@ from app.models.source_job_attributes import (
     JobSourceClassificationPathNode,
     JobSourceEmploymentLabel,
 )
+from app.models.canonical_job_taxonomy import (
+    CanonicalJobCategory,
+    CanonicalJobDomain,
+    CanonicalJobSubcategory,
+    CanonicalJobTaxonomyActiveMappingRevision,
+    CanonicalJobTaxonomyActiveRevision,
+    CanonicalJobTaxonomyMappingCoverage,
+    CanonicalJobTaxonomyMappingRevision,
+    CanonicalJobTaxonomyRelease,
+    JobTaxonomyAssignment,
+    JobTaxonomyReviewItem,
+    SourceJobTaxonomyMapping,
+    SourceJobTaxonomyMappingTarget,
+)
 
 __all__ = [
     "Company",
@@ -92,4 +106,16 @@ __all__ = [
     "JobSourceClassificationPath",
     "JobSourceClassificationPathNode",
     "JobSourceEmploymentLabel",
+    "CanonicalJobCategory",
+    "CanonicalJobDomain",
+    "CanonicalJobSubcategory",
+    "CanonicalJobTaxonomyActiveMappingRevision",
+    "CanonicalJobTaxonomyActiveRevision",
+    "CanonicalJobTaxonomyMappingCoverage",
+    "CanonicalJobTaxonomyMappingRevision",
+    "CanonicalJobTaxonomyRelease",
+    "JobTaxonomyAssignment",
+    "JobTaxonomyReviewItem",
+    "SourceJobTaxonomyMapping",
+    "SourceJobTaxonomyMappingTarget",
 ]

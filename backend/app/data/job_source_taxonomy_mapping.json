@@ -1,654 +1,1919 @@
 {
-  "1200": {
-    "source_name": "Accounting",
-    "allowed_domains": ["Accounting"],
-    "default_path": ["Accounting", "General", "General"],
-    "subcategory_hints": {
-      "Financial Accounting & Reporting": {
-        "allowed_categories": ["Financial Accounting", "General"]
-      },
-      "Audit - External": {
-        "allowed_categories": ["Audit & Tax", "General"]
+  "schema_version": 1,
+  "release_key": "source-to-canonical-job-mapping-v1",
+  "taxonomy_release_key": "canonical-job-taxonomy-v1",
+  "expected_counts": {
+    "entries": 68,
+    "deterministic": 0,
+    "allowed_slice": 62,
+    "excluded": 6,
+    "unmapped": 0
+  },
+  "legacy_discrepancies": {
+    "ctgoodjobs_proposal_only_ids": [
+      "ctgoodjobs:002",
+      "ctgoodjobs:003",
+      "ctgoodjobs:004",
+      "ctgoodjobs:010",
+      "ctgoodjobs:013",
+      "ctgoodjobs:017",
+      "ctgoodjobs:025",
+      "ctgoodjobs:028",
+      "ctgoodjobs:029",
+      "ctgoodjobs:038",
+      "ctgoodjobs:041",
+      "ctgoodjobs:043",
+      "ctgoodjobs:049",
+      "ctgoodjobs:051",
+      "ctgoodjobs:052"
+    ]
+  },
+  "entries": [
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:001",
+      "source_label": "Accounting",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "accounting.financial_accounting.financial_accounting",
+        "accounting.financial_accounting.accounts_payable",
+        "accounting.financial_accounting.accounts_receivable",
+        "accounting.audit_tax.audit",
+        "accounting.audit_tax.tax",
+        "accounting.audit_tax.compliance_reporting"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Accounting",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:007",
+      "source_label": "Banking & Financial Services",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "banking_financial_services.banking.retail_banking",
+        "banking_financial_services.banking.corporate_banking",
+        "banking_financial_services.banking.private_banking",
+        "banking_financial_services.investment_markets.investment_banking",
+        "banking_financial_services.investment_markets.asset_management",
+        "banking_financial_services.investment_markets.trading_markets",
+        "banking_financial_services.risk_compliance.risk_management",
+        "banking_financial_services.risk_compliance.regulatory_compliance",
+        "banking_financial_services.risk_compliance.kyc_aml"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Banking & Financial Services",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:015",
+      "source_label": "Engineering",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "engineering.mechanical_manufacturing.mechanical_engineering",
+        "engineering.mechanical_manufacturing.manufacturing_engineering",
+        "engineering.mechanical_manufacturing.industrial_engineering",
+        "engineering.electrical_electronics.electrical_engineering",
+        "engineering.electrical_electronics.electronics_engineering",
+        "engineering.electrical_electronics.automation_engineering",
+        "engineering.civil_structural.civil_engineering",
+        "engineering.civil_structural.structural_engineering",
+        "engineering.civil_structural.geotechnical_engineering"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Engineering",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:018",
+      "source_label": "Hospitality & Tourism",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "hospitality_tourism.hotel_operations.front_office",
+        "hospitality_tourism.hotel_operations.housekeeping",
+        "hospitality_tourism.hotel_operations.guest_relations",
+        "hospitality_tourism.food_beverage.restaurant_operations",
+        "hospitality_tourism.food_beverage.kitchen_operations",
+        "hospitality_tourism.food_beverage.bar_service",
+        "hospitality_tourism.travel_services.travel_consulting",
+        "hospitality_tourism.travel_services.tour_operations",
+        "hospitality_tourism.travel_services.reservations"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Hospitality & Tourism",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:021",
+      "source_label": "Information & Communication Technology",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "information_communication_technology.software_development.backend_development",
+        "information_communication_technology.software_development.frontend_development",
+        "information_communication_technology.software_development.web_development",
+        "information_communication_technology.software_development.mobile_development",
+        "information_communication_technology.software_development.full_stack_development",
+        "information_communication_technology.infrastructure_support.application_support",
+        "information_communication_technology.infrastructure_support.help_desk_support",
+        "information_communication_technology.infrastructure_support.systems_administration",
+        "information_communication_technology.infrastructure_support.network_engineering",
+        "information_communication_technology.infrastructure_support.solutions_architecture",
+        "information_communication_technology.infrastructure_support.solutions_consulting",
+        "information_communication_technology.infrastructure_support.technology_management",
+        "information_communication_technology.data_analytics.data_analysis",
+        "information_communication_technology.data_analytics.data_engineering",
+        "information_communication_technology.data_analytics.machine_learning",
+        "information_communication_technology.data_analytics.business_intelligence",
+        "information_communication_technology.product_quality.product_management",
+        "information_communication_technology.product_quality.project_management",
+        "information_communication_technology.product_quality.qa_testing",
+        "information_communication_technology.product_quality.ui_ux_design",
+        "information_communication_technology.product_quality.technical_documentation",
+        "information_communication_technology.cybersecurity.security_operations",
+        "information_communication_technology.cybersecurity.application_security",
+        "information_communication_technology.cybersecurity.governance_risk_compliance"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Information & Communication Technology",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:022",
+      "source_label": "Insurance & Superannuation",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "insurance_superannuation.claims_underwriting.claims",
+        "insurance_superannuation.claims_underwriting.underwriting",
+        "insurance_superannuation.claims_underwriting.policy_administration",
+        "insurance_superannuation.advisory_broking.insurance_advisory",
+        "insurance_superannuation.advisory_broking.brokerage",
+        "insurance_superannuation.advisory_broking.relationship_management"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Insurance & Superannuation",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:026",
+      "source_label": "Marketing & Communications",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "marketing_communications.digital_marketing.performance_marketing",
+        "marketing_communications.digital_marketing.social_media_marketing",
+        "marketing_communications.digital_marketing.seo_sem",
+        "marketing_communications.brand_communications.brand_marketing",
+        "marketing_communications.brand_communications.corporate_communications",
+        "marketing_communications.brand_communications.pr",
+        "marketing_communications.content_events.content_marketing",
+        "marketing_communications.content_events.event_marketing",
+        "marketing_communications.content_events.campaign_management"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Marketing & Communications",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:027",
+      "source_label": "Healthcare & Medical",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "healthcare_medical.clinical_care.clinical_care",
+        "healthcare_medical.clinical_care.nursing",
+        "healthcare_medical.clinical_care.medical_practitioner",
+        "healthcare_medical.allied_health.physiotherapy",
+        "healthcare_medical.allied_health.pharmacy",
+        "healthcare_medical.allied_health.diagnostic_services",
+        "healthcare_medical.healthcare_operations.medical_administration",
+        "healthcare_medical.healthcare_operations.clinic_operations",
+        "healthcare_medical.healthcare_operations.healthcare_support"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Healthcare & Medical",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:032",
+      "source_label": "Real Estate & Property",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "real_estate_property.property_management.property_management",
+        "real_estate_property.property_management.facilities_management",
+        "real_estate_property.property_management.building_operations",
+        "real_estate_property.sales_leasing.property_sales",
+        "real_estate_property.sales_leasing.leasing",
+        "real_estate_property.sales_leasing.real_estate_advisory"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Real Estate & Property",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:037",
+      "source_label": "Retail & Consumer Products",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "retail_consumer_products.retail_operations.store_operations",
+        "retail_consumer_products.retail_operations.floor_management",
+        "retail_consumer_products.retail_operations.customer_experience",
+        "retail_consumer_products.merchandising_buying.merchandising",
+        "retail_consumer_products.merchandising_buying.buying",
+        "retail_consumer_products.merchandising_buying.category_management"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Retail & Consumer Products",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:039",
+      "source_label": "Community Services & Development",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "community_services_development.community_programs.program_delivery",
+        "community_services_development.community_programs.ngo_operations",
+        "community_services_development.community_programs.volunteer_coordination",
+        "community_services_development.case_support_services.case_management",
+        "community_services_development.case_support_services.counselling_support",
+        "community_services_development.case_support_services.outreach_services"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Community Services & Development",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "ctgoodjobs",
+      "source_classification_id": "ctgoodjobs:048",
+      "source_label": "Administration & Office Support",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "administration_office_support.administrative_support.administrative_assistant",
+        "administration_office_support.administrative_support.executive_assistant",
+        "administration_office_support.administrative_support.team_support",
+        "administration_office_support.office_operations.office_management",
+        "administration_office_support.office_operations.reception",
+        "administration_office_support.office_operations.data_entry_coordination"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Administration & Office Support",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1200",
+      "source_label": "Accounting",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "accounting.financial_accounting.financial_accounting",
+        "accounting.financial_accounting.accounts_payable",
+        "accounting.financial_accounting.accounts_receivable",
+        "accounting.audit_tax.audit",
+        "accounting.audit_tax.tax",
+        "accounting.audit_tax.compliance_reporting"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Accounting",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {
+          "Financial Accounting & Reporting": {
+            "allowed_categories": [
+              "Financial Accounting",
+              "General"
+            ]
+          },
+          "Audit - External": {
+            "allowed_categories": [
+              "Audit & Tax",
+              "General"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1203",
+      "source_label": "Banking & Financial Services",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "banking_financial_services.banking.retail_banking",
+        "banking_financial_services.banking.corporate_banking",
+        "banking_financial_services.banking.private_banking",
+        "banking_financial_services.investment_markets.investment_banking",
+        "banking_financial_services.investment_markets.asset_management",
+        "banking_financial_services.investment_markets.trading_markets",
+        "banking_financial_services.risk_compliance.risk_management",
+        "banking_financial_services.risk_compliance.regulatory_compliance",
+        "banking_financial_services.risk_compliance.kyc_aml"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Banking & Financial Services",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {
+          "Banking - Retail/Branch": {
+            "allowed_categories": [
+              "Banking",
+              "General"
+            ]
+          },
+          "Funds Management": {
+            "allowed_categories": [
+              "Investment & Markets",
+              "General"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1204",
+      "source_label": "Call Centre & Customer Service",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "call_centre_customer_service.customer_service.customer_service_representative",
+        "call_centre_customer_service.customer_service.customer_success",
+        "call_centre_customer_service.customer_service.after_sales_support",
+        "call_centre_customer_service.call_centre.inbound_support",
+        "call_centre_customer_service.call_centre.outbound_support",
+        "call_centre_customer_service.call_centre.contact_centre_operations"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Call Centre & Customer Service",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {
+          "Customer Service - Call Centre": {
+            "allowed_categories": [
+              "Call Centre",
+              "General"
+            ]
+          },
+          "Customer Service - Customer Facing": {
+            "allowed_categories": [
+              "Customer Service",
+              "General"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1206",
+      "source_label": "Construction",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "construction.project_delivery.project_management",
+        "construction.project_delivery.site_coordination",
+        "construction.project_delivery.construction_planning",
+        "construction.technical_construction.quantity_surveying",
+        "construction.technical_construction.building_services",
+        "construction.technical_construction.site_engineering"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Construction",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1209",
+      "source_label": "Engineering",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "engineering.mechanical_manufacturing.mechanical_engineering",
+        "engineering.mechanical_manufacturing.manufacturing_engineering",
+        "engineering.mechanical_manufacturing.industrial_engineering",
+        "engineering.electrical_electronics.electrical_engineering",
+        "engineering.electrical_electronics.electronics_engineering",
+        "engineering.electrical_electronics.automation_engineering",
+        "engineering.civil_structural.civil_engineering",
+        "engineering.civil_structural.structural_engineering",
+        "engineering.civil_structural.geotechnical_engineering"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Engineering",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1211",
+      "source_label": "Healthcare & Medical",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "healthcare_medical.clinical_care.clinical_care",
+        "healthcare_medical.clinical_care.nursing",
+        "healthcare_medical.clinical_care.medical_practitioner",
+        "healthcare_medical.allied_health.physiotherapy",
+        "healthcare_medical.allied_health.pharmacy",
+        "healthcare_medical.allied_health.diagnostic_services",
+        "healthcare_medical.healthcare_operations.medical_administration",
+        "healthcare_medical.healthcare_operations.clinic_operations",
+        "healthcare_medical.healthcare_operations.healthcare_support"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Healthcare & Medical",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1212",
+      "source_label": "Hospitality & Tourism",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "hospitality_tourism.hotel_operations.front_office",
+        "hospitality_tourism.hotel_operations.housekeeping",
+        "hospitality_tourism.hotel_operations.guest_relations",
+        "hospitality_tourism.food_beverage.restaurant_operations",
+        "hospitality_tourism.food_beverage.kitchen_operations",
+        "hospitality_tourism.food_beverage.bar_service",
+        "hospitality_tourism.travel_services.travel_consulting",
+        "hospitality_tourism.travel_services.tour_operations",
+        "hospitality_tourism.travel_services.reservations"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Hospitality & Tourism",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1214",
+      "source_label": "Insurance & Superannuation",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "insurance_superannuation.claims_underwriting.claims",
+        "insurance_superannuation.claims_underwriting.underwriting",
+        "insurance_superannuation.claims_underwriting.policy_administration",
+        "insurance_superannuation.advisory_broking.insurance_advisory",
+        "insurance_superannuation.advisory_broking.brokerage",
+        "insurance_superannuation.advisory_broking.relationship_management"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Insurance & Superannuation",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1216",
+      "source_label": "Legal",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "legal.legal_practice.corporate_law",
+        "legal.legal_practice.litigation",
+        "legal.legal_practice.commercial_law",
+        "legal.legal_operations.paralegal",
+        "legal.legal_operations.compliance",
+        "legal.legal_operations.company_secretarial"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Legal",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1220",
+      "source_label": "Real Estate & Property",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "real_estate_property.property_management.property_management",
+        "real_estate_property.property_management.facilities_management",
+        "real_estate_property.property_management.building_operations",
+        "real_estate_property.sales_leasing.property_sales",
+        "real_estate_property.sales_leasing.leasing",
+        "real_estate_property.sales_leasing.real_estate_advisory"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Real Estate & Property",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1223",
+      "source_label": "Science & Technology",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "science_technology.research.scientific_research",
+        "science_technology.research.r_d",
+        "science_technology.research.research_operations",
+        "science_technology.laboratory_quality.laboratory_science",
+        "science_technology.laboratory_quality.quality_assurance",
+        "science_technology.laboratory_quality.testing_services"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Science & Technology",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:1225",
+      "source_label": "Trades & Services",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "trades_services.field_services.maintenance",
+        "trades_services.field_services.installation",
+        "trades_services.field_services.repair_services",
+        "trades_services.technical_trades.electrical_trades",
+        "trades_services.technical_trades.plumbing",
+        "trades_services.technical_trades.automotive_services"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Trades & Services",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6008",
+      "source_label": "Marketing & Communications",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "marketing_communications.digital_marketing.performance_marketing",
+        "marketing_communications.digital_marketing.social_media_marketing",
+        "marketing_communications.digital_marketing.seo_sem",
+        "marketing_communications.brand_communications.brand_marketing",
+        "marketing_communications.brand_communications.corporate_communications",
+        "marketing_communications.brand_communications.pr",
+        "marketing_communications.content_events.content_marketing",
+        "marketing_communications.content_events.event_marketing",
+        "marketing_communications.content_events.campaign_management"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Marketing & Communications",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6043",
+      "source_label": "Retail & Consumer Products",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "retail_consumer_products.retail_operations.store_operations",
+        "retail_consumer_products.retail_operations.floor_management",
+        "retail_consumer_products.retail_operations.customer_experience",
+        "retail_consumer_products.merchandising_buying.merchandising",
+        "retail_consumer_products.merchandising_buying.buying",
+        "retail_consumer_products.merchandising_buying.category_management"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Retail & Consumer Products",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6076",
+      "source_label": "Consulting & Strategy",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "consulting_strategy.strategy_consulting.corporate_strategy",
+        "consulting_strategy.strategy_consulting.market_analysis",
+        "consulting_strategy.strategy_consulting.growth_strategy",
+        "consulting_strategy.operations_consulting.business_transformation",
+        "consulting_strategy.operations_consulting.process_improvement",
+        "consulting_strategy.operations_consulting.pmo"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Consulting & Strategy",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6092",
+      "source_label": "Manufacturing, Transport & Logistics",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "manufacturing_transport_logistics.logistics.logistics_coordination",
+        "manufacturing_transport_logistics.logistics.transportation",
+        "manufacturing_transport_logistics.logistics.warehouse_operations",
+        "manufacturing_transport_logistics.supply_chain.supply_chain_planning",
+        "manufacturing_transport_logistics.supply_chain.procurement",
+        "manufacturing_transport_logistics.supply_chain.inventory_control",
+        "manufacturing_transport_logistics.manufacturing_operations.production_planning",
+        "manufacturing_transport_logistics.manufacturing_operations.plant_operations",
+        "manufacturing_transport_logistics.manufacturing_operations.quality_control"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Manufacturing, Transport & Logistics",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {
+          "Warehousing, Storage & Distribution": {
+            "allowed_categories": [
+              "Logistics",
+              "General"
+            ]
+          },
+          "Purchasing, Procurement & Inventory": {
+            "allowed_categories": [
+              "Supply Chain",
+              "General"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6123",
+      "source_label": "Education & Training",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "education_training.teaching.primary_education",
+        "education_training.teaching.secondary_education",
+        "education_training.teaching.higher_education",
+        "education_training.training_support.corporate_training",
+        "education_training.training_support.curriculum_development",
+        "education_training.training_support.student_support"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Education & Training",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6163",
+      "source_label": "Community Services & Development",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "community_services_development.community_programs.program_delivery",
+        "community_services_development.community_programs.ngo_operations",
+        "community_services_development.community_programs.volunteer_coordination",
+        "community_services_development.case_support_services.case_management",
+        "community_services_development.case_support_services.counselling_support",
+        "community_services_development.case_support_services.outreach_services"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Community Services & Development",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6251",
+      "source_label": "Administration & Office Support",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "administration_office_support.administrative_support.administrative_assistant",
+        "administration_office_support.administrative_support.executive_assistant",
+        "administration_office_support.administrative_support.team_support",
+        "administration_office_support.office_operations.office_management",
+        "administration_office_support.office_operations.reception",
+        "administration_office_support.office_operations.data_entry_coordination"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Administration & Office Support",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {
+          "Administrative Assistants": {
+            "allowed_categories": [
+              "Administrative Support",
+              "General"
+            ]
+          },
+          "Receptionists": {
+            "allowed_categories": [
+              "Office Operations",
+              "General"
+            ]
+          },
+          "PA, EA & Secretarial": {
+            "allowed_categories": [
+              "Administrative Support",
+              "General"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6263",
+      "source_label": "Design & Architecture",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "design_architecture.graphic_design.brand_design",
+        "design_architecture.graphic_design.visual_communication",
+        "design_architecture.graphic_design.motion_graphics",
+        "design_architecture.product_ux_design.product_design",
+        "design_architecture.product_ux_design.ux_design",
+        "design_architecture.product_ux_design.ui_design",
+        "design_architecture.architecture_interior.architecture",
+        "design_architecture.architecture_interior.interior_design",
+        "design_architecture.architecture_interior.spatial_design"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Design & Architecture",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {
+          "Graphic Design": {
+            "allowed_categories": [
+              "Graphic Design",
+              "General"
+            ]
+          },
+          "Web & Interaction Design": {
+            "allowed_categories": [
+              "Product & UX Design",
+              "General"
+            ]
+          },
+          "Architecture": {
+            "allowed_categories": [
+              "Architecture & Interior",
+              "General"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6281",
+      "source_label": "Information & Communication Technology",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "information_communication_technology.software_development.backend_development",
+        "information_communication_technology.software_development.frontend_development",
+        "information_communication_technology.software_development.web_development",
+        "information_communication_technology.software_development.mobile_development",
+        "information_communication_technology.software_development.full_stack_development",
+        "information_communication_technology.infrastructure_support.application_support",
+        "information_communication_technology.infrastructure_support.help_desk_support",
+        "information_communication_technology.infrastructure_support.systems_administration",
+        "information_communication_technology.infrastructure_support.network_engineering",
+        "information_communication_technology.infrastructure_support.solutions_architecture",
+        "information_communication_technology.infrastructure_support.solutions_consulting",
+        "information_communication_technology.infrastructure_support.technology_management",
+        "information_communication_technology.data_analytics.data_analysis",
+        "information_communication_technology.data_analytics.data_engineering",
+        "information_communication_technology.data_analytics.machine_learning",
+        "information_communication_technology.data_analytics.business_intelligence",
+        "information_communication_technology.product_quality.product_management",
+        "information_communication_technology.product_quality.project_management",
+        "information_communication_technology.product_quality.qa_testing",
+        "information_communication_technology.product_quality.ui_ux_design",
+        "information_communication_technology.product_quality.technical_documentation",
+        "information_communication_technology.cybersecurity.security_operations",
+        "information_communication_technology.cybersecurity.application_security",
+        "information_communication_technology.cybersecurity.governance_risk_compliance"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Information & Communication Technology",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {
+          "Developers/Programmers": {
+            "allowed_categories": [
+              "Software Development",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Software Development",
+              "Backend Development"
+            ]
+          },
+          "Help Desk & IT Support": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Help Desk Support"
+            ]
+          },
+          "Business/Systems Analysts": {
+            "allowed_categories": [
+              "Data & Analytics",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Data & Analytics",
+              "Data Analysis"
+            ]
+          },
+          "Networks & Systems Administration": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Systems Administration"
+            ]
+          },
+          "Database Development & Administration": {
+            "allowed_categories": [
+              "Data & Analytics",
+              "Cybersecurity",
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Data & Analytics",
+              "Data Engineering"
+            ]
+          },
+          "Programme & Project Management": {
+            "allowed_categories": [
+              "Product & Quality",
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Product & Quality",
+              "Project Management"
+            ]
+          },
+          "Product Management & Development": {
+            "allowed_categories": [
+              "Product & Quality",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Product & Quality",
+              "Product Management"
+            ]
+          },
+          "Management": {
+            "allowed_categories": [
+              "Product & Quality",
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Technology Management"
+            ]
+          },
+          "Sales - Pre & Post": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "Cybersecurity",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Solutions Consulting"
+            ]
+          },
+          "Engineering - Software": {
+            "allowed_categories": [
+              "Software Development",
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Software Development",
+              "Backend Development"
+            ]
+          },
+          "Consultants": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "Data & Analytics",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Solutions Consulting"
+            ]
+          },
+          "Architects": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "Software Development",
+              "Data & Analytics",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Solutions Architecture"
+            ]
+          },
+          "Team Leaders": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "Software Development",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Technology Management"
+            ]
+          },
+          "Testing & Quality Assurance": {
+            "allowed_categories": [
+              "Product & Quality",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Product & Quality",
+              "QA Testing"
+            ]
+          },
+          "Telecommunications": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Network Engineering"
+            ]
+          },
+          "Security": {
+            "allowed_categories": [
+              "Cybersecurity",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Cybersecurity",
+              "Security Operations"
+            ]
+          },
+          "Web Development & Production": {
+            "allowed_categories": [
+              "Software Development",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Software Development",
+              "Web Development"
+            ]
+          },
+          "Technical Writing": {
+            "allowed_categories": [
+              "Product & Quality",
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Product & Quality",
+              "Technical Documentation"
+            ]
+          },
+          "Engineering - Hardware": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Systems Administration"
+            ]
+          },
+          "Computer Operators": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Application Support"
+            ]
+          },
+          "Engineering - Network": {
+            "allowed_categories": [
+              "Infrastructure & Support",
+              "General"
+            ],
+            "default_path": [
+              "Information & Communication Technology",
+              "Infrastructure & Support",
+              "Network Engineering"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6304",
+      "source_label": "Advertising, Arts & Media",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "advertising_arts_media.creative_production.art_direction",
+        "advertising_arts_media.creative_production.copywriting",
+        "advertising_arts_media.creative_production.media_production",
+        "advertising_arts_media.content_editorial.editorial",
+        "advertising_arts_media.content_editorial.content_production",
+        "advertising_arts_media.content_editorial.publishing",
+        "advertising_arts_media.media_planning.media_buying",
+        "advertising_arts_media.media_planning.media_planning",
+        "advertising_arts_media.media_planning.campaign_traffic"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Advertising, Arts & Media",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6317",
+      "source_label": "Human Resources & Recruitment",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "human_resources_recruitment.hr_operations.hr_management",
+        "human_resources_recruitment.hr_operations.hr_business_partner",
+        "human_resources_recruitment.hr_operations.hr_administration",
+        "human_resources_recruitment.recruitment_talent.recruitment",
+        "human_resources_recruitment.recruitment_talent.talent_acquisition",
+        "human_resources_recruitment.recruitment_talent.employer_branding",
+        "human_resources_recruitment.hr_systems_analytics.hris",
+        "human_resources_recruitment.hr_systems_analytics.people_analytics",
+        "human_resources_recruitment.hr_systems_analytics.payroll_systems"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Human Resources & Recruitment",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:6362",
+      "source_label": "Sales",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "sales.business_development.new_business",
+        "sales.business_development.channel_sales",
+        "sales.business_development.partnerships",
+        "sales.account_management.key_account_management",
+        "sales.account_management.client_success",
+        "sales.account_management.inside_sales",
+        "sales.retail_sales.store_sales",
+        "sales.retail_sales.luxury_retail",
+        "sales.retail_sales.consumer_sales"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Sales",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "jobsdb",
+      "source_classification_id": "jobsdb:7019",
+      "source_label": "CEO & General Management",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "ceo_general_management.executive_leadership.chief_executive",
+        "ceo_general_management.executive_leadership.general_management",
+        "ceo_general_management.executive_leadership.business_leadership",
+        "ceo_general_management.operations_leadership.business_unit_management",
+        "ceo_general_management.operations_leadership.regional_management",
+        "ceo_general_management.operations_leadership.operational_leadership"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "CEO & General Management",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:101000",
+      "source_label": "Accounting",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "accounting.financial_accounting.financial_accounting",
+        "accounting.financial_accounting.accounts_payable",
+        "accounting.financial_accounting.accounts_receivable",
+        "accounting.audit_tax.audit",
+        "accounting.audit_tax.tax",
+        "accounting.audit_tax.compliance_reporting"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Accounting",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:102000",
+      "source_label": "Administration & Office Support",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "administration_office_support.administrative_support.administrative_assistant",
+        "administration_office_support.administrative_support.executive_assistant",
+        "administration_office_support.administrative_support.team_support",
+        "administration_office_support.office_operations.office_management",
+        "administration_office_support.office_operations.reception",
+        "administration_office_support.office_operations.data_entry_coordination"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Administration & Office Support",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:103000",
+      "source_label": "Advertising & Media",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "advertising_arts_media.creative_production.art_direction",
+        "advertising_arts_media.creative_production.copywriting",
+        "advertising_arts_media.creative_production.media_production",
+        "advertising_arts_media.content_editorial.editorial",
+        "advertising_arts_media.content_editorial.content_production",
+        "advertising_arts_media.content_editorial.publishing",
+        "advertising_arts_media.media_planning.media_buying",
+        "advertising_arts_media.media_planning.media_planning",
+        "advertising_arts_media.media_planning.campaign_traffic"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Advertising, Arts & Media",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:104000",
+      "source_label": "Banking & Financial Services",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "banking_financial_services.banking.retail_banking",
+        "banking_financial_services.banking.corporate_banking",
+        "banking_financial_services.banking.private_banking",
+        "banking_financial_services.investment_markets.investment_banking",
+        "banking_financial_services.investment_markets.asset_management",
+        "banking_financial_services.investment_markets.trading_markets",
+        "banking_financial_services.risk_compliance.risk_management",
+        "banking_financial_services.risk_compliance.regulatory_compliance",
+        "banking_financial_services.risk_compliance.kyc_aml"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Banking & Financial Services",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:105000",
+      "source_label": "Customer Service",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "call_centre_customer_service.customer_service.customer_service_representative",
+        "call_centre_customer_service.customer_service.customer_success",
+        "call_centre_customer_service.customer_service.after_sales_support",
+        "call_centre_customer_service.call_centre.inbound_support",
+        "call_centre_customer_service.call_centre.outbound_support",
+        "call_centre_customer_service.call_centre.contact_centre_operations"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Call Centre & Customer Service",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:106000",
+      "source_label": "CEO & General Management",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "ceo_general_management.executive_leadership.chief_executive",
+        "ceo_general_management.executive_leadership.general_management",
+        "ceo_general_management.executive_leadership.business_leadership",
+        "ceo_general_management.operations_leadership.business_unit_management",
+        "ceo_general_management.operations_leadership.regional_management",
+        "ceo_general_management.operations_leadership.operational_leadership"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "CEO & General Management",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:107000",
+      "source_label": "Community Services",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "community_services_development.community_programs.program_delivery",
+        "community_services_development.community_programs.ngo_operations",
+        "community_services_development.community_programs.volunteer_coordination",
+        "community_services_development.case_support_services.case_management",
+        "community_services_development.case_support_services.counselling_support",
+        "community_services_development.case_support_services.outreach_services"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Community Services & Development",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:108000",
+      "source_label": "Construction",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "construction.project_delivery.project_management",
+        "construction.project_delivery.site_coordination",
+        "construction.project_delivery.construction_planning",
+        "construction.technical_construction.quantity_surveying",
+        "construction.technical_construction.building_services",
+        "construction.technical_construction.site_engineering"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Construction",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:109000",
+      "source_label": "Consulting",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "consulting_strategy.strategy_consulting.corporate_strategy",
+        "consulting_strategy.strategy_consulting.market_analysis",
+        "consulting_strategy.strategy_consulting.growth_strategy",
+        "consulting_strategy.operations_consulting.business_transformation",
+        "consulting_strategy.operations_consulting.process_improvement",
+        "consulting_strategy.operations_consulting.pmo"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Consulting & Strategy",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:110000",
+      "source_label": "Design",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "design_architecture.graphic_design.brand_design",
+        "design_architecture.graphic_design.visual_communication",
+        "design_architecture.graphic_design.motion_graphics",
+        "design_architecture.product_ux_design.product_design",
+        "design_architecture.product_ux_design.ux_design",
+        "design_architecture.product_ux_design.ui_design",
+        "design_architecture.architecture_interior.architecture",
+        "design_architecture.architecture_interior.interior_design",
+        "design_architecture.architecture_interior.spatial_design"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Design & Architecture",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:111000",
+      "source_label": "Education",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "education_training.teaching.primary_education",
+        "education_training.teaching.secondary_education",
+        "education_training.teaching.higher_education",
+        "education_training.training_support.corporate_training",
+        "education_training.training_support.curriculum_development",
+        "education_training.training_support.student_support"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Education & Training",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:112000",
+      "source_label": "Engineering",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "engineering.mechanical_manufacturing.mechanical_engineering",
+        "engineering.mechanical_manufacturing.manufacturing_engineering",
+        "engineering.mechanical_manufacturing.industrial_engineering",
+        "engineering.electrical_electronics.electrical_engineering",
+        "engineering.electrical_electronics.electronics_engineering",
+        "engineering.electrical_electronics.automation_engineering",
+        "engineering.civil_structural.civil_engineering",
+        "engineering.civil_structural.structural_engineering",
+        "engineering.civil_structural.geotechnical_engineering"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Engineering",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:113000",
+      "source_label": "Farming",
+      "disposition": "excluded",
+      "target_codes": [],
+      "review_evidence": {
+        "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:114000",
+      "source_label": "Government",
+      "disposition": "excluded",
+      "target_codes": [],
+      "review_evidence": {
+        "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:115000",
+      "source_label": "Healthcare & Medical",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "healthcare_medical.clinical_care.clinical_care",
+        "healthcare_medical.clinical_care.nursing",
+        "healthcare_medical.clinical_care.medical_practitioner",
+        "healthcare_medical.allied_health.physiotherapy",
+        "healthcare_medical.allied_health.pharmacy",
+        "healthcare_medical.allied_health.diagnostic_services",
+        "healthcare_medical.healthcare_operations.medical_administration",
+        "healthcare_medical.healthcare_operations.clinic_operations",
+        "healthcare_medical.healthcare_operations.healthcare_support"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Healthcare & Medical",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:116000",
+      "source_label": "Hospitality & Catering & Tourism",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "hospitality_tourism.hotel_operations.front_office",
+        "hospitality_tourism.hotel_operations.housekeeping",
+        "hospitality_tourism.hotel_operations.guest_relations",
+        "hospitality_tourism.food_beverage.restaurant_operations",
+        "hospitality_tourism.food_beverage.kitchen_operations",
+        "hospitality_tourism.food_beverage.bar_service",
+        "hospitality_tourism.travel_services.travel_consulting",
+        "hospitality_tourism.travel_services.tour_operations",
+        "hospitality_tourism.travel_services.reservations"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Hospitality & Tourism",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:117000",
+      "source_label": "Human Resources & Recruitment",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "human_resources_recruitment.hr_operations.hr_management",
+        "human_resources_recruitment.hr_operations.hr_business_partner",
+        "human_resources_recruitment.hr_operations.hr_administration",
+        "human_resources_recruitment.recruitment_talent.recruitment",
+        "human_resources_recruitment.recruitment_talent.talent_acquisition",
+        "human_resources_recruitment.recruitment_talent.employer_branding",
+        "human_resources_recruitment.hr_systems_analytics.hris",
+        "human_resources_recruitment.hr_systems_analytics.people_analytics",
+        "human_resources_recruitment.hr_systems_analytics.payroll_systems"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Human Resources & Recruitment",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:118000",
+      "source_label": "Information & Communication Technology",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "information_communication_technology.software_development.backend_development",
+        "information_communication_technology.software_development.frontend_development",
+        "information_communication_technology.software_development.web_development",
+        "information_communication_technology.software_development.mobile_development",
+        "information_communication_technology.software_development.full_stack_development",
+        "information_communication_technology.infrastructure_support.application_support",
+        "information_communication_technology.infrastructure_support.help_desk_support",
+        "information_communication_technology.infrastructure_support.systems_administration",
+        "information_communication_technology.infrastructure_support.network_engineering",
+        "information_communication_technology.infrastructure_support.solutions_architecture",
+        "information_communication_technology.infrastructure_support.solutions_consulting",
+        "information_communication_technology.infrastructure_support.technology_management",
+        "information_communication_technology.data_analytics.data_analysis",
+        "information_communication_technology.data_analytics.data_engineering",
+        "information_communication_technology.data_analytics.machine_learning",
+        "information_communication_technology.data_analytics.business_intelligence",
+        "information_communication_technology.product_quality.product_management",
+        "information_communication_technology.product_quality.project_management",
+        "information_communication_technology.product_quality.qa_testing",
+        "information_communication_technology.product_quality.ui_ux_design",
+        "information_communication_technology.product_quality.technical_documentation",
+        "information_communication_technology.cybersecurity.security_operations",
+        "information_communication_technology.cybersecurity.application_security",
+        "information_communication_technology.cybersecurity.governance_risk_compliance"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Information & Communication Technology",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:119000",
+      "source_label": "Insurance",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "insurance_superannuation.claims_underwriting.claims",
+        "insurance_superannuation.claims_underwriting.underwriting",
+        "insurance_superannuation.claims_underwriting.policy_administration",
+        "insurance_superannuation.advisory_broking.insurance_advisory",
+        "insurance_superannuation.advisory_broking.brokerage",
+        "insurance_superannuation.advisory_broking.relationship_management"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Insurance & Superannuation",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:120000",
+      "source_label": "Legal",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "legal.legal_practice.corporate_law",
+        "legal.legal_practice.litigation",
+        "legal.legal_practice.commercial_law",
+        "legal.legal_operations.paralegal",
+        "legal.legal_operations.compliance",
+        "legal.legal_operations.company_secretarial"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Legal",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:121000",
+      "source_label": "Manufacturing & Logistics",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "manufacturing_transport_logistics.logistics.logistics_coordination",
+        "manufacturing_transport_logistics.logistics.transportation",
+        "manufacturing_transport_logistics.logistics.warehouse_operations",
+        "manufacturing_transport_logistics.supply_chain.supply_chain_planning",
+        "manufacturing_transport_logistics.supply_chain.procurement",
+        "manufacturing_transport_logistics.supply_chain.inventory_control",
+        "manufacturing_transport_logistics.manufacturing_operations.production_planning",
+        "manufacturing_transport_logistics.manufacturing_operations.plant_operations",
+        "manufacturing_transport_logistics.manufacturing_operations.quality_control"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Manufacturing, Transport & Logistics",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:122000",
+      "source_label": "Marketing & Communications",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "marketing_communications.digital_marketing.performance_marketing",
+        "marketing_communications.digital_marketing.social_media_marketing",
+        "marketing_communications.digital_marketing.seo_sem",
+        "marketing_communications.brand_communications.brand_marketing",
+        "marketing_communications.brand_communications.corporate_communications",
+        "marketing_communications.brand_communications.pr",
+        "marketing_communications.content_events.content_marketing",
+        "marketing_communications.content_events.event_marketing",
+        "marketing_communications.content_events.campaign_management"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Marketing & Communications",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:123000",
+      "source_label": "Natural Energy",
+      "disposition": "excluded",
+      "target_codes": [],
+      "review_evidence": {
+        "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:124000",
+      "source_label": "Real Estate & Property",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "real_estate_property.property_management.property_management",
+        "real_estate_property.property_management.facilities_management",
+        "real_estate_property.property_management.building_operations",
+        "real_estate_property.sales_leasing.property_sales",
+        "real_estate_property.sales_leasing.leasing",
+        "real_estate_property.sales_leasing.real_estate_advisory"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Real Estate & Property",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:125000",
+      "source_label": "Retail & Consumer Products",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "retail_consumer_products.retail_operations.store_operations",
+        "retail_consumer_products.retail_operations.floor_management",
+        "retail_consumer_products.retail_operations.customer_experience",
+        "retail_consumer_products.merchandising_buying.merchandising",
+        "retail_consumer_products.merchandising_buying.buying",
+        "retail_consumer_products.merchandising_buying.category_management"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Retail & Consumer Products",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:126000",
+      "source_label": "Sales",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "sales.business_development.new_business",
+        "sales.business_development.channel_sales",
+        "sales.business_development.partnerships",
+        "sales.account_management.key_account_management",
+        "sales.account_management.client_success",
+        "sales.account_management.inside_sales",
+        "sales.retail_sales.store_sales",
+        "sales.retail_sales.luxury_retail",
+        "sales.retail_sales.consumer_sales"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Sales",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:127000",
+      "source_label": "Science & Technology",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "science_technology.research.scientific_research",
+        "science_technology.research.r_d",
+        "science_technology.research.research_operations",
+        "science_technology.laboratory_quality.laboratory_science",
+        "science_technology.laboratory_quality.quality_assurance",
+        "science_technology.laboratory_quality.testing_services"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Science & Technology",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:128000",
+      "source_label": "Self Employment",
+      "disposition": "excluded",
+      "target_codes": [],
+      "review_evidence": {
+        "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:129000",
+      "source_label": "Sport",
+      "disposition": "excluded",
+      "target_codes": [],
+      "review_evidence": {
+        "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:130000",
+      "source_label": "Trades & Services",
+      "disposition": "allowed_slice",
+      "target_codes": [
+        "trades_services.field_services.maintenance",
+        "trades_services.field_services.installation",
+        "trades_services.field_services.repair_services",
+        "trades_services.technical_trades.electrical_trades",
+        "trades_services.technical_trades.plumbing",
+        "trades_services.technical_trades.automotive_services"
+      ],
+      "review_evidence": {
+        "legacy_default_path": [
+          "Trades & Services",
+          "General",
+          "General"
+        ],
+        "legacy_subcategory_hints": {}
+      }
+    },
+    {
+      "source_site": "offertoday",
+      "source_classification_id": "offertoday:999000",
+      "source_label": "Other",
+      "disposition": "excluded",
+      "target_codes": [],
+      "review_evidence": {
+        "reason": "No defensible internal taxonomy domain is available for this OfferToday source category."
       }
     }
-  },
-  "1203": {
-    "source_name": "Banking & Financial Services",
-    "allowed_domains": ["Banking & Financial Services"],
-    "default_path": ["Banking & Financial Services", "General", "General"],
-    "subcategory_hints": {
-      "Banking - Retail/Branch": {
-        "allowed_categories": ["Banking", "General"]
-      },
-      "Funds Management": {
-        "allowed_categories": ["Investment & Markets", "General"]
-      }
-    }
-  },
-  "1204": {
-    "source_name": "Call Centre & Customer Service",
-    "allowed_domains": ["Call Centre & Customer Service"],
-    "default_path": ["Call Centre & Customer Service", "General", "General"],
-    "subcategory_hints": {
-      "Customer Service - Call Centre": {
-        "allowed_categories": ["Call Centre", "General"]
-      },
-      "Customer Service - Customer Facing": {
-        "allowed_categories": ["Customer Service", "General"]
-      }
-    }
-  },
-  "1206": {
-    "source_name": "Construction",
-    "allowed_domains": ["Construction"],
-    "default_path": ["Construction", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "1209": {
-    "source_name": "Engineering",
-    "allowed_domains": ["Engineering"],
-    "default_path": ["Engineering", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "1211": {
-    "source_name": "Healthcare & Medical",
-    "allowed_domains": ["Healthcare & Medical"],
-    "default_path": ["Healthcare & Medical", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "1212": {
-    "source_name": "Hospitality & Tourism",
-    "allowed_domains": ["Hospitality & Tourism"],
-    "default_path": ["Hospitality & Tourism", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "1214": {
-    "source_name": "Insurance & Superannuation",
-    "allowed_domains": ["Insurance & Superannuation"],
-    "default_path": ["Insurance & Superannuation", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "1216": {
-    "source_name": "Legal",
-    "allowed_domains": ["Legal"],
-    "default_path": ["Legal", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "1220": {
-    "source_name": "Real Estate & Property",
-    "allowed_domains": ["Real Estate & Property"],
-    "default_path": ["Real Estate & Property", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "1223": {
-    "source_name": "Science & Technology",
-    "allowed_domains": ["Science & Technology"],
-    "default_path": ["Science & Technology", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "1225": {
-    "source_name": "Trades & Services",
-    "allowed_domains": ["Trades & Services"],
-    "default_path": ["Trades & Services", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "6008": {
-    "source_name": "Marketing & Communications",
-    "allowed_domains": ["Marketing & Communications"],
-    "default_path": ["Marketing & Communications", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "6043": {
-    "source_name": "Retail & Consumer Products",
-    "allowed_domains": ["Retail & Consumer Products"],
-    "default_path": ["Retail & Consumer Products", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "6076": {
-    "source_name": "Consulting & Strategy",
-    "allowed_domains": ["Consulting & Strategy"],
-    "default_path": ["Consulting & Strategy", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "6092": {
-    "source_name": "Manufacturing, Transport & Logistics",
-    "allowed_domains": ["Manufacturing, Transport & Logistics"],
-    "default_path": ["Manufacturing, Transport & Logistics", "General", "General"],
-    "subcategory_hints": {
-      "Warehousing, Storage & Distribution": {
-        "allowed_categories": ["Logistics", "General"]
-      },
-      "Purchasing, Procurement & Inventory": {
-        "allowed_categories": ["Supply Chain", "General"]
-      }
-    }
-  },
-  "6123": {
-    "source_name": "Education & Training",
-    "allowed_domains": ["Education & Training"],
-    "default_path": ["Education & Training", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "6163": {
-    "source_name": "Community Services & Development",
-    "allowed_domains": ["Community Services & Development"],
-    "default_path": ["Community Services & Development", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "6317": {
-    "source_name": "Human Resources & Recruitment",
-    "allowed_domains": ["Human Resources & Recruitment"],
-    "default_path": ["Human Resources & Recruitment", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "6251": {
-    "source_name": "Administration & Office Support",
-    "allowed_domains": ["Administration & Office Support"],
-    "default_path": ["Administration & Office Support", "General", "General"],
-    "subcategory_hints": {
-      "Administrative Assistants": {
-        "allowed_categories": ["Administrative Support", "General"]
-      },
-      "Receptionists": {
-        "allowed_categories": ["Office Operations", "General"]
-      },
-      "PA, EA & Secretarial": {
-        "allowed_categories": ["Administrative Support", "General"]
-      }
-    }
-  },
-  "6263": {
-    "source_name": "Design & Architecture",
-    "allowed_domains": ["Design & Architecture"],
-    "default_path": ["Design & Architecture", "General", "General"],
-    "subcategory_hints": {
-      "Graphic Design": {
-        "allowed_categories": ["Graphic Design", "General"]
-      },
-      "Web & Interaction Design": {
-        "allowed_categories": ["Product & UX Design", "General"]
-      },
-      "Architecture": {
-        "allowed_categories": ["Architecture & Interior", "General"]
-      }
-    }
-  },
-  "6281": {
-    "source_name": "Information & Communication Technology",
-    "allowed_domains": ["Information & Communication Technology"],
-    "default_path": ["Information & Communication Technology", "General", "General"],
-    "subcategory_hints": {
-      "Developers/Programmers": {
-        "allowed_categories": ["Software Development", "General"],
-        "default_path": [
-          "Information & Communication Technology",
-          "Software Development",
-          "Backend Development"
-        ]
-      },
-      "Help Desk & IT Support": {
-        "allowed_categories": ["Infrastructure & Support", "General"],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Help Desk Support"
-        ]
-      },
-      "Business/Systems Analysts": {
-        "allowed_categories": ["Data & Analytics", "General"],
-        "default_path": [
-          "Information & Communication Technology",
-          "Data & Analytics",
-          "Data Analysis"
-        ]
-      },
-      "Networks & Systems Administration": {
-        "allowed_categories": ["Infrastructure & Support", "General"],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Systems Administration"
-        ]
-      },
-      "Database Development & Administration": {
-        "allowed_categories": [
-          "Data & Analytics",
-          "Cybersecurity",
-          "Infrastructure & Support",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Data & Analytics",
-          "Data Engineering"
-        ]
-      },
-      "Programme & Project Management": {
-        "allowed_categories": [
-          "Product & Quality",
-          "Infrastructure & Support",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Product & Quality",
-          "Project Management"
-        ]
-      },
-      "Product Management & Development": {
-        "allowed_categories": [
-          "Product & Quality",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Product & Quality",
-          "Product Management"
-        ]
-      },
-      "Management": {
-        "allowed_categories": [
-          "Product & Quality",
-          "Infrastructure & Support",
-          "General"
-        ]
-        ,
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Technology Management"
-        ]
-      },
-      "Sales - Pre & Post": {
-        "allowed_categories": [
-          "Infrastructure & Support",
-          "Cybersecurity",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Solutions Consulting"
-        ]
-      },
-      "Engineering - Software": {
-        "allowed_categories": [
-          "Software Development",
-          "Infrastructure & Support",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Software Development",
-          "Backend Development"
-        ]
-      },
-      "Consultants": {
-        "allowed_categories": [
-          "Infrastructure & Support",
-          "Data & Analytics",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Solutions Consulting"
-        ]
-      },
-      "Architects": {
-        "allowed_categories": [
-          "Infrastructure & Support",
-          "Software Development",
-          "Data & Analytics",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Solutions Architecture"
-        ]
-      },
-      "Team Leaders": {
-        "allowed_categories": [
-          "Infrastructure & Support",
-          "Software Development",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Technology Management"
-        ]
-      },
-      "Testing & Quality Assurance": {
-        "allowed_categories": [
-          "Product & Quality",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Product & Quality",
-          "QA Testing"
-        ]
-      },
-      "Telecommunications": {
-        "allowed_categories": [
-          "Infrastructure & Support",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Network Engineering"
-        ]
-      },
-      "Security": {
-        "allowed_categories": [
-          "Cybersecurity",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Cybersecurity",
-          "Security Operations"
-        ]
-      },
-      "Web Development & Production": {
-        "allowed_categories": [
-          "Software Development",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Software Development",
-          "Web Development"
-        ]
-      },
-      "Technical Writing": {
-        "allowed_categories": [
-          "Product & Quality",
-          "Infrastructure & Support",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Product & Quality",
-          "Technical Documentation"
-        ]
-      },
-      "Engineering - Hardware": {
-        "allowed_categories": [
-          "Infrastructure & Support",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Systems Administration"
-        ]
-      },
-      "Computer Operators": {
-        "allowed_categories": [
-          "Infrastructure & Support",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Application Support"
-        ]
-      },
-      "Engineering - Network": {
-        "allowed_categories": [
-          "Infrastructure & Support",
-          "General"
-        ],
-        "default_path": [
-          "Information & Communication Technology",
-          "Infrastructure & Support",
-          "Network Engineering"
-        ]
-      }
-    }
-  },
-  "6304": {
-    "source_name": "Advertising, Arts & Media",
-    "allowed_domains": ["Advertising, Arts & Media"],
-    "default_path": ["Advertising, Arts & Media", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "6362": {
-    "source_name": "Sales",
-    "allowed_domains": ["Sales"],
-    "default_path": ["Sales", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "7019": {
-    "source_name": "CEO & General Management",
-    "allowed_domains": ["CEO & General Management"],
-    "default_path": ["CEO & General Management", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:001": {
-    "source_name": "Accounting",
-    "allowed_domains": ["Accounting"],
-    "default_path": ["Accounting", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:048": {
-    "source_name": "Administration & Office Support",
-    "allowed_domains": ["Administration & Office Support"],
-    "default_path": ["Administration & Office Support", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:007": {
-    "source_name": "Banking & Financial Services",
-    "allowed_domains": ["Banking & Financial Services"],
-    "default_path": ["Banking & Financial Services", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:015": {
-    "source_name": "Engineering",
-    "allowed_domains": ["Engineering"],
-    "default_path": ["Engineering", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:018": {
-    "source_name": "Hospitality & Tourism",
-    "allowed_domains": ["Hospitality & Tourism"],
-    "default_path": ["Hospitality & Tourism", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:021": {
-    "source_name": "Information & Communication Technology",
-    "allowed_domains": ["Information & Communication Technology"],
-    "default_path": ["Information & Communication Technology", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:022": {
-    "source_name": "Insurance & Superannuation",
-    "allowed_domains": ["Insurance & Superannuation"],
-    "default_path": ["Insurance & Superannuation", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:026": {
-    "source_name": "Marketing & Communications",
-    "allowed_domains": ["Marketing & Communications"],
-    "default_path": ["Marketing & Communications", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:027": {
-    "source_name": "Healthcare & Medical",
-    "allowed_domains": ["Healthcare & Medical"],
-    "default_path": ["Healthcare & Medical", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:032": {
-    "source_name": "Real Estate & Property",
-    "allowed_domains": ["Real Estate & Property"],
-    "default_path": ["Real Estate & Property", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:037": {
-    "source_name": "Retail & Consumer Products",
-    "allowed_domains": ["Retail & Consumer Products"],
-    "default_path": ["Retail & Consumer Products", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "ctgoodjobs:039": {
-    "source_name": "Community Services & Development",
-    "allowed_domains": ["Community Services & Development"],
-    "default_path": ["Community Services & Development", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:101000": {
-    "source_name": "Accounting",
-    "allowed_domains": ["Accounting"],
-    "default_path": ["Accounting", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:102000": {
-    "source_name": "Administration & Office Support",
-    "allowed_domains": ["Administration & Office Support"],
-    "default_path": ["Administration & Office Support", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:103000": {
-    "source_name": "Advertising & Media",
-    "allowed_domains": ["Advertising, Arts & Media"],
-    "default_path": ["Advertising, Arts & Media", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:104000": {
-    "source_name": "Banking & Financial Services",
-    "allowed_domains": ["Banking & Financial Services"],
-    "default_path": ["Banking & Financial Services", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:105000": {
-    "source_name": "Customer Service",
-    "allowed_domains": ["Call Centre & Customer Service"],
-    "default_path": ["Call Centre & Customer Service", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:106000": {
-    "source_name": "CEO & General Management",
-    "allowed_domains": ["CEO & General Management"],
-    "default_path": ["CEO & General Management", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:107000": {
-    "source_name": "Community Services",
-    "allowed_domains": ["Community Services & Development"],
-    "default_path": ["Community Services & Development", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:108000": {
-    "source_name": "Construction",
-    "allowed_domains": ["Construction"],
-    "default_path": ["Construction", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:109000": {
-    "source_name": "Consulting",
-    "allowed_domains": ["Consulting & Strategy"],
-    "default_path": ["Consulting & Strategy", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:110000": {
-    "source_name": "Design",
-    "allowed_domains": ["Design & Architecture"],
-    "default_path": ["Design & Architecture", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:111000": {
-    "source_name": "Education",
-    "allowed_domains": ["Education & Training"],
-    "default_path": ["Education & Training", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:112000": {
-    "source_name": "Engineering",
-    "allowed_domains": ["Engineering"],
-    "default_path": ["Engineering", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:116000": {
-    "source_name": "Hospitality & Catering & Tourism",
-    "allowed_domains": ["Hospitality & Tourism"],
-    "default_path": ["Hospitality & Tourism", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:117000": {
-    "source_name": "Human Resources & Recruitment",
-    "allowed_domains": ["Human Resources & Recruitment"],
-    "default_path": ["Human Resources & Recruitment", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:115000": {
-    "source_name": "Healthcare & Medical",
-    "allowed_domains": ["Healthcare & Medical"],
-    "default_path": ["Healthcare & Medical", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:119000": {
-    "source_name": "Insurance",
-    "allowed_domains": ["Insurance & Superannuation"],
-    "default_path": ["Insurance & Superannuation", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:120000": {
-    "source_name": "Legal",
-    "allowed_domains": ["Legal"],
-    "default_path": ["Legal", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:121000": {
-    "source_name": "Manufacturing & Logistics",
-    "allowed_domains": ["Manufacturing, Transport & Logistics"],
-    "default_path": ["Manufacturing, Transport & Logistics", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:118000": {
-    "source_name": "Information & Communication Technology",
-    "allowed_domains": ["Information & Communication Technology"],
-    "default_path": ["Information & Communication Technology", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:122000": {
-    "source_name": "Marketing & Communications",
-    "allowed_domains": ["Marketing & Communications"],
-    "default_path": ["Marketing & Communications", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:124000": {
-    "source_name": "Real Estate & Property",
-    "allowed_domains": ["Real Estate & Property"],
-    "default_path": ["Real Estate & Property", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:125000": {
-    "source_name": "Retail & Consumer Products",
-    "allowed_domains": ["Retail & Consumer Products"],
-    "default_path": ["Retail & Consumer Products", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:126000": {
-    "source_name": "Sales",
-    "allowed_domains": ["Sales"],
-    "default_path": ["Sales", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:127000": {
-    "source_name": "Science & Technology",
-    "allowed_domains": ["Science & Technology"],
-    "default_path": ["Science & Technology", "General", "General"],
-    "subcategory_hints": {}
-  },
-  "offertoday:130000": {
-    "source_name": "Trades & Services",
-    "allowed_domains": ["Trades & Services"],
-    "default_path": ["Trades & Services", "General", "General"],
-    "subcategory_hints": {}
-  }
+  ]
 }
