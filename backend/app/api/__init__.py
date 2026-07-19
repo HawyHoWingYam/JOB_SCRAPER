@@ -6,6 +6,7 @@ from app.api import (
     crawl_jobs,
     filters,
     health,
+    job_intelligence,
     jobs,
     recommendations,
     settings,
@@ -15,6 +16,7 @@ router = APIRouter()
 
 # Include route modules
 router.include_router(health.router)
+router.include_router(job_intelligence.router, prefix="/api/v1")
 router.include_router(jobs.router, prefix="/api/v1")
 router.include_router(companies.router, prefix="/api/v1")
 router.include_router(crawl_jobs.router, prefix="/api/v1")

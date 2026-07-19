@@ -27,8 +27,10 @@ from app.services.enrichment_run_service import (
     EnrichmentRunService,
     PendingJobFilters,
 )
-from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
-from app.services.job_taxonomy_registry import get_job_taxonomy_registry
+from app.services.ai_runtime_settings_service import (
+    ensure_profile_runtime_ready,
+    ProfileRuntimeNotReadyError,
+)
 from app.services.source_catalog import list_supported_source_sites
 
 logger = logging.getLogger(__name__)
@@ -152,7 +154,9 @@ class CreateRunRequest(BaseModel):
         return self
 
 
-def _derive_last_failed_job_titles(db: Session, run_ids: list[str]) -> dict[str, Optional[str]]:
+def _derive_last_failed_job_titles(
+    db: Session, run_ids: list[str]
+) -> dict[str, Optional[str]]:
     if not run_ids:
         return {}
 
@@ -160,14 +164,16 @@ def _derive_last_failed_job_titles(db: Session, run_ids: list[str]) -> dict[str,
         db.query(
             EnrichmentRunItem.run_id.label("run_id"),
             Job.title.label("job_title"),
-            func.row_number().over(
+            func.row_number()
+            .over(
                 partition_by=EnrichmentRunItem.run_id,
                 order_by=(
                     EnrichmentRunItem.completed_at.desc(),
                     EnrichmentRunItem.position.desc(),
                     EnrichmentRunItem.id.desc(),
                 ),
-            ).label("row_number"),
+            )
+            .label("row_number"),
         )
         .join(Job, Job.id == EnrichmentRunItem.job_id)
         .filter(
@@ -217,19 +223,13 @@ def _derive_excluded_details(
         .all()
     )
     for run_id, job_id, source_id, source_name, error_message in rows:
-        normalized_source_id = str(source_id) if source_id is not None else None
-        normalized_source_name = str(source_name) if source_name is not None else None
-        handling = get_job_taxonomy_registry().get_handling(
-            normalized_source_id,
-            normalized_source_name,
-        )
-        normalized_source_id = handling.source_classification_id
-        normalized_source_name = handling.source_classification_name
-        reason = str(
-            error_message
-            or handling.reason
-            or "Unsupported source taxonomy"
-        )
+        normalized_source_id = (
+            str(source_id).strip() if source_id is not None else None
+        ) or None
+        normalized_source_name = (
+            str(source_name).strip() if source_name is not None else None
+        ) or None
+        reason = str(error_message or "canonical_taxonomy_preflight_blocked")
         key = (str(run_id), normalized_source_id, normalized_source_name, reason)
         group = grouped.setdefault(
             key,
@@ -258,15 +258,19 @@ def _serialize_run(
     pending_gate: Optional[dict[str, object]] = None,
     excluded_details: Optional[list[ExcludedDetail]] = None,
 ) -> dict:
-    in_progress_items = max(
-        int(run.total_items or 0)
-        - int(run.pending_items or 0)
-        - int(run.completed_items or 0)
-        - int(run.failed_items or 0)
-        - int(getattr(run, "cancelled_items", 0) or 0)
-        - int(getattr(run, "excluded_items", 0) or 0),
-        0,
-    ) if str(run.status or "").lower() in ACTIVE_AI_RUN_STATUSES else 0
+    in_progress_items = (
+        max(
+            int(run.total_items or 0)
+            - int(run.pending_items or 0)
+            - int(run.completed_items or 0)
+            - int(run.failed_items or 0)
+            - int(getattr(run, "cancelled_items", 0) or 0)
+            - int(getattr(run, "excluded_items", 0) or 0),
+            0,
+        )
+        if str(run.status or "").lower() in ACTIVE_AI_RUN_STATUSES
+        else 0
+    )
     failed_items = int(run.failed_items or 0)
     resolved_failed_title = None
     if failed_items > 0:
@@ -277,7 +281,9 @@ def _serialize_run(
     return {
         "id": run.id,
         "source_type": run.source_type,
-        "trigger_crawl_job_id": str(run.trigger_crawl_job_id) if getattr(run, "trigger_crawl_job_id", None) else None,
+        "trigger_crawl_job_id": str(run.trigger_crawl_job_id)
+        if getattr(run, "trigger_crawl_job_id", None)
+        else None,
         "status": run.status,
         "job_ids": list(run.job_ids or []),
         "total_items": run.total_items,
@@ -305,7 +311,9 @@ def _serialize_run(
                 "emitted_items": pending_gate["emitted_items"],
                 "settled_items": pending_gate["settled_items"],
             }
-            if pending_gate and "emitted_items" in pending_gate and "settled_items" in pending_gate
+            if pending_gate
+            and "emitted_items" in pending_gate
+            and "settled_items" in pending_gate
             else None
         ),
         "pending_gate_crawl_job_status": (pending_gate or {}).get("crawl_job_status"),
@@ -313,12 +321,16 @@ def _serialize_run(
     }
 
 
-def _serialize_runs(runs: list[EnrichmentRun], db: Optional[Session] = None) -> list[dict]:
+def _serialize_runs(
+    runs: list[EnrichmentRun], db: Optional[Session] = None
+) -> list[dict]:
     failed_title_map: Optional[dict[str, Optional[str]]] = None
     excluded_details_map: dict[str, list[ExcludedDetail]] = {}
     pending_gate_map: dict[str, dict[str, object] | None] = {}
     if db is not None:
-        failed_run_ids = [run.id for run in runs if int(getattr(run, "failed_items", 0) or 0) > 0]
+        failed_run_ids = [
+            run.id for run in runs if int(getattr(run, "failed_items", 0) or 0) > 0
+        ]
         failed_title_map = _derive_last_failed_job_titles(db, failed_run_ids)
         excluded_details_map = _derive_excluded_details(db, [run.id for run in runs])
         service = EnrichmentRunService(db)
@@ -374,10 +386,9 @@ def _publish_run_request(
 def _run_execution_result(run: EnrichmentRun, requested: bool) -> str:
     if requested:
         return "queued"
-    if (
-        int(run.total_items or 0) > 0
-        and int(getattr(run, "excluded_items", 0) or 0) == int(run.total_items or 0)
-    ):
+    if int(run.total_items or 0) > 0 and int(
+        getattr(run, "excluded_items", 0) or 0
+    ) == int(run.total_items or 0):
         return "no_supported_items"
     return "not_dispatched"
 
@@ -580,11 +591,14 @@ async def create_enrichment_run(
                 filters=request.filters.to_service_filters(),
             )
         else:
+            query = request.query
+            if query is None:
+                raise HTTPException(status_code=422, detail="query is required")
             run = service.create_manual_query_run(
-                review_candidate_names=request.query.review_candidate_names,
-                polluted_skill_names=request.query.polluted_skill_names,
-                source_subclassification_names=request.query.source_subclassification_names,
-                scope=request.query.scope,
+                review_candidate_names=query.review_candidate_names,
+                polluted_skill_names=query.polluted_skill_names,
+                source_subclassification_names=query.source_subclassification_names,
+                scope=query.scope,
             )
     except ActiveEnrichmentRunError as exc:
         raise _active_run_conflict(exc) from exc
@@ -693,5 +707,9 @@ async def get_ai_stats(db: Session = Depends(get_db)):
         "ai_eligible_jobs": ai_eligible_jobs,
         "ineligible_jobs": queue_counts["ineligible_jobs"],
         "pending_jobs": queue_counts["pending_jobs"],
-        "enrichment_rate": round(queue_counts["eligible_enriched_jobs"] / ai_eligible_jobs * 100, 1) if ai_eligible_jobs > 0 else 0
+        "enrichment_rate": round(
+            queue_counts["eligible_enriched_jobs"] / ai_eligible_jobs * 100, 1
+        )
+        if ai_eligible_jobs > 0
+        else 0,
     }

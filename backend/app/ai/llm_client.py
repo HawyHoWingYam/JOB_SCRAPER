@@ -20,7 +20,6 @@ from typing import Optional, Dict, Any, Callable
 from app.services.ai_runtime_settings_service import (
     EffectiveAIRuntimeSettings,
     AIRuntimeSettingsService,
-    ProfileRuntimeNotReadyError,
     get_effective_runtime_settings,
 )
 from app.database import SessionLocal
@@ -344,7 +343,9 @@ class GeminiClient(LLMClient):
             client = self._get_client()
             response = await _call_with_retry(
                 "gemini",
-                lambda: client.models.generate_content(model=self.model, contents=prompt),
+                lambda: client.models.generate_content(
+                    model=self.model, contents=prompt
+                ),
             )
             return response.text
         except LLMUpstreamError:
@@ -374,7 +375,8 @@ class ZhipuClient(LLMClient):
     def _get_client(self):
         """Lazy initialization of Zhipu client."""
         if self._client is None:
-            from zhipuai import ZhipuAI
+            from zhipuai import ZhipuAI  # type: ignore[import-untyped]
+
             self._client = ZhipuAI(api_key=self.api_key)
         return self._client
 
@@ -415,7 +417,13 @@ class AnthropicClient(LLMClient):
     _DEFAULT_TEXT_MAX_TOKENS = 1024
     _DEFAULT_JSON_MAX_TOKENS = 4096
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-5", base_url: str = None, default_headers: Dict[str, str] = None):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-sonnet-4-5",
+        base_url: Optional[str] = None,
+        default_headers: Optional[Dict[str, str]] = None,
+    ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
@@ -426,7 +434,8 @@ class AnthropicClient(LLMClient):
         """Lazy initialization of Anthropic client."""
         if self._client is None:
             from anthropic import AsyncAnthropic
-            kwargs = {"api_key": self.api_key}
+
+            kwargs: Dict[str, Any] = {"api_key": self.api_key}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
             if self.default_headers:
@@ -451,7 +460,9 @@ class AnthropicClient(LLMClient):
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate text using Claude."""
         _consume_web_search_flag(kwargs, provider_name="anthropic", supported=False)
-        image_payload = _consume_image_kwargs(kwargs, provider_name="anthropic", supported=True)
+        image_payload = _consume_image_kwargs(
+            kwargs, provider_name="anthropic", supported=True
+        )
         max_tokens = kwargs.pop("max_tokens", self._DEFAULT_TEXT_MAX_TOKENS)
         user_content: Any = prompt
         if image_payload is not None:
@@ -532,7 +543,9 @@ class OpenAIResponsesClient(LLMClient):
             provider_name="custom",
             supported=True,
         )
-        image_payload = _consume_image_kwargs(kwargs, provider_name="custom", supported=True)
+        image_payload = _consume_image_kwargs(
+            kwargs, provider_name="custom", supported=True
+        )
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -640,7 +653,7 @@ class OpenAIResponsesClient(LLMClient):
         if data.get("type") == "response.output_text.done":
             return (data.get("text") or "").strip()
 
-        message = ((data.get("choices") or [{}])[0].get("message") or {})
+        message = (data.get("choices") or [{}])[0].get("message") or {}
         content = message.get("content")
         if isinstance(content, str) and content.strip():
             return content.strip()
@@ -658,7 +671,9 @@ class OpenAIResponsesClient(LLMClient):
                 if part.get("type") == "output_text" and part.get("text"):
                     message_parts.append(part["text"].strip())
             if message_parts:
-                last_message_text = " ".join(part for part in message_parts if part).strip()
+                last_message_text = " ".join(
+                    part for part in message_parts if part
+                ).strip()
 
         if last_message_text:
             return last_message_text
@@ -685,13 +700,46 @@ class MockClient(LLMClient):
         # Detect what kind of response is expected
         prompt_lower = prompt.lower()
 
-        if "manual-verification" in prompt_lower or "manual verification" in prompt_lower:
+        if (
+            "manual-verification" in prompt_lower
+            or "manual verification" in prompt_lower
+        ):
             return {
                 "challenge_type": "unknown",
                 "confidence": 0.5,
                 "summary": "Mock manual-action analysis result.",
-                "recommended_actions": ["Open the verification browser and inspect the challenge."],
+                "recommended_actions": [
+                    "Open the verification browser and inspect the challenge."
+                ],
                 "should_resume": False,
+            }
+
+        if "allowed governed stable-code targets" in prompt_lower:
+            target_code = next(
+                (
+                    line[2:].split(" | ", 1)[0].strip()
+                    for line in prompt.splitlines()
+                    if line.startswith("- ") and " | " in line
+                ),
+                None,
+            )
+            return {
+                "classification": {
+                    "decision": "select_existing" if target_code else "invalid",
+                    "target_code": target_code,
+                    "confidence": 0.85,
+                    "reasoning": "Mock canonical classification",
+                },
+                "summary": "Mock job insight summary.",
+                "skills": [],
+                "experience": {
+                    "experience_level": "not_specified",
+                    "experience_min_years": None,
+                    "experience_max_years": None,
+                    "summary": None,
+                    "evidence": [],
+                },
+                "confidence": 0.85,
             }
 
         if "category" in prompt_lower or "classify" in prompt_lower:
@@ -718,7 +766,7 @@ class MockClient(LLMClient):
         elif "skill" in prompt_lower or "extract" in prompt_lower:
             return {
                 "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "Redis"],
-                "confidence": 0.9
+                "confidence": 0.9,
             }
         else:
             return {"result": "mock_response", "status": "success"}
@@ -795,7 +843,9 @@ PROVIDER_REGISTRY = {
         required_settings=(("zhipu_api_key", "ZHIPU_API_KEY"),),
         builder=_build_zhipu_client,
     ),
-    "mock": ProviderSpec(name="mock", required_settings=tuple(), builder=_build_mock_client),
+    "mock": ProviderSpec(
+        name="mock", required_settings=tuple(), builder=_build_mock_client
+    ),
 }
 
 
@@ -900,7 +950,9 @@ def get_llm_client(scope: str = "jobs") -> LLMClient:
         _active_models[scope] = None
         _degraded_states[scope] = True
         _degradation_reasons[scope] = reason
-        raise LLMProfileNotReadyError(scope, reason, code="runtime_settings_resolution_failed") from exc
+        raise LLMProfileNotReadyError(
+            scope, reason, code="runtime_settings_resolution_failed"
+        ) from exc
 
     provider = (runtime_settings.llm_provider or "").lower()
     _configured_provider_names[scope] = provider
@@ -919,16 +971,15 @@ def get_llm_client(scope: str = "jobs") -> LLMClient:
     _last_tested_at[scope] = metadata.last_tested_at
     _last_test_errors[scope] = metadata.last_test_error
     _last_test_fingerprints[scope] = metadata.last_test_fingerprint
-    _last_successful_test_fingerprints[scope] = metadata.last_successful_test_fingerprint
+    _last_successful_test_fingerprints[
+        scope
+    ] = metadata.last_successful_test_fingerprint
 
     if metadata.requires_test or not metadata.is_ready:
-        reason = (
-            metadata.last_test_error
-            or (
-                "Profile is not configured"
-                if not provider
-                else "Profile requires a successful test before it can run"
-            )
+        reason = metadata.last_test_error or (
+            "Profile is not configured"
+            if not provider
+            else "Profile requires a successful test before it can run"
         )
         _provider_names[scope] = ""
         _active_models[scope] = None
@@ -972,7 +1023,9 @@ def get_llm_client(scope: str = "jobs") -> LLMClient:
         _active_models[scope] = None
         _degraded_states[scope] = True
         _degradation_reasons[scope] = reason
-        raise LLMProfileNotReadyError(scope, reason, code="provider_init_failed") from exc
+        raise LLMProfileNotReadyError(
+            scope, reason, code="provider_init_failed"
+        ) from exc
 
     return _client_instances[scope]
 
@@ -992,7 +1045,9 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
     configured_provider = _configured_provider_names.get(scope, "")
     if not configured_provider:
         try:
-            configured_provider = (_load_effective_runtime_settings(scope).llm_provider or "").lower()
+            configured_provider = (
+                _load_effective_runtime_settings(scope).llm_provider or ""
+            ).lower()
         except Exception:
             configured_provider = ""
 
@@ -1009,7 +1064,9 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
         _last_tested_at[scope] = metadata.last_tested_at
         _last_test_errors[scope] = metadata.last_test_error
         _last_test_fingerprints[scope] = metadata.last_test_fingerprint
-        _last_successful_test_fingerprints[scope] = metadata.last_successful_test_fingerprint
+        _last_successful_test_fingerprints[
+            scope
+        ] = metadata.last_successful_test_fingerprint
 
     client = _client_instances.get(scope)
     return {
@@ -1026,7 +1083,8 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
         ),
         "active_model": _active_models.get(scope),
         "model": _active_models.get(scope),
-        "is_degraded": _degraded_states.get(scope, False) or bool(_requires_test_states.get(scope)),
+        "is_degraded": _degraded_states.get(scope, False)
+        or bool(_requires_test_states.get(scope)),
         "degradation_reason": _degradation_reasons.get(scope),
         "supports_web_search": bool(client.supports_web_search()) if client else False,
         "requires_test": _requires_test_states.get(scope, False),
@@ -1035,7 +1093,9 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
         "last_tested_at": _last_tested_at.get(scope),
         "last_test_error": _last_test_errors.get(scope),
         "last_test_fingerprint": _last_test_fingerprints.get(scope),
-        "last_successful_test_fingerprint": _last_successful_test_fingerprints.get(scope),
+        "last_successful_test_fingerprint": _last_successful_test_fingerprints.get(
+            scope
+        ),
     }
 
 

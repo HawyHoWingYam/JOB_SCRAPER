@@ -1,23 +1,30 @@
-"""Job category normalization service for source-guided taxonomy resolution."""
+"""Read-only legacy taxonomy adapter with retired mutation entry points."""
 
 from __future__ import annotations
 
 import uuid
-from typing import Optional
+from typing import NoReturn, Optional
 
 from sqlalchemy.orm import Session
 
 from app.models import JobDomain, JobCategory, JobSubcategory
-from app.services.job_taxonomy_registry import (
-    SourceBoundTaxonomySlice,
-    get_job_taxonomy_registry,
-)
+from app.services.job_taxonomy_registry import SourceBoundTaxonomySlice
+
+
+class LegacyJobTaxonomyWriterRetiredError(RuntimeError):
+    """Raised when obsolete legacy taxonomy authority is invoked."""
+
+
+def _raise_legacy_writer_retired() -> NoReturn:
+    raise LegacyJobTaxonomyWriterRetiredError(
+        "Legacy Job taxonomy writes are retired; use CanonicalJobTaxonomy"
+    )
 
 
 class JobCategoryNormalizer:
     def __init__(self, db: Session, registry=None):
         self.db = db
-        self.registry = registry or get_job_taxonomy_registry()
+        self.registry = registry
 
     def normalize_category(
         self,
@@ -28,7 +35,8 @@ class JobCategoryNormalizer:
         source_classification_name: Optional[str] = None,
         source_subclassification_name: Optional[str] = None,
     ) -> uuid.UUID:
-        """Compatibility wrapper for resolving a taxonomy decision."""
+        """Reject the retired legacy normalization writer."""
+        _raise_legacy_writer_retired()
         if source_classification_id:
             return self.resolve_taxonomy_decision(
                 classification or {},
@@ -60,7 +68,8 @@ class JobCategoryNormalizer:
         job_description: str = "",
         extracted_skills: Optional[list[dict | str]] = None,
     ) -> uuid.UUID:
-        """Resolve an AI taxonomy decision into a concrete subcategory id."""
+        """Reject the retired legacy assignment writer."""
+        _raise_legacy_writer_retired()
         source_slice = self.registry.get_allowed_slice(
             source_classification_id=source_classification_id,
             source_classification_name=source_classification_name,
@@ -90,16 +99,24 @@ class JobCategoryNormalizer:
             governance_override=bool(classification.get("governance_override")),
         )
 
-        domain_name, category_name, subcategory_name, allow_create = (
-            self._select_resolved_path(
-                classification,
-                source_path=source_path,
-                final_path=final_path,
-                conservative_mode=conservative_mode,
-                cross_domain_min_confidence=cross_domain_min_confidence,
-            )
+        (
+            domain_name,
+            category_name,
+            subcategory_name,
+            allow_create,
+        ) = self._select_resolved_path(
+            classification,
+            source_path=source_path,
+            final_path=final_path,
+            conservative_mode=conservative_mode,
+            cross_domain_min_confidence=cross_domain_min_confidence,
         )
-        domain_name, category_name, subcategory_name, allow_create = self._prefer_specific_default_over_generic(
+        (
+            domain_name,
+            category_name,
+            subcategory_name,
+            allow_create,
+        ) = self._prefer_specific_default_over_generic(
             (domain_name, category_name, subcategory_name, allow_create),
             source_slice,
             source_subclassification_name=source_subclassification_name,
@@ -108,27 +125,33 @@ class JobCategoryNormalizer:
             extracted_skills=extracted_skills,
             governance_override=bool(classification.get("governance_override")),
         )
-        domain_name, category_name, subcategory_name, allow_create = (
-            self._prefer_infrastructure_support_for_devops_like_signals(
-                (domain_name, category_name, subcategory_name, allow_create),
-                source_slice,
-                source_subclassification_name=source_subclassification_name,
-                job_title=job_title,
-                job_description=job_description,
-                extracted_skills=extracted_skills,
-                governance_override=bool(classification.get("governance_override")),
-            )
+        (
+            domain_name,
+            category_name,
+            subcategory_name,
+            allow_create,
+        ) = self._prefer_infrastructure_support_for_devops_like_signals(
+            (domain_name, category_name, subcategory_name, allow_create),
+            source_slice,
+            source_subclassification_name=source_subclassification_name,
+            job_title=job_title,
+            job_description=job_description,
+            extracted_skills=extracted_skills,
+            governance_override=bool(classification.get("governance_override")),
         )
-        domain_name, category_name, subcategory_name, allow_create = (
-            self._prefer_backend_development_for_explicit_software_signals(
-                (domain_name, category_name, subcategory_name, allow_create),
-                source_slice,
-                source_subclassification_name=source_subclassification_name,
-                job_title=job_title,
-                job_description=job_description,
-                extracted_skills=extracted_skills,
-                governance_override=bool(classification.get("governance_override")),
-            )
+        (
+            domain_name,
+            category_name,
+            subcategory_name,
+            allow_create,
+        ) = self._prefer_backend_development_for_explicit_software_signals(
+            (domain_name, category_name, subcategory_name, allow_create),
+            source_slice,
+            source_subclassification_name=source_subclassification_name,
+            job_title=job_title,
+            job_description=job_description,
+            extracted_skills=extracted_skills,
+            governance_override=bool(classification.get("governance_override")),
         )
         resolved_path = (domain_name, category_name, subcategory_name)
         return self._get_or_create_path(
@@ -157,7 +180,11 @@ class JobCategoryNormalizer:
         if governance_override:
             return resolved_path
 
-        default_domain, default_category, default_subcategory = source_slice.default_path
+        (
+            default_domain,
+            default_category,
+            default_subcategory,
+        ) = source_slice.default_path
         if default_subcategory == "General":
             return resolved_path
 
@@ -197,7 +224,10 @@ class JobCategoryNormalizer:
             return resolved_path
 
         domain_name, category_name, subcategory_name, allow_create = resolved_path
-        if category_name != "Software Development" or subcategory_name != "Backend Development":
+        if (
+            category_name != "Software Development"
+            or subcategory_name != "Backend Development"
+        ):
             return resolved_path
         if "Infrastructure & Support" not in source_slice.allowed_categories:
             return resolved_path
@@ -205,8 +235,7 @@ class JobCategoryNormalizer:
             return resolved_path
 
         normalized_text = " ".join(
-            str(value or "").strip().lower()
-            for value in (job_title, job_description)
+            str(value or "").strip().lower() for value in (job_title, job_description)
         )
         normalized_skill_names = {
             self._normalize_skill_signal_name(skill)
@@ -281,7 +310,10 @@ class JobCategoryNormalizer:
             if signal in normalized_text
         }
 
-        if not title_has_strong_signal and len(infra_signal_hits | cloud_platform_hits) < 4:
+        if (
+            not title_has_strong_signal
+            and len(infra_signal_hits | cloud_platform_hits) < 4
+        ):
             if title_has_explicit_backend_marker:
                 return resolved_path
             infra_tool_hits = {
@@ -301,13 +333,17 @@ class JobCategoryNormalizer:
 
     def _normalize_skill_signal_name(self, skill: dict | str) -> str:
         if isinstance(skill, dict):
-            return str(
-                skill.get("name")
-                or skill.get("skill")
-                or skill.get("raw_name")
-                or skill.get("normalized_name")
-                or ""
-            ).strip().lower()
+            return (
+                str(
+                    skill.get("name")
+                    or skill.get("skill")
+                    or skill.get("raw_name")
+                    or skill.get("normalized_name")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
         if isinstance(skill, str):
             return skill.strip().lower()
         return ""
@@ -321,8 +357,7 @@ class JobCategoryNormalizer:
     ) -> bool:
         normalized_title = str(job_title or "").lower()
         normalized_text = " ".join(
-            str(value or "").strip().lower()
-            for value in (job_title, job_description)
+            str(value or "").strip().lower() for value in (job_title, job_description)
         )
         normalized_skill_names = {
             self._normalize_skill_signal_name(skill)
@@ -375,7 +410,10 @@ class JobCategoryNormalizer:
             return resolved_path
 
         domain_name, category_name, subcategory_name, allow_create = resolved_path
-        if category_name != "Infrastructure & Support" or subcategory_name != "Systems Administration":
+        if (
+            category_name != "Infrastructure & Support"
+            or subcategory_name != "Systems Administration"
+        ):
             return resolved_path
         if "Software Development" not in source_slice.allowed_categories:
             return resolved_path
@@ -406,7 +444,8 @@ class JobCategoryNormalizer:
         source_classification_name: Optional[str] = None,
         source_subclassification_name: Optional[str] = None,
     ) -> dict:
-        """Return the candidate slice that should bound job classification."""
+        """Reject legacy prompt authority in favor of active canonical mappings."""
+        _raise_legacy_writer_retired()
         if source_classification_id:
             source_slice = self.registry.get_allowed_slice(
                 source_classification_id=source_classification_id,
@@ -455,9 +494,11 @@ class JobCategoryNormalizer:
         source_slice: SourceBoundTaxonomySlice,
     ) -> tuple[str, str, str, bool]:
         """Clamp a classifier decision into a valid or default taxonomy path."""
-        fallback_domain, fallback_category, fallback_subcategory = self.build_default_path(
-            source_slice
-        )
+        (
+            fallback_domain,
+            fallback_category,
+            fallback_subcategory,
+        ) = self.build_default_path(source_slice)
 
         domain = decision.get("domain")
         category = decision.get("category")
@@ -481,7 +522,8 @@ class JobCategoryNormalizer:
     def build_default_path(
         self, source_slice: SourceBoundTaxonomySlice
     ) -> tuple[str, str, str]:
-        """Return the default fallback path for a source slice."""
+        """Reject implicit fallback/default authority."""
+        _raise_legacy_writer_retired()
         return source_slice.default_path
 
     def _resolve_open_path_from_decision(
@@ -540,6 +582,8 @@ class JobCategoryNormalizer:
 
     def _coerce_confidence(self, value: object) -> float:
         """Clamp configured or model confidence into the 0-1 range."""
+        if not isinstance(value, (str, int, float)):
+            return 0.0
         try:
             return max(0.0, min(1.0, float(value)))
         except (TypeError, ValueError):
@@ -563,7 +607,8 @@ class JobCategoryNormalizer:
         subcategory_name: str,
         allow_create: bool = False,
     ) -> uuid.UUID:
-        """Resolve a taxonomy path to ids, creating hidden nodes when needed."""
+        """Reject hidden legacy node creation."""
+        _raise_legacy_writer_retired()
         domain = self._find_domain(domain_name)
         if domain is None:
             if not allow_create:
@@ -616,17 +661,23 @@ class JobCategoryNormalizer:
         return self.db.query(JobDomain).filter_by(name=name).first()
 
     def _find_category(self, domain_id: uuid.UUID, name: str) -> Optional[JobCategory]:
-        return self.db.query(JobCategory).filter_by(domain_id=domain_id, name=name).first()
+        return (
+            self.db.query(JobCategory).filter_by(domain_id=domain_id, name=name).first()
+        )
 
     def _find_subcategory(
         self,
         category_id: uuid.UUID,
         name: str,
     ) -> Optional[JobSubcategory]:
-        return self.db.query(JobSubcategory).filter_by(
-            category_id=category_id,
-            name=name,
-        ).first()
+        return (
+            self.db.query(JobSubcategory)
+            .filter_by(
+                category_id=category_id,
+                name=name,
+            )
+            .first()
+        )
 
     def _create_domain(self, name: str) -> JobDomain:
         domain = JobDomain(
@@ -687,7 +738,10 @@ class JobCategoryNormalizer:
                 "Infrastructure & Support",
                 "Application Support",
             )
-        if any(token in keywords for token in ["backend", "frontend", "developer", "engineer"]):
+        if any(
+            token in keywords
+            for token in ["backend", "frontend", "developer", "engineer"]
+        ):
             return (
                 "Information & Communication Technology",
                 "Software Development",

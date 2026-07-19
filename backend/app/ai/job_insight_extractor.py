@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TypeGuard
 
 from app.ai.llm_client import LLMUpstreamError, get_llm_client
 
@@ -23,18 +23,19 @@ INSIGHT_PROMPT = """You are a careful job-posting analyst.
 
 You MUST return JSON only, matching the schema at the end of this prompt.
 
-**1) Source-Bounded Taxonomy Guidance**
-Source classification (strong prior):
-- L1 source category: __SOURCE_CLASSIFICATION_NAME__
-- Source subcategory: __SOURCE_SUBCLASSIFICATION_NAME__
+**1) Governed Canonical Job Taxonomy Guidance**
+Preserved Source Classification Paths (evidence only):
+__SOURCE_CLASSIFICATION_PATHS__
 
-Allowed taxonomy boundary:
+Allowed governed stable-code targets:
 __TAXONOMY_CONTEXT__
 
 Rules:
-- `classification.source_path_decision` MUST be the safest valid L1/L2/L3 path inside the allowed boundary.
-- Prefer existing taxonomy nodes. Use `create_new` only when the candidate slice clearly does not fit.
-- Use the provided default path when ambiguous.
+- `classification.decision` may be `select_existing` only when one listed stable code is supported by the posting.
+- For `select_existing`, copy exactly one listed stable code into `classification.target_code`.
+- Never invent a code, taxonomy node, fallback, or default.
+- If the listed targets do not contain a supported answer, return `decision=invalid` and `target_code=null`.
+- `fallback_default` and `create_new` are explicit refusal signals and are never accepted assignments.
 - Keep `classification.reasoning` brief and concrete.
 
 **2) Skill Taxonomy Candidate Guidance**
@@ -117,28 +118,8 @@ Respond with JSON only (no markdown, no extra keys):
   "classification": {{
     "confidence": 0.0,
     "reasoning": "",
-    "source_path_decision": {{
-      "domain": "",
-      "category": "",
-      "subcategory": "",
-      "resolution": "match_existing|fallback_default_path|create_new"
-    }},
-    "final_taxonomy_decision": {{
-      "domain": "",
-      "category": "",
-      "subcategory": "",
-      "resolution": "match_existing|fallback_default_path|create_new"
-    }},
-    "taxonomy_decision": {{
-      "domain": "",
-      "category": "",
-      "subcategory": "",
-      "resolution": "match_existing|fallback_default_path|create_new"
-    }},
-    "compatibility_category": "",
-    "cross_domain": false,
-    "cross_domain_confidence": 1.0,
-    "cross_domain_reason": ""
+    "decision": "select_existing|fallback_default|create_new|invalid",
+    "target_code": "governed.stable.code or null"
   }},
   "summary": "",
   "skills": [
@@ -161,7 +142,11 @@ Respond with JSON only (no markdown, no extra keys):
   }},
   "confidence": 0.0
 }}
-""".replace("{{", "{").replace("}}", "}")
+""".replace(
+    "{{", "{"
+).replace(
+    "}}", "}"
+)
 
 
 class JobInsightExtractor:
@@ -203,12 +188,8 @@ class JobInsightExtractor:
         taxonomy_candidates = taxonomy_candidates or {}
         skill_taxonomy_candidates = skill_taxonomy_candidates or {}
         replacements = {
-            "__SOURCE_CLASSIFICATION_NAME__": taxonomy_candidates.get(
-                "source_classification_name", "Unknown"
-            ),
-            "__SOURCE_SUBCLASSIFICATION_NAME__": (
-                taxonomy_candidates.get("source_subclassification_name", "Unknown")
-                or "Unknown"
+            "__SOURCE_CLASSIFICATION_PATHS__": self._format_source_paths(
+                taxonomy_candidates.get("source_classification_paths")
             ),
             "__TAXONOMY_CONTEXT__": self._format_taxonomy_context(taxonomy_candidates),
             "__EXISTING_CATEGORIES__": self._format_candidates(
@@ -226,7 +207,9 @@ class JobInsightExtractor:
             "__SUPPRESSED_REVIEW_TERMS__": self._format_candidates(
                 skill_taxonomy_candidates.get("suppressed_review_terms", [])
             ),
-            "__ROLE_MODE__": str(skill_taxonomy_candidates.get("role_mode") or "technical_heavy"),
+            "__ROLE_MODE__": str(
+                skill_taxonomy_candidates.get("role_mode") or "technical_heavy"
+            ),
             "__ROLE_MODE_GUIDANCE__": str(
                 skill_taxonomy_candidates.get("role_mode_guidance")
                 or "No additional role-specific guidance."
@@ -347,6 +330,22 @@ class JobInsightExtractor:
         return self.llm
 
     def _format_taxonomy_context(self, taxonomy_candidates: Dict[str, Any]) -> str:
+        if taxonomy_candidates.get("authority") == "canonical-job-taxonomy":
+            targets = taxonomy_candidates.get("canonical_targets")
+            if not isinstance(targets, list) or not targets:
+                return "- None\nNo fallback or default target exists."
+            formatted = []
+            for target in targets:
+                if not isinstance(target, dict):
+                    continue
+                code = str(target.get("code") or "").strip()
+                breadcrumb = str(target.get("breadcrumb") or "").strip()
+                if code and breadcrumb:
+                    formatted.append(f"- {code} | {breadcrumb}")
+            if not formatted:
+                return "- None\nNo fallback or default target exists."
+            return "\n".join(formatted)
+
         if not taxonomy_candidates:
             return (
                 "Allowed domains:\n- Unknown\n"
@@ -369,11 +368,62 @@ class JobInsightExtractor:
             "Do not leave the allowed domain boundary."
         )
 
+    def _format_source_paths(self, paths: Any) -> str:
+        if not isinstance(paths, list) or not paths:
+            return "- None"
+        formatted: list[str] = []
+        for path in paths:
+            if not isinstance(path, dict):
+                continue
+            nodes = path.get("nodes")
+            if not isinstance(nodes, list):
+                continue
+            labels = [
+                str(node.get("label") or "").strip()
+                for node in nodes
+                if isinstance(node, dict) and str(node.get("label") or "").strip()
+            ]
+            identities = [
+                str(node.get("id") or "").strip()
+                for node in nodes
+                if isinstance(node, dict) and str(node.get("id") or "").strip()
+            ]
+            if labels and identities:
+                formatted.append(f"- {' / '.join(labels)} ({' / '.join(identities)})")
+        return "\n".join(formatted) if formatted else "- None"
+
     def _normalize_classification(
         self,
         classification: Any,
         taxonomy_candidates: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        if (taxonomy_candidates or {}).get("authority") == "canonical-job-taxonomy":
+            if not isinstance(classification, dict):
+                return self._default_classification(taxonomy_candidates)
+            raw_decision = classification.get("decision")
+            decision = (
+                raw_decision
+                if raw_decision
+                in {"select_existing", "fallback_default", "create_new", "invalid"}
+                else "invalid"
+            )
+            raw_target_code = classification.get("target_code")
+            target_code = (
+                raw_target_code.strip()
+                if isinstance(raw_target_code, str) and raw_target_code.strip()
+                else None
+            )
+            return {
+                "confidence": self._coerce_confidence(classification.get("confidence")),
+                "reasoning": (
+                    classification.get("reasoning")
+                    if isinstance(classification.get("reasoning"), str)
+                    else ""
+                ),
+                "decision": decision,
+                "target_code": target_code,
+            }
+
         if not isinstance(classification, dict):
             return self._default_classification(taxonomy_candidates)
 
@@ -392,10 +442,9 @@ class JobInsightExtractor:
         if not self._is_complete_decision(taxonomy_decision):
             taxonomy_decision = final_decision
         normalized["taxonomy_decision"] = dict(taxonomy_decision)
-        normalized["compatibility_category"] = (
-            classification.get("compatibility_category")
-            or self._build_compatibility_category(final_decision)
-        )
+        normalized["compatibility_category"] = classification.get(
+            "compatibility_category"
+        ) or self._build_compatibility_category(final_decision)
         normalized["cross_domain"] = bool(classification.get("cross_domain", False))
         normalized["cross_domain_confidence"] = self._coerce_confidence(
             classification.get("cross_domain_confidence")
@@ -435,10 +484,12 @@ class JobInsightExtractor:
                 item = {
                     "name": skill,
                     "kind": str(raw.get("kind") or "").strip().lower() or None,
-                    "resolution": str(raw.get("resolution") or "").strip().lower() or None,
+                    "resolution": str(raw.get("resolution") or "").strip().lower()
+                    or None,
                     "category": str(raw.get("category") or "").strip() or None,
                     "technology": str(raw.get("technology") or "").strip() or None,
-                    "existing_skill": str(raw.get("existing_skill") or "").strip() or None,
+                    "existing_skill": str(raw.get("existing_skill") or "").strip()
+                    or None,
                     "evidence": str(raw.get("evidence") or "").strip() or None,
                 }
             elif isinstance(raw, str):
@@ -540,6 +591,13 @@ class JobInsightExtractor:
         self,
         taxonomy_candidates: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        if (taxonomy_candidates or {}).get("authority") == "canonical-job-taxonomy":
+            return {
+                "confidence": 0.0,
+                "reasoning": "Missing or invalid canonical classification",
+                "decision": "invalid",
+                "target_code": None,
+            }
         default_path = list((taxonomy_candidates or {}).get("default_path") or [])
         while len(default_path) < 3:
             default_path.append(None)
@@ -561,22 +619,22 @@ class JobInsightExtractor:
             "cross_domain_reason": "",
         }
 
-    def _is_complete_decision(self, value: Any) -> bool:
+    def _is_complete_decision(self, value: Any) -> TypeGuard[Dict[str, Any]]:
         if not isinstance(value, dict):
             return False
-        return all(
-            isinstance(value.get(field), str) and value.get(field).strip()
-            for field in ("domain", "category", "subcategory", "resolution")
-        )
+        for field in ("domain", "category", "subcategory", "resolution"):
+            part = value.get(field)
+            if not isinstance(part, str) or not part.strip():
+                return False
+        return True
 
     def _build_compatibility_category(self, decision: Dict[str, Any]) -> Optional[str]:
-        parts = [
-            decision.get("domain"),
-            decision.get("category"),
-            decision.get("subcategory"),
-        ]
-        if not all(parts):
-            return None
+        parts: list[str] = []
+        for field in ("domain", "category", "subcategory"):
+            part = decision.get(field)
+            if not isinstance(part, str) or not part:
+                return None
+            parts.append(part)
         return " / ".join(parts)
 
 

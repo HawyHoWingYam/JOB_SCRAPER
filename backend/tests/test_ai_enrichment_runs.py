@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 import uuid
 
@@ -14,14 +15,42 @@ from app.api.ai import (
     _serialize_single_run,
     router,
 )
+from app.job_intelligence.canonical_taxonomy import CanonicalTaxonomyPreflightResult
 from app.models.company import Company
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
+from app.models.source_job_attributes import JobSourceAttributeProjection
 from app.services.enrichment_run_service import (
     ActiveEnrichmentRunError,
     EnrichmentRunService,
     PendingJobFilters,
 )
+from app.services import enrichment_run_service as enrichment_run_module
+
+
+class _CanonicalTaxonomyPreflight:
+    def __init__(self, _db):
+        pass
+
+    def inspect(self, job):
+        if job.source_classification_id in {
+            "offertoday:113000",
+            "offertoday:129000",
+        }:
+            return CanonicalTaxonomyPreflightResult(
+                status="excluded",
+                reasons=("source_mapping_excluded",),
+            )
+        return CanonicalTaxonomyPreflightResult(status="supported", reasons=())
+
+
+@pytest.fixture(autouse=True)
+def canonical_taxonomy_preflight(monkeypatch):
+    monkeypatch.setattr(
+        enrichment_run_module,
+        "CanonicalTaxonomyPreflight",
+        _CanonicalTaxonomyPreflight,
+    )
 
 
 @compiles(UUID, "sqlite")
@@ -34,6 +63,7 @@ def db():
     engine = create_engine("sqlite:///:memory:")
     Company.__table__.create(engine)
     Job.__table__.create(engine)
+    JobSourceAttributeProjection.__table__.create(engine)
     EnrichmentRun.__table__.create(engine)
     EnrichmentRunItem.__table__.create(engine)
     session = sessionmaker(bind=engine)()
@@ -70,6 +100,7 @@ def make_job(
     created_at=datetime(2026, 7, 18, 12, 0),
     enriched=False,
     deleted=False,
+    projected=True,
 ):
     row = Job(
         id=uuid.UUID(job_id),
@@ -93,6 +124,16 @@ def make_job(
     )
     db.add(row)
     db.flush()
+    if projected:
+        db.add(
+            JobSourceAttributeProjection(
+                job_id=row.id,
+                source_site=source_site,
+                evidence_hash="0" * 64,
+                version=1,
+            )
+        )
+        db.flush()
     return row
 
 
@@ -104,7 +145,9 @@ def make_run(db, *, run_id, status, created_at, completed_at=None, job_ids=None)
         status=status,
         job_ids=ids,
         total_items=len(ids),
-        pending_items=len(ids) if status in {"waiting", "pending", "running", "stopping"} else 0,
+        pending_items=len(ids)
+        if status in {"waiting", "pending", "running", "stopping"}
+        else 0,
         completed_items=0,
         failed_items=0,
         cancelled_items=0,
@@ -114,19 +157,28 @@ def make_run(db, *, run_id, status, created_at, completed_at=None, job_ids=None)
     db.add(row)
     db.flush()
     for position, job_id in enumerate(ids):
-        db.add(EnrichmentRunItem(run_id=row.id, job_id=uuid.UUID(job_id), position=position, status="pending"))
+        db.add(
+            EnrichmentRunItem(
+                run_id=row.id,
+                job_id=uuid.UUID(job_id),
+                position=position,
+                status="pending",
+            )
+        )
     db.flush()
     return row
 
 
 def test_pending_request_normalizes_values_and_enforces_safe_scope():
-    request = PendingSelectionRequest.model_validate({
-        "filters": {
-            "source_sites": [" JobsDB ", "jobsdb"],
-            "source_classification_names": [" Information Technology "],
-        },
-        "limit": 25,
-    })
+    request = PendingSelectionRequest.model_validate(
+        {
+            "filters": {
+                "source_sites": [" JobsDB ", "jobsdb"],
+                "source_classification_names": [" Information Technology "],
+            },
+            "limit": 25,
+        }
+    )
     assert request.filters.source_sites == ["jobsdb"]
     assert request.filters.source_classification_names == ["information technology"]
 
@@ -135,7 +187,9 @@ def test_pending_request_normalizes_values_and_enforces_safe_scope():
     with pytest.raises(ValidationError):
         PendingSelectionRequest(filters={}, limit=0, all_pending_acknowledged=True)
     with pytest.raises(ValidationError):
-        CreateRunRequest.model_validate({"mode": "batch", "job_ids": [str(uuid.uuid4())]})
+        CreateRunRequest.model_validate(
+            {"mode": "batch", "job_ids": [str(uuid.uuid4())]}
+        )
 
 
 def test_pending_preview_and_create_separate_unsupported_taxonomy_items(db, company):
@@ -167,7 +221,7 @@ def test_pending_preview_and_create_separate_unsupported_taxonomy_items(db, comp
             "source_classification_id": "offertoday:113000",
             "source_classification_name": "Farming",
             "count": 1,
-            "reason": "No defensible internal taxonomy domain is available for this OfferToday source category.",
+            "reason": "source_mapping_excluded",
             "job_ids": [str(excluded.id)],
         }
     ]
@@ -190,7 +244,7 @@ def test_pending_preview_and_create_separate_unsupported_taxonomy_items(db, comp
             "source_classification_id": "offertoday:113000",
             "source_classification_name": "Farming",
             "count": 1,
-            "reason": "No defensible internal taxonomy domain is available for this OfferToday source category.",
+            "reason": "source_mapping_excluded",
             "job_ids": [str(excluded.id)],
         }
     ]
@@ -217,15 +271,92 @@ def test_all_unsupported_pending_items_do_not_start_a_worker_run(db, company):
     assert _run_execution_result(run, requested=False) == "no_supported_items"
 
 
+def test_execute_run_rechecks_canonical_preflight_before_worker_dispatch(db, company):
+    job = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000105",
+    )
+    run = make_run(
+        db,
+        run_id="canonical-preflight-execution",
+        status="running",
+        created_at=datetime(2026, 7, 18, 12, 0),
+        job_ids=[str(job.id)],
+    )
+
+    class _BlockingPreflight:
+        def inspect(self, _job):
+            return CanonicalTaxonomyPreflightResult(
+                status="excluded",
+                reasons=("source_mapping_unmapped",),
+            )
+
+    calls = 0
+
+    class _ForbiddenEnrichmentService:
+        async def enrich_job_id(self, _job_id):
+            nonlocal calls
+            calls += 1
+            raise AssertionError("blocked item crossed the worker LLM boundary")
+
+    service = EnrichmentRunService(
+        db,
+        taxonomy_preflight=_BlockingPreflight(),
+    )
+    service._resolve_run_concurrency = lambda: 1
+
+    result = asyncio.run(
+        service.execute_run(
+            run.id,
+            enrichment_service=_ForbiddenEnrichmentService(),
+            claim=False,
+        )
+    )
+
+    assert calls == 0
+    assert result.status == "completed_with_exclusions"
+    assert result.excluded_items == 1
+    assert result.items[0].status == "excluded"
+    assert result.items[0].error_message == "source_mapping_unmapped"
+
+
 def test_public_routes_expose_filtered_controls_and_remove_single_job_endpoint():
-    route_paths = {(route.path, method) for route in router.routes for method in route.methods}
+    route_paths = {
+        (route.path, method) for route in router.routes for method in route.methods
+    }
     assert ("/api/v1/ai/pending/filter-options", "GET") in route_paths
     assert ("/api/v1/ai/pending/preview", "POST") in route_paths
     assert ("/api/v1/ai/runs/{run_id}/stop", "POST") in route_paths
     assert not any(path == "/api/v1/ai/enrich-job/{job_id}" for path, _ in route_paths)
 
 
-def test_filters_use_or_within_fields_and_and_across_fields_with_inclusive_dates(db, company):
+def test_pending_eligibility_uses_source_attribute_projection_not_legacy_scalar(
+    db,
+    company,
+):
+    projected = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000104",
+        classification=None,
+        projected=True,
+    )
+
+    preview = EnrichmentRunService(db).preview_pending_jobs(
+        filters=PendingJobFilters(),
+        limit=50,
+    )
+
+    assert preview["matching_pending_count"] == 1
+    assert preview["effective_item_count"] == 1
+    run = EnrichmentRunService(db).create_manual_pending_run(limit=50)
+    assert run.job_ids == [str(projected.id)]
+
+
+def test_filters_use_or_within_fields_and_and_across_fields_with_inclusive_dates(
+    db, company
+):
     matching = make_job(
         db,
         company,
@@ -269,10 +400,18 @@ def test_filters_use_or_within_fields_and_and_across_fields_with_inclusive_dates
     assert run.job_ids == [str(matching.id)]
 
 
-def test_candidate_query_excludes_ineligible_enriched_deleted_and_reserved_jobs(db, company):
+def test_candidate_query_excludes_ineligible_enriched_deleted_and_reserved_jobs(
+    db, company
+):
     eligible = make_job(db, company, job_id="00000000-0000-0000-0000-000000000010")
     reserved = make_job(db, company, job_id="00000000-0000-0000-0000-000000000011")
-    make_job(db, company, job_id="00000000-0000-0000-0000-000000000012", classification=None)
+    make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000012",
+        classification=None,
+        projected=False,
+    )
     make_job(db, company, job_id="00000000-0000-0000-0000-000000000013", enriched=True)
     make_job(db, company, job_id="00000000-0000-0000-0000-000000000014", deleted=True)
     make_run(
@@ -284,7 +423,12 @@ def test_candidate_query_excludes_ineligible_enriched_deleted_and_reserved_jobs(
     )
 
     service = EnrichmentRunService(db)
-    assert service.preview_pending_jobs(filters=PendingJobFilters(), limit=50)["matching_pending_count"] == 1
+    assert (
+        service.preview_pending_jobs(filters=PendingJobFilters(), limit=50)[
+            "matching_pending_count"
+        ]
+        == 1
+    )
     assert service._query_pending_candidates(Job.id).one().id == eligible.id
 
 
@@ -346,13 +490,18 @@ def test_cooperative_stop_finishes_in_flight_and_cancels_untouched_items(db, com
     assert stopped.status == "stopping"
     assert stopped.stop_requested_at is not None
     assert service._update_item_started(run.id, items[1].id, second.title) is None
-    service._update_item_finished(run.id, items[0].id, {"status": "error", "error": "bad output"})
+    service._update_item_finished(
+        run.id, items[0].id, {"status": "error", "error": "bad output"}
+    )
     finalized = service._finalize_stopping_run(service.get_run(run.id))
     assert finalized.status == "cancelled"
     assert finalized.pending_items == 0
     assert finalized.failed_items == 1
     assert finalized.cancelled_items == 1
-    assert [item.status for item in service.list_run_items(run.id)] == ["failed", "cancelled"]
+    assert [item.status for item in service.list_run_items(run.id)] == [
+        "failed",
+        "cancelled",
+    ]
 
 
 def test_stop_is_idempotent_for_terminal_runs(db):
@@ -369,7 +518,9 @@ def test_stop_is_idempotent_for_terminal_runs(db):
 
 
 def test_monitor_returns_active_plus_latest_terminal_or_latest_two_terminals(db):
-    active = make_run(db, run_id="active", status="stopping", created_at=datetime(2026, 7, 18, 13, 0))
+    active = make_run(
+        db, run_id="active", status="stopping", created_at=datetime(2026, 7, 18, 13, 0)
+    )
     latest = make_run(
         db,
         run_id="latest",

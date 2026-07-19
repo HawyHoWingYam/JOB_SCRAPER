@@ -1,0 +1,173 @@
+{
+  "revision": {
+    "id": "10000000-0000-4000-8000-000000000001",
+    "release_key": "canonical-job-taxonomy-v1",
+    "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "active",
+    "lock_version": 1,
+    "activated_at": "2026-07-19T10:00:00Z",
+    "counts": {
+      "domains": 1,
+      "categories": 1,
+      "subcategories": 2
+    },
+    "active_mapping": {
+      "id": "20000000-0000-4000-8000-000000000001",
+      "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "lock_version": 1,
+      "activated_at": "2026-07-19T10:05:00Z"
+    }
+  },
+  "tree": {
+    "revision": {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "release_key": "canonical-job-taxonomy-v1",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "status": "active",
+      "lock_version": 1,
+      "activated_at": "2026-07-19T10:00:00Z",
+      "counts": {
+        "domains": 1,
+        "categories": 1,
+        "subcategories": 2
+      },
+      "active_mapping": {
+        "id": "20000000-0000-4000-8000-000000000001",
+        "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "lock_version": 1,
+        "activated_at": "2026-07-19T10:05:00Z"
+      }
+    },
+    "counts": {
+      "domains": 1,
+      "categories": 1,
+      "subcategories": 2
+    },
+    "domains": [
+      {
+        "id": "11000000-0000-4000-8000-000000000001",
+        "code": "accounting",
+        "label": "Accounting",
+        "order": 1,
+        "categories": [
+          {
+            "id": "12000000-0000-4000-8000-000000000001",
+            "code": "accounting.financial_accounting",
+            "label": "Financial Accounting",
+            "order": 1,
+            "subcategories": [
+              {
+                "id": "13000000-0000-4000-8000-000000000001",
+                "code": "accounting.financial_accounting.accounts_payable",
+                "label": "Accounts Payable",
+                "order": 1,
+                "is_assignable": true
+              },
+              {
+                "id": "13000000-0000-4000-8000-000000000002",
+                "code": "accounting.financial_accounting.accounts_receivable",
+                "label": "Accounts Receivable",
+                "order": 2,
+                "is_assignable": true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "assigned_job": {
+    "job_id": "30000000-0000-4000-8000-000000000001",
+    "state": "assigned",
+    "assignment": {
+      "id": "31000000-0000-4000-8000-000000000001",
+      "job_id": "30000000-0000-4000-8000-000000000001",
+      "taxonomy_revision_id": "10000000-0000-4000-8000-000000000001",
+      "subcategory_id": "13000000-0000-4000-8000-000000000001",
+      "method": "reviewed_mapping",
+      "breadcrumb": {
+        "domain": {
+          "id": "11000000-0000-4000-8000-000000000001",
+          "code": "accounting",
+          "label": "Accounting"
+        },
+        "category": {
+          "id": "12000000-0000-4000-8000-000000000001",
+          "code": "accounting.financial_accounting",
+          "label": "Financial Accounting"
+        },
+        "subcategory": {
+          "id": "13000000-0000-4000-8000-000000000001",
+          "code": "accounting.financial_accounting.accounts_payable",
+          "label": "Accounts Payable"
+        }
+      },
+      "version": 1,
+      "provenance": {
+        "evidence_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "source_evidence_refs": [
+          {
+            "kind": "source-classification-path",
+            "id": "32000000-0000-4000-8000-000000000001"
+          }
+        ],
+        "mapping_revision_id": "20000000-0000-4000-8000-000000000001",
+        "mapping_ids": ["21000000-0000-4000-8000-000000000001"],
+        "model": null,
+        "captured_at": "2026-07-19T10:10:00Z"
+      }
+    },
+    "reasons": [],
+    "review_item_refs": []
+  },
+  "unassigned_job": {
+    "job_id": "30000000-0000-4000-8000-000000000002",
+    "state": "unassigned",
+    "assignment": null,
+    "reasons": ["classifier_provenance_missing"],
+    "review_item_refs": [
+      {
+        "id": "33000000-0000-4000-8000-000000000001",
+        "status": "active",
+        "version": 1,
+        "decision_audit_id": null,
+        "deep_link": "/api/v1/job-intelligence/governance/job-taxonomy/review-items/33000000-0000-4000-8000-000000000001"
+      }
+    ]
+  },
+  "review_page": {
+    "items": [
+      {
+        "id": "33000000-0000-4000-8000-000000000001",
+        "job_id": "30000000-0000-4000-8000-000000000002",
+        "taxonomy_revision_id": "10000000-0000-4000-8000-000000000001",
+        "mapping_revision_id": "20000000-0000-4000-8000-000000000001",
+        "status": "active",
+        "reasons": ["classifier_provenance_missing"],
+        "evidence_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "evidence_refs": [
+          {
+            "kind": "ai-classifier-output",
+            "content_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        ],
+        "recommendations": [
+          {
+            "subcategory_id": "13000000-0000-4000-8000-000000000001",
+            "code": "accounting.financial_accounting.accounts_payable",
+            "label": "Accounts Payable"
+          }
+        ],
+        "version": 1,
+        "decision_audit_id": null,
+        "assignment_id": null,
+        "deep_link": "/api/v1/job-intelligence/governance/job-taxonomy/review-items/33000000-0000-4000-8000-000000000001",
+        "created_at": "2026-07-19T10:10:00Z",
+        "updated_at": "2026-07-19T10:10:00Z",
+        "resolved_at": null
+      }
+    ],
+    "next_cursor": null,
+    "total": 1
+  }
+}

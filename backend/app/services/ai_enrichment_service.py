@@ -4,23 +4,29 @@ AI Enrichment Service
 Orchestrates unified job insight enrichment with batch processing.
 """
 
-import logging
 import asyncio
 import json
-from typing import Optional, List, Dict, Any
+import logging
+from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.ai.job_insight_extractor import get_job_insight_extractor
-from app.ai.llm_client import LLMUpstreamError, LLMResponseFormatError
-from app.config import settings
+from app.ai.llm_client import LLMResponseFormatError, LLMUpstreamError, get_llm_status
+from app.job_intelligence.canonical_taxonomy import (
+    CanonicalClassifierContext,
+    CanonicalClassifierOutput,
+    CanonicalJobTaxonomy,
+    EvaluationResult,
+)
+from app.job_intelligence.foundation import Provenance, normalized_content_hash
+from app.job_intelligence.source_attributes import SourceJobAttributes
 from app.models.job import Job
-from app.models import JobSubcategory, Skill, SkillReviewCandidate
+from app.models import Skill, SkillReviewCandidate
 from app.database import SessionLocal
 from app.repositories.job_skill_mention_repository import JobSkillMentionRepository
 from app.repositories.job_skill_repository import JobSkillRepository
-from app.services.job_category_normalizer import JobCategoryNormalizer
 from app.services.job_role_mode import resolve_job_role_mode
 from app.services.skill_normalizer import SkillNormalizer
 from app.services.taxonomy_visibility_service import get_taxonomy_visibility_service
@@ -33,34 +39,39 @@ class AIEnrichmentService:
     """Orchestrates AI enrichment for jobs."""
 
     def __init__(self):
-        self.settings = settings
         self.insight_extractor = get_job_insight_extractor()
         self.visibility_service = get_taxonomy_visibility_service()
         self.batch_size = 10
 
     async def enrich_job(self, job: Job, db: Session) -> Dict[str, Any]:
         """Enrich a single job with one AI insight request."""
-        results = {"job_id": str(job.id), "status": "success"}
+        results: Dict[str, Any] = {"job_id": str(job.id), "status": "success"}
 
         try:
             skill_normalizer = SkillNormalizer(db)
-            job_category_normalizer = JobCategoryNormalizer(db)
             role_mode = resolve_job_role_mode(
                 title=job.title,
                 source_subclassification_name=job.source_subclassification_name or "",
                 source_classification_name=job.source_classification_name or "",
             )
-            category_candidates = job_category_normalizer.get_taxonomy_candidate_slice(
-                source_classification_id=job.source_classification_id,
-                source_classification_name=job.source_classification_name,
-                source_subclassification_name=job.source_subclassification_name,
+            source_attributes = SourceJobAttributes(db).get(job.id)
+            canonical_taxonomy = CanonicalJobTaxonomy(db)
+            classifier_context = canonical_taxonomy.build_classifier_context(
+                source_attributes
             )
-            category_candidates["conservative_mode"] = (
-                self.settings.job_classification_conservative_mode
-            )
-            category_candidates["cross_domain_min_confidence"] = (
-                self.settings.job_classification_cross_domain_min_confidence
-            )
+            if classifier_context.blocking_reasons:
+                evaluation = canonical_taxonomy.evaluate(
+                    job.id,
+                    source_attributes,
+                    classifier_output=None,
+                )
+                results["status"] = "excluded"
+                results["error"] = ",".join(classifier_context.blocking_reasons)
+                results["canonical_taxonomy"] = self._evaluation_payload(evaluation)
+                db.commit()
+                return results
+
+            category_candidates = classifier_context.to_prompt_payload()
             skill_candidates = skill_normalizer.get_taxonomy_candidate_slice(
                 job.title,
                 description=job.description or "",
@@ -82,21 +93,17 @@ class AIEnrichmentService:
                 "confidence": insight.get("confidence"),
             }
 
-            previous_subcategory_id = job.subcategory_id
-            subcategory_id = job_category_normalizer.resolve_taxonomy_decision(
+            classifier_output = self._canonical_classifier_output(
                 classification,
-                source_classification_id=job.source_classification_id,
-                source_classification_name=job.source_classification_name,
-                source_subclassification_name=job.source_subclassification_name,
-                conservative_mode=self.settings.job_classification_conservative_mode,
-                cross_domain_min_confidence=(
-                    self.settings.job_classification_cross_domain_min_confidence
-                ),
-                job_title=job.title,
-                job_description=job.description or "",
-                extracted_skills=extracted_skills,
+                context=classifier_context,
+                llm_status=get_llm_status("jobs"),
             )
-            job.subcategory_id = subcategory_id
+            evaluation = canonical_taxonomy.evaluate(
+                job.id,
+                source_attributes,
+                classifier_output,
+            )
+            results["canonical_taxonomy"] = self._evaluation_payload(evaluation)
             job.ai_enriched_at = utc_now()
 
             job.ai_summary = insight.get("summary")
@@ -109,13 +116,6 @@ class AIEnrichmentService:
             job.experience_max_years = experience.get("experience_max_years")
             job.experience_summary = experience.get("summary")
             job.experience_evidence = experience.get("evidence")
-
-            subcategory = db.query(JobSubcategory).filter_by(id=subcategory_id).first()
-            if subcategory is not None:
-                self.visibility_service.record_job_taxonomy_usage(
-                    subcategory,
-                    is_distinct_job=previous_subcategory_id != subcategory_id,
-                )
 
             # Update relational tables
             mention_repo = JobSkillMentionRepository()
@@ -224,11 +224,13 @@ class AIEnrichmentService:
                 source="ai",
             )
             for candidate_id in affected_candidate_ids:
-                candidate = db.query(SkillReviewCandidate).filter_by(id=candidate_id).first()
+                candidate = (
+                    db.query(SkillReviewCandidate).filter_by(id=candidate_id).first()
+                )
                 if candidate is None:
                     continue
-                candidate.occurrence_count = mention_repo.count_jobs_for_review_candidate(
-                    db, candidate_id
+                candidate.occurrence_count = (
+                    mention_repo.count_jobs_for_review_candidate(db, candidate_id)
                 )
             db.commit()
 
@@ -263,10 +265,78 @@ class AIEnrichmentService:
 
         return results
 
+    @staticmethod
+    def _evaluation_payload(evaluation: EvaluationResult) -> dict[str, object]:
+        return {
+            "state": evaluation.state,
+            "version": evaluation.version,
+            "assignment_id": (
+                str(evaluation.assignment_id)
+                if evaluation.assignment_id is not None
+                else None
+            ),
+            "review_item_id": (
+                str(evaluation.review_item_id)
+                if evaluation.review_item_id is not None
+                else None
+            ),
+            "reasons": list(evaluation.reasons),
+        }
+
+    @staticmethod
+    def _canonical_classifier_output(
+        classification: object,
+        *,
+        context: CanonicalClassifierContext,
+        llm_status: Dict[str, Any],
+    ) -> CanonicalClassifierOutput:
+        payload = classification if isinstance(classification, dict) else {}
+        raw_decision = payload.get("decision")
+        decision = (
+            raw_decision
+            if raw_decision
+            in {"select_existing", "fallback_default", "create_new", "invalid"}
+            else "invalid"
+        )
+        raw_target_code = payload.get("target_code")
+        target_code = (
+            raw_target_code.strip()
+            if isinstance(raw_target_code, str) and raw_target_code.strip()
+            else None
+        )
+
+        def optional_text(value: object) -> str | None:
+            if not isinstance(value, str):
+                return None
+            normalized = value.strip()
+            return normalized or None
+
+        provenance = Provenance(
+            method="constrained-ai-classifier",
+            evidence_refs=(
+                {
+                    "kind": "ai-classifier-output",
+                    "content_hash": normalized_content_hash(payload),
+                    "taxonomy_revision_id": str(context.taxonomy_revision_id),
+                    "mapping_revision_id": str(context.mapping_revision_id),
+                },
+            ),
+            captured_at=utc_now(),
+            source_site=None,
+            model_provider=optional_text(llm_status.get("active_provider")),
+            model_name=optional_text(llm_status.get("active_model")),
+            model_version=optional_text(llm_status.get("model_version")),
+        )
+        return CanonicalClassifierOutput(
+            decision=decision,
+            target_code=target_code,
+            provenance=provenance,
+        )
+
     async def enrich_batch(
         self,
         job_ids: List[UUID],
-        on_progress: Optional[callable] = None
+        on_progress: Optional[Callable[[int, int], None]] = None,
     ) -> Dict[str, Any]:
         """Backward-compatible alias for enriching an explicit set of job IDs."""
         return await self.enrich_job_ids(job_ids, on_progress)
@@ -274,11 +344,16 @@ class AIEnrichmentService:
     async def enrich_job_ids(
         self,
         job_ids: List[UUID],
-        on_progress: Optional[callable] = None
+        on_progress: Optional[Callable[[int, int], None]] = None,
     ) -> Dict[str, Any]:
         """Enrich multiple jobs by ID."""
         db = SessionLocal()
-        results = {"total": len(job_ids), "success": 0, "failed": 0, "jobs": []}
+        results: Dict[str, Any] = {
+            "total": len(job_ids),
+            "success": 0,
+            "failed": 0,
+            "jobs": [],
+        }
 
         try:
             for i, job_id in enumerate(job_ids):
@@ -320,18 +395,22 @@ class AIEnrichmentService:
     async def enrich_unenriched(
         self,
         limit: int = 100,
-        on_progress: Optional[callable] = None
+        on_progress: Optional[Callable[[int, int], None]] = None,
     ) -> Dict[str, Any]:
         """Enrich jobs that haven't been processed yet."""
         db = SessionLocal()
 
         try:
-            jobs = db.query(Job).filter(
-                Job.ai_enriched_at.is_(None),
-                Job.is_deleted.is_(False),
-                Job.source_classification_id.isnot(None),
-                Job.source_classification_id != "",
-            ).limit(limit).all()
+            jobs = (
+                db.query(Job)
+                .filter(
+                    Job.ai_enriched_at.is_(None),
+                    Job.is_deleted.is_(False),
+                    Job.source_attribute_projection.has(),
+                )
+                .limit(limit)
+                .all()
+            )
 
             job_ids = [job.id for job in jobs]
         finally:
@@ -339,7 +418,9 @@ class AIEnrichmentService:
 
         return await self.enrich_batch(job_ids, on_progress)
 
+
 _service: Optional[AIEnrichmentService] = None
+
 
 def get_ai_enrichment_service() -> AIEnrichmentService:
     """Get singleton AIEnrichmentService instance."""

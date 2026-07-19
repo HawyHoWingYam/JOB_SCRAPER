@@ -3,11 +3,12 @@ import asyncio
 from dataclasses import dataclass
 from datetime import date, timedelta
 import re
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, TypedDict
 
 from sqlalchemy import and_, case, func, text
 from sqlalchemy.orm import Session
 
+from app.job_intelligence.canonical_taxonomy import CanonicalTaxonomyPreflight
 from app.messaging.topics import STREAM_JOB_LIFECYCLE
 from app.models.crawl_job import CrawlJob
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
@@ -22,7 +23,6 @@ from app.models.skill_technology import SkillTechnology
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
-from app.services.job_taxonomy_registry import get_job_taxonomy_registry
 from app.utils.time import utc_now
 from app.workers.event_types import INGEST_ITEM_SETTLED_EVENT_TYPE
 
@@ -93,6 +93,14 @@ class PendingJobFilters:
         )
 
 
+class _ExcludedTaxonomyGroup(TypedDict):
+    source_classification_id: str | None
+    source_classification_name: str | None
+    count: int
+    reason: str
+    job_ids: list[str]
+
+
 class ActiveEnrichmentRunError(RuntimeError):
     def __init__(self, run_id: str):
         self.run_id = run_id
@@ -102,20 +110,21 @@ class ActiveEnrichmentRunError(RuntimeError):
 class EnrichmentRunService:
     """Persist enrichment runs and their items."""
 
-    def __init__(self, db: Session):
+    def __init__(
+        self,
+        db: Session,
+        *,
+        taxonomy_preflight: CanonicalTaxonomyPreflight | None = None,
+    ):
         self.db = db
         self.crawl_job_repository = CrawlJobRepository()
         self.event_outbox_repository = EventOutboxRepository()
-        self.taxonomy_registry = get_job_taxonomy_registry()
+        self.taxonomy_preflight = taxonomy_preflight or CanonicalTaxonomyPreflight(db)
 
     def _query_ai_actionable_jobs(self, *entities):
-        return (
-            self.db.query(*entities)
-            .filter(
-                Job.is_deleted.is_(False),
-                Job.source_classification_id.isnot(None),
-                Job.source_classification_id != "",
-            )
+        return self.db.query(*entities).filter(
+            Job.is_deleted.is_(False),
+            Job.source_attribute_projection.has(),
         )
 
     def _acquire_active_slot_lock(self) -> None:
@@ -151,14 +160,18 @@ class EnrichmentRunService:
             .exists()
         )
 
-    def _query_pending_candidates(self, *entities, filters: PendingJobFilters | None = None):
+    def _query_pending_candidates(
+        self, *entities, filters: PendingJobFilters | None = None
+    ):
         normalized = filters or PendingJobFilters()
         query = self._query_ai_actionable_jobs(*entities).filter(
             Job.ai_enriched_at.is_(None),
             ~self._reserved_job_exists(),
         )
         if normalized.source_sites:
-            query = query.filter(func.lower(Job.source_site).in_(normalized.source_sites))
+            query = query.filter(
+                func.lower(Job.source_site).in_(normalized.source_sites)
+            )
         if normalized.source_classification_names:
             query = query.filter(
                 func.lower(Job.source_classification_name).in_(
@@ -172,30 +185,38 @@ class EnrichmentRunService:
                 )
             )
         if normalized.posted_date_from is not None:
-            query = query.filter(func.date(Job.posted_date) >= normalized.posted_date_from)
+            query = query.filter(
+                func.date(Job.posted_date) >= normalized.posted_date_from
+            )
         if normalized.posted_date_to is not None:
-            query = query.filter(func.date(Job.posted_date) <= normalized.posted_date_to)
+            query = query.filter(
+                func.date(Job.posted_date) <= normalized.posted_date_to
+            )
         return query
 
-    def preview_pending_jobs(self, *, filters: PendingJobFilters, limit: int) -> dict[str, object]:
+    def preview_pending_jobs(
+        self, *, filters: PendingJobFilters, limit: int
+    ) -> dict[str, object]:
         matching_count = int(
             self._query_pending_candidates(func.count(Job.id), filters=filters).scalar()
             or 0
         )
         selected_jobs = self._select_pending_jobs(filters=filters, limit=limit)
-        supported_jobs, excluded_jobs, excluded_items = self._preflight_jobs(selected_jobs)
+        supported_jobs, excluded_reasons, excluded_items = self._preflight_jobs(
+            selected_jobs
+        )
         return {
             "matching_pending_count": matching_count,
             "selected_item_count": len(selected_jobs),
             "effective_item_count": len(supported_jobs),
-            "excluded_item_count": len(excluded_jobs),
+            "excluded_item_count": len(excluded_reasons),
             "excluded_items": excluded_items,
         }
 
     def _select_pending_jobs(
         self,
         *,
-        filters: PendingJobFilters,
+        filters: PendingJobFilters | None,
         limit: Optional[int],
     ) -> list[Job]:
         query = self._query_pending_candidates(Job, filters=filters).order_by(
@@ -208,40 +229,46 @@ class EnrichmentRunService:
     def _preflight_jobs(
         self,
         jobs: list[Job],
-    ) -> tuple[list[Job], list[Job], list[dict[str, object]]]:
+    ) -> tuple[list[Job], dict[str, str], list[_ExcludedTaxonomyGroup]]:
         supported_jobs: list[Job] = []
-        excluded_jobs: list[Job] = []
-        grouped: dict[tuple[str | None, str | None, str], dict[str, object]] = {}
+        excluded_reasons: dict[str, str] = {}
+        grouped: dict[
+            tuple[str | None, str | None, str],
+            _ExcludedTaxonomyGroup,
+        ] = {}
 
         for job in jobs:
-            handling = self.taxonomy_registry.get_handling(
-                job.source_classification_id,
-                job.source_classification_name,
-            )
-            if handling.status == "mapped":
+            handling = self.taxonomy_preflight.inspect(job)
+            if handling.status == "supported":
                 supported_jobs.append(job)
                 continue
 
-            excluded_jobs.append(job)
+            source_id = str(job.source_classification_id or "").strip() or None
+            source_name = str(job.source_classification_name or "").strip() or None
+            reason = handling.reason or "canonical_taxonomy_preflight_blocked"
+            excluded_reasons[str(job.id)] = reason
             key = (
-                handling.source_classification_id,
-                handling.source_classification_name,
-                handling.reason or "Unsupported source taxonomy",
+                source_id,
+                source_name,
+                reason,
             )
             group = grouped.setdefault(
                 key,
                 {
-                    "source_classification_id": handling.source_classification_id,
-                    "source_classification_name": handling.source_classification_name,
+                    # These legacy scalars are display-only compatibility evidence.
+                    # Canonical eligibility above comes exclusively from preserved
+                    # Source Classification Paths and the active mapping release.
+                    "source_classification_id": source_id,
+                    "source_classification_name": source_name,
                     "count": 0,
-                    "reason": handling.reason or "Unsupported source taxonomy",
+                    "reason": reason,
                     "job_ids": [],
                 },
             )
             group["count"] = int(group["count"]) + 1
             group["job_ids"].append(str(job.id))
 
-        return supported_jobs, excluded_jobs, list(grouped.values())
+        return supported_jobs, excluded_reasons, list(grouped.values())
 
     def get_pending_filter_options(self) -> list[dict[str, str | None]]:
         rows = (
@@ -278,8 +305,7 @@ class EnrichmentRunService:
                             (
                                 and_(
                                     Job.ai_enriched_at.isnot(None),
-                                    Job.source_classification_id.isnot(None),
-                                    Job.source_classification_id != "",
+                                    Job.source_attribute_projection.has(),
                                 ),
                                 1,
                             ),
@@ -294,8 +320,7 @@ class EnrichmentRunService:
                             (
                                 and_(
                                     Job.ai_enriched_at.is_(None),
-                                    Job.source_classification_id.isnot(None),
-                                    Job.source_classification_id != "",
+                                    Job.source_attribute_projection.has(),
                                 ),
                                 1,
                             ),
@@ -352,12 +377,20 @@ class EnrichmentRunService:
         )
         pending_count = item_count - excluded_count
         effective_status = initial_status
-        if excluded_count and pending_count == 0 and initial_status in {"pending", "waiting"}:
+        if (
+            excluded_count
+            and pending_count == 0
+            and initial_status in {"pending", "waiting"}
+        ):
             effective_status = "completed_with_exclusions"
-        completed_at = utc_now() if effective_status == "completed_with_exclusions" else None
+        completed_at = (
+            utc_now() if effective_status == "completed_with_exclusions" else None
+        )
         run = EnrichmentRun(
             source_type=source_type,
-            trigger_crawl_job_id=uuid.UUID(str(trigger_crawl_job_id)) if trigger_crawl_job_id else None,
+            trigger_crawl_job_id=uuid.UUID(str(trigger_crawl_job_id))
+            if trigger_crawl_job_id
+            else None,
             status=effective_status,
             job_ids=normalized_job_ids,
             total_items=item_count,
@@ -385,7 +418,9 @@ class EnrichmentRunService:
         self.db.flush()
         return run
 
-    def create_post_scrape_run_for_batch(self, job_ids: List[str]) -> Optional[EnrichmentRun]:
+    def create_post_scrape_run_for_batch(
+        self, job_ids: List[str]
+    ) -> Optional[EnrichmentRun]:
         """Create a post-scrape run only when the scrape batch persisted rows."""
         if not job_ids:
             return None
@@ -428,16 +463,7 @@ class EnrichmentRunService:
         selected_jobs = self._select_pending_jobs(filters=filters, limit=limit)
         if not selected_jobs:
             return None
-        _, excluded_jobs, _ = self._preflight_jobs(selected_jobs)
-        excluded_reasons_by_job_id = {}
-        for job in excluded_jobs:
-            handling = self.taxonomy_registry.get_handling(
-                job.source_classification_id,
-                job.source_classification_name,
-            )
-            excluded_reasons_by_job_id[str(job.id)] = (
-                handling.reason or "Unsupported source taxonomy"
-            )
+        _, excluded_reasons_by_job_id, _ = self._preflight_jobs(selected_jobs)
         return self._create_run(
             source_type="manual_pending",
             job_ids=[str(job.id) for job in selected_jobs],
@@ -459,7 +485,9 @@ class EnrichmentRunService:
             .first()
         )
 
-    def append_job_to_crawl_auto_run(self, *, crawl_job_id: str, job_id: str) -> CrawlAutoRunAppendResult:
+    def append_job_to_crawl_auto_run(
+        self, *, crawl_job_id: str, job_id: str
+    ) -> CrawlAutoRunAppendResult:
         crawl_job_uuid = uuid.UUID(str(crawl_job_id))
         job_uuid = uuid.UUID(str(job_id))
         run = self.get_crawl_auto_run(str(crawl_job_uuid))
@@ -511,7 +539,9 @@ class EnrichmentRunService:
         self.db.flush()
         return CrawlAutoRunAppendResult(run=run, action="added")
 
-    def request_run_execution(self, run_id: str, *, source_service: str = "ai-api") -> bool:
+    def request_run_execution(
+        self, run_id: str, *, source_service: str = "ai-api"
+    ) -> bool:
         run = (
             self.db.query(EnrichmentRun)
             .filter(EnrichmentRun.id == run_id)
@@ -546,7 +576,9 @@ class EnrichmentRunService:
         self.db.flush()
         return True
 
-    def request_ready_pending_runs(self, *, source_service: str = "enrichment-worker") -> int:
+    def request_ready_pending_runs(
+        self, *, source_service: str = "enrichment-worker"
+    ) -> int:
         self.promote_next_ready_waiting_run(source_service=source_service)
         pending_runs = (
             self.db.query(EnrichmentRun)
@@ -592,9 +624,7 @@ class EnrichmentRunService:
     def request_crawl_auto_run_if_ready(self, crawl_job_id: str) -> bool:
         crawl_job_uuid = uuid.UUID(str(crawl_job_id))
         crawl_job = (
-            self.db.query(CrawlJob)
-            .filter(CrawlJob.id == crawl_job_uuid)
-            .first()
+            self.db.query(CrawlJob).filter(CrawlJob.id == crawl_job_uuid).first()
         )
         run = self.get_crawl_auto_run(str(crawl_job_uuid))
         if crawl_job is None or run is None:
@@ -615,7 +645,10 @@ class EnrichmentRunService:
         *,
         crawl_job: CrawlJob | None = None,
     ) -> Dict[str, object] | None:
-        if str(run.status or "").lower() not in {"waiting", "pending"} or run.started_at is not None:
+        if (
+            str(run.status or "").lower() not in {"waiting", "pending"}
+            or run.started_at is not None
+        ):
             return None
 
         if not run.total_items:
@@ -628,7 +661,11 @@ class EnrichmentRunService:
                 "reason": "queued_for_execution",
             }
 
-        if not AIRuntimeSettingsService(self.db).get_profile_runtime_metadata("jobs").is_ready:
+        if (
+            not AIRuntimeSettingsService(self.db)
+            .get_profile_runtime_metadata("jobs")
+            .is_ready
+        ):
             return {
                 "reason": "waiting_for_ai_runtime",
             }
@@ -659,7 +696,9 @@ class EnrichmentRunService:
         ingest_items_failed = int(metrics.get("ingest_items_failed") or 0)
         ingest_dead_lettered = int(metrics.get("ingest_dead_lettered") or 0)
         effective_ingest_items_seen = max(ingest_items_seen, int(run.total_items or 0))
-        ingest_items_settled = effective_ingest_items_seen + max(ingest_items_failed, ingest_dead_lettered)
+        ingest_items_settled = effective_ingest_items_seen + max(
+            ingest_items_failed, ingest_dead_lettered
+        )
         settled_event_count = self.crawl_job_repository.count_events(
             self.db,
             resolved_crawl_job.id,
@@ -751,7 +790,10 @@ class EnrichmentRunService:
                 )
             )
 
-        return [str(row.id) for row in query.order_by(Job.created_at.asc(), Job.id.asc()).all()]
+        return [
+            str(row.id)
+            for row in query.order_by(Job.created_at.asc(), Job.id.asc()).all()
+        ]
 
     def _normalize_selector_values(
         self,
@@ -776,7 +818,8 @@ class EnrichmentRunService:
                 SkillReviewCandidate.id,
                 SkillReviewCandidate.normalized_name,
             ).all()
-            if _normalize_review_candidate_key(candidate.normalized_name or "") in normalized_names
+            if _normalize_review_candidate_key(candidate.normalized_name or "")
+            in normalized_names
         }
 
     def _find_polluted_skill_ids(self, normalized_names: set[str]) -> set[uuid.UUID]:
@@ -800,11 +843,7 @@ class EnrichmentRunService:
 
     def get_run(self, run_id: str) -> Optional[EnrichmentRun]:
         """Fetch a persisted run by ID."""
-        return (
-            self.db.query(EnrichmentRun)
-            .filter(EnrichmentRun.id == run_id)
-            .first()
-        )
+        return self.db.query(EnrichmentRun).filter(EnrichmentRun.id == run_id).first()
 
     def claim_run(self, run_id: str) -> Optional[EnrichmentRun]:
         run = (
@@ -906,7 +945,9 @@ class EnrichmentRunService:
             return None
         return [item for _, item in rows if item is not None]
 
-    def mark_run_failed(self, run_id: str, error_message: str) -> Optional[EnrichmentRun]:
+    def mark_run_failed(
+        self, run_id: str, error_message: str
+    ) -> Optional[EnrichmentRun]:
         """Persist a terminal failure state for a run when orchestration aborts."""
         run = self.get_run(run_id)
         if run is None:
@@ -1043,7 +1084,9 @@ class EnrichmentRunService:
         if run.status == "running":
             run.status = "stopping"
             run.stop_requested_at = utc_now()
-            run.error_message = "Stop requested by operator; in-flight items are finishing"
+            run.error_message = (
+                "Stop requested by operator; in-flight items are finishing"
+            )
             self.db.flush()
         return run
 
@@ -1083,19 +1126,18 @@ class EnrichmentRunService:
     def get_overview(self) -> dict:
         """Return AI enrichment overview counters and last completed run."""
         queue_counts = self.get_job_queue_counts()
-        running_runs, active_runs = (
-            self.db.query(
-                func.coalesce(
-                    func.sum(case((EnrichmentRun.status == "running", 1), else_=0)),
-                    0,
+        running_runs, active_runs = self.db.query(
+            func.coalesce(
+                func.sum(case((EnrichmentRun.status == "running", 1), else_=0)),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    case((EnrichmentRun.status.in_(ACTIVE_RUN_STATUSES), 1), else_=0)
                 ),
-                func.coalesce(
-                    func.sum(case((EnrichmentRun.status.in_(ACTIVE_RUN_STATUSES), 1), else_=0)),
-                    0,
-                ),
-            )
-            .one()
-        )
+                0,
+            ),
+        ).one()
         failed_items = (
             self.db.query(EnrichmentRunItem)
             .filter(EnrichmentRunItem.status == "failed")
@@ -1105,11 +1147,13 @@ class EnrichmentRunService:
         last_completed_run = (
             self.db.query(EnrichmentRun)
             .filter(
-                EnrichmentRun.status.in_([
-                    "completed",
-                    "completed_with_failures",
-                    "completed_with_exclusions",
-                ])
+                EnrichmentRun.status.in_(
+                    [
+                        "completed",
+                        "completed_with_failures",
+                        "completed_with_exclusions",
+                    ]
+                )
             )
             .order_by(
                 EnrichmentRun.completed_at.desc(),
@@ -1133,20 +1177,19 @@ class EnrichmentRunService:
         }
 
     def _count_current_failed_jobs(self) -> int:
-        latest_item_per_job = (
-            self.db.query(
-                EnrichmentRunItem.job_id.label("job_id"),
-                EnrichmentRunItem.status.label("status"),
-                func.row_number().over(
-                    partition_by=EnrichmentRunItem.job_id,
-                    order_by=(
-                        EnrichmentRunItem.created_at.desc(),
-                        EnrichmentRunItem.id.desc(),
-                    ),
-                ).label("row_number"),
+        latest_item_per_job = self.db.query(
+            EnrichmentRunItem.job_id.label("job_id"),
+            EnrichmentRunItem.status.label("status"),
+            func.row_number()
+            .over(
+                partition_by=EnrichmentRunItem.job_id,
+                order_by=(
+                    EnrichmentRunItem.created_at.desc(),
+                    EnrichmentRunItem.id.desc(),
+                ),
             )
-            .subquery()
-        )
+            .label("row_number"),
+        ).subquery()
 
         return int(
             self.db.query(func.count())
@@ -1321,12 +1364,57 @@ class EnrichmentRunService:
             item.status = "completed"
             item.error_message = None
             self._enqueue_job_enriched_event(run=run, item=item)
+        elif result.get("status") == "excluded":
+            item.status = "excluded"
+            item.error_message = str(
+                result.get("error") or "canonical_taxonomy_preflight_blocked"
+            )
         else:
             item.status = "failed"
-            item.error_message = str(result.get("error") or "missing result for run item")
+            item.error_message = str(
+                result.get("error") or "missing result for run item"
+            )
 
         item.completed_at = timestamp
 
+        self.db.flush()
+        counts = self._count_items_by_status(run_id)
+        run.completed_items = counts["completed"]
+        run.failed_items = counts["failed"]
+        run.pending_items = counts["pending"]
+        run.cancelled_items = counts["cancelled"]
+        run.excluded_items = counts["excluded"]
+        run.current_job_title = self._resolve_latest_running_job_title(run_id)
+        self._sync_linked_crawl_job_ai_metrics(run)
+        self.db.commit()
+        return self._serialize_run_progress(run_id)
+
+    def _update_item_excluded(
+        self,
+        run_id: str,
+        item_id: str,
+        reason: str,
+    ) -> Optional[Dict[str, object]]:
+        timestamp = utc_now()
+        run = (
+            self.db.query(EnrichmentRun)
+            .filter(EnrichmentRun.id == run_id)
+            .with_for_update()
+            .one()
+        )
+        item = (
+            self.db.query(EnrichmentRunItem)
+            .filter(EnrichmentRunItem.id == item_id)
+            .with_for_update()
+            .one()
+        )
+        if run.status not in {"running", "stopping"} or item.status != "pending":
+            self.db.commit()
+            return None
+
+        item.status = "excluded"
+        item.error_message = reason
+        item.completed_at = timestamp
         self.db.flush()
         counts = self._count_items_by_status(run_id)
         run.completed_items = counts["completed"]
@@ -1347,12 +1435,16 @@ class EnrichmentRunService:
         return {
             "run_id": run.id,
             "source_type": run.source_type,
-            "trigger_crawl_job_id": str(run.trigger_crawl_job_id) if run.trigger_crawl_job_id else None,
+            "trigger_crawl_job_id": str(run.trigger_crawl_job_id)
+            if run.trigger_crawl_job_id
+            else None,
             "total_items": int(run.total_items or 0),
             "excluded_items": int(run.excluded_items or 0),
         }
 
-    def _enqueue_job_enriched_event(self, *, run: EnrichmentRun, item: EnrichmentRunItem) -> None:
+    def _enqueue_job_enriched_event(
+        self, *, run: EnrichmentRun, item: EnrichmentRunItem
+    ) -> None:
         self.event_outbox_repository.enqueue(
             self.db,
             topic=STREAM_JOB_LIFECYCLE,
@@ -1363,13 +1455,17 @@ class EnrichmentRunService:
                 "run_id": run.id,
                 "job_id": str(item.job_id),
                 "source_type": run.source_type,
-                "crawl_job_id": str(run.trigger_crawl_job_id) if run.trigger_crawl_job_id else None,
+                "crawl_job_id": str(run.trigger_crawl_job_id)
+                if run.trigger_crawl_job_id
+                else None,
             },
             source_service="enrichment-worker",
             auto_commit=False,
         )
 
-    async def execute_run(self, run_id: str, enrichment_service=None, *, claim: bool = True) -> EnrichmentRun:
+    async def execute_run(
+        self, run_id: str, enrichment_service=None, *, claim: bool = True
+    ) -> EnrichmentRun:
         """Execute a persisted run and update item/run status from enrichment results."""
         from app.services.ai_enrichment_service import get_ai_enrichment_service
 
@@ -1406,12 +1502,29 @@ class EnrichmentRunService:
             item_queue.put_nowait(item)
 
         try:
+
             async def worker() -> None:
                 while True:
                     try:
                         item = item_queue.get_nowait()
                     except asyncio.QueueEmpty:
                         return
+
+                    job = self.db.get(Job, item.job_id)
+                    preflight_reason: str | None
+                    if job is None:
+                        preflight_reason = "JOB_NOT_FOUND"
+                    else:
+                        preflight = self.taxonomy_preflight.inspect(job)
+                        preflight_reason = preflight.reason
+                    if preflight_reason is not None:
+                        self._update_item_excluded(
+                            run_id,
+                            item.id,
+                            preflight_reason,
+                        )
+                        item_queue.task_done()
+                        continue
 
                     job_title = self._get_job_title(item.job_id)
                     if self._update_item_started(run_id, item.id, job_title) is None:
@@ -1430,7 +1543,10 @@ class EnrichmentRunService:
                     self._update_item_finished(run_id, item.id, result)
                     item_queue.task_done()
 
-            workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(items) or 1))]
+            workers = [
+                asyncio.create_task(worker())
+                for _ in range(min(concurrency, len(items) or 1))
+            ]
             await asyncio.gather(*workers)
         except Exception as exc:
             error_message = str(exc)
@@ -1464,7 +1580,9 @@ class EnrichmentRunService:
         run.cancelled_items = counts["cancelled"]
         run.excluded_items = excluded_items
         run.current_job_title = None
-        run.error_message = None if failed_items == 0 else f"{failed_items} item(s) failed"
+        run.error_message = (
+            None if failed_items == 0 else f"{failed_items} item(s) failed"
+        )
         run.completed_at = utc_now()
         self._sync_linked_crawl_job_ai_metrics(run)
         self.db.flush()
@@ -1472,7 +1590,9 @@ class EnrichmentRunService:
         self.db.commit()
         return run
 
-    def create_retry_run_from_failed_items(self, run_id: str) -> Optional[EnrichmentRun]:
+    def create_retry_run_from_failed_items(
+        self, run_id: str
+    ) -> Optional[EnrichmentRun]:
         """Create a new retry run from failed items in an earlier run."""
         self._require_active_slot()
         failed_item_rows = (
