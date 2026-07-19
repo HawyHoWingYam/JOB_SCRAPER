@@ -62,6 +62,15 @@ from app.models.canonical_job_taxonomy import (
     SourceJobTaxonomyMapping,
     SourceJobTaxonomyMappingTarget,
 )
+from app.models.company_industry import (
+    CompanyIndustryActiveRevision,
+    CompanyIndustryAssignment,
+    CompanyIndustryCrosswalkEdge,
+    CompanyIndustryReviewItem,
+    CompanyIndustryTaxonomyNode,
+    CompanyIndustryTaxonomyRelease,
+    SourceIndustryMapping,
+)
 
 __all__ = [
     "Company",
@@ -118,4 +127,11 @@ __all__ = [
     "JobTaxonomyReviewItem",
     "SourceJobTaxonomyMapping",
     "SourceJobTaxonomyMappingTarget",
+    "CompanyIndustryActiveRevision",
+    "CompanyIndustryAssignment",
+    "CompanyIndustryCrosswalkEdge",
+    "CompanyIndustryReviewItem",
+    "CompanyIndustryTaxonomyNode",
+    "CompanyIndustryTaxonomyRelease",
+    "SourceIndustryMapping",
 ]
