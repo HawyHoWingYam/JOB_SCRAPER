@@ -566,3 +566,52 @@ def test_postgres_fresh_and_existing_bootstrap_have_schema_parity(
         "trg_crawl_dispatch_plans_immutable",
         "trg_crawl_jobs_dispatch_authority_immutable",
     } <= trigger_names
+
+
+def test_postgres_existing_bootstrap_converges_legacy_orphan_listings(
+    postgres_cutover_engine,
+) -> None:
+    _run_alembic(postgres_cutover_engine, "downgrade", "20260720_180000")
+    orphan_listing_id = uuid4()
+    with postgres_cutover_engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE crawl_job_listings DROP CONSTRAINT "
+                "fk_crawl_job_listings_crawl_job_id_crawl_jobs"
+            )
+        )
+        connection.execute(
+            Base.metadata.tables["crawl_job_listings"].insert().values(
+                id=orphan_listing_id,
+                crawl_job_id=uuid4(),
+                source_site="offertoday",
+                source_job_id="legacy-orphan",
+                source_url="https://example.test/legacy-orphan",
+                listing_payload={"id": "legacy-orphan"},
+                detail_status="pending",
+                detail_attempts=0,
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+        )
+
+    _run_alembic(postgres_cutover_engine, "upgrade", "20260720_210000")
+
+    with postgres_cutover_engine.connect() as connection:
+        assert connection.scalar(
+            text("SELECT count(*) FROM crawl_job_listings WHERE id = :id"),
+            {"id": orphan_listing_id},
+        ) == 0
+        assert connection.scalar(text("SELECT count(*) FROM crawl_job_listings")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM companies")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM jobs")) == 1
+        assert connection.scalar(
+            text(
+                "SELECT convalidated FROM pg_constraint "
+                "WHERE conname = "
+                "'fk_crawl_job_listings_crawl_job_id_crawl_jobs'"
+            )
+        ) is True
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
+            "20260720_210000"
+        )

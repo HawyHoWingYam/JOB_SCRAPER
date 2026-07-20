@@ -32,10 +32,15 @@ def downgrade() -> None:
 
 def _ensure_listing_crawl_job_foreign_key() -> None:
     # The historical migration installed this FK, while the ORM relationship is
-    # intentionally view-only.  Fresh metadata therefore needs convergence.
+    # intentionally view-only. Fresh metadata therefore needs convergence. A
+    # legacy metadata-created database may also contain staging rows whose
+    # Crawl Job was already deleted; those reset-scope rows cannot be attached
+    # to truthful history and must be removed before the FK can be validated.
     op.execute(
         """
         DO $$
+        DECLARE
+          orphan_listing_count bigint;
         BEGIN
           IF NOT EXISTS (
             SELECT 1
@@ -52,6 +57,19 @@ def _ensure_listing_crawl_job_foreign_key() -> None:
               AND source_column.attname = 'crawl_job_id'
               AND target_table.relname = 'crawl_jobs'
           ) THEN
+            DELETE FROM crawl_job_listings AS listing
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM crawl_jobs AS crawl_job
+              WHERE crawl_job.id = listing.crawl_job_id
+            );
+            GET DIAGNOSTICS orphan_listing_count = ROW_COUNT;
+            IF orphan_listing_count > 0 THEN
+              RAISE NOTICE
+                'Removed % legacy orphan Crawl Job listing rows',
+                orphan_listing_count;
+            END IF;
+
             ALTER TABLE crawl_job_listings
               ADD CONSTRAINT fk_crawl_job_listings_crawl_job_id_crawl_jobs
               FOREIGN KEY (crawl_job_id) REFERENCES crawl_jobs(id)
