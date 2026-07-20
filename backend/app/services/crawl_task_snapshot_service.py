@@ -37,7 +37,15 @@ PROGRESS_CONTEXT_EVENT_TYPES = ACTIVITY_INTERVAL_EVENT_TYPES | {
     "waf.challenge_cleared",
     "crawl.ip_blocked",
     "crawl.cancel_requested",
+    "crawl.resume_requested",
 } | DETAIL_PROGRESS_EVENT_TYPES
+
+RECOVERY_OUTCOME_EVENT_TYPES = {
+    "crawl.completed": "completed",
+    "crawl.failed": "failed",
+    "crawl.cancelled": "cancelled",
+    "crawl.manual_action_required": "manual_action_required",
+}
 
 
 def _elapsed_seconds(reference_time, timestamp) -> int:
@@ -89,6 +97,87 @@ def _latest_event_of_types(events: list[Any] | None, event_types: set[str]) -> A
         if getattr(event, "event_type", None) in event_types:
             return event
     return None
+
+
+def _optional_text(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _project_recovery_attempt(
+    events: list[Any] | None,
+) -> dict[str, Any] | None:
+    ordered_events = list(events or [])
+    latest_resume_index = None
+    for index in range(len(ordered_events) - 1, -1, -1):
+        if getattr(ordered_events[index], "event_type", None) == (
+            "crawl.resume_requested"
+        ):
+            latest_resume_index = index
+            break
+    if latest_resume_index is None:
+        return None
+
+    resume_event = ordered_events[latest_resume_index]
+    resume_payload = (
+        resume_event.payload
+        if isinstance(getattr(resume_event, "payload", None), dict)
+        else {}
+    )
+    manual_action = resume_payload.get("manual_action")
+    if not isinstance(manual_action, dict):
+        manual_action = {}
+    strategy = _optional_text(resume_payload.get("strategy"))
+    if strategy not in {"fresh_profile", "reuse_open_browser"}:
+        strategy = None
+
+    outcome_event = None
+    for event in ordered_events[latest_resume_index + 1 :]:
+        if getattr(event, "event_type", None) in RECOVERY_OUTCOME_EVENT_TYPES:
+            outcome_event = event
+            break
+
+    projection = {
+        "version": 1,
+        "request_event_sequence": int(resume_event.sequence_no),
+        "requested_at": resume_event.created_at,
+        "requested_by": (
+            _optional_text(resume_payload.get("requested_by"))
+            or _optional_text(getattr(resume_event, "emitted_by", None))
+        ),
+        "strategy": strategy,
+        "trigger_classification": _optional_text(
+            manual_action.get("classification")
+        ),
+        "outcome": "pending",
+        "outcome_event_sequence": None,
+        "outcome_at": None,
+        "outcome_classification": None,
+        "outcome_error": None,
+    }
+    if outcome_event is None:
+        return projection
+
+    outcome_payload = (
+        outcome_event.payload
+        if isinstance(getattr(outcome_event, "payload", None), dict)
+        else {}
+    )
+    outcome_manual_action = outcome_payload.get("manual_action")
+    if not isinstance(outcome_manual_action, dict):
+        outcome_manual_action = {}
+    projection.update(
+        {
+            "outcome": RECOVERY_OUTCOME_EVENT_TYPES[outcome_event.event_type],
+            "outcome_event_sequence": int(outcome_event.sequence_no),
+            "outcome_at": outcome_event.created_at,
+            "outcome_classification": _optional_text(
+                outcome_manual_action.get("classification")
+            ),
+            "outcome_error": _optional_text(outcome_payload.get("error")),
+        }
+    )
+    return projection
 
 
 def _resolve_category_lookup(
@@ -1124,7 +1213,7 @@ def build_crawl_task_snapshot(
             "detail_distinct_reconciled": None,
             "detail_distinct_remaining": None,
         }
-    return {
+    snapshot = {
         "crawl_job_id": str(crawl_job.id),
         "persisted_status": crawl_job.status,
         "status": status,
@@ -1223,6 +1312,7 @@ def build_crawl_task_snapshot(
         "ai_failed_items": ai_failed_items,
         "ai_total_items": ai_total_items,
         "manual_action": manual_action,
+        "recovery_attempt": _project_recovery_attempt(events),
         "manual_action_resolution": event_payload.get("manual_action_resolution"),
         **issue_metadata,
         "listing_completed": listing_completed,
@@ -1242,6 +1332,71 @@ def build_crawl_task_snapshot(
         ),
         "error": crawl_job.error_message or event_payload.get("error"),
     }
+    from app.crawl_control.task_control_board_service import (
+        build_crawl_control_run_projection,
+    )
+
+    control_run = build_crawl_control_run_projection(
+        crawl_job,
+        normalized=snapshot,
+    )
+    authority = control_run.authority
+    snapshot.update(
+        {
+            "crawl_phase": control_run.crawl_phase,
+            "dispatch_plan_id": (
+                str(authority.dispatch_plan_id)
+                if authority.dispatch_plan_id is not None
+                else None
+            ),
+            "dispatch_plan_fingerprint": (
+                authority.dispatch_plan_fingerprint
+            ),
+            "catalog_revision_id": (
+                str(authority.catalog_revision_id)
+                if authority.catalog_revision_id is not None
+                else None
+            ),
+            "automation_id": (
+                str(authority.automation_id)
+                if authority.automation_id is not None
+                else None
+            ),
+            "automation_revision": authority.automation_revision,
+            "authored_scope": (
+                authority.authored_scope.model_dump(mode="json")
+                if authority.authored_scope is not None
+                else None
+            ),
+            "resolved_scope": (
+                authority.resolved_scope.model_dump(mode="json")
+                if authority.resolved_scope is not None
+                else None
+            ),
+            "readiness": (
+                authority.readiness.model_dump(mode="json")
+                if authority.readiness is not None
+                else None
+            ),
+            "authority": authority.model_dump(mode="json"),
+            "listing_workload": (
+                control_run.listing_workload.model_dump(mode="json")
+                if control_run.listing_workload is not None
+                else None
+            ),
+            "detail_snapshot": (
+                control_run.detail_snapshot.model_dump(mode="json")
+                if control_run.detail_snapshot is not None
+                else None
+            ),
+            "recovery_attempt": (
+                control_run.recovery_attempt.model_dump(mode="json")
+                if control_run.recovery_attempt is not None
+                else None
+            ),
+        }
+    )
+    return snapshot
 
 
 def collect_progress_payload(*, repository: CrawlJobRepository | None = None) -> dict[str, Any]:

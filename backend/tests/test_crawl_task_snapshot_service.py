@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from uuid import UUID
 
 from app.services.crawl_task_snapshot_service import build_crawl_task_snapshot
 
 
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+CRAWL_JOB_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
 def _crawl_job(
@@ -17,7 +19,7 @@ def _crawl_job(
     status="completed",
 ):
     return SimpleNamespace(
-        id="crawl-task",
+        id=CRAWL_JOB_ID,
         status=status,
         source_site=source_site,
         trigger_type="manual",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from app.crawl_control.automation_contracts import AutomationDeleteImpactV1
@@ -46,6 +47,46 @@ class AutomationRepository:
             )
             .one_or_none()
         )
+
+    def list_with_current_revision(
+        self,
+        db: Session,
+        *,
+        source_site: str | None = None,
+        lifecycle_state: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[tuple[ScrapeSchedule, AutomationRevision]], int]:
+        query = (
+            db.query(ScrapeSchedule, AutomationRevision)
+            .join(
+                AutomationRevision,
+                and_(
+                    AutomationRevision.automation_id == ScrapeSchedule.id,
+                    AutomationRevision.revision == ScrapeSchedule.revision,
+                ),
+            )
+            .filter(ScrapeSchedule.scope_contract.is_not(None))
+        )
+        if source_site is not None:
+            query = query.filter(ScrapeSchedule.source_site == source_site)
+        if lifecycle_state is not None:
+            query = query.filter(
+                ScrapeSchedule.lifecycle_state == lifecycle_state
+            )
+        total = int(
+            query.with_entities(func.count(ScrapeSchedule.id)).scalar() or 0
+        )
+        rows = (
+            query.order_by(
+                ScrapeSchedule.updated_at.desc(),
+                ScrapeSchedule.id.asc(),
+            )
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return rows, total
 
     def append_revision(
         self,

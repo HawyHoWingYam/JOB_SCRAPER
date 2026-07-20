@@ -99,6 +99,32 @@ class AutomationService:
         snapshot = AutomationSnapshotV1.model_validate(revision.snapshot)
         return self._projection(automation, snapshot)
 
+    def list(
+        self,
+        *,
+        source_site: str | None = None,
+        lifecycle_state: AutomationLifecycleState | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[tuple[AutomationProjectionV1, ...], int]:
+        rows, total = self.repository.list_with_current_revision(
+            self.db,
+            source_site=source_site,
+            lifecycle_state=lifecycle_state,
+            offset=offset,
+            limit=limit,
+        )
+        return (
+            tuple(
+                self._projection(
+                    automation,
+                    AutomationSnapshotV1.model_validate(revision.snapshot),
+                )
+                for automation, revision in rows
+            ),
+            total,
+        )
+
     def update_configuration(
         self,
         automation_id: UUID,

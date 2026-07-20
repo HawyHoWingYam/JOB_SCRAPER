@@ -13,6 +13,12 @@ from app.services.crawl_request_validation import (
     validate_crawl_request,
 )
 from app.schemas.scraper_pacing import DetailPacingConfig
+from app.crawl_control.task_control_board_contracts import (
+    DetailSnapshotProjectionV1,
+    ListingWorkloadProjectionV1,
+    RecoveryAttemptProjectionV1,
+    RunAuthorityProjectionV1,
+)
 
 
 class CrawlJobCreateRequest(BaseModel):
@@ -123,6 +129,19 @@ class CrawlTaskListItemSchema(BaseModel):
     status: str
     source_site: str
     crawl_mode: str | None = None
+    crawl_phase: str
+    dispatch_plan_id: str | None = None
+    dispatch_plan_fingerprint: str | None = None
+    catalog_revision_id: str | None = None
+    automation_id: str | None = None
+    automation_revision: int | None = None
+    authored_scope: dict | None = None
+    resolved_scope: dict | None = None
+    readiness: dict | None = None
+    authority: RunAuthorityProjectionV1
+    listing_workload: ListingWorkloadProjectionV1 | None = None
+    detail_snapshot: DetailSnapshotProjectionV1 | None = None
+    recovery_attempt: RecoveryAttemptProjectionV1 | None = None
     updated_at: str | None = None
     error: str | None = None
     issue_class: str | None = None

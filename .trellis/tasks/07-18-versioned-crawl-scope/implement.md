@@ -135,12 +135,25 @@ mypy (8 source files), compileall, and `git diff --check` also passed.
 
 ### 7. Add Automation/plan/board APIs
 
-- [ ] Add versioned routes/schemas and stable machine error codes.
-- [ ] Return current revision on conflict and forbid implicit merge.
-- [ ] Add normalized Task Control Board, Automation row, run, workload, and detail snapshot projections.
-- [ ] Add normalized fallback fields to Crawl Tasks/Logs so new control UI and post-cutover history never need raw request/event parsing.
-- [ ] Make legacy schedule routes delegate temporarily; stop new writes of `category_ids`.
-- [ ] Add contract tests that frontend never needs raw request/event decoding.
+- [x] Add versioned routes/schemas and stable machine error codes.
+- [x] Return current revision on conflict and forbid implicit merge.
+- [x] Add normalized Task Control Board, Automation row, run, workload, and detail snapshot projections.
+- [x] Add normalized fallback fields to Crawl Tasks/Logs so new control UI and post-cutover history never need raw request/event parsing.
+- [x] Make legacy schedule routes delegate temporarily; stop new writes of `category_ids`.
+- [x] Add contract tests that frontend never needs raw request/event decoding.
+
+Checkpoint 7 adds the versioned Crawl Scope, Automation, Dispatch Plan, and
+Task Control Board HTTP contracts; compare-and-swap revision headers; normalized
+plan-backed listing/detail/recovery projections; and temporary legacy Schedule
+delegation that never writes primitive scope fields for versioned rows. Mixed
+configuration/lifecycle compatibility updates fail before mutation, Dispatch
+confirmation requires the reviewed fingerprint, and unsupported Source/Catalog
+failures remain structured.
+
+Verification covered the 16 API contract tests, 59 focused Automation/Dispatch
+Plan/snapshot regressions with three skips, and the full backend suite
+(`384 passed, 155 skipped`). Touched-file Ruff, focused mypy, compileall, and
+`git diff --check` passed.
 
 ### 8. Integrate catalog impact/publication
 

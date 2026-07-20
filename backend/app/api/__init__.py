@@ -4,6 +4,7 @@ from app.api import (
     capabilities,
     company_industries,
     companies,
+    crawl_control,
     crawl_jobs,
     filters,
     health,
@@ -25,6 +26,7 @@ router.include_router(skill_governance.router, prefix="/api/v1")
 router.include_router(skills.router, prefix="/api/v1")
 router.include_router(jobs.router, prefix="/api/v1")
 router.include_router(companies.router, prefix="/api/v1")
+router.include_router(crawl_control.router, prefix="/api/v1")
 router.include_router(crawl_jobs.router, prefix="/api/v1")
 router.include_router(filters.router, prefix="/api/v1")
 router.include_router(recommendations.router, prefix="/api/v1")
