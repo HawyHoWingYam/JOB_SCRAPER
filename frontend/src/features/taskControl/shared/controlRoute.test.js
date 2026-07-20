@@ -4,7 +4,10 @@ import { formatControlDateTime } from './controlTime';
 
 describe('Task Control routes and time', () => {
   it('parses and builds encoded feature-local routes while preserving board entry', () => {
-    expect(parseControlRoute('#scheduler')).toEqual({ kind: 'board' });
+    expect(parseControlRoute('#scheduler')).toEqual({
+      kind: 'board',
+      sourceSite: 'jobsdb',
+    });
     expect(buildControlRoute({ kind: 'board' })).toBe('#scheduler');
     const hash = buildControlRoute({
       flow: 'automation', mode: 'edit', automationId: 'automation-1',

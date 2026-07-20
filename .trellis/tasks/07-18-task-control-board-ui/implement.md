@@ -41,13 +41,13 @@ checked UI children. It remains `planning` and is not an implementation target.
 
 Task: `07-18-source-catalog-governance-ui`
 
-- [ ] Establish compatible structured API errors and `#source-catalogs` route.
-- [ ] Build revision health, discovery, diff, durable validation/manual action,
+- [x] Establish compatible structured API errors and `#source-catalogs` route.
+- [x] Build revision health, discovery, diff, durable validation/manual action,
   real Automation impact, publish/rollback, and immutable history.
-- [ ] Prove page load is read-only and stale impact/candidate cannot publish.
-- [ ] Pass feature-focused tests and build checkpoint; do not rerun unrelated
+- [x] Prove page load is read-only and stale impact/candidate cannot publish.
+- [x] Pass feature-focused tests and build checkpoint; do not rerun unrelated
   backend suites.
-- [ ] Commit and archive after its Trellis check.
+- [x] Commit and archive after its Trellis check.
 
 Rollback: hide/remove the frontend route without changing active Catalog state;
 CLI/API publication remains server-gated.
@@ -56,16 +56,16 @@ CLI/API publication remains server-gated.
 
 Task: `07-18-task-control-board-wizard-ui`
 
-- [ ] Add the narrow read-only Automation review/fingerprint seam with focused
+- [x] Add the narrow read-only Automation review/fingerprint seam with focused
   backend contract tests.
-- [ ] Establish feature-local Crawl Control route, decoders, versioned draft,
+- [x] Establish feature-local Crawl Control route, decoders, versioned draft,
   reducer, and four-step shell.
-- [ ] Implement Automation listing/detail and One-off listing/detail flows,
+- [x] Implement Automation listing/detail and One-off listing/detail flows,
   Edit, Run now, schedule/timezone, scope tree, workload review, plan dispatch,
   and detail-conflict cancellation recovery.
-- [ ] Keep the legacy Board/forms reachable until all four routes pass.
-- [ ] Pass focused backend/frontend tests and production build checkpoint.
-- [ ] Commit and archive after its Trellis check.
+- [x] Keep the legacy Board/forms reachable until all four routes pass.
+- [x] Pass focused backend/frontend tests and production build checkpoint.
+- [x] Commit and archive after its Trellis check.
 
 Rollback: remove Wizard routes/review endpoint while preserving Automations,
 plans, and the legacy board; stale plans are discarded, never reconstructed.
@@ -74,19 +74,19 @@ plans, and the legacy board; stale plans are discarded, never reconstructed.
 
 Task: `07-21-task-control-board-operations-ui`
 
-- [ ] Add the narrow Board V2/source-summary/action-capability and normalized
+- [x] Add the narrow Board V2/source-summary/action-capability and normalized
   single-task projections with focused backend tests.
-- [ ] Implement `#scheduler` source tabs/banner, Needs attention, Active runs,
+- [x] Implement `#scheduler` source tabs/banner, Needs attention, Active runs,
   Upcoming Automation table, and All clear.
-- [ ] Implement Pause/Resume, Archive/Restore, permanent-delete impact, and
+- [x] Implement Pause/Resume, Archive/Restore, permanent-delete impact, and
   links to Wizard/Governance/Logs.
-- [ ] Refactor `#crawl-tasks?task=<id>` Task Details to use normalized authority,
+- [x] Refactor `#crawl-tasks?task=<id>` Task Details to use normalized authority,
   workload/snapshot, issue/manual-action, recovery, and cancellation fields.
-- [ ] Remove ordinary raw `manual_action`/`request_payload` JSON rendering.
-- [ ] Retire legacy scheduler composition only after parity tests pass; remove
+- [x] Remove ordinary raw `manual_action`/`request_payload` JSON rendering.
+- [x] Retire legacy scheduler composition only after parity tests pass; remove
   the temporary switch before acceptance.
-- [ ] Pass focused backend/frontend tests and production build checkpoint.
-- [ ] Commit and archive after its Trellis check.
+- [x] Pass focused backend/frontend tests and production build checkpoint.
+- [x] Commit and archive after its Trellis check.
 
 Rollback: switch `#scheduler` back to the old composition while leaving backend
 state untouched. Retain normalized Task Details/API work if only the board
@@ -108,21 +108,21 @@ visual composition is reverted.
 
 ## Parent integration review
 
-- [ ] Published candidate/revision state, wizard catalog selection, Dispatch
+- [x] Published candidate/revision state, wizard catalog selection, Dispatch
   Plan authority, Board, and Task Details show identical Source/Revision IDs.
-- [ ] Candidate data cannot enter scope validation or runtime execution.
-- [ ] Automation review and save revalidate the same configuration/revision;
+- [x] Candidate data cannot enter scope validation or runtime execution.
+- [x] Automation review and save revalidate the same configuration/revision;
   One-off and Run now consume the exact reviewed plan fingerprint.
-- [ ] Board section membership, priority, action capabilities, schedule summary,
+- [x] Board section membership, priority, action capabilities, schedule summary,
   latest outcome, and catalog health are backend-owned.
-- [ ] Page Depth/Run Page Cap and Detail Run Cap/Recovery Segment/snapshot/future
+- [x] Page Depth/Run Page Cap and Detail Run Cap/Recovery Segment/snapshot/future
   backlog remain distinct end to end.
-- [ ] Pause/Archive do not imply run cancellation; run cancellation remains
+- [x] Pause/Archive do not imply run cancellation; run cancellation remains
   `cancelling → cancelled` and preserves committed work.
-- [ ] Task Details and all new features contain no raw payload/event parsing for
+- [x] Task Details and all new features contain no raw payload/event parsing for
   scope, readiness, metrics, or recovery actions.
-- [ ] CTgoodjobs exposes headed-only behavior.
-- [ ] Browser hash back/forward, versioned draft corruption/storage failure,
+- [x] CTgoodjobs exposes headed-only behavior.
+- [x] Browser hash back/forward, versioned draft corruption/storage failure,
   request abort/version guards, keyboard/focus, and narrow desktop pass.
 
 ## Validation budget
@@ -163,9 +163,9 @@ new regression evidence.
 
 ## Final handoff
 
-- [ ] All three UI children are checked, committed, and archived.
-- [ ] Parent acceptance criteria map to exact test/evidence paths.
-- [ ] Any direct integration fix is placed in a separately approved child; do
+- [x] All three UI children are checked, committed, and archived.
+- [x] Parent acceptance criteria map to exact test/evidence paths.
+- [x] Any direct integration fix is placed in a separately approved child; do
   not silently start the parent.
-- [ ] Update `docs/20260718.md` and run `trellis-finish-work` once the complete
+- [x] Update `docs/20260718.md` and run `trellis-finish-work` once the complete
   Crawl Control UI program is accepted.

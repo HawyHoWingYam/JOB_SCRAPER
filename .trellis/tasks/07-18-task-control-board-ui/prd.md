@@ -162,22 +162,22 @@ files or shared seams overlap.
 
 - [x] Versioned backend, three active Catalog Revisions, cutover, bounded smoke
   authority, cancellation acknowledgement, and rollback evidence are complete.
-- [ ] Governance UI cannot expose a candidate as executable or publish with
+- [x] Governance UI cannot expose a candidate as executable or publish with
   stale validation/impact.
-- [ ] All four authoring flows, Edit, and Run now show server-owned reviewed
+- [x] All four authoring flows, Edit, and Run now show server-owned reviewed
   scope/workload/readiness and dispatch exactly the reviewed plan.
-- [ ] Board sections, source summaries, Automation table, lifecycle actions,
+- [x] Board sections, source summaries, Automation table, lifecycle actions,
   and Task Details consume normalized backend projections.
-- [ ] Listing and detail Task Details distinguish authored/resolved authority,
+- [x] Listing and detail Task Details distinguish authored/resolved authority,
   workload/snapshot progress, future backlog, manual action, and cancellation
   without raw JSON rendering.
-- [ ] `cancelling` remains pending until backend `cancelled` acknowledgement;
+- [x] `cancelling` remains pending until backend `cancelled` acknowledgement;
   repeated actions are disabled and fresh readiness is built afterward.
-- [ ] Hash back/forward, draft corruption/storage failure, stale responses,
+- [x] Hash back/forward, draft corruption/storage failure, stale responses,
   structured errors, keyboard/focus, and narrow-desktop behavior are tested.
-- [ ] Governance, Wizard, and Board children pass their focused checks; the full
+- [x] Governance, Wizard, and Board children pass their focused checks; the full
   frontend suite/build runs once at the final UI integration gate.
-- [ ] Parent integration confirms no automatic publication, runtime discovery,
+- [x] Parent integration confirms no automatic publication, runtime discovery,
   static executable fallback, implicit categoryless query, or React payload
   archaeology remains.
 
