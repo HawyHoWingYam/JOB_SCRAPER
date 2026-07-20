@@ -20,15 +20,18 @@ Inline mode applies: each child loads `trellis-before-dev` before editing and do
 
 ## Parent coordination checklist
 
-- [ ] Confirm every child PRD states its real dependencies and excludes tree-position assumptions.
-- [ ] Confirm every child design uses the parent Module seams and ubiquitous language.
-- [ ] Confirm common `RevisionRef`, `Provenance`, `DecisionCommand`, audit, idempotency, and conflict contracts are stable before children 2–5 start.
-- [ ] Confirm Source Catalog integration is an Adapter and not a new crawl authority in this task.
-- [ ] Confirm domain children own their migrations, rebuild commands, Interface tests, and compatibility adapters.
-- [ ] Confirm product surfaces consume real backend schemas and cannot execute decisions outside governance routes.
-- [ ] Confirm cutover uses dry-run, backup identity, writer quiescence, checkpoints, reconciliation, and rollback.
-- [ ] Perform a final terminology search for retired labels: `Job Type`, `AI Category`, bare canonical `Classification`, and `Provisional Skills`.
-- [ ] Perform a final legacy-field search and classify every remaining use as archived evidence, compatibility adapter, or defect.
+- [x] Confirm every child PRD states its real dependencies and excludes tree-position assumptions.
+- [x] Confirm every child design uses the parent Module seams and ubiquitous language.
+- [x] Confirm common `RevisionRef`, `Provenance`, `DecisionCommand`, audit, idempotency, and conflict contracts are stable before children 2–5 start.
+- [x] Confirm Source Catalog integration is an Adapter and not a new crawl authority in this task.
+- [x] Confirm domain children own their migrations, rebuild commands, Interface tests, and compatibility adapters.
+- [x] Confirm product surfaces consume real backend schemas and cannot execute decisions outside governance routes.
+- [x] Confirm cutover uses dry-run, backup identity, writer quiescence, checkpoints, reconciliation, and rollback.
+- [x] Perform a final terminology search for retired labels: `Job Type`, `AI Category`, bare canonical `Classification`, and `Provisional Skills`.
+- [x] Perform a final legacy-field search and classify every remaining use as archived evidence, compatibility adapter, or defect.
+
+Detailed evidence and the compatibility/live-operation dispositions are recorded
+in `research/parent-integration-acceptance.md`.
 
 ## Integration validation commands
 
@@ -47,14 +50,14 @@ Before final acceptance, run package-specific checks from `.trellis/spec/backend
 
 ## Cross-child integration scenarios
 
-1. A JobsDB Job with multiple source classifications and `Full time + Permanent` retains all raw evidence, produces two Employment Types, and never invents Primary classification.
-2. An OfferToday Job with multiple `jobFunctions` preserves every path; one valid constrained AI Job Subcategory assignment records full provenance.
-3. An invalid/fallback canonical decision leaves the Job Unassigned and appears in Job Taxonomy Review; operator resolution is idempotent/audited and triggers embedding invalidation.
-4. A company source label matching an approved HSIC mapping creates a most-specific Company Industry Assignment; ancestor filter includes it.
-5. An unmapped company label and AI recommendation create a Company Industry Review Item; no assignment occurs before local-operator decision.
-6. A technical unknown creates a Skill Candidate and Unreviewed Skill Mentions; operator merge rewrites all affected mentions and creates governed Job-Skill links atomically.
-7. Job Browser, Job Detail, Companies, Dashboard, and governance queues serialize and render the same contract and language.
-8. Cutover dry-run and execute preserve 17k+ Job corpus identities/raw evidence, archive legacy values, rebuild projections, reindex embeddings, and pass reconciliation before writers reopen.
+1. [x] A JobsDB Job with multiple source classifications and `Full time + Permanent` retains all raw evidence, produces two Employment Types, and never invents Primary classification.
+2. [x] An OfferToday Job with multiple `jobFunctions` preserves every path; one valid constrained AI Job Subcategory assignment records full provenance.
+3. [x] An invalid/fallback canonical decision leaves the Job Unassigned and appears in Job Taxonomy Review; operator resolution is idempotent/audited and triggers embedding invalidation.
+4. [x] A company source label matching an approved HSIC mapping creates a most-specific Company Industry Assignment; ancestor filter includes it.
+5. [x] An unmapped company label and AI recommendation create a Company Industry Review Item; no assignment occurs before local-operator decision.
+6. [x] A technical unknown creates a Skill Candidate and Unreviewed Skill Mentions; operator merge rewrites all affected mentions and creates governed Job-Skill links atomically.
+7. [x] Job Browser, Job Detail, Companies, Dashboard, and governance queues serialize and render the same contract and language.
+8. [x] Disposable cutover dry-run/execute rehearsals preserve the documented 17,596-Job corpus identities/raw evidence, archive legacy values, rebuild projections, reindex embeddings, and pass reconciliation before simulated writer reopening. Live execution remains separately approved.
 
 ## Release and rollback gates
 

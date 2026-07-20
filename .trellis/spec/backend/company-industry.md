@@ -169,6 +169,11 @@ seed materialization tests, or raw guard checks at the live corpus.
 - Company state returns complete assignment and review-reference arrays.
   Ancestor filters expand descendants inside the active revision and match any
   active assignment; display labels and `companies.industry` are excluded.
+- The legacy Job Browser `industry` request field is retired. Any non-empty
+  value fails validation with `industry is retired; use
+  company_industry_node_ids`; the compatibility `industries` option array is
+  returned empty. Never translate display text or restore direct
+  `Company.industry` equality as a fallback predicate.
 - Review pagination is newest-first by `(created_at, id)` with a stable cursor.
   Mapping and audit reads expose operator provenance and immutable audit IDs.
 - Compatibility projection returns the explicit governed Primary, a single
@@ -195,6 +200,7 @@ seed materialization tests, or raw guard checks at the live corpus.
 | Review cursor/filter/status/limit invalid | Stable `COMPANY_INDUSTRY_REVIEW_*_INVALID`, HTTP 422 |
 | Audit cursor invalid | `422 / COMPANY_INDUSTRY_AUDIT_CURSOR_INVALID` |
 | Unknown descendant filter node | `COMPANY_INDUSTRY_FILTER_NODE_INVALID`; no fallback match |
+| Legacy Job search `industry` is non-empty | HTTP/Pydantic 422 directing the caller to `company_industry_node_ids`; no scalar predicate |
 | Manual, AI, unmapped, invalid, or conflicting evidence | Active review; zero assignment |
 | Exact evidence/outcome replay | `changed=false`; no duplicate assignment/review/outbox |
 | Changed same-node evidence | Supersede old row with timestamp; create next active version |
@@ -236,6 +242,11 @@ seed materialization tests, or raw guard checks at the live corpus.
   crawl tests must keep their Industry projection test doubles current.
 - `test_company_industry_architecture.py` proves workers cannot reference human
   decision interfaces and only the Module constructs assignment rows.
+- `test_job_intelligence_response_contracts.py` rejects legacy scalar Industry
+  at both the schema and `GET /jobs/search` HTTP boundaries, proves the GET
+  replacement accepts stable node IDs, and retains ancestor/descendant
+  semantics; `test_source_job_attributes.py` proves filter options publish no
+  raw legacy Industry strings.
 - `test_company_industry_migration.py` covers additive/no-data migration,
   application-level 1,814-node plus crosswalk materialization against the
   migrated schema, ready/content/CAS guards, Primary uniqueness, hash/timestamp

@@ -12,6 +12,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 import pytest
 from sqlalchemy import create_engine, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
@@ -81,7 +82,7 @@ def company_industry_revision_db():
     database_url = os.getenv("JOB_INTELLIGENCE_TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("JOB_INTELLIGENCE_TEST_DATABASE_URL is not configured")
-    if not database_url.rsplit("/", 1)[-1].endswith("_test"):
+    if not (make_url(database_url).database or "").endswith("_test"):
         pytest.fail("Company Industry tests require a dedicated *_test database")
     engine = create_engine(database_url)
     tables = (

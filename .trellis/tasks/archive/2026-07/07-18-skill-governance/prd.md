@@ -24,14 +24,19 @@ Establish a governed Skill Taxonomy and explicit Skill Mention/Skill Candidate l
 
 ## Acceptance Criteria
 
-- [ ] Static Skill seed/aliases/curations have no orphan targets, collisions, or invalid paths.
-- [ ] Database contains a governed revision and constrained statuses/resolutions; no free-string transition bypass exists.
-- [ ] Deterministic known alias resolves without Candidate; unknown technical evidence creates/updates one Candidate and unreviewed mentions.
-- [ ] AI/fuzzy recommendations never execute Candidate actions.
-- [ ] Merge/create/generic/reject actions update every affected mention and projection atomically with audit/outbox/idempotency/version checks.
-- [ ] Governed Skills alone appear in ordinary search/recommendation/analytics; Job Detail labels secondary evidence `Unreviewed Skill Mentions`.
-- [ ] Deleting/retiring Skills cannot leave a silent `match_existing` mention with null Skill.
-- [ ] Backend serialization and frontend contract fixtures cover mixed governed/unreviewed/generic/rejected cases.
+- [x] Static Skill seed/aliases/curations have no orphan targets, collisions, or invalid paths.
+- [x] Database contains a governed revision and constrained statuses/resolutions; no free-string transition bypass exists.
+- [x] Deterministic known alias resolves without Candidate; unknown technical evidence creates/updates one Candidate and unreviewed mentions.
+- [x] AI/fuzzy recommendations never execute Candidate actions.
+- [x] Merge/create/generic/reject actions update every affected mention and projection atomically with audit/outbox/idempotency/version checks.
+- [x] Governed Skills alone appear in ordinary search/recommendation/analytics; Job Detail labels secondary evidence `Unreviewed Skill Mentions`.
+- [x] Deleting/retiring Skills cannot leave a silent `match_existing` mention with null Skill.
+- [x] Backend serialization and frontend contract fixtures cover mixed governed/unreviewed/generic/rejected cases.
+
+These criteria were reconciled against the implemented seed, schema,
+normalization, Candidate-decision, governed-projection, API, architecture, and
+fixture tests during the parent integration audit on 2026-07-20. Live
+destructive rebuild remains separately gated cutover work.
 
 ## Dependencies and scope
 

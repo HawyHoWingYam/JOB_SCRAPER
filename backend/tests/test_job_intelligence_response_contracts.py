@@ -7,11 +7,15 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
+from app.api import jobs as jobs_api
 from app.api.job_intelligence import (
     list_job_taxonomy_audit_events,
     read_job_intelligence_governance_summary,
@@ -24,7 +28,7 @@ from app.api.jobs import (
     get_job,
 )
 from app.api.stats import get_dashboard_category_stats
-from app.database import Base
+from app.database import Base, get_db
 from app.job_intelligence.foundation import Provenance
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.job_intelligence.source_attributes import (
@@ -119,7 +123,7 @@ def product_contract_db():
     database_url = os.getenv("JOB_INTELLIGENCE_TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("JOB_INTELLIGENCE_TEST_DATABASE_URL is not configured")
-    if not database_url.rsplit("/", 1)[-1].endswith("_test"):
+    if not (make_url(database_url).database or "").endswith("_test"):
         pytest.fail("Product response contracts require a dedicated *_test database")
 
     engine = create_engine(database_url)
@@ -361,6 +365,13 @@ def _seed_summary_state(db) -> dict[str, object]:
         "skill_candidate_id": skill_candidate.id,
         "now": now,
     }
+
+
+def _job_search_client(db) -> TestClient:
+    app = FastAPI()
+    app.include_router(jobs_api.router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db
+    return TestClient(app)
 
 
 def _seed_rich_job_detail_state(db) -> dict[str, object]:
@@ -1675,6 +1686,42 @@ def test_job_browser_filters_use_governed_ids_and_industry_descendants(
     assert [job.id for job in matches] == [state["job_id"]]
     assert filters.canonical_subcategory_ids == [str(state["canonical_subcategory_id"])]
     assert filters.company_industry_node_ids == [str(state["industry_section_id"])]
+
+
+def test_job_browser_rejects_legacy_company_industry_filter_authority() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="industry is retired; use company_industry_node_ids",
+    ):
+        JobSearchFiltersSchema(industry="Legacy evidence only")
+
+
+def test_get_job_browser_rejects_legacy_company_industry_filter_with_http_422() -> None:
+    response = _job_search_client(None).get(
+        "/api/v1/jobs/search",
+        params={"industry": "Legacy evidence only"},
+    )
+
+    assert response.status_code == 422
+    assert "industry is retired; use company_industry_node_ids" in response.text
+
+
+def test_get_job_browser_filters_by_company_industry_node_ids(
+    product_contract_db,
+) -> None:
+    state = _seed_rich_job_detail_state(product_contract_db)
+
+    response = _job_search_client(product_contract_db).get(
+        "/api/v1/jobs/search",
+        params={
+            "company_industry_node_ids": str(state["industry_section_id"]),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert [job["id"] for job in payload["jobs"]] == [str(state["job_id"])]
 
 
 def test_job_browser_cards_expose_batched_canonical_state(

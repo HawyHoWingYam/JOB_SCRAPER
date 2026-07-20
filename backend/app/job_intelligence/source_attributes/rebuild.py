@@ -123,6 +123,8 @@ class _SourceCounters:
 class SourceJobAttributeRebuildInspector:
     """Inspect historical Source Job Attribute recoverability without writes."""
 
+    _STAGING_LOOKUP_BATCH_SIZE = 100
+
     def __init__(self, db: Session) -> None:
         self.db = db
 
@@ -296,19 +298,32 @@ class SourceJobAttributeRebuildInspector:
         self,
         jobs: Sequence[Job],
     ) -> list[CrawlJobListing]:
-        source_keys = tuple((job.source_site, job.source_job_id) for job in jobs)
+        source_keys = tuple(
+            dict.fromkeys((job.source_site, job.source_job_id) for job in jobs)
+        )
         if not source_keys:
             return []
-        return (
-            self.db.query(CrawlJobListing)
-            .filter(
-                tuple_(
-                    CrawlJobListing.source_site,
-                    CrawlJobListing.source_job_id,
-                ).in_(source_keys)
+
+        staging_rows: list[CrawlJobListing] = []
+        for start in range(
+            0,
+            len(source_keys),
+            self._STAGING_LOOKUP_BATCH_SIZE,
+        ):
+            source_key_batch = source_keys[
+                start : start + self._STAGING_LOOKUP_BATCH_SIZE
+            ]
+            staging_rows.extend(
+                self.db.query(CrawlJobListing)
+                .filter(
+                    tuple_(
+                        CrawlJobListing.source_site,
+                        CrawlJobListing.source_job_id,
+                    ).in_(source_key_batch)
+                )
+                .all()
             )
-            .all()
-        )
+        return staging_rows
 
     def _evidence_for_job(
         self,

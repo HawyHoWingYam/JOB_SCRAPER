@@ -2,6 +2,7 @@ import asyncio
 import ast
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -10,6 +11,7 @@ from threading import Barrier
 
 import pytest
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -28,6 +30,7 @@ from app.job_intelligence.canonical_taxonomy import (
 )
 from app.job_intelligence.canonical_taxonomy.breadcrumbs import canonical_breadcrumb
 from app.job_intelligence.source_attributes import (
+    OfferTodaySourceEvidenceAdapter,
     SourceCatalogRevisionRef,
     SourceClassificationNodeEvidence,
     SourceClassificationPathEvidence,
@@ -89,6 +92,8 @@ def canonical_taxonomy_db():
     database_url = os.getenv("JOB_INTELLIGENCE_TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("JOB_INTELLIGENCE_TEST_DATABASE_URL is not configured")
+    if not (make_url(database_url).database or "").endswith("_test"):
+        pytest.fail("Canonical governance tests require a dedicated *_test database")
 
     engine = create_engine(database_url)
     tables = (
@@ -1216,6 +1221,144 @@ def test_evaluate_accepts_provenanced_ai_choice_inside_allowed_slice(
         .count()
         == 1
     )
+
+
+def test_offertoday_paths_flow_into_constrained_ai_assignment_with_provenance(
+    canonical_taxonomy_db,
+):
+    seed = json.loads(SEED_PATH.read_text())
+    mapping_seed = json.loads(MAPPING_PATH.read_text())
+    publisher = CanonicalTaxonomyPublisher(canonical_taxonomy_db)
+    taxonomy_revision = publisher.materialize(seed)
+    publisher.activate(taxonomy_revision, expected_lock_version=0)
+    _publish_fixture_catalogs(canonical_taxonomy_db, mapping_seed)
+    mapping_revision = publisher.materialize_mapping(seed, mapping_seed)
+    publisher.activate_mapping(mapping_revision, expected_lock_version=0)
+
+    company = Company(
+        company_id="canonical-offertoday-ai-company",
+        source_site="offertoday",
+        source_company_id="canonical-offertoday-ai-company",
+        name="OfferToday Constrained AI Company",
+    )
+    job = Job(
+        job_id="canonical-offertoday-ai-job",
+        source_site="offertoday",
+        source_job_id="canonical-offertoday-ai-job",
+        company=company,
+        title="Product Design Engineer",
+    )
+    canonical_taxonomy_db.add(job)
+    canonical_taxonomy_db.flush()
+    provenance = Provenance(
+        method="offertoday-detail-payload",
+        source_site="offertoday",
+        evidence_refs=({"kind": "detail-payload", "source_job_id": job.source_job_id},),
+        captured_at=datetime(2026, 7, 20, 10, 0, tzinfo=timezone.utc),
+    )
+    extracted = OfferTodaySourceEvidenceAdapter().extract(
+        {
+            "jobFunctions": [
+                {
+                    "code": "118000",
+                    "name": "Information & Communication Technology",
+                    "children": [],
+                },
+                {"code": "110000", "name": "Design", "children": []},
+            ],
+        },
+        provenance=provenance,
+    )
+    catalog_revision = (
+        canonical_taxonomy_db.query(SourceCatalogRevision)
+        .filter(SourceCatalogRevision.source_site == "offertoday")
+        .one()
+    )
+    catalog_ref = SourceCatalogRevisionRef(
+        source_site="offertoday",
+        revision_id=catalog_revision.id,
+        fingerprint=catalog_revision.fingerprint,
+    )
+    evidence = replace(
+        extracted,
+        classification_paths=tuple(
+            replace(path, source_catalog_revision=catalog_ref)
+            for path in extracted.classification_paths
+        ),
+    )
+    source_view = (
+        SourceJobAttributes(canonical_taxonomy_db)
+        .project(
+            job.id,
+            evidence,
+        )
+        .view
+    )
+    classifier_output = CanonicalClassifierOutput(
+        decision="select_existing",
+        target_code=(
+            "information_communication_technology.product_quality.ui_ux_design"
+        ),
+        provenance=Provenance(
+            method="constrained-ai",
+            source_site="offertoday",
+            evidence_refs=({"kind": "classifier-response", "id": "offertoday-ai-1"},),
+            model_provider="openai",
+            model_name="gpt-5-mini",
+            model_version="2026-07-01",
+            captured_at=datetime(2026, 7, 20, 10, 5, tzinfo=timezone.utc),
+        ),
+    )
+
+    result = CanonicalJobTaxonomy(canonical_taxonomy_db).evaluate(
+        job.id,
+        source_view,
+        classifier_output,
+    )
+
+    assignment = canonical_taxonomy_db.get(
+        JobTaxonomyAssignment,
+        result.assignment_id,
+    )
+    assert assignment is not None
+    assert {
+        "state": result.state,
+        "paths": [
+            [node.source_classification_id for node in path.nodes]
+            for path in source_view.source_classification_paths
+        ],
+        "primary_flags": [
+            path.is_primary for path in source_view.source_classification_paths
+        ],
+        "target": assignment.breadcrumb["subcategory"]["code"],
+        "method": assignment.method,
+        "model": (
+            assignment.model_provider,
+            assignment.model_name,
+            assignment.model_version,
+        ),
+        "mapping_count": len(assignment.mapping_ids),
+        "source_path_refs": len(
+            [
+                item
+                for item in assignment.source_evidence_refs
+                if item.get("kind") == "source-classification-path"
+            ]
+        ),
+    } == {
+        "state": "assigned",
+        "paths": [["offertoday:118000"], ["offertoday:110000"]],
+        "primary_flags": [False, False],
+        "target": ("information_communication_technology.product_quality.ui_ux_design"),
+        "method": "constrained_ai",
+        "model": ("openai", "gpt-5-mini", "2026-07-01"),
+        "mapping_count": 2,
+        "source_path_refs": 2,
+    }
+    assert assignment.source_evidence_refs[-1] == {
+        "kind": "classifier-response",
+        "id": "offertoday-ai-1",
+    }
 
 
 def test_evaluate_preserves_out_of_slice_classifier_evidence_in_review(

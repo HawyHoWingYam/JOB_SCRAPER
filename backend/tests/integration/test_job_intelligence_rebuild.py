@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -54,6 +55,7 @@ from app.source_catalog.domain import (
 
 
 SHA_A = "a" * 64
+SCALE_JOB_COUNT = 17_596
 
 
 class AllStoppedWriterStateProvider:
@@ -676,6 +678,121 @@ def test_postgres_inventory_separates_preserved_core_from_legacy_projection(
             "scheduler_dispatches": 0,
         }
         assert {item.state for item in quiescence.writers} == {"stopped"}
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine, checkfirst=True)
+        engine.dispose()
+
+
+def test_cutover_dry_run_preserves_the_documented_17596_job_scale(
+    tmp_path: Path,
+) -> None:
+    database_url = os.getenv("JOB_INTELLIGENCE_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("JOB_INTELLIGENCE_TEST_DATABASE_URL is not configured")
+    if not (make_url(database_url).database or "").endswith("_test"):
+        pytest.fail("Cutover integration tests require a dedicated *_test database")
+
+    engine = create_engine(database_url)
+    session_factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    Base.metadata.drop_all(engine, checkfirst=True)
+    with engine.begin() as connection:
+        connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    Base.metadata.create_all(engine)
+    db = session_factory()
+    try:
+        company = Company(
+            id=UUID(int=SCALE_JOB_COUNT + 1),
+            company_id="scale-company",
+            source_site="jobsdb",
+            source_company_id="scale-company",
+            name="Scale Fixture Company",
+        )
+        db.add(company)
+        db.flush()
+        posted_date = datetime(2026, 7, 18, tzinfo=timezone.utc)
+        for start in range(0, SCALE_JOB_COUNT, 1_000):
+            stop = min(start + 1_000, SCALE_JOB_COUNT)
+            db.execute(
+                Job.__table__.insert(),
+                [
+                    {
+                        "id": UUID(int=index + 1),
+                        "job_id": f"scale-job-{index:05d}",
+                        "source_site": "jobsdb",
+                        "source_job_id": f"scale-job-{index:05d}",
+                        "company_id": company.id,
+                        "title": f"Scale Fixture Job {index:05d}",
+                        "description": f"Preserved description {index:05d}",
+                        "raw_data": {
+                            "fixture": "job-intelligence-parent-integration",
+                            "ordinal": index,
+                        },
+                        "posted_date": posted_date,
+                        "is_deleted": False,
+                    }
+                    for index in range(start, stop)
+                ],
+            )
+        db.commit()
+
+        environment = PostgresCutoverEnvironment(
+            session_factory=session_factory,
+            database_url=database_url,
+            application=ApplicationIdentity(
+                commit="0123456789abcdef",
+                image="job-scraper@sha256:scale-fixture",
+                configuration_hash=SHA_A,
+            ),
+            target_schema_revision="20260719_160000",
+            rebuild=RebuildIdentity(
+                source_attributes="v1",
+                canonical_taxonomy="canonical-job-taxonomy-v1",
+                company_industry="hsic-v2.0-2026-07-19",
+                skills="skills-2026-07-19-v1",
+                embedding_model="all-MiniLM-L6-v2",
+                embedding_version=1,
+            ),
+        )
+        cutover = JobIntelligenceCutover(
+            environment=environment,
+            clock=lambda: datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+        )
+        manifest_path = tmp_path / "scale-manifest.json"
+        checkpoint_dir = tmp_path / "scale-checkpoints"
+
+        manifest = cutover.inventory(output=manifest_path)
+        report = cutover.dry_run(
+            manifest_path=manifest_path,
+            checkpoint_dir=checkpoint_dir,
+        )
+
+        jobs_before = report.preserved_before["jobs-core"]
+        jobs_after = report.preserved_after["jobs-core"]
+        assert jobs_before.count == SCALE_JOB_COUNT
+        assert jobs_after == jobs_before
+        assert jobs_before == manifest.preserved_datasets["jobs-core"]
+        assert report.mutation_detected is False
+        assert set(report.domain_inspections) == {
+            "canonical_taxonomy",
+            "company_industry",
+            "embeddings",
+            "skills",
+            "source_attributes",
+        }
+        assert db.query(Job).count() == SCALE_JOB_COUNT
+        assert db.get(Job, UUID(int=1)).raw_data == {
+            "fixture": "job-intelligence-parent-integration",
+            "ordinal": 0,
+        }
+        assert db.get(Job, UUID(int=SCALE_JOB_COUNT)).raw_data == {
+            "fixture": "job-intelligence-parent-integration",
+            "ordinal": SCALE_JOB_COUNT - 1,
+        }
     finally:
         db.close()
         Base.metadata.drop_all(engine, checkfirst=True)

@@ -25,15 +25,20 @@ Replace polluted free-text Company Industry with immutable HSIC V2.0-based gover
 
 ## Acceptance Criteria
 
-- [ ] HSIC revision has all five levels, valid parentage/codes, bilingual labels, official provenance, and deterministic content hash.
-- [ ] Re-importing identical release is deterministic; changed content requires a new revision.
-- [ ] Assignment targets the most-specific supported node; ancestors are not duplicated and ancestor filters include descendants.
-- [ ] At most one active Primary exists per Company, and Primary always has authoritative/operator basis.
-- [ ] Only valid code/reviewed mapping auto-assigns; manual/AI/unmapped evidence creates review item without assignment.
-- [ ] Review/mapping decisions are versioned, idempotent, audited, and cannot create HSIC nodes.
-- [ ] Every Company Industry decision records `local-operator`, and ingest/recommendation worker dependencies cannot reach decision Interfaces.
-- [ ] No ingest path writes a Job Source Classification into Company Industry.
-- [ ] Legacy audit/dry-run identifies polluted, recoverable, unknown, and conflicting Companies without guessing.
+- [x] HSIC revision has all five levels, valid parentage/codes, bilingual labels, official provenance, and deterministic content hash.
+- [x] Re-importing identical release is deterministic; changed content requires a new revision.
+- [x] Assignment targets the most-specific supported node; ancestors are not duplicated and ancestor filters include descendants.
+- [x] At most one active Primary exists per Company, and Primary always has authoritative/operator basis.
+- [x] Only valid code/reviewed mapping auto-assigns; manual/AI/unmapped evidence creates review item without assignment.
+- [x] Review/mapping decisions are versioned, idempotent, audited, and cannot create HSIC nodes.
+- [x] Every Company Industry decision records `local-operator`, and ingest/recommendation worker dependencies cannot reach decision Interfaces.
+- [x] No ingest path writes a Job Source Classification into Company Industry.
+- [x] Legacy audit/dry-run identifies polluted, recoverable, unknown, and conflicting Companies without guessing.
+
+These criteria were reconciled against the implemented HSIC publication,
+assignment, mapping, decision, worker-isolation, contamination-guard, API, and
+read-only rebuild tests during the parent integration audit on 2026-07-20.
+Destructive live cleanup remains separately gated cutover work.
 
 ## Dependencies and scope
 

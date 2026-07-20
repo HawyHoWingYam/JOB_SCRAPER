@@ -106,27 +106,32 @@ Preserve complete source-owned classification and employment evidence for every 
 
 ## Acceptance Criteria
 
-- [ ] AC-R1: Worker/import architecture tests prove automated projection cannot
+- [x] AC-R1: Worker/import architecture tests prove automated projection cannot
   reach Foundation human-decision Interfaces, while persisted provenance and
   outbox payloads follow the reviewed Foundation value contracts.
-- [ ] AC-R2: Multi-classification JobsDB and OfferToday fixtures persist every
+- [x] AC-R2: Multi-classification JobsDB and OfferToday fixtures persist every
   semantic path/node in source order; CTgoodjobs remains a valid root-only path;
   no Source without explicit primary evidence produces `is_primary=true`.
-- [ ] AC-R2-History: A path with an unknown catalog revision remains queryable
+- [x] AC-R2-History: A path with an unknown catalog revision remains queryable
   with `catalog_revision=null` and `provenance_limited=true`; a known revision
   must belong to the same Source and cannot be cascade-deleted.
-- [ ] AC-R3: Employment combinations normalize to multiple governed codes and
+- [x] AC-R3: Employment combinations normalize to multiple governed codes and
   retain raw labels/codes/order. `Other`, `N, A`, unknown, malformed,
   remote/hybrid/on-site, and working-day values produce no Employment Type.
-- [ ] AC-R4: PostgreSQL tests prove atomic Job/projection/outbox persistence,
+- [x] AC-R4: PostgreSQL tests prove atomic Job/projection/outbox persistence,
   replacement idempotency, constraints/indexes, and Job deletion cascade; new
   writer tests prove legacy source-attribute scalars are not dual-written.
-- [ ] AC-R5: List/detail schemas return complete arrays and stable identities;
+- [x] AC-R5: List/detail schemas return complete arrays and stable identities;
   filter tests prove OR-within/AND-across semantics and no authoritative
   comma-joined/scalar equality path.
-- [ ] AC-R6: The dry-run report deterministically distinguishes recovered,
+- [x] AC-R6: The dry-run report deterministically distinguishes recovered,
   ambiguous, unknown, conflicting, provenance-limited, and unrecoverable rows
   and leaves all database tables byte-for-byte unchanged.
+
+These criteria were reconciled against the implemented PostgreSQL, adapter,
+API, architecture, and deterministic rebuild tests during the parent
+integration audit on 2026-07-20. Live corpus execution remains child 7 and
+operator scope.
 
 ## Dependencies and out of scope
 

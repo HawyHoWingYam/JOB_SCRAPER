@@ -180,31 +180,36 @@ Unassigned/review state.
 
 ## Acceptance Criteria
 
-- [ ] AC-R1: A validated explicit-code seed publishes an immutable replacement
+- [x] AC-R1: A validated explicit-code seed publishes an immutable replacement
   release with exactly 25 Domains/63 Categories/198 Subcategories and no
   `General → General` nodes; its active pointer cannot reference partial/
   orphan/duplicate materialization, and rename/reparent tests prove codes do
   not drift.
-- [ ] AC-R2: Mapping publication pins published Source Catalog revisions,
+- [x] AC-R2: Mapping publication pins published Source Catalog revisions,
   validates exact identity coverage, exclusive disposition cardinality, and
   stable-code targets, reports the 15-ID CTgoodjobs legacy discrepancy without
   promoting it to authority, and passes a deterministic multi-path truth-table
   test matrix.
-- [ ] AC-R3: Reviewed mapping and valid constrained-AI outcomes assign only
+- [x] AC-R3: Reviewed mapping and valid constrained-AI outcomes assign only
   existing assignable Subcategories with complete provenance; every invalid/
   fallback/default/create-new/missing-provenance branch produces review and no
   legacy/new node write.
-- [ ] AC-R4: PostgreSQL tests prove one current assignment/one active review,
+- [x] AC-R4: PostgreSQL tests prove one current assignment/one active review,
   same-revision FKs, immutable nodes, replacement idempotency, decision stale/
   confirmation/target/replay behavior, and assignment/review/audit/outbox
   atomicity across two Sessions.
-- [ ] AC-R5: Versioned Job/API/filter/embedding contracts distinguish assigned
+- [x] AC-R5: Versioned Job/API/filter/embedding contracts distinguish assigned
   from Unassigned, use stable governed identity, exclude legacy/fallback
   authority, export real backend fixtures, and architecture tests prove this
   child does not switch existing live product consumers.
-- [ ] AC-R6: The dry-run report is deterministic, performs zero writes,
+- [x] AC-R6: The dry-run report is deterministic, performs zero writes,
   classifies legacy comparisons honestly, and no live migration/backfill/
   activation/cutover command is exposed by this child.
+
+These criteria were reconciled against the implemented release, mapping,
+evaluation, decision, API, architecture, and deterministic rebuild tests during
+the parent integration audit on 2026-07-20. Live activation, consumer switch,
+embedding rebuild, and corpus mutation remain separately gated cutover work.
 
 ## Dependencies and out of scope
 

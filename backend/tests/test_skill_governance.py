@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, func, inspect, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -77,7 +78,7 @@ def skill_governance_db():
     database_url = os.getenv("JOB_INTELLIGENCE_TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("JOB_INTELLIGENCE_TEST_DATABASE_URL is not configured")
-    if not database_url.rsplit("/", 1)[-1].endswith("_test"):
+    if not (make_url(database_url).database or "").endswith("_test"):
         pytest.fail("Skill governance tests require a dedicated *_test database")
 
     engine = create_engine(database_url)

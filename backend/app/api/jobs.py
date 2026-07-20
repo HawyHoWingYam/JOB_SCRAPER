@@ -7,6 +7,8 @@ from datetime import date
 from io import StringIO
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from sqlalchemy.orm import Session, joinedload, object_session, selectinload
 from sqlalchemy import and_, false, func, not_, or_
 from typing import Literal, Optional, List
@@ -395,8 +397,6 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
         source_classification_ids=filters.source_classification_ids or [],
         employment_type_codes=filters.employment_type_codes or [],
     )
-    if filters.industry and not filters.company_industry_node_ids:
-        query = query.filter(Company.industry == filters.industry)
     if filters.posted_date_from:
         query = query.filter(func.date(Job.posted_date) >= filters.posted_date_from)
     if filters.posted_date_to:
@@ -587,6 +587,7 @@ def _build_legacy_scope(
     employment_type: Optional[str],
     source_classification_ids: Optional[List[str]],
     employment_type_codes: Optional[List[str]],
+    company_industry_node_ids: Optional[List[str]],
     industry: Optional[str],
     posted_date_from: Optional[date],
     posted_date_to: Optional[date],
@@ -615,6 +616,7 @@ def _build_legacy_scope(
                     employment_type=employment_type,
                     source_classification_ids=source_classification_ids,
                     employment_type_codes=employment_type_codes,
+                    company_industry_node_ids=company_industry_node_ids,
                     industry=industry,
                     posted_date_from=posted_date_from,
                     posted_date_to=posted_date_to,
@@ -932,7 +934,15 @@ async def search_jobs(
         None,
         description="Filter by governed Employment Type codes",
     ),
-    industry: Optional[str] = Query(None, description="Filter by industry"),
+    company_industry_node_ids: Optional[List[str]] = Query(
+        None,
+        description="Filter by governed Company Industry node IDs",
+    ),
+    industry: Optional[str] = Query(
+        None,
+        description="Retired; use company_industry_node_ids",
+        deprecated=True,
+    ),
     posted_date_from: Optional[date] = Query(
         None, description="Filter by posted date from"
     ),
@@ -971,30 +981,34 @@ async def search_jobs(
     db: Session = Depends(get_db),
 ):
     """Search jobs with filters and pagination."""
-    scope = _build_legacy_scope(
-        q=q,
-        source_site=source_site,
-        location=location,
-        region=region,
-        district=district,
-        employment_type=employment_type,
-        source_classification_ids=source_classification_ids,
-        employment_type_codes=employment_type_codes,
-        industry=industry,
-        posted_date_from=posted_date_from,
-        posted_date_to=posted_date_to,
-        experience_years_from=experience_years_from,
-        experience_years_to=experience_years_to,
-        skills=skills,
-        skill_ids=skill_ids,
-        technology_ids=technology_ids,
-        skill_category_ids=skill_category_ids,
-        subcategory_ids=subcategory_ids,
-        job_category_ids=job_category_ids,
-        domain_ids=domain_ids,
-        salary_min=salary_min,
-        salary_max=salary_max,
-    )
+    try:
+        scope = _build_legacy_scope(
+            q=q,
+            source_site=source_site,
+            location=location,
+            region=region,
+            district=district,
+            employment_type=employment_type,
+            source_classification_ids=source_classification_ids,
+            employment_type_codes=employment_type_codes,
+            company_industry_node_ids=company_industry_node_ids,
+            industry=industry,
+            posted_date_from=posted_date_from,
+            posted_date_to=posted_date_to,
+            experience_years_from=experience_years_from,
+            experience_years_to=experience_years_to,
+            skills=skills,
+            skill_ids=skill_ids,
+            technology_ids=technology_ids,
+            skill_category_ids=skill_category_ids,
+            subcategory_ids=subcategory_ids,
+            job_category_ids=job_category_ids,
+            domain_ids=domain_ids,
+            salary_min=salary_min,
+            salary_max=salary_max,
+        )
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
     query = _build_query_from_scope(db, scope)
     return _build_search_response(query, page=page, page_size=page_size)
 
@@ -1089,18 +1103,6 @@ async def get_filter_options(db: Session = Depends(get_db)):
                 )
             )
 
-    # Get unique industries from companies
-    industries = (
-        db.query(Company.industry)
-        .filter(
-            Company.is_deleted.is_(False),
-            Company.industry.isnot(None),
-            Company.industry != "",
-        )
-        .distinct()
-        .all()
-    )
-
     raw_locations = [loc[0] for loc in locations if loc[0]]
 
     return FilterOptionsResponse(
@@ -1116,7 +1118,7 @@ async def get_filter_options(db: Session = Depends(get_db)):
             for item in employment_types
         ],
         source_classifications=source_classifications,
-        industries=[ind[0] for ind in industries if ind[0]],
+        industries=[],
     )
 
 

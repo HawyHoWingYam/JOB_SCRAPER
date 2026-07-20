@@ -149,6 +149,14 @@ class JobSearchFiltersSchema(BaseModel):
         self.employment_type_codes = codes
         return self
 
+    @model_validator(mode="after")
+    def _reject_legacy_company_industry_filter(self):
+        legacy_industry = str(self.industry or "").strip()
+        if legacy_industry:
+            raise ValueError("industry is retired; use company_industry_node_ids")
+        self.industry = None
+        return self
+
 
 class JobSearchLayerSchema(BaseModel):
     client_id: str

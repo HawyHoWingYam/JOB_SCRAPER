@@ -3,7 +3,7 @@
   "name": "job-intelligence-taxonomy-governance",
   "title": "Job intelligence taxonomy and skill governance",
   "description": "Align post-collection job taxonomy, employment type, company industry, source classification snapshots, and governed/provisional skill semantics across UI, backend, and database contracts.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

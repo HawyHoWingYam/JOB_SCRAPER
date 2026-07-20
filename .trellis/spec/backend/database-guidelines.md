@@ -53,6 +53,10 @@ JOB_INTELLIGENCE_TEST_DATABASE_URL=postgresql://.../<dedicated-test-db>
 Never point that key, Alembic rollback tests, or downgrade commands at the live
 development corpus.
 
+Every test suite that reads this key must parse the URL and require the database
+name to end in `_test` before its first `create_engine`, schema DDL, or fixture
+cleanup call. A configured URL is not sufficient evidence of safety.
+
 ### 3. Contracts
 
 `DecisionCommand` contains `subject_id`, domain-owned `action`, optional
@@ -103,6 +107,7 @@ domain hierarchy or mapping rules.
 | release key or hash rebound | `GOVERNANCE_REVISION_CONFLICT` |
 | revision/audit/idempotency UPDATE or DELETE | ORM or PostgreSQL immutability error |
 | malformed audit cursor | Stable `Invalid governance audit cursor` error |
+| Test database URL is configured but its database name does not end in `_test` | Fail before `create_engine` or any DDL; never connect to the configured database |
 
 ### 5. Good / Base / Bad Cases
 
@@ -133,6 +138,13 @@ domain hierarchy or mapping rules.
 - worker import/injection isolation;
 - schema-only Alembic migration plus real disposable-PostgreSQL
   upgrade/trigger/downgrade rehearsal.
+
+`backend/tests/test_job_intelligence_test_safety.py` inventories every
+PostgreSQL-bound Job Intelligence suite. For every engine-opening function, it
+asserts that the parsed `make_url(database_url).database` name is checked for
+the `_test` suffix and fails closed before each engine open, schema DDL, or
+fixture cleanup call. A raw URL-tail check is insufficient because query text
+can masquerade as a database-name suffix.
 
 Targeted checks:
 

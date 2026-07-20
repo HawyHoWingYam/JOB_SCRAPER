@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import create_engine, delete, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
@@ -22,6 +23,7 @@ from app.job_intelligence.foundation import Provenance
 from app.job_intelligence.source_attributes import (
     EMPLOYMENT_TYPE_SEEDS,
     JobsDBSourceEvidenceAdapter,
+    OfferTodaySourceEvidenceAdapter,
     SourceCatalogRevisionRef,
     SourceClassificationNodeEvidence,
     SourceClassificationPathEvidence,
@@ -59,6 +61,8 @@ def source_attribute_db():
     database_url = os.getenv("JOB_INTELLIGENCE_TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("JOB_INTELLIGENCE_TEST_DATABASE_URL is not configured")
+    if not (make_url(database_url).database or "").endswith("_test"):
+        pytest.fail("Source Job Attribute tests require a dedicated *_test database")
     engine = create_engine(database_url)
     tables = (
         Company.__table__,
@@ -149,6 +153,7 @@ def test_project_is_idempotent_through_the_source_job_attributes_interface(
             [node.source_classification_id for node in path.nodes]
             for path in view.source_classification_paths
         ],
+        "primary_flags": [path.is_primary for path in view.source_classification_paths],
         "employment_types": [item.code for item in view.employment_types],
         "source_employment_labels": [
             (label.raw_label, label.mapped_type_code)
@@ -161,6 +166,7 @@ def test_project_is_idempotent_through_the_source_job_attributes_interface(
             ["jobsdb:6281", "jobsdb:6287"],
             ["jobsdb:6092"],
         ],
+        "primary_flags": [False, False],
         "employment_types": ["full_time", "permanent"],
         "source_employment_labels": [
             ("Full-time", "full_time"),
@@ -1241,6 +1247,7 @@ def test_job_filter_options_use_stable_codes_and_source_qualified_identities(
         source_site="jobsdb",
         source_company_id="option-company-1",
         name="Option Company",
+        industry="Legacy filter evidence",
     )
     job = Job(
         job_id="option-job-1",
@@ -1286,6 +1293,7 @@ def test_job_filter_options_use_stable_codes_and_source_qualified_identities(
     assert {
         "employment_types": payload["employment_types"],
         "source_classifications": payload["source_classifications"],
+        "industries": payload["industries"],
     } == {
         "employment_types": [
             {"code": "full_time", "label": "Full-time", "order": 1},
@@ -1305,6 +1313,7 @@ def test_job_filter_options_use_stable_codes_and_source_qualified_identities(
                 "path": "Information Technology / Developers and Programmers",
             },
         ],
+        "industries": [],
     }
 
 
@@ -1586,43 +1595,132 @@ def test_rebuild_inspector_reports_recoverable_and_unrecoverable_without_writes(
     }
 
 
-def test_rebuild_inspector_bulk_loads_job_source_keys_without_n_plus_one(
+def test_rebuild_inspector_batches_source_keys_and_merges_rows_deterministically(
     source_attribute_db,
+    monkeypatch,
 ):
-    company = Company(
-        company_id="inspect-query-company",
+    jobsdb_company = Company(
+        company_id="inspect-query-jobsdb-company",
         source_site="jobsdb",
-        source_company_id="inspect-query-company",
-        name="Query Inspector Company",
+        source_company_id="inspect-query-jobsdb-company",
+        name="JobsDB Query Inspector Company",
     )
-    source_attribute_db.add_all(
-        [
-            Job(
-                job_id=f"inspect-query-{index}",
-                source_site="jobsdb",
-                source_job_id=f"inspect-query-{index}",
-                company=company,
-                title=f"Query evidence {index}",
+    offertoday_company = Company(
+        company_id="inspect-query-offertoday-company",
+        source_site="offertoday",
+        source_company_id="inspect-query-offertoday-company",
+        name="OfferToday Query Inspector Company",
+    )
+    cases = (
+        ("jobsdb", "jobsdb-only", "6281"),
+        ("jobsdb", "shared-key", "6092"),
+        ("jobsdb", "shared-key-2", "6163"),
+        ("offertoday", "offertoday-only", "118000"),
+        ("offertoday", "shared-key", "119000"),
+    )
+    captured_at = datetime(2026, 7, 18, 15, 0, tzinfo=timezone.utc)
+    jobs = []
+    staging_rows = []
+    for index, (source_site, source_job_id, classification_id) in enumerate(cases):
+        company = jobsdb_company if source_site == "jobsdb" else offertoday_company
+        job = Job(
+            job_id=f"inspect-query-{source_site}-{source_job_id}",
+            source_site=source_site,
+            source_job_id=source_job_id,
+            company=company,
+            title=f"Query evidence {index}",
+        )
+        provenance = Provenance(
+            method="historical-fixture",
+            source_site=source_site,
+            evidence_refs=(
+                {"kind": "fixture", "id": f"batch-query-{source_site}-{index}"},
+            ),
+            captured_at=captured_at,
+        )
+        if source_site == "jobsdb":
+            evidence = JobsDBSourceEvidenceAdapter().extract(
+                {
+                    "classifications": [
+                        {
+                            "classification": {
+                                "id": classification_id,
+                                "description": f"JobsDB {classification_id}",
+                            }
+                        }
+                    ]
+                },
+                provenance=provenance,
             )
-            for index in range(3)
-        ]
+        else:
+            evidence = OfferTodaySourceEvidenceAdapter().extract(
+                {
+                    "jobFunctions": [
+                        {
+                            "code": classification_id,
+                            "name": f"OfferToday {classification_id}",
+                            "children": [],
+                        }
+                    ]
+                },
+                provenance=provenance,
+            )
+        jobs.append(job)
+        staging_rows.append(
+            CrawlJobListing(
+                crawl_job_id=UUID(int=index + 1),
+                source_site=source_site,
+                source_job_id=source_job_id,
+                source_url=f"https://example.test/{source_site}/{source_job_id}",
+                listing_payload={"source_attribute_evidence": evidence.to_payload()},
+            )
+        )
+    source_attribute_db.add_all(
+        [jobsdb_company, offertoday_company, *jobs, *staging_rows]
     )
     source_attribute_db.commit()
-    select_statements = []
+    monkeypatch.setattr(
+        SourceJobAttributeRebuildInspector,
+        "_STAGING_LOOKUP_BATCH_SIZE",
+        2,
+        raising=False,
+    )
+    staging_parameter_counts = []
 
-    def capture_selects(_connection, _cursor, statement, *_args):
-        if statement.lstrip().upper().startswith("SELECT"):
-            select_statements.append(statement)
+    def capture_selects(_connection, _cursor, statement, parameters, *_args):
+        if (
+            statement.lstrip().upper().startswith("SELECT")
+            and "FROM crawl_job_listings" in statement
+        ):
+            staging_parameter_counts.append(len(parameters))
 
     engine = source_attribute_db.get_bind()
     event.listen(engine, "before_cursor_execute", capture_selects)
     try:
-        report = SourceJobAttributeRebuildInspector(source_attribute_db).inspect()
+        inspector = SourceJobAttributeRebuildInspector(source_attribute_db)
+        report = inspector.inspect()
     finally:
         event.remove(engine, "before_cursor_execute", capture_selects)
+    recovered = inspector.recover()
 
-    assert report.jobs_inspected == 3
-    assert len(select_statements) == 2
+    assert report.jobs_inspected == 5
+    assert staging_parameter_counts == [4, 4, 2]
+    assert {
+        source.source_site: (source.jobs_inspected, source.recoverable_jobs)
+        for source in report.sources
+    } == {"jobsdb": (3, 3), "offertoday": (2, 2)}
+    assert {
+        (item.source_site, item.source_job_id): tuple(
+            node.source_classification_id
+            for path in item.evidence.classification_paths
+            for node in path.nodes
+        )
+        for item in recovered
+        if item.evidence is not None
+    } == {
+        (source_site, source_job_id): (f"{source_site}:{classification_id}",)
+        for source_site, source_job_id, classification_id in cases
+    }
 
 
 def test_rebuild_inspector_prefers_newest_usable_staging_detail_evidence(

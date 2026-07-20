@@ -123,17 +123,22 @@ The parent owns terminology, source requirements, final integration acceptance, 
 
 ## Acceptance Criteria
 
-- [ ] AC-R1: `CONTEXT.md`, UI, APIs, docs, and tests consistently distinguish Source evidence, governed knowledge, and review items; retired terms remain only in legacy/audit context.
-- [ ] AC-R2: Revision/provenance/audit/idempotency/concurrency/outbox behavior is atomic, deterministic, records `local-operator`, and is unreachable through worker recommendation Interfaces.
-- [ ] AC-R3: All three Sources preserve complete zero-to-many paths without inferred Primary; stable qualified filtering and historical unknown-revision behavior pass.
-- [ ] AC-R4: Only the seven Employment Types appear as governed values; raw labels/order survive, Unknown never becomes Other, and Work Arrangement remains separate.
-- [ ] AC-R5: Assignments target existing governed Subcategories with complete provenance; every uncertain/fallback/create-new outcome remains Unassigned/review, and AI cannot create nodes.
-- [ ] AC-R6: Complete immutable HSIC hierarchy, assignment cardinality/Primary/most-specific/subtree rules, reviewed mappings, review items, and pollution repair pass deterministic tests.
-- [ ] AC-R7: Skill seed/curations are reference-clean; Candidate decisions are human-only, atomic across Mentions/Job-Skills, and only governed Skills reach downstream intelligence.
-- [ ] AC-R8: Three accessible governance sections and all read-only surfaces render real backend contracts, correct labels/states/deep links, and safe conflict/confirmation behavior.
-- [ ] AC-R9: PostgreSQL constraints/indexes, versioned APIs, backend→frontend fixtures, filters, search/stats/recommendations, and embedding documents agree end to end.
-- [ ] AC-R10: Dry-run/backup/quiescence/checkpoint/rebuild/reconciliation/rollback rehearsal preserves corpus evidence and passes every gate before writers reopen.
-- [ ] AC-R11: All parent/child artifacts validate and are reviewed; no task is started without explicit approval.
+Completion below covers implemented contracts, automated disposable-PostgreSQL
+validation, product tests, and cutover/backup rehearsal. It does not authorize
+live publication, activation, migration, corpus mutation, production smoke,
+writer shutdown/reopening, or legacy cleanup.
+
+- [x] AC-R1: `CONTEXT.md`, UI, APIs, docs, and tests consistently distinguish Source evidence, governed knowledge, and review items; retired terms remain only in legacy/audit context.
+- [x] AC-R2: Revision/provenance/audit/idempotency/concurrency/outbox behavior is atomic, deterministic, records `local-operator`, and is unreachable through worker recommendation Interfaces.
+- [x] AC-R3: All three Sources preserve complete zero-to-many paths without inferred Primary; stable qualified filtering and historical unknown-revision behavior pass.
+- [x] AC-R4: Only the seven Employment Types appear as governed values; raw labels/order survive, Unknown never becomes Other, and Work Arrangement remains separate.
+- [x] AC-R5: Assignments target existing governed Subcategories with complete provenance; every uncertain/fallback/create-new outcome remains Unassigned/review, and AI cannot create nodes.
+- [x] AC-R6: Complete immutable HSIC hierarchy, assignment cardinality/Primary/most-specific/subtree rules, reviewed mappings, review items, and pollution repair pass deterministic tests.
+- [x] AC-R7: Skill seed/curations are reference-clean; Candidate decisions are human-only, atomic across Mentions/Job-Skills, and only governed Skills reach downstream intelligence.
+- [x] AC-R8: Three accessible governance sections and all read-only surfaces render real backend contracts, correct labels/states/deep links, and safe conflict/confirmation behavior.
+- [x] AC-R9: PostgreSQL constraints/indexes, versioned APIs, backend→frontend fixtures, filters, search/stats/recommendations, and embedding documents agree end to end.
+- [x] AC-R10: Disposable dry-run/backup/quiescence/checkpoint/rebuild/reconciliation/rollback rehearsal preserves corpus evidence and passes every gate before simulated writer reopening; live writer shutdown/reopening remains separately approved.
+- [x] AC-R11: All parent/child artifacts validate and are reviewed; no task is started without explicit approval.
 
 ## Out of scope
 

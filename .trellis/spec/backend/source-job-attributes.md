@@ -48,6 +48,13 @@ POST /api/v1/jobs/search
 python backend/scripts/inspect_source_job_attributes.py --format json|human
 ```
 
+Historical recovery uses:
+
+```python
+SourceJobAttributeRebuildInspector(db).inspect(job_ids=None) -> SourceJobAttributeRebuildReport
+SourceJobAttributeRebuildInspector(db).recover(job_ids=None) -> tuple[RecoveredSourceJobAttribute, ...]
+```
+
 Persistence is owned by `job_source_attribute_projections`,
 `job_source_classification_paths`,
 `job_source_classification_path_nodes`, `job_source_employment_labels`,
@@ -110,6 +117,11 @@ Persistence is owned by `job_source_attribute_projections`,
 - The inspector selects the newest usable staging detail payload, then staging
   listing payload, then `Job.raw_data`; legacy scalars are comparison evidence
   only and never reconstruct discarded arrays.
+- Staging lookup deduplicates `(source_site, source_job_id)` keys in stable Job
+  order and queries them in batches of at most 100 composite keys. Batch results
+  are merged before the existing per-key freshness/UUID tie-break selection.
+  Never emit one whole-corpus composite `IN` statement: PostgreSQL can raise
+  `StatementTooComplex` before any evidence is inspected.
 - Each per-Source report includes recoverable Job/path/label totals, mapped and
   unknown labels, explicit Primary paths, evidence-source and path-count
   distributions, ambiguity, legacy conflicts, missing revisions,
@@ -138,6 +150,7 @@ Persistence is owned by `job_source_attribute_projections`,
 | Exact evidence replay | `changed=false`; no duplicate outbox row |
 | Malformed bounded label marker | Retain evidence, map no type, count malformed but not unknown |
 | Historical evidence has no catalog revision | Keep the path queryable with `provenance_limited=true` |
+| Historical lookup exceeds 100 distinct Source keys | Issue multiple bounded read-only staging SELECTs and merge to the same deterministic report/recovery result |
 
 ### 5. Good / Base / Bad Cases
 
@@ -149,6 +162,9 @@ Persistence is owned by `job_source_attribute_projections`,
 - **Good:** rebuild finds a newer malformed detail payload and an older usable
   detail payload. It reports the Job recoverable and malformed, records
   `staging_detail_payload`, and performs no writes.
+- **Good:** a 17,596-Job dry run issues bounded composite-key staging lookups,
+  preserves every core/raw fingerprint, and produces the same deterministic
+  evidence result as a smaller input.
 - **Bad:** a writer comma-joins employment labels or selects
   `classifications[0]` before evidence extraction. Historical arrays become
   unrecoverable.
@@ -161,7 +177,9 @@ Persistence is owned by `job_source_attribute_projections`,
   malformed markers, governed mappings, and Work Arrangement separation.
 - `test_source_job_attributes.py`: PostgreSQL replacement/replay/concurrency,
   outbox rollback, Primary/source/catalog constraints, `RESTRICT`/`CASCADE`,
-  OR-within/AND-across filters, API views, and deterministic rebuild counters.
+  OR-within/AND-across filters, API views, deterministic rebuild counters, and
+  a forced small-batch assertion that checks bounded parameter counts plus
+  cross-batch/cross-Source evidence merging.
 - `test_source_job_attribute_ingest.py` and
   `test_source_job_attribute_architecture.py`: every collected writer is
   inventoried, projects before commit, cannot use human-governance Interfaces,
@@ -174,6 +192,9 @@ Persistence is owned by `job_source_attribute_projections`,
   corpus.
 - `FilterPanel.test.jsx` and `JobDetailModal.test.jsx`: structured option
   compatibility and backend fixture consumption.
+- `integration/test_job_intelligence_rebuild.py`: preserve the documented
+  17,596-Job PostgreSQL dry-run scale test; do not shrink or mock away the
+  database statement-shape regression.
 
 ### 7. Wrong vs Correct
 
@@ -201,3 +222,24 @@ db.commit()
 
 The caller owns one atomic Job/projection/outbox transaction and exact replay
 remains idempotent.
+
+#### Wrong: one whole-corpus staging lookup
+
+```python
+query.filter(tuple_(source, source_job_id).in_(all_source_keys)).all()
+```
+
+This creates an expression and parameter set proportional to the entire corpus;
+PostgreSQL can exhaust parser stack depth before returning any row.
+
+#### Correct: stable bounded composite-key batches
+
+```python
+source_keys = tuple(dict.fromkeys(source_keys_in_job_order))
+for start in range(0, len(source_keys), 100):
+    rows.extend(load_staging_rows(source_keys[start : start + 100]))
+```
+
+Stable de-duplication prevents redundant queries, every statement has a fixed
+upper bound, and the existing per-key freshness selection keeps report and
+recovery semantics deterministic.
