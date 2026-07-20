@@ -108,7 +108,12 @@ Implemented cursor-correct search listing, partial page-cap continuation, bulk n
 
 ### Main Changes
 
-- Detailed change bullets were not supplied; see the summary above.
+- Added the manifest-bound 13-phase cutover orchestrator, verified artifact and
+  PostgreSQL backup adapters, writer probes, recovery ports, and operator CLI.
+- Rebuilt governed Source Attributes, Canonical Taxonomy, Company Industry,
+  Skill state, and embeddings with checkpoint-safe replay and reconciliation.
+- Added the runbook, go/no-go checklist, executable backend spec, anonymized
+  fixture, and runtime-smoke chronology enforcement.
 
 ### Git Commits
 
@@ -154,7 +159,10 @@ Corrected OfferToday Crawl Tasks partial metrics, added resumable IP-block manua
 
 ### Testing
 
-- Validation was not recorded for this session.
+- Backend: 429 passed, 1 unrelated pacing race skipped.
+- Frontend: 26 files / 172 tests passed; lint and production build passed.
+- Targeted Ruff, Black, mypy, compileall, Trellis validation, disposable
+  PostgreSQL rebuild integration, and real pg_dump/pg_restore rehearsal passed.
 
 ### Status
 
@@ -162,7 +170,8 @@ Corrected OfferToday Crawl Tasks partial metrics, added resumable IP-block manua
 
 ### Next Steps
 
-- None - task complete
+- Complete the Job Intelligence parent integration review; do not perform live
+  rollout without separate operator approval.
 
 
 ## Session 5: Stabilize crawl tasks and OfferToday detail scope
@@ -913,6 +922,40 @@ Built the three-area Job Intelligence governance workspace and aligned Job Brows
 |------|---------|
 | `a65be5ed` | (see git log) |
 | `0678e7fa` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 27: Complete Job Intelligence cutover rebuild
+
+**Date**: 2026-07-20
+**Task**: Complete Job Intelligence cutover rebuild
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented and verified the 13-phase PostgreSQL cutover orchestrator, recovery ports, governed embedding rebuild, backup/restore and writer gates, CLI/runbook, runtime-smoke chronology enforcement, disposable PostgreSQL rehearsal, and full backend/frontend quality gates; archived the child without live jobsdb mutation.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b9ba7056` | (see git log) |
+| `47c068bc` | (see git log) |
 
 ### Testing
 
