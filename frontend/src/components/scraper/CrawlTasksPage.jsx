@@ -1,29 +1,25 @@
 import React, {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
 import {
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
   RefreshCcw,
-  Square,
 } from "lucide-react";
 import { apiPath } from "../../api/base";
-import { fetchCapabilities } from "../../api/capabilities";
 import { apiFetchJson } from "../../api/client";
-import { formatPacingInterval } from "../../api/scraperPacing";
 import { createMonitoringId, logError, logInfo } from "../../monitoring";
 import { formatCrawlModeLabel } from "./crawlMode";
 import { formatCrawlPhaseLabel } from "./crawlPhase";
 import { formatScraperSourceLabel } from "./listingBatchLabel";
-import { buildIpBlockGuidance } from "./ipBlockGuidance";
-import { cancelCrawlJob, getCrawlJobEvents } from "./crawlTaskActions";
-import ManualActionRecoveryPanel from "./ManualActionRecoveryPanel";
-import { deriveLatestRecoveryAttempt } from "./recoveryAttemptUtils";
+import { cancelCrawlJob } from "./crawlTaskActions";
+import { getCrawlTaskDetail, resumeManualTask } from "../../features/taskControl/board/boardApi";
+import { buildCrawlTaskRoute, parseCrawlTaskRoute } from "../../features/taskControl/board/boardRoute";
+import ConfirmActionDialog from "../../features/taskControl/shared/ConfirmActionDialog";
+import CrawlTaskDetails from "./CrawlTaskDetails";
 import "./CrawlTasksPage.css";
 
 const API_BASE = apiPath("");
@@ -114,7 +110,7 @@ function formatCountPair(currentValue, totalValue) {
 
 function resolveRequestedCrawlPhase(task) {
   const requestedPhase =
-    `${task?.request_payload?.crawl_phase || task?.crawl_phase || ""}`
+    `${task?.crawl_phase || ""}`
       .trim()
       .toLowerCase();
   if (requestedPhase) {
@@ -140,43 +136,6 @@ function isCompletedListingTask(task) {
     task?.status === "completed" &&
     resolveRequestedCrawlPhase(task) === "listing" &&
     Boolean(task?.listing_completed)
-  );
-}
-
-function DetailPacingCard({ task }) {
-  if (resolveRequestedCrawlPhase(task) !== "detail") {
-    return null;
-  }
-
-  const pacing = task?.detail_pacing;
-  return (
-    <section className="crawl-task-pacing-card" data-testid="crawl-task-detail-pacing">
-      <div>
-        <p className="crawl-task-pacing-eyebrow">Task startup snapshot</p>
-        <h3>Detail Pacing</h3>
-      </div>
-      {pacing ? (
-        <dl className="crawl-task-pacing-values">
-          <div>
-            <dt>Random interval</dt>
-            <dd>{formatPacingInterval(pacing)}</dd>
-          </div>
-          <div>
-            <dt>Burst</dt>
-            <dd>{pacing.burst_size} attempts</dd>
-          </div>
-          <div>
-            <dt>Burst pause</dt>
-            <dd>{pacing.burst_pause_seconds} seconds</dd>
-          </div>
-        </dl>
-      ) : (
-        <div className="crawl-task-pacing-empty">
-          <strong>Not recorded</strong>
-          <p>This historical detail task has no saved pacing snapshot.</p>
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -295,7 +254,7 @@ function buildMetricSummary(task) {
 function buildScopeHint(task) {
   const crawlPhase = resolveRequestedCrawlPhase(task);
   const detailScope =
-    `${task?.detail_scope || task?.request_payload?.detail_scope || ""}`.trim();
+    `${task?.detail_scope || ""}`.trim();
   if (
     crawlPhase === "detail" &&
     `${task?.source_site || ""}`.trim().toLowerCase() === "offertoday"
@@ -308,28 +267,6 @@ function buildScopeHint(task) {
     }
   }
   return formatCrawlPhaseLabel(crawlPhase);
-}
-
-function isIpBlockedTask(task) {
-  return (
-    task?.issue_class === "ip_blocked" ||
-    task?.manual_action?.classification === "ip_blocked" ||
-    task?.issue_code === "-1000035"
-  );
-}
-
-function buildManualActionGuidance(task) {
-  if (isIpBlockedTask(task)) {
-    return buildIpBlockGuidance({
-      sourceSite:
-        task?.manual_action?.source_site ||
-        task?.request_payload?.source_site ||
-        task?.source_site,
-      message: task?.manual_action?.message,
-    }).message;
-  }
-
-  return null;
 }
 
 function buildIssueSummary(task) {
@@ -350,9 +287,7 @@ function buildIssueSummary(task) {
   })();
 
   return (
-    buildManualActionGuidance(task) ||
     task?.latest_issue_text ||
-    task?.manual_action?.reason ||
     task?.error ||
     task?.status_reason ||
     listingPartialSummary ||
@@ -374,27 +309,6 @@ function buildStatusLabel(task) {
   return formatStatusLabel(task?.status);
 }
 
-function isManualActionTask(task) {
-  return (
-    task?.status === "manual_action_required" || Boolean(task?.manual_action)
-  );
-}
-
-const CANCELLABLE_STATUSES = new Set([
-  "queued",
-  "dispatching",
-  "running",
-  "manual_action_required",
-]);
-
-function canCancelTask(task) {
-  return (
-    (!task?.trigger_type || task.trigger_type === "manual") &&
-    !task?.schedule_id &&
-    CANCELLABLE_STATUSES.has(task?.status)
-  );
-}
-
 function isCancellingTask(task) {
   return task?.status === "cancelling";
 }
@@ -408,6 +322,7 @@ function extractErrorMessage(error, fallbackMessage) {
 }
 
 export default function CrawlTasksPage() {
+  const initialRoute = typeof window === "undefined" ? { taskId: null } : parseCrawlTaskRoute(window.location.hash);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [page, setPage] = useState(1);
   const [tasks, setTasks] = useState([]);
@@ -416,7 +331,10 @@ export default function CrawlTasksPage() {
     page: 1,
     pageSize: PAGE_SIZE,
   });
-  const [selectedTaskId, setSelectedTaskId] = useState(null);
+  const [selectedTaskId, setSelectedTaskId] = useState(initialRoute.taskId);
+  const [selectedTaskDetail, setSelectedTaskDetail] = useState(null);
+  const [selectedTaskDetailError, setSelectedTaskDetailError] = useState(null);
+  const [selectedTaskDetailLoading, setSelectedTaskDetailLoading] = useState(false);
   const [refreshedAt, setRefreshedAt] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -425,66 +343,35 @@ export default function CrawlTasksPage() {
     error: null,
     notice: null,
   });
-  const [manualActionCapability, setManualActionCapability] = useState(null);
-  const [selectedTaskEvents, setSelectedTaskEvents] = useState([]);
-  const [selectedTaskEventsTaskId, setSelectedTaskEventsTaskId] =
-    useState(null);
-  const [selectedTaskEventsError, setSelectedTaskEventsError] = useState(null);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const latestLoadRef = useRef(0);
-  const latestEventsLoadRef = useRef(0);
-
-  const selectedTask = useMemo(() => {
-    return tasks.find((task) => task.crawl_job_id === selectedTaskId) || null;
-  }, [selectedTaskId, tasks]);
+  const dialogTriggerRef = useRef(null);
   const pageCount = Math.max(
     1,
     Math.ceil((pagination.total || 0) / (pagination.pageSize || PAGE_SIZE)),
   );
-  const manualActionGuidance = buildManualActionGuidance(selectedTask);
   const hasCancellingTask = tasks.some(isCancellingTask);
-  const recoveryAttempt = useMemo(
-    () =>
-      selectedTaskEventsTaskId === selectedTaskId
-        ? deriveLatestRecoveryAttempt(selectedTaskEvents)
-        : null,
-    [selectedTaskEvents, selectedTaskEventsTaskId, selectedTaskId],
-  );
 
-  const loadSelectedTaskEvents = useCallback(async (crawlJobId) => {
-    if (!crawlJobId) {
-      setSelectedTaskEvents([]);
-      setSelectedTaskEventsTaskId(null);
-      setSelectedTaskEventsError(null);
+  const loadSelectedTaskDetail = useCallback(async ({ signal } = {}) => {
+    if (!selectedTaskId) {
+      setSelectedTaskDetail(null);
+      setSelectedTaskDetailError(null);
       return;
     }
-
-    const requestVersion = latestEventsLoadRef.current + 1;
-    latestEventsLoadRef.current = requestVersion;
+    setSelectedTaskDetail((current) => current?.run.id === selectedTaskId ? current : null);
+    setSelectedTaskDetailLoading(true);
     try {
-      const payload = await getCrawlJobEvents(crawlJobId, 100);
-      if (latestEventsLoadRef.current !== requestVersion) {
-        return;
+      const value = await getCrawlTaskDetail(selectedTaskId, { signal });
+      if (!signal?.aborted) {
+        setSelectedTaskDetail(value);
+        setSelectedTaskDetailError(null);
       }
-      setSelectedTaskEvents(
-        Array.isArray(payload?.events) ? payload.events : [],
-      );
-      setSelectedTaskEventsTaskId(crawlJobId);
-      setSelectedTaskEventsError(null);
-    } catch (eventsError) {
-      if (latestEventsLoadRef.current !== requestVersion) {
-        return;
-      }
-      const detail = extractErrorMessage(
-        eventsError,
-        "Recovery attempt history is unavailable",
-      );
-      setSelectedTaskEventsError(detail);
-      logError("crawl_tasks.events_load_failed", {
-        crawlJobId,
-        detail,
-      });
+    } catch (detailError) {
+      if (!signal?.aborted) setSelectedTaskDetailError(extractErrorMessage(detailError, "Failed to load normalized Task Details"));
+    } finally {
+      if (!signal?.aborted) setSelectedTaskDetailLoading(false);
     }
-  }, []);
+  }, [selectedTaskId]);
 
   const loadTasks = useCallback(
     async ({ reason = "refresh" } = {}) => {
@@ -516,7 +403,7 @@ export default function CrawlTasksPage() {
         });
         setRefreshedAt(data?.refreshed_at || null);
         setSelectedTaskId((currentId) => {
-          if (nextItems.some((task) => task.crawl_job_id === currentId)) {
+          if (currentId) {
             return currentId;
           }
 
@@ -568,40 +455,24 @@ export default function CrawlTasksPage() {
   }, [hasCancellingTask, loadTasks]);
 
   useEffect(() => {
-    void loadSelectedTaskEvents(selectedTaskId);
-    if (!selectedTaskId) {
-      return undefined;
-    }
-
-    const intervalId = window.setInterval(() => {
-      void loadSelectedTaskEvents(selectedTaskId);
-    }, AUTO_REFRESH_MS);
+    const controller = new AbortController();
+    void loadSelectedTaskDetail({ signal: controller.signal });
+    const intervalId = selectedTaskId ? window.setInterval(() => {
+      void loadSelectedTaskDetail();
+    }, selectedTaskDetail?.run.status === "cancelling" ? CANCELLATION_REFRESH_MS : AUTO_REFRESH_MS) : null;
     return () => {
-      window.clearInterval(intervalId);
+      controller.abort();
+      if (intervalId) window.clearInterval(intervalId);
     };
-  }, [loadSelectedTaskEvents, selectedTaskId]);
+  }, [loadSelectedTaskDetail, selectedTaskDetail?.run.status, selectedTaskId]);
 
   useEffect(() => {
-    let cancelled = false;
-    void fetchCapabilities()
-      .then((payload) => {
-        if (!cancelled) {
-          setManualActionCapability(payload?.manual_actions || null);
-        }
-      })
-      .catch((capabilityError) => {
-        if (!cancelled) {
-          logError("crawl_tasks.manual_action_capabilities_failed", {
-            detail: extractErrorMessage(
-              capabilityError,
-              "Failed to load manual-action helper capability",
-            ),
-          });
-        }
-      });
-    return () => {
-      cancelled = true;
+    const onHashChange = () => {
+      const next = parseCrawlTaskRoute(window.location.hash);
+      if (next.kind === "tasks") setSelectedTaskId(next.taskId);
     };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   const handleFilterChange = useCallback(
@@ -619,12 +490,13 @@ export default function CrawlTasksPage() {
 
   const handleSelectTask = useCallback((crawlJobId) => {
     setSelectedTaskId(crawlJobId);
+    window.location.hash = buildCrawlTaskRoute(crawlJobId);
     setActionState({ pending: null, error: null, notice: null });
   }, []);
 
   const runTaskAction = useCallback(
     async (actionKey, actionLabel, action) => {
-      if (!selectedTask?.crawl_job_id) {
+      if (!selectedTaskId) {
         return;
       }
 
@@ -635,9 +507,11 @@ export default function CrawlTasksPage() {
         setActionState({
           pending: null,
           error: null,
-          notice: `${actionLabel} requested for ${selectedTask.crawl_job_id}.`,
+          notice: `${actionLabel} requested for ${selectedTaskId}.`,
         });
         await loadTasks({ reason: actionKey });
+        await loadSelectedTaskDetail();
+        return true;
       } catch (actionError) {
         const detail = extractErrorMessage(
           actionError,
@@ -646,48 +520,45 @@ export default function CrawlTasksPage() {
         setActionState({ pending: null, error: detail, notice: null });
         logError("crawl_tasks.action_failed", {
           action: actionKey,
-          crawlJobId: selectedTask.crawl_job_id,
+          crawlJobId: selectedTaskId,
           detail,
         });
+        return false;
       }
     },
-    [loadTasks, selectedTask],
+    [loadSelectedTaskDetail, loadTasks, selectedTaskId],
   );
 
   const handleOpenEvents = useCallback(() => {
-    if (!selectedTask?.crawl_job_id || typeof window === "undefined") {
+    if (!selectedTaskId || typeof window === "undefined") {
       return;
     }
 
     window.open(
-      apiPath(`/crawl-jobs/${selectedTask.crawl_job_id}/events`),
+      apiPath(`/crawl-jobs/${selectedTaskId}/events`),
       "_blank",
       "noopener,noreferrer",
     );
-  }, [selectedTask]);
+  }, [selectedTaskId]);
 
-  const handleTaskChanged = useCallback(
-    async (reason) => {
-      await loadTasks({ reason });
-      await loadSelectedTaskEvents(selectedTask?.crawl_job_id);
-    },
-    [loadSelectedTaskEvents, loadTasks, selectedTask],
-  );
+  const handleNormalizedAction = useCallback((action, trigger) => {
+    if (!selectedTaskId) return;
+    if (action === "cancel") {
+      dialogTriggerRef.current = trigger;
+      setCancelDialogOpen(true);
+    } else if (action === "resume_manual_action") {
+      void runTaskAction("resume", "Resume manual action", () => resumeManualTask(selectedTaskId));
+    }
+  }, [runTaskAction, selectedTaskId]);
 
-  const handleCancelTask = useCallback(() => {
-    if (!selectedTask?.crawl_job_id || !canCancelTask(selectedTask)) {
-      return;
-    }
-    const confirmed = window.confirm(
-      `Cancel crawl job ${selectedTask.crawl_job_id}? This stops any remaining work for this task.`,
+  const confirmCancellation = useCallback(async () => {
+    const succeeded = await runTaskAction(
+      "cancel",
+      "Cancel crawl job",
+      () => cancelCrawlJob(selectedTaskId),
     );
-    if (!confirmed) {
-      return;
-    }
-    void runTaskAction("cancel", "Cancel crawl job", () =>
-      cancelCrawlJob(selectedTask.crawl_job_id),
-    );
-  }, [runTaskAction, selectedTask]);
+    if (succeeded) setCancelDialogOpen(false);
+  }, [runTaskAction, selectedTaskId]);
 
   return (
     <section className="crawl-tasks-page">
@@ -896,192 +767,15 @@ export default function CrawlTasksPage() {
         </section>
 
         <aside className="glass-panel crawl-tasks-detail">
-          {selectedTask ? (
-            <>
-              <div className="crawl-tasks-detail-header">
-                <div>
-                  <h2>Task Details</h2>
-                  <div className="crawl-task-id">
-                    {selectedTask.crawl_job_id}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="crawl-tasks-link-button"
-                  onClick={handleOpenEvents}
-                >
-                  <ExternalLink size={16} aria-hidden="true" />
-                  <span>View Events</span>
-                </button>
-              </div>
-
-              {manualActionGuidance && (
-                <div
-                  className="crawl-tasks-banner crawl-tasks-banner-warning"
-                  data-testid="crawl-task-ip-block-guidance"
-                >
-                  {manualActionGuidance}
-                </div>
-              )}
-
-              {isCancellingTask(selectedTask) && (
-                <div className="crawl-tasks-banner crawl-tasks-banner-warning">
-                  Cancellation requested. Waiting for the crawler process to
-                  stop before this task becomes Cancelled.
-                </div>
-              )}
-
-              {isManualActionTask(selectedTask) ? (
-                <ManualActionRecoveryPanel
-                  key={selectedTask.crawl_job_id}
-                  task={selectedTask}
-                  capability={manualActionCapability}
-                  onTaskChanged={handleTaskChanged}
-                  recoveryAttempt={recoveryAttempt}
-                  recoveryAttemptError={selectedTaskEventsError}
-                />
-              ) : null}
-
-              {actionState.error && (
-                <div className="crawl-tasks-banner crawl-tasks-banner-error">
-                  {actionState.error}
-                </div>
-              )}
-              {actionState.notice && (
-                <div className="crawl-tasks-banner crawl-tasks-banner-success">
-                  {actionState.notice}
-                </div>
-              )}
-
-              <dl className="crawl-tasks-detail-grid">
-                <div>
-                  <dt>Status</dt>
-                  <dd>{buildStatusLabel(selectedTask)}</dd>
-                </div>
-                <div>
-                  <dt>Source</dt>
-                  <dd>{formatScraperSourceLabel(selectedTask.source_site)}</dd>
-                </div>
-                <div>
-                  <dt>Crawl Mode</dt>
-                  <dd>{formatCrawlModeLabel(selectedTask.crawl_mode)}</dd>
-                </div>
-                <div>
-                  <dt>Scope</dt>
-                  <dd>{buildScopeHint(selectedTask)}</dd>
-                </div>
-                <div>
-                  <dt>Queued</dt>
-                  <dd>{formatTimestamp(selectedTask.queued_at)}</dd>
-                </div>
-                <div>
-                  <dt>Started</dt>
-                  <dd>{formatTimestamp(selectedTask.started_at)}</dd>
-                </div>
-                <div>
-                  <dt>Updated</dt>
-                  <dd>{formatTimestamp(selectedTask.updated_at)}</dd>
-                </div>
-                <div>
-                  <dt>Metrics</dt>
-                  <dd data-testid="crawl-task-detail-metrics">
-                    {buildMetricSummary(selectedTask).join(" | ")}
-                  </dd>
-                </div>
-              </dl>
-
-              <DetailPacingCard task={selectedTask} />
-
-              <div className="crawl-tasks-detail-block">
-                <div className="crawl-tasks-detail-label">Issue Class</div>
-                <div
-                  className="crawl-tasks-detail-text"
-                  data-testid="crawl-task-issue-class"
-                >
-                  {selectedTask.issue_class || "none"}
-                </div>
-              </div>
-
-              <div className="crawl-tasks-detail-block">
-                <div className="crawl-tasks-detail-label">Issue Code</div>
-                <div
-                  className="crawl-tasks-detail-text"
-                  data-testid="crawl-task-issue-code"
-                >
-                  {selectedTask.issue_code || "none"}
-                </div>
-              </div>
-
-              <div className="crawl-tasks-detail-block">
-                <div className="crawl-tasks-detail-label">Issue Stage</div>
-                <div
-                  className="crawl-tasks-detail-text"
-                  data-testid="crawl-task-issue-stage"
-                >
-                  {selectedTask.issue_stage || "none"}
-                </div>
-              </div>
-
-              {buildIssueSummary(selectedTask) && (
-                <div className="crawl-tasks-detail-block">
-                  <div className="crawl-tasks-detail-label">Latest issue</div>
-                  <div
-                    className="crawl-tasks-detail-text"
-                    data-testid="crawl-task-latest-issue-text"
-                  >
-                    {buildIssueSummary(selectedTask)}
-                  </div>
-                </div>
-              )}
-
-              {selectedTask.manual_action && (
-                <div className="crawl-tasks-detail-block">
-                  <div className="crawl-tasks-detail-label">
-                    Manual action payload
-                  </div>
-                  <pre className="crawl-tasks-json">
-                    {JSON.stringify(selectedTask.manual_action, null, 2)}
-                  </pre>
-                </div>
-              )}
-
-              {selectedTask.request_payload && (
-                <div className="crawl-tasks-detail-block">
-                  <div className="crawl-tasks-detail-label">
-                    Request payload
-                  </div>
-                  <pre className="crawl-tasks-json">
-                    {JSON.stringify(selectedTask.request_payload, null, 2)}
-                  </pre>
-                </div>
-              )}
-
-              {(canCancelTask(selectedTask) ||
-                isCancellingTask(selectedTask)) && (
-                <div className="crawl-tasks-danger-zone">
-                  <div>
-                    <strong>Danger zone</strong>
-                    <p>Cancel this crawl only when it should not be resumed.</p>
-                  </div>
-                  <button
-                    type="button"
-                    data-testid="crawl-task-cancel"
-                    disabled={
-                      actionState.pending !== null ||
-                      isCancellingTask(selectedTask)
-                    }
-                    onClick={handleCancelTask}
-                  >
-                    <Square size={16} aria-hidden="true" />
-                    <span>
-                      {isCancellingTask(selectedTask)
-                        ? "Cancelling Crawl Job"
-                        : "Cancel Crawl Job"}
-                    </span>
-                  </button>
-                </div>
-              )}
-            </>
+          {selectedTaskId ? (
+            <CrawlTaskDetails
+              detail={selectedTaskDetail}
+              loading={selectedTaskDetailLoading}
+              error={selectedTaskDetailError}
+              actionState={actionState}
+              onAction={handleNormalizedAction}
+              onOpenEvents={handleOpenEvents}
+            />
           ) : (
             <div className="crawl-tasks-empty">
               Select a task to inspect details and actions.
@@ -1089,6 +783,18 @@ export default function CrawlTasksPage() {
           )}
         </aside>
       </div>
+      {cancelDialogOpen && (
+        <ConfirmActionDialog
+          title="Cancel this crawl?"
+          summary="Committed work remains visible. Unfinished detail work returns to backend-owned later backlog after cancelled acknowledgement."
+          confirmLabel="Request cancellation"
+          pending={actionState.pending === "cancel"}
+          error={actionState.error ? { message: actionState.error } : null}
+          restoreFocusRef={dialogTriggerRef}
+          onCancel={() => setCancelDialogOpen(false)}
+          onConfirm={confirmCancellation}
+        />
+      )}
     </section>
   );
 }

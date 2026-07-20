@@ -35,6 +35,7 @@ from app.crawl_control.task_control_board_service import (
 )
 from app.crawl_control.task_control_board_contracts import (
     TaskControlBoardProjectionV1,
+    TaskControlBoardProjectionV2,
 )
 from app.database import get_db
 from app.schemas.crawl_control import (
@@ -500,14 +501,20 @@ def dispatch_plan(
 
 @router.get(
     "/task-control-board",
-    response_model=TaskControlBoardProjectionV1,
+    response_model=TaskControlBoardProjectionV1 | TaskControlBoardProjectionV2,
 )
 def get_task_control_board(
     source_site: str | None = None,
     run_limit: int = Query(default=100, ge=1, le=100),
+    version: int = Query(default=1, ge=1, le=2),
     db: Session = Depends(get_db),
-) -> TaskControlBoardProjectionV1:
+) -> TaskControlBoardProjectionV1 | TaskControlBoardProjectionV2:
     normalized_source_site = _normalize_control_source_site(source_site)
+    if version == 2:
+        return TaskControlBoardProjectionService(db).get_v2(
+            selected_source=normalized_source_site or "jobsdb",
+            run_limit=run_limit,
+        )
     return TaskControlBoardProjectionService(db).get(
         source_site=normalized_source_site,
         run_limit=run_limit,

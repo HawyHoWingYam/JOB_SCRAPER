@@ -2,13 +2,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  act,
   cleanup,
-  fireEvent,
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import userEvent from "@testing-library/user-event";
@@ -26,9 +23,9 @@ const listingTask = {
   crawl_job_id: "listing-task",
   status: "running",
   trigger_type: "manual",
-  schedule_id: null,
   source_site: "jobsdb",
   crawl_mode: "headless",
+  crawl_phase: "listing",
   phase: 1,
   job_ids_collected: 87,
   raw_job_ids_collected: 96,
@@ -39,203 +36,181 @@ const listingTask = {
   updated_at: "2026-07-15T12:00:00Z",
 };
 
+function normalizedTaskDetail({
+  id = "listing-task",
+  status = "running",
+  phase = "listing",
+  sourceSite = "jobsdb",
+  actions,
+} = {}) {
+  return {
+    run: {
+      crawl_job_id: id,
+      source_site: sourceSite,
+      crawl_phase: phase,
+      crawl_mode: sourceSite === "ctgoodjobs" ? "headed" : "headless",
+      trigger_kind: "one_off",
+      status,
+      queued_at: "2026-07-15T12:00:00Z",
+      started_at: "2026-07-15T12:01:00Z",
+      completed_at: null,
+      updated_at: "2026-07-15T12:02:00Z",
+      authority: { authority_kind: "legacy" },
+      listing_workload: phase === "listing" ? {
+        query_target_count: 2,
+        page_depth: 5,
+        estimated_max_pages: 10,
+        run_page_cap: 10,
+        pages_requested: 2,
+      } : null,
+      detail_snapshot: phase === "detail" ? {
+        backlog_scope: { kind: "global" },
+        cutoff_at: "2026-07-15T12:00:00Z",
+        target_count: 4,
+        fetched_count: 3,
+        saved_count: 2,
+        failed_count: 1,
+        unavailable_count: 1,
+        manual_action_count: 0,
+        remaining_count: 1,
+        future_eligible_count: 7,
+        detail_run_cap: 5000,
+      } : null,
+      recovery_attempt: null,
+    },
+    persisted_status: status,
+    operator_state: status === "cancelling" ? "cancellation_pending" : null,
+    queued_at: "2026-07-15T12:00:00Z",
+    started_at: "2026-07-15T12:01:00Z",
+    completed_at: null,
+    updated_at: "2026-07-15T12:02:00Z",
+    detail_pacing: phase === "detail" ? {
+      interval_min_seconds: 1,
+      interval_max_seconds: 3,
+      burst_size: 20,
+      burst_pause_seconds: 30,
+    } : null,
+    issue: null,
+    manual_action_guidance: null,
+    recovery_attempt: null,
+    actions: actions ?? (status === "running" ? [
+      { action: "cancel", enabled: true, reason_code: null },
+    ] : []),
+  };
+}
+
+function listPayload(items = [listingTask]) {
+  return {
+    items,
+    total: items.length,
+    page: 1,
+    page_size: 10,
+    refreshed_at: "2026-07-15T12:00:00Z",
+  };
+}
+
+function isDetailRequest(url) {
+  return /\/crawl-jobs\/tasks\/[^?]+/.test(String(url));
+}
+
+function detailId(url) {
+  return decodeURIComponent(String(url).split("/crawl-jobs/tasks/")[1]);
+}
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  window.history.replaceState(null, "", "#crawl-tasks");
 });
+
 beforeEach(() => {
-  Object.defineProperty(window.navigator, "clipboard", {
-    configurable: true,
-    value: { writeText: vi.fn().mockResolvedValue(undefined) },
-  });
+  window.history.replaceState(null, "", "#crawl-tasks");
   apiFetchJson.mockImplementation(async (url) => {
-    if (`${url}`.includes("/capabilities")) {
-      return {
-        manual_actions: {
-          helper_url: "http://127.0.0.1:47652",
-          health_url: "http://127.0.0.1:47652/health",
-          manual_start_workdir: "backend",
-          manual_start_command:
-            "python -m app.workers.run_manual_action_helper",
-        },
-      };
+    if (isDetailRequest(url)) {
+      return normalizedTaskDetail({ id: detailId(url) });
     }
-    if (`${url}`.includes("/health")) {
-      return { status: "ok" };
-    }
-    if (`${url}`.includes("/events")) {
-      return { events: [], total: 0 };
-    }
-    return {
-      items: [listingTask],
-      total: 1,
-      page: 1,
-      page_size: 10,
-      refreshed_at: "2026-07-15T12:00:00Z",
-    };
+    return listPayload();
   });
 });
 
-describe("CrawlTasksPage metric summaries", () => {
-  it("uses a one-minute refresh interval and keeps the manual refresh action", async () => {
+describe("CrawlTasksPage list projections", () => {
+  it("uses a one-minute refresh interval and keeps manual refresh", async () => {
     expect(AUTO_REFRESH_MS).toBe(60_000);
     const setIntervalSpy = vi.spyOn(window, "setInterval");
-
     render(<CrawlTasksPage />);
 
-    const refreshButton = await screen.findByRole("button", {
-      name: "Refresh",
-    });
-    expect(refreshButton).toBeInTheDocument();
-    expect(setIntervalSpy).toHaveBeenCalledWith(
-      expect.any(Function),
-      AUTO_REFRESH_MS,
-    );
-
+    const refreshButton = await screen.findByRole("button", { name: "Refresh" });
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), AUTO_REFRESH_MS);
     await userEvent.setup().click(refreshButton);
     await waitFor(() => {
-      const taskRequests = apiFetchJson.mock.calls.filter(([url]) =>
-        `${url}`.includes("/crawl-jobs/tasks"),
+      const listRequests = apiFetchJson.mock.calls.filter(([url]) =>
+        `${url}`.includes("/crawl-jobs/tasks?"),
       );
-      expect(taskRequests).toHaveLength(2);
+      expect(listRequests).toHaveLength(2);
     });
-
-    setIntervalSpy.mockRestore();
   });
 
-  it("shows raw IDs only when the snapshot contains the optional field", async () => {
-    render(<CrawlTasksPage />);
+  it("shows raw IDs only when the list snapshot contains the optional field", async () => {
+    const { unmount } = render(<CrawlTasksPage />);
     expect(await screen.findByText("Raw IDs 96")).toBeInTheDocument();
+    unmount();
 
-    cleanup();
-    apiFetchJson.mockResolvedValueOnce({
-      items: [{ ...listingTask, raw_job_ids_collected: null }],
-      total: 1,
-      page: 1,
-      page_size: 10,
+    apiFetchJson.mockImplementation(async (url) => {
+      if (isDetailRequest(url)) return normalizedTaskDetail({ id: detailId(url) });
+      return listPayload([{ ...listingTask, raw_job_ids_collected: null }]);
     });
     render(<CrawlTasksPage />);
     await screen.findByTestId("crawl-task-row-listing-task");
-    expect(screen.queryByText("Raw IDs 0")).not.toBeInTheDocument();
-    expect(screen.queryByText("Raw IDs 96")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Raw IDs/)).not.toBeInTheDocument();
   });
 
-  it("uses the detail layout for detail snapshots and legacy numeric phase", async () => {
-    apiFetchJson.mockResolvedValueOnce({
-      items: [
-        {
-          crawl_job_id: "detail-task",
-          status: "running",
-          source_site: "jobsdb",
-          crawl_mode: "headless",
-          phase: 2,
-          detail_target_count: 4,
-          detail_fetched_count: 3,
-          detail_saved_count: 2,
-          detail_failed_count: 1,
-          detail_remaining_count: 0,
-          detail_unavailable_count: 1,
-          detail_manual_action_count: 1,
-          request_payload: { crawl_phase: "detail" },
-          detail_pacing: {
-            interval_min_seconds: 1,
-            interval_max_seconds: 3,
-            burst_size: 20,
-            burst_pause_seconds: 30,
-          },
-          updated_at: "2026-07-15T12:00:00Z",
-        },
-      ],
-      total: 1,
-      page: 1,
-      page_size: 10,
+  it("keeps list metrics while rendering normalized detail data separately", async () => {
+    const task = {
+      ...listingTask,
+      crawl_job_id: "detail-task",
+      crawl_phase: "detail",
+      phase: 2,
+      detail_target_count: 4,
+      detail_fetched_count: 3,
+      detail_saved_count: 2,
+      detail_failed_count: 1,
+      detail_remaining_count: 0,
+      detail_unavailable_count: 1,
+      detail_manual_action_count: 1,
+    };
+    apiFetchJson.mockImplementation(async (url) => {
+      if (isDetailRequest(url)) {
+        return normalizedTaskDetail({ id: "detail-task", phase: "detail" });
+      }
+      return listPayload([task]);
     });
     render(<CrawlTasksPage />);
 
     expect(await screen.findByText("Detail targets 4")).toBeInTheDocument();
-    expect(screen.getByText("Fetched 3")).toBeInTheDocument();
-    expect(screen.getByText("Saved 2")).toBeInTheDocument();
-    expect(screen.getByText("Failed 1")).toBeInTheDocument();
-    expect(screen.getByText("Remaining 0")).toBeInTheDocument();
-    expect(screen.getByText("Unavailable 1")).toBeInTheDocument();
     expect(screen.getByText("Manual action 1")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Detail Pacing" })).toBeInTheDocument();
-    expect(screen.getByText("1-3 seconds")).toBeInTheDocument();
-    expect(screen.getByText("20 attempts")).toBeInTheDocument();
-    expect(screen.getByText("30 seconds")).toBeInTheDocument();
-    expect(
-      within(screen.getByTestId("crawl-task-detail-pacing")).queryByText(
-        /countdown|attempt count|waiting/i,
-      ),
-    ).not.toBeInTheDocument();
-    expect(screen.getByTestId("crawl-task-detail-metrics")).toHaveTextContent(
-      "Detail targets 4 | Fetched 3 | Saved 2 | Failed 1 | Remaining 0 | Unavailable 1 | Manual action 1",
-    );
+    expect(await screen.findByRole("heading", { name: "Immutable detail pacing" })).toBeInTheDocument();
+    expect(screen.getByText(/1–3 seconds · 20 attempts · 30 seconds pause/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Finite detail snapshot" })).toBeInTheDocument();
   });
 
-  it("shows historical detail pacing as not recorded and hides pacing for listing tasks", async () => {
-    apiFetchJson.mockResolvedValueOnce({
-      items: [{
-        ...listingTask,
-        crawl_job_id: "historical-detail",
-        phase: 2,
-        request_payload: { crawl_phase: "detail" },
-        detail_pacing: null,
-      }],
-      total: 1,
-      page: 1,
-      page_size: 10,
-    });
-    render(<CrawlTasksPage />);
-
-    expect(await screen.findByRole("heading", { name: "Detail Pacing" })).toBeInTheDocument();
-    expect(screen.getByText("Not recorded")).toBeInTheDocument();
-
-    cleanup();
-    apiFetchJson.mockResolvedValueOnce({
-      items: [{
-        ...listingTask,
-        request_payload: { crawl_phase: "listing" },
-        detail_pacing: {
-          interval_min_seconds: 1,
-          interval_max_seconds: 3,
-          burst_size: 20,
-          burst_pause_seconds: 30,
-        },
-      }],
-      total: 1,
-      page: 1,
-      page_size: 10,
-    });
-    render(<CrawlTasksPage />);
-    await screen.findByTestId("crawl-task-row-listing-task");
-    expect(screen.queryByTestId("crawl-task-detail-pacing")).not.toBeInTheDocument();
-  });
-
-  it("renders observed zero values for every common detail metric", async () => {
-    apiFetchJson.mockResolvedValueOnce({
-      items: [
-        {
-          crawl_job_id: "zero-detail-task",
-          status: "running",
-          source_site: "ctgoodjobs",
-          crawl_mode: "headed",
-          request_payload: { crawl_phase: "detail" },
-          detail_target_count: 0,
-          detail_fetched_count: 0,
-          detail_saved_count: 0,
-          detail_failed_count: 0,
-          detail_remaining_count: 0,
-          detail_unavailable_count: 0,
-          detail_manual_action_count: 0,
-          updated_at: "2026-07-15T12:00:00Z",
-        },
-      ],
-      total: 1,
-      page: 1,
-      page_size: 10,
+  it("renders observed zero values for common detail list metrics", async () => {
+    const task = {
+      ...listingTask,
+      crawl_job_id: "zero-detail-task",
+      source_site: "ctgoodjobs",
+      crawl_mode: "headed",
+      crawl_phase: "detail",
+      detail_target_count: 0,
+      detail_fetched_count: 0,
+      detail_saved_count: 0,
+      detail_failed_count: 0,
+      detail_remaining_count: 0,
+    };
+    apiFetchJson.mockImplementation(async (url) => {
+      if (isDetailRequest(url)) return normalizedTaskDetail({ id: "zero-detail-task", phase: "detail", sourceSite: "ctgoodjobs" });
+      return listPayload([task]);
     });
     render(<CrawlTasksPage />);
 
@@ -247,467 +222,131 @@ describe("CrawlTasksPage metric summaries", () => {
   });
 
   it("separates an OfferToday segment from the remaining global backlog", async () => {
-    const detailTask = {
+    const task = {
+      ...listingTask,
       crawl_job_id: "offertoday-detail-task",
       status: "running",
       source_site: "offertoday",
-      crawl_mode: "headless",
-      phase: 2,
-      request_payload: { crawl_phase: "detail", detail_scope: "global" },
+      crawl_phase: "detail",
       detail_scope: "global",
-      detail_target_rows: 5000,
       detail_segment_index: 2,
-      detail_segments_completed: 1,
       detail_segment_target_rows: 5000,
       detail_backlog_remaining: 7431,
       detail_backlog_failed: 20,
       detail_backlog_manual_action_required: 11,
       detail_continuation_state: "continuing",
-      updated_at: "2026-07-15T12:00:00Z",
     };
     apiFetchJson.mockImplementation(async (url) => {
-      if (`${url}`.includes("/capabilities")) {
-        return { manual_actions: {} };
-      }
-      return {
-        items: [detailTask],
-        total: 1,
-        page: 1,
-        page_size: 10,
-      };
+      if (isDetailRequest(url)) return normalizedTaskDetail({ id: task.crawl_job_id, phase: "detail", sourceSite: "offertoday" });
+      return listPayload([task]);
     });
-
     render(<CrawlTasksPage />);
 
-    expect(
-      await screen.findAllByText("Job Detail Crawl · Global backlog"),
-    ).not.toHaveLength(0);
-    expect(screen.getByText("Segment 2 targets 5,000")).toBeInTheDocument();
+    expect(await screen.findByText("Segment 2 targets 5,000")).toBeInTheDocument();
     expect(screen.getByText("Backlog remaining 7,431")).toBeInTheDocument();
     expect(screen.getByText("Backlog failed 20")).toBeInTheDocument();
     expect(screen.getByText("Manual review 11")).toBeInTheDocument();
   });
 });
 
-describe("CrawlTasksPage manual-action helper health", () => {
-  it("keeps both resume actions disabled while an accepted attempt is unresolved", async () => {
-    const manualTask = {
-      crawl_job_id: "jobsdb-pending-recovery-task",
-      status: "manual_action_required",
-      source_site: "jobsdb",
-      crawl_mode: "headless",
-      manual_action: {
-        resume_supported: true,
-        reuse_open_browser_supported: true,
-      },
-    };
+describe("CrawlTasksPage normalized Task Details", () => {
+  it("loads a deep-linked task directly even when it is absent from the list", async () => {
+    window.history.replaceState(null, "", "#crawl-tasks?task=deep%2Flink%20task");
     apiFetchJson.mockImplementation(async (url) => {
-      if (`${url}`.includes("/capabilities")) {
-        return { manual_actions: {} };
-      }
-      if (`${url}`.includes("/health")) {
-        return { status: "ok" };
-      }
-      if (`${url}`.includes("/manual-actions/reuse-status")) {
-        return { available: true, status: "live" };
-      }
-      if (`${url}`.includes("/events")) {
-        return {
-          events: [
-            {
-              sequence_no: 8,
-              event_type: "crawl.resume_requested",
-              created_at: "2026-07-16T00:35:00Z",
-              payload: { strategy: "reuse_open_browser" },
-            },
-          ],
-          total: 1,
-        };
-      }
-      return { items: [manualTask], total: 1, page: 1, page_size: 10 };
+      if (isDetailRequest(url)) return normalizedTaskDetail({ id: "deep/link task" });
+      return listPayload([]);
     });
-
     render(<CrawlTasksPage />);
 
-    expect(
-      await screen.findByText(/waiting for the crawl outcome/i),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByTestId("crawl-task-resume-open-browser"),
-    ).toBeDisabled();
-    expect(screen.getByTestId("crawl-task-resume-fresh")).toBeDisabled();
-  });
-
-  it("shows a pending resume and persists the returned manual-action outcome", async () => {
-    let resolveResume;
-    let recoveryEvents = [];
-    const resumePromise = new Promise((resolve) => {
-      resolveResume = resolve;
-    });
-    const manualTask = {
-      crawl_job_id: "jobsdb-recovery-task",
-      status: "manual_action_required",
-      source_site: "jobsdb",
-      crawl_mode: "headless",
-      manual_action: {
-        resume_supported: true,
-        reuse_open_browser_supported: true,
-      },
-      updated_at: "2026-07-16T00:35:03Z",
-    };
-    apiFetchJson.mockImplementation(async (url) => {
-      if (`${url}`.includes("/capabilities")) {
-        return { manual_actions: {} };
-      }
-      if (`${url}`.includes("/health")) {
-        return { status: "ok" };
-      }
-      if (`${url}`.includes("/manual-actions/reuse-status")) {
-        return { available: true, status: "live" };
-      }
-      if (`${url}`.includes("/events")) {
-        return { events: recoveryEvents, total: recoveryEvents.length };
-      }
-      if (`${url}`.includes("/resume")) {
-        await resumePromise;
-        recoveryEvents = [
-          {
-            sequence_no: 8,
-            event_type: "crawl.resume_requested",
-            created_at: "2026-07-16T00:35:00Z",
-            payload: { strategy: "reuse_open_browser" },
-          },
-          {
-            sequence_no: 11,
-            event_type: "crawl.manual_action_required",
-            created_at: "2026-07-16T00:35:03Z",
-            payload: {
-              manual_action: {
-                stage: "reuse_open_browser_unavailable",
-                classification: "human_verification",
-                message: "The reusable browser session is unavailable.",
-              },
-            },
-          },
-        ];
-        return { status: "dispatching" };
-      }
-      return { items: [manualTask], total: 1, page: 1, page_size: 10 };
-    });
-
-    render(<CrawlTasksPage />);
-    const resumeButton = await screen.findByTestId(
-      "crawl-task-resume-open-browser",
-    );
-    const freshButton = screen.getByTestId("crawl-task-resume-fresh");
-
-    fireEvent.click(resumeButton);
-    expect(
-      await screen.findByText("Resume request in progress..."),
-    ).toBeInTheDocument();
-    expect(resumeButton).toBeDisabled();
-    expect(freshButton).toBeDisabled();
-
-    resolveResume({ status: "dispatching" });
-
-    const attempt = await screen.findByTestId("crawl-task-recovery-attempt");
-    expect(attempt).toHaveTextContent("Resume #8");
-    expect(attempt).toHaveTextContent("reuse open browser");
-    expect(attempt).toHaveTextContent("reuse open browser unavailable");
-    expect(attempt).toHaveTextContent("human verification");
-    expect(attempt).toHaveTextContent(
-      "The reusable browser session is unavailable.",
+    expect(await screen.findByText("deep/link task")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Task Details" })).toBeInTheDocument();
+    expect(apiFetchJson).toHaveBeenCalledWith(
+      "/api/v1/crawl-jobs/tasks/deep%2Flink%20task",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
-  it("guides helper recovery without automatically opening a browser or resuming", async () => {
-    let helperOnline = false;
-    let browserConnected = false;
-    const manualTask = {
-      crawl_job_id: "offertoday-manual-task",
-      status: "manual_action_required",
-      source_site: "offertoday",
-      crawl_mode: "headed",
-      trigger_type: "manual",
-      schedule_id: null,
-      request_payload: { crawl_phase: "detail" },
-      manual_action: {
-        resume_supported: true,
-        reuse_open_browser_supported: true,
-        classification: "ip_blocked",
-      },
-      updated_at: "2026-07-15T12:00:00Z",
-    };
+  it("shows a structured error for an unknown deep-linked task", async () => {
+    window.history.replaceState(null, "", "#crawl-tasks?task=missing-task");
     apiFetchJson.mockImplementation(async (url) => {
-      if (`${url}`.includes("/capabilities")) {
-        return {
-          manual_actions: {
-            helper_url: "http://127.0.0.1:47652",
-            health_url: "http://127.0.0.1:47652/health",
-            manual_start_workdir: "backend",
-            manual_start_command:
-              "python -m app.workers.run_manual_action_helper",
-          },
-        };
-      }
-      if (`${url}`.includes("/health")) {
-        if (!helperOnline) {
-          throw new TypeError("Failed to fetch");
-        }
-        return { status: "ok" };
-      }
-      if (`${url}`.includes("/manual-actions/open-browser")) {
-        browserConnected = true;
-        return { status: "live", debug_port: 9222 };
-      }
-      if (`${url}`.includes("/manual-actions/reuse-status")) {
-        return browserConnected
-          ? { available: true, status: "live" }
-          : { available: false, reason: "live_browser_not_found" };
-      }
-      if (`${url}`.includes("/resume")) {
-        return { status: "dispatching" };
-      }
-      return {
-        items: [manualTask],
-        total: 1,
-        page: 1,
-        page_size: 10,
+      if (isDetailRequest(url)) throw new Error("Task not found");
+      return listPayload([]);
+    });
+    render(<CrawlTasksPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Task not found");
+  });
+
+  it("renders only safe normalized issue and manual-action guidance", async () => {
+    apiFetchJson.mockImplementation(async (url) => {
+      if (!isDetailRequest(url)) return listPayload();
+      const detail = normalizedTaskDetail({
+        id: "listing-task",
+        status: "manual_action_required",
+        actions: [{ action: "resume_manual_action", enabled: true, reason_code: null }],
+      });
+      detail.issue = {
+        issue_class: "source_access",
+        code: "HUMAN_VERIFICATION_REQUIRED",
+        stage: "listing",
+        summary: "Source verification is required.",
       };
-    });
-
-    render(<CrawlTasksPage />);
-
-    expect(
-      await screen.findByText("Host helper is offline"),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("crawl-task-copy-helper-command")).toBeEnabled();
-    expect(screen.getByTestId("crawl-task-resume-fresh")).toBeEnabled();
-    expect(
-      screen.getByText(/does not reuse the open browser/i),
-    ).toBeInTheDocument();
-
-    const advanced = screen
-      .getByText("Advanced troubleshooting")
-      .closest("details");
-    expect(advanced).not.toHaveAttribute("open");
-
-    vi.useFakeTimers();
-    await act(async () => {
-      fireEvent.click(screen.getByTestId("crawl-task-copy-helper-command"));
-      await Promise.resolve();
-    });
-    expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith(
-      "Set-Location 'backend'; python -m app.workers.run_manual_action_helper",
-    );
-
-    helperOnline = true;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
-    vi.useRealTimers();
-
-    expect(screen.getByTestId("crawl-task-open-browser")).toBeEnabled();
-    expect(
-      apiFetchJson.mock.calls.some(([url]) =>
-        `${url}`.includes("/open-browser"),
-      ),
-    ).toBe(false);
-    expect(
-      apiFetchJson.mock.calls.some(([url]) => `${url}`.includes("/resume")),
-    ).toBe(false);
-
-    const user = userEvent.setup();
-    await user.click(screen.getByTestId("crawl-task-open-browser"));
-    await act(async () => {});
-    expect(
-      screen.getByText("Browser connected — site access is not verified"),
-    ).toBeInTheDocument();
-    expect(
-      apiFetchJson.mock.calls.some(([url]) => `${url}`.includes("/resume")),
-    ).toBe(false);
-
-    await user.click(screen.getByTestId("crawl-task-resume-open-browser"));
-    await act(async () => {});
-    const resumeRequest = apiFetchJson.mock.calls.find(([url]) =>
-      `${url}`.includes("/resume"),
-    );
-    expect(resumeRequest?.[1]?.body).toBe(
-      JSON.stringify({ strategy: "reuse_open_browser" }),
-    );
-  });
-
-  it("shows cancelling as pending shutdown and disables invalid actions", async () => {
-    const cancellingTask = {
-      ...listingTask,
-      crawl_job_id: "cancelling-task",
-      status: "cancelling",
-    };
-    const intervalSpy = vi.spyOn(window, "setInterval");
-    apiFetchJson.mockImplementation(async (url) => {
-      if (`${url}`.includes("/capabilities")) {
-        return { manual_actions: {} };
-      }
-      return { items: [cancellingTask], total: 1, page: 1, page_size: 10 };
-    });
-
-    render(<CrawlTasksPage />);
-
-    expect((await screen.findAllByText("cancelling")).length).toBeGreaterThan(
-      0,
-    );
-    expect(
-      screen.getByText(/Waiting for the crawler process to stop/i),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("crawl-task-cancel")).toBeDisabled();
-    expect(screen.queryByTestId("crawl-task-resume")).not.toBeInTheDocument();
-    await waitFor(() => {
-      expect(intervalSpy).toHaveBeenCalledWith(
-        expect.any(Function),
-        CANCELLATION_REFRESH_MS,
-      );
-    });
-  });
-
-  it("does not expose cancellation for terminal tasks", async () => {
-    apiFetchJson.mockImplementation(async (url) => {
-      if (`${url}`.includes("/capabilities")) {
-        return { manual_actions: {} };
-      }
-      return {
-        items: [{ ...listingTask, status: "completed" }],
-        total: 1,
-        page: 1,
-        page_size: 10,
+      detail.manual_action_guidance = {
+        message: "Open the source in the managed browser, then resume.",
+        instructions: ["Complete the verification challenge."],
       };
+      return detail;
     });
-
     render(<CrawlTasksPage />);
 
-    expect((await screen.findAllByText("completed")).length).toBeGreaterThan(0);
-    expect(screen.queryByTestId("crawl-task-cancel")).not.toBeInTheDocument();
+    const issueSection = (await screen.findByRole("heading", { name: "Issue" })).closest("section");
+    expect(issueSection).toHaveTextContent("Source verification is required.");
+    expect(screen.getByText("Complete the verification challenge.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resume manual action" })).toBeEnabled();
+    expect(screen.queryByText(/request_payload|manual_action\s*:/i)).not.toBeInTheDocument();
   });
 
-  it("keeps a simpler fresh-profile path for manual actions without browser reuse", async () => {
-    const manualTask = {
-      crawl_job_id: "jobsdb-manual-task",
-      status: "manual_action_required",
-      source_site: "jobsdb",
-      crawl_mode: "headed",
-      manual_action: {
-        resume_supported: true,
-        reuse_open_browser_supported: false,
-        instructions: "Review the source page before resuming.",
-      },
-      updated_at: "2026-07-15T12:00:00Z",
-    };
-    apiFetchJson.mockImplementation(async (url) => {
-      if (`${url}`.includes("/capabilities")) {
-        return { manual_actions: {} };
-      }
-      return { items: [manualTask], total: 1, page: 1, page_size: 10 };
-    });
-
-    render(<CrawlTasksPage />);
-
-    expect(
-      await screen.findByText("Operator review required"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Review the source page before resuming."),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("crawl-task-resume-fresh")).toBeEnabled();
-    expect(
-      screen.queryByTestId("crawl-task-copy-helper-command"),
-    ).not.toBeInTheDocument();
-    expect(
-      apiFetchJson.mock.calls.some(([url]) => `${url}`.includes("/health")),
-    ).toBe(false);
-  });
-
-  it("confirms profile cleanup and crawl cancellation before sending either request", async () => {
-    const manualTask = {
-      crawl_job_id: "offertoday-confirm-task",
-      status: "manual_action_required",
-      source_site: "offertoday",
-      crawl_mode: "headed",
-      manual_action: {
-        resume_supported: true,
-        reuse_open_browser_supported: true,
-      },
-      updated_at: "2026-07-15T12:00:00Z",
-    };
-    apiFetchJson.mockImplementation(async (url) => {
-      if (`${url}`.includes("/capabilities")) {
-        return { manual_actions: {} };
-      }
-      if (`${url}`.includes("/health")) {
-        return { status: "ok" };
-      }
-      if (`${url}`.includes("/manual-actions/reuse-status")) {
-        return { available: true, status: "live" };
-      }
-      if (
-        `${url}`.includes("/close-profile-windows") ||
-        `${url}`.includes("/cancel")
-      ) {
-        return { status: "ok" };
-      }
-      return { items: [manualTask], total: 1, page: 1, page_size: 10 };
-    });
-    const confirmSpy = vi
-      .spyOn(window, "confirm")
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true);
+  it("uses an accessible cancellation dialog and restores focus", async () => {
     const user = userEvent.setup();
-
     render(<CrawlTasksPage />);
-    expect(
-      await screen.findByText(
-        "Browser connected — site access is not verified",
-      ),
-    ).toBeInTheDocument();
-    await user.click(screen.getByText("Advanced troubleshooting"));
+    const cancelButton = await screen.findByRole("button", { name: "Cancel Crawl Job" });
 
-    const closeButton = screen.getByTestId("crawl-task-close-profile-windows");
-    await user.click(closeButton);
-    expect(
-      apiFetchJson.mock.calls.some(([url]) =>
-        `${url}`.includes("/close-profile-windows"),
-      ),
-    ).toBe(false);
-    await user.click(closeButton);
-    await waitFor(() => {
-      expect(
-        apiFetchJson.mock.calls.some(([url]) =>
-          `${url}`.includes("/close-profile-windows"),
-        ),
-      ).toBe(true);
-    });
-
-    const cancelButton = screen.getByTestId("crawl-task-cancel");
     await user.click(cancelButton);
-    expect(
-      apiFetchJson.mock.calls.some(([url]) => `${url}`.includes("/cancel")),
-    ).toBe(false);
-    await user.click(cancelButton);
-    await waitFor(() => {
-      expect(
-        apiFetchJson.mock.calls.some(([url]) => `${url}`.includes("/cancel")),
-      ).toBe(true);
-    });
+    const dialog = screen.getByRole("dialog", { name: "Cancel this crawl?" });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(cancelButton).toHaveFocus();
 
-    expect(confirmSpy).toHaveBeenNthCalledWith(
-      1,
-      expect.stringContaining(
-        "Close the dedicated OfferToday browser profile windows",
-      ),
-    );
-    expect(confirmSpy).toHaveBeenNthCalledWith(
-      3,
-      expect.stringContaining("Cancel crawl job offertoday-confirm-task"),
-    );
+    await user.click(cancelButton);
+    await user.click(screen.getByRole("button", { name: "Request cancellation" }));
+    await waitFor(() => {
+      expect(apiFetchJson.mock.calls.some(([url, options]) =>
+        `${url}`.endsWith("/crawl-jobs/listing-task/cancel") && options?.method === "POST",
+      )).toBe(true);
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("polls cancelling details every second and cleans the interval on unmount", async () => {
+    window.history.replaceState(null, "", "#crawl-tasks?task=cancelling-task");
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+    apiFetchJson.mockImplementation(async (url) => {
+      if (isDetailRequest(url)) return normalizedTaskDetail({ id: "cancelling-task", status: "cancelling" });
+      return listPayload([]);
+    });
+    const { unmount } = render(<CrawlTasksPage />);
+
+    expect(await screen.findByText(/Waiting for backend/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), CANCELLATION_REFRESH_MS);
+    });
+    const cancellationInterval = setIntervalSpy.mock.results.find((result, index) =>
+      setIntervalSpy.mock.calls[index][1] === CANCELLATION_REFRESH_MS && result.value,
+    )?.value;
+    unmount();
+    expect(clearIntervalSpy).toHaveBeenCalledWith(cancellationInterval);
   });
 });

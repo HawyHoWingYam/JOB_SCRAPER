@@ -138,27 +138,27 @@ cancellation without exposing raw payloads as product truth.
 
 ## Acceptance criteria
 
-- [ ] Board response owns all three sections, source summaries, priority/order,
+- [x] Board response owns all three sections, source summaries, priority/order,
   catalog/schedule/outcome truth, and action capabilities.
-- [ ] Source tabs/banner switch context without mixing rows; All clear appears
+- [x] Source tabs/banner switch context without mixing rows; All clear appears
   only when all three sections are empty.
-- [ ] Automation table/lifecycle actions preserve backend order/CAS semantics;
+- [x] Automation table/lifecycle actions preserve backend order/CAS semantics;
   Edit and Run now hand off to the exact Wizard routes.
-- [ ] Pause/Resume, Archive/Restore, permanent-delete impact, conflicts, and
+- [x] Pause/Resume, Archive/Restore, permanent-delete impact, conflicts, and
   duplicate-action prevention match backend contracts.
-- [ ] `#crawl-tasks?task=<id>` loads one normalized Task directly and survives
+- [x] `#crawl-tasks?task=<id>` loads one normalized Task directly and survives
   reload/back/forward.
-- [ ] Listing and detail Task Details show all required normalized authority and
+- [x] Listing and detail Task Details show all required normalized authority and
   workload/snapshot distinctions.
-- [ ] Raw `manual_action` and `request_payload` JSON are absent from ordinary
+- [x] Raw `manual_action` and `request_payload` JSON are absent from ordinary
   Task Details; events are audit-only, not reconstruction input.
-- [ ] `cancelling` waits at one-second cadence for `cancelled`, disables invalid
+- [x] `cancelling` waits at one-second cadence for `cancelled`, disables invalid
   actions, and cleans polling up on terminal/unmount/route change.
-- [ ] CTgoodjobs remains headed-only and OfferToday IP block remains truthful.
-- [ ] Loading/empty/prior-good-error/stale/manual-action/conflict/success,
+- [x] CTgoodjobs remains headed-only and OfferToday IP block remains truthful.
+- [x] Loading/empty/prior-good-error/stale/manual-action/conflict/success,
   keyboard/focus/table/dialog/status, focused backend/frontend tests, and build
   pass.
-- [ ] Legacy scheduler composition and temporary switch are removed only after
+- [x] Legacy scheduler composition and temporary switch are removed only after
   parity; full frontend suite/lint/build runs once at parent integration.
 
 ## Dependency and approval

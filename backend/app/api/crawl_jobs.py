@@ -9,6 +9,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.crawl_phases import resolve_crawl_phase
+from app.crawl_control.task_control_board_contracts import (
+    CrawlTaskDetailProjectionV1,
+)
+from app.crawl_control.task_control_board_service import (
+    build_crawl_task_detail_projection,
+)
 from app.database import get_db
 from app.request_monitoring import build_monitoring_log_event
 from app.repositories.crawl_job_repository import CrawlJobRepository
@@ -319,6 +325,46 @@ async def list_crawl_tasks(
         crawl_mode=crawl_mode,
         time_range=str(time_range or "all").strip().lower() or "all",
         refreshed_at=now.isoformat(),
+    )
+
+
+@router.get(
+    "/tasks/{crawl_job_id}",
+    response_model=CrawlTaskDetailProjectionV1,
+)
+async def get_crawl_task_detail(
+    crawl_job_id: UUID,
+    db: Session = Depends(get_db),
+) -> CrawlTaskDetailProjectionV1:
+    crawl_job = crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
+    if crawl_job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "CRAWL_TASK_NOT_FOUND",
+                "message": "Crawl task not found",
+                "context": {"crawl_job_id": str(crawl_job_id)},
+            },
+        )
+    latest_event = crawl_job_repository.list_latest_events_for_jobs(
+        db,
+        crawl_job_ids=[crawl_job.id],
+    ).get(crawl_job.id)
+    events = crawl_job_repository.list_events_by_job_ids(
+        db,
+        crawl_job_ids=[crawl_job.id],
+        event_types=PROGRESS_CONTEXT_EVENT_TYPES,
+    ).get(crawl_job.id, [])
+    normalized = build_crawl_task_snapshot(
+        crawl_job,
+        latest_event=latest_event,
+        now=utc_now(),
+        events=events,
+        category_lookup_cache={},
+    )
+    return build_crawl_task_detail_projection(
+        crawl_job,
+        normalized=normalized,
     )
 
 

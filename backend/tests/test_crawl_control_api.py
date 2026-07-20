@@ -723,6 +723,7 @@ def test_dispatch_plan_confirmation_returns_normalized_single_use_run(
 
 def test_task_control_board_returns_normalized_automation_and_run_rows(
     crawl_control_client,
+    monkeypatch,
 ):
     client, revision_id = crawl_control_client
     configuration = {
@@ -805,6 +806,69 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
     assert board["runs"][0]["listing_workload"]["query_target_count"] == 25
     assert "request_payload" not in board["runs"][0]
     assert "events" not in board["runs"][0]
+
+    board_sources = []
+    original_list_page = CrawlJobRepository.list_crawl_task_page
+
+    def record_board_source(self, db, **kwargs):
+        board_sources.append(kwargs["source_site"])
+        return original_list_page(self, db, **kwargs)
+
+    monkeypatch.setattr(
+        CrawlJobRepository,
+        "list_crawl_task_page",
+        record_board_source,
+    )
+    v2_response = client.get(
+        "/api/v1/task-control-board",
+        params={"version": 2, "source_site": "jobsdb"},
+    )
+    assert v2_response.status_code == 200
+    v2 = v2_response.json()
+    assert v2["version"] == 2
+    assert v2["selected_source"] == "jobsdb"
+    assert board_sources == ["jobsdb", "ctgoodjobs", "offertoday"]
+    assert [item["source_site"] for item in v2["source_summaries"]] == [
+        "jobsdb",
+        "ctgoodjobs",
+        "offertoday",
+    ]
+    assert v2["source_summaries"][0]["catalog_health"]["state"] == "healthy"
+    assert v2["source_summaries"][1]["catalog_health"]["state"] == "unpublished"
+    assert v2["needs_attention"] == []
+    assert len(v2["active_runs"]) == 1
+    assert v2["active_runs"][0]["run"]["crawl_job_id"] == dispatched["run"]["crawl_job_id"]
+    assert v2["active_runs"][0]["actions"][0]["action"] == "view_task"
+    assert len(v2["upcoming"]) == 1
+    assert v2["upcoming"][0]["schedule"]["timezone"] == "UTC"
+    assert v2["upcoming"][0]["catalog_health"]["state"] == "healthy"
+    assert v2["upcoming"][0]["actions"][0] == {
+        "version": 1,
+        "action": "edit",
+        "enabled": True,
+        "reason_code": None,
+    }
+    assert v2["all_clear"] is False
+
+    task_response = client.get(
+        f"/api/v1/crawl-jobs/tasks/{dispatched['run']['crawl_job_id']}"
+    )
+    assert task_response.status_code == 200
+    task = task_response.json()
+    assert task["run"]["authority"]["authority_kind"] == "dispatch_plan"
+    assert task["run"]["listing_workload"]["query_target_count"] == 25
+    assert task["actions"][0]["action"] == "view_task"
+    assert "request_payload" not in task
+    assert "manual_action" not in task
+
+    missing_id = uuid4()
+    missing_response = client.get(f"/api/v1/crawl-jobs/tasks/{missing_id}")
+    assert missing_response.status_code == 404
+    assert missing_response.json()["detail"] == {
+        "code": "CRAWL_TASK_NOT_FOUND",
+        "message": "Crawl task not found",
+        "context": {"crawl_job_id": str(missing_id)},
+    }
 
 
 def test_control_board_rejects_an_unsupported_source_with_a_stable_error(

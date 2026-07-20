@@ -16,8 +16,14 @@ export function parseControlRoute(hash = window.location.hash) {
   const [path] = raw.split('?', 1);
   const parts = path.split('/').filter(Boolean);
   if (parts[0] !== 'scheduler') return { kind: 'invalid', notice: 'Unsupported Task Control route.' };
-  if (parts.length === 1) return { kind: 'board' };
   const params = query(raw);
+  const boardSource = params.get('source')?.toLowerCase() || 'jobsdb';
+  if (parts.length === 1) {
+    return {
+      kind: 'board',
+      sourceSite: ['jobsdb', 'ctgoodjobs', 'offertoday'].includes(boardSource) ? boardSource : 'jobsdb',
+    };
+  }
   const draftId = safeId(params.get('draft'));
   const sourceSite = params.get('source')?.toLowerCase() || null;
   const step = WIZARD_STEPS.has(params.get('step')) ? params.get('step') : null;
@@ -52,7 +58,7 @@ function params(sourceSite, draftId, step) {
 }
 
 export function buildControlRoute({ flow, mode, automationId, sourceSite, draftId, step }) {
-  if (!flow) return '#scheduler';
+  if (!flow) return sourceSite ? `#scheduler?source=${encodeURIComponent(sourceSite)}` : '#scheduler';
   if (flow === 'automation' && mode === 'create') {
     return `#scheduler/automation/new${params(sourceSite, draftId, step)}`;
   }

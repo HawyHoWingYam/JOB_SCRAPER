@@ -9,7 +9,6 @@ const JobBrowser = lazy(() => import('./components/JobBrowser'));
 const AIEnrichmentPage = lazy(() => import('./components/ai/AIEnrichmentPage'));
 const CompaniesPage = lazy(() => import('./components/companies/CompaniesPage'));
 const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage'));
-const ScheduleManager = lazy(() => import('./components/scraper/ScheduleManager'));
 const CrawlTasksPage = lazy(() => import('./components/scraper/CrawlTasksPage'));
 const AddJobPage = lazy(() => import('./components/jobs/AddJobPage'));
 const JobIntelligenceGovernancePage = lazy(
@@ -24,6 +23,9 @@ const SourceCatalogsPage = lazy(
 const TaskControlWizard = lazy(
   () => import('./features/taskControl/wizard/TaskControlWizard'),
 );
+const TaskControlBoardPage = lazy(
+  () => import('./features/taskControl/board/TaskControlBoardPage'),
+);
 
 function App() {
   const [activeView, setActiveView] = useState(() =>
@@ -32,13 +34,9 @@ function App() {
   const [locationHash, setLocationHash] = useState(() =>
     typeof window === 'undefined' ? '#dashboard' : window.location.hash,
   );
-  const [settingsSection, setSettingsSection] = useState('ai-runtime');
+  const settingsSection = 'ai-runtime';
   const navigateToAI = () => setActiveView('ai');
   const navigateToCrawlTasks = () => setActiveView('crawl-tasks');
-  const navigateToScraperPacing = () => {
-    setSettingsSection('scraper-pacing');
-    setActiveView('settings');
-  };
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -91,11 +89,7 @@ function App() {
             )}
             {activeView === 'scheduler' && (
               parseControlRoute(locationHash).kind === 'board' ? (
-                <ScheduleManager
-                  onNavigateToAI={navigateToAI}
-                  onNavigateToCrawlTasks={navigateToCrawlTasks}
-                  onNavigateToScraperPacing={navigateToScraperPacing}
-                />
+                <TaskControlBoardPage hash={locationHash} />
               ) : <TaskControlWizard hash={locationHash} />
             )}
             {activeView === 'crawl-tasks' && <CrawlTasksPage />}

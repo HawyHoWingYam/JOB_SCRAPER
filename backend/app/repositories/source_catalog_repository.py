@@ -171,6 +171,21 @@ class SourceCatalogRepository:
             .one_or_none()
         )
 
+    def list_active_revisions(
+        self,
+        db: Session,
+    ) -> list[SourceCatalogRevision]:
+        """Load every active Source Catalog revision in one stable query."""
+        return (
+            db.query(SourceCatalogRevision)
+            .join(
+                SourceCatalogActiveRevision,
+                SourceCatalogActiveRevision.revision_id == SourceCatalogRevision.id,
+            )
+            .order_by(SourceCatalogRevision.source_site.asc())
+            .all()
+        )
+
     def get_active_pointer_for_update(
         self,
         db: Session,
