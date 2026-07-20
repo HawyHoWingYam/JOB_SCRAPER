@@ -9,10 +9,12 @@ from app.crawl_control.contracts import (
     CrawlScopeImpactV1,
     CrawlScopePreviewV1,
     CrawlScopeRuleV1,
+    DetailBacklogSnapshotV1,
     DetailSettingsV1,
     ListingSettingsV1,
     ResolvedRunScopeV1,
 )
+from app.crawl_control.detail_runtime import DetailRuntimePlan
 from app.crawl_control.errors import CrawlControlError
 from app.crawl_control.dispatch_plan_contracts import (
     DispatchPlanContentV1,
@@ -46,6 +48,8 @@ __all__ = [
     "DispatchPlanSnapshotV1",
     "DispatchPlanTargetRowV1",
     "DispatchPlanTargetV1",
+    "DetailBacklogSnapshotV1",
+    "DetailRuntimePlan",
     "DetailSettingsV1",
     "ListingSettingsV1",
     "ListingRuntimePlan",

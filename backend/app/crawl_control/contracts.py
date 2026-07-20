@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 from uuid import UUID
 
@@ -320,11 +321,61 @@ DetailRunLimitV1: TypeAlias = Annotated[
 ]
 
 
+class DetailBacklogSnapshotV1(FrozenContract):
+    """Finite eligible detail membership reviewed into one Dispatch Plan."""
+
+    version: Literal[1] = 1
+    cutoff_at: datetime
+    eligible_target_count: int = Field(ge=0)
+    selected_target_count: int = Field(ge=0)
+    selected_row_count: int = Field(ge=0)
+    absolute_safety_cap: int = Field(ge=1)
+    membership_fingerprint: str = Field(pattern=SHA256_PATTERN)
+
+    @field_validator("cutoff_at")
+    @classmethod
+    def require_aware_cutoff(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Detail backlog snapshot cutoff must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def validate_snapshot_counts(self) -> DetailBacklogSnapshotV1:
+        if self.selected_target_count > self.eligible_target_count:
+            raise ValueError(
+                "Detail snapshot cannot select more targets than were eligible"
+            )
+        if self.selected_target_count > self.absolute_safety_cap:
+            raise ValueError("Detail snapshot exceeds the absolute safety cap")
+        if self.selected_row_count < self.selected_target_count:
+            raise ValueError(
+                "Detail snapshot row membership cannot be smaller than its targets"
+            )
+        return self
+
+
 class DetailSettingsV1(FrozenContract):
     version: Literal[1] = 1
     crawl_mode: Literal["headless", "headed"]
     backlog_scope: DetailBacklogScopeV1
     limit: DetailRunLimitV1
+    backlog_snapshot: DetailBacklogSnapshotV1 | None = None
+
+    @model_validator(mode="after")
+    def validate_snapshot_limit(self) -> DetailSettingsV1:
+        snapshot = self.backlog_snapshot
+        if snapshot is None:
+            return self
+        if self.limit.kind == "entire_snapshot":
+            if snapshot.selected_target_count != snapshot.eligible_target_count:
+                raise ValueError(
+                    "Entire-snapshot detail runs must freeze every eligible target"
+                )
+        elif snapshot.selected_target_count > self.limit.detail_run_cap:
+            raise ValueError(
+                "Detail snapshot exceeds the reviewed complete-run cap"
+            )
+        return self
 
 
 class CrawlScopePreviewV1(FrozenContract):

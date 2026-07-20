@@ -124,7 +124,7 @@ class CrawlJobExecutionLauncher:
                 authority = plan_service.load_execution_authority(locked_job.id)
                 plan_service.require_worker_runtime_supported(
                     authority,
-                    supported_phases=("listing",),
+                    supported_phases=("listing", "detail"),
                 )
             self._execution_repository.create_launch(
                 db,

@@ -149,6 +149,49 @@ def test_snapshot_common_detail_metrics_are_numeric_zeros() -> None:
     assert snapshot["detail_remaining_count"] == 0
 
 
+def test_versioned_snapshot_remaining_is_separate_from_live_future_backlog() -> None:
+    event = _event(
+        {
+            "phase": 2,
+            "detail_backlog_remaining": 999,
+        },
+        event_type="crawl.detail_progress",
+    )
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(
+            source_site="jobsdb",
+            status="running",
+            request_payload={"crawl_phase": "detail"},
+            metrics={
+                "detail_run_cap": 10,
+                "detail_snapshot_cutoff_at": NOW.isoformat(),
+                "detail_snapshot_target_count": 10,
+                "detail_snapshot_fetched_count": 3,
+                "detail_snapshot_failed_count": 2,
+                "detail_snapshot_unavailable_count": 1,
+                "detail_snapshot_manual_action_count": 1,
+                "detail_snapshot_remaining_count": 4,
+                "detail_live_future_eligible_count": 27,
+                "jobs_saved": 3,
+            },
+        ),
+        event,
+        now=NOW,
+        events=[event],
+    )
+
+    assert snapshot["detail_run_cap"] == 10
+    assert snapshot["detail_target_count"] == 10
+    assert snapshot["detail_fetched_count"] == 3
+    assert snapshot["detail_failed_count"] == 2
+    assert snapshot["detail_unavailable_count"] == 1
+    assert snapshot["detail_manual_action_count"] == 1
+    assert snapshot["detail_remaining_count"] == 4
+    assert snapshot["detail_snapshot_remaining_count"] == 4
+    assert snapshot["detail_live_future_eligible_count"] == 27
+    assert snapshot["detail_backlog_remaining"] == 999
+
+
 def test_snapshot_projects_cancelling_as_live_operator_state() -> None:
     cancel_requested = _event(
         {"status": "cancelling"},

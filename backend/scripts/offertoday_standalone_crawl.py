@@ -60,6 +60,10 @@ from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # n
 from app.crawl_control.contracts import (  # noqa: E402
     OfferTodayQueryTargetParametersV1,
 )
+from app.crawl_control.detail_runtime import (  # noqa: E402
+    DetailRuntimePlan,
+    DetailRuntimeTarget,
+)
 from app.crawl_control.listing_runtime import ListingRuntimePlan  # noqa: E402
 from app.crawl_control.runtime_authority import (  # noqa: E402
     WorkerStartupInput,
@@ -86,6 +90,7 @@ from app.sources.offertoday.response_policy import (  # noqa: E402
 
 MAX_PAGES_GLOBAL = 9999
 DEFAULT_MAX_PAGES_PER_CONDITION = 100
+DEFAULT_DETAIL_RECOVERY_SEGMENT_SIZE = 5_000
 
 # WAF challenge URL fragment — OfferToday redirects here when it detects unusual traffic.
 _WAF_CHALLENGE_PATH = "/web/passport/cm/verify"
@@ -357,11 +362,55 @@ def _apply_listing_runtime_plan(
     args.skip_existing = False
 
 
+def _apply_detail_runtime_plan(
+    args,
+    runtime_plan: DetailRuntimePlan | None,
+) -> None:
+    args.detail_runtime_plan = runtime_plan
+    if runtime_plan is None:
+        return
+    args.category_ids = ",".join(runtime_plan.classification_ids)
+    args.keywords = ""
+    args.max_pages = 0
+    args.headed = runtime_plan.crawl_mode == "headed"
+    args.crawl_phase = "detail"
+    args.source_listing_crawl_job_id = str(
+        runtime_plan.source_listing_crawl_job_id or ""
+    )
+    args.detail_scope = runtime_plan.backlog_scope_kind
+    args.detail_limit = runtime_plan.complete_run_cap
+    args.detail_statuses = ",".join(runtime_plan.resume_statuses)
+    args.skip_existing = False
+    args.detail_pacing = None
+    args.manual_action_browser_channel = ""
+    args.manual_action_browser_profile_path = ""
+    if runtime_plan.resume_context is not None:
+        args.resume_strategy = runtime_plan.resume_context.resume_strategy
+        args.manual_action_browser_channel = (
+            runtime_plan.resume_context.browser_channel or ""
+        )
+        args.manual_action_browser_profile_path = (
+            runtime_plan.resume_context.browser_profile_path or ""
+        )
+
+
 def _resolve_detail_scope(
     args,
     *,
     listing_phase_completed: bool,
 ) -> tuple[str | None, str]:
+    runtime_plan: DetailRuntimePlan | None = getattr(
+        args,
+        "detail_runtime_plan",
+        None,
+    )
+    if runtime_plan is not None:
+        return (
+            str(runtime_plan.source_listing_crawl_job_id)
+            if runtime_plan.source_listing_crawl_job_id is not None
+            else None,
+            runtime_plan.backlog_scope_kind,
+        )
     requested_source_listing_crawl_job_id = str(args.source_listing_crawl_job_id or "").strip() or None
     requested_scope = str(getattr(args, "detail_scope", "") or "").strip().lower()
     if requested_scope and requested_scope not in {"global", "listing_batch"}:
@@ -401,6 +450,17 @@ def _build_runtime_request_payload(
             "crawl_phase": "listing",
             "crawl_mode": runtime_plan.crawl_mode,
             **runtime_plan.audit_payload(),
+        }
+    detail_runtime_plan: DetailRuntimePlan | None = getattr(
+        args,
+        "detail_runtime_plan",
+        None,
+    )
+    if crawl_phase == "detail" and detail_runtime_plan is not None:
+        return {
+            "crawl_phase": "detail",
+            "crawl_mode": detail_runtime_plan.crawl_mode,
+            **detail_runtime_plan.audit_payload(),
         }
     category_ids = _parse_catalog_classification_ids(args.category_ids)
     detail_statuses = _normalize_detail_statuses(args.detail_statuses)
@@ -1460,6 +1520,7 @@ async def _run_detail_phase(
     completion_metrics: dict[str, Any] | None = None,
     finalize_crawl: bool = True,
     segment_index: int = 1,
+    runtime_targets: tuple[DetailRuntimeTarget, ...] | None = None,
 ) -> OfferTodayDetailPhaseResult:
     cancellation_token = resolve_cancellation_token(args)
     phase_started_at = time.perf_counter()
@@ -1485,6 +1546,12 @@ async def _run_detail_phase(
                 source_site="offertoday",
                 request_payload=request_payload,
                 detail_crawl_job_id=crawl_job_id,
+                detail_runtime_plan=getattr(
+                    args,
+                    "detail_runtime_plan",
+                    None,
+                ),
+                runtime_targets=runtime_targets,
             )
     except ManualActionRequiredError as exc:
         logger.warning(
@@ -2029,7 +2096,36 @@ async def _run_detail_recovery(
         source_listing_crawl_job_id=source_listing_crawl_job_id,
         detail_scope=detail_scope,
     )
+    detail_runtime_plan: DetailRuntimePlan | None = getattr(
+        args,
+        "detail_runtime_plan",
+        None,
+    )
+    runtime_segments = (
+        iter(
+            detail_runtime_plan.iter_segments(
+                DEFAULT_DETAIL_RECOVERY_SEGMENT_SIZE
+            )
+        )
+        if detail_runtime_plan is not None
+        else None
+    )
     current_load_result = detail_load_result
+    current_runtime_segment: tuple[DetailRuntimeTarget, ...] | None = None
+    if detail_runtime_plan is not None:
+        if detail_load_result is not None:
+            raise RuntimeError(
+                "Versioned detail execution cannot reuse a listing-derived cohort"
+            )
+        assert runtime_segments is not None
+        current_runtime_segment = next(runtime_segments, ())
+        current_load_result = crawl_runtime.load_detail_targets(
+            source_site="offertoday",
+            request_payload=request_payload,
+            detail_crawl_job_id=crawl_job_id,
+            detail_runtime_plan=detail_runtime_plan,
+            runtime_targets=current_runtime_segment,
+        )
     segment_index = 1
     cumulative_outcomes: dict[str, int] = {}
     cumulative_target_rows = 0
@@ -2056,6 +2152,22 @@ async def _run_detail_recovery(
             )
         )
         processed_targets = sum(cumulative_outcomes.values())
+        live_future_eligible = int(
+            getattr(
+                backlog_result,
+                "live_future_eligible_target_count",
+                0,
+            )
+            or 0
+        )
+        snapshot_remaining = int(
+            getattr(
+                backlog_result,
+                "snapshot_remaining_target_count",
+                0,
+            )
+            or 0
+        )
         return {
             **dict(completion_metrics or {}),
             "detail_scope": detail_scope,
@@ -2088,8 +2200,17 @@ async def _run_detail_recovery(
                 getattr(backlog_result, "eligible_manual_action_rows", 0) or 0
             ),
             "detail_backlog_remaining": int(
-                getattr(backlog_result, "eligible_distinct_target_rows", 0) or 0
+                live_future_eligible
+                if detail_runtime_plan is not None
+                else getattr(
+                    backlog_result,
+                    "eligible_distinct_target_rows",
+                    0,
+                )
+                or 0
             ),
+            "detail_snapshot_remaining_count": snapshot_remaining,
+            "detail_live_future_eligible_count": live_future_eligible,
             "detail_continuation_state": continuation_state,
         }
 
@@ -2133,6 +2254,7 @@ async def _run_detail_recovery(
             completion_metrics=completion_metrics,
             finalize_crawl=False,
             segment_index=segment_index,
+            runtime_targets=current_runtime_segment,
         )
         last_result = segment_result
         cumulative_target_rows += int(segment_result.detail_load_result.target_rows)
@@ -2147,11 +2269,6 @@ async def _run_detail_recovery(
             segment_result.detail_load_result.reconciled_source_job_ids
         )
 
-        next_load_result = crawl_runtime.load_detail_targets(
-            source_site="offertoday",
-            request_payload=request_payload,
-            detail_crawl_job_id=crawl_job_id,
-        )
         segment_failure = max(
             segment_result.processed_targets
             - int(
@@ -2163,6 +2280,29 @@ async def _run_detail_recovery(
             - int(segment_result.terminal_unavailable),
             0,
         )
+        versioned_snapshot_exhausted = False
+        if detail_runtime_plan is None:
+            next_load_result = crawl_runtime.load_detail_targets(
+                source_site="offertoday",
+                request_payload=request_payload,
+                detail_crawl_job_id=crawl_job_id,
+            )
+        else:
+            assert runtime_segments is not None
+            next_runtime_segment: tuple[DetailRuntimeTarget, ...]
+            if segment_result.stop_batch or segment_failure > 0:
+                next_runtime_segment = ()
+            else:
+                next_segment = next(runtime_segments, None)
+                next_runtime_segment = next_segment or ()
+            versioned_snapshot_exhausted = not next_runtime_segment
+            next_load_result = crawl_runtime.load_detail_targets(
+                source_site="offertoday",
+                request_payload=request_payload,
+                detail_crawl_job_id=crawl_job_id,
+                detail_runtime_plan=detail_runtime_plan,
+                runtime_targets=next_runtime_segment,
+            )
         if segment_result.stop_batch:
             metrics = build_cumulative_metrics(
                 backlog_result=next_load_result,
@@ -2222,7 +2362,11 @@ async def _run_detail_recovery(
             )
 
         if (
-            int(next_load_result.target_rows) == 0
+            (
+                versioned_snapshot_exhausted
+                if detail_runtime_plan is not None
+                else int(next_load_result.target_rows) == 0
+            )
             and not next_load_result.identity_conflict_ids
         ):
             reconciled_source_job_ids.update(
@@ -2278,6 +2422,8 @@ async def _run_detail_recovery(
             },
         )
         current_load_result = next_load_result
+        if detail_runtime_plan is not None:
+            current_runtime_segment = next_runtime_segment
         segment_index += 1
 
 
@@ -2342,6 +2488,7 @@ async def main() -> None:
     startup = _load_runtime_input(args.crawl_job_id)
     _apply_request_payload_defaults(args, startup.request_payload)
     _apply_listing_runtime_plan(args, startup.listing_runtime_plan)
+    _apply_detail_runtime_plan(args, startup.detail_runtime_plan)
     args.cancellation_token = CrawlCancellationToken(
         crawl_job_id=args.crawl_job_id,
         execution_generation=args.execution_generation or None,

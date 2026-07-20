@@ -3,8 +3,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sqlalchemy import select
+
 from app.crawl_phases import resolve_crawl_phase
 from app.database import SessionLocal
+from app.models.crawl_dispatch_plan import (
+    CrawlDispatchPlanTarget,
+    CrawlDispatchPlanTargetRow,
+)
 from app.models.crawl_job_listing import CrawlJobListing
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.utils.time import utc_now
@@ -49,6 +55,7 @@ class CrawlJobCancellationService:
             recovered_records = self._release_running_detail_rows(
                 db,
                 crawl_job_id=crawl_job.id,
+                dispatch_plan_id=getattr(crawl_job, "dispatch_plan_id", None),
                 timestamp=timestamp,
             )
             metrics = dict(crawl_job.metrics or {})
@@ -98,16 +105,32 @@ class CrawlJobCancellationService:
             db.close()
 
     @staticmethod
-    def _release_running_detail_rows(db, *, crawl_job_id, timestamp) -> list[dict]:
-        rows = (
-            db.query(CrawlJobListing)
-            .filter(
-                CrawlJobListing.last_detail_crawl_job_id == crawl_job_id,
-                CrawlJobListing.detail_status == "running",
-            )
-            .order_by(CrawlJobListing.created_at.asc(), CrawlJobListing.id.asc())
-            .all()
+    def _release_running_detail_rows(
+        db,
+        *,
+        crawl_job_id,
+        dispatch_plan_id,
+        timestamp,
+    ) -> list[dict]:
+        query = db.query(CrawlJobListing).filter(
+            CrawlJobListing.last_detail_crawl_job_id == crawl_job_id,
+            CrawlJobListing.detail_status == "running",
         )
+        if dispatch_plan_id is not None:
+            frozen_membership = (
+                select(CrawlDispatchPlanTargetRow.crawl_job_listing_id)
+                .join(
+                    CrawlDispatchPlanTarget,
+                    CrawlDispatchPlanTarget.id
+                    == CrawlDispatchPlanTargetRow.plan_target_id,
+                )
+                .where(CrawlDispatchPlanTarget.plan_id == dispatch_plan_id)
+            )
+            query = query.filter(CrawlJobListing.id.in_(frozen_membership))
+        rows = query.order_by(
+            CrawlJobListing.created_at.asc(),
+            CrawlJobListing.id.asc(),
+        ).all()
         records: list[dict] = []
         for row in rows:
             row.detail_status = "pending"

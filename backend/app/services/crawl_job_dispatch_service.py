@@ -471,7 +471,10 @@ class CrawlJobDispatchService:
             raise RuntimeError(
                 "Crawl job manual action does not support reuse-open-browser resume"
             )
-        DispatchPlanService.require_worker_runtime_supported(execution_authority)
+        DispatchPlanService.require_worker_runtime_supported(
+            execution_authority,
+            supported_phases=("detail",),
+        )
 
         resume_context = dict(manual_action.get("resume_context") or {})
         if not resume_context:

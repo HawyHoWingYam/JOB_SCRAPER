@@ -325,11 +325,10 @@ def _project_distinct_detail_progress(
 
 def _event_manual_action(latest_event) -> dict[str, Any]:
     event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
-    return (
-        event_payload.get("manual_action")
-        if isinstance(event_payload.get("manual_action"), dict)
-        else {}
-    )
+    manual_action = event_payload.get("manual_action")
+    if not isinstance(manual_action, dict):
+        return {}
+    return {str(key): value for key, value in manual_action.items()}
 
 
 def _extract_issue_text(
@@ -871,6 +870,58 @@ def build_crawl_task_snapshot(
             metrics.get("detail_backlog_remaining", 0),
         )
     )
+    detail_snapshot_cutoff_at = event_payload.get(
+        "detail_snapshot_cutoff_at",
+        metrics.get("detail_snapshot_cutoff_at"),
+    )
+    detail_snapshot_target_count = _to_int(
+        event_payload.get(
+            "detail_snapshot_target_count",
+            metrics.get("detail_snapshot_target_count", 0),
+        )
+    )
+    detail_snapshot_fetched_count = _to_int(
+        event_payload.get(
+            "detail_snapshot_fetched_count",
+            metrics.get("detail_snapshot_fetched_count", 0),
+        )
+    )
+    detail_snapshot_failed_count = _to_int(
+        event_payload.get(
+            "detail_snapshot_failed_count",
+            metrics.get("detail_snapshot_failed_count", 0),
+        )
+    )
+    detail_snapshot_unavailable_count = _to_int(
+        event_payload.get(
+            "detail_snapshot_unavailable_count",
+            metrics.get("detail_snapshot_unavailable_count", 0),
+        )
+    )
+    detail_snapshot_manual_action_count = _to_int(
+        event_payload.get(
+            "detail_snapshot_manual_action_count",
+            metrics.get("detail_snapshot_manual_action_count", 0),
+        )
+    )
+    detail_snapshot_remaining_count = _to_int(
+        event_payload.get(
+            "detail_snapshot_remaining_count",
+            metrics.get("detail_snapshot_remaining_count", 0),
+        )
+    )
+    detail_live_future_eligible_count = _to_int(
+        event_payload.get(
+            "detail_live_future_eligible_count",
+            metrics.get("detail_live_future_eligible_count", 0),
+        )
+    )
+    detail_run_cap = _to_int(
+        event_payload.get(
+            "detail_run_cap",
+            metrics.get("detail_run_cap", 0),
+        )
+    )
     detail_continuation_state = (
         event_payload.get("detail_continuation_state")
         or event_payload.get("continuation_state")
@@ -921,7 +972,13 @@ def build_crawl_task_snapshot(
         if normalized_source_site == "offertoday"
         else None
     )
-    if detail_distinct_progress is not None:
+    if detail_snapshot_cutoff_at is not None:
+        detail_target_count = detail_snapshot_target_count
+        detail_fetched_count = detail_snapshot_fetched_count
+        detail_failed_count = detail_snapshot_failed_count
+        detail_unavailable_count = detail_snapshot_unavailable_count
+        detail_remaining_count = detail_snapshot_remaining_count
+    elif detail_distinct_progress is not None:
         detail_target_count = _to_int(
             detail_distinct_progress["detail_distinct_target_total"]
         )
@@ -959,12 +1016,18 @@ def build_crawl_task_snapshot(
             - detail_unavailable_count,
             0,
         )
-    detail_manual_action_count = _max_count(
-        detail_manual_action_required,
-        detail_run_manual_action_required,
+    detail_manual_action_count = (
+        detail_snapshot_manual_action_count
+        if detail_snapshot_cutoff_at is not None
+        else _max_count(
+            detail_manual_action_required,
+            detail_run_manual_action_required,
+        )
     )
     detail_saved_count = (
-        _max_count(jobs_saved, detail_run_completed)
+        jobs_saved
+        if detail_snapshot_cutoff_at is not None
+        else _max_count(jobs_saved, detail_run_completed)
         if normalized_source_site in {"ctgoodjobs", "jobsdb"}
         else jobs_saved
     )
@@ -1049,6 +1112,18 @@ def build_crawl_task_snapshot(
     )
     ip_blocked = ip_blocked or issue_metadata["issue_class"] == "ip_blocked"
 
+    detail_distinct_projection: dict[str, Any]
+    if detail_distinct_progress is not None:
+        detail_distinct_projection = dict(detail_distinct_progress)
+    else:
+        detail_distinct_projection = {
+            "detail_distinct_target_total": None,
+            "detail_distinct_succeeded": None,
+            "detail_distinct_terminal_unavailable": None,
+            "detail_distinct_failed": None,
+            "detail_distinct_reconciled": None,
+            "detail_distinct_remaining": None,
+        }
     return {
         "crawl_job_id": str(crawl_job.id),
         "persisted_status": crawl_job.status,
@@ -1105,6 +1180,15 @@ def build_crawl_task_snapshot(
         "detail_backlog_failed": detail_backlog_failed,
         "detail_backlog_manual_action_required": detail_backlog_manual_action_required,
         "detail_backlog_remaining": detail_backlog_remaining,
+        "detail_run_cap": detail_run_cap,
+        "detail_snapshot_cutoff_at": detail_snapshot_cutoff_at,
+        "detail_snapshot_target_count": detail_snapshot_target_count,
+        "detail_snapshot_fetched_count": detail_snapshot_fetched_count,
+        "detail_snapshot_failed_count": detail_snapshot_failed_count,
+        "detail_snapshot_unavailable_count": detail_snapshot_unavailable_count,
+        "detail_snapshot_manual_action_count": detail_snapshot_manual_action_count,
+        "detail_snapshot_remaining_count": detail_snapshot_remaining_count,
+        "detail_live_future_eligible_count": detail_live_future_eligible_count,
         "detail_continuation_state": detail_continuation_state,
         "detail_run_completed": detail_run_completed,
         "detail_run_failed": detail_run_failed,
@@ -1119,17 +1203,7 @@ def build_crawl_task_snapshot(
         "detail_unavailable_count": detail_unavailable_count,
         "detail_manual_action_count": detail_manual_action_count,
         "detail_remaining_count": detail_remaining_count,
-        **(
-            detail_distinct_progress
-            or {
-                "detail_distinct_target_total": None,
-                "detail_distinct_succeeded": None,
-                "detail_distinct_terminal_unavailable": None,
-                "detail_distinct_failed": None,
-                "detail_distinct_reconciled": None,
-                "detail_distinct_remaining": None,
-            }
-        ),
+        **detail_distinct_projection,
         "listings_staged": listings_staged,
         "jobs_skipped_existing": jobs_skipped_existing,
         "detail_pending": detail_pending,

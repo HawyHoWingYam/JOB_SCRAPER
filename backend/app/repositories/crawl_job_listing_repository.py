@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import case, func, select
@@ -221,6 +222,7 @@ class CrawlJobListingRepository:
         category_ids: Iterable[str | int] | None = None,
         statuses: Iterable[str] | None = None,
         source_job_ids: Iterable[str] | None = None,
+        eligible_at_or_before: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[CrawlJobListing]:
@@ -245,6 +247,10 @@ class CrawlJobListingRepository:
             detail_statuses=statuses,
         )
         query = query.filter(CrawlJobListing.detail_status.in_(normalized_statuses))
+        if eligible_at_or_before is not None:
+            query = query.filter(
+                CrawlJobListing.created_at <= eligible_at_or_before
+            )
         if normalized_source_job_ids is None:
             normalized_detail_scope = str(detail_scope or "").strip().lower()
             if normalized_source_site == "offertoday":
@@ -288,6 +294,14 @@ class CrawlJobListingRepository:
                     historical_blocker.detail_status.in_(
                         ("terminal_unavailable", "identity_conflict")
                     ),
+                    *(
+                        (
+                            historical_blocker.created_at
+                            <= eligible_at_or_before,
+                        )
+                        if eligible_at_or_before is not None
+                        else ()
+                    ),
                 )
                 .correlate(CrawlJobListing)
                 .exists()
@@ -309,6 +323,21 @@ class CrawlJobListingRepository:
         if limit is not None:
             query = query.limit(max(int(limit), 0))
         return query.all()
+
+    def list_by_ids(
+        self,
+        db: Session,
+        *,
+        listing_ids: Iterable[Any],
+    ) -> list[CrawlJobListing]:
+        normalized_ids = tuple(dict.fromkeys(listing_ids))
+        if not normalized_ids:
+            return []
+        return (
+            db.query(CrawlJobListing)
+            .filter(CrawlJobListing.id.in_(normalized_ids))
+            .all()
+        )
 
     def list_offertoday_identity_history(
         self,
@@ -728,7 +757,5 @@ class CrawlJobListingRepository:
         else:
             db.flush()
         return listing
-
-
 
 

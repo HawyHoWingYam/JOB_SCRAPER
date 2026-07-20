@@ -100,6 +100,25 @@ class ListingRunPageCapExceededError(CrawlControlError):
         )
 
 
+class BacklogSafetyCapExceededError(CrawlControlError):
+    def __init__(
+        self,
+        *,
+        eligible_target_count: int,
+        selected_target_count: int,
+        absolute_safety_cap: int,
+    ) -> None:
+        super().__init__(
+            "BACKLOG_SAFETY_CAP_EXCEEDED",
+            "Detail backlog snapshot exceeds the absolute safety cap",
+            context={
+                "eligible_target_count": eligible_target_count,
+                "selected_target_count": selected_target_count,
+                "absolute_safety_cap": absolute_safety_cap,
+            },
+        )
+
+
 class AutomationNotFoundError(CrawlControlError):
     def __init__(self, automation_id: Any) -> None:
         super().__init__(

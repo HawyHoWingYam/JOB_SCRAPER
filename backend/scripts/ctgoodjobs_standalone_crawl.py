@@ -24,6 +24,7 @@ from app.config import settings  # noqa: E402
 from app.crawl_control.contracts import (  # noqa: E402
     CTgoodjobsQueryTargetParametersV1,
 )
+from app.crawl_control.detail_runtime import DetailRuntimePlan  # noqa: E402
 from app.crawl_control.listing_runtime import ListingRuntimePlan  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.repositories.company_repository import CompanyRepository  # noqa: E402
@@ -147,6 +148,28 @@ def _apply_listing_runtime_plan(
     args.is_resume = False
 
 
+def _apply_detail_runtime_plan(
+    args,
+    runtime_plan: DetailRuntimePlan | None,
+) -> None:
+    args.detail_runtime_plan = runtime_plan
+    if runtime_plan is None:
+        return
+    args.category_ids = list(runtime_plan.classification_ids)
+    args.crawl_mode = runtime_plan.crawl_mode
+    args.crawl_phase = "detail"
+    args.detail_limit = runtime_plan.complete_run_cap
+    args.source_listing_crawl_job_id = str(
+        runtime_plan.source_listing_crawl_job_id or ""
+    )
+    args.detail_statuses = list(runtime_plan.resume_statuses)
+    args.skip_existing = False
+    args.is_resume = runtime_plan.resume_context is not None
+    args.detail_pacing = None
+    if runtime_plan.resume_context is not None:
+        args.resume_strategy = runtime_plan.resume_context.resume_strategy
+
+
 @dataclass(frozen=True)
 class _PublishedCTGoodJobsCategory:
     source_classification_id: str
@@ -260,6 +283,18 @@ def _resolve_detail_scope(
     *,
     listing_phase_completed: bool,
 ) -> tuple[str | None, str]:
+    runtime_plan: DetailRuntimePlan | None = getattr(
+        args,
+        "detail_runtime_plan",
+        None,
+    )
+    if runtime_plan is not None:
+        return (
+            str(runtime_plan.source_listing_crawl_job_id)
+            if runtime_plan.source_listing_crawl_job_id is not None
+            else None,
+            runtime_plan.backlog_scope_kind,
+        )
     requested_source_listing_crawl_job_id = str(args.source_listing_crawl_job_id or "").strip() or None
     if requested_source_listing_crawl_job_id:
         return requested_source_listing_crawl_job_id, "listing_batch"
@@ -273,6 +308,17 @@ def _build_detail_request_payload(
     *,
     source_listing_crawl_job_id: str | None,
 ) -> dict[str, Any]:
+    runtime_plan: DetailRuntimePlan | None = getattr(
+        args,
+        "detail_runtime_plan",
+        None,
+    )
+    if runtime_plan is not None:
+        return {
+            "crawl_phase": "detail",
+            "crawl_mode": runtime_plan.crawl_mode,
+            **runtime_plan.audit_payload(),
+        }
     payload = {
         "crawl_phase": "detail",
         "crawl_mode": args.crawl_mode,
@@ -285,6 +331,16 @@ def _build_detail_request_payload(
     if isinstance(getattr(args, "detail_pacing", None), dict):
         payload["detail_pacing"] = dict(args.detail_pacing)
     return payload
+
+
+def _detail_target_listing_ids(target: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(
+        target.get("listing_ids")
+        or (
+            target["listing_id"],
+            *tuple(target.get("duplicate_listing_ids") or ()),
+        )
+    )
 
 
 async def _persist_ctgoodjobs_job(*, canonical_job: dict[str, Any]):
@@ -596,6 +652,11 @@ async def _run_detail_phase(
                 source_listing_crawl_job_id=source_listing_crawl_job_id,
             ),
             detail_crawl_job_id=args.crawl_job_id,
+            detail_runtime_plan=getattr(
+                args,
+                "detail_runtime_plan",
+                None,
+            ),
         )
     except Exception as exc:
         logger.info(
@@ -680,7 +741,7 @@ async def _run_detail_phase(
 
     def record_failure(*, exc: Exception, index: int, target, item_started_at: float) -> None:
         crawl_runtime.mark_detail_failed(
-            listing_id=target["listing_id"],
+            listing_ids=_detail_target_listing_ids(target),
             detail_crawl_job_id=args.crawl_job_id,
             error_message=str(exc),
         )
@@ -722,7 +783,7 @@ async def _run_detail_phase(
         item_started_at: float,
     ) -> dict[str, int]:
         crawl_runtime.mark_detail_manual_action_required(
-            listing_id=target["listing_id"],
+            listing_ids=_detail_target_listing_ids(target),
             detail_crawl_job_id=args.crawl_job_id,
             error_message=exc.message,
         )
@@ -792,7 +853,14 @@ async def _run_detail_phase(
         )
         log_detail_done("empty")
         return counts
-    category_lookup = _categories_by_id()
+    detail_runtime_plan: DetailRuntimePlan | None = getattr(
+        args,
+        "detail_runtime_plan",
+        None,
+    )
+    category_lookup = (
+        _categories_by_id() if detail_runtime_plan is None else {}
+    )
 
     for index, target in enumerate(detail_targets.targets, start=1):
         cancellation_token.raise_if_cancelled()
@@ -812,7 +880,7 @@ async def _run_detail_phase(
             )
         )
         crawl_runtime.mark_detail_running(
-            listing_id=target["listing_id"],
+            listing_ids=_detail_target_listing_ids(target),
             detail_crawl_job_id=args.crawl_job_id,
         )
         listing_payload = dict(target.get("listing_payload") or {})
@@ -822,7 +890,23 @@ async def _run_detail_phase(
             or ""
         ).strip()
         try:
-            category = _resolve_category(category_lookup, category_id)
+            if detail_runtime_plan is None:
+                category = _resolve_category(category_lookup, category_id)
+            else:
+                category = _PublishedCTGoodJobsCategory(
+                    source_classification_id=category_id,
+                    ctgoodjobs_id="",
+                    name=str(
+                        target.get("source_classification_name")
+                        or listing_payload.get("source_classification_name")
+                        or category_id
+                    ),
+                    slug=str(
+                        listing_payload.get("source_classification_slug")
+                        or ""
+                    ),
+                    url=str(target.get("source_url") or ""),
+                )
             cancellation_token.raise_if_cancelled()
             html = await browser_scraper.fetch_page_html(
                 target["source_url"],
@@ -848,7 +932,7 @@ async def _run_detail_phase(
             canonical = build_ctgoodjobs_canonical_job(merged).to_dict()
             saved_job_id = await _persist_ctgoodjobs_job(canonical_job=canonical)
             crawl_runtime.mark_detail_completed(
-                listing_id=target["listing_id"],
+                listing_ids=_detail_target_listing_ids(target),
                 detail_crawl_job_id=args.crawl_job_id,
                 detail_payload=canonical["raw_data"],
                 published_job_id=saved_job_id,
@@ -892,7 +976,7 @@ async def _run_detail_phase(
         except CTGoodJobsTerminalUnavailableError as exc:
             last_content_anomaly_reason = None
             crawl_runtime.mark_detail_terminal_unavailable(
-                listing_id=target["listing_id"],
+                listing_ids=_detail_target_listing_ids(target),
                 detail_crawl_job_id=args.crawl_job_id,
                 error_message=str(exc),
             )
@@ -995,6 +1079,7 @@ async def main(argv: Sequence[str] | None = None) -> int:
     )
     _apply_request_payload_defaults(args, startup.request_payload)
     _apply_listing_runtime_plan(args, startup.listing_runtime_plan)
+    _apply_detail_runtime_plan(args, startup.detail_runtime_plan)
     if str(args.crawl_mode).strip().lower() != "headed":
         raise RuntimeError("CTgoodjobs supports headed crawl mode only")
     args.cancellation_token = CrawlCancellationToken(

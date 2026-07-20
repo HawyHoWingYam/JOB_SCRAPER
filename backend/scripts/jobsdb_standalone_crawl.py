@@ -26,6 +26,7 @@ from app.repositories.company_repository import CompanyRepository  # noqa: E402
 from app.crawl_control.contracts import (  # noqa: E402
     JobsDBQueryTargetParametersV1,
 )
+from app.crawl_control.detail_runtime import DetailRuntimePlan  # noqa: E402
 from app.crawl_control.listing_runtime import ListingRuntimePlan  # noqa: E402
 from app.crawl_control.runtime_authority import (  # noqa: E402
     WorkerStartupInput,
@@ -159,8 +160,51 @@ def _apply_listing_runtime_plan(
     args.is_resume = False
 
 
-def _resolve_source_listing_crawl_job_id(args) -> str:
+def _apply_detail_runtime_plan(
+    args,
+    runtime_plan: DetailRuntimePlan | None,
+) -> None:
+    args.detail_runtime_plan = runtime_plan
+    if runtime_plan is None:
+        return
+    args.category_ids = list(runtime_plan.classification_ids)
+    args.crawl_mode = runtime_plan.crawl_mode
+    args.crawl_phase = "detail"
+    args.detail_limit = runtime_plan.complete_run_cap
+    args.source_listing_crawl_job_id = str(
+        runtime_plan.source_listing_crawl_job_id or ""
+    )
+    args.detail_statuses = list(runtime_plan.resume_statuses)
+    args.skip_existing = False
+    args.is_resume = runtime_plan.resume_context is not None
+    args.detail_pacing = None
+    if runtime_plan.resume_context is not None:
+        args.resume_strategy = runtime_plan.resume_context.resume_strategy
+
+
+def _resolve_source_listing_crawl_job_id(args) -> str | None:
+    runtime_plan: DetailRuntimePlan | None = getattr(
+        args,
+        "detail_runtime_plan",
+        None,
+    )
+    if runtime_plan is not None:
+        return (
+            str(runtime_plan.source_listing_crawl_job_id)
+            if runtime_plan.source_listing_crawl_job_id is not None
+            else None
+        )
     return str(args.source_listing_crawl_job_id or args.crawl_job_id)
+
+
+def _detail_target_listing_ids(target: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(
+        target.get("listing_ids")
+        or (
+            target["listing_id"],
+            *tuple(target.get("duplicate_listing_ids") or ()),
+        )
+    )
 
 
 def _build_listing_request_payload(args) -> dict[str, Any]:
@@ -181,6 +225,17 @@ def _build_listing_request_payload(args) -> dict[str, Any]:
 
 
 def _build_detail_request_payload(args) -> dict[str, Any]:
+    runtime_plan: DetailRuntimePlan | None = getattr(
+        args,
+        "detail_runtime_plan",
+        None,
+    )
+    if runtime_plan is not None:
+        return {
+            "crawl_phase": "detail",
+            "crawl_mode": runtime_plan.crawl_mode,
+            **runtime_plan.audit_payload(),
+        }
     payload = {
         "crawl_phase": "detail",
         "crawl_mode": args.crawl_mode,
@@ -556,6 +611,11 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
             source_site=JOBSDB_SOURCE_SITE,
             request_payload=_build_detail_request_payload(args),
             detail_crawl_job_id=args.crawl_job_id,
+            detail_runtime_plan=getattr(
+                args,
+                "detail_runtime_plan",
+                None,
+            ),
         )
     except Exception as exc:
         logger.info(
@@ -673,7 +733,7 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                     )
                 )
                 crawl_runtime.mark_detail_running(
-                    listing_id=target["listing_id"],
+                    listing_ids=_detail_target_listing_ids(target),
                     detail_crawl_job_id=args.crawl_job_id,
                 )
                 try:
@@ -708,7 +768,7 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                     db.commit()
                     published_job_id = saved_job.id
                     crawl_runtime.mark_detail_completed(
-                        listing_id=target["listing_id"],
+                        listing_ids=_detail_target_listing_ids(target),
                         detail_crawl_job_id=args.crawl_job_id,
                         detail_payload=canonical["raw_data"],
                         published_job_id=published_job_id,
@@ -750,7 +810,7 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                 except ManualActionRequiredError as exc:
                     db.rollback()
                     crawl_runtime.mark_detail_manual_action_required(
-                        listing_id=target["listing_id"],
+                        listing_ids=_detail_target_listing_ids(target),
                         detail_crawl_job_id=args.crawl_job_id,
                         error_message=exc.message,
                     )
@@ -797,7 +857,7 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                 except Exception as exc:
                     db.rollback()
                     crawl_runtime.mark_detail_failed(
-                        listing_id=target["listing_id"],
+                        listing_ids=_detail_target_listing_ids(target),
                         detail_crawl_job_id=args.crawl_job_id,
                         error_message=str(exc),
                     )
@@ -901,6 +961,7 @@ async def main(argv: Sequence[str] | None = None) -> int:
     )
     _apply_request_payload_defaults(args, startup.request_payload)
     _apply_listing_runtime_plan(args, startup.listing_runtime_plan)
+    _apply_detail_runtime_plan(args, startup.detail_runtime_plan)
     args.cancellation_token = CrawlCancellationToken(
         crawl_job_id=args.crawl_job_id,
         execution_generation=args.execution_generation or None,

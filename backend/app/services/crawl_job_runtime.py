@@ -7,6 +7,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.crawl_phases import DEFAULT_DETAIL_RETRY_STATUSES
+from app.crawl_control.detail_runtime import (
+    DetailRuntimePlan,
+    DetailRuntimeTarget,
+    build_detail_runtime_plan,
+    detail_row_eligibility_fingerprint,
+    detail_row_runtime_identity_fingerprint,
+)
+from app.crawl_control.dispatch_plan_service import DispatchPlanService
+from app.crawl_control.errors import DispatchPlanStaleError
 from app.database import SessionLocal
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.crawl_job_repository import CrawlJobRepository, _UNSET as CRAWL_JOB_REPOSITORY_UNSET
@@ -84,6 +93,10 @@ class DetailTargetLoadResult:
     eligible_pending_rows: int = 0
     eligible_failed_rows: int = 0
     eligible_manual_action_rows: int = 0
+    snapshot_target_count: int = 0
+    snapshot_remaining_target_count: int = 0
+    live_future_eligible_target_count: int = 0
+    snapshot_cutoff_at: str | None = None
 
 
 def _canonical_id_hash(source_job_ids: tuple[str, ...]) -> str:
@@ -769,67 +782,124 @@ class CrawlJobRuntime:
         source_site: str,
         request_payload: dict[str, Any],
         detail_crawl_job_id,
+        detail_runtime_plan: DetailRuntimePlan | None = None,
+        runtime_targets: tuple[DetailRuntimeTarget, ...] | None = None,
     ) -> DetailTargetLoadResult:
         db = self.session_factory()
         try:
             normalized_source = str(source_site).strip().lower()
-            payload = dict(request_payload or {})
-            source_job_ids_present = "source_job_ids" in payload
-            source_job_ids = (
-                self._ordered_distinct_values(payload.get("source_job_ids") or [])
-                if source_job_ids_present
-                else None
+            payload = (
+                {}
+                if detail_runtime_plan is not None
+                else dict(request_payload or {})
             )
-            source_listing_crawl_job_id = (
-                None
-                if source_job_ids_present
-                else payload.get("source_listing_crawl_job_id")
-            )
-            detail_scope = str(payload.get("detail_scope") or "").strip().lower()
-            if normalized_source == "offertoday":
-                if detail_scope not in {"global", "listing_batch"}:
-                    detail_scope = (
-                        "listing_batch"
-                        if source_listing_crawl_job_id is not None
-                        else "global"
+            if detail_runtime_plan is not None:
+                if (
+                    detail_runtime_plan.source_site != normalized_source
+                    or str(detail_runtime_plan.crawl_job_id)
+                    != str(detail_crawl_job_id)
+                ):
+                    raise DispatchPlanStaleError(
+                        "Detail runtime authority does not match this worker",
+                        plan_id=detail_runtime_plan.dispatch_plan_id,
+                        reason="detail_runtime_authority_mismatch",
                     )
-                if detail_scope == "global" and source_listing_crawl_job_id is not None:
-                    raise ValueError(
-                        "OfferToday global detail scope cannot carry a listing batch ID"
+                selected_runtime_targets = (
+                    detail_runtime_plan.targets
+                    if runtime_targets is None
+                    else self._validated_runtime_target_subset(
+                        detail_runtime_plan,
+                        runtime_targets,
                     )
-                if detail_scope == "listing_batch" and source_listing_crawl_job_id is None:
-                    raise ValueError(
-                        "OfferToday listing_batch detail scope requires a listing batch ID"
-                    )
-            detail_limit = (
-                None
-                if "detail_limit" in payload
-                and payload.get("detail_limit") is None
-                else max(int(payload.get("detail_limit") or 100), 1)
-            )
-            category_ids = (
-                resolve_offertoday_detail_category_ids(
-                    payload.get("category_ids") or [],
-                    source_listing_crawl_job_id=source_listing_crawl_job_id,
-                    detail_scope=detail_scope,
                 )
-                if normalized_source == "offertoday"
-                else payload.get("category_ids") or []
-            )
-            selected_rows = (
-                self.crawl_job_listing_repository.list_detail_candidates(
+                selected_rows = self._load_runtime_plan_rows(
                     db,
-                    source_site=normalized_source,
-                    source_listing_crawl_job_id=source_listing_crawl_job_id,
-                    detail_scope=detail_scope or None,
-                    category_ids=category_ids,
-                    statuses=payload.get("detail_statuses"),
-                    source_job_ids=source_job_ids,
-                    limit=None,
+                    detail_runtime_plan=detail_runtime_plan,
+                    runtime_targets=selected_runtime_targets,
+                    detail_crawl_job_id=detail_crawl_job_id,
                 )
-                if source_job_ids is None or source_job_ids
-                else []
-            )
+                source_job_ids_present = False
+                source_job_ids = None
+                source_listing_crawl_job_id = (
+                    detail_runtime_plan.source_listing_crawl_job_id
+                )
+                detail_scope = detail_runtime_plan.backlog_scope_kind
+                detail_limit = None
+                category_ids = detail_runtime_plan.classification_ids
+            else:
+                selected_rows = None
+                source_job_ids_present = "source_job_ids" in payload
+                source_job_ids = (
+                    self._ordered_distinct_values(
+                        payload.get("source_job_ids") or []
+                    )
+                    if source_job_ids_present
+                    else None
+                )
+                source_listing_crawl_job_id = (
+                    None
+                    if source_job_ids_present
+                    else payload.get("source_listing_crawl_job_id")
+                )
+                detail_scope = str(
+                    payload.get("detail_scope") or ""
+                ).strip().lower()
+                if normalized_source == "offertoday":
+                    if detail_scope not in {"global", "listing_batch"}:
+                        detail_scope = (
+                            "listing_batch"
+                            if source_listing_crawl_job_id is not None
+                            else "global"
+                        )
+                    if (
+                        detail_scope == "global"
+                        and source_listing_crawl_job_id is not None
+                    ):
+                        raise ValueError(
+                            "OfferToday global detail scope cannot carry a "
+                            "listing batch ID"
+                        )
+                    if (
+                        detail_scope == "listing_batch"
+                        and source_listing_crawl_job_id is None
+                    ):
+                        raise ValueError(
+                            "OfferToday listing_batch detail scope requires a "
+                            "listing batch ID"
+                        )
+                detail_limit = (
+                    None
+                    if "detail_limit" in payload
+                    and payload.get("detail_limit") is None
+                    else max(int(payload.get("detail_limit") or 100), 1)
+                )
+                category_ids = (
+                    resolve_offertoday_detail_category_ids(
+                        payload.get("category_ids") or [],
+                        source_listing_crawl_job_id=(
+                            source_listing_crawl_job_id
+                        ),
+                        detail_scope=detail_scope,
+                    )
+                    if normalized_source == "offertoday"
+                    else payload.get("category_ids") or []
+                )
+            if detail_runtime_plan is None:
+                selected_rows = (
+                    self.crawl_job_listing_repository.list_detail_candidates(
+                        db,
+                        source_site=normalized_source,
+                        source_listing_crawl_job_id=source_listing_crawl_job_id,
+                        detail_scope=detail_scope or None,
+                        category_ids=category_ids,
+                        statuses=payload.get("detail_statuses"),
+                        source_job_ids=source_job_ids,
+                        limit=None,
+                    )
+                    if source_job_ids is None or source_job_ids
+                    else []
+                )
+            assert selected_rows is not None
             groups = _group_detail_rows(selected_rows)
 
             resolved_identity_by_row_id: dict[
@@ -984,6 +1054,7 @@ class CrawlJobRuntime:
                         "duplicate_listing_ids": tuple(
                             row.id for row in rows[1:]
                         ),
+                        "listing_ids": tuple(row.id for row in rows),
                         "crawl_job_id": authoritative.crawl_job_id,
                         "source_site": authoritative.source_site,
                         "source_job_id": source_job_id,
@@ -1042,6 +1113,33 @@ class CrawlJobRuntime:
                     source_site=normalized_source,
                     skipped_existing_delta=0,
                 )
+            snapshot_target_count_value = (
+                detail_runtime_plan.selected_target_count
+                if detail_runtime_plan is not None
+                else len(targets)
+            )
+            snapshot_remaining_target_count_value = (
+                self._count_runtime_plan_remaining(
+                    db,
+                    detail_runtime_plan=detail_runtime_plan,
+                    detail_crawl_job_id=detail_crawl_job_id,
+                )
+                if detail_runtime_plan is not None
+                else len(targets)
+            )
+            live_future_eligible_target_count_value = (
+                self._count_live_future_eligible(
+                    db,
+                    detail_runtime_plan=detail_runtime_plan,
+                )
+                if detail_runtime_plan is not None
+                else 0
+            )
+            snapshot_cutoff_at_value = (
+                detail_runtime_plan.snapshot_cutoff_at.isoformat()
+                if detail_runtime_plan is not None
+                else None
+            )
             self._sync_detail_run_metrics(
                 db,
                 detail_crawl_job_id=detail_crawl_job_id,
@@ -1052,6 +1150,22 @@ class CrawlJobRuntime:
                 distinct_selected_ids=len(groups),
                 reconciled_rows=reconciled_rows,
                 duplicate_rows=len(selected_rows) - len(groups),
+                snapshot_target_count=(
+                    snapshot_target_count_value
+                    if detail_runtime_plan is not None
+                    else None
+                ),
+                snapshot_remaining_target_count=(
+                    snapshot_remaining_target_count_value
+                    if detail_runtime_plan is not None
+                    else None
+                ),
+                live_future_eligible_target_count=(
+                    live_future_eligible_target_count_value
+                    if detail_runtime_plan is not None
+                    else None
+                ),
+                snapshot_cutoff_at=snapshot_cutoff_at_value,
             )
             fetch_cohort_source_job_ids = tuple(
                 target["source_job_id"] for target in targets
@@ -1080,12 +1194,249 @@ class CrawlJobRuntime:
                 eligible_pending_rows=eligible_pending_rows,
                 eligible_failed_rows=eligible_failed_rows,
                 eligible_manual_action_rows=eligible_manual_action_rows,
+                snapshot_target_count=snapshot_target_count_value,
+                snapshot_remaining_target_count=(
+                    snapshot_remaining_target_count_value
+                ),
+                live_future_eligible_target_count=(
+                    live_future_eligible_target_count_value
+                ),
+                snapshot_cutoff_at=snapshot_cutoff_at_value,
             )
         except Exception:
             db.rollback()
             raise
         finally:
             db.close()
+
+    @staticmethod
+    def _validated_runtime_target_subset(
+        detail_runtime_plan: DetailRuntimePlan,
+        runtime_targets: tuple[DetailRuntimeTarget, ...],
+    ) -> tuple[DetailRuntimeTarget, ...]:
+        expected = {
+            target.selection_order: target
+            for target in detail_runtime_plan.targets
+        }
+        validated: list[DetailRuntimeTarget] = []
+        seen_orders: set[int] = set()
+        for target in runtime_targets:
+            if (
+                target.selection_order in seen_orders
+                or expected.get(target.selection_order) != target
+            ):
+                raise DispatchPlanStaleError(
+                    "Recovery Segment is not a subset of frozen membership",
+                    plan_id=detail_runtime_plan.dispatch_plan_id,
+                    reason="detail_recovery_segment_expanded",
+                )
+            seen_orders.add(target.selection_order)
+            validated.append(target)
+        if tuple(
+            target.selection_order for target in validated
+        ) != tuple(sorted(seen_orders)):
+            raise DispatchPlanStaleError(
+                "Recovery Segment changed frozen target order",
+                plan_id=detail_runtime_plan.dispatch_plan_id,
+                reason="detail_recovery_segment_reordered",
+            )
+        return tuple(validated)
+
+    def _load_runtime_plan_rows(
+        self,
+        db,
+        *,
+        detail_runtime_plan: DetailRuntimePlan,
+        runtime_targets: tuple[DetailRuntimeTarget, ...],
+        detail_crawl_job_id,
+    ) -> list[Any]:
+        requested_listing_ids = tuple(
+            listing_id
+            for target in runtime_targets
+            for listing_id in target.listing_ids
+        )
+        rows_by_id = {
+            row.id: row
+            for row in self.crawl_job_listing_repository.list_by_ids(
+                db,
+                listing_ids=requested_listing_ids,
+            )
+        }
+        if len(rows_by_id) != len(requested_listing_ids):
+            raise DispatchPlanStaleError(
+                "Frozen detail staging-row membership is no longer complete",
+                plan_id=detail_runtime_plan.dispatch_plan_id,
+                reason="detail_target_row_missing",
+            )
+
+        selected_rows: list[Any] = []
+        current_owner = str(detail_crawl_job_id)
+        resume_statuses = set(detail_runtime_plan.resume_statuses)
+        for target in runtime_targets:
+            target_rows = [rows_by_id[listing_id] for listing_id in target.listing_ids]
+            for (
+                row,
+                _original_status,
+                eligibility_fingerprint,
+                runtime_identity_fingerprint,
+            ) in zip(
+                target_rows,
+                target.eligibility_statuses,
+                target.eligibility_fingerprints,
+                target.runtime_identity_fingerprints,
+                strict=True,
+            ):
+                if (
+                    str(row.source_site).strip().lower()
+                    != detail_runtime_plan.source_site
+                    or str(row.source_job_id).strip() != target.source_job_id
+                ):
+                    raise DispatchPlanStaleError(
+                        "Frozen detail target identity changed before execution",
+                        plan_id=detail_runtime_plan.dispatch_plan_id,
+                        reason="detail_target_identity_changed",
+                    )
+                if (
+                    detail_row_runtime_identity_fingerprint(row)
+                    != runtime_identity_fingerprint
+                ):
+                    raise DispatchPlanStaleError(
+                        "Frozen detail target source inputs changed before execution",
+                        plan_id=detail_runtime_plan.dispatch_plan_id,
+                        reason="detail_target_inputs_changed",
+                    )
+                row_owner = (
+                    str(row.last_detail_crawl_job_id)
+                    if row.last_detail_crawl_job_id is not None
+                    else None
+                )
+                if (
+                    detail_row_eligibility_fingerprint(row)
+                    != eligibility_fingerprint
+                    and row_owner != current_owner
+                ):
+                    raise DispatchPlanStaleError(
+                        "Frozen detail target eligibility changed before execution",
+                        plan_id=detail_runtime_plan.dispatch_plan_id,
+                        reason="detail_target_eligibility_changed",
+                    )
+
+            authoritative = target_rows[0]
+            authoritative_status = str(authoritative.detail_status)
+            authoritative_owner = (
+                str(authoritative.last_detail_crawl_job_id)
+                if authoritative.last_detail_crawl_job_id is not None
+                else None
+            )
+            if resume_statuses:
+                should_fetch = authoritative_status in resume_statuses
+            else:
+                should_fetch = authoritative_status in {
+                    "pending",
+                    "failed",
+                    "manual_action_required",
+                } or (
+                    authoritative_status == "running"
+                    and authoritative_owner == current_owner
+                )
+            if should_fetch:
+                selected_rows.extend(target_rows)
+        return selected_rows
+
+    def _count_runtime_plan_remaining(
+        self,
+        db,
+        *,
+        detail_runtime_plan: DetailRuntimePlan,
+        detail_crawl_job_id,
+    ) -> int:
+        return self._runtime_plan_status_counts(
+            db,
+            detail_runtime_plan=detail_runtime_plan,
+            detail_crawl_job_id=detail_crawl_job_id,
+        )["remaining"]
+
+    def _runtime_plan_status_counts(
+        self,
+        db,
+        *,
+        detail_runtime_plan: DetailRuntimePlan,
+        detail_crawl_job_id,
+    ) -> dict[str, int]:
+        authoritative_ids = tuple(
+            target.listing_ids[0] for target in detail_runtime_plan.targets
+        )
+        rows_by_id = {
+            row.id: row
+            for row in self.crawl_job_listing_repository.list_by_ids(
+                db,
+                listing_ids=authoritative_ids,
+            )
+        }
+        current_owner = str(detail_crawl_job_id)
+        counts = {
+            "completed": 0,
+            "failed": 0,
+            "manual_action_required": 0,
+            "terminal_unavailable": 0,
+            "identity_conflict": 0,
+            "remaining": 0,
+        }
+        for listing_id in authoritative_ids:
+            row = rows_by_id.get(listing_id)
+            if row is None:
+                continue
+            status = str(row.detail_status)
+            owner = (
+                str(row.last_detail_crawl_job_id)
+                if row.last_detail_crawl_job_id is not None
+                else None
+            )
+            if status in {"pending", "running", "manual_action_required"}:
+                counts["remaining"] += 1
+            elif status == "failed" and owner != current_owner:
+                counts["remaining"] += 1
+            if owner == current_owner and status in counts and status != "remaining":
+                counts[status] += 1
+        return counts
+
+    def _count_live_future_eligible(
+        self,
+        db,
+        *,
+        detail_runtime_plan: DetailRuntimePlan,
+    ) -> int:
+        detail_scope = None
+        source_listing_crawl_job_id = None
+        if detail_runtime_plan.backlog_scope_kind == "source_backlog":
+            if detail_runtime_plan.source_site == "offertoday":
+                detail_scope = "global"
+        elif detail_runtime_plan.backlog_scope_kind == "listing_batch":
+            source_listing_crawl_job_id = (
+                detail_runtime_plan.source_listing_crawl_job_id
+            )
+            if detail_runtime_plan.source_site == "offertoday":
+                detail_scope = "listing_batch"
+        rows = self.crawl_job_listing_repository.list_detail_candidates(
+            db,
+            source_site=detail_runtime_plan.source_site,
+            source_listing_crawl_job_id=source_listing_crawl_job_id,
+            detail_scope=detail_scope,
+            category_ids=detail_runtime_plan.classification_ids,
+            statuses=None,
+            limit=None,
+        )
+        frozen_source_job_ids = {
+            target.source_job_id for target in detail_runtime_plan.targets
+        }
+        return len(
+            {
+                str(row.source_job_id).strip()
+                for row in rows
+                if str(row.source_job_id).strip()
+                and str(row.source_job_id).strip() not in frozen_source_job_ids
+            }
+        )
 
     def defer_listing_identity_conflict(
         self,
@@ -1137,19 +1488,33 @@ class CrawlJobRuntime:
         finally:
             db.close()
 
-    def transition_detail_running(self, db, *, listing_id, detail_crawl_job_id):
-        listing = self.crawl_job_listing_repository.mark_detail_running(
-            db,
+    def transition_detail_running(
+        self,
+        db,
+        *,
+        listing_id=None,
+        listing_ids=None,
+        detail_crawl_job_id,
+    ):
+        normalized_listing_ids = self._normalize_transition_listing_ids(
             listing_id=listing_id,
-            detail_crawl_job_id=detail_crawl_job_id,
-            auto_commit=False,
+            listing_ids=listing_ids,
+        )
+        listings = tuple(
+            self.crawl_job_listing_repository.mark_detail_running(
+                db,
+                listing_id=current_listing_id,
+                detail_crawl_job_id=detail_crawl_job_id,
+                auto_commit=False,
+            )
+            for current_listing_id in normalized_listing_ids
         )
         self._sync_detail_group_transition_metrics(
             db,
-            listings=(listing,),
+            listings=listings,
             detail_crawl_job_id=detail_crawl_job_id,
         )
-        return listing
+        return listings[0] if len(listings) == 1 else listings
 
     def transition_detail_completed(
         self,
@@ -1240,12 +1605,19 @@ class CrawlJobRuntime:
             auto_commit=False,
         )
 
-    def mark_detail_running(self, *, listing_id, detail_crawl_job_id) -> None:
+    def mark_detail_running(
+        self,
+        *,
+        listing_id=None,
+        listing_ids=None,
+        detail_crawl_job_id,
+    ) -> None:
         db = self.session_factory()
         try:
             self.transition_detail_running(
                 db,
                 listing_id=listing_id,
+                listing_ids=listing_ids,
                 detail_crawl_job_id=detail_crawl_job_id,
             )
             db.commit()
@@ -1258,7 +1630,8 @@ class CrawlJobRuntime:
     def mark_detail_completed(
         self,
         *,
-        listing_id,
+        listing_id=None,
+        listing_ids=None,
         detail_crawl_job_id,
         detail_payload: dict[str, Any],
         published_job_id=None,
@@ -1267,7 +1640,10 @@ class CrawlJobRuntime:
         try:
             self.transition_detail_completed(
                 db,
-                listing_ids=(listing_id,),
+                listing_ids=self._normalize_transition_listing_ids(
+                    listing_id=listing_id,
+                    listing_ids=listing_ids,
+                ),
                 detail_crawl_job_id=detail_crawl_job_id,
                 detail_payload=detail_payload,
                 published_job_id=published_job_id,
@@ -1282,7 +1658,8 @@ class CrawlJobRuntime:
     def mark_detail_failed(
         self,
         *,
-        listing_id,
+        listing_id=None,
+        listing_ids=None,
         detail_crawl_job_id,
         error_message: str,
     ) -> None:
@@ -1290,7 +1667,10 @@ class CrawlJobRuntime:
         try:
             self.transition_detail_outcome(
                 db,
-                listing_ids=(listing_id,),
+                listing_ids=self._normalize_transition_listing_ids(
+                    listing_id=listing_id,
+                    listing_ids=listing_ids,
+                ),
                 detail_crawl_job_id=detail_crawl_job_id,
                 status="failed",
                 error_message=error_message,
@@ -1305,7 +1685,8 @@ class CrawlJobRuntime:
     def mark_detail_manual_action_required(
         self,
         *,
-        listing_id,
+        listing_id=None,
+        listing_ids=None,
         detail_crawl_job_id,
         error_message: str,
     ) -> None:
@@ -1313,7 +1694,10 @@ class CrawlJobRuntime:
         try:
             self.transition_detail_outcome(
                 db,
-                listing_ids=(listing_id,),
+                listing_ids=self._normalize_transition_listing_ids(
+                    listing_id=listing_id,
+                    listing_ids=listing_ids,
+                ),
                 detail_crawl_job_id=detail_crawl_job_id,
                 status="manual_action_required",
                 error_message=error_message,
@@ -1328,7 +1712,8 @@ class CrawlJobRuntime:
     def mark_detail_terminal_unavailable(
         self,
         *,
-        listing_id,
+        listing_id=None,
+        listing_ids=None,
         detail_crawl_job_id,
         error_message: str,
     ) -> None:
@@ -1336,7 +1721,10 @@ class CrawlJobRuntime:
         try:
             self.transition_detail_outcome(
                 db,
-                listing_ids=(listing_id,),
+                listing_ids=self._normalize_transition_listing_ids(
+                    listing_id=listing_id,
+                    listing_ids=listing_ids,
+                ),
                 detail_crawl_job_id=detail_crawl_job_id,
                 status="terminal_unavailable",
                 error_message=error_message,
@@ -1459,7 +1847,7 @@ class CrawlJobRuntime:
         raw_job_ids_total = int(existing_metrics.get("raw_job_ids_collected") or 0) + int(
             raw_job_ids_delta or 0
         )
-        metrics_patch = {
+        metrics_patch: dict[str, Any] = {
             "listings_staged": listings_staged,
             "detail_pending": int(counts.get("pending", 0)),
             "detail_running": int(counts.get("running", 0)),
@@ -1495,13 +1883,62 @@ class CrawlJobRuntime:
         distinct_selected_ids: int | None = None,
         reconciled_rows: int | None = None,
         duplicate_rows: int | None = None,
+        snapshot_target_count: int | None = None,
+        snapshot_remaining_target_count: int | None = None,
+        live_future_eligible_target_count: int | None = None,
+        snapshot_cutoff_at: str | None = None,
     ) -> None:
+        snapshot_status_counts: dict[str, int] | None = None
+        snapshot_run_cap: int | None = None
+        get_crawl_job = getattr(
+            self.crawl_job_repository,
+            "get_crawl_job_by_id",
+            None,
+        )
+        crawl_job = (
+            get_crawl_job(db, detail_crawl_job_id)
+            if callable(get_crawl_job)
+            else None
+        )
+        if (
+            crawl_job is not None
+            and getattr(crawl_job, "dispatch_plan_id", None) is not None
+        ):
+            authority = DispatchPlanService(db).load_execution_authority(
+                crawl_job.id
+            )
+            assert authority is not None
+            runtime_plan = build_detail_runtime_plan(
+                authority,
+                expected_source_site=source_site,
+            )
+            snapshot_run_cap = runtime_plan.complete_run_cap
+            if snapshot_target_count is None:
+                snapshot_target_count = runtime_plan.selected_target_count
+            snapshot_status_counts = self._runtime_plan_status_counts(
+                db,
+                detail_runtime_plan=runtime_plan,
+                detail_crawl_job_id=detail_crawl_job_id,
+            )
+            if snapshot_remaining_target_count is None:
+                snapshot_remaining_target_count = snapshot_status_counts[
+                    "remaining"
+                ]
+            if live_future_eligible_target_count is None:
+                live_future_eligible_target_count = (
+                    self._count_live_future_eligible(
+                        db,
+                        detail_runtime_plan=runtime_plan,
+                    )
+                )
+            if snapshot_cutoff_at is None:
+                snapshot_cutoff_at = runtime_plan.snapshot_cutoff_at.isoformat()
         run_counts = self.crawl_job_listing_repository.count_detail_statuses_for_detail_crawl_job(
             db,
             detail_crawl_job_id=detail_crawl_job_id,
             source_site=source_site,
         )
-        metrics_patch = {
+        metrics_patch: dict[str, Any] = {
             "detail_run_completed": int(run_counts.get("completed", 0)),
             "detail_run_failed": int(run_counts.get("failed", 0)),
             "detail_run_manual_action_required": int(run_counts.get("manual_action_required", 0)),
@@ -1526,12 +1963,62 @@ class CrawlJobRuntime:
             metrics_patch["detail_reconciled_rows"] = int(reconciled_rows)
         if duplicate_rows is not None:
             metrics_patch["detail_duplicate_rows"] = int(duplicate_rows)
+        if snapshot_target_count is not None:
+            metrics_patch["detail_snapshot_target_count"] = int(
+                snapshot_target_count
+            )
+        if snapshot_remaining_target_count is not None:
+            metrics_patch["detail_snapshot_remaining_count"] = int(
+                snapshot_remaining_target_count
+            )
+        if live_future_eligible_target_count is not None:
+            metrics_patch["detail_live_future_eligible_count"] = int(
+                live_future_eligible_target_count
+            )
+        if snapshot_cutoff_at is not None:
+            metrics_patch["detail_snapshot_cutoff_at"] = snapshot_cutoff_at
+        if snapshot_status_counts is not None:
+            metrics_patch.update(
+                {
+                    "detail_snapshot_fetched_count": snapshot_status_counts[
+                        "completed"
+                    ],
+                    "detail_snapshot_failed_count": snapshot_status_counts[
+                        "failed"
+                    ],
+                    "detail_snapshot_manual_action_count": (
+                        snapshot_status_counts["manual_action_required"]
+                    ),
+                    "detail_snapshot_unavailable_count": (
+                        snapshot_status_counts["terminal_unavailable"]
+                    ),
+                    "detail_snapshot_identity_conflict_count": (
+                        snapshot_status_counts["identity_conflict"]
+                    ),
+                }
+            )
+        if snapshot_run_cap is not None:
+            metrics_patch["detail_run_cap"] = snapshot_run_cap
         self.crawl_job_repository.merge_metrics(
             db,
             crawl_job_id=detail_crawl_job_id,
             metrics_patch=metrics_patch,
             auto_commit=False,
         )
+
+    @staticmethod
+    def _normalize_transition_listing_ids(
+        *,
+        listing_id=None,
+        listing_ids=None,
+    ) -> tuple[Any, ...]:
+        if listing_id is not None and listing_ids is not None:
+            raise ValueError("Supply listing_id or listing_ids, not both")
+        values = (listing_id,) if listing_ids is None else tuple(listing_ids)
+        normalized = tuple(dict.fromkeys(value for value in values if value is not None))
+        if not normalized:
+            raise ValueError("At least one detail staging-row ID is required")
+        return normalized
 
     @staticmethod
     def _distinct_source_job_ids(payloads: list[dict[str, Any]]) -> set[str]:

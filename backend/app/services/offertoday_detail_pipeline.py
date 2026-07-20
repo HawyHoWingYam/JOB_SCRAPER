@@ -156,7 +156,7 @@ class OfferTodayDetailPipeline:
 
         for attempt in range(1, self.max_attempts + 1):
             self._transition_running(
-                listing_id=target.listing_id,
+                listing_ids=target.listing_ids,
                 detail_crawl_job_id=detail_crawl_job_id,
             )
             started_at = float(self.clock())
@@ -373,12 +373,12 @@ class OfferTodayDetailPipeline:
             canonical_job=canonical_job,
         )
 
-    def _transition_running(self, *, listing_id, detail_crawl_job_id) -> None:
+    def _transition_running(self, *, listing_ids, detail_crawl_job_id) -> None:
         db = self.session_factory()
         try:
             self.crawl_runtime.transition_detail_running(
                 db,
-                listing_id=listing_id,
+                listing_ids=listing_ids,
                 detail_crawl_job_id=detail_crawl_job_id,
             )
             db.commit()

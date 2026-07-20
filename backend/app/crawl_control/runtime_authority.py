@@ -5,7 +5,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.crawl_control.dispatch_plan_contracts import ExecutionAuthorityV1
+from app.crawl_control.detail_runtime import (
+    DetailRuntimePlan,
+    build_detail_runtime_plan,
+)
+from app.crawl_control.dispatch_plan_contracts import (
+    ExecutionAuthorityV1,
+    ExecutionResumeContextV1,
+)
 from app.crawl_control.dispatch_plan_service import DispatchPlanService
 from app.crawl_control.errors import DispatchPlanStaleError
 from app.crawl_control.listing_runtime import (
@@ -27,6 +34,7 @@ class WorkerStartupInput:
     source_site: str
     execution_authority: ExecutionAuthorityV1 | None = None
     listing_runtime_plan: ListingRuntimePlan | None = None
+    detail_runtime_plan: DetailRuntimePlan | None = None
 
     @property
     def is_versioned(self) -> bool:
@@ -68,7 +76,7 @@ def load_worker_startup_input(
     default_source_site: str,
     allow_missing: bool = False,
 ) -> WorkerStartupInput:
-    """Load legacy input or validated listing authority at the worker boundary."""
+    """Load legacy input or validated immutable authority at the worker boundary."""
 
     crawl_job = CrawlJobRepository().get_crawl_job_by_id(db, crawl_job_id)
     if crawl_job is None:
@@ -95,17 +103,50 @@ def load_worker_startup_input(
     assert authority is not None
     plan_service.require_worker_runtime_supported(
         authority,
-        supported_phases=("listing",),
+        supported_phases=("listing", "detail"),
     )
-    listing_runtime_plan = build_listing_runtime_plan(
-        authority,
-        expected_source_site=default_source_site,
-    )
+    try:
+        resume_context = (
+            ExecutionResumeContextV1.model_validate(crawl_job.resume_context)
+            if crawl_job.resume_context is not None
+            else None
+        )
+    except (TypeError, ValueError) as exc:
+        raise DispatchPlanStaleError(
+            "Versioned Crawl Job resume context is invalid",
+            plan_id=authority.dispatch_plan.plan_id,
+            reason="resume_context_invalid",
+        ) from exc
+    if authority.dispatch_plan.content.crawl_phase == "listing":
+        listing_runtime_plan = build_listing_runtime_plan(
+            authority,
+            expected_source_site=default_source_site,
+        )
+        detail_runtime_plan = None
+        source_site = listing_runtime_plan.source_site
+    else:
+        listing_runtime_plan = None
+        try:
+            detail_runtime_plan = build_detail_runtime_plan(
+                authority,
+                expected_source_site=default_source_site,
+                resume_context=resume_context,
+            )
+        except DispatchPlanStaleError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise DispatchPlanStaleError(
+                "Versioned detail runtime authority is invalid",
+                plan_id=authority.dispatch_plan.plan_id,
+                reason="detail_runtime_contract_invalid",
+            ) from exc
+        source_site = detail_runtime_plan.source_site
     return WorkerStartupInput(
         request_payload={},
-        source_site=listing_runtime_plan.source_site,
+        source_site=source_site,
         execution_authority=authority,
         listing_runtime_plan=listing_runtime_plan,
+        detail_runtime_plan=detail_runtime_plan,
     )
 
 
@@ -122,10 +163,18 @@ def load_listing_runtime_plan_for_worker(
 
     db = SessionLocal()
     try:
-        return load_worker_startup_input(
+        startup = load_worker_startup_input(
             db,
             crawl_job_id=crawl_job_id,
             default_source_site=expected_source_site,
-        ).listing_runtime_plan
+        )
+        if startup.is_versioned and startup.listing_runtime_plan is None:
+            assert startup.execution_authority is not None
+            raise DispatchPlanStaleError(
+                "Dispatch Plan is not a listing execution authority",
+                plan_id=startup.execution_authority.dispatch_plan.plan_id,
+                reason="runtime_authority_adapter_required",
+            )
+        return startup.listing_runtime_plan
     finally:
         db.close()

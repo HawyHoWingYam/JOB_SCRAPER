@@ -80,12 +80,26 @@ bodies with no hidden keyword/default scope.
 
 ### 5. Implement detail backlog scope/snapshot
 
-- [ ] Build one eligibility query seam for Source backlog, Crawl Scope, and Listing Batch.
-- [ ] Group by canonical `source_job_id` before limits.
-- [ ] Freeze exact deterministic target and every contributing staging-row membership plus cutoff/count under safety cap.
-- [ ] Make runtime consume only plan targets and segment within Detail Run Cap.
-- [ ] Keep future eligible backlog separate from plan remaining.
-- [ ] Cover duplicates, null classifications, listing-batch retention, failures/manual action, resume, and cancellation release.
+- [x] Build one eligibility query seam for Source backlog, Crawl Scope, and Listing Batch.
+- [x] Group by canonical `source_job_id` before limits.
+- [x] Freeze exact deterministic target and every contributing staging-row membership plus cutoff/count under safety cap.
+- [x] Make runtime consume only plan targets and segment within Detail Run Cap.
+- [x] Keep future eligible backlog separate from plan remaining.
+- [x] Cover duplicates, null classifications, listing-batch retention, failures/manual action, resume, and cancellation release.
+
+Checkpoint 5 freezes source-qualified detail membership before dispatch, applies
+the complete-run limit to canonical `source_job_id` groups, persists every
+contributing staging row and cutoff/count/fingerprint metadata, and makes all
+three standalone runtimes consume only that frozen authority. Recovery segments
+partition the snapshot without extending it; resume and cancellation operate on
+the same plan-owned membership; snapshot projections distinguish remaining
+frozen work from future live eligibility.
+
+Final verification covered 83 focused detail/dispatch/runtime/snapshot/
+cancellation regressions and the full backend suite (`354 passed, 152 skipped`).
+Touched-file Ruff, focused mypy (13 source files), compileall, and
+`git diff --check` passed. Three independent final reviews found no actionable
+integrity, resume/fail-closed, or cross-runtime regression.
 
 Rollback point: old detail runtime remains selectable only in test until snapshot parity passes; never run both against the same production backlog.
 

@@ -218,7 +218,6 @@ class DispatchPlanSnapshotV1(FrozenContract):
             and not self.targets
         ):
             raise ValueError("Ready Detail Dispatch Plans require target membership")
-
         if self.state == "prepared":
             if self.consumed_at is not None or self.crawl_job_id is not None:
                 raise ValueError("Prepared Dispatch Plan cannot have consumption data")

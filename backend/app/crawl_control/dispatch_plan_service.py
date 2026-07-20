@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
+from app.crawl_control.contracts import CrawlScopeErrorPayloadV1
 from app.crawl_control.dispatch_plan_contracts import (
     DispatchPlanCleanupResultV1,
     DispatchPlanContentV1,
@@ -21,6 +22,7 @@ from app.crawl_control.dispatch_plan_contracts import (
     dispatch_plan_fingerprint,
 )
 from app.crawl_control.dispatch_plan_repository import DispatchPlanRepository
+from app.crawl_control.detail_runtime import DetailBacklogSnapshotBuilder
 from app.crawl_control.errors import (
     DispatchPlanAlreadyConsumedError,
     DispatchPlanExpiredError,
@@ -51,19 +53,23 @@ class DispatchPlanService:
         clock: Callable[[], datetime] = utc_now,
         token_factory: Callable[[], str] | None = None,
         uuid_factory: Callable[[], UUID] = uuid4,
+        detail_backlog_builder: DetailBacklogSnapshotBuilder | None = None,
     ) -> None:
         self.db = db
         self.repository = repository or DispatchPlanRepository()
         self._clock = clock
         self._token_factory = token_factory or (lambda: secrets.token_urlsafe(32))
         self._uuid_factory = uuid_factory
+        self._detail_backlog_builder = (
+            detail_backlog_builder or DetailBacklogSnapshotBuilder()
+        )
 
     def prepare(
         self,
         content: DispatchPlanContentV1,
         *,
         readiness: DispatchPlanReadinessV1,
-        targets: tuple[DispatchPlanTargetV1, ...] = (),
+        targets: tuple[DispatchPlanTargetV1, ...] | None = None,
         prepared_by: str,
         ttl: timedelta = DEFAULT_DISPATCH_PLAN_TTL,
         confirmation_required: bool | None = None,
@@ -73,14 +79,52 @@ class DispatchPlanService:
             raise ValueError("Dispatch Plan preparer is required")
         if ttl <= timedelta(0) or ttl > MAX_DISPATCH_PLAN_TTL:
             raise ValueError("Dispatch Plan TTL must be positive and no more than 24 hours")
+        now = self._now()
         if content.listing_settings is not None:
             evaluate_listing_workload(
                 content.resolved_scope,
                 content.listing_settings,
                 enforce=True,
             )
+            if targets:
+                raise ValueError("Listing Dispatch Plans cannot contain detail targets")
+            targets = ()
+        else:
+            if targets is not None:
+                raise ValueError(
+                    "Detail target membership is selected by Dispatch Plan preparation"
+                )
+            frozen_backlog = self._detail_backlog_builder.freeze(
+                self.db,
+                content=content,
+                cutoff_at=now,
+            )
+            content = frozen_backlog.content
+            targets = frozen_backlog.targets
 
-        now = self._now()
+        assert targets is not None
+        if (
+            content.crawl_phase == "detail"
+            and not targets
+            and readiness.status == "ready"
+        ):
+            detail_settings = content.detail_settings
+            assert detail_settings is not None
+            readiness = DispatchPlanReadinessV1(
+                status="blocked",
+                checked_at=readiness.checked_at,
+                blocking_errors=(
+                    CrawlScopeErrorPayloadV1(
+                        code="DETAIL_BACKLOG_EMPTY",
+                        message="No eligible detail targets were found at review cutoff",
+                        context={
+                            "source_site": content.source_site,
+                            "backlog_scope": detail_settings.backlog_scope.kind,
+                        },
+                    ),
+                ),
+                capabilities=dict(readiness.capabilities),
+            )
         plan_id = self._uuid_factory()
         confirmation_required = self._confirmation_required(
             content=content,

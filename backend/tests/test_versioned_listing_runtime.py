@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 import sys
@@ -16,6 +17,10 @@ from app.crawl_control.contracts import (
     SelectedClassificationSnapshotV1,
 )
 from app.crawl_control.errors import ListingRunPageCapExceededError
+from app.crawl_control.detail_runtime import (
+    DetailRuntimePlan,
+    DetailRuntimeTarget,
+)
 from app.crawl_control.listing_runtime import (
     ListingRuntimePlan,
     ListingRuntimeTarget,
@@ -100,6 +105,79 @@ def _runtime_plan(
         page_depth=page_depth,
         run_page_cap=run_page_cap or estimated,
         targets=targets,
+    )
+
+
+def _detail_runtime_plan(
+    source_site: str,
+    *,
+    target_count: int,
+) -> DetailRuntimePlan:
+    targets = tuple(
+        DetailRuntimeTarget(
+            source_job_id=f"frozen-{index}",
+            selection_order=index,
+            listing_ids=(uuid4(),),
+            eligibility_statuses=("pending",),
+            eligibility_fingerprints=("1" * 64,),
+            runtime_identity_fingerprints=("2" * 64,),
+        )
+        for index in range(target_count)
+    )
+    return DetailRuntimePlan(
+        crawl_job_id=uuid4(),
+        dispatch_plan_id=uuid4(),
+        dispatch_plan_fingerprint="d" * 64,
+        source_site=source_site,
+        crawl_mode="headed" if source_site == "ctgoodjobs" else "headless",
+        backlog_scope_kind="source_backlog",
+        source_listing_crawl_job_id=None,
+        classification_ids=(),
+        snapshot_cutoff_at=datetime(2026, 7, 20, 10, 0, tzinfo=UTC),
+        eligible_target_count=target_count,
+        selected_target_count=target_count,
+        selected_row_count=target_count,
+        complete_run_cap=max(target_count, 1),
+        membership_fingerprint="e" * 64,
+        targets=targets,
+    )
+
+
+def _detail_load_result(
+    runtime_targets: tuple[DetailRuntimeTarget, ...],
+    *,
+    snapshot_target_count: int,
+):
+    source_job_ids = tuple(target.source_job_id for target in runtime_targets)
+    return SimpleNamespace(
+        selected_rows=len(runtime_targets),
+        skipped_existing_rows=0,
+        target_rows=len(runtime_targets),
+        distinct_selected_ids=len(runtime_targets),
+        reconciled_rows=0,
+        duplicate_rows=0,
+        fetch_cohort_source_job_ids=source_job_ids,
+        fetch_cohort_hash="f" * 64,
+        reconciled_source_job_ids=(),
+        identity_conflict_ids=(),
+        identity_conflict_evidence=(),
+        targets=[
+            {
+                "source_job_id": target.source_job_id,
+                "listing_id": target.listing_ids[0],
+                "listing_ids": target.listing_ids,
+            }
+            for target in runtime_targets
+        ],
+        new_detail_targets=len(runtime_targets),
+        repair_detail_targets=0,
+        eligible_distinct_target_rows=len(runtime_targets),
+        eligible_pending_rows=len(runtime_targets),
+        eligible_failed_rows=0,
+        eligible_manual_action_rows=0,
+        snapshot_target_count=snapshot_target_count,
+        snapshot_remaining_target_count=len(runtime_targets),
+        live_future_eligible_target_count=1,
     )
 
 
@@ -579,3 +657,180 @@ async def test_offertoday_standalone_uses_browse_plan_without_hidden_defaults(
     assert captured["terminal_policy"] == (
         "cursor-terminal-empty-confirmation-v1"
     )
+
+
+@pytest.mark.asyncio
+async def test_jobsdb_and_ctgoodjobs_detail_loops_receive_frozen_runtime_plan(
+    caplog,
+) -> None:
+    class Runtime:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def load_detail_targets(self, **kwargs):
+            self.calls.append(kwargs)
+            plan = kwargs["detail_runtime_plan"]
+            return _detail_load_result(
+                (),
+                snapshot_target_count=plan.selected_target_count,
+            )
+
+    jobsdb_plan = _detail_runtime_plan("jobsdb", target_count=0)
+    jobsdb_args = SimpleNamespace(
+        crawl_job_id=str(jobsdb_plan.crawl_job_id),
+        category_ids=["tampered"],
+        crawl_mode="headless",
+        crawl_phase="listing",
+        detail_limit=999,
+        detail_statuses=["pending"],
+        source_listing_crawl_job_id="tampered",
+        skip_existing=True,
+        is_resume=False,
+        resume_strategy="fresh_profile",
+        detail_pacing=None,
+        cancellation_token=SimpleNamespace(
+            raise_if_cancelled=lambda: None
+        ),
+    )
+    jobsdb_crawl._apply_detail_runtime_plan(jobsdb_args, jobsdb_plan)
+    jobsdb_runtime = Runtime()
+    await jobsdb_crawl.run_detail_phase(jobsdb_args, jobsdb_runtime)
+    assert jobsdb_runtime.calls[0]["detail_runtime_plan"] is jobsdb_plan
+    assert jobsdb_runtime.calls[0]["request_payload"][
+        "request_payload_authoritative"
+    ] is False
+
+    ctgoodjobs_plan = _detail_runtime_plan("ctgoodjobs", target_count=0)
+    ctgoodjobs_args = SimpleNamespace(
+        crawl_job_id=str(ctgoodjobs_plan.crawl_job_id),
+        category_ids=["tampered"],
+        crawl_mode="headed",
+        crawl_phase="listing",
+        detail_limit=999,
+        detail_statuses=["pending"],
+        source_listing_crawl_job_id="tampered",
+        skip_existing=True,
+        is_resume=False,
+        resume_strategy="fresh_profile",
+        detail_pacing=None,
+        cancellation_token=SimpleNamespace(
+            raise_if_cancelled=lambda: None
+        ),
+    )
+    ctgoodjobs_crawl._apply_detail_runtime_plan(
+        ctgoodjobs_args,
+        ctgoodjobs_plan,
+    )
+    ctgoodjobs_runtime = Runtime()
+    await ctgoodjobs_crawl._run_detail_phase(
+        ctgoodjobs_args,
+        ctgoodjobs_runtime,
+        browser_scraper=SimpleNamespace(),
+        source_listing_crawl_job_id=None,
+        detail_scope="source_backlog",
+    )
+    assert ctgoodjobs_runtime.calls[0][
+        "detail_runtime_plan"
+    ] is ctgoodjobs_plan
+    assert "tampered" not in str(
+        ctgoodjobs_runtime.calls[0]["request_payload"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_offertoday_recovery_segments_only_frozen_complete_run_membership(
+    monkeypatch,
+) -> None:
+    plan = _detail_runtime_plan("offertoday", target_count=3)
+    args = SimpleNamespace(
+        crawl_job_id=str(plan.crawl_job_id),
+        crawl_phase="listing",
+        category_ids="tampered",
+        keywords="tampered",
+        max_pages=999,
+        headed=False,
+        source_listing_crawl_job_id="tampered",
+        detail_scope="global",
+        detail_limit=999,
+        detail_statuses="pending",
+        skip_existing=True,
+        resume_strategy="fresh_profile",
+        detail_pacing=None,
+    )
+    offertoday_crawl._apply_detail_runtime_plan(args, plan)
+
+    class Runtime:
+        def __init__(self) -> None:
+            self.loaded_segments: list[tuple[str, ...]] = []
+            self.completed: list[dict] = []
+
+        def load_detail_targets(self, **kwargs):
+            assert kwargs["detail_runtime_plan"] is plan
+            runtime_targets = tuple(kwargs.get("runtime_targets") or ())
+            self.loaded_segments.append(
+                tuple(target.source_job_id for target in runtime_targets)
+            )
+            return _detail_load_result(
+                runtime_targets,
+                snapshot_target_count=plan.selected_target_count,
+            )
+
+        def merge_metrics(self, **_kwargs) -> None:
+            return None
+
+        def write_progress_event(self, **_kwargs) -> None:
+            return None
+
+        def mark_completed(self, **kwargs) -> None:
+            self.completed.append(kwargs)
+
+        def mark_failed(self, **_kwargs) -> None:
+            pytest.fail("frozen successful segments must not fail")
+
+    async def fake_detail_phase(**kwargs):
+        loaded = kwargs["detail_load_result"]
+        return offertoday_crawl.OfferTodayDetailPhaseResult(
+            detail_load_result=loaded,
+            processed_targets=loaded.target_rows,
+            outcome_counts={"success": loaded.target_rows},
+            jobs_created=loaded.target_rows,
+            jobs_updated=0,
+            jobs_reconciled=0,
+            companies_created=0,
+            companies_updated=0,
+            terminal_unavailable=0,
+            persist_failure=0,
+            stop_batch=False,
+            total_target_rows=loaded.target_rows,
+        )
+
+    monkeypatch.setattr(
+        offertoday_crawl,
+        "DEFAULT_DETAIL_RECOVERY_SEGMENT_SIZE",
+        2,
+    )
+    monkeypatch.setattr(
+        offertoday_crawl,
+        "_run_detail_phase",
+        fake_detail_phase,
+    )
+    runtime = Runtime()
+
+    result = await offertoday_crawl._run_detail_recovery(
+        args=args,
+        browser_runtime=SimpleNamespace(),
+        crawl_runtime=runtime,
+        crawl_job_id=args.crawl_job_id,
+    )
+
+    assert runtime.loaded_segments == [
+        ("frozen-0", "frozen-1"),
+        ("frozen-2",),
+        (),
+    ]
+    assert result.total_target_rows == 3
+    assert result.segments_completed == 2
+    assert result.stop_batch is False
+    assert runtime.completed[0]["metrics"][
+        "detail_live_future_eligible_count"
+    ] == 1

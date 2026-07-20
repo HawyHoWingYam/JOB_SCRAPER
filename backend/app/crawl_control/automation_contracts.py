@@ -59,6 +59,10 @@ class AutomationConfigurationV1(FrozenContract):
                 "Automation requires exactly one Listing or Detail settings contract"
             )
         if self.detail_settings is not None:
+            if self.detail_settings.backlog_snapshot is not None:
+                raise ValueError(
+                    "Automation configuration cannot persist a run backlog snapshot"
+                )
             backlog_scope = self.detail_settings.backlog_scope
             if backlog_scope.kind == "crawl_scope":
                 if backlog_scope.scope != self.scope:
