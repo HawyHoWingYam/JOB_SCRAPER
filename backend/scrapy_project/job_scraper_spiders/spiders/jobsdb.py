@@ -14,6 +14,11 @@ from typing import Any, AsyncIterable
 import scrapy
 from scrapy.http import Response
 
+from app.crawl_control.contracts import JobsDBQueryTargetParametersV1
+from app.crawl_control.listing_runtime import ListingRuntimePlan
+from app.crawl_control.runtime_authority import (
+    load_listing_runtime_plan_for_worker,
+)
 from app.source_catalog.runtime import load_published_query_plan
 from app.sources.jobsdb.request import build_jobsdb_search_url
 
@@ -47,6 +52,7 @@ class JobsdbSpider(scrapy.Spider):
     category_ids: str = ""  # comma-separated classification IDs
     max_pages: str = "10"
     crawl_run_id: str = ""
+    crawl_job_id: str = ""
     jobdir: str = ""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -61,13 +67,30 @@ class JobsdbSpider(scrapy.Spider):
             self._max_pages = 10
 
         self.crawl_run_id = str(kwargs.get("crawl_run_id", "") or "")
+        self.crawl_job_id = str(kwargs.get("crawl_job_id", "") or "")
         self.jobdir = str(kwargs.get("jobdir", "") or "")
+        self._listing_runtime_plan = load_listing_runtime_plan_for_worker(
+            self.crawl_job_id,
+            expected_source_site="jobsdb",
+        )
+        if self._listing_runtime_plan is not None:
+            self._category_ids = [
+                target.classification_id
+                for target in self._listing_runtime_plan.targets
+            ]
+            self._max_pages = self._listing_runtime_plan.page_depth
         self._detail_job_ids: list[tuple[str, str]] = []  # (external_id, title, source_url)
         self._detail_done: int = 0
         self._detail_total: int = 0
 
     def start_requests(self) -> AsyncIterable[scrapy.Request]:
         """Start with listing API requests for each category."""
+        if self._listing_runtime_plan is not None:
+            yield from self._start_versioned_listing_requests(
+                self._listing_runtime_plan
+            )
+            return
+
         plan = load_published_query_plan("jobsdb", self._category_ids)
         for entry in plan.entries:
             cat_id = entry.node.classification_id
@@ -86,6 +109,36 @@ class JobsdbSpider(scrapy.Spider):
                     callback=self._parse_listing,
                     dont_filter=True,
                 )
+
+    def _start_versioned_listing_requests(
+        self,
+        runtime_plan: ListingRuntimePlan,
+    ) -> AsyncIterable[scrapy.Request]:
+        for target, page in runtime_plan.iter_target_pages():
+            parameters = target.query_target.parameters
+            if not isinstance(parameters, JobsDBQueryTargetParametersV1):
+                raise RuntimeError("JobsDB Dispatch Plan contains another adapter")
+            yield scrapy.Request(
+                url=build_jobsdb_search_url(
+                    parameters.native_id,
+                    page=page,
+                    page_size=JOBSDB_PAGE_SIZE,
+                ),
+                method="GET",
+                headers=_DEFAULT_HEADERS,
+                meta={
+                    "category_id": target.classification_id,
+                    "page": page,
+                    "dont_retry": True,
+                    **runtime_plan.audit_payload(),
+                },
+                cb_kwargs={
+                    "category_id": target.classification_id,
+                    "page": page,
+                },
+                callback=self._parse_listing,
+                dont_filter=True,
+            )
 
     def _parse_listing(self, response: Response, *, category_id: str, page: int) -> AsyncIterable[scrapy.Item]:
         """Parse a listing API response."""
@@ -129,7 +182,8 @@ class JobsdbSpider(scrapy.Spider):
             )
 
             # Queue detail fetch
-            self._detail_job_ids.append((external_id, listing_url))
+            if self._listing_runtime_plan is None:
+                self._detail_job_ids.append((external_id, listing_url))
 
         # Report listing progress
         yield CrawlProgressItem(
@@ -149,6 +203,8 @@ class JobsdbSpider(scrapy.Spider):
 
     def _is_last_listing_request(self, category_id: str, page: int) -> bool:
         """Heuristic: trigger details after last listing page of last category."""
+        if self._listing_runtime_plan is not None:
+            return False
         if not self._category_ids:
             return False
         last_cat = self._category_ids[-1]

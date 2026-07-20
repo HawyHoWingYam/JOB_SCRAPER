@@ -56,11 +56,27 @@ adapters; no versioned path falls back to mutable `request_payload` meanwhile.
 
 ### 4. Implement listing preview and enforcement
 
-- [ ] Resolve target count, Page Depth, estimated maximum, operator Run Page Cap, and system ceiling.
-- [ ] Reject over-cap preparation with structured details.
-- [ ] Update all listing runtimes to iterate resolved Query Targets and one aggregate page counter.
-- [ ] Disable retained Scrapy listing callbacks from auto-starting detail work for versioned plans.
-- [ ] Add cross-source captured-outbound-request tests for early empty pages, aggregate cap, and target-specific URL/query/body constraints.
+- [x] Resolve target count, Page Depth, estimated maximum, operator Run Page Cap, and system ceiling.
+- [x] Reject over-cap preparation with structured details.
+- [x] Update all listing runtimes to iterate resolved Query Targets and one aggregate page counter.
+- [x] Disable retained Scrapy listing callbacks from auto-starting detail work for versioned plans.
+- [x] Add cross-source captured-outbound-request tests for early empty pages, aggregate cap, and target-specific URL/query/body constraints.
+
+Checkpoint 4 makes consumed listing plans executable while detail plans and
+versioned resume remain fail-closed for Checkpoint 5. JobsDB, CTgoodjobs, and
+OfferToday standalone and retained Scrapy runtimes reload authority by Crawl
+Job ID, use the frozen target order and source-native parameters, enforce Page
+Depth plus the aggregate Run Page Cap, and never re-resolve the active catalog.
+Versioned Scrapy requests disable middleware retries so actual outbound work
+cannot exceed the reviewed budget, and listing callbacks no longer start
+detail requests.
+
+Verification covered 91 focused scope/dispatch/source/runtime/launcher tests
+and the full backend suite (`343 passed, 152 skipped`). Focused Ruff and mypy,
+compileall, and `git diff --check` also passed. Failure injection covers Popen
+and process-registration rollback, while cross-source tests capture JobsDB
+query parameters, CTgoodjobs paths/early-empty behavior, and OfferToday browse
+bodies with no hidden keyword/default scope.
 
 ### 5. Implement detail backlog scope/snapshot
 

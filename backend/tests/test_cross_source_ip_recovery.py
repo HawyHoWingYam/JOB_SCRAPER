@@ -676,13 +676,13 @@ async def test_jobsdb_page_sink_commits_prefix_before_later_ip_stop() -> None:
         async def fetch_page(self, classification_id, page=1, client=None):
             self.fetch_count += 1
             if self.fetch_count == 1:
-                return {"totalCount": 64, "data": []}
-            if page == 2:
-                return {"totalCount": 64, "data": [{"id": "job-1"}, {"id": "job-2"}]}
+                return {"totalCount": 96, "data": []}
+            if page == 3:
+                return {"totalCount": 96, "data": [{"id": "job-1"}, {"id": "job-2"}]}
             raise build_session_recovery_manual_action(
                 source_site="jobsdb",
                 stage="category_page",
-                blocked_url="https://hk.jobsdb.com/jobs?page=1",
+                blocked_url="https://hk.jobsdb.com/jobs?page=2",
                 classification="ip_blocked",
                 evidence={"status_code": 429},
             )
@@ -696,11 +696,11 @@ async def test_jobsdb_page_sink_commits_prefix_before_later_ip_stop() -> None:
     with pytest.raises(ManualActionRequiredError):
         await FakeCategoryScraper().scrape_category(
             1200,
-            max_pages=2,
+            max_pages=3,
             page_sink=page_sink,
         )
 
-    assert staged_pages == [(2, ("job-1", "job-2"))]
+    assert staged_pages == [(3, ("job-1", "job-2"))]
 
 
 @pytest.mark.asyncio

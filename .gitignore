@@ -100,6 +100,7 @@ backend/tests/*
 !backend/tests/test_crawl_scope_service.py
 !backend/tests/test_automation_lifecycle.py
 !backend/tests/test_dispatch_plan_*.py
+!backend/tests/test_versioned_listing_runtime.py
 !backend/tests/test_jobsdb_standalone_crawl.py
 !backend/tests/test_ctgoodjobs_standalone_crawl.py
 !backend/tests/test_offertoday_quality.py

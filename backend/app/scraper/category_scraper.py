@@ -43,6 +43,7 @@ class CategoryListScraper:
         self.max_delay = getattr(settings, 'scrape_max_delay', 5.0)
         self.before_request = before_request
         self.sleep = sleep or asyncio.sleep
+        self.reuse_first_page = False
 
     async def fetch_page(
         self,
@@ -175,6 +176,7 @@ class CategoryListScraper:
             if before_request is not None:
                 before_request()
             result = await self.fetch_page(classification_id, page, client)
+            first_page_result = result
             total_count = result.get("totalCount", 0)
 
             if total_count == 0:
@@ -200,9 +202,12 @@ class CategoryListScraper:
                     page=page,
                     total_pages=total_pages,
                 )
-            if before_request is not None:
-                before_request()
-            result = await self.fetch_page(classification_id, page, client)
+            if page == 1 and self.reuse_first_page:
+                result = first_page_result
+            else:
+                if before_request is not None:
+                    before_request()
+                result = await self.fetch_page(classification_id, page, client)
             jobs = result.get("data", [])
             if page_sink is not None:
                 await page_sink(
@@ -233,9 +238,12 @@ class CategoryListScraper:
                         page=page,
                         total_pages=total_pages,
                     )
-                if before_request is not None:
-                    before_request()
-                result = await self.fetch_page(classification_id, page, client)
+                if page == 1 and self.reuse_first_page:
+                    result = first_page_result
+                else:
+                    if before_request is not None:
+                        before_request()
+                    result = await self.fetch_page(classification_id, page, client)
                 jobs = result.get("data", [])
 
                 if page_sink is not None:

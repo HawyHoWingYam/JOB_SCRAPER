@@ -122,7 +122,10 @@ class CrawlJobExecutionLauncher:
             ):
                 plan_service = DispatchPlanService(db)
                 authority = plan_service.load_execution_authority(locked_job.id)
-                plan_service.require_worker_runtime_supported(authority)
+                plan_service.require_worker_runtime_supported(
+                    authority,
+                    supported_phases=("listing",),
+                )
             self._execution_repository.create_launch(
                 db,
                 crawl_job_id=crawl_job.id,

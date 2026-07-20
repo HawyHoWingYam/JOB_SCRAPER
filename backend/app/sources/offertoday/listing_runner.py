@@ -95,6 +95,7 @@ class OfferTodayListingCondition:
 @dataclass(frozen=True, slots=True)
 class ListingStopPolicy:
     max_pages_per_condition: int
+    run_page_cap: int | None = None
     unique_job_cap: int | None = None
     require_empty_confirmation: bool = True
     page_cap_behavior: ListingPageCapBehavior = "reject"
@@ -102,6 +103,8 @@ class ListingStopPolicy:
     def __post_init__(self) -> None:
         if self.max_pages_per_condition < 1:
             raise ValueError("max_pages_per_condition must be >= 1")
+        if self.run_page_cap is not None and self.run_page_cap < 1:
+            raise ValueError("run_page_cap must be >= 1")
         if self.page_cap_behavior not in {"reject", "retain-and-continue"}:
             raise ValueError(
                 "page_cap_behavior must be 'reject' or 'retain-and-continue'"
@@ -368,7 +371,7 @@ def _analyze_raw_identity_value(
 ) -> tuple[str | None, str | None]:
     if value is None:
         return None, missing_reason
-    if type(value) is not str:
+    if not isinstance(value, str):
         return None, invalid_reason
     normalized = value.strip()
     if not normalized:
@@ -666,6 +669,7 @@ class OfferTodayListingRunner:
         supplemental_identity_issue_count = 0
         capped_condition_ids: list[str] = []
         run_stop_reason: str | None = None
+        requests_started = 0
 
         for condition in conditions:
             condition_ordered_job_count = len(ordered_job_ids)
@@ -753,6 +757,13 @@ class OfferTodayListingRunner:
                 restart_condition = False
 
                 for attempt in range(1, retry_policy.max_attempts_per_page + 1):
+                    if (
+                        stop_policy.run_page_cap is not None
+                        and requests_started >= stop_policy.run_page_cap
+                    ):
+                        condition_stop_reason = "run_page_cap"
+                        break
+                    requests_started += 1
                     record_page_start = getattr(
                         observation_sink,
                         "record_page_start",
@@ -817,7 +828,10 @@ class OfferTodayListingRunner:
                             getattr(exc, "response_url", None) or listing_url
                         )
                         raw_http_status = getattr(exc, "http_status", None)
-                        if type(raw_http_status) is int:
+                        if isinstance(raw_http_status, int) and not isinstance(
+                            raw_http_status,
+                            bool,
+                        ):
                             http_status = raw_http_status
 
                     browser_context_hash = (
@@ -1054,7 +1068,9 @@ class OfferTodayListingRunner:
                             )
                             response_page_size = (
                                 raw_page_size
-                                if type(raw_page_size) is int and raw_page_size > 0
+                                if isinstance(raw_page_size, int)
+                                and not isinstance(raw_page_size, bool)
+                                and raw_page_size > 0
                                 else None
                             )
                             endpoint_violation = (
@@ -1147,11 +1163,14 @@ class OfferTodayListingRunner:
                             )
                         raw_has_more = raw_data.get("hasMore")
                         has_more = (
-                            raw_has_more if type(raw_has_more) is bool else None
+                            raw_has_more if isinstance(raw_has_more, bool) else None
                         )
                         raw_total = raw_data.get("total")
                         reported_total = (
-                            raw_total if type(raw_total) is int else None
+                            raw_total
+                            if isinstance(raw_total, int)
+                            and not isinstance(raw_total, bool)
+                            else None
                         )
                     page_succeeded = True
                     pages_observed += 1

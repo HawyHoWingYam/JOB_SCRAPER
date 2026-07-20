@@ -40,6 +40,46 @@ from app.source_catalog.domain import (
 DEFAULT_LISTING_SYSTEM_RUN_PAGE_CAP = 1000
 
 
+def evaluate_listing_workload(
+    resolved_scope: ResolvedRunScopeV1,
+    settings: ListingSettingsV1,
+    *,
+    system_listing_run_page_cap: int = DEFAULT_LISTING_SYSTEM_RUN_PAGE_CAP,
+    enforce: bool = True,
+) -> ListingWorkloadPreviewV1:
+    """Evaluate reviewed listing workload without requiring a catalog gateway."""
+
+    if system_listing_run_page_cap < 1:
+        raise ValueError("system_listing_run_page_cap must be positive")
+    supported_modes = get_supported_crawl_modes(resolved_scope.source_site)
+    if settings.crawl_mode not in supported_modes:
+        raise ScopeRuleInvalidError(
+            "Crawl mode is not supported by this source",
+            context={
+                "source_site": resolved_scope.source_site,
+                "crawl_mode": settings.crawl_mode,
+                "supported_crawl_modes": ",".join(supported_modes),
+            },
+        )
+    estimated_max_pages = resolved_scope.query_target_count * settings.page_depth
+    preview = ListingWorkloadPreviewV1(
+        query_target_count=resolved_scope.query_target_count,
+        page_depth=settings.page_depth,
+        estimated_max_pages=estimated_max_pages,
+        run_page_cap=settings.run_page_cap,
+        system_run_page_cap=system_listing_run_page_cap,
+        within_operator_cap=estimated_max_pages <= settings.run_page_cap,
+        within_system_cap=estimated_max_pages <= system_listing_run_page_cap,
+    )
+    if enforce and not preview.dispatchable:
+        raise WorkloadCapExceededError(
+            estimated_max_pages=preview.estimated_max_pages,
+            run_page_cap=preview.run_page_cap,
+            system_run_page_cap=preview.system_run_page_cap,
+        )
+    return preview
+
+
 class CrawlScopeCatalogGateway(Protocol):
     def get_published(self, source_site: str) -> PublishedSourceCatalog: ...
 
@@ -145,39 +185,12 @@ class CrawlScopeService:
         *,
         enforce: bool = True,
     ) -> ListingWorkloadPreviewV1:
-        supported_modes = get_supported_crawl_modes(resolved_scope.source_site)
-        if settings.crawl_mode not in supported_modes:
-            raise ScopeRuleInvalidError(
-                "Crawl mode is not supported by this source",
-                context={
-                    "source_site": resolved_scope.source_site,
-                    "crawl_mode": settings.crawl_mode,
-                    "supported_crawl_modes": ",".join(supported_modes),
-                },
-            )
-        estimated_max_pages = (
-            resolved_scope.query_target_count * settings.page_depth
+        return evaluate_listing_workload(
+            resolved_scope,
+            settings,
+            system_listing_run_page_cap=self.system_listing_run_page_cap,
+            enforce=enforce,
         )
-        preview = ListingWorkloadPreviewV1(
-            query_target_count=resolved_scope.query_target_count,
-            page_depth=settings.page_depth,
-            estimated_max_pages=estimated_max_pages,
-            run_page_cap=settings.run_page_cap,
-            system_run_page_cap=self.system_listing_run_page_cap,
-            within_operator_cap=(
-                estimated_max_pages <= settings.run_page_cap
-            ),
-            within_system_cap=(
-                estimated_max_pages <= self.system_listing_run_page_cap
-            ),
-        )
-        if enforce and not preview.dispatchable:
-            raise WorkloadCapExceededError(
-                estimated_max_pages=preview.estimated_max_pages,
-                run_page_cap=preview.run_page_cap,
-                system_run_page_cap=preview.system_run_page_cap,
-            )
-        return preview
 
     def assess_catalog_change(
         self,

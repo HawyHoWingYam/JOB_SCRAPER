@@ -13,6 +13,11 @@ from typing import Any, AsyncIterable
 import scrapy
 from scrapy.http import Response
 
+from app.crawl_control.contracts import CTgoodjobsQueryTargetParametersV1
+from app.crawl_control.listing_runtime import ListingRuntimePlan
+from app.crawl_control.runtime_authority import (
+    load_listing_runtime_plan_for_worker,
+)
 from app.scraper.ctgoodjobs.category_registry import (
     CTGOODJOBS_BASE_URL,
 )
@@ -55,6 +60,7 @@ class CtgoodjobsSpider(scrapy.Spider):
     category_ids: str = ""  # comma-separated source_classification_ids
     max_pages: str = "5"
     crawl_run_id: str = ""
+    crawl_job_id: str = ""
     jobdir: str = ""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -69,12 +75,29 @@ class CtgoodjobsSpider(scrapy.Spider):
             self._max_pages = 5
 
         self.crawl_run_id = str(kwargs.get("crawl_run_id", "") or "")
+        self.crawl_job_id = str(kwargs.get("crawl_job_id", "") or "")
         self.jobdir = str(kwargs.get("jobdir", "") or "")
+        self._listing_runtime_plan = load_listing_runtime_plan_for_worker(
+            self.crawl_job_id,
+            expected_source_site="ctgoodjobs",
+        )
+        if self._listing_runtime_plan is not None:
+            self._category_ids = [
+                target.classification_id
+                for target in self._listing_runtime_plan.targets
+            ]
+            self._max_pages = self._listing_runtime_plan.page_depth
         self._detail_done: int = 0
         self._detail_total: int = 0
 
     def start_requests(self) -> AsyncIterable[scrapy.Request]:
         """Start with category listing page requests."""
+        if self._listing_runtime_plan is not None:
+            yield from self._start_versioned_listing_requests(
+                self._listing_runtime_plan
+            )
+            return
+
         plan = load_published_query_plan("ctgoodjobs", self._category_ids)
         for entry in plan.entries:
             cat_id = entry.node.classification_id
@@ -104,6 +127,43 @@ class CtgoodjobsSpider(scrapy.Spider):
                     },
                     dont_filter=True,
                 )
+
+    def _start_versioned_listing_requests(
+        self,
+        runtime_plan: ListingRuntimePlan,
+    ) -> AsyncIterable[scrapy.Request]:
+        for target, page in runtime_plan.iter_target_pages():
+            parameters = target.query_target.parameters
+            if not isinstance(parameters, CTgoodjobsQueryTargetParametersV1):
+                raise RuntimeError(
+                    "CTGoodJobs Dispatch Plan contains another adapter"
+                )
+            url = category_page_url(
+                f"{CTGOODJOBS_BASE_URL}{parameters.url_path}",
+                page=page,
+            )
+            yield scrapy.Request(
+                url=url,
+                headers=_DEFAULT_HEADERS,
+                callback=self._parse_listing_page,
+                cb_kwargs={
+                    "category_id": target.classification_id,
+                    "category_name": (
+                        target.selected_classification.native_label
+                    ),
+                    "slug": parameters.url_path.removeprefix(
+                        "/jobs/jobs-in-"
+                    ),
+                    "page": page,
+                    "url": url,
+                },
+                meta={
+                    "playwright": True,
+                    "dont_retry": True,
+                    **runtime_plan.audit_payload(),
+                },
+                dont_filter=True,
+            )
 
     def _parse_listing_page(
         self,
@@ -150,22 +210,24 @@ class CtgoodjobsSpider(scrapy.Spider):
                 listing_rank=0,
             )
 
-            # Trigger detail fetch
-            yield scrapy.Request(
-                url=job_url,
-                headers=_DEFAULT_HEADERS,
-                callback=self._parse_detail_page,
-                cb_kwargs={
-                    "job_id": str(job_id),
-                    "job_url": job_url,
-                    "category_id": category_id,
-                    "category_name": category_name,
-                    "slug": slug,
-                },
-                errback=self._on_detail_failure,
-                meta={"job_id": str(job_id), "ctgoodjobs_request": True},
-                dont_filter=True,
-            )
+            if self._listing_runtime_plan is None:
+                # Legacy full-crawl compatibility. Versioned listing plans stage
+                # only; detail membership is prepared independently.
+                yield scrapy.Request(
+                    url=job_url,
+                    headers=_DEFAULT_HEADERS,
+                    callback=self._parse_detail_page,
+                    cb_kwargs={
+                        "job_id": str(job_id),
+                        "job_url": job_url,
+                        "category_id": category_id,
+                        "category_name": category_name,
+                        "slug": slug,
+                    },
+                    errback=self._on_detail_failure,
+                    meta={"job_id": str(job_id), "ctgoodjobs_request": True},
+                    dont_filter=True,
+                )
 
         yield CrawlProgressItem(
             event_type="listing_page",

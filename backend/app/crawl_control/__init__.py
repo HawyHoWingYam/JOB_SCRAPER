@@ -25,6 +25,7 @@ from app.crawl_control.dispatch_plan_contracts import (
     ExecutionResumeContextV1,
 )
 from app.crawl_control.dispatch_plan_service import DispatchPlanService
+from app.crawl_control.listing_runtime import ListingRuntimePlan
 from app.crawl_control.scope_service import CrawlScopeService
 
 __all__ = [
@@ -47,6 +48,7 @@ __all__ = [
     "DispatchPlanTargetV1",
     "DetailSettingsV1",
     "ListingSettingsV1",
+    "ListingRuntimePlan",
     "ExecutionAuthorityV1",
     "ExecutionResumeContextV1",
     "ResolvedRunScopeV1",

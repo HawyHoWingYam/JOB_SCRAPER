@@ -23,8 +23,13 @@ if BACKEND not in sys.path:
 from app.config import settings  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.repositories.company_repository import CompanyRepository  # noqa: E402
+from app.crawl_control.contracts import (  # noqa: E402
+    JobsDBQueryTargetParametersV1,
+)
+from app.crawl_control.listing_runtime import ListingRuntimePlan  # noqa: E402
 from app.crawl_control.runtime_authority import (  # noqa: E402
-    load_legacy_worker_startup_input,
+    WorkerStartupInput,
+    load_worker_startup_input,
 )
 from app.repositories.job_repository import JobRepository  # noqa: E402
 from app.scraper.category_scraper import CategoryListScraper  # noqa: E402
@@ -72,15 +77,19 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_request_payload(crawl_job_id: str) -> tuple[dict[str, Any], str]:
+def _load_runtime_input(
+    crawl_job_id: str,
+    *,
+    allow_missing: bool = False,
+) -> WorkerStartupInput:
     db = SessionLocal()
     try:
-        startup = load_legacy_worker_startup_input(
+        return load_worker_startup_input(
             db,
             crawl_job_id=crawl_job_id,
             default_source_site=JOBSDB_SOURCE_SITE,
+            allow_missing=allow_missing,
         )
-        return startup.request_payload, startup.source_site
     finally:
         db.close()
 
@@ -135,11 +144,33 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     args.detail_pacing = request_payload.get("detail_pacing")
 
 
+def _apply_listing_runtime_plan(
+    args,
+    runtime_plan: ListingRuntimePlan | None,
+) -> None:
+    args.listing_runtime_plan = runtime_plan
+    if runtime_plan is None:
+        return
+    args.category_ids = [target.classification_id for target in runtime_plan.targets]
+    args.max_pages = runtime_plan.page_depth
+    args.crawl_mode = runtime_plan.crawl_mode
+    args.crawl_phase = "listing"
+    args.skip_existing = False
+    args.is_resume = False
+
+
 def _resolve_source_listing_crawl_job_id(args) -> str:
     return str(args.source_listing_crawl_job_id or args.crawl_job_id)
 
 
 def _build_listing_request_payload(args) -> dict[str, Any]:
+    runtime_plan = getattr(args, "listing_runtime_plan", None)
+    if runtime_plan is not None:
+        return {
+            "crawl_phase": "listing",
+            "crawl_mode": runtime_plan.crawl_mode,
+            **runtime_plan.audit_payload(),
+        }
     return {
         "crawl_phase": "listing",
         "crawl_mode": args.crawl_mode,
@@ -175,16 +206,26 @@ def _build_manual_action_payload(
         browser_channel=settings.jobsdb_headed_browser_channel,
         browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
     )
-    resume_context: dict[str, Any] = {
-        "crawl_phase": crawl_phase,
-        "crawl_mode": args.crawl_mode,
-        "category_ids": list(args.category_ids),
-        "skip_existing": args.skip_existing,
-        "resume_strategy": args.resume_strategy,
-    }
-    if crawl_phase == "listing":
-        resume_context["max_pages"] = args.max_pages
+    runtime_plan = getattr(args, "listing_runtime_plan", None)
+    resume_context: dict[str, Any]
+    if crawl_phase == "listing" and runtime_plan is not None:
+        resume_context = {
+            "crawl_phase": "listing",
+            "crawl_mode": runtime_plan.crawl_mode,
+            "resume_strategy": args.resume_strategy,
+            **runtime_plan.audit_payload(),
+        }
     else:
+        resume_context = {
+            "crawl_phase": crawl_phase,
+            "crawl_mode": args.crawl_mode,
+            "category_ids": list(args.category_ids),
+            "skip_existing": args.skip_existing,
+            "resume_strategy": args.resume_strategy,
+        }
+    if crawl_phase == "listing" and runtime_plan is None:
+        resume_context["max_pages"] = args.max_pages
+    elif crawl_phase != "listing":
         resume_context.update(_build_detail_request_payload(args))
     payload["resume_context"] = {
         **resume_context,
@@ -194,16 +235,54 @@ def _build_manual_action_payload(
 
 
 async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatchPersistResult:
-    query_plan = load_published_query_plan(JOBSDB_SOURCE_SITE, args.category_ids)
-    native_category_ids = [int(entry.target.payload["native_id"]) for entry in query_plan.entries]
-    classification_by_native = {
-        int(entry.target.payload["native_id"]): str(entry.node.classification_id)
-        for entry in query_plan.entries
-    }
+    runtime_plan: ListingRuntimePlan | None = getattr(
+        args,
+        "listing_runtime_plan",
+        None,
+    )
+    if runtime_plan is None:
+        query_plan = load_published_query_plan(
+            JOBSDB_SOURCE_SITE,
+            args.category_ids,
+        )
+        native_category_ids = [
+            int(entry.target.payload["native_id"])
+            for entry in query_plan.entries
+        ]
+        classification_by_native = {
+            int(entry.target.payload["native_id"]): str(
+                entry.node.classification_id
+            )
+            for entry in query_plan.entries
+        }
+    else:
+        native_category_ids = []
+        classification_by_native = {}
+        for target in runtime_plan.targets:
+            parameters = target.query_target.parameters
+            if not isinstance(parameters, JobsDBQueryTargetParametersV1):
+                raise RuntimeError("JobsDB Dispatch Plan contains another adapter")
+            native_category_ids.append(parameters.native_id)
+            classification_by_native[parameters.native_id] = (
+                target.classification_id
+            )
     scraper = CategoryListScraper()
+    if runtime_plan is not None:
+        scraper.reuse_first_page = True
     cancellation_token = resolve_cancellation_token(args)
+    request_budget = (
+        runtime_plan.new_request_budget()
+        if runtime_plan is not None
+        else None
+    )
+
+    def before_request() -> None:
+        cancellation_token.raise_if_cancelled()
+        if request_budget is not None:
+            request_budget.claim()
+
     if hasattr(scraper, "before_request"):
-        scraper.before_request = cancellation_token.raise_if_cancelled
+        scraper.before_request = before_request
     if hasattr(scraper, "sleep"):
         scraper.sleep = cancellation_token.sleep
     phase_started_at = time.perf_counter()
@@ -814,15 +893,23 @@ async def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     args.category_ids = _parse_category_ids(args.category_ids)
     args.detail_statuses = _parse_detail_statuses(args.detail_statuses)
-    args.crawl_job_id = str(args.crawl_job_id or uuid4())
-    request_payload, source_site = _load_request_payload(args.crawl_job_id)
-    _apply_request_payload_defaults(args, request_payload)
+    requested_crawl_job_id = str(args.crawl_job_id or "").strip()
+    args.crawl_job_id = requested_crawl_job_id or str(uuid4())
+    startup = _load_runtime_input(
+        args.crawl_job_id,
+        allow_missing=not requested_crawl_job_id,
+    )
+    _apply_request_payload_defaults(args, startup.request_payload)
+    _apply_listing_runtime_plan(args, startup.listing_runtime_plan)
     args.cancellation_token = CrawlCancellationToken(
         crawl_job_id=args.crawl_job_id,
         execution_generation=args.execution_generation or None,
     )
-    if str(source_site).strip().lower() != JOBSDB_SOURCE_SITE:
-        logger.warning("JobsDB executor received source_site=%s; continuing with jobsdb runtime", source_site)
+    if str(startup.source_site).strip().lower() != JOBSDB_SOURCE_SITE:
+        logger.warning(
+            "JobsDB executor received source_site=%s; continuing with jobsdb runtime",
+            startup.source_site,
+        )
     logger.info(
         build_scrape_log_event(
             "SCRAPE_EXECUTOR_START",
@@ -856,11 +943,15 @@ async def main(argv: Sequence[str] | None = None) -> int:
     crawl_runtime.mark_started(
         crawl_job_id=args.crawl_job_id,
         source_site=JOBSDB_SOURCE_SITE,
-        payload={
-            "crawl_phase": args.crawl_phase,
-            "crawl_mode": args.crawl_mode,
-            "category_ids": list(args.category_ids),
-        },
+        payload=(
+            _build_listing_request_payload(args)
+            if args.crawl_phase == "listing"
+            else {
+                "crawl_phase": args.crawl_phase,
+                "crawl_mode": args.crawl_mode,
+                "category_ids": list(args.category_ids),
+            }
+        ),
     )
 
     listing_result = None
@@ -880,8 +971,18 @@ async def main(argv: Sequence[str] | None = None) -> int:
                         "raw_job_ids_collected": int(listing_result.raw_job_ids_seen),
                         "listings_staged": int(listing_result.rows_staged),
                         "jobs_skipped_existing": int(listing_result.skipped_existing),
-                        "detail_target_rows": int(listing_result.rows_staged),
-                        "message": "Listing phase completed; detail phase will continue.",
+                        "detail_target_rows": (
+                            0
+                            if getattr(args, "listing_runtime_plan", None)
+                            is not None
+                            else int(listing_result.rows_staged)
+                        ),
+                        "message": (
+                            "Listing phase completed."
+                            if getattr(args, "listing_runtime_plan", None)
+                            is not None
+                            else "Listing phase completed; detail phase will continue."
+                        ),
                     },
                 )
             except ManualActionRequiredError as exc:
@@ -951,11 +1052,15 @@ async def main(argv: Sequence[str] | None = None) -> int:
         crawl_runtime.mark_completed(
             crawl_job_id=args.crawl_job_id,
             source_site=JOBSDB_SOURCE_SITE,
-            payload={
-                "crawl_phase": args.crawl_phase,
-                "crawl_mode": args.crawl_mode,
-                "category_ids": list(args.category_ids),
-            },
+            payload=(
+                _build_listing_request_payload(args)
+                if args.crawl_phase == "listing"
+                else {
+                    "crawl_phase": args.crawl_phase,
+                    "crawl_mode": args.crawl_mode,
+                    "category_ids": list(args.category_ids),
+                }
+            ),
             metrics=metrics,
         )
         logger.info(
@@ -1000,11 +1105,15 @@ async def main(argv: Sequence[str] | None = None) -> int:
             crawl_job_id=args.crawl_job_id,
             source_site=JOBSDB_SOURCE_SITE,
             error_message=str(exc),
-            payload={
-                "crawl_phase": args.crawl_phase,
-                "crawl_mode": args.crawl_mode,
-                "category_ids": list(args.category_ids),
-            },
+            payload=(
+                _build_listing_request_payload(args)
+                if args.crawl_phase == "listing"
+                else {
+                    "crawl_phase": args.crawl_phase,
+                    "crawl_mode": args.crawl_mode,
+                    "category_ids": list(args.category_ids),
+                }
+            ),
         )
         return 1
 

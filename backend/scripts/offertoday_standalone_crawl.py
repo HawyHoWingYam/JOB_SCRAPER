@@ -57,8 +57,13 @@ from app.services.offertoday_detail_pipeline import (  # noqa: E402
     OfferTodayDetailTarget,
 )
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
+from app.crawl_control.contracts import (  # noqa: E402
+    OfferTodayQueryTargetParametersV1,
+)
+from app.crawl_control.listing_runtime import ListingRuntimePlan  # noqa: E402
 from app.crawl_control.runtime_authority import (  # noqa: E402
-    load_legacy_worker_startup_input,
+    WorkerStartupInput,
+    load_worker_startup_input,
 )
 from app.sources.offertoday.listing_runner import (  # noqa: E402
     ListingRetryPolicy,
@@ -265,19 +270,19 @@ def _build_probe_listing_payload(
     )
 
 
-def _load_request_payload(crawl_job_id: str) -> dict[str, Any]:
+def _load_runtime_input(crawl_job_id: str) -> WorkerStartupInput:
     if not str(crawl_job_id or "").strip():
-        return {}
+        return WorkerStartupInput(request_payload={}, source_site="offertoday")
 
     from app.database import SessionLocal
 
     db = SessionLocal()
     try:
-        return load_legacy_worker_startup_input(
+        return load_worker_startup_input(
             db,
             crawl_job_id=crawl_job_id,
             default_source_site="offertoday",
-        ).request_payload
+        )
     finally:
         db.close()
 
@@ -335,6 +340,23 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     args.detail_pacing = request_payload.get("detail_pacing")
 
 
+def _apply_listing_runtime_plan(
+    args,
+    runtime_plan: ListingRuntimePlan | None,
+) -> None:
+    args.listing_runtime_plan = runtime_plan
+    if runtime_plan is None:
+        return
+    args.category_ids = ",".join(
+        target.classification_id for target in runtime_plan.targets
+    )
+    args.keywords = ""
+    args.max_pages = runtime_plan.page_depth
+    args.headed = runtime_plan.crawl_mode == "headed"
+    args.crawl_phase = "listing"
+    args.skip_existing = False
+
+
 def _resolve_detail_scope(
     args,
     *,
@@ -373,6 +395,13 @@ def _build_runtime_request_payload(
     source_listing_crawl_job_id: str | None,
     detail_scope: str | None = None,
 ) -> dict[str, Any]:
+    runtime_plan = getattr(args, "listing_runtime_plan", None)
+    if crawl_phase == "listing" and runtime_plan is not None:
+        return {
+            "crawl_phase": "listing",
+            "crawl_mode": runtime_plan.crawl_mode,
+            **runtime_plan.audit_payload(),
+        }
     category_ids = _parse_catalog_classification_ids(args.category_ids)
     detail_statuses = _normalize_detail_statuses(args.detail_statuses)
     payload: dict[str, Any] = {
@@ -425,19 +454,34 @@ def _build_manual_action_payload(
         browser_channel=settings.jobsdb_headed_browser_channel,
         browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
     )
-    resume_context: dict[str, Any] = {
-        "crawl_phase": crawl_phase,
-        "crawl_mode": "headed" if args.headed else "headless",
-        "category_ids": _parse_catalog_classification_ids(args.category_ids),
-        "skip_existing": bool(args.skip_existing),
-        "resume_strategy": str(args.resume_strategy or RESUME_STRATEGY_FRESH_PROFILE),
-    }
-    keywords = normalize_offertoday_keywords(args.keywords)
-    if keywords:
-        resume_context["keywords"] = ",".join(keywords)
-    if crawl_phase == "listing":
-        resume_context["max_pages"] = int(args.max_pages)
+    runtime_plan = getattr(args, "listing_runtime_plan", None)
+    if crawl_phase == "listing" and runtime_plan is not None:
+        resume_context: dict[str, Any] = {
+            "crawl_phase": "listing",
+            "crawl_mode": runtime_plan.crawl_mode,
+            "resume_strategy": str(
+                args.resume_strategy or RESUME_STRATEGY_FRESH_PROFILE
+            ),
+            **runtime_plan.audit_payload(),
+        }
     else:
+        resume_context = {
+            "crawl_phase": crawl_phase,
+            "crawl_mode": "headed" if args.headed else "headless",
+            "category_ids": _parse_catalog_classification_ids(
+                args.category_ids
+            ),
+            "skip_existing": bool(args.skip_existing),
+            "resume_strategy": str(
+                args.resume_strategy or RESUME_STRATEGY_FRESH_PROFILE
+            ),
+        }
+    keywords = normalize_offertoday_keywords(args.keywords)
+    if keywords and runtime_plan is None:
+        resume_context["keywords"] = ",".join(keywords)
+    if crawl_phase == "listing" and runtime_plan is None:
+        resume_context["max_pages"] = int(args.max_pages)
+    elif crawl_phase != "listing":
         resolved_scope = str(detail_scope or "").strip().lower() or (
             "listing_batch" if source_listing_crawl_job_id else "global"
         )
@@ -645,7 +689,27 @@ def _build_request_listing_conditions(
     category_value: Any,
     *,
     keywords: list[str],
+    runtime_plan: ListingRuntimePlan | None = None,
 ) -> list[OfferTodayListingCondition]:
+    if runtime_plan is not None:
+        conditions: list[OfferTodayListingCondition] = []
+        for target in runtime_plan.targets:
+            parameters = target.query_target.parameters
+            if not isinstance(parameters, OfferTodayQueryTargetParametersV1):
+                raise RuntimeError(
+                    "OfferToday Dispatch Plan contains another adapter"
+                )
+            conditions.append(
+                OfferTodayListingCondition(
+                    search_family="catalog_category",
+                    category_id=parameters.category_code,
+                    keyword=parameters.keyword,
+                    endpoint=parameters.endpoint,
+                    rcd_type=parameters.rcd_type,
+                )
+            )
+        return conditions
+
     category_ids = _parse_catalog_classification_ids(category_value)
     if category_ids and keywords:
         plan = load_published_query_plan("offertoday", category_ids)
@@ -1058,9 +1122,15 @@ async def _run_listing_phase(
     crawl_mode = "headed" if args.headed else "headless"
     category_ids = _parse_catalog_classification_ids(args.category_ids)
     keywords = normalize_offertoday_keywords(args.keywords)
+    runtime_plan: ListingRuntimePlan | None = getattr(
+        args,
+        "listing_runtime_plan",
+        None,
+    )
     conditions = _build_request_listing_conditions(
         args.category_ids,
         keywords=keywords,
+        runtime_plan=runtime_plan,
     )
     observation_sink = CrawlJobListingObservationSink(
         crawl_runtime=crawl_runtime,
@@ -1085,12 +1155,18 @@ async def _run_listing_phase(
         result = await runner.run(
             conditions=conditions,
             stop_policy=ListingStopPolicy(
-                max_pages_per_condition=min(
-                    int(args.max_pages),
-                    MAX_PAGES_GLOBAL,
+                max_pages_per_condition=(
+                    runtime_plan.page_depth
+                    if runtime_plan is not None
+                    else min(int(args.max_pages), MAX_PAGES_GLOBAL)
+                ),
+                run_page_cap=(
+                    runtime_plan.run_page_cap
+                    if runtime_plan is not None
+                    else None
                 ),
                 unique_job_cap=None,
-                require_empty_confirmation=True,
+                require_empty_confirmation=runtime_plan is None,
                 page_cap_behavior="retain-and-continue",
             ),
             retry_policy=ListingRetryPolicy(
@@ -1101,8 +1177,16 @@ async def _run_listing_phase(
             observation_sink=observation_sink,
             staging_sink=staging_sink,
             session_mode=crawl_mode,
-            request_policy=production_offertoday_listing_request_policy(),
-            terminal_policy="result-transition-confirmation-v1",
+            request_policy=(
+                None
+                if runtime_plan is not None
+                else production_offertoday_listing_request_policy()
+            ),
+            terminal_policy=(
+                "cursor-terminal-empty-confirmation-v1"
+                if runtime_plan is not None
+                else "result-transition-confirmation-v1"
+            ),
         )
     except ManualActionRequiredError as exc:
         logger.warning(
@@ -2255,12 +2339,19 @@ def _persist_listing_checkpoint(
 async def main() -> None:
     parser = _build_argument_parser()
     args = parser.parse_args()
-    _apply_request_payload_defaults(args, _load_request_payload(args.crawl_job_id))
+    startup = _load_runtime_input(args.crawl_job_id)
+    _apply_request_payload_defaults(args, startup.request_payload)
+    _apply_listing_runtime_plan(args, startup.listing_runtime_plan)
     args.cancellation_token = CrawlCancellationToken(
         crawl_job_id=args.crawl_job_id,
         execution_generation=args.execution_generation or None,
     )
     crawl_phase = str(args.crawl_phase or "full").strip().lower()
+    runtime_plan: ListingRuntimePlan | None = getattr(
+        args,
+        "listing_runtime_plan",
+        None,
+    )
     logger.info(
         build_scrape_log_event(
             "SCRAPE_EXECUTOR_START",
@@ -2268,7 +2359,16 @@ async def main() -> None:
             crawl_job_id=args.crawl_job_id or None,
             crawl_phase=crawl_phase,
             crawl_mode="headed" if args.headed else "headless",
-            category_ids=args.category_ids or None,
+            category_ids=(
+                args.category_ids or None
+                if runtime_plan is None
+                else None
+            ),
+            query_target_count=(
+                runtime_plan.query_target_count
+                if runtime_plan is not None
+                else None
+            ),
             keywords=args.keywords or None,
             max_pages=args.max_pages,
             detail_limit=args.detail_limit,
@@ -2278,7 +2378,18 @@ async def main() -> None:
         )
     )
 
-    category_ids = _resolve_published_listing_category_ids(args.category_ids)
+    category_ids = (
+        [
+            target.query_target.parameters.category_code
+            for target in runtime_plan.targets
+            if isinstance(
+                target.query_target.parameters,
+                OfferTodayQueryTargetParametersV1,
+            )
+        ]
+        if runtime_plan is not None
+        else _resolve_published_listing_category_ids(args.category_ids)
+    )
     keywords = normalize_offertoday_keywords(args.keywords)
     if args.check or args.smoke_test:
         exit_code = await _run_runtime_probe(
@@ -2293,11 +2404,16 @@ async def main() -> None:
             raise SystemExit(exit_code)
         return
 
-    page_limit_per_query = min(args.max_pages, MAX_PAGES_GLOBAL)
+    page_limit_per_query = (
+        runtime_plan.page_depth
+        if runtime_plan is not None
+        else min(args.max_pages, MAX_PAGES_GLOBAL)
+    )
     listing_conditions = (
         _build_request_listing_conditions(
             args.category_ids,
             keywords=keywords,
+            runtime_plan=runtime_plan,
         )
         if crawl_phase != "detail"
         else []
@@ -2309,7 +2425,11 @@ async def main() -> None:
             if str(condition.search_family or "").strip()
         )
     )
-    planned_total_pages = len(listing_conditions) * page_limit_per_query
+    planned_total_pages = (
+        runtime_plan.estimated_max_pages
+        if runtime_plan is not None
+        else len(listing_conditions) * page_limit_per_query
+    )
     source_listing_crawl_job_id, detail_scope = _resolve_detail_scope(
         args,
         listing_phase_completed=False,
@@ -2346,7 +2466,18 @@ async def main() -> None:
             crawl_runtime.mark_started(
                 crawl_job_id=cj_id,
                 source_site="offertoday",
-                payload={"phase": 2 if crawl_phase == "detail" else 1, "source_site": "offertoday"},
+                payload=(
+                    _build_runtime_request_payload(
+                        args,
+                        crawl_phase=crawl_phase,
+                        source_listing_crawl_job_id=None,
+                    )
+                    if crawl_phase == "listing"
+                    else {
+                        "phase": 2,
+                        "source_site": "offertoday",
+                    }
+                ),
                 metrics={
                     "pages_processed": 0,
                     "job_ids_collected": 0,

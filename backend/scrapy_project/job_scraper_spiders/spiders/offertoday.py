@@ -17,6 +17,10 @@ from typing import Any, Iterable
 import scrapy
 from scrapy.http import Response
 
+from app.crawl_control.contracts import OfferTodayQueryTargetParametersV1
+from app.crawl_control.runtime_authority import (
+    load_listing_runtime_plan_for_worker,
+)
 from app.source_catalog.runtime import load_published_query_plan
 from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, OFFERTODAY_LISTING_BROWSE_URL, build_offertoday_listing_payload
 from app.sources.offertoday.search_space import build_offertoday_listing_queries
@@ -57,6 +61,7 @@ class OfferTodaySpider(scrapy.Spider):
     max_pages: str = "100"
     publish_time_window: str = ""
     crawl_run_id: str = ""
+    crawl_job_id: str = ""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -88,6 +93,18 @@ class OfferTodaySpider(scrapy.Spider):
             self._max_pages_val = 100
 
         self.crawl_run_id = str(kwargs.get("crawl_run_id", "") or "")
+        self.crawl_job_id = str(kwargs.get("crawl_job_id", "") or "")
+        self._listing_runtime_plan = load_listing_runtime_plan_for_worker(
+            self.crawl_job_id,
+            expected_source_site="offertoday",
+        )
+        if self._listing_runtime_plan is not None:
+            self._category_ids = [
+                target.classification_id
+                for target in self._listing_runtime_plan.targets
+            ]
+            self._keywords = ""
+            self._max_pages_val = self._listing_runtime_plan.page_depth
         listing_tasks = self._build_listing_tasks()
         self._search_families = list(
             dict.fromkeys(
@@ -105,6 +122,29 @@ class OfferTodaySpider(scrapy.Spider):
         self._detail_phase_started = False
 
     def _build_listing_tasks(self) -> list[dict[str, Any]]:
+        if self._listing_runtime_plan is not None:
+            tasks: list[dict[str, Any]] = []
+            for target, page in self._listing_runtime_plan.iter_target_pages():
+                parameters = target.query_target.parameters
+                if not isinstance(
+                    parameters,
+                    OfferTodayQueryTargetParametersV1,
+                ):
+                    raise RuntimeError(
+                        "OfferToday Dispatch Plan contains another adapter"
+                    )
+                tasks.append(
+                    {
+                        "search_family": "catalog_category",
+                        "category_id": parameters.category_code,
+                        "keyword": parameters.keyword,
+                        "endpoint": parameters.endpoint,
+                        "rcd_type": parameters.rcd_type,
+                        "page": page,
+                    }
+                )
+            return tasks
+
         category_ids = self._category_ids
         if category_ids and self._keywords.strip():
             plan = load_published_query_plan("offertoday", category_ids)
@@ -169,6 +209,8 @@ class OfferTodaySpider(scrapy.Spider):
             return
 
         if not self._detail_phase_started:
+            if self._listing_runtime_plan is not None:
+                return
             self._detail_phase_started = True
             yield from self._start_detail_requests()
 
@@ -202,6 +244,14 @@ class OfferTodaySpider(scrapy.Spider):
                 "page": task["page"],
                 "search_family": task["search_family"],
             },
+            meta=(
+                {
+                    "dont_retry": True,
+                    **self._listing_runtime_plan.audit_payload(),
+                }
+                if self._listing_runtime_plan is not None
+                else None
+            ),
             dont_filter=True,
         )
 
@@ -299,14 +349,15 @@ class OfferTodaySpider(scrapy.Spider):
                 listing_rank=len(self._seen_ids),
             )
 
-            self._detail_targets.append(
-                {
-                    "eid": eid,
-                    "url": url,
-                    "listing_data": dict(job),
-                    "cid": cid,
-                }
-            )
+            if self._listing_runtime_plan is None:
+                self._detail_targets.append(
+                    {
+                        "eid": eid,
+                        "url": url,
+                        "listing_data": dict(job),
+                        "cid": cid,
+                    }
+                )
             probe_new += 1
 
         self._listing_pages_processed += 1

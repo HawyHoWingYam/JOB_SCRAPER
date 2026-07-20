@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 import httpx
 
 from app.database import get_db
+from app.models.crawl_run import CrawlRun
 from app.repositories.crawl_run_repository import CrawlRunRepository
 from app.services.crawl_run_projection_service import CrawlRunProjectionService
 from app.services.scrapyd_client import ScrapydClient, ScrapydClientError
@@ -115,6 +116,7 @@ async def schedule_spider(
             project=request.scrapyd_project,
             spider=request.scrapyd_spider,
             crawl_run_id=str(request.crawl_job_id),
+            crawl_job_id=str(request.crawl_job_id),
         )
     except (ScrapydClientError, httpx.HTTPError) as exc:
         logger.error("Failed to schedule spider via Scrapyd: %s", exc)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -21,7 +22,7 @@ class CrawlJobExecutionRepository:
     ) -> CrawlJobExecution:
         execution = CrawlJobExecution(
             crawl_job_id=crawl_job_id,
-            generation=generation,
+            generation=self._generation_uuid(generation),
             launcher_instance_id=launcher_instance_id,
             status="launching",
             command=list(command),
@@ -38,7 +39,7 @@ class CrawlJobExecutionRepository:
         for_update: bool = False,
     ) -> CrawlJobExecution | None:
         query = db.query(CrawlJobExecution).filter(
-            CrawlJobExecution.generation == generation
+            CrawlJobExecution.generation == self._generation_uuid(generation)
         )
         if for_update:
             query = query.with_for_update()
@@ -114,3 +115,7 @@ class CrawlJobExecutionRepository:
             "command": list(execution.command or []),
             "stop_requested_at": execution.stop_requested_at,
         }
+
+    @staticmethod
+    def _generation_uuid(generation) -> UUID:
+        return generation if isinstance(generation, UUID) else UUID(str(generation))

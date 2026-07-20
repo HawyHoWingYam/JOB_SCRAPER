@@ -21,10 +21,15 @@ if BACKEND not in sys.path:
     sys.path.insert(0, BACKEND)
 
 from app.config import settings  # noqa: E402
+from app.crawl_control.contracts import (  # noqa: E402
+    CTgoodjobsQueryTargetParametersV1,
+)
+from app.crawl_control.listing_runtime import ListingRuntimePlan  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.repositories.company_repository import CompanyRepository  # noqa: E402
 from app.crawl_control.runtime_authority import (  # noqa: E402
-    load_legacy_worker_startup_input,
+    WorkerStartupInput,
+    load_worker_startup_input,
 )
 from app.repositories.job_repository import JobRepository  # noqa: E402
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL  # noqa: E402
@@ -88,15 +93,19 @@ def _parse_detail_statuses(raw_value: str | Sequence[str]) -> list[str]:
     return statuses or list(DEFAULT_DETAIL_STATUSES)
 
 
-def _load_request_payload(crawl_job_id: str) -> tuple[dict[str, Any], str]:
+def _load_runtime_input(
+    crawl_job_id: str,
+    *,
+    allow_missing: bool = False,
+) -> WorkerStartupInput:
     db = SessionLocal()
     try:
-        startup = load_legacy_worker_startup_input(
+        return load_worker_startup_input(
             db,
             crawl_job_id=crawl_job_id,
             default_source_site=CTGOODJOBS_SOURCE_SITE,
+            allow_missing=allow_missing,
         )
-        return startup.request_payload, startup.source_site
     finally:
         db.close()
 
@@ -123,6 +132,21 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     args.detail_pacing = request_payload.get("detail_pacing")
 
 
+def _apply_listing_runtime_plan(
+    args,
+    runtime_plan: ListingRuntimePlan | None,
+) -> None:
+    args.listing_runtime_plan = runtime_plan
+    if runtime_plan is None:
+        return
+    args.category_ids = [target.classification_id for target in runtime_plan.targets]
+    args.max_pages = runtime_plan.page_depth
+    args.crawl_mode = runtime_plan.crawl_mode
+    args.crawl_phase = "listing"
+    args.skip_existing = False
+    args.is_resume = False
+
+
 @dataclass(frozen=True)
 class _PublishedCTGoodJobsCategory:
     source_classification_id: str
@@ -132,7 +156,29 @@ class _PublishedCTGoodJobsCategory:
     url: str
 
 
-def _categories_by_id() -> dict[str, _PublishedCTGoodJobsCategory]:
+def _categories_by_id(
+    runtime_plan: ListingRuntimePlan | None = None,
+) -> dict[str, _PublishedCTGoodJobsCategory]:
+    if runtime_plan is not None:
+        runtime_categories: dict[str, _PublishedCTGoodJobsCategory] = {}
+        for target in runtime_plan.targets:
+            parameters = target.query_target.parameters
+            if not isinstance(parameters, CTgoodjobsQueryTargetParametersV1):
+                raise RuntimeError(
+                    "CTGoodJobs Dispatch Plan contains another adapter"
+                )
+            url_path = parameters.url_path
+            runtime_categories[target.classification_id] = (
+                _PublishedCTGoodJobsCategory(
+                    source_classification_id=target.classification_id,
+                    ctgoodjobs_id=parameters.native_id,
+                    name=target.selected_classification.native_label,
+                    slug=url_path.removeprefix("/jobs/jobs-in-"),
+                    url=f"{CTGOODJOBS_BASE_URL}{url_path}",
+                )
+            )
+        return runtime_categories
+
     plan = load_published_scope_query_plan("ctgoodjobs", mode="all")
     categories: dict[str, _PublishedCTGoodJobsCategory] = {}
     for entry in plan.entries:
@@ -158,6 +204,14 @@ def _resolve_category(category_lookup: dict[str, Any], category_id: str):
 
 
 def _build_browser_request_payload(args) -> dict[str, Any]:
+    runtime_plan = getattr(args, "listing_runtime_plan", None)
+    if runtime_plan is not None:
+        return {
+            "crawl_job_id": args.crawl_job_id,
+            "crawl_phase": "listing",
+            "crawl_mode": runtime_plan.crawl_mode,
+            **runtime_plan.audit_payload(),
+        }
     return {
         "crawl_job_id": args.crawl_job_id,
         "crawl_phase": args.crawl_phase,
@@ -186,10 +240,14 @@ def _build_manual_action_payload(
         browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
     )
     resume_context = dict(payload.get("resume_context") or {})
+    runtime_plan = getattr(args, "listing_runtime_plan", None)
+    if crawl_phase == "listing" and runtime_plan is not None:
+        resume_context.update(runtime_plan.audit_payload())
     resume_context.setdefault("crawl_phase", crawl_phase)
     resume_context.setdefault("crawl_mode", args.crawl_mode)
-    resume_context.setdefault("category_ids", list(args.category_ids))
-    resume_context.setdefault("skip_existing", args.skip_existing)
+    if runtime_plan is None:
+        resume_context.setdefault("category_ids", list(args.category_ids))
+        resume_context.setdefault("skip_existing", args.skip_existing)
     resume_context.setdefault("resume_strategy", args.resume_strategy)
     if source_listing_crawl_job_id:
         resume_context.setdefault("source_listing_crawl_job_id", source_listing_crawl_job_id)
@@ -261,7 +319,21 @@ async def _run_listing_phase_impl(
     current_page_context: dict[str, Any],
 ) -> dict[str, int]:
     cancellation_token = resolve_cancellation_token(args)
-    category_lookup = _categories_by_id()
+    runtime_plan: ListingRuntimePlan | None = getattr(
+        args,
+        "listing_runtime_plan",
+        None,
+    )
+    category_lookup = (
+        _categories_by_id()
+        if runtime_plan is None
+        else _categories_by_id(runtime_plan)
+    )
+    request_budget = (
+        runtime_plan.new_request_budget()
+        if runtime_plan is not None
+        else None
+    )
 
     for category_id in args.category_ids:
         category = _resolve_category(category_lookup, category_id)
@@ -301,6 +373,8 @@ async def _run_listing_phase_impl(
                 )
             )
             cancellation_token.raise_if_cancelled()
+            if request_budget is not None:
+                request_budget.claim()
             html = await browser_scraper.fetch_page_html(
                 url,
                 stage="category_page",
@@ -387,6 +461,8 @@ async def _run_listing_phase_impl(
                     "jobs_skipped_existing": totals["jobs_skipped_existing"],
                 },
             )
+            if runtime_plan is not None and not job_ids:
+                break
 
     crawl_runtime.write_progress_event(
         crawl_job_id=args.crawl_job_id,
@@ -399,8 +475,16 @@ async def _run_listing_phase_impl(
             "raw_job_ids_collected": totals["raw_job_ids_collected"],
             "listings_staged": totals["listings_staged"],
             "jobs_skipped_existing": totals["jobs_skipped_existing"],
-            "detail_target_rows": totals["listings_staged"],
-            "message": "Listing phase completed; detail phase will continue.",
+            "detail_target_rows": (
+                0
+                if getattr(args, "listing_runtime_plan", None) is not None
+                else totals["listings_staged"]
+            ),
+            "message": (
+                "Listing phase completed."
+                if getattr(args, "listing_runtime_plan", None) is not None
+                else "Listing phase completed; detail phase will continue."
+            ),
         },
     )
     return totals
@@ -903,19 +987,24 @@ async def main(argv: Sequence[str] | None = None) -> int:
     args = _build_argument_parser().parse_args(list(argv) if argv is not None else None)
     args.category_ids = _parse_category_ids(args.category_ids)
     args.detail_statuses = _parse_detail_statuses(args.detail_statuses)
-    args.crawl_job_id = str(args.crawl_job_id or uuid4())
-    request_payload, source_site = _load_request_payload(args.crawl_job_id)
-    _apply_request_payload_defaults(args, request_payload)
+    requested_crawl_job_id = str(args.crawl_job_id or "").strip()
+    args.crawl_job_id = requested_crawl_job_id or str(uuid4())
+    startup = _load_runtime_input(
+        args.crawl_job_id,
+        allow_missing=not requested_crawl_job_id,
+    )
+    _apply_request_payload_defaults(args, startup.request_payload)
+    _apply_listing_runtime_plan(args, startup.listing_runtime_plan)
     if str(args.crawl_mode).strip().lower() != "headed":
         raise RuntimeError("CTgoodjobs supports headed crawl mode only")
     args.cancellation_token = CrawlCancellationToken(
         crawl_job_id=args.crawl_job_id,
         execution_generation=args.execution_generation or None,
     )
-    if str(source_site).strip().lower() != CTGOODJOBS_SOURCE_SITE:
+    if str(startup.source_site).strip().lower() != CTGOODJOBS_SOURCE_SITE:
         logger.warning(
             "CTGoodJobs executor received source_site=%s; continuing with ctgoodjobs runtime",
-            source_site,
+            startup.source_site,
         )
     logger.info(
         build_scrape_log_event(
@@ -950,11 +1039,15 @@ async def main(argv: Sequence[str] | None = None) -> int:
     crawl_runtime.mark_started(
         crawl_job_id=args.crawl_job_id,
         source_site=CTGOODJOBS_SOURCE_SITE,
-        payload={
-            "crawl_phase": args.crawl_phase,
-            "crawl_mode": args.crawl_mode,
-            "category_ids": list(args.category_ids),
-        },
+        payload=(
+            _build_browser_request_payload(args)
+            if args.crawl_phase == "listing"
+            else {
+                "crawl_phase": args.crawl_phase,
+                "crawl_mode": args.crawl_mode,
+                "category_ids": list(args.category_ids),
+            }
+        ),
     )
 
     listing_summary = {
@@ -1035,11 +1128,15 @@ async def main(argv: Sequence[str] | None = None) -> int:
             crawl_runtime.mark_completed(
                 crawl_job_id=args.crawl_job_id,
                 source_site=CTGOODJOBS_SOURCE_SITE,
-                payload={
-                    "crawl_phase": args.crawl_phase,
-                    "crawl_mode": args.crawl_mode,
-                    "category_ids": list(args.category_ids),
-                },
+                payload=(
+                    _build_browser_request_payload(args)
+                    if args.crawl_phase == "listing"
+                    else {
+                        "crawl_phase": args.crawl_phase,
+                        "crawl_mode": args.crawl_mode,
+                        "category_ids": list(args.category_ids),
+                    }
+                ),
                 metrics={
                     "pages_processed": listing_summary["pages_processed"],
                     "job_ids_collected": listing_summary["job_ids_collected"],
@@ -1128,11 +1225,15 @@ async def main(argv: Sequence[str] | None = None) -> int:
             crawl_job_id=args.crawl_job_id,
             source_site=CTGOODJOBS_SOURCE_SITE,
             error_message=str(exc),
-            payload={
-                "crawl_phase": args.crawl_phase,
-                "crawl_mode": args.crawl_mode,
-                "category_ids": list(args.category_ids),
-            },
+            payload=(
+                _build_browser_request_payload(args)
+                if args.crawl_phase == "listing"
+                else {
+                    "crawl_phase": args.crawl_phase,
+                    "crawl_mode": args.crawl_mode,
+                    "category_ids": list(args.category_ids),
+                }
+            ),
         )
         return 1
 

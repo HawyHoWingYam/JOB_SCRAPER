@@ -32,8 +32,12 @@ from app.crawl_control.errors import (
     DispatchPlanExpiredError,
     DispatchPlanFingerprintMismatchError,
     DispatchPlanStaleError,
+    WorkloadCapExceededError,
 )
-from app.crawl_control.runtime_authority import load_legacy_worker_startup_input
+from app.crawl_control.runtime_authority import (
+    load_legacy_worker_startup_input,
+    load_worker_startup_input,
+)
 from app.database import Base
 from app.models.crawl_dispatch_plan import (
     CRAWL_DISPATCH_PLAN_TABLES,
@@ -275,6 +279,33 @@ def test_prepare_consume_is_single_use_and_payload_is_not_authority(dispatch_db)
     assert authority is not None
     assert authority.dispatch_plan.content.crawl_phase == "listing"
     assert authority.dispatch_plan.content.listing_settings.run_page_cap == 10
+
+
+def test_prepare_rejects_listing_workload_above_reviewed_cap(dispatch_db):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    content = _listing_content(revision).model_copy(
+        update={
+            "listing_settings": ListingSettingsV1(
+                crawl_mode="headless",
+                page_depth=2,
+                run_page_cap=1,
+            )
+        }
+    )
+
+    with pytest.raises(WorkloadCapExceededError) as over_cap:
+        _service(db, now).prepare(
+            content,
+            readiness=_ready(now[0]),
+            prepared_by="operator@example.com",
+        )
+
+    assert over_cap.value.context == {
+        "estimated_max_pages": 2,
+        "run_page_cap": 1,
+        "system_run_page_cap": 1000,
+    }
 
 
 def test_expiry_is_durable_and_cleanup_deletes_only_expired_plans(dispatch_db):
@@ -561,7 +592,9 @@ def test_launcher_rejects_unconsumed_versioned_plan_before_process_creation(
     assert popen_calls == []
 
 
-def test_consumed_plan_fails_closed_until_worker_reads_authority(dispatch_db):
+def test_consumed_listing_plan_launches_and_worker_ignores_compatibility_payload(
+    dispatch_db,
+):
     _engine, factory, db, revision = dispatch_db
     now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
     service = _service(db, now)
@@ -582,29 +615,144 @@ def test_consumed_plan_fails_closed_until_worker_reads_authority(dispatch_db):
     )
     original_payload = dict(crawl_job.request_payload)
     popen_calls = []
+    process = type("Process", (), {"pid": 4321})()
     launcher = CrawlJobExecutionLauncher(
         session_factory=factory,
-        popen=lambda *_args, **_kwargs: popen_calls.append(True),
+        popen=lambda *args, **kwargs: popen_calls.append((args, kwargs))
+        or process,
+        process_factory=lambda _pid: type(
+            "ProcessSnapshot",
+            (),
+            {"create_time": lambda self: 123.0},
+        )(),
     )
+    launcher._start_monitor = lambda _generation: None
 
-    with pytest.raises(DispatchPlanStaleError) as unsupported:
-        launcher.launch(crawl_job)
-    assert unsupported.value.context["reason"] == (
-        "runtime_authority_adapter_required"
-    )
+    launch_result = launcher.launch(crawl_job)
+    assert launch_result.launched is True
     with pytest.raises(DispatchPlanStaleError):
         load_legacy_worker_startup_input(
             db,
             crawl_job_id=crawl_job.id,
             default_source_site="jobsdb",
         )
+    startup = load_worker_startup_input(
+        db,
+        crawl_job_id=crawl_job.id,
+        default_source_site="jobsdb",
+    )
+    assert startup.request_payload == {}
+    assert startup.listing_runtime_plan is not None
+    assert startup.listing_runtime_plan.page_depth == 2
+    assert startup.listing_runtime_plan.run_page_cap == 10
+    assert [
+        target.classification_id
+        for target in startup.listing_runtime_plan.targets
+    ] == ["jobsdb:6281"]
+    with pytest.raises(DispatchPlanStaleError) as wrong_worker:
+        load_worker_startup_input(
+            db,
+            crawl_job_id=crawl_job.id,
+            default_source_site="ctgoodjobs",
+        )
+    assert wrong_worker.value.context["reason"] == "worker_source_mismatch"
     crawl_job.request_payload = {"crawl_phase": "listing"}
     with pytest.raises(ValueError, match="compatibility request payload"):
         db.commit()
     db.rollback()
     db.refresh(crawl_job)
     assert crawl_job.request_payload == original_payload
-    assert popen_calls == []
+    assert len(popen_calls) == 1
+
+
+def test_worker_startup_missing_job_fails_closed(dispatch_db):
+    _engine, _factory, db, _revision = dispatch_db
+
+    with pytest.raises(DispatchPlanStaleError) as missing:
+        load_worker_startup_input(
+            db,
+            crawl_job_id=uuid4(),
+            default_source_site="jobsdb",
+        )
+
+    assert missing.value.context["reason"] == "crawl_job_missing"
+
+
+def test_versioned_launcher_popen_failure_settles_execution_and_job(dispatch_db):
+    _engine, factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    service = _service(db, now)
+    preparation = service.prepare(
+        _listing_content(revision),
+        readiness=_ready(now[0]),
+        prepared_by="operator@example.com",
+    )
+    crawl_job = _create_linked_job(db, preparation)
+    service.consume(
+        preparation.plan.plan_id,
+        crawl_job_id=crawl_job.id,
+        confirmation_token=preparation.confirmation_token,
+    )
+
+    def fail_popen(*_args, **_kwargs):
+        raise OSError("process unavailable")
+
+    launcher = CrawlJobExecutionLauncher(
+        session_factory=factory,
+        popen=fail_popen,
+    )
+    with pytest.raises(OSError, match="process unavailable"):
+        launcher.launch(crawl_job)
+
+    db.expire_all()
+    execution = db.query(CrawlJobExecution).one()
+    db.refresh(crawl_job)
+    assert execution.status == "launch_failed"
+    assert crawl_job.status == "failed"
+    assert crawl_job.error_message == "Crawler process launch failed: OSError"
+
+
+def test_versioned_launcher_registration_failure_terminates_process(dispatch_db):
+    _engine, factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    service = _service(db, now)
+    preparation = service.prepare(
+        _listing_content(revision),
+        readiness=_ready(now[0]),
+        prepared_by="operator@example.com",
+    )
+    crawl_job = _create_linked_job(db, preparation)
+    service.consume(
+        preparation.plan.plan_id,
+        crawl_job_id=crawl_job.id,
+        confirmation_token=preparation.confirmation_token,
+    )
+    process = type("Process", (), {"pid": 4321})()
+    launcher = CrawlJobExecutionLauncher(
+        session_factory=factory,
+        popen=lambda *_args, **_kwargs: process,
+        process_factory=lambda _pid: type(
+            "ProcessSnapshot",
+            (),
+            {"create_time": lambda self: 123.0},
+        )(),
+    )
+    terminated = []
+    launcher._terminate_unregistered_process = terminated.append
+
+    def fail_mark_running(*_args, **_kwargs):
+        raise RuntimeError("registration failed")
+
+    launcher._execution_repository.mark_running = fail_mark_running
+    with pytest.raises(RuntimeError, match="registration failed"):
+        launcher.launch(crawl_job)
+
+    db.expire_all()
+    execution = db.query(CrawlJobExecution).one()
+    db.refresh(crawl_job)
+    assert terminated == [process]
+    assert execution.status == "launch_failed"
+    assert crawl_job.status == "failed"
 
 
 def test_versioned_resume_cannot_rewrite_compatibility_payload(dispatch_db):

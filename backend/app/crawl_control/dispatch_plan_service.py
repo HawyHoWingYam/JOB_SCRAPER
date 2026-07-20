@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 import hashlib
 import secrets
@@ -27,6 +28,7 @@ from app.crawl_control.errors import (
     DispatchPlanNotFoundError,
     DispatchPlanStaleError,
 )
+from app.crawl_control.scope_service import evaluate_listing_workload
 from app.models.crawl_dispatch_plan import CrawlDispatchPlan
 from app.models.crawl_job import CrawlJob
 from app.models.schedule import ScheduleExecution
@@ -71,6 +73,12 @@ class DispatchPlanService:
             raise ValueError("Dispatch Plan preparer is required")
         if ttl <= timedelta(0) or ttl > MAX_DISPATCH_PLAN_TTL:
             raise ValueError("Dispatch Plan TTL must be positive and no more than 24 hours")
+        if content.listing_settings is not None:
+            evaluate_listing_workload(
+                content.resolved_scope,
+                content.listing_settings,
+                enforce=True,
+            )
 
         now = self._now()
         plan_id = self._uuid_factory()
@@ -268,10 +276,14 @@ class DispatchPlanService:
     @staticmethod
     def require_worker_runtime_supported(
         authority: ExecutionAuthorityV1 | None,
+        *,
+        supported_phases: Collection[str] = (),
     ) -> None:
-        """Fail closed until phase-specific workers consume plan authority directly."""
+        """Allow only phase adapters that consume immutable plan authority directly."""
 
         if authority is None:
+            return
+        if authority.dispatch_plan.content.crawl_phase in supported_phases:
             return
         raise DispatchPlanStaleError(
             "Versioned worker runtime adapter is not available for this phase",

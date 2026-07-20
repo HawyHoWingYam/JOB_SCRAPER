@@ -80,6 +80,26 @@ class WorkloadCapExceededError(CrawlControlError):
         )
 
 
+class ListingRunPageCapExceededError(CrawlControlError):
+    def __init__(
+        self,
+        *,
+        plan_id: Any,
+        requested_pages: int,
+        run_page_cap: int,
+    ) -> None:
+        super().__init__(
+            "WORKLOAD_CAP_EXCEEDED",
+            "Listing runtime exhausted its reviewed aggregate page cap",
+            context={
+                "dispatch_plan_id": str(plan_id),
+                "reason": "runtime_run_page_cap_exhausted",
+                "requested_pages": requested_pages,
+                "run_page_cap": run_page_cap,
+            },
+        )
+
+
 class AutomationNotFoundError(CrawlControlError):
     def __init__(self, automation_id: Any) -> None:
         super().__init__(
