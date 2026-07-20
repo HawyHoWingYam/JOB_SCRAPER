@@ -968,3 +968,36 @@ Implemented and verified the 13-phase PostgreSQL cutover orchestrator, recovery 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: Complete Job Intelligence parent integration
+
+**Date**: 2026-07-20
+**Task**: Complete Job Intelligence parent integration
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Closed parent integration gaps: bounded the 17,596-Job staging lookup, retired legacy Company Industry filter authority across GET/POST, enforced parsed *_test database guards, reconciled child acceptance evidence, and kept live cutover operations NO-GO. Verified 48 backend test files sequentially plus frontend lint/build and isolated coverage for the documented AISettings timing flake.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `56571eb3` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
