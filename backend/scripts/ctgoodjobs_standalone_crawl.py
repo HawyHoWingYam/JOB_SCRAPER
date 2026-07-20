@@ -23,7 +23,9 @@ if BACKEND not in sys.path:
 from app.config import settings  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.repositories.company_repository import CompanyRepository  # noqa: E402
-from app.repositories.crawl_job_repository import CrawlJobRepository  # noqa: E402
+from app.crawl_control.runtime_authority import (  # noqa: E402
+    load_legacy_worker_startup_input,
+)
 from app.repositories.job_repository import JobRepository  # noqa: E402
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL  # noqa: E402
 from app.scraper.ctgoodjobs.detail_scraper import parse_detail_page  # noqa: E402
@@ -89,10 +91,12 @@ def _parse_detail_statuses(raw_value: str | Sequence[str]) -> list[str]:
 def _load_request_payload(crawl_job_id: str) -> tuple[dict[str, Any], str]:
     db = SessionLocal()
     try:
-        crawl_job = CrawlJobRepository().get_crawl_job_by_id(db, crawl_job_id)
-        if crawl_job is None:
-            return {}, CTGOODJOBS_SOURCE_SITE
-        return dict(crawl_job.request_payload or {}), str(crawl_job.source_site or CTGOODJOBS_SOURCE_SITE)
+        startup = load_legacy_worker_startup_input(
+            db,
+            crawl_job_id=crawl_job_id,
+            default_source_site=CTGOODJOBS_SOURCE_SITE,
+        )
+        return startup.request_payload, startup.source_site
     finally:
         db.close()
 

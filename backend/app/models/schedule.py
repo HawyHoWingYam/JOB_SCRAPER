@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    inspect,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -252,6 +253,17 @@ class ScheduleExecution(Base):
 
     __tablename__ = "schedule_executions"
     __table_args__ = (
+        UniqueConstraint(
+            "dispatch_plan_id",
+            name="uq_schedule_executions_dispatch_plan_id",
+        ),
+        CheckConstraint(
+            "(dispatch_plan_id IS NULL AND dispatch_plan_fingerprint IS NULL) "
+            "OR (dispatch_plan_id IS NOT NULL AND "
+            "dispatch_plan_fingerprint IS NOT NULL AND "
+            "length(dispatch_plan_fingerprint) = 64)",
+            name="ck_schedule_executions_dispatch_plan_link",
+        ),
         Index(
             "ix_schedule_executions_schedule_started",
             "schedule_id",
@@ -298,6 +310,20 @@ class ScheduleExecution(Base):
     automation_id_snapshot = Column(UUID(as_uuid=True), nullable=True, index=True)
     automation_revision = Column(Integer, nullable=True)
     automation_snapshot = Column(JSON, nullable=True)
+    dispatch_plan_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "crawl_dispatch_plans.id",
+            name=(
+                "fk_schedule_executions_dispatch_plan_id_"
+                "crawl_dispatch_plans"
+            ),
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+        index=True,
+    )
+    dispatch_plan_fingerprint = Column(String(64), nullable=True)
 
     # Phase completion tracking
     phase1_completed = Column(Boolean, default=False)
@@ -326,6 +352,10 @@ class ScheduleExecution(Base):
     # Relationships
     schedule = relationship("ScrapeSchedule", back_populates="executions")
     crawl_job = relationship("CrawlJob", back_populates="schedule_executions")
+    dispatch_plan = relationship(
+        "CrawlDispatchPlan",
+        foreign_keys=[dispatch_plan_id],
+    )
 
     def __repr__(self):
         return f"<ScheduleExecution(id={self.id}, status={self.status})>"
@@ -357,6 +387,20 @@ class SchedulerRuntimeHeartbeat(Base):
 @event.listens_for(AutomationRevision, "before_update")
 def _prevent_automation_revision_update(_mapper, _connection, _revision) -> None:
     raise ValueError("Automation revisions are immutable")
+
+
+@event.listens_for(ScheduleExecution, "before_update")
+def _prevent_schedule_execution_dispatch_plan_update(
+    _mapper,
+    _connection,
+    execution,
+) -> None:
+    state = inspect(execution)
+    if any(
+        state.attrs[field].history.has_changes()
+        for field in ("dispatch_plan_id", "dispatch_plan_fingerprint")
+    ):
+        raise ValueError("Schedule Execution Dispatch Plan authority is immutable")
 
 
 AUTOMATION_CONTROL_TABLES = (

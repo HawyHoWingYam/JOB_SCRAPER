@@ -2,6 +2,11 @@ from app.models.company import Company
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_execution import CrawlJobExecution
 from app.models.crawl_job_listing import CrawlJobListing
+from app.models.crawl_dispatch_plan import (
+    CrawlDispatchPlan,
+    CrawlDispatchPlanTarget,
+    CrawlDispatchPlanTargetRow,
+)
 from app.models.crawl_run import CrawlRun
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
@@ -91,6 +96,9 @@ __all__ = [
     "CrawlJobEvent",
     "CrawlJobExecution",
     "CrawlJobListing",
+    "CrawlDispatchPlan",
+    "CrawlDispatchPlanTarget",
+    "CrawlDispatchPlanTargetRow",
     "CrawlRun",
     "EventOutbox",
     "Job",

@@ -57,7 +57,9 @@ from app.services.offertoday_detail_pipeline import (  # noqa: E402
     OfferTodayDetailTarget,
 )
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
-from app.repositories.crawl_job_repository import CrawlJobRepository  # noqa: E402
+from app.crawl_control.runtime_authority import (  # noqa: E402
+    load_legacy_worker_startup_input,
+)
 from app.sources.offertoday.listing_runner import (  # noqa: E402
     ListingRetryPolicy,
     ListingStopPolicy,
@@ -271,10 +273,11 @@ def _load_request_payload(crawl_job_id: str) -> dict[str, Any]:
 
     db = SessionLocal()
     try:
-        crawl_job = CrawlJobRepository().get_crawl_job_by_id(db, crawl_job_id)
-        if crawl_job is None:
-            return {}
-        return dict(crawl_job.request_payload or {})
+        return load_legacy_worker_startup_input(
+            db,
+            crawl_job_id=crawl_job_id,
+            default_source_site="offertoday",
+        ).request_payload
     finally:
         db.close()
 

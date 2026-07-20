@@ -128,3 +128,65 @@ class AutomationTransitionInvalidError(CrawlControlError):
 class AutomationDeleteReviewStaleError(CrawlControlError):
     def __init__(self, message: str) -> None:
         super().__init__("AUTOMATION_DELETE_REVIEW_STALE", message)
+
+
+class DispatchPlanNotFoundError(CrawlControlError):
+    def __init__(self, plan_id: Any) -> None:
+        super().__init__(
+            "DISPATCH_PLAN_NOT_FOUND",
+            "Dispatch Plan was not found",
+            context={"dispatch_plan_id": str(plan_id)},
+        )
+
+
+class DispatchPlanExpiredError(CrawlControlError):
+    def __init__(self, plan_id: Any) -> None:
+        super().__init__(
+            "DISPATCH_PLAN_EXPIRED",
+            "Dispatch Plan expired before confirmation",
+            context={"dispatch_plan_id": str(plan_id)},
+        )
+
+
+class DispatchPlanAlreadyConsumedError(CrawlControlError):
+    def __init__(self, plan_id: Any) -> None:
+        super().__init__(
+            "DISPATCH_PLAN_ALREADY_CONSUMED",
+            "Dispatch Plan has already been consumed",
+            context={"dispatch_plan_id": str(plan_id)},
+        )
+
+
+class DispatchPlanStaleError(CrawlControlError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        plan_id: Any | None = None,
+        reason: str | None = None,
+    ) -> None:
+        context = {}
+        if plan_id is not None:
+            context["dispatch_plan_id"] = str(plan_id)
+        if reason is not None:
+            context["reason"] = reason
+        super().__init__("DISPATCH_PLAN_STALE", message, context=context)
+
+
+class DispatchPlanFingerprintMismatchError(CrawlControlError):
+    def __init__(
+        self,
+        *,
+        plan_id: Any | None,
+        crawl_job_id: Any | None = None,
+    ) -> None:
+        context = {}
+        if plan_id is not None:
+            context["dispatch_plan_id"] = str(plan_id)
+        if crawl_job_id is not None:
+            context["crawl_job_id"] = str(crawl_job_id)
+        super().__init__(
+            "DISPATCH_PLAN_FINGERPRINT_MISMATCH",
+            "Dispatch Plan fingerprint validation failed",
+            context=context,
+        )

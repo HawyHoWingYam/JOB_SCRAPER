@@ -34,11 +34,25 @@ Checkpoint commit: lifecycle backend, no cutover.
 
 ### 3. Add Dispatch Plan persistence
 
-- [ ] Add plan, distinct target, and target-to-staging-row membership models/FKs/indexes.
-- [ ] Link Crawl Job/Schedule Execution to plan ID and fingerprint while retaining compatibility snapshots.
-- [ ] Add repository locking, expiry, fingerprint/token, single-use, and cleanup.
-- [ ] Make executor startup load/verify the consumed plan; forbid Schedule/`request_payload` reconstruction and keep resume context as a separate overlay.
-- [ ] Test double consume, expiry, plan/payload tamper, missing fingerprint, rollback, deterministic target/row order, and no unbounded logs.
+- [x] Add plan, distinct target, and target-to-staging-row membership models/FKs/indexes.
+- [x] Link Crawl Job/Schedule Execution to plan ID and fingerprint while retaining compatibility snapshots.
+- [x] Add repository locking, expiry, fingerprint/token, single-use, and cleanup.
+- [x] Make executor startup load/verify the consumed plan; forbid Schedule/`request_payload` reconstruction and keep resume context as a separate overlay.
+- [x] Test double consume, expiry, plan/payload tamper, missing fingerprint, rollback, deterministic target/row order, and no unbounded logs.
+
+Checkpoint 3 verification covered 34 focused Dispatch Plan/Automation regressions
+and the full backend suite (`333 passed, 152 skipped`), plus focused Ruff and
+mypy, compileall, and `git diff --check`. An isolated
+`job_scraper_dispatch_plan_test` PostgreSQL database rehearsed metadata
+`create_all`, stamp/downgrade/upgrade, ORM/schema parity, immutable plan/job/
+payload/target triggers, expired-plan cascade cleanup, and Automation
+`SET NULL` snapshot retention; the disposable database was removed afterward.
+
+Versioned worker execution intentionally remains fail-closed at this checkpoint:
+launcher, standalone-worker, and resume entry points validate consumed plan
+authority and then reject with `runtime_authority_adapter_required`. Checkpoints
+4 and 5 replace that safety gate with listing and detail plan-backed runtime
+adapters; no versioned path falls back to mutable `request_payload` meanwhile.
 
 ### 4. Implement listing preview and enforcement
 

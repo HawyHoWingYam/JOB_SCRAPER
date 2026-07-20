@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
-import psutil
+import psutil  # type: ignore[import-untyped]
 
 from app.crawl_cancellation import ACTIVE_EXECUTION_STATUSES
+from app.crawl_control.dispatch_plan_service import DispatchPlanService
 from app.crawl_modes import normalize_source_site
 from app.database import SessionLocal
 from app.repositories.crawl_job_execution_repository import (
@@ -115,6 +116,13 @@ class CrawlJobExecutionLauncher:
                     reason=locked_job.error_message or "Cancelled before launch.",
                 )
                 return CrawlJobLaunchResult(launched=False, command=command)
+            if (
+                getattr(locked_job, "dispatch_plan_id", None) is not None
+                or getattr(locked_job, "dispatch_plan_fingerprint", None) is not None
+            ):
+                plan_service = DispatchPlanService(db)
+                authority = plan_service.load_execution_authority(locked_job.id)
+                plan_service.require_worker_runtime_supported(authority)
             self._execution_repository.create_launch(
                 db,
                 crawl_job_id=crawl_job.id,
@@ -133,7 +141,7 @@ class CrawlJobExecutionLauncher:
         env[EXECUTION_GENERATION_ENV] = generation
         popen_kwargs: dict[str, Any] = {"env": env}
         if os.name == "nt":
-            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
         else:
             popen_kwargs["start_new_session"] = True
 

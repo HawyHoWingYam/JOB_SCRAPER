@@ -348,9 +348,23 @@ class ScheduleRepository:
         automation_id_snapshot: UUID | None = None,
         automation_revision: int | None = None,
         automation_snapshot: dict | None = None,
+        dispatch_plan_id: UUID | None = None,
+        dispatch_plan_fingerprint: str | None = None,
         auto_commit: bool = True,
     ) -> ScheduleExecution:
         """Create a new execution record."""
+        if (dispatch_plan_id is None) != (dispatch_plan_fingerprint is None):
+            raise ValueError(
+                "Schedule Execution Dispatch Plan ID and fingerprint "
+                "must be supplied together"
+            )
+        if (
+            dispatch_plan_fingerprint is not None
+            and len(dispatch_plan_fingerprint) != 64
+        ):
+            raise ValueError(
+                "Schedule Execution Dispatch Plan fingerprint must be SHA-256"
+            )
         execution = ScheduleExecution(
             schedule_id=schedule_id,
             crawl_job_id=crawl_job_id,
@@ -361,6 +375,8 @@ class ScheduleRepository:
                 if automation_snapshot is not None
                 else None
             ),
+            dispatch_plan_id=dispatch_plan_id,
+            dispatch_plan_fingerprint=dispatch_plan_fingerprint,
             status=status,
             started_at=utc_now(),
         )

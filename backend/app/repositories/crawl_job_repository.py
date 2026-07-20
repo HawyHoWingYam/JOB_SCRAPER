@@ -28,14 +28,27 @@ class CrawlJobRepository:
         request_payload: dict[str, Any],
         requested_by: str | None = None,
         schedule_id=None,
+        dispatch_plan_id=None,
+        dispatch_plan_fingerprint: str | None = None,
         status: str = "queued",
         crawl_job_id=None,
         auto_commit: bool = True,
     ) -> CrawlJob:
+        if (dispatch_plan_id is None) != (dispatch_plan_fingerprint is None):
+            raise ValueError(
+                "Crawl Job Dispatch Plan ID and fingerprint must be supplied together"
+            )
+        if (
+            dispatch_plan_fingerprint is not None
+            and len(dispatch_plan_fingerprint) != 64
+        ):
+            raise ValueError("Crawl Job Dispatch Plan fingerprint must be SHA-256")
         crawl_job_kwargs = {
             "source_site": source_site,
             "trigger_type": trigger_type,
             "schedule_id": schedule_id,
+            "dispatch_plan_id": dispatch_plan_id,
+            "dispatch_plan_fingerprint": dispatch_plan_fingerprint,
             "status": status,
             "request_payload": request_payload,
             "requested_by": requested_by,

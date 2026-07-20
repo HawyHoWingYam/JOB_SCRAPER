@@ -32,6 +32,8 @@ from app.crawl_control.errors import (
     ScopeReviewRequiredError,
 )
 from app.models.crawl_job import CrawlJob
+from app.models.crawl_job_listing import CrawlJobListing
+from app.models.crawl_dispatch_plan import CRAWL_DISPATCH_PLAN_TABLES
 from app.models.schedule import (
     AUTOMATION_CONTROL_TABLES,
     AutomationDeleteReview,
@@ -39,6 +41,7 @@ from app.models.schedule import (
     ScheduleExecution,
     ScrapeSchedule,
 )
+from app.models.source_catalog import SourceCatalogCandidate, SourceCatalogRevision
 from app.database import Base
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
@@ -73,8 +76,12 @@ def automation_db():
         cursor.close()
 
     tables = (
+        SourceCatalogCandidate.__table__,
+        SourceCatalogRevision.__table__,
         AUTOMATION_CONTROL_TABLES[0],
         CrawlJob.__table__,
+        CrawlJobListing.__table__,
+        *CRAWL_DISPATCH_PLAN_TABLES,
         *AUTOMATION_CONTROL_TABLES[1:],
     )
     ScrapeSchedule.metadata.create_all(engine, tables=tables)

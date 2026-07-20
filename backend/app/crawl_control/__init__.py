@@ -14,6 +14,17 @@ from app.crawl_control.contracts import (
     ResolvedRunScopeV1,
 )
 from app.crawl_control.errors import CrawlControlError
+from app.crawl_control.dispatch_plan_contracts import (
+    DispatchPlanContentV1,
+    DispatchPlanPreparationV1,
+    DispatchPlanReadinessV1,
+    DispatchPlanSnapshotV1,
+    DispatchPlanTargetRowV1,
+    DispatchPlanTargetV1,
+    ExecutionAuthorityV1,
+    ExecutionResumeContextV1,
+)
+from app.crawl_control.dispatch_plan_service import DispatchPlanService
 from app.crawl_control.scope_service import CrawlScopeService
 
 __all__ = [
@@ -27,7 +38,16 @@ __all__ = [
     "CrawlScopePreviewV1",
     "CrawlScopeRuleV1",
     "CrawlScopeService",
+    "DispatchPlanContentV1",
+    "DispatchPlanPreparationV1",
+    "DispatchPlanReadinessV1",
+    "DispatchPlanService",
+    "DispatchPlanSnapshotV1",
+    "DispatchPlanTargetRowV1",
+    "DispatchPlanTargetV1",
     "DetailSettingsV1",
     "ListingSettingsV1",
+    "ExecutionAuthorityV1",
+    "ExecutionResumeContextV1",
     "ResolvedRunScopeV1",
 ]
