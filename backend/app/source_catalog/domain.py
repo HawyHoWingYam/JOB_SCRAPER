@@ -22,7 +22,7 @@ class CatalogValidationError(ValueError):
         self.node_key = node_key
 
 
-def _is_source_qualified_classification_id(value: str, source_site: str) -> bool:
+def is_source_qualified_classification_id(value: str, source_site: str) -> bool:
     """Accept exactly ``<source>:<opaque-token>`` with no whitespace ambiguity."""
 
     prefix, separator, token = value.partition(":")
@@ -458,7 +458,7 @@ def validate_catalog(catalog: DiscoveredCatalog) -> CatalogValidationReport:
                 node_key=node.node_key,
             )
         if node.classification_id is not None:
-            if not _is_source_qualified_classification_id(
+            if not is_source_qualified_classification_id(
                 node.classification_id,
                 catalog.source_site,
             ):
