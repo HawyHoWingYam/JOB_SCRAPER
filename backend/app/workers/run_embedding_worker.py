@@ -14,15 +14,18 @@ from app.logging_config import configure_logging
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.redis_stream_bus import RedisStreamBus, StreamMessage
 from app.messaging.topics import (
-    STREAM_JOB_EMBEDDING,
     STREAM_JOB_INTELLIGENCE_PROJECTIONS,
     STREAM_JOB_LIFECYCLE,
 )
-from app.models import Job, JobEmbedding
-from app.job_intelligence.skill_governance import SkillGovernanceReader
+from app.models import Job
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.job_embedding_repository import JobEmbeddingRepository
 from app.services.embedding_document_builder import EmbeddingDocumentBuilder
+from app.services.embedding_indexer import EmbeddingIndexer
+from app.services.governed_embedding_document_builder import (
+    GovernedEmbeddingDocumentBuilder,
+    SUPPORTED_GOVERNED_EMBEDDING_EVENTS,
+)
 
 try:
     SentenceTransformer = import_module("sentence_transformers").SentenceTransformer
@@ -74,6 +77,16 @@ class EmbeddingWorkerService:
         )
         self.embedding_model_name = embedding_model_name
         self.embedding_version = embedding_version
+        self.governed_document_builder = GovernedEmbeddingDocumentBuilder(
+            document_builder=self.document_builder,
+        )
+        self.embedding_indexer = EmbeddingIndexer(
+            embedding_model=self.embedding_model,
+            embedding_model_name=self.embedding_model_name,
+            embedding_version=self.embedding_version,
+            event_outbox_repository=self.event_outbox_repository,
+            job_embedding_repository=self.job_embedding_repository,
+        )
         self.bus.ensure_group(STREAM_JOB_LIFECYCLE, self.group_name)
         self.bus.ensure_group(
             STREAM_JOB_INTELLIGENCE_PROJECTIONS,
@@ -105,11 +118,7 @@ class EmbeddingWorkerService:
         topic: str = STREAM_JOB_LIFECYCLE,
     ) -> None:
         event = message.event
-        if event.event_type not in {
-            "job.ingested",
-            "job.enriched",
-            "job.skill_projection_changed",
-        }:
+        if event.event_type not in SUPPORTED_GOVERNED_EMBEDDING_EVENTS:
             self.bus.ack(topic, self.group_name, message.message_id)
             return
 
@@ -128,55 +137,20 @@ class EmbeddingWorkerService:
             if job is None:
                 raise ValueError(f"Job not found for embedding: {job_id}")
 
-            skill_state = SkillGovernanceReader(db).get_job_state(job.id)
-            document = self.document_builder.build_for_job(
+            document = self.governed_document_builder.build_for_job(
+                db,
                 job,
-                governed_skill_names=(skill.name for skill in skill_state.skills),
             )
-            existing = (
-                db.query(JobEmbedding)
-                .filter(JobEmbedding.job_id == job.id)
-                .one_or_none()
+            result = self.embedding_indexer.index(
+                db,
+                job_id=job_id,
+                document=document,
+                trigger_event_type=event.event_type,
+                crawl_job_id=payload.get("crawl_job_id"),
             )
-            if (
-                existing is not None
-                and existing.document_hash == document.document_hash
-            ):
+            if not result.changed:
                 self.bus.ack(topic, self.group_name, message.message_id)
                 return
-
-            embedding = self.embedding_model.encode(
-                document.document_text,
-                normalize_embeddings=True,
-            )
-            self.job_embedding_repository.upsert_embedding(
-                db,
-                job_id=job.id,
-                embedding_model=self.embedding_model_name,
-                embedding_dimensions=len(list(embedding)),
-                embedding_version=self.embedding_version,
-                document_text=document.document_text,
-                document_hash=document.document_hash,
-                embedding=embedding,
-                auto_commit=False,
-            )
-            self.event_outbox_repository.enqueue(
-                db,
-                topic=STREAM_JOB_EMBEDDING,
-                aggregate_type="job",
-                aggregate_id=str(job.id),
-                event_type="job.embedded",
-                payload={
-                    "job_id": str(job.id),
-                    "crawl_job_id": payload.get("crawl_job_id"),
-                    "trigger_event_type": event.event_type,
-                    "document_hash": document.document_hash,
-                    "embedding_model": self.embedding_model_name,
-                    "embedding_version": self.embedding_version,
-                },
-                source_service="embedding-worker",
-                auto_commit=False,
-            )
             db.commit()
             self.outbox_publisher.publish_pending_batch(db, limit=100)
         except Exception:

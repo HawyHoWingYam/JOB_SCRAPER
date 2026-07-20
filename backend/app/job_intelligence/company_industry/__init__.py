@@ -23,6 +23,7 @@ from app.job_intelligence.company_industry.publisher import (
 from app.job_intelligence.company_industry.rebuild import (
     CompanyIndustryRebuildInspector,
     CompanyIndustryRebuildReport,
+    RecoveredCompanyIndustry,
 )
 from app.job_intelligence.company_industry.read_model import (
     CompanyIndustry,
@@ -62,6 +63,7 @@ __all__ = [
     "CompanyIndustryReviewRefView",
     "CompanyIndustryRevisionView",
     "CompanyIndustryTreeView",
+    "RecoveredCompanyIndustry",
     "SourceIndustryMappingView",
     "project_company_industry",
 ]

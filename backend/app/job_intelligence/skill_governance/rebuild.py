@@ -54,6 +54,26 @@ class SkillGovernanceRebuildReport:
         }
 
 
+@dataclass(frozen=True)
+class RecoveredSkillEvidence:
+    job_id: UUID
+    terms: tuple[object, ...]
+    evidence_source: str | None
+    evidence_hash: str | None
+
+    @property
+    def cursor(self) -> str:
+        return str(self.job_id)
+
+    @property
+    def extraction_source(self) -> str:
+        return {
+            "ai_extraction.skills": "ai-extraction",
+            "ai_enrichment.skills": "ai-enrichment",
+            "skills": "legacy-skills",
+        }.get(self.evidence_source or "", "skill-cutover-rebuild")
+
+
 class SkillGovernanceRebuildInspector:
     """Compare preserved extraction evidence with one pinned active Skill release."""
 
@@ -209,6 +229,32 @@ class SkillGovernanceRebuildInspector:
             jobs=tuple(job_payloads),
         )
 
+    def recover(
+        self,
+        job_ids: Iterable[UUID] | None = None,
+    ) -> tuple[RecoveredSkillEvidence, ...]:
+        """Expose preserved extraction terms through a read-only rebuild port."""
+
+        requested_ids = tuple(dict.fromkeys(job_ids or ()))
+        statement = select(Job)
+        if job_ids is not None:
+            statement = statement.where(Job.id.in_(requested_ids))
+        jobs = self.db.scalars(statement.order_by(Job.id.asc())).all()
+        recovered: list[RecoveredSkillEvidence] = []
+        for job in jobs:
+            raw_terms, evidence_source = _preserved_terms(job.raw_data)
+            recovered.append(
+                RecoveredSkillEvidence(
+                    job_id=job.id,
+                    terms=tuple(raw_terms),
+                    evidence_source=evidence_source,
+                    evidence_hash=(
+                        normalized_content_hash(raw_terms) if raw_terms else None
+                    ),
+                )
+            )
+        return tuple(recovered)
+
     def _classify(
         self,
         *,
@@ -292,4 +338,8 @@ def _coerce_term(value: object) -> dict[str, Any]:
     return {"name": str(value or ""), "kind": "technical"}
 
 
-__all__ = ["SkillGovernanceRebuildInspector", "SkillGovernanceRebuildReport"]
+__all__ = [
+    "RecoveredSkillEvidence",
+    "SkillGovernanceRebuildInspector",
+    "SkillGovernanceRebuildReport",
+]

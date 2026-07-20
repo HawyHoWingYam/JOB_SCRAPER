@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "anonymized": true,
+  "company": {
+    "company_id": "company-1",
+    "source_site": "jobsdb",
+    "source_company_id": "company-1",
+    "name": "Fixture Company",
+    "industry": "Legacy technology industry",
+    "extra_data": {
+      "company_owned": "evidence"
+    }
+  },
+  "jobs": [
+    {
+      "job_id": "job-1",
+      "source_site": "jobsdb",
+      "source_job_id": "job-1",
+      "title": "Platform Engineer",
+      "description": "Preserved description",
+      "employment_type": "Full time",
+      "source_classification_id": "6281",
+      "source_classification_name": "Information Technology",
+      "raw_data": {
+        "classifications": [
+          {
+            "classification": {
+              "id": "6281",
+              "description": "Information Technology"
+            }
+          }
+        ],
+        "workTypes": [
+          "Full-time"
+        ],
+        "ai_extraction": {
+          "skills": [
+            {
+              "name": "Python",
+              "kind": "technical"
+            },
+            {
+              "name": "Novel Stack",
+              "kind": "technical"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "job_id": "job-unsupported",
+      "source_site": "jobsdb",
+      "source_job_id": "job-unsupported",
+      "title": "Unclassified Role",
+      "description": "Preserved unsupported description",
+      "raw_data": {}
+    }
+  ]
+}

@@ -22,6 +22,7 @@ from app.job_intelligence.source_attributes.module import (
     SourceJobAttributes,
 )
 from app.job_intelligence.source_attributes.rebuild import (
+    RecoveredSourceJobAttribute,
     SourceJobAttributeRebuildInspector,
     SourceJobAttributeRebuildReport,
     SourceRebuildInspection,
@@ -34,6 +35,7 @@ __all__ = [
     "JobsDBSourceEvidenceAdapter",
     "OfferTodaySourceEvidenceAdapter",
     "ProjectionResult",
+    "RecoveredSourceJobAttribute",
     "SourceCatalogRevisionRef",
     "SourceClassificationContext",
     "SourceClassificationNodeEvidence",

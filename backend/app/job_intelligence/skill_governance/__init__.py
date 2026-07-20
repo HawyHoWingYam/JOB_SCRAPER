@@ -33,6 +33,7 @@ from app.job_intelligence.skill_governance.read_model import (
     UnreviewedSkillMentionView,
 )
 from app.job_intelligence.skill_governance.rebuild import (
+    RecoveredSkillEvidence,
     SkillGovernanceRebuildInspector,
     SkillGovernanceRebuildReport,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "UnreviewedSkillMentionView",
     "GovernedSkillView",
     "JobSkillStateView",
+    "RecoveredSkillEvidence",
     "SkillMentionProjection",
     "SkillTaxonomyPublisher",
     "SkillTaxonomyValidationError",

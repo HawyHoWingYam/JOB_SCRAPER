@@ -3,11 +3,14 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy.orm import Session, undefer
 
+from app.job_intelligence.company_industry.contracts import CompanyIndustryEvidence
 from app.job_intelligence.company_industry.read_model import CompanyIndustry
+from app.job_intelligence.foundation import Provenance
 from app.models.company import Company
 from app.models.company_industry import (
     CompanyIndustryActiveRevision,
@@ -46,6 +49,19 @@ class CompanyIndustryRebuildReport:
                 for key in sorted(self.company_ids_by_state)
             },
         }
+
+
+@dataclass(frozen=True)
+class RecoveredCompanyIndustry:
+    company_id: UUID
+    source_site: str
+    source_company_id: str
+    state: str
+    evidence: CompanyIndustryEvidence | None
+
+    @property
+    def cursor(self) -> str:
+        return f"{self.source_site}\x1f{self.source_company_id}\x1f{self.company_id}"
 
 
 class CompanyIndustryRebuildInspector:
@@ -156,6 +172,96 @@ class CompanyIndustryRebuildInspector:
             },
         )
 
+    def recover(
+        self,
+        company_ids: Sequence[UUID] | None = None,
+    ) -> tuple[RecoveredCompanyIndustry, ...]:
+        """Recover typed evidence without granting legacy scalars authority."""
+
+        report = self.inspect(company_ids)
+        state_by_id = {
+            company_id: state
+            for state, company_ids_for_state in report.company_ids_by_state.items()
+            for company_id in company_ids_for_state
+        }
+        requested_ids = tuple(dict.fromkeys(company_ids or ()))
+        with self.db.no_autoflush:
+            query = (
+                self.db.query(Company)
+                .options(
+                    undefer(Company.source_site),
+                    undefer(Company.source_company_id),
+                )
+                .filter(Company.is_deleted.is_(False))
+                .order_by(
+                    Company.source_site,
+                    Company.source_company_id,
+                    Company.id,
+                )
+            )
+            if company_ids is not None:
+                query = query.filter(Company.id.in_(requested_ids))
+            companies = query.all()
+
+        recovered: list[RecoveredCompanyIndustry] = []
+        for company in companies:
+            state = state_by_id[company.id]
+            source_label, source_primary = _company_source_evidence(company)
+            legacy_label = _clean_text(company.industry)
+            captured_at = _aware_utc(company.updated_at or company.created_at)
+            evidence_ref = {
+                "kind": "preserved-company-industry",
+                "company_id": str(company.id),
+                "source_company_id": company.source_company_id,
+                "rebuild_state": state,
+            }
+            if (
+                state == "recoverable"
+                and source_label is not None
+                and company.source_site == "offertoday"
+            ):
+                evidence = CompanyIndustryEvidence(
+                    evidence_kind="source_industry",
+                    source_site=company.source_site,
+                    raw_label=source_label,
+                    declares_primary=source_primary,
+                    provenance=Provenance(
+                        method="offertoday-preserved-company-industry",
+                        source_site=company.source_site,
+                        evidence_refs=(evidence_ref,),
+                        captured_at=captured_at,
+                    ),
+                )
+            else:
+                review_label = source_label or legacy_label
+                evidence = (
+                    CompanyIndustryEvidence(
+                        evidence_kind="manual",
+                        raw_label=review_label,
+                        provenance=Provenance(
+                            method=(
+                                "legacy-company-industry-cutover"
+                                if state in {"legacy_review", "polluted"}
+                                else "non-authoritative-company-industry-cutover"
+                            ),
+                            evidence_refs=(evidence_ref,),
+                            captured_at=captured_at,
+                        ),
+                    )
+                    if review_label is not None
+                    else None
+                )
+            recovered.append(
+                RecoveredCompanyIndustry(
+                    company_id=company.id,
+                    source_site=company.source_site,
+                    source_company_id=company.source_company_id,
+                    state=state,
+                    evidence=evidence,
+                )
+            )
+        return tuple(recovered)
+
 
 def _clean_text(value: object) -> str | None:
     if not isinstance(value, str):
@@ -181,4 +287,15 @@ def _company_source_evidence(company: Company) -> tuple[str | None, bool]:
     return label, raw_data.get("company_industry_primary") is True
 
 
-__all__ = ["CompanyIndustryRebuildInspector", "CompanyIndustryRebuildReport"]
+def _aware_utc(value: datetime | None) -> datetime:
+    captured_at = value or datetime(1970, 1, 1, tzinfo=timezone.utc)
+    if captured_at.tzinfo is None:
+        captured_at = captured_at.replace(tzinfo=timezone.utc)
+    return captured_at
+
+
+__all__ = [
+    "CompanyIndustryRebuildInspector",
+    "CompanyIndustryRebuildReport",
+    "RecoveredCompanyIndustry",
+]

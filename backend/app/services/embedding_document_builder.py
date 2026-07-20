@@ -24,6 +24,7 @@ class EmbeddingDocumentBuilder:
         job,
         *,
         governed_skill_names: Iterable[str] | None = None,
+        governed_taxonomy_document: str | None = None,
     ) -> EmbeddingDocument:
         sections: list[str] = []
 
@@ -40,6 +41,13 @@ class EmbeddingDocumentBuilder:
         source_taxonomy = self._build_source_taxonomy(job)
         if source_taxonomy:
             sections.append(f"Source Taxonomy: {source_taxonomy}")
+
+        if governed_taxonomy_document:
+            sections.extend(
+                cleaned
+                for line in governed_taxonomy_document.splitlines()
+                if (cleaned := self._clean_text(line))
+            )
 
         ai_summary = self._clean_text(getattr(job, "ai_summary", None))
         if ai_summary:

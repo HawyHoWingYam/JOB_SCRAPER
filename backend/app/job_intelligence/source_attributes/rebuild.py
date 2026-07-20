@@ -83,6 +83,22 @@ class SourceJobAttributeRebuildReport:
         }
 
 
+@dataclass(frozen=True)
+class RecoveredSourceJobAttribute:
+    job_id: UUID
+    source_site: str
+    source_job_id: str
+    evidence: SourceJobAttributeEvidence | None
+    evidence_source: str | None
+    malformed: bool
+    ambiguous: bool
+    unrecoverable_cause: str | None
+
+    @property
+    def cursor(self) -> str:
+        return f"{self.source_site}\x1f{self.source_job_id}\x1f{self.job_id}"
+
+
 @dataclass
 class _SourceCounters:
     jobs_inspected: int = 0
@@ -223,6 +239,58 @@ class SourceJobAttributeRebuildInspector:
             jobs_inspected=len(jobs),
             sources=sources,
         )
+
+    def recover(
+        self,
+        job_ids: Sequence[UUID] | None = None,
+    ) -> tuple[RecoveredSourceJobAttribute, ...]:
+        """Recover typed historical evidence for the cutover writer port."""
+
+        with self.db.no_autoflush:
+            query = (
+                self.db.query(Job)
+                .options(
+                    undefer(Job.source_site),
+                    undefer(Job.source_job_id),
+                )
+                .order_by(
+                    Job.source_site.asc(),
+                    Job.source_job_id.asc(),
+                    Job.id.asc(),
+                )
+            )
+            if job_ids is not None:
+                query = query.filter(Job.id.in_(tuple(job_ids)))
+            jobs = query.all()
+            staging_rows = self._load_staging_rows(jobs)
+
+        staging_by_job: dict[tuple[str, str], list[CrawlJobListing]] = defaultdict(list)
+        for row in staging_rows:
+            staging_by_job[(row.source_site, row.source_job_id)].append(row)
+
+        recovered: list[RecoveredSourceJobAttribute] = []
+        for job in jobs:
+            evidence, evidence_source, malformed, ambiguous = self._evidence_for_job(
+                job,
+                staging_by_job[(job.source_site, job.source_job_id)],
+            )
+            recovered.append(
+                RecoveredSourceJobAttribute(
+                    job_id=job.id,
+                    source_site=job.source_site,
+                    source_job_id=job.source_job_id,
+                    evidence=evidence,
+                    evidence_source=evidence_source,
+                    malformed=malformed,
+                    ambiguous=ambiguous,
+                    unrecoverable_cause=(
+                        self._unrecoverable_cause(job, malformed)
+                        if evidence is None
+                        else None
+                    ),
+                )
+            )
+        return tuple(recovered)
 
     def _load_staging_rows(
         self,

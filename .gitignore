@@ -103,4 +103,9 @@ backend/tests/*
 !backend/tests/test_offertoday_standalone_crawl.py
 !backend/tests/test_source_catalog_*.py
 !backend/tests/test_job_intelligence_foundation.py
+!backend/tests/test_job_intelligence_cutover.py
+!backend/tests/fixtures/
+!backend/tests/fixtures/job_intelligence_cutover_legacy.json
+!backend/tests/integration/
+!backend/tests/integration/test_job_intelligence_rebuild.py
 docs/*

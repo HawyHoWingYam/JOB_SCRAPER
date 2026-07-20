@@ -1,0 +1,45 @@
+RESET_ALLOWLIST = (
+    "company_industry_assignments",
+    "company_industry_review_items",
+    "governed_job_skill_mentions",
+    "governed_job_skills",
+    "job_embeddings",
+    "job_employment_types",
+    "job_source_attribute_projections",
+    "job_source_classification_path_nodes",
+    "job_source_classification_paths",
+    "job_source_employment_labels",
+    "job_taxonomy_assignments",
+    "job_taxonomy_review_items",
+    "skill_candidates",
+)
+
+CUTOVER_PHASES = (
+    "inventory_and_quiesce",
+    "backup_and_restore_test",
+    "legacy_audit_snapshot",
+    "schema_expand_and_seed_revisions",
+    "rebuild_source_classification_paths",
+    "rebuild_employment_types",
+    "rebuild_canonical_job_taxonomy",
+    "rebuild_company_industries",
+    "rebuild_skill_state",
+    "switch_authoritative_reads",
+    "rebuild_embeddings",
+    "cross_layer_verify",
+    "reopen_writers",
+)
+
+KNOWN_WRITERS = (
+    "api",
+    "detail-worker",
+    "embedding-worker",
+    "enrichment-worker",
+    "ingest-worker",
+    "listing-worker",
+    "manual-action-helper",
+    "outbox-publisher",
+    "scheduler-worker",
+    "scrapyd",
+    "source-catalog-admin",
+)
