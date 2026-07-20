@@ -329,15 +329,19 @@ class CrawlJobListingRepository:
         db: Session,
         *,
         listing_ids: Iterable[Any],
+        for_update: bool = False,
     ) -> list[CrawlJobListing]:
         normalized_ids = tuple(dict.fromkeys(listing_ids))
         if not normalized_ids:
             return []
-        return (
+        query = (
             db.query(CrawlJobListing)
             .filter(CrawlJobListing.id.in_(normalized_ids))
-            .all()
+            .order_by(CrawlJobListing.id.asc())
         )
+        if for_update:
+            query = query.populate_existing().with_for_update()
+        return query.all()
 
     def list_offertoday_identity_history(
         self,
@@ -757,5 +761,4 @@ class CrawlJobListingRepository:
         else:
             db.flush()
         return listing
-
 

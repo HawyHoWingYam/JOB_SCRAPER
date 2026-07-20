@@ -119,6 +119,18 @@ class BacklogSafetyCapExceededError(CrawlControlError):
         )
 
 
+class DetailRunConflictError(CrawlControlError):
+    def __init__(self, *, source_site: str, crawl_job_id: Any) -> None:
+        super().__init__(
+            "DETAIL_RUN_CONFLICT",
+            "An active manual detail run already exists for this source",
+            context={
+                "source_site": source_site,
+                "crawl_job_id": str(crawl_job_id),
+            },
+        )
+
+
 class AutomationNotFoundError(CrawlControlError):
     def __init__(self, automation_id: Any) -> None:
         super().__init__(
@@ -175,6 +187,19 @@ class DispatchPlanNotFoundError(CrawlControlError):
             "DISPATCH_PLAN_NOT_FOUND",
             "Dispatch Plan was not found",
             context={"dispatch_plan_id": str(plan_id)},
+        )
+
+
+class DispatchPlanReviewRequiredError(CrawlControlError):
+    def __init__(self, *, automation_id: Any, expected_revision: int) -> None:
+        super().__init__(
+            "DISPATCH_PLAN_REVIEW_REQUIRED",
+            "Versioned Automation runs require Dispatch Plan review and confirmation",
+            context={
+                "automation_id": str(automation_id),
+                "expected_revision": expected_revision,
+                "action": "prepare_saved_automation_run",
+            },
         )
 
 

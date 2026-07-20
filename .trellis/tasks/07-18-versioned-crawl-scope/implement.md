@@ -105,14 +105,33 @@ Rollback point: old detail runtime remains selectable only in test until snapsho
 
 ### 6. Implement preparation/dispatch transactions
 
-- [ ] Add saved-Automation and One-off request variants.
-- [ ] Implement readiness, conflict, pacing, headed-worker, catalog, scope, and cap checks.
-- [ ] Persist prepared plan without launch.
-- [ ] Atomically consume plan into Schedule Execution/Crawl Job/event/outbox and launch after commit.
-- [ ] Add scheduled prepare-and-consume path.
-- [ ] Add stale catalog/Automation/eligibility/readiness and active-detail-conflict tests.
-- [ ] Preserve existing cancellation service and regression tests.
-- [ ] Verify publication after run commit does not invalidate the in-flight plan, while pre-dispatch active-revision drift rejects an unconsumed plan.
+- [x] Add saved-Automation and One-off request variants.
+- [x] Implement readiness, conflict, pacing, headed-worker, catalog, scope, and cap checks.
+- [x] Persist prepared plan without launch.
+- [x] Atomically consume plan into Schedule Execution/Crawl Job/event/outbox and launch after commit.
+- [x] Add scheduled prepare-and-consume path.
+- [x] Add stale catalog/Automation/eligibility/readiness and active-detail-conflict tests.
+- [x] Preserve existing cancellation service and regression tests.
+- [x] Verify publication after run commit does not invalidate the in-flight plan, while pre-dispatch active-revision drift rejects an unconsumed plan.
+
+Checkpoint 6 adds reviewed One-off/Saved Automation requests, atomic scheduled
+prepare-and-consume, frozen detail pacing for every versioned trigger, consume-
+time catalog/Automation/readiness/eligibility rechecks, and post-commit launch
+recovery limited to the plan-owned detail membership. Scheduler consumption
+always reloads the Automation with `SELECT ... FOR UPDATE`; legacy Run now
+fails with a structured review-required conflict instead of an unhandled 500;
+expired consumption rolls back unrelated Session mutations before persisting
+expiry; and cancellation/launch recovery locks running rows before release.
+
+Final verification covered 37 Dispatch Plan tests with three opt-in PostgreSQL
+tests skipped, plus 104 related Automation/runtime/pacing/cancellation tests
+with three skips. A disposable `crawl_control_cp6_test` PostgreSQL database ran
+three required transaction/concurrency scenarios: scheduled detail failure
+rolled back plan/execution/job/event/outbox/claims, two concurrent consumers
+produced exactly one consumed plan and one already-consumed error, and recovery
+row locking could not overwrite a concurrent terminal detail outcome. The full
+backend suite passed (`368 passed, 155 skipped`). Touched-file Ruff, focused
+mypy (8 source files), compileall, and `git diff --check` also passed.
 
 ### 7. Add Automation/plan/board APIs
 

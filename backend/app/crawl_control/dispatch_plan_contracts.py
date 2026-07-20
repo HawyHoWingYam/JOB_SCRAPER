@@ -27,6 +27,51 @@ DispatchTriggerKind: TypeAlias = Literal[
 ]
 
 
+class OneOffRunV1(FrozenContract):
+    """Operator-authored configuration reviewed into one immutable run."""
+
+    version: Literal[1] = 1
+    kind: Literal["one_off"] = "one_off"
+    scope: AuthoredCrawlScopeV1
+    listing_settings: ListingSettingsV1 | None = None
+    detail_settings: DetailSettingsV1 | None = None
+
+    @model_validator(mode="after")
+    def validate_execution_settings(self) -> OneOffRunV1:
+        if (self.listing_settings is None) == (self.detail_settings is None):
+            raise ValueError(
+                "One-off run requires exactly one Listing or Detail settings contract"
+            )
+        if self.detail_settings is not None:
+            if self.detail_settings.backlog_snapshot is not None:
+                raise ValueError(
+                    "One-off run cannot provide a pre-frozen backlog snapshot"
+                )
+            backlog_scope = self.detail_settings.backlog_scope
+            if backlog_scope.kind == "crawl_scope":
+                if backlog_scope.scope != self.scope:
+                    raise ValueError(
+                        "Detail crawl_scope must reuse the One-off Authored Scope"
+                    )
+            elif self.scope.mode != "all":
+                raise ValueError(
+                    "Source backlog and Listing Batch runs require all-source context"
+                )
+        return self
+
+
+class SavedAutomationRunV1(FrozenContract):
+    """Request to review the exact current revision of a saved Automation."""
+
+    version: Literal[1] = 1
+    kind: Literal["saved_automation"] = "saved_automation"
+    automation_id: UUID
+    expected_revision: int = Field(ge=1)
+
+
+DispatchPlanRunRequestV1: TypeAlias = OneOffRunV1 | SavedAutomationRunV1
+
+
 class DispatchPlanReadinessV1(FrozenContract):
     version: Literal[1] = 1
     status: Literal["ready", "blocked"]

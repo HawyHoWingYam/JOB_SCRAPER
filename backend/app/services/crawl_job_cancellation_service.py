@@ -52,7 +52,7 @@ class CrawlJobCancellationService:
                 return False
 
             timestamp = utc_now()
-            recovered_records = self._release_running_detail_rows(
+            recovered_records = self.release_running_detail_rows(
                 db,
                 crawl_job_id=crawl_job.id,
                 dispatch_plan_id=getattr(crawl_job, "dispatch_plan_id", None),
@@ -104,6 +104,23 @@ class CrawlJobCancellationService:
         finally:
             db.close()
 
+    def release_running_detail_rows(
+        self,
+        db,
+        *,
+        crawl_job_id,
+        dispatch_plan_id,
+        timestamp,
+    ) -> list[dict]:
+        """Release only still-running rows owned by one stopped Crawl Job."""
+
+        return self._release_running_detail_rows(
+            db,
+            crawl_job_id=crawl_job_id,
+            dispatch_plan_id=dispatch_plan_id,
+            timestamp=timestamp,
+        )
+
     @staticmethod
     def _release_running_detail_rows(
         db,
@@ -130,7 +147,7 @@ class CrawlJobCancellationService:
         rows = query.order_by(
             CrawlJobListing.created_at.asc(),
             CrawlJobListing.id.asc(),
-        ).all()
+        ).populate_existing().with_for_update().all()
         records: list[dict] = []
         for row in rows:
             row.detail_status = "pending"

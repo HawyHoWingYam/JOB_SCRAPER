@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+import os
+import threading
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, event, update
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 
+from app.api import schedules as schedules_api
+from app.crawl_control.automation_contracts import AutomationConfigurationV1
+from app.crawl_control.automation_repository import AutomationRepository
+from app.crawl_control.automation_service import AutomationService
 from app.crawl_control.contracts import (
     AuthoredCrawlScopeV1,
     DetailSettingsV1,
@@ -23,11 +32,15 @@ from app.crawl_control.dispatch_plan_contracts import (
     DispatchPlanContentV1,
     DispatchPlanReadinessV1,
     ExecutionResumeContextV1,
+    OneOffRunV1,
+    SavedAutomationRunV1,
 )
 from app.crawl_control.dispatch_plan_repository import DispatchPlanRepository
 from app.crawl_control.dispatch_plan_service import DispatchPlanService
 from app.crawl_control.detail_runtime import DetailBacklogSnapshotBuilder
 from app.crawl_control.errors import (
+    AutomationRevisionConflictError,
+    DetailRunConflictError,
     DispatchPlanAlreadyConsumedError,
     DispatchPlanExpiredError,
     DispatchPlanFingerprintMismatchError,
@@ -48,8 +61,18 @@ from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_execution import CrawlJobExecution
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.crawl_run import CrawlRun
-from app.models.schedule import ScheduleExecution, ScrapeSchedule
-from app.models.source_catalog import SourceCatalogCandidate, SourceCatalogRevision
+from app.models.event_outbox import EventOutbox
+from app.models.schedule import (
+    AutomationRevision,
+    ScheduleExecution,
+    ScrapeSchedule,
+)
+from app.models.scraper_pacing_settings import ScraperPacingSettings
+from app.models.source_catalog import (
+    SourceCatalogActiveRevision,
+    SourceCatalogCandidate,
+    SourceCatalogRevision,
+)
 from app.repositories.crawl_job_listing_repository import (
     CrawlJobListingRepository,
 )
@@ -57,7 +80,11 @@ from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.scraper.manual_action import build_session_recovery_manual_action
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.services.crawl_job_cancellation_service import CrawlJobCancellationService
-from app.services.crawl_job_execution_launcher import CrawlJobExecutionLauncher
+from app.services.crawl_job_execution_launcher import (
+    CrawlJobExecutionLauncher,
+    CrawlJobLaunchResult,
+)
+from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
 from app.services.crawl_job_runtime import CrawlJobRuntime
 from app.source_catalog.domain import SourceQueryTarget, payload_fingerprint
 
@@ -65,6 +92,25 @@ from app.source_catalog.domain import SourceQueryTarget, payload_fingerprint
 @compiles(PostgreSQLUUID, "sqlite")
 def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
     return "CHAR(32)"
+
+
+def _dispatch_test_tables():
+    return (
+        SourceCatalogCandidate.__table__,
+        SourceCatalogRevision.__table__,
+        SourceCatalogActiveRevision.__table__,
+        ScrapeSchedule.__table__,
+        AutomationRevision.__table__,
+        CrawlJob.__table__,
+        CrawlJobEvent.__table__,
+        CrawlJobExecution.__table__,
+        CrawlRun.__table__,
+        CrawlJobListing.__table__,
+        *CRAWL_DISPATCH_PLAN_TABLES,
+        ScheduleExecution.__table__,
+        EventOutbox.__table__,
+        ScraperPacingSettings.__table__,
+    )
 
 
 @pytest.fixture
@@ -77,22 +123,21 @@ def dispatch_db():
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
-    tables = (
-        SourceCatalogCandidate.__table__,
-        SourceCatalogRevision.__table__,
-        ScrapeSchedule.__table__,
-        CrawlJob.__table__,
-        CrawlJobEvent.__table__,
-        CrawlJobExecution.__table__,
-        CrawlRun.__table__,
-        CrawlJobListing.__table__,
-        *CRAWL_DISPATCH_PLAN_TABLES,
-        ScheduleExecution.__table__,
-    )
+    tables = _dispatch_test_tables()
     Base.metadata.create_all(engine, tables=tables)
     factory = sessionmaker(bind=engine)
     db = factory()
     revision = _create_catalog_revision(db)
+    db.add(
+        ScraperPacingSettings(
+            source_site="jobsdb",
+            interval_min_seconds=1,
+            interval_max_seconds=3,
+            burst_size=20,
+            burst_pause_seconds=30,
+        )
+    )
+    db.commit()
     try:
         yield engine, factory, db, revision
     finally:
@@ -100,10 +145,55 @@ def dispatch_db():
         engine.dispose()
 
 
-def _create_catalog_revision(db) -> SourceCatalogRevision:
+@pytest.fixture
+def postgres_dispatch_db():
+    database_url = os.getenv("CRAWL_CONTROL_POSTGRES_TEST_URL")
+    if not database_url:
+        pytest.skip(
+            "CRAWL_CONTROL_POSTGRES_TEST_URL is required for PostgreSQL evidence"
+        )
+    database_name = make_url(database_url).database
+    if database_name is None or not database_name.endswith("_test"):
+        raise RuntimeError(
+            "CRAWL_CONTROL_POSTGRES_TEST_URL database name must end in _test"
+        )
+
+    engine = create_engine(database_url, pool_pre_ping=True)
+    tables = _dispatch_test_tables()
+    Base.metadata.drop_all(engine, tables=tables, checkfirst=True)
+    Base.metadata.create_all(engine, tables=tables)
+    factory = sessionmaker(bind=engine)
+    db = factory()
+    revision = _create_catalog_revision(db)
+    db.add(
+        ScraperPacingSettings(
+            source_site="jobsdb",
+            interval_min_seconds=1,
+            interval_max_seconds=3,
+            burst_size=20,
+            burst_pause_seconds=30,
+        )
+    )
+    db.commit()
+    try:
+        yield engine, factory, db, revision
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine, tables=tables, checkfirst=True)
+        engine.dispose()
+
+
+def _create_catalog_revision(
+    db,
+    *,
+    sequence: int = 1,
+    activate: bool = True,
+) -> SourceCatalogRevision:
+    candidate_fingerprint = f"{sequence:064x}"
+    revision_fingerprint = f"{sequence + 1000:064x}"
     candidate = SourceCatalogCandidate(
         source_site="jobsdb",
-        fingerprint="c" * 64,
+        fingerprint=candidate_fingerprint,
         normalized_payload={"version": 1, "nodes": []},
         source_payload={"categories": []},
         provenance={"method": "fixture"},
@@ -115,8 +205,8 @@ def _create_catalog_revision(db) -> SourceCatalogRevision:
     db.flush()
     revision = SourceCatalogRevision(
         source_site="jobsdb",
-        sequence=1,
-        fingerprint="d" * 64,
+        sequence=sequence,
+        fingerprint=revision_fingerprint,
         normalized_payload={"version": 1, "nodes": []},
         source_payload={"categories": []},
         provenance={"method": "fixture"},
@@ -125,6 +215,20 @@ def _create_catalog_revision(db) -> SourceCatalogRevision:
         published_by="operator@example.com",
     )
     db.add(revision)
+    db.flush()
+    if activate:
+        pointer = db.get(SourceCatalogActiveRevision, "jobsdb")
+        if pointer is None:
+            db.add(
+                SourceCatalogActiveRevision(
+                    source_site="jobsdb",
+                    revision_id=revision.id,
+                    updated_by="operator@example.com",
+                )
+            )
+        else:
+            pointer.revision_id = revision.id
+            pointer.updated_by = "operator@example.com"
     db.commit()
     db.refresh(revision)
     return revision
@@ -235,6 +339,179 @@ def _service(db, now: list[datetime], *, repository=None) -> DispatchPlanService
         repository=repository,
         clock=lambda: now[0],
         token_factory=lambda: "confirmation-token-0123456789",
+    )
+
+
+class _FixtureScopeService:
+    def __init__(self, revision: SourceCatalogRevision) -> None:
+        self.resolved_scope = _resolved_scope(revision)
+
+    def preview(self, scope, *, listing_settings=None):
+        assert scope == self.resolved_scope.authored_scope
+        return SimpleNamespace(
+            resolved_scope=self.resolved_scope,
+            listing_workload=None,
+        )
+
+    def resolve_for_run(self, scope, *, listing_settings=None):
+        assert scope == self.resolved_scope.authored_scope
+        return self.resolved_scope
+
+
+class _MutableRuntimeReadiness:
+    def __init__(self) -> None:
+        self.available = True
+
+    def __call__(self, *, crawl_mode, source_site) -> None:
+        if not self.available:
+            raise HeadedCrawlWorkerUnavailableError(
+                f"{source_site}:{crawl_mode} runtime unavailable"
+            )
+
+
+class _NoopLauncher:
+    def __init__(self, *, launch_locally: bool = True) -> None:
+        self.launch_locally = launch_locally
+        self.launched_job_ids: list[UUID] = []
+
+    def should_launch_locally(self, _crawl_job) -> bool:
+        return self.launch_locally
+
+    def launch(self, crawl_job) -> CrawlJobLaunchResult:
+        self.launched_job_ids.append(crawl_job.id)
+        return CrawlJobLaunchResult(
+            launched=self.launch_locally,
+            command=["fixture-launch"] if self.launch_locally else None,
+        )
+
+
+class _AssertingOutboxPublisher:
+    def __init__(self, factory) -> None:
+        self.factory = factory
+        self.published_row_ids: list[int] = []
+        self.pending_batches = 0
+
+    def publish_row(self, _db, *, row):
+        verification_db = self.factory()
+        try:
+            plan = verification_db.query(CrawlDispatchPlan).one()
+            assert plan.state == "consumed"
+            assert verification_db.query(CrawlJobEvent).count() == 1
+            assert verification_db.query(EventOutbox).count() == 1
+        finally:
+            verification_db.close()
+        self.published_row_ids.append(row.id)
+        return row
+
+    def publish_pending_batch(self, _db, *, limit):
+        assert limit == 100
+        self.pending_batches += 1
+        return []
+
+
+class _NoopOutboxPublisher:
+    def publish_row(self, _db, *, row):
+        return row
+
+    def publish_pending_batch(self, _db, *, limit):
+        assert limit == 100
+        return []
+
+
+class _FailingEventCrawlJobRepository(CrawlJobRepository):
+    def append_event(self, *args, **kwargs):
+        raise RuntimeError("injected requested-event failure")
+
+
+class _TrackingAutomationRepository(AutomationRepository):
+    def __init__(self) -> None:
+        self.locked_automation_ids: list[UUID] = []
+
+    def get(self, db, automation_id, *, for_update=False):
+        if for_update:
+            self.locked_automation_ids.append(automation_id)
+        return super().get(
+            db,
+            automation_id,
+            for_update=for_update,
+        )
+
+
+def _request_plan_service(
+    db,
+    now: list[datetime],
+    revision: SourceCatalogRevision,
+    *,
+    readiness_check=None,
+    automation_repository=None,
+) -> DispatchPlanService:
+    return DispatchPlanService(
+        db,
+        clock=lambda: now[0],
+        token_factory=lambda: "confirmation-token-0123456789",
+        scope_service=_FixtureScopeService(revision),
+        runtime_readiness_check=(
+            readiness_check or _MutableRuntimeReadiness()
+        ),
+        automation_repository=automation_repository,
+    )
+
+
+def _one_off_listing_run(revision: SourceCatalogRevision) -> OneOffRunV1:
+    return OneOffRunV1(
+        scope=_scope(revision.id),
+        listing_settings=ListingSettingsV1(
+            crawl_mode="headless",
+            page_depth=2,
+            run_page_cap=10,
+        ),
+    )
+
+
+def _one_off_detail_run(revision: SourceCatalogRevision) -> OneOffRunV1:
+    return OneOffRunV1(
+        scope=_scope(revision.id),
+        detail_settings=DetailSettingsV1.model_validate(
+            {
+                "crawl_mode": "headless",
+                "backlog_scope": {"kind": "source_backlog"},
+                "limit": {"kind": "stop_after", "detail_run_cap": 10},
+            }
+        ),
+    )
+
+
+def _listing_automation_configuration(
+    revision: SourceCatalogRevision,
+) -> AutomationConfigurationV1:
+    return AutomationConfigurationV1(
+        name="JobsDB listing",
+        cron_expression="0 4 * * *",
+        timezone="Asia/Hong_Kong",
+        scope=_scope(revision.id),
+        listing_settings=ListingSettingsV1(
+            crawl_mode="headless",
+            page_depth=2,
+            run_page_cap=10,
+        ),
+    )
+
+
+def _detail_automation_configuration(
+    revision: SourceCatalogRevision,
+) -> AutomationConfigurationV1:
+    return AutomationConfigurationV1(
+        name="JobsDB detail",
+        cron_expression="0 5 * * *",
+        timezone="Asia/Hong_Kong",
+        scope=_scope(revision.id),
+        detail_settings=DetailSettingsV1.model_validate(
+            {
+                "crawl_mode": "headless",
+                "backlog_scope": {"kind": "source_backlog"},
+                "limit": {"kind": "stop_after", "detail_run_cap": 10},
+            }
+        ),
     )
 
 
@@ -364,6 +641,8 @@ def test_expiry_is_durable_and_cleanup_deletes_only_expired_plans(dispatch_db):
         ttl=timedelta(minutes=1),
     )
     crawl_job = _create_linked_job(db, preparation)
+    pacing = db.get(ScraperPacingSettings, "jobsdb")
+    pacing.interval_min_seconds = 2
     now[0] += timedelta(minutes=2)
 
     with pytest.raises(DispatchPlanExpiredError) as expired:
@@ -374,6 +653,8 @@ def test_expiry_is_durable_and_cleanup_deletes_only_expired_plans(dispatch_db):
         )
     assert expired.value.code == "DISPATCH_PLAN_EXPIRED"
     assert service.get(preparation.plan.plan_id).state == "expired"
+    db.expire_all()
+    assert db.get(ScraperPacingSettings, "jobsdb").interval_min_seconds == 1
 
     db.delete(crawl_job)
     db.commit()
@@ -1385,3 +1666,949 @@ def test_versioned_resume_cannot_rewrite_compatibility_payload(dispatch_db):
     assert crawl_job.status == "manual_action_required"
     assert crawl_job.request_payload == original_payload
     assert crawl_job.resume_context is None
+
+
+def test_one_off_detail_dispatch_commits_plan_job_event_outbox_and_claims_before_publish(
+    dispatch_db,
+):
+    _engine, factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    source_listing_job = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "listing"},
+        status="completed",
+    )
+    row = _staging_row(
+        source_job_id="job-atomic",
+        crawl_job_id=source_listing_job.id,
+        created_at=now[0] - timedelta(minutes=1),
+    )
+    db.add(row)
+    db.commit()
+
+    readiness = _MutableRuntimeReadiness()
+    plan_service = _request_plan_service(
+        db,
+        now,
+        revision,
+        readiness_check=readiness,
+    )
+    preparation = plan_service.prepare_run(
+        _one_off_detail_run(revision),
+        prepared_by="operator@example.com",
+    )
+    assert preparation.plan.state == "prepared"
+    assert preparation.confirmation_token is not None
+
+    pacing_snapshot = {
+        "interval_min_seconds": 1.0,
+        "interval_max_seconds": 3.0,
+        "burst_size": 20,
+        "burst_pause_seconds": 30.0,
+    }
+    db.query(ScraperPacingSettings).filter_by(source_site="jobsdb").update(
+        {"interval_min_seconds": 5, "interval_max_seconds": 7}
+    )
+    db.commit()
+
+    launcher = _NoopLauncher(launch_locally=False)
+    publisher = _AssertingOutboxPublisher(factory)
+    dispatch_service = CrawlJobDispatchService(
+        execution_launcher=launcher,
+        outbox_publisher=publisher,
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+            readiness_check=readiness,
+        ),
+    )
+    result = dispatch_service.dispatch_prepared_plan(
+        db,
+        plan_id=preparation.plan.plan_id,
+        confirmation_token=preparation.confirmation_token,
+        requested_by="operator@example.com",
+    )
+
+    assert result.dispatch_plan is not None
+    assert result.dispatch_plan.state == "consumed"
+    assert result.schedule_execution is None
+    assert result.crawl_job.dispatch_plan_id == preparation.plan.plan_id
+    assert result.crawl_job.request_payload["detail_pacing"] == pacing_snapshot
+    assert launcher.launched_job_ids == [result.crawl_job.id]
+    assert len(publisher.published_row_ids) == 1
+    assert publisher.pending_batches == 1
+    event_row = db.query(CrawlJobEvent).filter_by(
+        crawl_job_id=result.crawl_job.id,
+        event_type="crawl.requested",
+    ).one()
+    assert event_row.payload["request_payload_authoritative"] is False
+    db.refresh(row)
+    assert row.detail_status == "running"
+    assert row.last_detail_crawl_job_id == result.crawl_job.id
+
+
+def test_expired_prepared_dispatch_rolls_back_unrelated_pending_mutations(
+    dispatch_db,
+):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    plan_service = _request_plan_service(db, now, revision)
+    preparation = plan_service.prepare_run(
+        _one_off_listing_run(revision),
+        prepared_by="operator@example.com",
+        ttl=timedelta(minutes=1),
+    )
+    pacing = db.get(ScraperPacingSettings, "jobsdb")
+    pacing.interval_min_seconds = 2
+    now[0] += timedelta(minutes=2)
+    dispatch_service = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    )
+
+    with pytest.raises(DispatchPlanExpiredError):
+        dispatch_service.dispatch_prepared_plan(
+            db,
+            plan_id=preparation.plan.plan_id,
+            confirmation_token=preparation.confirmation_token,
+            requested_by="operator@example.com",
+        )
+
+    db.expire_all()
+    assert db.get(ScraperPacingSettings, "jobsdb").interval_min_seconds == 1
+    assert db.get(CrawlDispatchPlan, preparation.plan.plan_id).state == "expired"
+    assert db.query(CrawlJob).count() == 0
+
+
+def test_prepared_dispatch_failure_rolls_back_job_event_plan_and_detail_claims(
+    dispatch_db,
+):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    source_listing_job = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "listing"},
+        status="completed",
+    )
+    row = _staging_row(
+        source_job_id="job-rollback",
+        crawl_job_id=source_listing_job.id,
+        created_at=now[0] - timedelta(minutes=1),
+    )
+    db.add(row)
+    db.commit()
+    plan_service = _request_plan_service(db, now, revision)
+    preparation = plan_service.prepare_run(
+        _one_off_detail_run(revision),
+        prepared_by="operator@example.com",
+    )
+    baseline_job_count = db.query(CrawlJob).count()
+
+    dispatch_service = CrawlJobDispatchService(
+        crawl_job_repository=_FailingEventCrawlJobRepository(),
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="injected requested-event failure"):
+        dispatch_service.dispatch_prepared_plan(
+            db,
+            plan_id=preparation.plan.plan_id,
+            confirmation_token=preparation.confirmation_token,
+            requested_by="operator@example.com",
+        )
+
+    db.expire_all()
+    assert plan_service.get(preparation.plan.plan_id).state == "prepared"
+    assert db.query(CrawlJob).count() == baseline_job_count
+    assert db.query(CrawlJobEvent).count() == 0
+    db.refresh(row)
+    assert row.detail_status == "pending"
+    assert row.last_detail_crawl_job_id is None
+
+
+def test_post_commit_launch_failure_releases_only_claimed_detail_membership(
+    dispatch_db,
+):
+    _engine, factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    source_listing_job = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "listing"},
+        status="completed",
+    )
+    row = _staging_row(
+        source_job_id="job-launch-failure",
+        crawl_job_id=source_listing_job.id,
+        created_at=now[0] - timedelta(minutes=1),
+    )
+    unrelated = _staging_row(
+        source_job_id="job-unrelated-running",
+        crawl_job_id=source_listing_job.id,
+        created_at=now[0] + timedelta(seconds=1),
+        detail_status="running",
+    )
+    db.add_all([row, unrelated])
+    db.commit()
+    plan_service = _request_plan_service(db, now, revision)
+    preparation = plan_service.prepare_run(
+        _one_off_detail_run(revision),
+        prepared_by="operator@example.com",
+    )
+
+    def fail_popen(*_args, **_kwargs):
+        raise OSError("process unavailable")
+
+    launcher = CrawlJobExecutionLauncher(
+        session_factory=factory,
+        popen=fail_popen,
+    )
+    dispatch_service = CrawlJobDispatchService(
+        execution_launcher=launcher,
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    )
+    with pytest.raises(OSError, match="process unavailable"):
+        dispatch_service.dispatch_prepared_plan(
+            db,
+            plan_id=preparation.plan.plan_id,
+            confirmation_token=preparation.confirmation_token,
+            requested_by="operator@example.com",
+        )
+
+    db.expire_all()
+    plan = db.get(CrawlDispatchPlan, preparation.plan.plan_id)
+    assert plan.state == "consumed"
+    crawl_job = db.get(CrawlJob, plan.crawl_job_id)
+    assert crawl_job.status == "failed"
+    db.refresh(row)
+    db.refresh(unrelated)
+    assert row.detail_status == "pending"
+    assert row.last_detail_crawl_job_id == crawl_job.id
+    assert unrelated.detail_status == "running"
+    recovery = db.query(CrawlJobEvent).filter_by(
+        crawl_job_id=crawl_job.id,
+        event_type="crawl.detail_launch_failed_recovered",
+    ).one()
+    assert recovery.payload["records"][0]["listing_id"] == str(row.id)
+
+
+def test_prepared_dispatch_rejects_catalog_revision_drift_but_consumed_run_survives_later_publication(
+    dispatch_db,
+):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    plan_service = _request_plan_service(db, now, revision)
+    stale_preparation = plan_service.prepare_run(
+        _one_off_listing_run(revision),
+        prepared_by="operator@example.com",
+    )
+    second_revision = _create_catalog_revision(db, sequence=2)
+    dispatch_service = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    )
+    with pytest.raises(DispatchPlanStaleError) as stale:
+        dispatch_service.dispatch_prepared_plan(
+            db,
+            plan_id=stale_preparation.plan.plan_id,
+            confirmation_token=stale_preparation.confirmation_token,
+            requested_by="operator@example.com",
+        )
+    assert stale.value.context["reason"] == "catalog_revision_changed"
+    assert plan_service.get(stale_preparation.plan.plan_id).state == "prepared"
+
+    pointer = db.get(SourceCatalogActiveRevision, "jobsdb")
+    pointer.revision_id = revision.id
+    db.commit()
+    preparation = plan_service.prepare_run(
+        _one_off_listing_run(revision),
+        prepared_by="operator@example.com",
+    )
+    result = dispatch_service.dispatch_prepared_plan(
+        db,
+        plan_id=preparation.plan.plan_id,
+        confirmation_token=preparation.confirmation_token,
+        requested_by="operator@example.com",
+    )
+    pointer = db.get(SourceCatalogActiveRevision, "jobsdb")
+    pointer.revision_id = second_revision.id
+    db.commit()
+
+    authority = DispatchPlanService(db).load_execution_authority(
+        result.crawl_job.id
+    )
+    assert authority is not None
+    assert authority.dispatch_plan.content.catalog_revision_id == revision.id
+
+
+def test_prepared_detail_dispatch_rechecks_eligibility_and_active_conflict(
+    dispatch_db,
+):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    source_listing_job = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "listing"},
+        status="completed",
+    )
+    row = _staging_row(
+        source_job_id="job-stale",
+        crawl_job_id=source_listing_job.id,
+        created_at=now[0] - timedelta(minutes=1),
+    )
+    db.add(row)
+    db.commit()
+    plan_service = _request_plan_service(db, now, revision)
+    eligibility_plan = plan_service.prepare_run(
+        _one_off_detail_run(revision),
+        prepared_by="operator@example.com",
+    )
+    row.detail_status = "failed"
+    db.commit()
+    dispatch_service = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    )
+    with pytest.raises(DispatchPlanStaleError) as eligibility_stale:
+        dispatch_service.dispatch_prepared_plan(
+            db,
+            plan_id=eligibility_plan.plan.plan_id,
+            confirmation_token=eligibility_plan.confirmation_token,
+            requested_by="operator@example.com",
+        )
+    assert eligibility_stale.value.context["reason"] == (
+        "detail_target_eligibility_changed"
+    )
+
+    row.detail_status = "pending"
+    row.updated_at = now[0]
+    db.commit()
+    conflict_plan = plan_service.prepare_run(
+        _one_off_detail_run(revision),
+        prepared_by="operator@example.com",
+    )
+    conflict_job = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "detail"},
+        status="running",
+    )
+    with pytest.raises(DetailRunConflictError) as conflict:
+        dispatch_service.dispatch_prepared_plan(
+            db,
+            plan_id=conflict_plan.plan.plan_id,
+            confirmation_token=conflict_plan.confirmation_token,
+            requested_by="operator@example.com",
+        )
+    assert conflict.value.context["crawl_job_id"] == str(conflict_job.id)
+    assert plan_service.get(conflict_plan.plan.plan_id).state == "prepared"
+
+
+def test_prepared_dispatch_rechecks_runtime_readiness(dispatch_db):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    readiness = _MutableRuntimeReadiness()
+    plan_service = _request_plan_service(
+        db,
+        now,
+        revision,
+        readiness_check=readiness,
+    )
+    preparation = plan_service.prepare_run(
+        _one_off_listing_run(revision),
+        prepared_by="operator@example.com",
+    )
+    readiness.available = False
+    dispatch_service = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+            readiness_check=readiness,
+        ),
+    )
+
+    with pytest.raises(DispatchPlanStaleError) as stale:
+        dispatch_service.dispatch_prepared_plan(
+            db,
+            plan_id=preparation.plan.plan_id,
+            confirmation_token=preparation.confirmation_token,
+            requested_by="operator@example.com",
+        )
+    assert stale.value.context["reason"] == "runtime_readiness_changed"
+    assert plan_service.get(preparation.plan.plan_id).state == "prepared"
+
+
+def test_saved_automation_plan_rechecks_revision_and_preserves_execution_snapshot(
+    dispatch_db,
+):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    scope_service = _FixtureScopeService(revision)
+    automation_service = AutomationService(db, scope_service=scope_service)
+    created = automation_service.create(
+        _listing_automation_configuration(revision),
+        actor="operator@example.com",
+        initial_state="paused",
+    )
+    automation_id = created.snapshot.automation_id
+    plan_service = _request_plan_service(db, now, revision)
+    stale_preparation = plan_service.prepare_run(
+        SavedAutomationRunV1(
+            automation_id=automation_id,
+            expected_revision=1,
+        ),
+        prepared_by="operator@example.com",
+    )
+    automation_service.update_configuration(
+        automation_id,
+        expected_revision=1,
+        configuration=_listing_automation_configuration(revision).model_copy(
+            update={"name": "JobsDB listing v2"}
+        ),
+        actor="operator@example.com",
+    )
+    dispatch_service = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    )
+    with pytest.raises(AutomationRevisionConflictError):
+        dispatch_service.dispatch_prepared_plan(
+            db,
+            plan_id=stale_preparation.plan.plan_id,
+            confirmation_token=stale_preparation.confirmation_token,
+            requested_by="operator@example.com",
+        )
+
+    current = db.get(ScrapeSchedule, automation_id)
+    preparation = plan_service.prepare_run(
+        SavedAutomationRunV1(
+            automation_id=automation_id,
+            expected_revision=current.revision,
+        ),
+        prepared_by="operator@example.com",
+    )
+    result = dispatch_service.dispatch_prepared_plan(
+        db,
+        plan_id=preparation.plan.plan_id,
+        confirmation_token=preparation.confirmation_token,
+        requested_by="operator@example.com",
+    )
+    assert result.schedule_execution is not None
+    assert result.schedule_execution.automation_id_snapshot == automation_id
+    assert result.schedule_execution.automation_revision == current.revision
+    assert result.schedule_execution.dispatch_plan_id == preparation.plan.plan_id
+    assert result.schedule_execution.automation_snapshot["revision"] == (
+        current.revision
+    )
+
+
+def test_saved_detail_automation_plan_freezes_pacing_before_confirmation(
+    dispatch_db,
+):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    source_listing_job = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "listing"},
+        status="completed",
+    )
+    db.add(
+        _staging_row(
+            source_job_id="saved-detail-pacing",
+            crawl_job_id=source_listing_job.id,
+            created_at=now[0] - timedelta(minutes=1),
+        )
+    )
+    db.commit()
+    created = AutomationService(
+        db,
+        scope_service=_FixtureScopeService(revision),
+    ).create(
+        _detail_automation_configuration(revision),
+        actor="operator@example.com",
+        initial_state="paused",
+    )
+    plan_service = _request_plan_service(db, now, revision)
+    preparation = plan_service.prepare_run(
+        SavedAutomationRunV1(
+            automation_id=created.snapshot.automation_id,
+            expected_revision=created.snapshot.revision,
+        ),
+        prepared_by="operator@example.com",
+    )
+    assert DispatchPlanService.detail_pacing_payload(preparation.plan) == {
+        "interval_min_seconds": 1.0,
+        "interval_max_seconds": 3.0,
+        "burst_size": 20,
+        "burst_pause_seconds": 30.0,
+    }
+
+    db.query(ScraperPacingSettings).filter_by(source_site="jobsdb").update(
+        {"interval_min_seconds": 5, "interval_max_seconds": 7}
+    )
+    db.commit()
+    result = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    ).dispatch_prepared_plan(
+        db,
+        plan_id=preparation.plan.plan_id,
+        confirmation_token=preparation.confirmation_token,
+        requested_by="operator@example.com",
+    )
+
+    assert result.crawl_job.request_payload["detail_pacing"] == {
+        "interval_min_seconds": 1.0,
+        "interval_max_seconds": 3.0,
+        "burst_size": 20,
+        "burst_pause_seconds": 30.0,
+    }
+
+
+def test_scheduled_versioned_automation_prepares_and_consumes_in_one_transaction(
+    dispatch_db,
+):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    scope_service = _FixtureScopeService(revision)
+    created = AutomationService(db, scope_service=scope_service).create(
+        _listing_automation_configuration(revision),
+        actor="operator@example.com",
+        initial_state="active",
+    )
+    schedule = db.get(ScrapeSchedule, created.snapshot.automation_id)
+    dispatch_service = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    )
+    result = dispatch_service.dispatch_schedule_crawl_job(
+        db,
+        schedule=schedule,
+    )
+
+    assert result.dispatch_plan is not None
+    assert result.dispatch_plan.state == "consumed"
+    assert result.dispatch_plan.content.trigger_kind == "scheduled_automation"
+    assert result.dispatch_plan.confirmation_required is False
+    assert result.schedule_execution is not None
+    assert result.schedule_execution.crawl_job_id == result.crawl_job.id
+    assert result.schedule_execution.dispatch_plan_id == (
+        result.dispatch_plan.plan_id
+    )
+    db.refresh(schedule)
+    assert schedule.last_run_at.replace(tzinfo=UTC) == now[0]
+
+
+def test_scheduled_versioned_dispatch_reloads_automation_for_update(dispatch_db):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    created = AutomationService(
+        db,
+        scope_service=_FixtureScopeService(revision),
+    ).create(
+        _listing_automation_configuration(revision),
+        actor="operator@example.com",
+        initial_state="active",
+    )
+    schedule = db.get(ScrapeSchedule, created.snapshot.automation_id)
+    tracking_repository = _TrackingAutomationRepository()
+    dispatch_service = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+            automation_repository=tracking_repository,
+        ),
+    )
+
+    dispatch_service.dispatch_schedule_crawl_job(db, schedule=schedule)
+
+    assert tracking_repository.locked_automation_ids == [schedule.id]
+
+
+def test_scheduled_detail_automation_freezes_pacing_in_atomic_dispatch(dispatch_db):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    source_listing_job = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "listing"},
+        status="completed",
+    )
+    db.add(
+        _staging_row(
+            source_job_id="scheduled-detail-pacing",
+            crawl_job_id=source_listing_job.id,
+            created_at=now[0] - timedelta(minutes=1),
+        )
+    )
+    db.commit()
+    created = AutomationService(
+        db,
+        scope_service=_FixtureScopeService(revision),
+    ).create(
+        _detail_automation_configuration(revision),
+        actor="operator@example.com",
+        initial_state="active",
+    )
+    schedule = db.get(ScrapeSchedule, created.snapshot.automation_id)
+    result = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    ).dispatch_schedule_crawl_job(db, schedule=schedule)
+
+    assert result.dispatch_plan is not None
+    assert DispatchPlanService.detail_pacing_payload(result.dispatch_plan) == {
+        "interval_min_seconds": 1.0,
+        "interval_max_seconds": 3.0,
+        "burst_size": 20,
+        "burst_pause_seconds": 30.0,
+    }
+    assert result.crawl_job.request_payload["detail_pacing"] == {
+        "interval_min_seconds": 1.0,
+        "interval_max_seconds": 3.0,
+        "burst_size": 20,
+        "burst_pause_seconds": 30.0,
+    }
+
+
+def test_versioned_schedule_run_now_returns_structured_review_required_conflict(
+    dispatch_db,
+):
+    _engine, _factory, db, revision = dispatch_db
+    created = AutomationService(
+        db,
+        scope_service=_FixtureScopeService(revision),
+    ).create(
+        _listing_automation_configuration(revision),
+        actor="operator@example.com",
+        initial_state="active",
+    )
+    baseline_plan_count = db.query(CrawlDispatchPlan).count()
+    baseline_job_count = db.query(CrawlJob).count()
+
+    with pytest.raises(HTTPException) as response:
+        asyncio.run(
+            schedules_api.run_schedule_now(
+                created.snapshot.automation_id,
+                SimpleNamespace(state=SimpleNamespace(request_id="test-request")),
+                db,
+            )
+        )
+
+    assert response.value.status_code == 409
+    assert response.value.detail == {
+        "code": "DISPATCH_PLAN_REVIEW_REQUIRED",
+        "message": (
+            "Versioned Automation runs require Dispatch Plan review and confirmation"
+        ),
+        "context": {
+            "automation_id": str(created.snapshot.automation_id),
+            "expected_revision": 1,
+            "action": "prepare_saved_automation_run",
+        },
+    }
+    assert db.query(CrawlDispatchPlan).count() == baseline_plan_count
+    assert db.query(CrawlJob).count() == baseline_job_count
+
+
+def test_scheduled_versioned_dispatch_failure_rolls_back_plan_and_run_artifacts(
+    dispatch_db,
+):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    scope_service = _FixtureScopeService(revision)
+    created = AutomationService(db, scope_service=scope_service).create(
+        _listing_automation_configuration(revision),
+        actor="operator@example.com",
+        initial_state="active",
+    )
+    schedule = db.get(ScrapeSchedule, created.snapshot.automation_id)
+    dispatch_service = CrawlJobDispatchService(
+        crawl_job_repository=_FailingEventCrawlJobRepository(),
+        execution_launcher=_NoopLauncher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="injected requested-event failure"):
+        dispatch_service.dispatch_schedule_crawl_job(
+            db,
+            schedule=schedule,
+        )
+
+    db.expire_all()
+    assert db.query(CrawlDispatchPlan).count() == 0
+    assert db.query(ScheduleExecution).count() == 0
+    assert db.query(CrawlJob).count() == 0
+    assert db.query(CrawlJobEvent).count() == 0
+    assert db.get(ScrapeSchedule, created.snapshot.automation_id).last_run_at is None
+
+
+def test_postgres_scheduled_detail_failure_rolls_back_every_dispatch_artifact(
+    postgres_dispatch_db,
+):
+    _engine, _factory, db, revision = postgres_dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    source_listing_job = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "listing"},
+        status="completed",
+    )
+    row = _staging_row(
+        source_job_id="postgres-scheduled-rollback",
+        crawl_job_id=source_listing_job.id,
+        created_at=now[0] - timedelta(minutes=1),
+    )
+    db.add(row)
+    db.commit()
+    baseline_job_count = db.query(CrawlJob).count()
+    created = AutomationService(
+        db,
+        scope_service=_FixtureScopeService(revision),
+    ).create(
+        _detail_automation_configuration(revision),
+        actor="operator@example.com",
+        initial_state="active",
+    )
+    schedule = db.get(ScrapeSchedule, created.snapshot.automation_id)
+    dispatch_service = CrawlJobDispatchService(
+        crawl_job_repository=_FailingEventCrawlJobRepository(),
+        execution_launcher=_NoopLauncher(),
+        outbox_publisher=_NoopOutboxPublisher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="injected requested-event failure"):
+        dispatch_service.dispatch_schedule_crawl_job(db, schedule=schedule)
+
+    db.expire_all()
+    assert db.query(CrawlDispatchPlan).count() == 0
+    assert db.query(ScheduleExecution).count() == 0
+    assert db.query(CrawlJob).count() == baseline_job_count
+    assert db.query(CrawlJobEvent).count() == 0
+    assert db.query(EventOutbox).count() == 0
+    assert db.get(CrawlJobListing, row.id).detail_status == "pending"
+    assert db.get(CrawlJobListing, row.id).last_detail_crawl_job_id is None
+    assert db.get(ScrapeSchedule, created.snapshot.automation_id).last_run_at is None
+
+
+def test_postgres_concurrent_dispatch_consumes_one_versioned_plan_once(
+    postgres_dispatch_db,
+):
+    _engine, factory, db, revision = postgres_dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    revision_snapshot = SimpleNamespace(
+        id=revision.id,
+        fingerprint=revision.fingerprint,
+    )
+    preparation = _request_plan_service(db, now, revision_snapshot).prepare_run(
+        _one_off_listing_run(revision_snapshot),
+        prepared_by="operator@example.com",
+    )
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+    failures: list[BaseException] = []
+
+    def dispatch() -> None:
+        with factory() as thread_db:
+            service = CrawlJobDispatchService(
+                execution_launcher=_NoopLauncher(launch_locally=False),
+                outbox_publisher=_NoopOutboxPublisher(),
+                dispatch_plan_service_factory=(
+                    lambda current_db: _request_plan_service(
+                        current_db,
+                        now,
+                        revision_snapshot,
+                    )
+                ),
+            )
+            try:
+                barrier.wait(timeout=5)
+                service.dispatch_prepared_plan(
+                    thread_db,
+                    plan_id=preparation.plan.plan_id,
+                    confirmation_token=preparation.confirmation_token,
+                    requested_by="operator@example.com",
+                )
+                outcomes.append("consumed")
+            except DispatchPlanAlreadyConsumedError:
+                outcomes.append("already_consumed")
+            except BaseException as exc:  # pragma: no cover - diagnostic capture
+                failures.append(exc)
+
+    threads = [threading.Thread(target=dispatch) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert failures == []
+    assert sorted(outcomes) == ["already_consumed", "consumed"]
+    db.expire_all()
+    plan = db.get(CrawlDispatchPlan, preparation.plan.plan_id)
+    assert plan.state == "consumed"
+    assert db.query(CrawlJob).count() == 1
+    assert db.query(CrawlJobEvent).count() == 1
+    assert db.query(EventOutbox).count() == 1
+
+
+def test_postgres_recovery_lock_cannot_overwrite_concurrent_terminal_outcome(
+    postgres_dispatch_db,
+):
+    _engine, factory, db, revision = postgres_dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    source_listing_job = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "listing"},
+        status="completed",
+    )
+    row = _staging_row(
+        source_job_id="postgres-recovery-lock",
+        crawl_job_id=source_listing_job.id,
+        created_at=now[0] - timedelta(minutes=1),
+    )
+    db.add(row)
+    db.commit()
+    preparation = _request_plan_service(db, now, revision).prepare_run(
+        _one_off_detail_run(revision),
+        prepared_by="operator@example.com",
+    )
+    result = CrawlJobDispatchService(
+        execution_launcher=_NoopLauncher(),
+        outbox_publisher=_NoopOutboxPublisher(),
+        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
+            current_db,
+            now,
+            revision,
+        ),
+    ).dispatch_prepared_plan(
+        db,
+        plan_id=preparation.plan.plan_id,
+        confirmation_token=preparation.confirmation_token,
+        requested_by="operator@example.com",
+    )
+    row_id = row.id
+    crawl_job_id = result.crawl_job.id
+    plan_id = result.dispatch_plan.plan_id
+    db.rollback()
+
+    recovery_locked = threading.Event()
+    release_recovery = threading.Event()
+    completion_finished = threading.Event()
+    failures: list[BaseException] = []
+
+    def recover() -> None:
+        with factory() as recovery_db:
+            try:
+                records = CrawlJobCancellationService().release_running_detail_rows(
+                    recovery_db,
+                    crawl_job_id=crawl_job_id,
+                    dispatch_plan_id=plan_id,
+                    timestamp=now[0],
+                )
+                assert [record["listing_id"] for record in records] == [
+                    str(row_id)
+                ]
+                recovery_locked.set()
+                assert release_recovery.wait(timeout=5)
+                recovery_db.commit()
+            except BaseException as exc:  # pragma: no cover - diagnostic capture
+                failures.append(exc)
+                recovery_locked.set()
+
+    def complete() -> None:
+        assert recovery_locked.wait(timeout=5)
+        with factory() as completion_db:
+            try:
+                CrawlJobListingRepository().mark_detail_completed(
+                    completion_db,
+                    listing_id=row_id,
+                    detail_crawl_job_id=crawl_job_id,
+                )
+                completion_finished.set()
+            except BaseException as exc:  # pragma: no cover - diagnostic capture
+                failures.append(exc)
+
+    recovery_thread = threading.Thread(target=recover)
+    completion_thread = threading.Thread(target=complete)
+    recovery_thread.start()
+    completion_thread.start()
+    assert recovery_locked.wait(timeout=5)
+    try:
+        assert not completion_finished.wait(timeout=0.2)
+    finally:
+        release_recovery.set()
+    recovery_thread.join(timeout=10)
+    completion_thread.join(timeout=10)
+
+    assert not recovery_thread.is_alive()
+    assert not completion_thread.is_alive()
+    assert failures == []
+    db.expire_all()
+    settled = db.get(CrawlJobListing, row_id)
+    assert settled.detail_status == "completed"
+    assert settled.last_detail_crawl_job_id == crawl_job_id

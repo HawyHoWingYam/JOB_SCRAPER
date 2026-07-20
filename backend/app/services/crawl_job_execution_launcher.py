@@ -134,8 +134,14 @@ class CrawlJobExecutionLauncher:
                 command=command,
             )
             db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
+            self._mark_launch_failed(generation)
+            self._settle_launch_failure(
+                crawl_job_id=crawl_job.id,
+                generation=generation,
+                error=exc,
+            )
             raise
         finally:
             db.close()
@@ -499,6 +505,19 @@ class CrawlJobExecutionLauncher:
                 should_acknowledge = crawl_job.status == "cancelling"
                 db.commit()
             else:
+                timestamp = utc_now()
+                recovered_records = (
+                    self._cancellation_service.release_running_detail_rows(
+                        db,
+                        crawl_job_id=crawl_job.id,
+                        dispatch_plan_id=getattr(
+                            crawl_job,
+                            "dispatch_plan_id",
+                            None,
+                        ),
+                        timestamp=timestamp,
+                    )
+                )
                 self._crawl_job_repository.record_runtime_event(
                     db,
                     crawl_job_id=crawl_job_id,
@@ -510,12 +529,22 @@ class CrawlJobExecutionLauncher:
                         "status": "failed",
                         "reason": message,
                         "execution_generation": generation,
+                        "released_detail_rows": len(recovered_records),
                     },
                     emitted_by="crawl-execution-launcher",
-                    completed_at=utc_now(),
+                    completed_at=timestamp,
                     error_message=message,
                     auto_commit=False,
                 )
+                if recovered_records:
+                    self._crawl_job_repository.append_event(
+                        db,
+                        crawl_job_id=crawl_job.id,
+                        event_type="crawl.detail_launch_failed_recovered",
+                        payload={"records": recovered_records},
+                        emitted_by="crawl-execution-launcher",
+                        auto_commit=False,
+                    )
                 db.commit()
         except Exception:
             db.rollback()

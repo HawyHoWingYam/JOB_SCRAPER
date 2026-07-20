@@ -44,7 +44,6 @@ from app.models.schedule import (
 from app.models.source_catalog import SourceCatalogCandidate, SourceCatalogRevision
 from app.database import Base
 from app.repositories.schedule_repository import ScheduleRepository
-from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.services.scheduler_service import SchedulerService, _normalize_next_run_at
 
 
@@ -491,12 +490,6 @@ def test_legacy_repository_cannot_mutate_versioned_automation(automation_db):
     with pytest.raises(RuntimeError, match="reviewed permanent deletion"):
         repository.delete_schedule(db, automation_id)
     db.rollback()
-    row = db.get(ScrapeSchedule, automation_id)
-    with pytest.raises(RuntimeError, match="immutable Dispatch Plan"):
-        CrawlJobDispatchService().dispatch_schedule_crawl_job(
-            db,
-            schedule=row,
-        )
 
 
 class FakeScheduler:

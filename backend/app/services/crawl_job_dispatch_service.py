@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -14,10 +14,16 @@ from app.crawl_cancellation import (
 from app.crawl_phases import resolve_crawl_phase, resolve_detail_statuses
 from app.crawl_modes import normalize_source_site, resolve_crawl_mode
 from app.crawl_control.dispatch_plan_contracts import (
+    DispatchPlanSnapshotV1,
     ExecutionAuthorityV1,
     ExecutionResumeContextV1,
+    SavedAutomationRunV1,
 )
 from app.crawl_control.dispatch_plan_service import DispatchPlanService
+from app.crawl_control.errors import (
+    DispatchPlanExpiredError,
+    DispatchPlanReviewRequiredError,
+)
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.topics import STREAM_CRAWL_COMMANDS, STREAM_CRAWL_COMMANDS_HEADED
 from app.models.crawl_job import CrawlJob
@@ -60,6 +66,7 @@ def resolve_resume_detail_statuses(classification: str | None) -> list[str]:
 class CrawlJobDispatchResult:
     crawl_job: CrawlJob
     schedule_execution: ScheduleExecution | None
+    dispatch_plan: DispatchPlanSnapshotV1 | None = None
 
 
 class CrawlJobDispatchService:
@@ -73,6 +80,9 @@ class CrawlJobDispatchService:
         outbox_publisher: OutboxPublisher | None = None,
         schedule_repository: ScheduleRepository | None = None,
         execution_launcher: CrawlJobExecutionLauncher | None = None,
+        dispatch_plan_service_factory: (
+            Callable[[Session], DispatchPlanService] | None
+        ) = None,
     ):
         self.crawl_job_repository = crawl_job_repository or CrawlJobRepository()
         self.event_outbox_repository = event_outbox_repository or EventOutboxRepository()
@@ -80,6 +90,9 @@ class CrawlJobDispatchService:
         self.schedule_repository = schedule_repository or ScheduleRepository()
         self.execution_launcher = execution_launcher or CrawlJobExecutionLauncher()
         self.execution_repository = CrawlJobExecutionRepository()
+        self._dispatch_plan_service_factory = (
+            dispatch_plan_service_factory or DispatchPlanService
+        )
 
     def build_manual_request_payload(
         self,
@@ -196,8 +209,32 @@ class CrawlJobDispatchService:
         trigger_type: str = "schedule",
     ) -> CrawlJobDispatchResult:
         if schedule.scope_contract is not None:
-            raise RuntimeError(
-                "Versioned Automations require an immutable Dispatch Plan"
+            if trigger_type != "schedule":
+                raise DispatchPlanReviewRequiredError(
+                    automation_id=schedule.id,
+                    expected_revision=int(schedule.revision),
+                )
+            plan_service = self._dispatch_plan_service_factory(db)
+            try:
+                preparation = plan_service.prepare_run(
+                    SavedAutomationRunV1(
+                        automation_id=schedule.id,
+                        expected_revision=int(schedule.revision),
+                    ),
+                    prepared_by=requested_by,
+                    trigger_kind="scheduled_automation",
+                    auto_commit=False,
+                    automation=schedule,
+                )
+            except Exception:
+                db.rollback()
+                raise
+            return self.dispatch_prepared_plan(
+                db,
+                plan_id=preparation.plan.plan_id,
+                confirmation_token=None,
+                requested_by=requested_by,
+                automation=schedule,
             )
         schedule.last_run_at = utc_now()
         return self.dispatch_crawl_job(
@@ -207,6 +244,162 @@ class CrawlJobDispatchService:
             request_payload=self.build_schedule_request_payload(schedule=schedule),
             requested_by=requested_by,
             schedule=schedule,
+        )
+
+    def dispatch_prepared_plan(
+        self,
+        db: Session,
+        *,
+        plan_id,
+        confirmation_token: str | None,
+        requested_by: str | None = None,
+        expected_plan_fingerprint: str | None = None,
+        automation: ScrapeSchedule | None = None,
+    ) -> CrawlJobDispatchResult:
+        """Consume a reviewed plan and create every durable run artifact once."""
+
+        plan_service = self._dispatch_plan_service_factory(db)
+        command_row = None
+        try:
+            plan, prepared_snapshot = plan_service.lock_prepared_for_dispatch(
+                plan_id,
+                confirmation_token=confirmation_token,
+                expected_plan_fingerprint=expected_plan_fingerprint,
+            )
+            plan_service.lock_current_catalog(prepared_snapshot)
+            locked_automation, automation_snapshot = (
+                plan_service.lock_current_automation(
+                    prepared_snapshot,
+                    automation=automation,
+                )
+            )
+            plan_service.revalidate_runtime_readiness(prepared_snapshot)
+
+            request_payload = self._build_versioned_request_payload(
+                prepared_snapshot
+            )
+            schedule_id = (
+                locked_automation.id if locked_automation is not None else None
+            )
+            trigger_type = (
+                "schedule"
+                if prepared_snapshot.content.trigger_kind
+                == "scheduled_automation"
+                else "manual"
+            )
+            crawl_job = self.crawl_job_repository.create_crawl_job(
+                db,
+                source_site=prepared_snapshot.content.source_site,
+                trigger_type=trigger_type,
+                request_payload=request_payload,
+                requested_by=requested_by,
+                schedule_id=schedule_id,
+                dispatch_plan_id=prepared_snapshot.plan_id,
+                dispatch_plan_fingerprint=(
+                    prepared_snapshot.plan_fingerprint
+                ),
+                status="queued",
+                auto_commit=False,
+            )
+            execution = None
+            if locked_automation is not None:
+                expected_revision = (
+                    prepared_snapshot.content.expected_automation_revision
+                )
+                assert expected_revision is not None
+                assert automation_snapshot is not None
+                execution = self.schedule_repository.create_execution(
+                    db,
+                    schedule_id=locked_automation.id,
+                    status="pending",
+                    crawl_job_id=crawl_job.id,
+                    automation_id_snapshot=locked_automation.id,
+                    automation_revision=expected_revision,
+                    automation_snapshot=automation_snapshot,
+                    dispatch_plan_id=prepared_snapshot.plan_id,
+                    dispatch_plan_fingerprint=(
+                        prepared_snapshot.plan_fingerprint
+                    ),
+                    auto_commit=False,
+                )
+                execution.request_payload_snapshot = dict(request_payload)
+
+            plan_service.claim_detail_membership(
+                prepared_snapshot,
+                crawl_job_id=crawl_job.id,
+            )
+            consumed_snapshot = plan_service.mark_consumed_in_transaction(
+                plan,
+                prepared_snapshot,
+                crawl_job=crawl_job,
+            )
+            if locked_automation is not None:
+                assert consumed_snapshot.consumed_at is not None
+                locked_automation.last_run_at = consumed_snapshot.consumed_at
+            authority = ExecutionAuthorityV1(
+                crawl_job_id=crawl_job.id,
+                dispatch_plan=consumed_snapshot,
+            )
+            event_payload = self._build_requested_event_payload(
+                crawl_job,
+                execution_authority=authority,
+            )
+            self.crawl_job_repository.append_event(
+                db,
+                crawl_job_id=crawl_job.id,
+                event_type="crawl.requested",
+                payload=event_payload,
+                emitted_by=requested_by or trigger_type,
+                auto_commit=False,
+            )
+            if self._should_enqueue_command(
+                source_site=crawl_job.source_site,
+                payload=request_payload,
+            ):
+                command_row = self.event_outbox_repository.enqueue(
+                    db,
+                    topic=self._resolve_command_topic(
+                        source_site=crawl_job.source_site,
+                        crawl_mode=request_payload.get("crawl_mode"),
+                    ),
+                    aggregate_type="crawl_job",
+                    aggregate_id=str(crawl_job.id),
+                    event_type="crawl.requested",
+                    payload=event_payload,
+                    auto_commit=False,
+                )
+
+            db.commit()
+            db.refresh(crawl_job)
+            if execution is not None:
+                db.refresh(execution)
+        except DispatchPlanExpiredError:
+            plan_service.persist_expired_plan_after_rollback(plan_id)
+            raise
+        except Exception:
+            db.rollback()
+            raise
+
+        launch_result = self.execution_launcher.launch(crawl_job)
+        if command_row is not None:
+            self.outbox_publisher.publish_row(db, row=command_row)
+            self.outbox_publisher.publish_pending_batch(db, limit=100)
+        logger.info(
+            "SCRAPE_DISPATCHED source=%s crawl_job_id=%s phase=%s mode=%s "
+            "trigger=%s dispatch_plan_id=%s launched=%s command=%s",
+            crawl_job.source_site,
+            crawl_job.id,
+            prepared_snapshot.content.crawl_phase,
+            request_payload.get("crawl_mode"),
+            trigger_type,
+            consumed_snapshot.plan_id,
+            launch_result.launched,
+            " ".join(launch_result.command or []),
+        )
+        return CrawlJobDispatchResult(
+            crawl_job=crawl_job,
+            schedule_execution=execution,
+            dispatch_plan=consumed_snapshot,
         )
 
     def dispatch_crawl_job(
@@ -679,6 +872,62 @@ class CrawlJobDispatchService:
             "status": crawl_job.status,
             "queued_at": crawl_job.queued_at.isoformat() if crawl_job.queued_at else None,
         }
+
+    @staticmethod
+    def _build_versioned_request_payload(
+        snapshot: DispatchPlanSnapshotV1,
+    ) -> dict[str, Any]:
+        content = snapshot.content
+        settings_contract = content.listing_settings or content.detail_settings
+        assert settings_contract is not None
+        payload: dict[str, Any] = {
+            "source_site": content.source_site,
+            "crawl_phase": content.crawl_phase,
+            "crawl_mode": settings_contract.crawl_mode,
+            "dispatch_plan_id": str(snapshot.plan_id),
+            "dispatch_plan_fingerprint": snapshot.plan_fingerprint,
+            "catalog_revision_id": str(content.catalog_revision_id),
+            "category_ids": [
+                selected.classification_id
+                for selected in content.resolved_scope.selected_classifications
+            ],
+            "skip_existing": False,
+        }
+        if content.listing_settings is not None:
+            payload.update(
+                {
+                    "max_pages": content.listing_settings.page_depth,
+                    "page_depth": content.listing_settings.page_depth,
+                    "run_page_cap": content.listing_settings.run_page_cap,
+                }
+            )
+            return payload
+
+        detail_settings = content.detail_settings
+        assert detail_settings is not None
+        backlog_scope = detail_settings.backlog_scope
+        detail_scope = backlog_scope.kind
+        if detail_scope == "source_backlog":
+            detail_scope = "global"
+        payload.update(
+            {
+                "detail_scope": detail_scope,
+                "detail_limit": snapshot.detail_target_count,
+                "detail_statuses": list(
+                    dict.fromkeys(
+                        target.eligibility_status for target in snapshot.targets
+                    )
+                ),
+            }
+        )
+        if backlog_scope.kind == "listing_batch":
+            payload["source_listing_crawl_job_id"] = str(
+                backlog_scope.source_listing_crawl_job_id
+            )
+        pacing = DispatchPlanService.detail_pacing_payload(snapshot)
+        if pacing is not None:
+            payload["detail_pacing"] = pacing
+        return payload
 
     def _resolve_command_topic(self, *, source_site: str, crawl_mode: str | None) -> str:
         effective_mode = resolve_crawl_mode(source_site, crawl_mode)

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.crawl_jobs import _build_crawl_request_created_log_message
+from app.crawl_control.errors import CrawlControlError
 from app.crawl_phases import resolve_crawl_phase
 from app.database import get_db
 from app.repositories.schedule_repository import ScheduleRepository
@@ -36,6 +37,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 repository = ScheduleRepository()
 crawl_job_dispatch_service = CrawlJobDispatchService()
+
+
+def _crawl_control_http_error(exc: CrawlControlError) -> HTTPException:
+    status_code = {
+        "AUTOMATION_NOT_FOUND": status.HTTP_404_NOT_FOUND,
+        "DISPATCH_PLAN_NOT_FOUND": status.HTTP_404_NOT_FOUND,
+        "SCOPE_RULE_INVALID": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "WORKLOAD_CAP_EXCEEDED": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "BACKLOG_SAFETY_CAP_EXCEEDED": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "AUTOMATION_REVISION_CONFLICT": status.HTTP_409_CONFLICT,
+        "AUTOMATION_TRANSITION_INVALID": status.HTTP_409_CONFLICT,
+        "DETAIL_RUN_CONFLICT": status.HTTP_409_CONFLICT,
+        "DISPATCH_PLAN_REVIEW_REQUIRED": status.HTTP_409_CONFLICT,
+        "DISPATCH_PLAN_EXPIRED": status.HTTP_409_CONFLICT,
+        "DISPATCH_PLAN_STALE": status.HTTP_409_CONFLICT,
+        "DISPATCH_PLAN_ALREADY_CONSUMED": status.HTTP_409_CONFLICT,
+    }.get(exc.code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+    return HTTPException(status_code=status_code, detail=exc.to_detail())
 
 
 async def _validate_effective_category_ids(
@@ -114,6 +133,8 @@ async def run_immediate_scrape(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+    except CrawlControlError as exc:
+        raise _crawl_control_http_error(exc) from exc
     return dispatch_result.crawl_job
 
 
@@ -266,6 +287,8 @@ async def run_schedule_now(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+    except CrawlControlError as exc:
+        raise _crawl_control_http_error(exc) from exc
     request_id = getattr(getattr(request, "state", None), "request_id", None)
     resolved_request_payload = dict(getattr(dispatch_result.crawl_job, "request_payload", {}) or {})
     logger.info(
