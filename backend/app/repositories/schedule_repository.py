@@ -13,7 +13,7 @@ from uuid import UUID
 from app.crawl_phases import resolve_crawl_phase
 from app.crawl_modes import resolve_crawl_mode
 from app.models.crawl_job import CrawlJob
-from app.models.schedule import ScrapeSchedule, ScheduleExecution
+from app.models.schedule import AutomationRevision, ScrapeSchedule, ScheduleExecution
 from app.schemas.schedule import normalize_source_site
 from app.services.source_catalog import is_supported_source_site
 from app.utils.time import utc_now
@@ -56,7 +56,7 @@ class ScheduleRepository:
         """Get all active schedules."""
         return (
             db.query(ScrapeSchedule)
-            .filter(ScrapeSchedule.is_active == True)
+            .filter(ScrapeSchedule.lifecycle_state == "active")
             .all()
         )
 
@@ -66,6 +66,18 @@ class ScheduleRepository:
         """Get schedule by ID."""
         return db.query(ScrapeSchedule).filter(ScrapeSchedule.id == schedule_id).first()
 
+    def get_schedule_by_id_for_update(
+        self, db: Session, schedule_id: UUID
+    ) -> Optional[ScrapeSchedule]:
+        """Lock one schedule so revision/lifecycle validation fences dispatch."""
+        return (
+            db.query(ScrapeSchedule)
+            .filter(ScrapeSchedule.id == schedule_id)
+            .populate_existing()
+            .with_for_update()
+            .one_or_none()
+        )
+
     def create_schedule(
         self, db: Session, schedule_data: dict
     ) -> ScrapeSchedule:
@@ -74,6 +86,10 @@ class ScheduleRepository:
             schedule_data = dict(schedule_data)
             schedule_data.setdefault("source_site", "jobsdb")
             schedule_data = self._normalize_source_site_and_activation(schedule_data)
+            is_active = bool(schedule_data.get("is_active", True))
+            schedule_data["is_active"] = is_active
+            schedule_data["lifecycle_state"] = "active" if is_active else "paused"
+            schedule_data["revision"] = 1
             schedule = ScrapeSchedule(**schedule_data)
             db.add(schedule)
             db.commit()
@@ -90,9 +106,13 @@ class ScheduleRepository:
     ) -> Optional[ScrapeSchedule]:
         """Update an existing schedule."""
         try:
-            schedule = self.get_schedule_by_id(db, schedule_id)
+            schedule = self.get_schedule_by_id_for_update(db, schedule_id)
             if not schedule:
                 return None
+            if schedule.scope_contract is not None:
+                raise RuntimeError(
+                    "Versioned Automations must be updated through AutomationService"
+                )
 
             update_data = dict(update_data)
             # Explicit null should not mutate the existing source_site.
@@ -107,6 +127,11 @@ class ScheduleRepository:
                 if hasattr(schedule, key) and (value is not None or key == "category_ids"):
                     setattr(schedule, key, value)
 
+            schedule.lifecycle_state = (
+                "active" if bool(schedule.is_active) else "paused"
+            )
+            schedule.revision = int(schedule.revision or 1) + 1
+
             db.commit()
             db.refresh(schedule)
             logger.info(f"Updated schedule: {schedule.name}")
@@ -119,9 +144,13 @@ class ScheduleRepository:
     def delete_schedule(self, db: Session, schedule_id: UUID) -> bool:
         """Delete a schedule."""
         try:
-            schedule = self.get_schedule_by_id(db, schedule_id)
+            schedule = self.get_schedule_by_id_for_update(db, schedule_id)
             if not schedule:
                 return False
+            if schedule.scope_contract is not None:
+                raise RuntimeError(
+                    "Versioned Automations require archive and reviewed permanent deletion"
+                )
 
             db.delete(schedule)
             db.commit()
@@ -136,14 +165,20 @@ class ScheduleRepository:
         self, db: Session, schedule_id: UUID
     ) -> Optional[ScrapeSchedule]:
         """Toggle schedule active status."""
-        schedule = self.get_schedule_by_id(db, schedule_id)
+        schedule = self.get_schedule_by_id_for_update(db, schedule_id)
         if not schedule:
             return None
+        if schedule.scope_contract is not None:
+            raise RuntimeError(
+                "Versioned Automations must use explicit lifecycle transitions"
+            )
 
         if not is_supported_source_site(normalize_source_site(getattr(schedule, "source_site", "jobsdb"))):
             schedule.is_active = False
         else:
             schedule.is_active = not schedule.is_active
+        schedule.lifecycle_state = "active" if schedule.is_active else "paused"
+        schedule.revision = int(schedule.revision or 1) + 1
         db.commit()
         db.refresh(schedule)
         return schedule
@@ -310,12 +345,22 @@ class ScheduleRepository:
         schedule_id: UUID,
         status: str = "pending",
         crawl_job_id: UUID | None = None,
+        automation_id_snapshot: UUID | None = None,
+        automation_revision: int | None = None,
+        automation_snapshot: dict | None = None,
         auto_commit: bool = True,
     ) -> ScheduleExecution:
         """Create a new execution record."""
         execution = ScheduleExecution(
             schedule_id=schedule_id,
             crawl_job_id=crawl_job_id,
+            automation_id_snapshot=automation_id_snapshot,
+            automation_revision=automation_revision,
+            automation_snapshot=(
+                dict(automation_snapshot)
+                if automation_snapshot is not None
+                else None
+            ),
             status=status,
             started_at=utc_now(),
         )
@@ -326,6 +371,23 @@ class ScheduleRepository:
         else:
             db.flush()
         return execution
+
+    def get_automation_revision_snapshot(
+        self,
+        db: Session,
+        *,
+        automation_id: UUID,
+        revision: int,
+    ) -> dict | None:
+        row = (
+            db.query(AutomationRevision)
+            .filter(
+                AutomationRevision.automation_id == automation_id,
+                AutomationRevision.revision == revision,
+            )
+            .one_or_none()
+        )
+        return dict(row.snapshot) if row is not None else None
 
     def update_execution(
         self, db: Session, execution_id: UUID, update_data: dict

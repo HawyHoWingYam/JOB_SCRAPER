@@ -34,13 +34,22 @@ def _normalize_next_run_at(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     if value.tzinfo is None:
-        return value
-    return value.astimezone(UTC).replace(tzinfo=None)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
-async def run_scheduled_crawl_job(schedule_id: str, *, trigger_type: str = "schedule"):
+async def run_scheduled_crawl_job(
+    schedule_id: str,
+    registered_revision: int | None = None,
+    *,
+    trigger_type: str = "schedule",
+):
     """Serializable APScheduler entrypoint that dispatches a persisted schedule."""
-    return await SchedulerService.get_instance()._dispatch_schedule(UUID(str(schedule_id)), trigger_type=trigger_type)
+    return await SchedulerService.get_instance()._dispatch_schedule(
+        UUID(str(schedule_id)),
+        registered_revision=registered_revision,
+        trigger_type=trigger_type,
+    )
 
 
 class SchedulerService:
@@ -143,7 +152,13 @@ class SchedulerService:
         try:
             schedules = self.repository.get_active_schedules(db)
             for schedule in schedules:
-                if normalize_source_site(getattr(schedule, "source_site", "jobsdb")) == "ctgoodjobs":
+                if (
+                    schedule.scope_contract is None
+                    and normalize_source_site(
+                        getattr(schedule, "source_site", "jobsdb")
+                    )
+                    == "ctgoodjobs"
+                ):
                     is_valid, validation_error, should_deactivate = self._validate_ctgoodjobs_schedule_shape(
                         schedule
                     )
@@ -154,7 +169,7 @@ class SchedulerService:
                             validation_error,
                         )
                         if should_deactivate and getattr(schedule, "is_active", False):
-                            self.repository.update_schedule(db, schedule.id, {"is_active": False})
+                            self._deactivate_invalid_legacy_schedule(schedule)
                         continue
 
                     self._add_job(schedule, db=db, ctgoodjobs_validated=True)
@@ -222,6 +237,8 @@ class SchedulerService:
         """Add or replace a job in the scheduler."""
         if self.scheduler is None:
             return False
+        if getattr(schedule, "lifecycle_state", "paused") != "active":
+            return False
 
         source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
         if not is_supported_source_site(source_site):
@@ -232,7 +249,11 @@ class SchedulerService:
             )
             return False
 
-        if source_site == "ctgoodjobs" and not ctgoodjobs_validated:
+        if (
+            schedule.scope_contract is None
+            and source_site == "ctgoodjobs"
+            and not ctgoodjobs_validated
+        ):
             is_valid, validation_error, should_deactivate = self._validate_ctgoodjobs_schedule(schedule)
             if not is_valid:
                 logger.info(
@@ -241,7 +262,7 @@ class SchedulerService:
                     validation_error,
                 )
                 if should_deactivate and db is not None and getattr(schedule, "is_active", False):
-                    self.repository.update_schedule(db, schedule.id, {"is_active": False})
+                    self._deactivate_invalid_legacy_schedule(schedule)
                 return False
 
         try:
@@ -253,7 +274,7 @@ class SchedulerService:
                 run_scheduled_crawl_job,
                 trigger=trigger,
                 id=str(schedule.id),
-                args=[str(schedule.id)],
+                args=[str(schedule.id), int(schedule.revision)],
                 replace_existing=True,
             )
             if db is not None:
@@ -278,7 +299,7 @@ class SchedulerService:
 
             for schedule in active_schedules:
                 source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
-                if source_site == "ctgoodjobs":
+                if schedule.scope_contract is None and source_site == "ctgoodjobs":
                     is_valid, validation_error, should_deactivate = self._validate_ctgoodjobs_schedule_shape(schedule)
                     if not is_valid:
                         logger.info(
@@ -287,7 +308,7 @@ class SchedulerService:
                             validation_error,
                         )
                         if should_deactivate and getattr(schedule, "is_active", False):
-                            self.repository.update_schedule(db, schedule.id, {"is_active": False})
+                            self._deactivate_invalid_legacy_schedule(schedule)
                         schedule.next_run_at = None
                         db.add(schedule)
                         continue
@@ -326,6 +347,13 @@ class SchedulerService:
             raise
         finally:
             db.close()
+
+    @staticmethod
+    def _deactivate_invalid_legacy_schedule(schedule: ScrapeSchedule) -> None:
+        schedule.is_active = False
+        schedule.lifecycle_state = "paused"
+        schedule.next_run_at = None
+        schedule.revision = int(schedule.revision or 1) + 1
 
     def _write_runtime_heartbeat(self, *, status: str, last_error: str | None = None) -> None:
         db = SessionLocal()
@@ -368,14 +396,50 @@ class SchedulerService:
         finally:
             db.close()
 
-    async def _dispatch_schedule(self, schedule_id: UUID, *, trigger_type: str = "schedule"):
+    async def _dispatch_schedule(
+        self,
+        schedule_id: UUID,
+        *,
+        registered_revision: int | None = None,
+        trigger_type: str = "schedule",
+    ):
         """Dispatch a scheduled crawl request into the durable crawl job control plane."""
         db = SessionLocal()
+        request_reconcile = False
         try:
-            schedule = self.repository.get_schedule_by_id(db, schedule_id)
+            schedule = self.repository.get_schedule_by_id_for_update(db, schedule_id)
             if not schedule:
                 logger.error("Schedule not found: %s", schedule_id)
+                request_reconcile = trigger_type == "schedule"
                 return None
+
+            if trigger_type == "schedule" and (
+                registered_revision is None
+                or int(schedule.revision) != int(registered_revision)
+                or schedule.lifecycle_state != "active"
+            ):
+                logger.info(
+                    "Skipping stale scheduler callback schedule_id=%s "
+                    "registered_revision=%s current_revision=%s lifecycle=%s",
+                    schedule_id,
+                    registered_revision,
+                    schedule.revision,
+                    schedule.lifecycle_state,
+                )
+                request_reconcile = True
+                return None
+            if trigger_type != "schedule" and schedule.lifecycle_state in {
+                "archived",
+                "scope_review_required",
+            }:
+                logger.info(
+                    "Skipping manual Automation dispatch schedule_id=%s lifecycle=%s",
+                    schedule_id,
+                    schedule.lifecycle_state,
+                )
+                return None
+            # Paused blocks cron dispatch only. An explicit manual "Run saved
+            # configuration" remains allowed; archive/review states do not.
 
             source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
             if not is_supported_source_site(source_site):
@@ -401,10 +465,24 @@ class SchedulerService:
             return None
         finally:
             db.close()
+            if request_reconcile:
+                self._request_reconcile()
+
+    def _request_reconcile(self) -> None:
+        if not self._initialized or self.scheduler is None:
+            return
+        try:
+            asyncio.create_task(self.reconcile_schedules())
+        except RuntimeError:
+            return
 
     async def _execute_scrape(self, schedule_id: UUID):
         """Backward-compatible alias for schedule dispatch during the worker cutover."""
-        return await self._dispatch_schedule(schedule_id)
+        return await self._dispatch_schedule(
+            schedule_id,
+            registered_revision=None,
+            trigger_type="schedule",
+        )
 
     # ============== Public Methods ==============
 
@@ -412,7 +490,7 @@ class SchedulerService:
         """Add a new schedule to the scheduler."""
         if not is_supported_source_site(normalize_source_site(getattr(schedule, "source_site", "jobsdb"))):
             return
-        if schedule.is_active:
+        if schedule.lifecycle_state == "active":
             self._add_job(schedule)
 
     def remove_schedule(self, schedule_id: UUID):
@@ -429,12 +507,16 @@ class SchedulerService:
         self.remove_schedule(schedule.id)
         if not is_supported_source_site(normalize_source_site(getattr(schedule, "source_site", "jobsdb"))):
             return
-        if schedule.is_active:
+        if schedule.lifecycle_state == "active":
             self._add_job(schedule)
 
     async def run_now(self, schedule_id: UUID):
         """Run a schedule immediately."""
-        return await self._dispatch_schedule(schedule_id, trigger_type="manual")
+        return await self._dispatch_schedule(
+            schedule_id,
+            registered_revision=None,
+            trigger_type="manual",
+        )
 
     def shutdown(self):
         """Shutdown the scheduler."""

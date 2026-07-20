@@ -97,6 +97,7 @@ The resolver traverses the normalized published revision itself: all mode begins
 ```json
 {
   "version": 1,
+  "crawl_mode": "headless",
   "backlog_scope": {
     "kind": "crawl_scope",
     "scope": {}

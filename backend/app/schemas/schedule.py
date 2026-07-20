@@ -161,6 +161,16 @@ class ScheduleSchema(BaseModel):
     location: Optional[str]
     max_pages: int
     detail_limit: int
+    revision: int
+    lifecycle_state: str
+    scope_contract: dict | None = None
+    listing_page_depth: int | None = None
+    listing_run_page_cap: int | None = None
+    detail_run_cap: int | None = None
+    detail_limit_kind: str | None = None
+    detail_backlog_scope: dict | None = None
+    scope_review_reason: dict | None = None
+    archived_at: datetime | None = None
     is_active: bool
     last_run_at: Optional[datetime]
     next_run_at: Optional[datetime]
@@ -195,7 +205,7 @@ class ExecutionSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    schedule_id: UUID
+    schedule_id: UUID | None
     crawl_job_id: Optional[UUID]
     status: str
     started_at: datetime
@@ -220,6 +230,9 @@ class ExecutionSchema(BaseModel):
     jobs_classified: int
     error_message: Optional[str]
     request_payload_snapshot: dict | None = None
+    automation_id_snapshot: UUID | None = None
+    automation_revision: int | None = None
+    automation_snapshot: dict | None = None
     created_at: datetime
 
 
@@ -294,4 +307,3 @@ class ImmediateScrapeRequest(BaseModel):
         self.crawl_mode = validated.crawl_mode
         self.category_ids = validated.category_ids
         return self
-

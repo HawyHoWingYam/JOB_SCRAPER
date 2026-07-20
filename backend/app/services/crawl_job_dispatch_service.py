@@ -190,6 +190,10 @@ class CrawlJobDispatchService:
         requested_by: str = "scheduler-worker",
         trigger_type: str = "schedule",
     ) -> CrawlJobDispatchResult:
+        if schedule.scope_contract is not None:
+            raise RuntimeError(
+                "Versioned Automations require an immutable Dispatch Plan"
+            )
         schedule.last_run_at = utc_now()
         return self.dispatch_crawl_job(
             db,
@@ -197,7 +201,7 @@ class CrawlJobDispatchService:
             trigger_type=trigger_type,
             request_payload=self.build_schedule_request_payload(schedule=schedule),
             requested_by=requested_by,
-            schedule_id=schedule.id,
+            schedule=schedule,
         )
 
     def dispatch_crawl_job(
@@ -209,8 +213,13 @@ class CrawlJobDispatchService:
         request_payload: dict[str, Any],
         requested_by: str | None = None,
         schedule_id=None,
+        schedule: ScrapeSchedule | None = None,
         schedule_execution: ScheduleExecution | None = None,
     ) -> CrawlJobDispatchResult:
+        if schedule is not None:
+            if schedule_id is not None and schedule_id != schedule.id:
+                raise ValueError("Schedule object and schedule_id differ")
+            schedule_id = schedule.id
         payload = dict(request_payload)
         payload["crawl_phase"] = resolve_crawl_phase(payload.get("crawl_phase"))
         payload["crawl_mode"] = resolve_crawl_mode(source_site, payload.get("crawl_mode"))
@@ -220,10 +229,28 @@ class CrawlJobDispatchService:
 
         execution = schedule_execution
         if schedule_id is not None and execution is None:
+            automation_snapshot = None
+            automation_revision = None
+            if schedule is not None and schedule.scope_contract is not None:
+                automation_revision = int(schedule.revision)
+                automation_snapshot = (
+                    self.schedule_repository.get_automation_revision_snapshot(
+                        db,
+                        automation_id=schedule.id,
+                        revision=automation_revision,
+                    )
+                )
+                if automation_snapshot is None:
+                    raise RuntimeError(
+                        "Versioned Automation revision snapshot is missing"
+                    )
             execution = self.schedule_repository.create_execution(
                 db,
                 schedule_id=schedule_id,
                 status="pending",
+                automation_id_snapshot=schedule_id,
+                automation_revision=automation_revision,
+                automation_snapshot=automation_snapshot,
                 auto_commit=False,
             )
 
@@ -263,6 +290,8 @@ class CrawlJobDispatchService:
                 auto_commit=False,
             )
 
+        # This commit is the dispatch boundary. Lifecycle edits after it affect
+        # future runs only; the durable queued run owns its frozen snapshot.
         db.commit()
         db.refresh(crawl_job)
         if execution is not None:
@@ -590,4 +619,3 @@ class CrawlJobDispatchService:
             },
         )()
         return not self.execution_launcher.should_launch_locally(crawl_job)
-

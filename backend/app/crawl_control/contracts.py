@@ -322,6 +322,7 @@ DetailRunLimitV1: TypeAlias = Annotated[
 
 class DetailSettingsV1(FrozenContract):
     version: Literal[1] = 1
+    crawl_mode: Literal["headless", "headed"]
     backlog_scope: DetailBacklogScopeV1
     limit: DetailRunLimitV1
 

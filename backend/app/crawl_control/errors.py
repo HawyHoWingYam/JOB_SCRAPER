@@ -78,3 +78,53 @@ class WorkloadCapExceededError(CrawlControlError):
                 "system_run_page_cap": system_run_page_cap,
             },
         )
+
+
+class AutomationNotFoundError(CrawlControlError):
+    def __init__(self, automation_id: Any) -> None:
+        super().__init__(
+            "AUTOMATION_NOT_FOUND",
+            "Automation was not found",
+            context={"automation_id": str(automation_id)},
+        )
+
+
+class AutomationRevisionConflictError(CrawlControlError):
+    def __init__(
+        self,
+        *,
+        automation_id: Any,
+        expected_revision: int,
+        current_revision: int,
+    ) -> None:
+        super().__init__(
+            "AUTOMATION_REVISION_CONFLICT",
+            "Automation revision changed before this mutation",
+            context={
+                "automation_id": str(automation_id),
+                "expected_revision": expected_revision,
+                "current_revision": current_revision,
+            },
+        )
+
+
+class AutomationTransitionInvalidError(CrawlControlError):
+    def __init__(
+        self,
+        *,
+        current_state: str,
+        operation: str,
+    ) -> None:
+        super().__init__(
+            "AUTOMATION_TRANSITION_INVALID",
+            "Automation lifecycle transition is not allowed",
+            context={
+                "current_state": current_state,
+                "operation": operation,
+            },
+        )
+
+
+class AutomationDeleteReviewStaleError(CrawlControlError):
+    def __init__(self, message: str) -> None:
+        super().__init__("AUTOMATION_DELETE_REVIEW_STALE", message)

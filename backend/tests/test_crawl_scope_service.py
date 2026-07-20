@@ -256,6 +256,7 @@ def _rule(kind: str, classification_id: str) -> CrawlScopeRuleV1:
 def _detail_settings() -> DetailSettingsV1:
     return DetailSettingsV1.model_validate(
         {
+            "crawl_mode": "headless",
             "backlog_scope": {"kind": "source_backlog"},
             "limit": {"kind": "stop_after", "detail_run_cap": 100},
         }
@@ -289,6 +290,7 @@ def test_authored_and_detail_contracts_require_explicit_versioned_shapes():
 
     settings = DetailSettingsV1.model_validate(
         {
+            "crawl_mode": "headless",
             "backlog_scope": {
                 "kind": "listing_batch",
                 "source_listing_crawl_job_id": str(uuid4()),
@@ -302,6 +304,7 @@ def test_authored_and_detail_contracts_require_explicit_versioned_shapes():
 
     source_backlog = DetailSettingsV1.model_validate(
         {
+            "crawl_mode": "headless",
             "backlog_scope": {"kind": "source_backlog"},
             "limit": {"kind": "entire_snapshot"},
         }
@@ -312,6 +315,7 @@ def test_authored_and_detail_contracts_require_explicit_versioned_shapes():
 
     crawl_scope = DetailSettingsV1.model_validate(
         {
+            "crawl_mode": "headless",
             "backlog_scope": {
                 "kind": "crawl_scope",
                 "scope": {
@@ -327,6 +331,7 @@ def test_authored_and_detail_contracts_require_explicit_versioned_shapes():
     with pytest.raises(ValidationError, match="union_tag_invalid"):
         DetailSettingsV1.model_validate(
             {
+                "crawl_mode": "headless",
                 "backlog_scope": {"kind": "newest_batch"},
                 "limit": {"kind": "entire_snapshot"},
             }
@@ -334,6 +339,7 @@ def test_authored_and_detail_contracts_require_explicit_versioned_shapes():
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         DetailSettingsV1.model_validate(
             {
+                "crawl_mode": "headless",
                 "backlog_scope": {"kind": "source_backlog", "category": 10},
                 "limit": {"kind": "entire_snapshot"},
             }

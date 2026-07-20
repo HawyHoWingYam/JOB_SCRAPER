@@ -14,15 +14,21 @@ Checkpoint commit: pure scope logic only.
 
 ### 2. Add Automation persistence/lifecycle
 
-- [ ] Extend current schedule model with revision/lifecycle/scope/settings/review/archive fields.
-- [ ] Add immutable `automation_revisions`.
-- [ ] Make Automation instant columns timezone-aware UTC while preserving the IANA cron timezone; cover non-HKT/DST serialization.
-- [ ] Add fresh metadata bootstrap and one existing-DB Alembic/convergence migration, then compare resulting tables/FKs/indexes for schema parity.
-- [ ] Implement compare-and-swap repository and valid transition table.
-- [ ] Change Schedule Execution's Automation FK to nullable `SET NULL`, add immutable execution snapshots, and define archived-only permanent-delete impact.
-- [ ] Implement create/update/pause/resume/archive/restore/delete-impact services plus eventually consistent scheduler reconciliation.
-- [ ] Make every due callback validate registered/current Automation Revision and active lifecycle under DB lock before dispatch; test stale/repeated reconcile and crash recovery.
-- [ ] Verify no lifecycle action mutates existing Schedule Execution/Crawl Job snapshots.
+- [x] Extend current schedule model with revision/lifecycle/scope/settings/review/archive fields.
+- [x] Add immutable `automation_revisions`.
+- [x] Make Automation instant columns timezone-aware UTC while preserving the IANA cron timezone; cover non-HKT/DST serialization.
+- [x] Add fresh metadata bootstrap and one existing-DB Alembic/convergence migration, then compare resulting tables/FKs/indexes for schema parity.
+- [x] Implement compare-and-swap repository and valid transition table.
+- [x] Change Schedule Execution's Automation FK to nullable `SET NULL`, add immutable execution snapshots, and define archived-only permanent-delete impact.
+- [x] Implement create/update/pause/resume/archive/restore/delete-impact services plus eventually consistent scheduler reconciliation.
+- [x] Make every due callback validate registered/current Automation Revision and active lifecycle under DB lock before dispatch; test stale/repeated reconcile and crash recovery.
+- [x] Verify no lifecycle action mutates existing Schedule Execution/Crawl Job snapshots.
+
+Checkpoint 2 verification used an isolated `job_scraper_automation_test` PostgreSQL
+database: a stamped current-schema fixture upgraded, downgraded, and upgraded again.
+The repository-wide migration chain still cannot bootstrap from an empty database
+because its historical base assumes `jobs` exists; checkpoint 9 retains that known
+fresh-baseline repair instead of hiding it with duplicate bootstrap DDL.
 
 Checkpoint commit: lifecycle backend, no cutover.
 
