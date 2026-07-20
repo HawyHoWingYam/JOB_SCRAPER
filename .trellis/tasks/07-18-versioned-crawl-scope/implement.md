@@ -187,7 +187,7 @@ Checkpoint: every Source has one active validated revision before cutover rehear
 - [x] Rehearse backup/restore and fresh DB bootstrap on disposable databases.
 - [x] Update `.gitignore` so all new migration/test artifacts are tracked.
 
-Checkpoint 9 replaces startup's ad-hoc convergence DDL with an explicit
+Checkpoint 9 replaced startup's ad-hoc convergence DDL with an explicit
 fresh-metadata/stamped-Alembic flow and adds head `20260720_210000`. The head
 converges the historical staging FK plus Source Catalog, Automation, and
 Dispatch Plan PostgreSQL guards; only a transaction-local maintenance setting
@@ -214,18 +214,40 @@ Catalog revisions, enrichment, and outbox rows; artifact SHA-256 was
 Focused regressions passed (`114 passed, 6 skipped`) and the full backend suite
 passed once (`394 passed, 158 skipped`). Touched Ruff, focused mypy,
 compileall, migration-head offline SQL, real downgrade/upgrade, and
-`git diff --check` passed. No live migration, service stop, publication, reset,
-or smoke was performed.
+`git diff --check` passed. This was the pre-rollout checkpoint; the separately
+approved live execution and acceptance evidence are recorded below.
 
 ### 10. Perform approved cutover
 
-- [ ] Obtain user/operations approval for maintenance execution; planning approval alone is not production cutover approval.
-- [ ] Stop scheduler/workers/outbox/API mutations and verify no external crawl remains.
-- [ ] Take backup and record preflight report.
-- [ ] Run reset transaction/script.
-- [ ] Verify preserved corpus/taxonomy/enrichment/catalog counts and FKs.
-- [ ] Restart services and create one bounded smoke Automation/One-off plan per Source.
-- [ ] Keep backup until full acceptance.
+- [x] Identify the live unstamped schema's candidate lineage as `20260718_120000` using read-only table/column/index evidence; record the fail-closed proof in `research/live-schema-lineage-preflight.md`.
+- [x] Obtain user/operations approval for maintenance execution; planning approval alone is not production cutover approval.
+- [x] Before touching live schema, restore the approved backup to a distinct `*_cutover_restore` database, stamp the clone at `20260718_120000`, upgrade it to `20260720_210000`, and require schema/FK/trigger/preserve-count parity.
+- [x] Stop scheduler/workers/outbox/API mutations and verify no external crawl remains.
+- [x] Take backup and record preflight report.
+- [x] Run reset transaction/script.
+- [x] Verify preserved corpus/taxonomy/enrichment/catalog counts and FKs.
+- [x] Restart services and create one bounded smoke Automation/One-off plan per Source.
+- [x] Keep backup until full acceptance.
+
+The user approved the exact phrase `批准执行 CP10 live rollout`. Live schema
+`jobsdb` reached `20260720_210000`; backup
+`jobsdb-crawl-control-20260720T144720Z-3a2fd136` has SHA-256
+`1d1b4274c5c4e4f421269e29028e03a2ebb498d9c61d3fa2d7b6f4849a856280`.
+The fenced ready report (`payload f2a14311...`, `report 9186c6c5...`) and reset
+(`payload 438b1c52...`) preserved 17,596 Jobs, 4,657 Companies, 8 enrichment
+runs, 4,042 embeddings, three published Catalog Revisions, and 10,310 unrelated
+outbox rows. Post-reset SQL independently confirmed the counts, schema, and the
+validated listing FK with `ON DELETE CASCADE`.
+
+JobsDB (`jobsdb:6281`) and CTgoodjobs (`ctgoodjobs:021`, headed) completed their
+one-target, one-page smoke plans. OfferToday consumed the immutable exact
+`offertoday:118000` plan, reported truthful `manual_action_required/ip_blocked`,
+and was cancelled through `crawl.cancel_requested -> crawl.cancelled` without
+an IP bypass, retry, categoryless query, or detail crawl. All five non-terminal
+Crawl Job status totals are now zero, and the six persistent services are
+running. Full evidence is indexed in
+`evidence/cp10-live-rollout-20260720.md`; the backup remains retained through
+the rollback window.
 
 ### 11. Verify and update specs
 
@@ -255,10 +277,18 @@ docker compose run --rm backend-api python -m pytest -q tests
 git diff --check
 ```
 
-- [ ] After finite membership/cap, normalized metrics, cancellation/recovery, and cross-source runtime tests pass, review and update `.trellis/spec/backend/offertoday-production-crawl.md`.
-- [ ] Under the same verified gate, update `.trellis/spec/backend/crawl-task-detail-metrics.md`.
-- [ ] Update affected frontend snapshot/pacing contracts only after the backend behavior and spec review pass.
-- [ ] Preserve logging and cancellation specs.
+- [x] After finite membership/cap, normalized metrics, cancellation/recovery, and cross-source runtime tests pass, review and update `.trellis/spec/backend/offertoday-production-crawl.md`.
+- [x] Under the same verified gate, update `.trellis/spec/backend/crawl-task-detail-metrics.md`.
+- [x] Update affected frontend snapshot/pacing contracts only after the backend behavior and spec review pass.
+- [x] Preserve logging and cancellation specs.
+
+Checkpoint 11 contract convergence is complete. It records finite
+plan-owned detail membership, complete-run caps, normalized snapshot-versus-
+future metrics, and unchanged recovery/cancellation authority without modifying
+the dedicated logging or cancellation specs. The separately approved CP10 live
+evidence is now complete and linked above, so this child may proceed through its
+single final Trellis check and archive gate without reopening the already passed
+backend suites.
 
 ## Rollback points
 
