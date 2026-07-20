@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 
 import pytest
 from sqlalchemy import create_engine
@@ -139,6 +140,68 @@ def test_validation_is_durable_and_does_not_activate_the_candidate():
         assert [run.status for run in completed] == ["passed", "passed"]
         assert repository.get_active_revision(db, source_site="jobsdb") is None
         assert all("payload" not in (run.evidence or {}) for run in completed)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_validation_uses_one_adapter_smoke_session_for_pending_targets():
+    class SessionAdapter(PassingAdapter):
+        def __init__(self):
+            super().__init__()
+            self.session_entries = 0
+            self.session_exits = 0
+            self.session_smoke_count = 0
+            self.direct_smoke_count = 0
+
+        @asynccontextmanager
+        async def validation_smoke_session(self):
+            self.session_entries += 1
+
+            async def session_smoke(target):
+                self.session_smoke_count += 1
+                return {
+                    "status": "passed",
+                    "constraint": "classification",
+                    "target_hash_prefix": target.fingerprint[:12],
+                }
+
+            try:
+                yield session_smoke
+            finally:
+                self.session_exits += 1
+
+        async def smoke(self, target):
+            self.direct_smoke_count += 1
+            return await super().smoke(target)
+
+    engine = create_engine("sqlite:///:memory:")
+    SourceCatalogCandidate.metadata.create_all(engine, tables=SOURCE_CATALOG_TABLES)
+    db = sessionmaker(bind=engine)()
+    repository = SourceCatalogRepository()
+    adapter = SessionAdapter()
+    service = SourceCatalogService(
+        db,
+        repository=repository,
+        adapters={"jobsdb": adapter},
+    )
+    coordinator = CatalogValidationCoordinator(
+        db,
+        repository=repository,
+        adapters={"jobsdb": adapter},
+    )
+    try:
+        candidate, _ = service.discover("jobsdb")
+        coordinator.start(candidate.id)
+
+        asyncio.run(coordinator.run_pending(candidate.id, worker_id="session-worker"))
+
+        db.refresh(candidate)
+        assert candidate.state == "validated"
+        assert adapter.session_entries == 1
+        assert adapter.session_exits == 1
+        assert adapter.session_smoke_count == 1
+        assert adapter.direct_smoke_count == 0
     finally:
         db.close()
         engine.dispose()

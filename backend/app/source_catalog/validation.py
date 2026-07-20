@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 import logging
 from typing import Any
@@ -188,6 +188,34 @@ class CatalogValidationCoordinator:
         return runs
 
     async def run_pending(self, candidate_id, *, worker_id: str) -> None:
+        candidate = self.repository.get_candidate(self.db, candidate_id)
+        if candidate is None:
+            raise SourceCatalogStateError("Source Catalog candidate was not found")
+        catalog = self._candidate_catalog(candidate)
+        adapter = self.adapters[catalog.source_site]
+        smoke_session = getattr(adapter, "validation_smoke_session", None)
+        if callable(smoke_session):
+            async with smoke_session() as smoke:
+                await self._run_pending_with_smoke(
+                    candidate_id,
+                    worker_id=worker_id,
+                    smoke=smoke,
+                )
+        else:
+            await self._run_pending_with_smoke(
+                candidate_id,
+                worker_id=worker_id,
+                smoke=adapter.smoke,
+            )
+        self._finalize_candidate(candidate_id)
+
+    async def _run_pending_with_smoke(
+        self,
+        candidate_id,
+        *,
+        worker_id: str,
+        smoke: Callable[[Any], Awaitable[Mapping[str, Any]]],
+    ) -> None:
         while True:
             run = self.repository.claim_next_validation_run(
                 self.db,
@@ -239,7 +267,7 @@ class CatalogValidationCoordinator:
                         raise SourceCatalogStateError(
                             "Validation target hash no longer matches candidate"
                         )
-                    result = _bounded_evidence(await adapter.smoke(target))
+                    result = _bounded_evidence(await smoke(target))
                     status = str(result.get("status") or "failed")
                     if status not in {"passed", "failed", "manual_action_required"}:
                         status = "failed"
@@ -288,7 +316,6 @@ class CatalogValidationCoordinator:
                     attempt=run.attempt,
                 )
             )
-        self._finalize_candidate(candidate_id)
 
     def _finalize_candidate(self, candidate_id) -> None:
         candidate = self.repository.get_candidate_for_update(self.db, candidate_id)

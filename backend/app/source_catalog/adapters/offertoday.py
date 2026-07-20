@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -178,6 +179,67 @@ class OfferTodaySourceCatalogAdapter:
         return (self._target(node.classification_id, category_code),)
 
     async def smoke(self, target: SourceQueryTarget) -> dict[str, Any]:
+        try:
+            if self._browser_runtime_factory is not None:
+                async with self._browser_runtime_factory() as runtime:
+                    return await self._smoke_with_runtime(target, runtime)
+            with TemporaryDirectory(
+                prefix="job-scraper-offertoday-catalog-smoke-"
+            ) as profile_dir:
+                async with OfferTodayBrowserRuntime(
+                    headed=True,
+                    user_data_dir=profile_dir,
+                ) as runtime:
+                    return await self._smoke_with_runtime(target, runtime)
+        except Exception as exc:
+            return self._smoke_exception_result(target, exc)
+
+    @asynccontextmanager
+    async def validation_smoke_session(
+        self,
+    ) -> AsyncIterator[
+        Callable[[SourceQueryTarget], Awaitable[dict[str, Any]]]
+    ]:
+        """Reuse one isolated browser session for one coordinator worker batch."""
+
+        if (
+            self._browser_runtime_factory is not None
+            or type(self).smoke is not OfferTodaySourceCatalogAdapter.smoke
+        ):
+            yield self.smoke
+            return
+
+        with TemporaryDirectory(
+            prefix="job-scraper-offertoday-catalog-validation-"
+        ) as profile_dir:
+            runtime = OfferTodayBrowserRuntime(
+                headed=True,
+                user_data_dir=profile_dir,
+            )
+            try:
+                await runtime.start()
+            except Exception as exc:
+                start_error = exc
+
+                async def failed_start(target: SourceQueryTarget) -> dict[str, Any]:
+                    return self._smoke_exception_result(target, start_error)
+
+                yield failed_start
+                return
+
+            async def session_smoke(target: SourceQueryTarget) -> dict[str, Any]:
+                return await self._smoke_with_runtime(target, runtime)
+
+            try:
+                yield session_smoke
+            finally:
+                await runtime.stop()
+
+    async def _smoke_with_runtime(
+        self,
+        target: SourceQueryTarget,
+        runtime: Any,
+    ) -> dict[str, Any]:
         category_code = int(target.payload["category_code"])
         endpoint = str(target.payload["endpoint"])
         listing_url = (
@@ -191,41 +253,13 @@ class OfferTodaySourceCatalogAdapter:
             page=1,
             rcd_type=int(target.payload["rcd_type"]),
         )
-
-        async def fetch(runtime: Any) -> Any:
-            async with runtime:
-                return await runtime.fetch_listing_page(
-                    request_payload,
-                    listing_url=listing_url,
-                )
-
         try:
-            if self._browser_runtime_factory is not None:
-                result = await fetch(self._browser_runtime_factory())
-            else:
-                with TemporaryDirectory(
-                    prefix="job-scraper-offertoday-catalog-smoke-"
-                ) as profile_dir:
-                    result = await fetch(
-                        OfferTodayBrowserRuntime(
-                            headed=True,
-                            user_data_dir=profile_dir,
-                        )
-                    )
-        except ManualActionRequiredError as exc:
-            return {
-                "status": "manual_action_required",
-                "code": exc.code,
-                "classification": exc.classification,
-                "stage": exc.stage,
-                "target_hash_prefix": target.fingerprint[:12],
-            }
+            result = await runtime.fetch_listing_page(
+                request_payload,
+                listing_url=listing_url,
+            )
         except Exception as exc:
-            return {
-                "status": "failed",
-                "error_type": type(exc).__name__,
-                "target_hash_prefix": target.fingerprint[:12],
-            }
+            return self._smoke_exception_result(target, exc)
         response_payload = getattr(result, "payload", None)
         http_status = getattr(result, "http_status", None)
         passed = (
@@ -238,5 +272,24 @@ class OfferTodaySourceCatalogAdapter:
             "http_status": http_status,
             "constraint": "jobFunctionCodes",
             "warmup": "completed",
+            "target_hash_prefix": target.fingerprint[:12],
+        }
+
+    @staticmethod
+    def _smoke_exception_result(
+        target: SourceQueryTarget,
+        exc: Exception,
+    ) -> dict[str, Any]:
+        if isinstance(exc, ManualActionRequiredError):
+            return {
+                "status": "manual_action_required",
+                "code": exc.code,
+                "classification": exc.classification,
+                "stage": exc.stage,
+                "target_hash_prefix": target.fingerprint[:12],
+            }
+        return {
+            "status": "failed",
+            "error_type": type(exc).__name__,
             "target_hash_prefix": target.fingerprint[:12],
         }

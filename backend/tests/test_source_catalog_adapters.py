@@ -376,6 +376,53 @@ def test_offertoday_catalog_smokes_isolate_temporary_browser_profiles(monkeypatc
     assert all(not Path(profile).exists() for profile in captured_profiles if profile)
 
 
+def test_offertoday_validation_smokes_reuse_one_isolated_browser_session(monkeypatch):
+    captured_profiles: list[str | None] = []
+    runtime_entries = 0
+    runtime_exits = 0
+
+    class BrowserRuntime:
+        def __init__(self, *, headed, user_data_dir=None):
+            assert headed is True
+            captured_profiles.append(user_data_dir)
+
+        async def start(self):
+            nonlocal runtime_entries
+            runtime_entries += 1
+
+        async def stop(self):
+            nonlocal runtime_exits
+            runtime_exits += 1
+
+        async def fetch_listing_page(self, _payload, *, listing_url):
+            assert listing_url.endswith("/wapi/geek/recommend/list")
+            return SimpleNamespace(payload={"data": {}}, http_status=200)
+
+    monkeypatch.setattr(
+        "app.source_catalog.adapters.offertoday.OfferTodayBrowserRuntime",
+        BrowserRuntime,
+    )
+    adapter = OfferTodaySourceCatalogAdapter()
+    targets = [
+        adapter.compile(node)[0]
+        for node in adapter.discover().nodes
+        if node.queryable
+    ][:2]
+
+    async def run_smokes():
+        async with adapter.validation_smoke_session() as smoke:
+            return [await smoke(target) for target in targets]
+
+    results = asyncio.run(run_smokes())
+
+    assert [result["status"] for result in results] == ["passed", "passed"]
+    assert len(captured_profiles) == 1
+    assert captured_profiles[0] is not None
+    assert runtime_entries == 1
+    assert runtime_exits == 1
+    assert not Path(captured_profiles[0]).exists()
+
+
 def test_offertoday_scrapy_requests_consume_published_category_targets_without_keywords(
     monkeypatch,
 ):
