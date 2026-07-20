@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from app.scraper.manual_action import ManualActionRequiredError
@@ -37,9 +38,7 @@ class OfferTodaySourceCatalogAdapter:
         *,
         browser_runtime_factory: Callable[[], Any] | None = None,
     ) -> None:
-        self._browser_runtime_factory = browser_runtime_factory or (
-            lambda: OfferTodayBrowserRuntime(headed=True)
-        )
+        self._browser_runtime_factory = browser_runtime_factory
 
     @staticmethod
     def _target(classification_id: str, category_code: int) -> SourceQueryTarget:
@@ -192,12 +191,27 @@ class OfferTodaySourceCatalogAdapter:
             page=1,
             rcd_type=int(target.payload["rcd_type"]),
         )
-        try:
-            async with self._browser_runtime_factory() as runtime:
-                result = await runtime.fetch_listing_page(
+
+        async def fetch(runtime: Any) -> Any:
+            async with runtime:
+                return await runtime.fetch_listing_page(
                     request_payload,
                     listing_url=listing_url,
                 )
+
+        try:
+            if self._browser_runtime_factory is not None:
+                result = await fetch(self._browser_runtime_factory())
+            else:
+                with TemporaryDirectory(
+                    prefix="job-scraper-offertoday-catalog-smoke-"
+                ) as profile_dir:
+                    result = await fetch(
+                        OfferTodayBrowserRuntime(
+                            headed=True,
+                            user_data_dir=profile_dir,
+                        )
+                    )
         except ManualActionRequiredError as exc:
             return {
                 "status": "manual_action_required",

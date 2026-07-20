@@ -338,6 +338,44 @@ def test_offertoday_hierarchy_keeps_aliases_auditable_and_compiles_only_bounded_
     assert not any("jobFunctionCodes" not in payload for payload in outbound_payloads)
 
 
+def test_offertoday_catalog_smokes_isolate_temporary_browser_profiles(monkeypatch):
+    captured_profiles: list[str | None] = []
+
+    class BrowserRuntime:
+        def __init__(self, *, headed, user_data_dir=None):
+            assert headed is True
+            captured_profiles.append(user_data_dir)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, _exc_type, _exc, _tb):
+            return None
+
+        async def fetch_listing_page(self, _payload, *, listing_url):
+            assert listing_url.endswith("/wapi/geek/recommend/list")
+            return SimpleNamespace(payload={"data": {}}, http_status=200)
+
+    monkeypatch.setattr(
+        "app.source_catalog.adapters.offertoday.OfferTodayBrowserRuntime",
+        BrowserRuntime,
+    )
+    adapter = OfferTodaySourceCatalogAdapter()
+    targets = [
+        adapter.compile(node)[0]
+        for node in adapter.discover().nodes
+        if node.queryable
+    ][:2]
+
+    results = [asyncio.run(adapter.smoke(target)) for target in targets]
+
+    assert [result["status"] for result in results] == ["passed", "passed"]
+    assert len(captured_profiles) == 2
+    assert None not in captured_profiles
+    assert len(set(captured_profiles)) == 2
+    assert all(not Path(profile).exists() for profile in captured_profiles if profile)
+
+
 def test_offertoday_scrapy_requests_consume_published_category_targets_without_keywords(
     monkeypatch,
 ):
