@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import Session
 
 from app.crawl_control.automation_contracts import AutomationDeleteImpactV1
@@ -87,6 +87,70 @@ class AutomationRepository:
             .all()
         )
         return rows, total
+
+    def list_for_catalog_impact(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+        for_update: bool = False,
+    ) -> list[tuple[ScrapeSchedule, AutomationRevision]]:
+        query = (
+            db.query(ScrapeSchedule, AutomationRevision)
+            .join(
+                AutomationRevision,
+                and_(
+                    AutomationRevision.automation_id == ScrapeSchedule.id,
+                    AutomationRevision.revision == ScrapeSchedule.revision,
+                ),
+            )
+            .filter(
+                ScrapeSchedule.scope_contract.is_not(None),
+                ScrapeSchedule.source_site == source_site,
+            )
+            .order_by(ScrapeSchedule.id.asc())
+        )
+        if for_update:
+            query = query.populate_existing().with_for_update()
+        return query.all()
+
+    def count_legacy_for_catalog_impact(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+    ) -> int:
+        return int(
+            db.query(func.count(ScrapeSchedule.id))
+            .outerjoin(
+                AutomationRevision,
+                and_(
+                    AutomationRevision.automation_id == ScrapeSchedule.id,
+                    AutomationRevision.revision == ScrapeSchedule.revision,
+                ),
+            )
+            .filter(
+                ScrapeSchedule.source_site == source_site,
+                or_(
+                    ScrapeSchedule.scope_contract.is_(None),
+                    AutomationRevision.id.is_(None),
+                ),
+            )
+            .scalar()
+            or 0
+        )
+
+    @staticmethod
+    def lock_catalog_impact_set(db: Session) -> None:
+        """Prevent versioned Automation inserts/updates during pointer change."""
+
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(
+                text(
+                    "LOCK TABLE scrape_schedules "
+                    "IN SHARE ROW EXCLUSIVE MODE"
+                )
+            )
 
     def append_revision(
         self,

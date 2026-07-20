@@ -280,6 +280,22 @@ class SourceCatalogService:
             )
         return assessment
 
+    def _apply_impact(
+        self,
+        assessment,
+        *,
+        actor: str,
+    ) -> None:
+        if assessment.versioned_automation_count == 0:
+            return
+        apply_impact = getattr(self.impact_evaluator, "apply", None)
+        if not callable(apply_impact):
+            raise SourceCatalogError(
+                "CATALOG_IMPACT_STALE",
+                "Catalog impact evaluator cannot apply Automation effects",
+            )
+        apply_impact(assessment=assessment, actor=actor)
+
     @staticmethod
     def _token_hash(review_token: str) -> str:
         return hashlib.sha256(review_token.encode("utf-8")).hexdigest()
@@ -443,6 +459,7 @@ class SourceCatalogService:
                     "CATALOG_IMPACT_STALE",
                     "Automation impact changed after catalog review",
                 )
+            self._apply_impact(current_impact, actor=actor)
             revision = self.repository.create_revision(
                 self.db,
                 candidate=candidate,
@@ -578,6 +595,11 @@ class SourceCatalogService:
             review = self.repository.get_change_review_by_token_hash_for_update(
                 self.db, token_hash=self._token_hash(review_token)
             )
+            if review is None:
+                raise SourceCatalogError(
+                    "CATALOG_IMPACT_STALE",
+                    "Catalog review token was not found",
+                )
             self._validate_review(
                 review=review,
                 operation="rollback",
@@ -612,6 +634,7 @@ class SourceCatalogService:
                     "CATALOG_IMPACT_STALE",
                     "Automation impact changed after rollback review",
                 )
+            self._apply_impact(current_impact, actor=actor)
             self.repository.set_active_revision(
                 self.db,
                 source_site=target.source_site,

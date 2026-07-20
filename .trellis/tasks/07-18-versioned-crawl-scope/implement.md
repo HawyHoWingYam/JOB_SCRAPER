@@ -157,10 +157,23 @@ Plan/snapshot regressions with three skips, and the full backend suite
 
 ### 8. Integrate catalog impact/publication
 
-- [ ] Provide the real `CatalogImpactEvaluator` to child 1's catalog module.
-- [ ] Test label/move compatible changes, future descendant inclusion, removed/query-changed nodes, alias dedup changes, and cap overflow.
-- [ ] Mark incompatible Automations `scope_review_required` in publication/rollback transaction.
-- [ ] Exercise explicit initial revision publication with legacy-reset warning in staging.
+- [x] Provide the real `CatalogImpactEvaluator` to child 1's catalog module.
+- [x] Test label/move compatible changes, future descendant inclusion, removed/query-changed nodes, alias dedup changes, and cap overflow.
+- [x] Mark incompatible Automations `scope_review_required` in publication/rollback transaction.
+- [x] Exercise explicit initial revision publication with legacy-reset warning in staging.
+
+Checkpoint 8 supplies the production Automation impact evaluator to both the
+Source Catalog API and operator CLI. Reviews now contain deterministic per-
+Automation before/after scope and workload projections; mutation-time digest
+revalidation fences the complete Automation set; and publish/rollback append
+the `scope_review_required` Automation revision in the same transaction as the
+active catalog pointer and publication audit. Initial publication remains
+explicit and reports legacy Crawl Control rows requiring the approved reset.
+
+Verification covered 30 focused scope/lifecycle/catalog-impact regressions,
+10 Source Catalog API/service/integration tests, and the full backend suite
+(`387 passed, 155 skipped`). Touched-file Ruff, focused mypy, compileall, and
+`git diff --check` passed.
 
 Checkpoint: every Source has one active validated revision before cutover rehearsal.
 

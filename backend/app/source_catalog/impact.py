@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from app.source_catalog.domain import payload_fingerprint
@@ -11,6 +11,10 @@ class CatalogImpactAssessment:
     allowed: bool
     versioned_automation_count: int
     summary: dict[str, Any]
+    effects: tuple[dict[str, Any], ...] = field(
+        default_factory=tuple,
+        repr=False,
+    )
 
     @property
     def digest(self) -> str:
@@ -19,6 +23,7 @@ class CatalogImpactAssessment:
                 "allowed": self.allowed,
                 "versioned_automation_count": self.versioned_automation_count,
                 "summary": self.summary,
+                "effects": self.effects,
             }
         )
 
@@ -33,3 +38,10 @@ class CatalogImpactEvaluator(Protocol):
         target_revision_id: str | None,
         base_active_revision_id: str | None,
     ) -> CatalogImpactAssessment: ...
+
+    def apply(
+        self,
+        *,
+        assessment: CatalogImpactAssessment,
+        actor: str,
+    ) -> None: ...

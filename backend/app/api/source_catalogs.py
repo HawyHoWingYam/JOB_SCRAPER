@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.crawl_control.catalog_impact import AutomationCatalogImpactEvaluator
 from app.repositories.source_catalog_repository import SourceCatalogRepository
 from app.schemas.source_catalog import CatalogActorRequest, CatalogPublishRequest
 from app.scraper.log_events import build_scrape_log_event
@@ -23,9 +24,10 @@ router = APIRouter(prefix="/source-catalogs", tags=["source-catalogs"])
 
 
 def _service(db: Session) -> SourceCatalogService:
-    # Production impact evaluation is intentionally absent until versioned
-    # Automation/Crawl Scope integration supplies it.
-    return SourceCatalogService(db)
+    return SourceCatalogService(
+        db,
+        impact_evaluator=AutomationCatalogImpactEvaluator(db),
+    )
 
 
 def _http_error(exc: SourceCatalogError) -> HTTPException:

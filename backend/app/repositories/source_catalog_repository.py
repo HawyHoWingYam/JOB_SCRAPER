@@ -123,6 +123,23 @@ class SourceCatalogRepository:
             .one_or_none()
         )
 
+    def get_validated_candidate_by_fingerprint(
+        self,
+        db: Session,
+        *,
+        source_site: str,
+        fingerprint: str,
+    ) -> SourceCatalogCandidate | None:
+        return (
+            db.query(SourceCatalogCandidate)
+            .filter(
+                SourceCatalogCandidate.source_site == source_site,
+                SourceCatalogCandidate.fingerprint == fingerprint,
+                SourceCatalogCandidate.state == "validated",
+            )
+            .one_or_none()
+        )
+
     def list_candidates(
         self,
         db: Session,

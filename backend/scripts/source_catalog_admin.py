@@ -13,6 +13,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import SessionLocal  # noqa: E402
+from app.crawl_control.catalog_impact import (  # noqa: E402
+    AutomationCatalogImpactEvaluator,
+)
 from app.repositories.source_catalog_repository import SourceCatalogRepository  # noqa: E402
 from app.source_catalog.validation import CatalogValidationCoordinator  # noqa: E402
 from app.services.source_catalog_service import (  # noqa: E402
@@ -57,7 +60,16 @@ def main(argv: list[str] | None = None) -> int:
     db = SessionLocal()
     repository = SourceCatalogRepository()
     adapters = build_production_source_catalog_adapters()
-    service = SourceCatalogService(db, repository=repository, adapters=adapters)
+    service = SourceCatalogService(
+        db,
+        repository=repository,
+        adapters=adapters,
+        impact_evaluator=AutomationCatalogImpactEvaluator(
+            db,
+            source_catalog_repository=repository,
+            adapters=adapters,
+        ),
+    )
     try:
         if args.command == "discover":
             candidate, created = service.discover(args.source)
