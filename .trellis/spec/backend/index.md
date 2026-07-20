@@ -31,6 +31,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Company Industry Governance](./company-industry.md) | Immutable HSIC V2.0 releases, company-owned evidence, reviewed mappings, assignments/reviews, reads, and dry-run rebuild | Active |
 | [Skill Governance](./skill-governance.md) | Immutable Skill releases, deterministic Mentions/Candidates, human decisions, governed projections, and secondary evidence | Active |
 | [Job Intelligence Product Reads](./job-intelligence-product-surfaces.md) | Active-revision product composition, availability, bulk recommendations, fixture contracts, and read-only UI boundaries | Active |
+| [Job Intelligence Cutover](./job-intelligence-cutover.md) | Manifest-bound backup, destructive rebuild recovery, embedding freshness, runtime verification, and writer reopening | Active |
 
 ---
 
