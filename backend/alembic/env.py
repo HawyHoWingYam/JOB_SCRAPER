@@ -9,12 +9,13 @@ from sqlalchemy import engine_from_config, pool
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
-from app.config import settings
-from app.database import Base
-from app.models import *  # noqa: F401,F403
+from app.config import settings  # noqa: E402
+from app.database import Base  # noqa: E402
+from app.models import *  # noqa: E402,F401,F403
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+if not config.get_main_option("sqlalchemy.url").strip():
+    config.set_main_option("sqlalchemy.url", settings.database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

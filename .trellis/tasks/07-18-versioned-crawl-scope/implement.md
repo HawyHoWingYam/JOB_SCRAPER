@@ -179,13 +179,43 @@ Checkpoint: every Source has one active validated revision before cutover rehear
 
 ### 9. Build migration and cutover tooling
 
-- [ ] Keep ORM metadata canonical for fresh `create_all`; use one migration/convergence path for existing DB and avoid duplicate ad-hoc DDL for these tables.
-- [ ] Test schema parity for fresh bootstrap, upgraded current-schema fixture, and a metadata-created fixture despite the incomplete baseline.
-- [ ] Implement maintenance preflight: service/process state, actual FKs, backup acknowledgement, preserve/reset counts.
-- [ ] Implement dry-run count report and FK-safe reset script scoped to crawl outbox rows.
-- [ ] Add transaction failure injection and preserve-count assertions.
-- [ ] Rehearse backup/restore and fresh DB bootstrap on disposable databases.
-- [ ] Update `.gitignore` so all new migration/test artifacts are tracked.
+- [x] Keep ORM metadata canonical for fresh `create_all`; use one migration/convergence path for existing DB and avoid duplicate ad-hoc DDL for these tables.
+- [x] Test schema parity for fresh bootstrap, upgraded current-schema fixture, and a metadata-created fixture despite the incomplete baseline.
+- [x] Implement maintenance preflight: service/process state, actual FKs, backup acknowledgement, preserve/reset counts.
+- [x] Implement dry-run count report and FK-safe reset script scoped to crawl outbox rows.
+- [x] Add transaction failure injection and preserve-count assertions.
+- [x] Rehearse backup/restore and fresh DB bootstrap on disposable databases.
+- [x] Update `.gitignore` so all new migration/test artifacts are tracked.
+
+Checkpoint 9 replaces startup's ad-hoc convergence DDL with an explicit
+fresh-metadata/stamped-Alembic flow and adds head `20260720_210000`. The head
+converges the historical staging FK plus Source Catalog, Automation, and
+Dispatch Plan PostgreSQL guards; only a transaction-local maintenance setting
+permits the reviewed reset to break immutable authority links. Non-empty
+unstamped databases fail closed pending operator lineage verification.
+
+`CrawlControlCutover` inventories real FK delete rules, all application table
+counts, active Catalogs, active Crawl Jobs, the shared service/process writer
+probe, and an acknowledged backup identity. Its reviewed-report hash fences an
+atomic reset that deletes only pending crawl outbox rows and Crawl Control data,
+handles the Dispatch Plan/Crawl Job FK cycle, and asserts every dynamically
+discovered preserve-table count before commit. Failure injection proves the
+whole reset rolls back. The operator CLI keeps dry-run, reset confirmation, and
+disposable backup rehearsal separate.
+
+Verification used disposable `crawl_control_cp9_test` and
+`crawl_control_cp9_cutover_restore` databases only. Fresh bootstrap, existing
+`20260720_180000` downgrade/upgrade convergence, trigger/FK/index parity, the
+FK-safe seeded reset, outbox scoping, preservation, and injected rollback all
+passed (`9 passed`). A real custom-format `pg_dump`/`pg_restore` rehearsal
+matched non-zero counts for Jobs, Companies, Crawl Control, three Source
+Catalog revisions, enrichment, and outbox rows; artifact SHA-256 was
+`4c628a8baf1a9a733dd0176b15ba6a025db0b4d32eabb58e8f0715f460d6bff6`.
+Focused regressions passed (`114 passed, 6 skipped`) and the full backend suite
+passed once (`394 passed, 158 skipped`). Touched Ruff, focused mypy,
+compileall, migration-head offline SQL, real downgrade/upgrade, and
+`git diff --check` passed. No live migration, service stop, publication, reset,
+or smoke was performed.
 
 ### 10. Perform approved cutover
 
