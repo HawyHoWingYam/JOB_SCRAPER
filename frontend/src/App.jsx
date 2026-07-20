@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import { hashForView, resolveAppView } from './appRoute';
+import { parseControlRoute } from './features/taskControl/shared/controlRoute';
 import './App.css';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
@@ -20,10 +21,16 @@ const JobIntelligenceGovernancePage = lazy(
 const SourceCatalogsPage = lazy(
   () => import('./features/sourceCatalogs/SourceCatalogsPage'),
 );
+const TaskControlWizard = lazy(
+  () => import('./features/taskControl/wizard/TaskControlWizard'),
+);
 
 function App() {
   const [activeView, setActiveView] = useState(() =>
     typeof window === 'undefined' ? 'dashboard' : resolveAppView(),
+  );
+  const [locationHash, setLocationHash] = useState(() =>
+    typeof window === 'undefined' ? '#dashboard' : window.location.hash,
   );
   const [settingsSection, setSettingsSection] = useState('ai-runtime');
   const navigateToAI = () => setActiveView('ai');
@@ -40,6 +47,7 @@ function App() {
 
     const handleHashChange = () => {
       const nextView = resolveAppView();
+      setLocationHash(window.location.hash);
       setActiveView((currentView) => (currentView === nextView ? currentView : nextView));
     };
 
@@ -82,11 +90,13 @@ function App() {
               />
             )}
             {activeView === 'scheduler' && (
-              <ScheduleManager
-                onNavigateToAI={navigateToAI}
-                onNavigateToCrawlTasks={navigateToCrawlTasks}
-                onNavigateToScraperPacing={navigateToScraperPacing}
-              />
+              parseControlRoute(locationHash).kind === 'board' ? (
+                <ScheduleManager
+                  onNavigateToAI={navigateToAI}
+                  onNavigateToCrawlTasks={navigateToCrawlTasks}
+                  onNavigateToScraperPacing={navigateToScraperPacing}
+                />
+              ) : <TaskControlWizard hash={locationHash} />
             )}
             {activeView === 'crawl-tasks' && <CrawlTasksPage />}
           </Suspense>

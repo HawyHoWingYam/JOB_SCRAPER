@@ -26,6 +26,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [OfferToday Production Crawl](./offertoday-production-crawl.md) | Cursor listing, partial caps, bound detail scope, distinct progress, and hard-stop contracts | Active |
 | [OfferToday Research Artifacts](./offertoday-research-artifacts.md) | Historical artifact parent, verification, replay, and exit-code contracts | Preserved |
 | [Authoritative Source Catalog Runtime](./source-catalog-runtime.md) | Published revision authority, source-native Query Targets, validation, and guarded publication | Active |
+| [Crawl Control Automation Review](./crawl-control-automation-review.md) | Read-only scheduled-run review, fingerprint fencing, and non-frozen detail preview | Active |
 | [Source Job Attributes](./source-job-attributes.md) | Source-owned classification paths, governed Employment Types, atomic projection, APIs, and rebuild evidence | Active |
 | [Canonical Job Taxonomy Governance](./canonical-job-taxonomy.md) | Stable governed releases, reviewed Source mappings, assignments/reviews, canonical reads, and dry-run rebuild | Active |
 | [Company Industry Governance](./company-industry.md) | Immutable HSIC V2.0 releases, company-owned evidence, reviewed mappings, assignments/reviews, reads, and dry-run rebuild | Active |

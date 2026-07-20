@@ -28,12 +28,14 @@ class CrawlScopePreviewRequestV1(FrozenContract):
 
 class AutomationCreateRequestV1(FrozenContract):
     configuration: AutomationConfigurationV1
+    review_fingerprint: str = Field(pattern=SHA256_PATTERN)
     initial_state: Literal["active", "paused"] = "paused"
 
 
 class AutomationUpdateRequestV1(FrozenContract):
     expected_revision: int = Field(ge=1)
     configuration: AutomationConfigurationV1
+    review_fingerprint: str = Field(pattern=SHA256_PATTERN)
 
 
 class AutomationRevisionRequestV1(FrozenContract):

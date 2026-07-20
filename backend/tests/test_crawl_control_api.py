@@ -72,6 +72,7 @@ def test_crawl_control_contracts_are_registered_in_production_openapi():
     expected_operations = {
         "/api/v1/crawl-scopes/preview": {"post"},
         "/api/v1/automations": {"get", "post"},
+        "/api/v1/automations/reviews": {"post"},
         "/api/v1/automations/{automation_id}": {"get", "put", "delete"},
         "/api/v1/automations/{automation_id}/pause": {"post"},
         "/api/v1/automations/{automation_id}/resume": {"post"},
@@ -205,6 +206,31 @@ def crawl_control_client(monkeypatch):
     with TestClient(app) as client:
         yield client, revision_id
     engine.dispose()
+
+
+def _review_automation_configuration(
+    client: TestClient,
+    configuration: dict,
+    *,
+    automation_id: str | None = None,
+    expected_revision: int | None = None,
+) -> dict:
+    response = client.post(
+        "/api/v1/automations/reviews",
+        json={
+            "configuration": configuration,
+            **(
+                {
+                    "automation_id": automation_id,
+                    "expected_revision": expected_revision,
+                }
+                if automation_id is not None
+                else {}
+            ),
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 def test_scope_preview_returns_normalized_workload_and_stable_revision_error(
@@ -496,10 +522,17 @@ def test_automation_lifecycle_and_reviewed_permanent_delete_are_revisioned(
         },
         "detail_settings": None,
     }
-    created = client.post(
+    automation_review = _review_automation_configuration(client, configuration)
+    created_response = client.post(
         "/api/v1/automations",
-        json={"configuration": configuration, "initial_state": "active"},
-    ).json()
+        json={
+            "configuration": configuration,
+            "review_fingerprint": automation_review["input_fingerprint"],
+            "initial_state": "active",
+        },
+    )
+    assert created_response.status_code == 201
+    created = created_response.json()
     automation_id = created["snapshot"]["automation_id"]
 
     paused = client.post(
@@ -713,9 +746,14 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
         },
         "detail_settings": None,
     }
+    automation_review = _review_automation_configuration(client, configuration)
     created = client.post(
         "/api/v1/automations",
-        json={"configuration": configuration, "initial_state": "paused"},
+        json={
+            "configuration": configuration,
+            "review_fingerprint": automation_review["input_fingerprint"],
+            "initial_state": "paused",
+        },
     ).json()
     one_off = {
         "version": 1,
@@ -1118,9 +1156,25 @@ def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
         "detail_settings": None,
     }
 
+    create_review = _review_automation_configuration(client, configuration)
+    stale_create = client.post(
+        "/api/v1/automations",
+        json={
+            "configuration": configuration,
+            "review_fingerprint": "0" * 64,
+            "initial_state": "paused",
+        },
+    )
+    assert stale_create.status_code == 409
+    assert stale_create.json()["detail"]["code"] == "AUTOMATION_REVIEW_STALE"
+
     created = client.post(
         "/api/v1/automations",
-        json={"configuration": configuration, "initial_state": "paused"},
+        json={
+            "configuration": configuration,
+            "review_fingerprint": create_review["input_fingerprint"],
+            "initial_state": "paused",
+        },
     )
 
     assert created.status_code == 201
@@ -1138,11 +1192,18 @@ def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
     ] == [automation_id]
 
     renamed_configuration = {**configuration, "name": "Renamed listing"}
+    update_review = _review_automation_configuration(
+        client,
+        renamed_configuration,
+        automation_id=automation_id,
+        expected_revision=1,
+    )
     updated = client.put(
         f"/api/v1/automations/{automation_id}",
         json={
             "expected_revision": 1,
             "configuration": renamed_configuration,
+            "review_fingerprint": update_review["input_fingerprint"],
         },
     )
     assert updated.status_code == 200
@@ -1156,6 +1217,7 @@ def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
         json={
             "expected_revision": 1,
             "configuration": configuration,
+            "review_fingerprint": update_review["input_fingerprint"],
         },
     )
     assert stale.status_code == 409

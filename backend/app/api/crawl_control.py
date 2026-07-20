@@ -13,6 +13,11 @@ from app.crawl_control.automation_contracts import (
     AutomationProjectionV1,
 )
 from app.crawl_control.automation_service import AutomationService
+from app.crawl_control.automation_review_contracts import (
+    AutomationReviewRequestV1,
+    AutomationReviewV1,
+)
+from app.crawl_control.automation_review_service import AutomationReviewService
 from app.crawl_control.contracts import CrawlScopePreviewV1, SourceSite
 from app.crawl_control.dispatch_plan_contracts import (
     DispatchPlanPreparationV1,
@@ -22,6 +27,7 @@ from app.crawl_control.dispatch_plan_contracts import (
 )
 from app.crawl_control.dispatch_plan_service import DispatchPlanService
 from app.crawl_control.errors import CrawlControlError
+from app.crawl_control.errors import AutomationReviewStaleError
 from app.crawl_control.scope_service import CrawlScopeService
 from app.crawl_control.task_control_board_service import (
     TaskControlBoardProjectionService,
@@ -64,6 +70,7 @@ _CRAWL_CONTROL_ERROR_STATUS = {
     "WORKLOAD_CAP_EXCEEDED": status.HTTP_422_UNPROCESSABLE_CONTENT,
     "BACKLOG_SAFETY_CAP_EXCEEDED": status.HTTP_422_UNPROCESSABLE_CONTENT,
     "AUTOMATION_REVISION_CONFLICT": status.HTTP_409_CONFLICT,
+    "AUTOMATION_REVIEW_STALE": status.HTTP_409_CONFLICT,
     "AUTOMATION_TRANSITION_INVALID": status.HTTP_409_CONFLICT,
     "AUTOMATION_DELETE_REVIEW_STALE": status.HTTP_409_CONFLICT,
     "SCOPE_REVIEW_REQUIRED": status.HTTP_409_CONFLICT,
@@ -160,6 +167,37 @@ def list_automations(
     )
 
 
+@router.post(
+    "/automations/reviews",
+    response_model=AutomationReviewV1,
+)
+def review_automation(
+    request: AutomationReviewRequestV1,
+    db: Session = Depends(get_db),
+) -> AutomationReviewV1:
+    try:
+        return AutomationReviewService(db).review(request)
+    except (CrawlControlError, SourceCatalogError) as exc:
+        raise crawl_control_http_error(exc) from exc
+
+
+def _require_current_automation_review(
+    db: Session,
+    *,
+    request: AutomationReviewRequestV1,
+    supplied_fingerprint: str,
+) -> AutomationReviewV1:
+    current = AutomationReviewService(db).review(request)
+    if current.input_fingerprint != supplied_fingerprint:
+        raise AutomationReviewStaleError(
+            current_fingerprint=current.input_fingerprint,
+            automation_id=request.automation_id,
+            current_revision=request.expected_revision,
+            catalog_revision_id=current.catalog_revision_id,
+        )
+    return current
+
+
 @router.get(
     "/automations/{automation_id}",
     response_model=AutomationProjectionV1,
@@ -188,6 +226,13 @@ def create_automation(
     db: Session = Depends(get_db),
 ) -> AutomationProjectionV1:
     try:
+        _require_current_automation_review(
+            db,
+            request=AutomationReviewRequestV1(
+                configuration=request.configuration,
+            ),
+            supplied_fingerprint=request.review_fingerprint,
+        )
         projection = AutomationService(db).create(
             request.configuration,
             actor=AUTOMATION_API_ACTOR,
@@ -210,6 +255,15 @@ def update_automation(
     db: Session = Depends(get_db),
 ) -> AutomationProjectionV1:
     try:
+        _require_current_automation_review(
+            db,
+            request=AutomationReviewRequestV1(
+                configuration=request.configuration,
+                automation_id=automation_id,
+                expected_revision=request.expected_revision,
+            ),
+            supplied_fingerprint=request.review_fingerprint,
+        )
         projection = AutomationService(db).update_configuration(
             automation_id,
             expected_revision=request.expected_revision,

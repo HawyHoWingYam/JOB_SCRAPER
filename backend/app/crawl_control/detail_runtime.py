@@ -39,6 +39,13 @@ class FrozenDetailBacklog:
 
 
 @dataclass(frozen=True, slots=True)
+class DetailBacklogPreview:
+    eligible_target_count: int
+    selected_target_count: int
+    absolute_safety_cap: int
+
+
+@dataclass(frozen=True, slots=True)
 class DetailRuntimeTarget:
     source_job_id: str
     selection_order: int
@@ -213,6 +220,39 @@ class DetailBacklogSnapshotBuilder:
             }
         )
         return FrozenDetailBacklog(content=frozen_content, targets=targets)
+
+    def preview(
+        self,
+        db: Session,
+        *,
+        content: DispatchPlanContentV1,
+        eligible_at_or_before: datetime,
+    ) -> DetailBacklogPreview:
+        """Count current eligibility without freezing membership or writing rows."""
+        settings = content.detail_settings
+        if content.crawl_phase != "detail" or settings is None:
+            raise ValueError("Only detail configurations have a backlog preview")
+        if settings.backlog_snapshot is not None:
+            raise ValueError("Automation review cannot consume a frozen snapshot")
+        rows = self.repository.list_detail_candidates(
+            db,
+            source_site=content.source_site,
+            statuses=None,
+            eligible_at_or_before=eligible_at_or_before,
+            limit=None,
+            **self._query_args(content),
+        )
+        eligible_target_count = len(self._group_rows(rows))
+        selected_target_count = (
+            eligible_target_count
+            if settings.limit.kind == "entire_snapshot"
+            else min(eligible_target_count, settings.limit.detail_run_cap)
+        )
+        return DetailBacklogPreview(
+            eligible_target_count=eligible_target_count,
+            selected_target_count=selected_target_count,
+            absolute_safety_cap=self.absolute_safety_cap,
+        )
 
     @staticmethod
     def _query_args(content: DispatchPlanContentV1) -> dict[str, Any]:

@@ -159,6 +159,39 @@ class AutomationRevisionConflictError(CrawlControlError):
         )
 
 
+class AutomationReviewStaleError(CrawlControlError):
+    def __init__(
+        self,
+        *,
+        current_fingerprint: str,
+        automation_id: Any | None = None,
+        current_revision: int | None = None,
+        catalog_revision_id: Any | None = None,
+    ) -> None:
+        super().__init__(
+            "AUTOMATION_REVIEW_STALE",
+            "Automation configuration or server review context changed",
+            context={
+                "current_review_fingerprint": current_fingerprint,
+                **(
+                    {"automation_id": str(automation_id)}
+                    if automation_id is not None
+                    else {}
+                ),
+                **(
+                    {"current_revision": current_revision}
+                    if current_revision is not None
+                    else {}
+                ),
+                **(
+                    {"catalog_revision_id": str(catalog_revision_id)}
+                    if catalog_revision_id is not None
+                    else {}
+                ),
+            },
+        )
+
+
 class AutomationTransitionInvalidError(CrawlControlError):
     def __init__(
         self,
