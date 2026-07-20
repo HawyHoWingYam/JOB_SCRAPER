@@ -115,12 +115,47 @@ describe('api client', () => {
       message: 'The review item changed',
       status: 409,
       code: 'GOVERNANCE_DECISION_STALE_VERSION',
+      details: {
+        code: 'GOVERNANCE_DECISION_STALE_VERSION',
+        message: 'The review item changed',
+      },
       detail: {
         code: 'GOVERNANCE_DECISION_STALE_VERSION',
         message: 'The review item changed',
       },
       requestId: 'req-fixed',
     });
+  });
+
+  it('retains structured details and the server request id without breaking detail', async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 409,
+        headers: new Headers({ 'X-Request-ID': 'req-server' }),
+        json: async () => ({
+          code: 'CATALOG_IMPACT_STALE',
+          message: 'Impact changed',
+          details: { candidateId: 'candidate-1' },
+        }),
+      }),
+    );
+
+    const error = await apiFetchJson('/api/v1/source-catalogs/jobsdb').catch(
+      (caught) => caught,
+    );
+
+    expect(error).toMatchObject({
+      name: 'ApiRequestError',
+      message: 'Impact changed',
+      code: 'CATALOG_IMPACT_STALE',
+      details: { candidateId: 'candidate-1' },
+      requestId: 'req-server',
+    });
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      'api.request_failed',
+      expect.objectContaining({ requestId: 'req-server' }),
+    );
   });
 
   it('formats array details into readable messages', () => {

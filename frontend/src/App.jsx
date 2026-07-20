@@ -17,6 +17,9 @@ const JobIntelligenceGovernancePage = lazy(
       './components/jobIntelligence/JobIntelligenceGovernancePage'
     ),
 );
+const SourceCatalogsPage = lazy(
+  () => import('./features/sourceCatalogs/SourceCatalogsPage'),
+);
 
 function App() {
   const [activeView, setActiveView] = useState(() =>
@@ -70,6 +73,7 @@ function App() {
             {activeView === 'job-intelligence' && (
               <JobIntelligenceGovernancePage />
             )}
+            {activeView === 'source-catalogs' && <SourceCatalogsPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
             {activeView === 'settings' && (
               <AISettingsPage

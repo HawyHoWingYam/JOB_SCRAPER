@@ -79,6 +79,10 @@ def test_published_tree_and_legacy_categories_share_one_revision_without_discove
         health = runtime_capabilities_service._source_catalog_health()
 
         assert tree["revision"]["fingerprint"] == catalog.fingerprint
+        assert tree["revision"]["node_count"] == 25
+        assert tree["revision"]["query_target_count"] == 25
+        assert tree["revision"]["validation_summary"]["status"] == "passed"
+        assert tree["revision"]["provenance"] == catalog.provenance
         assert len(tree["catalog"]["nodes"]) == 25
         assert legacy["total"] == 25
         assert legacy["categories"][0]["id"] == 1200

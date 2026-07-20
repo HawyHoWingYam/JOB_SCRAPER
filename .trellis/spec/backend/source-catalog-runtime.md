@@ -61,6 +61,21 @@ Governance routes live below `/api/v1/source-catalogs`. The legacy
 `GET /api/v1/categories` route is only a projection of the active revision.
 The explicit operator CLI is `backend/scripts/source_catalog_admin.py`.
 
+The read-only Governance projection is backward-compatible and includes:
+
+```text
+GET /api/v1/source-catalogs
+  sources[].published_revision.{provenance,validation_summary,node_count,query_target_count}
+  sources[].affected_automation_count
+GET /api/v1/source-catalogs/{source}/revisions
+  revisions[].{provenance,publication_metadata,validation_summary,node_count,query_target_count}
+  publications[].{id,operation,revision_id,previous_revision_id,actor,created_at}
+```
+
+These fields come from immutable revision/candidate/publication rows and the
+versioned Automation repository. The UI must not recreate provenance, impact,
+or history by interpreting display text.
+
 ### 3. Contracts
 
 #### Authority and immutability
@@ -184,8 +199,8 @@ It is never an executable fallback. Runtime code must not call `discover()`.
   rollback, immutable history, and transaction rollback after an injected
   publication-audit failure.
 - `test_source_catalog_api.py`: published tree/legacy/capability fingerprint
-  agreement, no discovery, stable structured errors, and request-ID summary
-  monitoring.
+  agreement, no discovery, enriched immutable revision metadata, stable
+  structured errors, and request-ID summary monitoring.
 - Keep normal tests network-free. Live smoke is opt-in and must never be a
   deterministic CI requirement.
 

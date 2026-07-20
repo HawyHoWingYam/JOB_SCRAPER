@@ -2,11 +2,22 @@ import { createMonitoringId, logError } from '../monitoring';
 import { formatApiErrorDetail } from './errors';
 
 export class ApiRequestError extends Error {
-  constructor(message, { status, code = null, detail = null, requestId = null } = {}) {
+  constructor(
+    message,
+    {
+      status,
+      code = null,
+      details = null,
+      detail = details,
+      requestId = null,
+    } = {},
+  ) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = status;
     this.code = code;
+    this.details = details;
+    // Keep the original singular field for existing callers.
     this.detail = detail;
     this.requestId = requestId;
   }
@@ -67,11 +78,28 @@ export async function apiFetchJson(url, options = {}) {
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
-      const message = formatApiErrorDetail(data?.detail) || `Request failed with status ${response.status}`;
+      const envelope =
+        data?.detail && typeof data.detail === 'object' && !Array.isArray(data.detail)
+          ? data.detail
+          : data && typeof data === 'object' && !Array.isArray(data)
+            ? data
+            : null;
+      const rawDetail = data?.detail ?? data?.details ?? null;
+      const message =
+        (typeof envelope?.message === 'string' && envelope.message.trim()) ||
+        formatApiErrorDetail(rawDetail) ||
+        `Request failed with status ${response.status}`;
+      const responseRequestId =
+        response.headers?.get?.('X-Request-ID') ||
+        envelope?.requestId ||
+        envelope?.request_id ||
+        effectiveRequestId;
+      const details =
+        envelope?.details ?? envelope?.context ?? rawDetail;
 
       failureLogged = true;
       logError('api.request_failed', {
-        requestId: effectiveRequestId,
+        requestId: responseRequestId,
         method,
         status: response.status,
         url,
@@ -80,12 +108,10 @@ export async function apiFetchJson(url, options = {}) {
       });
       throw new ApiRequestError(message, {
         status: response.status,
-        code:
-          data?.detail && typeof data.detail === 'object'
-            ? data.detail.code || null
-            : null,
-        detail: data?.detail ?? null,
-        requestId: effectiveRequestId,
+        code: envelope?.code || null,
+        details,
+        detail: rawDetail,
+        requestId: responseRequestId,
       });
     }
 

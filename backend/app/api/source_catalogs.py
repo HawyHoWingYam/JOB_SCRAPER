@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.crawl_control.catalog_impact import AutomationCatalogImpactEvaluator
+from app.crawl_control.automation_repository import AutomationRepository
 from app.repositories.source_catalog_repository import SourceCatalogRepository
 from app.schemas.source_catalog import CatalogActorRequest, CatalogPublishRequest
 from app.scraper.log_events import build_scrape_log_event
@@ -54,7 +55,13 @@ def _candidate_not_found_error() -> HTTPException:
     )
 
 
-def _revision_payload(revision) -> dict[str, Any]:
+def _revision_payload(
+    revision,
+    *,
+    validation_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized = revision.normalized_payload or {}
+    nodes = normalized.get("nodes") or []
     return {
         "id": str(revision.id),
         "source_site": revision.source_site,
@@ -67,6 +74,31 @@ def _revision_payload(revision) -> dict[str, Any]:
         ),
         "published_by": revision.published_by,
         "published_at": revision.published_at,
+        "provenance": revision.provenance or {},
+        "publication_metadata": revision.publication_metadata or {},
+        "validation_summary": validation_summary or {},
+        "node_count": len(nodes),
+        "query_target_count": sum(bool(node.get("queryable")) for node in nodes),
+    }
+
+
+def _publication_payload(publication) -> dict[str, Any]:
+    return {
+        "id": str(publication.id),
+        "source_site": publication.source_site,
+        "operation": publication.operation,
+        "revision_id": str(publication.revision_id),
+        "previous_revision_id": (
+            str(publication.previous_revision_id)
+            if publication.previous_revision_id
+            else None
+        ),
+        "candidate_id": (
+            str(publication.candidate_id) if publication.candidate_id else None
+        ),
+        "review_id": str(publication.review_id),
+        "actor": publication.actor,
+        "created_at": publication.created_at,
     }
 
 
@@ -109,14 +141,34 @@ def _run_payload(run) -> dict[str, Any]:
 @router.get("")
 def list_source_catalogs(db: Session = Depends(get_db)):
     repository = SourceCatalogRepository()
+    automation_repository = AutomationRepository()
     summaries = []
     for source_site in ("jobsdb", "ctgoodjobs", "offertoday"):
         active = repository.get_active_revision(db, source_site=source_site)
+        active_candidate = (
+            repository.get_candidate(db, active.candidate_id) if active else None
+        )
         candidates = repository.list_candidates(db, source_site=source_site, limit=1)
         summaries.append(
             {
                 "source_site": source_site,
-                "published_revision": _revision_payload(active) if active else None,
+                "published_revision": (
+                    _revision_payload(
+                        active,
+                        validation_summary=(
+                            active_candidate.validation_summary
+                            if active_candidate is not None
+                            else None
+                        ),
+                    )
+                    if active
+                    else None
+                ),
+                "affected_automation_count": len(
+                    automation_repository.list_for_catalog_impact(
+                        db, source_site=source_site
+                    )
+                ),
                 "latest_candidate": (
                     {
                         "id": str(candidates[0].id),
@@ -141,7 +193,14 @@ def get_published_source_catalog(source_site: str, db: Session = Depends(get_db)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
-        "revision": _revision_payload(published.revision),
+        "revision": _revision_payload(
+            published.revision,
+            validation_summary=(
+                SourceCatalogRepository()
+                .get_candidate(db, published.revision.candidate_id)
+                .validation_summary
+            ),
+        ),
         "catalog": published.catalog.normalized_payload(),
     }
 
@@ -266,8 +325,25 @@ def list_source_catalog_revisions(
     source_site: str,
     db: Session = Depends(get_db),
 ):
-    revisions = SourceCatalogRepository().list_revisions(db, source_site=source_site)
-    return {"source_site": source_site, "revisions": [_revision_payload(row) for row in revisions]}
+    repository = SourceCatalogRepository()
+    revisions = repository.list_revisions(db, source_site=source_site)
+    revision_payloads = []
+    for row in revisions:
+        candidate = repository.get_candidate(db, row.candidate_id)
+        revision_payloads.append(
+            _revision_payload(
+                row,
+                validation_summary=(
+                    candidate.validation_summary if candidate is not None else None
+                ),
+            )
+        )
+    publications = repository.list_publications(db, source_site=source_site)
+    return {
+        "source_site": source_site,
+        "revisions": revision_payloads,
+        "publications": [_publication_payload(row) for row in publications],
+    }
 
 
 @router.post("/{source_site}/revisions/{revision_id}/rollback-reviews")
