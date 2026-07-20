@@ -1,102 +1,188 @@
-# Improve Task Control Board UI
+# Task Control Board and Crawl Control UI program
 
 ## Goal
 
-Make the Task Control Board easier and safer for an operator to understand and act on: distinguish recurring automation from one-off recovery runs, expose the most important runtime state, make destructive or high-impact actions predictable, and model source-specific crawl taxonomy without flattening or silently conflating different sources.
+Deliver three independently verifiable desktop UI features on top of the live,
+versioned Crawl Control backend: Source Catalog governance, Automation/One-off
+authoring, and the Task Control Board with durable Task Details.
 
-## Background and confirmed facts
+The operator must always see the same source-native scope, Catalog Revision,
+workload, immutable Dispatch Plan, lifecycle state, and cancellation truth that
+the backend executes. React must not recreate those facts from legacy request
+payloads or event JSON.
 
-- The current page is rendered by `ScheduleManager` and presents two top-level actions, `New Automation` and `Direct Override`, alongside a source selector (`frontend/src/components/scraper/ScheduleManager.jsx:1053-1095`).
-- The page currently explains the two workstreams in two informational cards, then may show scheduler ownership/heartbeat, runtime warnings, errors, progress, and forms (`frontend/src/components/scraper/ScheduleManager.jsx:1109-1209`).
-- `Direct Override` expands an inline configuration sequence with crawl phase, crawl mode, target sectors, volume, optional advanced listing-batch scope, backlog metrics, readiness messaging, and a start action (`frontend/src/components/scraper/ScheduleManager.jsx:1211-1457`).
-- `New Automation` expands an inline form for task name, frequency, crawl phase/mode, volume, sectors, and create/cancel actions (`frontend/src/components/scraper/ScheduleForm.jsx:142-282`).
-- Existing scheduled tasks are shown as cards with active/paused state, source, frequency, sectors, phase/mode, last/next run, latest outcome, Run Now, Logs, pause/resume, and delete actions (`frontend/src/components/scraper/ScheduleList.jsx:231-359`).
-- The current visual system is a dark glass/cyber style with two-column launchpad cards and stacked panels (`frontend/src/components/scraper/Scheduler.css:1-155`).
-- The current category API is source-aware but exposes a common flat payload (`id`, `name`, `slug`, `source_site`) and drops hierarchy/mapping metadata in `SourceCategoryRegistry` (`backend/app/services/source_category_registry.py:75-163`).
-- JobsDB currently exposes 25 source-native top-level categories, including `Information & Communication Technology` (`backend/app/scraper/categories.py:18-45`).
-- CTgoodjobs uses source-qualified string IDs and source-native labels such as `Information Technology`; its richer registry model already contains child counts and canonical-domain mapping metadata, but the shared category API omits those fields (`backend/app/scraper/ctgoodjobs/category_registry.py:34-80`, `backend/app/services/source_category_registry.py:135-143`).
-- OfferToday has a validated two-level source taxonomy with 31 roots and 431 distinct query leaves, but the shared category API currently returns only the 31 roots (`backend/app/scraper/offertoday/category_registry.py:52-89`, `backend/app/scraper/offertoday/category_registry.py:107-168`, `backend/app/scraper/offertoday/category_registry.py:203-215`).
-- Existing request schemas type `category_ids` as a flat list of strict integers or strings. Schedules persist that list in a JSON column; crawl jobs persist it inside an unversioned JSON `request_payload` (`backend/app/services/crawl_request_validation.py:7-20`, `backend/app/models/schedule.py:38-42`, `backend/app/models/crawl_job.py:31-42`).
-- `source_site` currently provides the namespace used to validate primitive category IDs, but it is stored separately rather than being encoded into a stable Source Classification identity (`backend/app/services/crawl_request_validation.py:61-87`).
-- Existing frontend forms, summaries, cards, and history assume a flat `{id, name}` catalog plus primitive `category_ids`; an enriched/tree contract therefore requires explicit compatibility adapters rather than an in-place response-shape swap (`frontend/src/components/scraper/ScheduleForm.jsx:36-45`, `frontend/src/components/scraper/ScheduleList.jsx:93-112`, `frontend/src/components/scraper/ScheduleHistory.jsx:183-205`).
-- Source execution semantics differ: OfferToday parent selection may expand to a whole family and same-code aliases are not independent leaves; CTgoodjobs' dynamic registry is richer than the static registry currently used by its spider; JobsDB's Scrapy path currently carries selected category IDs as metadata without visibly placing them in the upstream API request (`backend/app/sources/offertoday/search_space.py:223-244`, `backend/scrapy_project/job_scraper_spiders/spiders/ctgoodjobs.py:67-100`, `backend/scrapy_project/job_scraper_spiders/spiders/jobsdb.py:66-78`).
-- A destructive control-plane reset is technically separable from collected-job deletion: schedules own schedule executions; crawl jobs own events, executions, and staged listings; crawl runs and some execution references use `SET NULL`; pending outbox events have no foreign key and require explicit cleanup (`backend/app/models/schedule.py:39-60`, `backend/app/models/crawl_job.py:31-93`, `backend/app/models/crawl_run.py:24-52`, `backend/app/models/event_outbox.py:9-25`).
-- Collected Jobs are a broader data boundary: they preserve source classification snapshots and canonical taxonomy references and own dependent enrichment/search data such as skills and embeddings (`backend/app/models/job.py:38-75`, `backend/app/models/job_skill.py:13-14`).
+## Confirmed state
 
-## Requirements
+- Source Catalog runtime correctness and Versioned Crawl Scope are complete and
+  archived. CP10 live rollout upgraded `jobsdb` to `20260720_210000`, preserved
+  the Published Job Corpus, published one active revision for JobsDB,
+  CTgoodjobs, and OfferToday, and left zero active Crawl Jobs. Exact evidence is
+  in
+  `.trellis/tasks/archive/2026-07/07-18-versioned-crawl-scope/evidence/cp10-live-rollout-20260720.md`.
+- The current scheduler UI still concentrates source selection, API state,
+  immediate-run state, progress, forms, and page composition in
+  `ScheduleManager.jsx`; `ScheduleForm.jsx` and `ScheduleList.jsx` still assume
+  legacy flat categories and card-oriented operations
+  (`frontend/src/components/scraper/ScheduleManager.jsx:376-418,793-1021,1053-1490`;
+  `ScheduleForm.jsx:27-128`; `ScheduleList.jsx:93-112,223-359`).
+- `App.jsx` uses hash-based top-level views and lazy components, not a router
+  package (`frontend/src/App.jsx:1-19,33-57,80-87`). Existing `#scheduler` and
+  `#crawl-tasks` bookmarks must remain valid.
+- Source Catalog governance endpoints, versioned Automation endpoints,
+  `POST /crawl-scopes/preview`, Dispatch Plan preparation/dispatch, and
+  `GET /task-control-board` are present
+  (`backend/app/api/crawl_control.py:118-455`).
+- The current board projection exposes normalized Automation rows and run
+  authority/workload/snapshot fields, but it is still a flat
+  `automations + runs` response. It does not yet own named board sections,
+  cross-source summaries, catalog health, action capabilities, full schedule
+  summary, or latest outcome
+  (`backend/app/crawl_control/task_control_board_contracts.py:138-211`;
+  `task_control_board_service.py:325-390`). The Board child must close this
+  narrow projection gap before rendering those concepts.
+- Automation create/update validates the final configuration, and listing scope
+  has a preview endpoint. There is no dedicated read-only Automation review
+  contract for both listing and detail drafts. The Wizard child must add that
+  narrow server-owned review seam instead of fabricating detail readiness or
+  backlog meaning in React.
+- Crawl Tasks already receives normalized `authority`, `listing_workload`,
+  `detail_snapshot`, and `recovery_attempt`; the current detail panel still
+  prints raw `manual_action` and `request_payload` JSON
+  (`frontend/src/components/scraper/CrawlTasksPage.jsx:898-1056`). The new Task
+  Details must replace payload archaeology with normalized projections.
+- CTgoodjobs remains headed-only. OfferToday upstream network blocks must remain
+  truthful manual-action states; UI must not suggest an implicit retry, IP
+  bypass, or headless fallback.
+- Post-collection Canonical Job Taxonomy, Company Industry, Employment Type,
+  and Skill governance remain the independent Job Intelligence program. They
+  never become Crawl Scope authority.
 
-To be refined through the design interview. The final scope may introduce category schema and API changes with an explicit compatibility plan, while preserving scheduler/crawler execution semantics unless a deliberate product decision changes them.
+## Shared product requirements
 
-### Confirmed product decisions
+### Source and execution truth
 
-- The board is primarily an operations control room: active, blocked, failed, and upcoming work should be easier to see than configuration forms.
-- `New Automation` and `Direct Override` remain available as secondary actions in the page header rather than defining the whole page hierarchy.
-- Rename `Direct Override` to `One-off Run`; explain that it starts a crawl immediately without changing recurring automations. Use `Backlog Recovery` as a contextual mode/use case for detail runs rather than as the global action name.
-- Scope is a substantial UI/UX redesign of the `New Automation` and `One-off Run` flows: redesign information architecture, field grouping, interaction flow, copy, status/error/empty/blocked states, responsive behavior, and accessibility while preserving backend APIs, task state models, and crawler behavior.
-- The current frontend already has enough data for a control-room summary without a new endpoint: schedules include latest execution and next-run fields; progress exposes active, attention, backlog, and terminal snapshots; runtime capabilities expose scheduler and worker health (`ScheduleManager.jsx:760-791`, `ScrapeProgressPanel.jsx:220-329`, `backend/app/services/crawl_task_snapshot_service.py:1173-1242`).
-- Keep the board scoped to one source at a time; represent the source context as a more visible tab/segmented control while preserving source-specific defaults and validation.
-- The redesign may replace the current inline form layout and field order; it is not limited to styling or converting the existing forms into a drawer.
-- Both flows should be intent-first and progressively disclose technical configuration in the sequence `intent → scope → execution settings → final confirmation`; advanced options remain available for experienced operators.
-- Use distinct intent copy for the two workflows: `New Automation` offers `Discover listings` and `Enrich job details`; `One-off Run` offers `Discover listings now` and `Recover detail backlog`.
-- Redesign all four combinations as first-class flows: `New Automation → Job ID`, `New Automation → Job Detail`, `One-off Run → Job ID`, and `One-off Run → Job Detail`.
-- The provided screenshots confirm that the current forms are long desktop-first layouts with duplicated technical fields and a wide 8-column sector checkbox grid; the redesign must address this structure rather than only changing labels or colors.
-- Summary copy must match the selected intent and phase: a Job ID run must not be described as backlog recovery.
-- Use a shared wizard shell with intent-specific step content rather than four entirely separate form implementations.
-- Use a four-step wizard with visible progress, back/continue navigation, a persistent live summary, and a final review/confirmation step.
-- Preserve the dark product theme but move to a calmer operations-console visual system: reduce decorative glass/glow and all-caps micro-labels, strengthen typography and spacing hierarchy, and reserve accent colors for state, risk, and primary actions.
-- Rework recurring frequency into a friendly schedule builder with a natural-language summary; retain custom cron as an advanced option mapped to the existing cron contract.
-- Require a final review step before creating a recurring automation or starting a one-off run; show intent, source, scope, volume, execution settings, readiness, and relevant risks in the confirmation summary.
-- If an active manual detail run conflicts with a new recovery request, block the new run, show the active run context and progress, and provide a path to cancel the current run; after cancellation succeeds, refresh readiness and allow the new run to be configured/launched.
-- Reuse the existing crawl-job cancellation capability; expose it from the conflict state with explicit inline confirmation and preserve completed records while leaving remaining work in backlog.
-- Optimize this redesign for desktop first; mobile-specific full-screen wizard behavior and sticky mobile actions are explicitly out of scope for this iteration.
-- Treat crawl mode as a recommended execution setting: keep the default mode out of the primary decision path, expose alternatives under advanced options, and show headed-worker readiness and dependency guidance whenever `Headed` is selected.
-- Make target scope explicit: offer `All available sectors` versus `Choose specific sectors`, use searchable multi-select with select/clear-all and counts, and distinguish global backlog, sector-scoped backlog, and specific listing-batch scope in the detail recovery flow and final summary.
-- For recurring discovery automations, JobsDB and CTgoodjobs require an explicit choice between all source categories and selected source categories; OfferToday may default to its explicit `All IT categories` scope, which must remain visible in review.
-- Expand the redesign through the data boundary: define a source-taxonomy schema, preserve source-native IDs/names/hierarchy, expose source-specific depth and capabilities to the frontend, and carry unambiguous scope selections through schedule and one-off-run payloads.
-- Source-native taxonomy is the execution authority for Crawl Scope. Canonical Job Domains may group or explain classifications but must not silently expand into source queries; future cross-source Automations require explicit per-source scopes (`docs/adr/0001-source-native-taxonomies-define-crawl-scope.md`).
-- Crawl Scope supports explicit Exact Scope and Subtree Scope rules. Subtree rules resolve against the current Source Catalog Revision and include future descendants; referenced nodes that disappear or become non-executable require operator review (`docs/adr/0003-model-crawl-scope-as-exact-or-subtree-rules.md`).
-- Correct source catalogs, executable scope semantics, and crawler query behavior take priority over retaining legacy schedule/run data shaped by ambiguous flat `category_ids`; a clean or destructive migration is acceptable once the exact discard boundary is agreed.
-- Taxonomy cutover will reset Crawl Control Data—Automations, schedule executions, crawl jobs/events/executions, listing staging/backlog, crawl run history, and pending crawl outbox events—while preserving the Published Job Corpus, Companies, canonical taxonomy, and attached enrichment (`docs/adr/0002-reset-crawl-control-data-during-taxonomy-cutover.md`).
-- Source execution correctness is part of this program and is a prerequisite to schema and UI work: JobsDB selections must demonstrably constrain upstream requests, CTgoodjobs must expose and execute one authoritative catalog, and OfferToday parent/leaf/alias semantics must be contractual and tested.
-- CTgoodjobs currently advertises and executes headed-only crawl jobs; legacy headless requests are upgraded to headed, even though separate HTTP listing/detail fetchers and registry discovery can operate without a visible browser (`backend/app/crawl_modes.py:6-19`, `backend/app/scraper/ctgoodjobs/list_scraper.py:28-59`, `backend/app/scraper/ctgoodjobs/detail_scraper.py:19-49`).
-- CTgoodjobs catalog authority is independent from crawl mode: the API/validation can use a live registry while headed runtime resolution uses a static snapshot, so a live classification can pass validation and still fail at execution (`backend/app/services/source_category_registry.py:100-149`, `backend/scripts/ctgoodjobs_standalone_crawl.py:120-136`).
-- CTgoodjobs remains headed-only for this program. Headless-first execution and automatic headed escalation are out of scope; manual-action handling continues on the existing headed runtime.
-- Live source discovery creates a Catalog Candidate. UI, validation, and crawler execution use only one validated, published Source Catalog Revision and switch revisions together (`docs/adr/0004-execute-only-against-published-source-catalog-revisions.md`).
-- Every first-version Source Catalog Revision requires explicit operator publication after automated validation and impact review; no catalog change auto-publishes.
-- Catalog candidate discovery, diff, validation, impact review, and publication live on a dedicated `Source Catalogs` governance page. The Task Control Board displays revision health and links there but cannot publish revisions inline.
+- Source-native taxonomy is the only executable Crawl Scope authority.
+- Every selection uses a source-qualified ID and one published immutable
+  Catalog Revision. Display-name equality and canonical mappings never create
+  or expand source queries.
+- Authored Scope, Resolved Run Scope, Automation Revision, Dispatch Plan,
+  Page Depth, Run Page Cap, Detail Run Cap, Backlog Snapshot, Recovery Segment,
+  and future eligible backlog remain visibly distinct.
+- Candidate Catalogs are non-executable. Publish/rollback requires durable
+  validation, current Automation impact, an explicit confirmation, and
+  authoritative refetch after mutation.
+- CTgoodjobs shows headed-only capability and manual-action readiness.
+- Components consume feature decoders and normalized projections. No new UI
+  reads raw `request_payload`, raw event payloads, source adapter payloads, or
+  message strings to infer recovery actions.
 
-### Initial design hypotheses to validate
+### Navigation and state
 
-- The board should prioritize operational awareness and safe action over merely exposing configuration fields.
-- `New Automation` and `Direct Override` should be presented as different intent paths, with language that explains when to use each.
-- The direct-run flow should make scope, expected impact, readiness/blockers, and the final action obvious before execution.
-- Scheduled automations should expose the next meaningful operator action without forcing the user to parse every metric in a dense card.
-- The layout must remain usable at narrow widths and retain accessible labels, status semantics, and confirmation for destructive actions.
+- Keep hash navigation and existing top-level bookmarks. Add feature-local
+  parsers/builders; do not add a router dependency solely for these features.
+- Browser back/forward must preserve the correct page, selected Source, and
+  versioned wizard draft.
+- Loading, prior-good refresh failure, empty, stale, conflict, worker-offline,
+  manual-action, cancelling, expired-plan, and success states each have explicit
+  copy and recovery actions.
+- Backend/server state wins after every mutation. Optimistic UI may indicate
+  pending work but cannot invent an active revision, terminal cancellation, or
+  consumed plan.
 
-## Acceptance Criteria
+### Experience and accessibility
 
-- [ ] Final product decisions are recorded as testable UI requirements.
-- [ ] The proposed information hierarchy clearly separates recurring automations, one-off runs, active progress, and runtime health.
-- [ ] The final design defines the behavior and copy for `New Automation`, `Direct Override`, `Run Now`, pause/resume, Logs, and delete.
-- [ ] The final design defines source taxonomy terminology, hierarchy semantics, stable identity, API payloads, compatibility behavior, and UI rendering for sources with different category depth.
-- [ ] Crawl requests and saved automations preserve exact source-qualified selections without relying on display-name equality across sources.
-- [ ] The design identifies responsive, accessibility, loading, empty, error, and blocked-readiness states.
-- [ ] Before implementation, complex-task planning artifacts (`design.md` and `implement.md`) describe boundaries, trade-offs, and validation.
+- Preserve the dark theme while reducing glass/glow, strengthening hierarchy,
+  and reserving accent colors for status, risk, and primary action.
+- Desktop is the dedicated target. Narrow desktop overflow must remain usable;
+  mobile-specific full-screen/sticky flows are out of scope.
+- Tabs, tables, nested classification controls, wizard steps, status messages,
+  confirmations, and focus restoration are keyboard and screen-reader usable;
+  state is never color-only.
+- Shared code is feature-local and extracted only where two UI children need the
+  same decoded contract or route/action helper. Do not build a speculative
+  project-wide design system.
 
-## Child task map
+## Three UI children and ownership
 
-1. `source-catalog-runtime-correctness` — establish authoritative source catalogs and prove selected Source Classifications constrain crawler queries.
-2. `source-catalog-governance-ui` — add the dedicated candidate diff/validation/impact/publish page; depends on child 1's governance contract.
-3. `versioned-crawl-scope` — introduce the versioned Crawl Scope contract and perform the approved Crawl Control Data cutover; depends on child 1's executable catalog contracts.
-4. `task-control-board-wizard-ui` — implement the operations board and four shared-wizard flows against the new contract, including revision-health links; depends on children 1-3.
+### 1. Source Catalog governance UI
 
-The parent owns the source requirement set, cross-child terminology/ADRs, dependency order, and final integration review. Each child owns independently testable implementation and validation.
+`07-18-source-catalog-governance-ui` owns `#source-catalogs`, read-only revision
+health, candidate discovery/diff, durable validation/manual action, real
+Automation impact, explicit publish/rollback, and immutable history. It never
+owns Crawl Scope resolution, Board rendering, or wizard authoring.
 
-The existing `07-18-offertoday-taxonomy-mapping` task remains separate: it governs post-collection source-to-canonical mapping and AI enrichment exclusions. This parent governs pre-dispatch source-native catalogs, Crawl Scope, crawler execution, and control-board UX; neither task may make the Canonical Job Domain authoritative for crawling.
+### 2. Automation and One-off wizard UI
 
+`07-18-task-control-board-wizard-ui` owns full-page create/edit Automation,
+One-off listing/detail, and Run-now review routes. It owns versioned session
+drafts, the shared four-step shell (`intent → scope → execution → review`),
+classification interaction, schedule builder, server-owned review, Dispatch
+Plan confirmation, and conflict cancellation inside the review flow. It does
+not own the Board, Automation table, persistent Task Details, or ordinary
+lifecycle menus.
 
-## Scope guardrails
+### 3. Task Control Board and Task Details UI
 
-- This phase is design and requirements discovery only; do not edit frontend implementation until planning is approved and the task is started.
-- Backend/schema work is now in scope, but crawler behavior changes and automatic cross-source category inference are not assumed until explicitly decided.
-- Do not mix this task with the existing bootstrap task or unrelated uncommitted changes.
+`07-21-task-control-board-operations-ui` owns `#scheduler`, source summaries and
+critical banner, `Needs attention`, `Active runs`, `Upcoming`, the expandable
+Automation table, lifecycle actions, and durable listing/detail Task Details.
+It owns the minimal backend projection extension required for those normalized
+sections/action capabilities. It links to the wizard/governance routes and
+reuses their decoders/helpers instead of duplicating them.
+
+## Dependency and execution order
+
+1. Backend children are complete and archived.
+2. Governance UI establishes the shared structured API-error behavior and
+   Source Catalog route.
+3. Wizard UI establishes Crawl Control route/draft/review seams while the
+   legacy board remains reachable.
+4. Board/Task Details consumes those seams, replaces the legacy scheduler
+   composition, and retires raw Task Details payload rendering only after
+   parity.
+5. Parent remains a planning/integration coordinator and is not an
+   implementation target.
+
+All three UI children may be moved to `in_progress` now because the user has
+approved the final plan. Their implementation order remains sequential where
+files or shared seams overlap.
+
+## Out of scope
+
+- Job Intelligence live rebuild, pointer switch, embedding rebuild, or writer
+  reopening.
+- CTgoodjobs headless-first execution or automatic headed fallback.
+- Canonical-taxonomy-driven Crawl Scope, keyword-only scope, cross-source
+  Automations, or automatic listing-to-detail chaining.
+- Reconstructing or preserving pre-cutover legacy Crawl Control rows.
+- A new project-wide router, generic design system, mobile-specific wizard, or
+  speculative global polling/state framework.
+
+## Parent acceptance criteria
+
+- [x] Versioned backend, three active Catalog Revisions, cutover, bounded smoke
+  authority, cancellation acknowledgement, and rollback evidence are complete.
+- [ ] Governance UI cannot expose a candidate as executable or publish with
+  stale validation/impact.
+- [ ] All four authoring flows, Edit, and Run now show server-owned reviewed
+  scope/workload/readiness and dispatch exactly the reviewed plan.
+- [ ] Board sections, source summaries, Automation table, lifecycle actions,
+  and Task Details consume normalized backend projections.
+- [ ] Listing and detail Task Details distinguish authored/resolved authority,
+  workload/snapshot progress, future backlog, manual action, and cancellation
+  without raw JSON rendering.
+- [ ] `cancelling` remains pending until backend `cancelled` acknowledgement;
+  repeated actions are disabled and fresh readiness is built afterward.
+- [ ] Hash back/forward, draft corruption/storage failure, stale responses,
+  structured errors, keyboard/focus, and narrow-desktop behavior are tested.
+- [ ] Governance, Wizard, and Board children pass their focused checks; the full
+  frontend suite/build runs once at the final UI integration gate.
+- [ ] Parent integration confirms no automatic publication, runtime discovery,
+  static executable fallback, implicit categoryless query, or React payload
+  archaeology remains.
+
+## Planning approval
+
+The user explicitly approved final Task Control Board UI planning and starting
+three UI children. The parent stays in `planning`; start only the three child
+tasks listed above.

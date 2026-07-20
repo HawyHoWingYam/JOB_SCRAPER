@@ -1,8 +1,8 @@
 {
   "id": "task-control-board-ui",
   "name": "task-control-board-ui",
-  "title": "Improve Task Control Board UI",
-  "description": "",
+  "title": "Crawl Control UI program",
+  "description": "Parent planning and integration task for the completed source-native Crawl Control backend plus three UI children: Source Catalog governance, Automation/One-off wizard, and Task Control Board/Task Details.",
   "status": "planning",
   "dev_type": null,
   "scope": null,
@@ -21,11 +21,17 @@
   "children": [
     "07-18-source-catalog-runtime-correctness",
     "07-18-versioned-crawl-scope",
+    "07-18-source-catalog-governance-ui",
     "07-18-task-control-board-wizard-ui",
-    "07-18-source-catalog-governance-ui"
+    "07-21-task-control-board-operations-ui"
   ],
   "parent": null,
-  "relatedFiles": [],
-  "notes": "",
+  "relatedFiles": [
+    "CONTEXT.md",
+    ".trellis/tasks/07-18-task-control-board-ui/prd.md",
+    ".trellis/tasks/07-18-task-control-board-ui/design.md",
+    ".trellis/tasks/07-18-task-control-board-ui/implement.md"
+  ],
+  "notes": "Backend children are archived and CP10 is live. User approved starting all three UI children. Delivery order: source-catalog-governance-ui -> task-control-board-wizard-ui -> task-control-board-operations-ui. Keep this parent in planning as the final integration coordinator.",
   "meta": {}
 }
