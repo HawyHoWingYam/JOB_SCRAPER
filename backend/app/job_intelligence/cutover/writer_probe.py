@@ -155,7 +155,14 @@ class SystemWriterStateProvider:
 
     def _defined_services(self) -> set[str]:
         result = self.command_runner(
-            ("docker", "compose", "config", "--services"),
+            (
+                "docker",
+                "compose",
+                "--profile",
+                "*",
+                "config",
+                "--services",
+            ),
             cwd=self.compose_directory,
         )
         return {
@@ -166,7 +173,16 @@ class SystemWriterStateProvider:
 
     def _service_states(self) -> dict[str, tuple[str, ...]]:
         result = self.command_runner(
-            ("docker", "compose", "ps", "--all", "--format", "json"),
+            (
+                "docker",
+                "compose",
+                "--profile",
+                "*",
+                "ps",
+                "--all",
+                "--format",
+                "json",
+            ),
             cwd=self.compose_directory,
         )
         rows = self._json_rows(str(result.stdout or ""))

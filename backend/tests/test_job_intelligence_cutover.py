@@ -125,14 +125,30 @@ def test_backup_adapter_keeps_credentials_out_of_commands_and_hashes_artifact(
 def test_system_writer_probe_combines_container_and_process_evidence() -> None:
     def command_runner(args: tuple[str, ...], *, cwd: Path):
         assert cwd.name == "JOB_SCRAPER"
-        if args == ("docker", "compose", "config", "--services"):
+        if args == (
+            "docker",
+            "compose",
+            "--profile",
+            "*",
+            "config",
+            "--services",
+        ):
             return SimpleNamespace(
                 stdout=(
                     "backend-api\nscheduler-worker\ningest-worker\n"
                     "enrichment-worker\nembedding-worker\nscrapyd\n"
                 )
             )
-        if args == ("docker", "compose", "ps", "--all", "--format", "json"):
+        if args == (
+            "docker",
+            "compose",
+            "--profile",
+            "*",
+            "ps",
+            "--all",
+            "--format",
+            "json",
+        ):
             return SimpleNamespace(
                 stdout=json.dumps(
                     [
