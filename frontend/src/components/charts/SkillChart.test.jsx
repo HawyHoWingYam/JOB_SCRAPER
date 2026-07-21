@@ -103,4 +103,38 @@ describe('SkillChart', () => {
     expect(screen.queryByText(/3 skills shown/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Legacy Skill')).not.toBeInTheDocument();
   });
+
+  it('renders dynamic dashboard buckets after the predefined buckets', async () => {
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+
+      if (url.includes('/api/v1/stats/skills')) {
+        return mockJsonResponse({
+          skills: [
+            { name: 'Python', category: 'Backend', count: 1015, dashboard_bucket: 'Backend' },
+            {
+              name: 'User Acceptance Testing',
+              category: 'Product & Delivery',
+              count: 65,
+              dashboard_bucket: 'Product & Delivery',
+            },
+          ],
+        });
+      }
+
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<SkillChart />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Product & Delivery')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('User Acceptance Testing')).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 4 }).map((heading) => heading.textContent)).toEqual([
+      'Backend',
+      'Product & Delivery',
+    ]);
+  });
 });

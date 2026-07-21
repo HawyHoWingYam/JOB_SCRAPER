@@ -64,13 +64,15 @@ function groupSkills(skills) {
     if (!bucket) {
       continue;
     }
+    if (!grouped.has(bucket)) {
+      grouped.set(bucket, []);
+    }
     grouped.get(bucket).push(skill);
   }
 
-  return SKILL_BUCKET_ORDER
-    .map((bucket) => ({
+  return Array.from(grouped, ([bucket, bucketSkills]) => ({
       bucket,
-      skills: (grouped.get(bucket) || []).sort((left, right) => Number(right.count || 0) - Number(left.count || 0)),
+      skills: bucketSkills.sort((left, right) => Number(right.count || 0) - Number(left.count || 0)),
     }))
     .filter((entry) => entry.skills.length > 0);
 }

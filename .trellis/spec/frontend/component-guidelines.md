@@ -18,6 +18,26 @@ Questions to answer:
 
 (To be filled by the team)
 
+## Dashboard Skill Bucket Contract
+
+The `/api/v1/stats/skills` response includes a `dashboard_bucket` field. The
+backend may return taxonomy categories that are not present in the frontend's
+preferred display order. Consumers must preserve the preferred order for known
+buckets, register non-empty buckets dynamically, and append them after the
+known buckets. Treating `dashboard_bucket` as a closed frontend enum can crash
+rendering when taxonomy categories evolve.
+
+```js
+if (!grouped.has(bucket)) {
+  grouped.set(bucket, []);
+}
+grouped.get(bucket).push(skill);
+```
+
+Regression tests should include a response such as
+`dashboard_bucket: "Product & Delivery"` and assert both successful rendering
+and appended bucket order.
+
 ---
 
 ## Component Structure
