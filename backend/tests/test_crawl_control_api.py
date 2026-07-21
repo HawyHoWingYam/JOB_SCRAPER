@@ -87,11 +87,13 @@ def test_crawl_control_contracts_are_registered_in_production_openapi():
     }
     for path, methods in expected_operations.items():
         assert methods <= set(paths[path])
-    assert paths["/api/v1/task-control-board"]["get"]["responses"]["200"][
+    board_schema = paths["/api/v1/task-control-board"]["get"]["responses"]["200"][
         "content"
-    ]["application/json"]["schema"]["$ref"].endswith(
-        "/TaskControlBoardProjectionV1"
-    )
+    ]["application/json"]["schema"]
+    assert {variant["$ref"] for variant in board_schema["anyOf"]} == {
+        "#/components/schemas/TaskControlBoardProjectionV1",
+        "#/components/schemas/TaskControlBoardProjectionV2",
+    }
     assert paths["/api/v1/dispatch-plans/{plan_id}/dispatch"]["post"][
         "responses"
     ]["202"]["content"]["application/json"]["schema"]["$ref"].endswith(
