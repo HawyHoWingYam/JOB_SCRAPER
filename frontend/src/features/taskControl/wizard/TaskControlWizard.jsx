@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   cancelCrawlJob,
   controlError,
@@ -181,6 +181,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
   const headingRef = useRef(null);
   const dialogTriggerRef = useRef(null);
   const catalogVersionRef = useRef(0);
+  const [catalogRetry, setCatalogRetry] = useState(0);
 
   useEffect(() => {
     if (draftRoute.kind !== 'wizard') return;
@@ -205,7 +206,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
   }, [state.draft.step]);
 
   useEffect(() => {
-    if (route.kind !== 'wizard') return undefined;
+    if (route.kind !== 'wizard' || !route.draftId) return undefined;
     const controller = new AbortController();
     const version = catalogVersionRef.current + 1;
     catalogVersionRef.current = version;
@@ -216,7 +217,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
         if (!controller.signal.aborted) dispatch({ type: 'catalogFailed', error: controlError(error), version });
       });
     return () => controller.abort();
-  }, [route.kind, state.draft.source_site]);
+  }, [catalogRetry, route.draftId, route.kind, state.draft.source_site]);
 
   useEffect(() => {
     if (route.kind !== 'wizard' || !route.automationId) return undefined;
@@ -373,6 +374,8 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
         <main className="wizard-main">
           <h2 ref={headingRef} tabIndex="-1">{stepTitle(state.draft.step)}</h2>
           {state.draft.step === 'intent' && <IntentStep draft={state.draft} dispatch={dispatch} route={route} automation={state.automation.value} onRunWithChanges={runWithChanges} />}
+          {state.draft.step === 'scope' && state.catalog.status === 'loading' && <p role="status" className="control-empty">Loading published source catalog…</p>}
+          {state.draft.step === 'scope' && state.catalog.status === 'error' && !state.catalog.value && <div className="control-error" role="status"><p>Published source catalog could not be loaded.</p><button type="button" onClick={() => setCatalogRetry((current) => current + 1)}>Retry loading catalog</button></div>}
           {state.draft.step === 'scope' && state.catalog.value && <SourceScopeTree sourceSite={state.draft.source_site} catalog={state.catalog.value.catalog} scope={state.draft.scope} onChange={(scope) => dispatch({ type: 'scopeChanged', scope })} />}
           {state.draft.step === 'execution' && <ExecutionStep draft={state.draft} dispatch={dispatch} />}
           {state.draft.step === 'review' && route.flow === 'run_now' && <IntentStep draft={state.draft} dispatch={dispatch} route={route} automation={state.automation.value} onRunWithChanges={runWithChanges} />}

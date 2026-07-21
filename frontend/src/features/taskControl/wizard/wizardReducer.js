@@ -26,20 +26,38 @@ function invalidateAuthority(state, draft) {
   };
 }
 
+function resetCatalog(state) {
+  return {
+    status: 'idle',
+    value: null,
+    error: null,
+    requestVersion: state.catalog.requestVersion + 1,
+  };
+}
+
 export function wizardReducer(state, action) {
   switch (action.type) {
-    case 'hydrate':
-      return createWizardState(action.draft, action.notice);
+    case 'hydrate': {
+      const nextState = createWizardState(action.draft, action.notice);
+      return {
+        ...nextState,
+        catalog: state.draft.source_site === action.draft.source_site
+          ? state.catalog
+          : resetCatalog(state),
+      };
+    }
     case 'notice':
       return { ...state, notice: action.notice };
-    case 'sourceChanged':
-      return invalidateAuthority(state, {
+    case 'sourceChanged': {
+      const nextState = invalidateAuthority(state, {
         ...state.draft,
         source_site: action.sourceSite,
         scope: null,
         execution: {},
         step: 'intent',
       });
+      return { ...nextState, catalog: resetCatalog(state) };
+    }
     case 'intentChanged':
       return invalidateAuthority(state, {
         ...state.draft,

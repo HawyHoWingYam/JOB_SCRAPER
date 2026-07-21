@@ -36,6 +36,25 @@ const published = {
   },
 };
 
+const offertodayPublished = {
+  revision: { id: 'catalog-offertoday-r7', sourceSite: 'offertoday' },
+  catalog: {
+    sourceSite: 'offertoday',
+    capabilities: { supportsAllScope: true },
+    nodes: [{
+      nodeKey: 'offertoday:118000',
+      classificationId: 'offertoday:118000',
+      nativeLabel: 'Information Technology',
+      nativePath: ['Information Technology'],
+      parentNodeKey: null,
+      selectable: true,
+      supportsExact: true,
+      supportsSubtree: true,
+      sourceMetadata: {},
+    }],
+  },
+};
+
 function draft({ flow = 'automation', sourceSite = 'jobsdb', step = 'review' } = {}) {
   return {
     version: 1,
@@ -193,6 +212,40 @@ describe('TaskControlWizard', () => {
 
     expect(await screen.findByText('Headed only.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Crawl mode')).not.toBeInTheDocument();
+  });
+
+  it('loads the OfferToday scope catalog after the draft URL becomes stable', async () => {
+    let resolveCatalog;
+    api.getPublishedCatalog.mockImplementation(() => new Promise((resolve) => {
+      resolveCatalog = resolve;
+    }));
+    const { rerender } = render(<TaskControlWizard hash="#scheduler/one-off/new?source=offertoday&step=scope" />);
+
+    rerender(<TaskControlWizard hash="#scheduler/one-off/new?source=offertoday&draft=offertoday-draft&step=scope" />);
+
+    await waitFor(() => expect(api.getPublishedCatalog).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Loading published source catalog…')).toBeInTheDocument();
+    resolveCatalog(offertodayPublished);
+
+    expect(await screen.findByRole('button', { name: 'All source classifications' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Recommend: All IT categories (offertoday:118000 subtree)' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Recommend: All IT categories (offertoday:118000 subtree)' }));
+    expect(screen.getByRole('button', { name: /Subtree · Information Technology/ })).toBeInTheDocument();
+  });
+
+  it('keeps the scope step actionable when the catalog request fails', async () => {
+    api.getPublishedCatalog
+      .mockRejectedValueOnce(new Error('Catalog unavailable'))
+      .mockResolvedValueOnce(offertodayPublished);
+    storeDraft('offertoday-error-draft', draft({ flow: 'one_off', sourceSite: 'offertoday', step: 'scope' }));
+    const user = userEvent.setup();
+
+    render(<TaskControlWizard hash="#scheduler/one-off/new?source=offertoday&draft=offertoday-error-draft&step=scope" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Catalog unavailable');
+    await user.click(screen.getByRole('button', { name: 'Retry loading catalog' }));
+    expect(await screen.findByRole('button', { name: 'All source classifications' })).toBeInTheDocument();
   });
 
   it('keeps the recoverable draft when the server rejects stale review authority', async () => {

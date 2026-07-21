@@ -31,6 +31,20 @@ under `#scheduler/*`. The legacy `#scheduler` board remains reachable.
 - CTgoodjobs is headed-only. OfferToday `offertoday:118000` is a visible
   recommendation, never an implicit default. React never compiles Query Targets.
 
+### Published catalog request lifecycle
+
+- Start the published Source Catalog request only after the wizard route has a
+  stable draft ID. The first render creates that ID in the URL; fetching before
+  the transition can leave the result attached to a request version that a
+  later draft hydrate has already invalidated.
+- Hydrating a draft or changing only the history-visible step must preserve a
+  catalog already loaded for the same Source. Hydrating or selecting a
+  different Source must clear the old value and advance the request version so
+  its late response cannot render the wrong taxonomy.
+- The scope step renders explicit loading and retryable failure states when no
+  published catalog value is available; a successful value renders the normal
+  source-scope controls.
+
 ## Detail conflict and accessibility
 
 - A detail conflict links to the normalized Task route, confirms cancellation
@@ -40,6 +54,9 @@ under `#scheduler/*`. The legacy `#scheduler` board remains reachable.
   and restore trigger focus. Step changes move focus to the step heading.
 - Errors/statuses are semantic and textual; do not branch on error message
   strings or read raw request/event payloads.
+- Do not start catalog loading before draft URL stabilization and then let
+  `hydrate` recreate an `idle` catalog: a successful 200 response can be
+  ignored, leaving the scope panel blank.
 
 ## Verification
 

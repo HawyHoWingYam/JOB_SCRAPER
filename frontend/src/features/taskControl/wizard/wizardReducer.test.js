@@ -24,4 +24,34 @@ describe('wizard reducer invariants', () => {
     expect(changed.draft.scope).toBeNull();
     expect(changed.draft.execution.backlog_kind).toBe('crawl_scope');
   });
+
+  it('preserves a same-source catalog during hydration and resets it for a source change', () => {
+    const base = createWizardState(createWizardDraft(route));
+    const loaded = wizardReducer(base, {
+      type: 'catalogStarted',
+      version: 1,
+    });
+    const catalog = { revision: { id: 'catalog-r7' }, catalog: { nodes: [] } };
+    const withCatalog = wizardReducer(loaded, {
+      type: 'catalogSucceeded',
+      version: 1,
+      value: catalog,
+    });
+
+    const rehydrated = wizardReducer(withCatalog, {
+      type: 'hydrate',
+      draft: { ...base.draft, step: 'scope' },
+      notice: null,
+    });
+    expect(rehydrated.catalog).toEqual(withCatalog.catalog);
+
+    const changed = wizardReducer(rehydrated, {
+      type: 'hydrate',
+      draft: { ...base.draft, source_site: 'offertoday', step: 'scope' },
+      notice: null,
+    });
+    expect(changed.catalog.value).toBeNull();
+    expect(changed.catalog.status).toBe('idle');
+    expect(changed.catalog.requestVersion).toBe(2);
+  });
 });
