@@ -269,7 +269,19 @@ class JobIntelligenceCutover:
                 "CUTOVER_DATABASE_NOT_QUIESCENT",
                 "Database write sentinel changed or used an insufficient window",
             )
-        if quiescence.pending_outbox:
+        existing_first_checkpoint = self._load_checkpoint(
+            ordinal=1,
+            phase=CUTOVER_PHASES[0],
+            manifest_hash=envelope.manifest_hash,
+            code_version=envelope.manifest.application.commit,
+            input_hash=envelope.manifest_hash,
+            checkpoint_dir=checkpoint_dir,
+        )
+        first_gate_completed = (
+            existing_first_checkpoint is not None
+            and existing_first_checkpoint.status == "completed"
+        )
+        if quiescence.pending_outbox and not first_gate_completed:
             raise CutoverExecutionBlocked(
                 "CUTOVER_OUTBOX_NOT_DRAINED",
                 "Relevant outbox events must be drained before execute",
@@ -283,15 +295,20 @@ class JobIntelligenceCutover:
                 f"Active runtime state remains: {', '.join(active_runs)}",
             )
 
-        first_checkpoint = self._complete_gate_checkpoint(
-            ordinal=1,
-            phase=CUTOVER_PHASES[0],
-            manifest_hash=envelope.manifest_hash,
-            code_version=envelope.manifest.application.commit,
-            input_hash=envelope.manifest_hash,
-            output={"quiescence": quiescence.model_dump(mode="json")},
-            checkpoint_dir=checkpoint_dir,
+        first_checkpoint = (
+            existing_first_checkpoint
+            if first_gate_completed
+            else self._complete_gate_checkpoint(
+                ordinal=1,
+                phase=CUTOVER_PHASES[0],
+                manifest_hash=envelope.manifest_hash,
+                code_version=envelope.manifest.application.commit,
+                input_hash=envelope.manifest_hash,
+                output={"quiescence": quiescence.model_dump(mode="json")},
+                checkpoint_dir=checkpoint_dir,
+            )
         )
+        assert first_checkpoint is not None
         second_input_hash = first_checkpoint.output_hash
         if second_input_hash is None:
             raise AssertionError("Completed quiescence checkpoint has no output hash")

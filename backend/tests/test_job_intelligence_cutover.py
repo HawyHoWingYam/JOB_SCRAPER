@@ -240,10 +240,12 @@ class FixedInventoryEnvironment:
         writer_overrides: dict[str, str] | None = None,
         restored_fingerprint_overrides: dict[str, DatasetFingerprint] | None = None,
         fail_phase: str | None = None,
+        pending_outbox: int = 0,
     ) -> None:
         self.writer_overrides = writer_overrides or {}
         self.restored_fingerprint_overrides = restored_fingerprint_overrides or {}
         self.fail_phase = fail_phase
+        self.pending_outbox = pending_outbox
         self.phase_calls: list[str] = []
 
     def collect_inventory(self) -> CutoverInventory:
@@ -373,7 +375,7 @@ class FixedInventoryEnvironment:
                 before_hash=SHA_A,
                 after_hash=SHA_A,
             ),
-            pending_outbox=0,
+            pending_outbox=self.pending_outbox,
             active_runs={
                 "crawl_executions": 0,
                 "enrichment_runs": 0,
@@ -832,6 +834,7 @@ def test_execute_resumes_from_failed_phase_without_replaying_completed_phases(
     assert not (checkpoint_dir / "09-rebuild_skill_state.json").exists()
 
     environment.fail_phase = None
+    environment.pending_outbox = 64_142
     environment.phase_calls.clear()
     result = cutover.execute(**execute_kwargs)
 
