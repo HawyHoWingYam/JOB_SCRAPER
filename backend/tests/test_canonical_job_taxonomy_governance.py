@@ -189,17 +189,18 @@ def test_committed_mapping_seed_uses_explicit_reviewed_dispositions():
         ],
     }
     assert mapping_seed["taxonomy_release_key"] == seed["release_key"]
+    assert mapping_seed["release_key"] == "source-to-canonical-job-mapping-v2"
     assert mapping_seed["expected_counts"] == {
-        "entries": 68,
+        "entries": 515,
         "deterministic": 0,
-        "allowed_slice": 62,
-        "excluded": 6,
-        "unmapped": 0,
+        "allowed_slice": 445,
+        "excluded": 54,
+        "unmapped": 16,
     }
 
     entries = mapping_seed["entries"]
-    assert len(entries) == 68
-    assert len({entry["source_classification_id"] for entry in entries}) == 68
+    assert len(entries) == 515
+    assert len({entry["source_classification_id"] for entry in entries}) == 515
     assert all(
         entry["source_classification_id"].startswith(f"{entry['source_site']}:")
         for entry in entries
@@ -218,7 +219,7 @@ def test_committed_mapping_seed_uses_explicit_reviewed_dispositions():
             assert target_codes
             assert target_codes == sorted(target_codes, key=leaf_order.__getitem__)
         else:
-            assert entry["disposition"] == "excluded"
+            assert entry["disposition"] in {"excluded", "unmapped"}
             assert target_codes == []
         assert set(target_codes) <= set(leaf_codes)
 
@@ -554,8 +555,8 @@ def test_mapping_materialization_pins_exact_catalog_coverage_and_stays_inactive(
     } == {
         "status": "ready",
         "taxonomy_revision_id": taxonomy_revision.revision_id,
-        "expected_counts": (3, 68, target_count),
-        "materialized_counts": (3, 68, target_count),
+        "expected_counts": (3, 515, target_count),
+        "materialized_counts": (3, 515, target_count),
     }
     coverages = canonical_taxonomy_db.scalars(
         select(CanonicalJobTaxonomyMappingCoverage).order_by(
@@ -564,7 +565,7 @@ def test_mapping_materialization_pins_exact_catalog_coverage_and_stays_inactive(
     ).all()
     assert {
         coverage.source_site: coverage.identity_count for coverage in coverages
-    } == {"ctgoodjobs": 12, "jobsdb": 25, "offertoday": 31}
+    } == {"ctgoodjobs": 28, "jobsdb": 25, "offertoday": 462}
     assert all(
         len(coverage.source_catalog_fingerprint) == 64
         and len(coverage.identity_set_hash) == 64

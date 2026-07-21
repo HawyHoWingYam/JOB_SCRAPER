@@ -119,7 +119,12 @@ constraint tests at the live development corpus.
   in the pinned taxonomy revision.
 - Legacy `default_path`, proposed-domain constants, labels, and static
   registries are evidence only. The 15 CTgoodjobs proposal-only IDs remain an
-  explicit warning and never expand Source Catalog coverage.
+  explicit warning; when those identities are present in the pinned active
+  Source Catalog they receive explicit `unmapped` entries and block automation.
+- Hierarchical Source catalogs require an explicit entry for every non-alias
+  classification identity. OfferToday child entries may inherit the reviewed
+  parent root disposition and target slice only when the inherited slice is
+  unchanged and the entry records the parent identity as review evidence.
 - For all preserved paths: any missing/excluded/unmapped entry blocks
   automation; deterministic targets must converge; allowed targets form a
   canonical-order union; a convergent deterministic target must belong to that
