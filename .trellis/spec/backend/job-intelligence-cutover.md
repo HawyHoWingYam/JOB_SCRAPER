@@ -97,6 +97,13 @@ The operator CLI reads its source connection through the application
 to `PG*` environment variables; a URL or password must never appear in the
 `pg_dump` / `pg_restore` argument list or persisted artifacts.
 
+Runtime API imports have two distinct seams:
+
+```python
+from app.api import router  # full backend API aggregation, loaded lazily
+from app.api.retrieval import router as retrieval_router  # isolated sidecar
+```
+
 ### 3. Contracts
 
 #### Manifest and verified artifacts
@@ -204,6 +211,11 @@ The only valid phase order is:
   lacks the embedding runtime and PostgreSQL clients, while ML images still lack
   PostgreSQL clients and Docker control. Run from a verified trusted host; do
   not mount Docker-daemon authority into the public API container.
+- `app.api` must remain import-light. Its public `router` export lazily loads the
+  full backend aggregation, while retrieval/recommendation entrypoints import
+  only their sidecar router. Eagerly importing every production route from the
+  package initializer makes the trimmed ML runtime depend on crawl/scheduler
+  packages and can pass host tests while failing container startup.
 
 ### 4. Validation & Error Matrix
 
@@ -222,6 +234,7 @@ The only valid phase order is:
 | Runtime evidence is absent, stale, false, incomplete, or belongs to another application/manifest | Phase 12 fails; no writer control |
 | Cross-layer record missing or writer control not explicitly injected | Phase 13 fails; no service restart |
 | Writer restart returns unknown/incomplete state or a persistent writer is not running | Reopen fails and records no successful Phase 13 checkpoint |
+| Retrieval entrypoint imports the production root router or its crawl modules | Runtime image import/health check fails; rollout is not complete |
 
 ### 5. Good / Base / Bad Cases
 
@@ -240,6 +253,11 @@ The only valid phase order is:
   governed authority, or automatically inject writer control on every execute.
 - **Bad:** clear valid rebuild outbox rows to make checkpoint replay appear
   idempotent. Outbox uniqueness/count assertions must prove replay instead.
+- **Good:** importing `app.retrieval_main` leaves production crawl route modules
+  unloaded, and the built ML image passes both import and `/health` probes.
+- **Bad:** add crawl/scheduler dependencies one at a time to the ML image to
+  mask an eager package import. This expands the image without restoring the
+  intended service boundary.
 
 ### 6. Tests Required
 
@@ -264,6 +282,10 @@ The only valid phase order is:
   skipped because a container mount is missing.
 - Live execute, activation, production smoke, and writer reopening are not test
   commands. They remain separately approved runbook operations.
+- `test_service_entrypoint_imports.py`: import the retrieval entrypoint in a
+  fresh Python subprocess and assert the production crawl router is absent from
+  `sys.modules`; the built retrieval image must also import the entrypoint and
+  report healthy before target-environment semantic search is accepted.
 
 ### 7. Wrong vs Correct
 
@@ -291,3 +313,27 @@ inventory -> dry-run -> quiesce -> execute (expected Phase 12 pause)
 
 The same manifest/checkpoint chain proves every completed phase, while runtime
 evidence and writer control become available only at their own explicit gates.
+
+#### Wrong: make every API submodule load the full production router
+
+```python
+# app/api/__init__.py
+from app.api import crawl_control, jobs, retrieval
+```
+
+Importing `app.api.retrieval` executes the package initializer first, so the
+trimmed retrieval image inherits unrelated crawl and scheduler dependencies.
+
+#### Correct: lazily expose the production root router
+
+```python
+def __getattr__(name: str):
+    if name == "router":
+        from app.api.root_router import router
+
+        return router
+    raise AttributeError(name)
+```
+
+Sidecar submodules can then import without loading the production aggregation;
+the full backend keeps the stable `from app.api import router` interface.
