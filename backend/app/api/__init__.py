@@ -1,36 +1,12 @@
-from fastapi import APIRouter
+from typing import Any
 
-from app.api import (
-    capabilities,
-    company_industries,
-    companies,
-    crawl_control,
-    crawl_jobs,
-    filters,
-    health,
-    job_intelligence,
-    jobs,
-    recommendations,
-    settings,
-    skill_governance,
-    skills,
-)
 
-router = APIRouter()
+def __getattr__(name: str) -> Any:
+    if name != "router":
+        raise AttributeError(name)
 
-# Include route modules
-router.include_router(health.router)
-router.include_router(job_intelligence.router, prefix="/api/v1")
-router.include_router(company_industries.router, prefix="/api/v1")
-router.include_router(skill_governance.router, prefix="/api/v1")
-router.include_router(skills.router, prefix="/api/v1")
-router.include_router(jobs.router, prefix="/api/v1")
-router.include_router(companies.router, prefix="/api/v1")
-router.include_router(crawl_control.router, prefix="/api/v1")
-router.include_router(crawl_jobs.router, prefix="/api/v1")
-router.include_router(filters.router, prefix="/api/v1")
-router.include_router(recommendations.router, prefix="/api/v1")
-router.include_router(capabilities.router, prefix="/api/v1")
-router.include_router(settings.router)
+    from app.api.root_router import router
+
+    return router
 
 __all__ = ["router"]
