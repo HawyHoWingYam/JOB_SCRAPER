@@ -40,15 +40,15 @@ max_journal_lines: 2000
 # Each hook receives TASK_JSON_PATH environment variable pointing to task.json.
 # Hook failures print a warning but do not block the main operation.
 #
-# hooks:
-#   after_create:
-#     - "echo 'Task created'"
-#   after_start:
-#     - "echo 'Task started'"
-#   after_finish:
-#     - "echo 'Task finished'"
-#   after_archive:
-#     - "echo 'Task archived'"
+hooks:
+  # GitHub is an external, best-effort integration. The Trellis hook runner
+  # surfaces failures as warnings without blocking local task lifecycle work.
+  after_start:
+    - "python3 .trellis/scripts/hooks/github_sync.py create"
+  after_archive:
+    - "python3 .trellis/scripts/hooks/github_sync.py archive"
+# Optional local repository override (gitignored):
+# .trellis/hooks.local.json -> {"github": {"repository": "owner/repo"}}
 
 #-------------------------------------------------------------------------------
 # Monorepo / Packages

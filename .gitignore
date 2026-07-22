@@ -82,6 +82,7 @@ backend/runtime/
 .serena/
 backend/.host_browser_profiles/
 backend/.host_worker_venv/
+.trellis/hooks.local.json
 
 # Misc
 .claude/
