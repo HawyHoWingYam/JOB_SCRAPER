@@ -17,6 +17,7 @@ import DecisionDialog from './DecisionDialog';
 import EvidencePanel from './EvidencePanel';
 import GovernanceQueue from './GovernanceQueue';
 import RecommendationPanel from './RecommendationPanel';
+import ProvenanceRepairPanel from './ProvenanceRepairPanel';
 import { GOVERNANCE_AREA_ADAPTERS } from './governanceAreas';
 import {
   navigateGovernance,
@@ -25,6 +26,7 @@ import {
 import './JobIntelligenceGovernancePage.css';
 
 const GOVERNANCE_PANEL_ID = 'governance-area-panel';
+const GOVERNANCE_PAGE_LIMIT = 10;
 const OPTIONAL_DETAIL_SECTION_LABELS = [
   'Audit timeline',
   'Governed targets',
@@ -56,8 +58,28 @@ function detailResources(payload) {
   return resources;
 }
 
+function scopeForRoute(route) {
+  return route.scope || {};
+}
+
+function describeScope(scope) {
+  const source = scope.sourceSites?.join(', ');
+  const categories = [
+    ...(scope.sourceClassificationIds || []),
+    ...(scope.sourceSubclassificationIds || []),
+  ];
+  const dates = scope.postedDateFrom || scope.postedDateTo
+    ? `${scope.postedDateFrom || 'any date'} → ${scope.postedDateTo || 'today'}`
+    : null;
+  return [source, categories.length ? categories.join(', ') : null, dates]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 export default function JobIntelligenceGovernancePage() {
   const [route, setRoute] = useState(() => parseGovernanceHash());
+  const currentScope = useMemo(() => scopeForRoute(route), [route]);
+  const currentScopeKey = JSON.stringify(currentScope);
   const [summary, setSummary] = useState(null);
   const [summaryError, setSummaryError] = useState(null);
   const [queue, setQueue] = useState({
@@ -65,6 +87,9 @@ export default function JobIntelligenceGovernancePage() {
     items: [],
     total: 0,
     nextCursor: null,
+    page: null,
+    pageCount: null,
+    offset: 0,
     error: null,
   });
   const [detail, setDetail] = useState({
@@ -115,24 +140,39 @@ export default function JobIntelligenceGovernancePage() {
       items: [],
       total: 0,
       nextCursor: null,
+      page: null,
+      pageCount: null,
+      offset: 0,
       error: null,
     });
     adapter.loadQueue(
       {
         query: route.query || '',
         cursor: route.cursor || null,
-        limit: 50,
+        page: route.page || 1,
+        scope: currentScope,
+        limit: GOVERNANCE_PAGE_LIMIT,
       },
       { signal: controller.signal },
     )
       .then((payload) => {
         if (controller.signal.aborted) return;
         const items = payload.items || [];
+        const pageMode = Number.isInteger(payload.page)
+          || Number.isInteger(payload.page_count);
         setQueue({
           status: 'ready',
           items,
           total: payload.total ?? items.length,
           nextCursor: payload.next_cursor || null,
+          page: pageMode ? (payload.page ?? route.page ?? 1) : null,
+          pageCount: pageMode
+            ? (payload.page_count ?? Math.max(
+                1,
+                Math.ceil((payload.total ?? items.length) / GOVERNANCE_PAGE_LIMIT),
+              ))
+            : null,
+          offset: payload.offset ?? 0,
           error: null,
         });
       })
@@ -143,11 +183,14 @@ export default function JobIntelligenceGovernancePage() {
           items: [],
           total: 0,
           nextCursor: null,
+          page: null,
+          pageCount: null,
+          offset: 0,
           error,
         });
       });
     return () => controller.abort();
-  }, [route.area, route.cursor, route.query, refreshVersion]);
+  }, [route, currentScope, currentScopeKey, refreshVersion]);
 
   useEffect(() => {
     if (!route.itemId) {
@@ -304,11 +347,14 @@ export default function JobIntelligenceGovernancePage() {
         items: [],
         total: 0,
         nextCursor: null,
+        page: null,
+        pageCount: null,
+        offset: 0,
         error: null,
       });
       setQueueFocusTarget('search');
       setRefreshVersion((version) => version + 1);
-      navigateGovernance(route.area);
+      navigateGovernance(route.area, null, currentScope);
     } catch (error) {
       if (isStaleGovernanceError(error)) {
         closeDecision();
@@ -371,6 +417,19 @@ export default function JobIntelligenceGovernancePage() {
         </div>
       )}
 
+      {Object.keys(currentScope).length > 0 && (
+        <section className="governance-scope-banner" aria-label="Current AI Enrichment scope">
+          <div>
+            <strong>Reviewing the current AI Enrichment scope</strong>
+            <span>{describeScope(currentScope) || 'Bounded pending batch'}</span>
+            {currentScope.reason && <small>Reason: {currentScope.reason}</small>}
+          </div>
+          <button type="button" onClick={() => navigateGovernance(route.area)}>
+            Clear scope
+          </button>
+        </section>
+      )}
+
       <div
         className="governance-tabs"
         role="tablist"
@@ -418,32 +477,58 @@ export default function JobIntelligenceGovernancePage() {
           </div>
         )}
         {queue.status === 'ready' && (
-          <div className="governance-workspace-grid">
+          <div
+            className={`governance-workspace-grid${route.itemId ? ' has-selected-item' : ''}`}
+          >
             <GovernanceQueue
               areaLabel={activeDefinition.label}
               adapter={activeAdapter}
               items={queue.items}
               total={queue.total}
+              page={queue.page}
+              pageCount={queue.pageCount}
               query={route.query || ''}
               nextCursor={queue.nextCursor}
               selectedId={route.itemId}
               focusTarget={queueFocusTarget}
               onFocusTargetHandled={clearQueueFocusTarget}
               onFilter={(query) =>
-                navigateGovernance(route.area, null, { query })
-              }
-              onNextPage={() =>
                 navigateGovernance(route.area, null, {
-                  query: route.query,
-                  cursor: queue.nextCursor,
+                  ...currentScope,
+                  query,
+                  page: 1,
                 })
               }
+              onPreviousPage={() => navigateGovernance(route.area, null, {
+                ...currentScope,
+                query: route.query,
+                page: Math.max(1, (queue.page || 1) - 1),
+              })}
+              onNextPage={() => navigateGovernance(route.area, null, queue.pageCount
+                ? {
+                    ...currentScope,
+                    query: route.query,
+                    page: Math.min(queue.pageCount, (queue.page || 1) + 1),
+                  }
+                : {
+                    ...currentScope,
+                    query: route.query,
+                    cursor: queue.nextCursor,
+                  })}
+              onPageChange={(page) => navigateGovernance(route.area, null, {
+                ...currentScope,
+                query: route.query,
+                page,
+              })}
               onSelect={(itemId) =>
                 navigateGovernance(route.area, itemId, {
+                  ...currentScope,
                   query: route.query,
                   cursor: route.cursor,
+                  page: route.page,
                 })
               }
+              scoped={Object.keys(currentScope).length > 0}
             />
             <section className="governance-detail" aria-label="Selected governance item">
               {route.itemId && (
@@ -453,8 +538,10 @@ export default function JobIntelligenceGovernancePage() {
                   onClick={() => {
                     setQueueFocusTarget(route.itemId);
                     navigateGovernance(route.area, null, {
+                      ...currentScope,
                       query: route.query,
                       cursor: route.cursor,
+                      page: route.page,
                     });
                   }}
                 >
@@ -499,6 +586,17 @@ export default function JobIntelligenceGovernancePage() {
                     </div>
                   )}
                   <EvidencePanel area={route.area} item={detail.item} />
+                  <ProvenanceRepairPanel
+                    scope={currentScope}
+                    item={detail.item}
+                    onComplete={(payload) => {
+                      setFeedback({
+                        kind: 'success',
+                        message: `Provenance repair completed for ${payload.repair?.changed_jobs || 0} jobs. Recheck AI Enrichment before running.`,
+                      });
+                      setRefreshVersion((version) => version + 1);
+                    }}
+                  />
                   {route.area === 'company-industries' && (
                     <CompanyIndustryContextPanel
                       tree={detail.resources.tree}
@@ -512,26 +610,32 @@ export default function JobIntelligenceGovernancePage() {
                         : detail.item.recommendations || []
                     }
                   />
-                  <section className="governance-panel">
-                    <h2>Decision</h2>
-                    <p className="governance-muted">
-                      Every action requires explicit confirmation and the current
-                      item version.
-                    </p>
-                    <div className="governance-decision-buttons">
-                      {activeAdapter.actions.map((action) => (
-                        <button
-                          key={action.value}
-                          type="button"
-                          disabled={action.requiresTarget && detail.options.length === 0}
-                          onClick={(event) => openDecision(action, event)}
-                        >
-                          {action.label}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                  <AuditTimeline events={detail.events} />
+                  {!activeAdapter.isSourceEvidenceReason?.(detail.item) && (
+                    <>
+                      <section className="governance-panel">
+                        <h2>Decision</h2>
+                        <p className="governance-muted">
+                          Every action requires explicit confirmation and the current
+                          item version.
+                        </p>
+                        <div className="governance-decision-buttons">
+                          {(activeAdapter.getActions
+                            ? activeAdapter.getActions(detail.item, activeAdapter)
+                            : activeAdapter.actions).map((action) => (
+                            <button
+                              key={action.value}
+                              type="button"
+                              disabled={action.requiresTarget && detail.options.length === 0}
+                              onClick={(event) => openDecision(action, event)}
+                            >
+                              {action.label}
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+                      <AuditTimeline events={detail.events} />
+                    </>
+                  )}
                 </>
               )}
             </section>

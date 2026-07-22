@@ -50,6 +50,45 @@
   color: #ffe0a3;
 }
 
+.governance-scope-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid rgba(124, 140, 255, 0.42);
+  border-radius: 0.7rem;
+  background: rgba(72, 83, 161, 0.14);
+}
+
+.governance-scope-banner > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.governance-scope-banner span,
+.governance-scope-banner small {
+  color: var(--text-secondary, #a9b1c4);
+  overflow-wrap: anywhere;
+}
+
+.governance-scope-banner button,
+.provenance-repair-panel button,
+.governance-queue-pagination button {
+  min-height: 2.25rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid rgba(124, 140, 255, 0.38);
+  border-radius: 0.5rem;
+  background: rgba(72, 83, 161, 0.18);
+  color: inherit;
+  cursor: pointer;
+}
+
+.governance-scope-banner button {
+  flex: 0 0 auto;
+}
+
 .governance-tabs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -174,13 +213,46 @@
   display: grid;
   width: 100%;
   gap: 0.3rem;
-  padding: 0.75rem;
+  padding: 0.55rem 0.65rem;
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 0.65rem;
   background: rgba(15, 23, 42, 0.42);
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.governance-queue-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
+.governance-queue-pagination button:disabled,
+.provenance-repair-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.governance-queue-pagination label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary, #a9b1c4);
+  font-size: 0.8rem;
+}
+
+.governance-queue-pagination input {
+  width: 4.2rem;
+  min-height: 2.25rem;
+  padding: 0.4rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.9);
+  color: inherit;
+  text-align: center;
 }
 
 .governance-queue li > button.selected {
@@ -210,6 +282,60 @@
   display: grid;
   min-width: 0;
   gap: 0.85rem;
+}
+
+.provenance-repair-panel {
+  border-color: rgba(245, 177, 66, 0.42);
+  background: rgba(91, 61, 17, 0.16);
+}
+
+.provenance-repair-panel dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.provenance-repair-panel dl div {
+  min-width: 0;
+  padding: 0.55rem;
+  border-radius: 0.5rem;
+  background: rgba(2, 6, 23, 0.22);
+}
+
+.provenance-repair-panel dt,
+.provenance-repair-panel dd {
+  overflow-wrap: anywhere;
+}
+
+.provenance-repair-panel dt {
+  color: var(--text-secondary, #a9b1c4);
+  font-size: 0.75rem;
+}
+
+.provenance-repair-panel dd {
+  margin: 0.2rem 0 0;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.provenance-repair-blockers,
+.provenance-confirmation,
+.provenance-repair-result {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.75rem 0;
+}
+
+.provenance-confirmation {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  color: #ffe0a3;
+}
+
+.provenance-repair-error {
+  color: #fca5a5;
+  overflow-wrap: anywhere;
 }
 
 .governance-narrow-back {
@@ -430,6 +556,14 @@
     grid-template-columns: 1fr;
   }
 
+  .governance-workspace-grid.has-selected-item .governance-queue {
+    display: none;
+  }
+
+  .governance-workspace-grid.has-selected-item .governance-detail {
+    grid-column: 1;
+  }
+
   .governance-queue {
     padding-right: 0;
     padding-bottom: 1rem;
@@ -440,6 +574,19 @@
   .governance-narrow-back {
     width: 100%;
     justify-content: center;
+  }
+
+  .governance-scope-banner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .governance-scope-banner button {
+    width: 100%;
+  }
+
+  .provenance-repair-panel dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .decision-dialog dl div {

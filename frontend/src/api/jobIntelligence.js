@@ -94,7 +94,15 @@ export function fetchCanonicalReviewItems(filters = {}, options) {
       appendValues(params, 'status', filters.status);
       appendValues(params, 'reason', filters.reason);
       if (filters.jobId) params.set('job_id', filters.jobId);
+      appendValues(params, 'job_ids', filters.jobIds);
+      appendValues(params, 'source_site', filters.sourceSites);
+      appendValues(params, 'source_classification_id', filters.sourceClassificationIds);
+      appendValues(params, 'source_subclassification_id', filters.sourceSubclassificationIds);
+      if (filters.postedDateFrom) params.set('posted_date_from', filters.postedDateFrom);
+      if (filters.postedDateTo) params.set('posted_date_to', filters.postedDateTo);
+      if (filters.pendingLimit) params.set('pending_limit', String(filters.pendingLimit));
       if (filters.cursor) params.set('cursor', filters.cursor);
+      if (filters.page) params.set('page', String(filters.page));
       if (filters.limit) params.set('limit', String(filters.limit));
     },
   );
@@ -168,6 +176,7 @@ export function fetchSkillCandidates(filters = {}, options) {
       appendValues(params, 'status', filters.status);
       if (filters.search) params.set('search', filters.search);
       if (filters.cursor) params.set('cursor', filters.cursor);
+      if (filters.page) params.set('page', String(filters.page));
       if (filters.limit) params.set('limit', String(filters.limit));
     }),
     options,
@@ -260,6 +269,7 @@ export function fetchCompanyIndustryReviewItems(filters = {}, options) {
         if (filters.companyId) params.set('company_id', filters.companyId);
         if (filters.rawValue) params.set('raw_value', filters.rawValue);
         if (filters.cursor) params.set('cursor', filters.cursor);
+        if (filters.page) params.set('page', String(filters.page));
         if (filters.limit) params.set('limit', String(filters.limit));
       },
     ),
@@ -310,6 +320,29 @@ export function fetchCompanyIndustryAudit(filters = {}, options) {
         if (filters.limit) params.set('limit', String(filters.limit));
       },
     ),
+    options,
+  );
+}
+
+export function inspectSourceCatalogProvenance(scope, limit, options) {
+  return postJson(
+    apiPath('/job-intelligence/governance/source-catalog-provenance/inspect'),
+    { scope, limit },
+    options,
+  );
+}
+
+export function applySourceCatalogProvenance(scope, values, options) {
+  return postJson(
+    apiPath('/job-intelligence/governance/source-catalog-provenance/apply'),
+    {
+      scope,
+      limit: values.limit,
+      revision_id: values.revisionId,
+      expected_fingerprint: values.expectedFingerprint,
+      repairable_job_ids: values.repairableJobIds,
+      confirmed: true,
+    },
     options,
   );
 }

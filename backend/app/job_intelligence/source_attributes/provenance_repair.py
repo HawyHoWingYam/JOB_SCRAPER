@@ -145,6 +145,24 @@ class SourceCatalogProvenanceRepair:
             source_catalog_repository or SourceCatalogRepository()
         )
 
+    def inspect_active(
+        self,
+        *,
+        source_site: str,
+        job_ids: Sequence[UUID] | None = None,
+        pending_only: bool = True,
+    ) -> ProvenanceRepairReport:
+        """Inspect the currently published revision without guessing a fallback."""
+        active_revision_id, _fingerprint = self._active_revision(source_site)
+        if active_revision_id is None:
+            raise ValueError("Source Catalog has no active revision")
+        return self.inspect(
+            source_site=source_site,
+            revision_id=active_revision_id,
+            job_ids=job_ids,
+            pending_only=pending_only,
+        )
+
     def inspect(
         self,
         *,

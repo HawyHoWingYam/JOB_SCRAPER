@@ -50,15 +50,51 @@ function industryOptions(tree) {
   }));
 }
 
+const canonicalActions = [
+  {
+    value: 'assign_existing_subcategory',
+    label: 'Assign existing Job Subcategory',
+    requiresTarget: true,
+    consequence:
+      'This accepts an existing governed Job Subcategory and updates the Job Intelligence Projection.',
+  },
+  {
+    value: 'mark_insufficient_evidence',
+    label: 'Mark insufficient evidence',
+    consequence:
+      'The Job remains Unassigned until new evidence is reviewed.',
+  },
+];
+
+function isSourceEvidenceReason(item) {
+  return (item?.reasons || []).some((reason) => (
+    reason === 'source_catalog_provenance_missing'
+    || reason === 'source_classification_paths_missing'
+  ));
+}
+
 export const GOVERNANCE_AREA_ADAPTERS = {
   'job-taxonomy': {
     queueSearchLabel: 'Filter by Job ID',
-    loadQueue: ({ query, cursor, limit = 50 } = {}, options) =>
+    loadQueue: ({ query, cursor, page, limit = 10, scope = {} } = {}, options) =>
       fetchCanonicalReviewItems(
         {
           status: ['active'],
+          ...(scope.reason ? { reason: [scope.reason] } : {}),
           ...(query ? { jobId: query } : {}),
+          ...(scope.jobIds ? { jobIds: scope.jobIds } : {}),
+          ...(scope.sourceSites ? { sourceSites: scope.sourceSites } : {}),
+          ...(scope.sourceClassificationIds
+            ? { sourceClassificationIds: scope.sourceClassificationIds }
+            : {}),
+          ...(scope.sourceSubclassificationIds
+            ? { sourceSubclassificationIds: scope.sourceSubclassificationIds }
+            : {}),
+          ...(scope.postedDateFrom ? { postedDateFrom: scope.postedDateFrom } : {}),
+          ...(scope.postedDateTo ? { postedDateTo: scope.postedDateTo } : {}),
+          ...(scope.pendingLimit ? { pendingLimit: scope.pendingLimit } : {}),
           ...(cursor ? { cursor } : {}),
+          ...(page && !cursor ? { page } : {}),
           limit,
         },
         options,
@@ -74,30 +110,19 @@ export const GOVERNANCE_AREA_ADAPTERS = {
     affectedLabel: () => '1 Job',
     evidenceSummary: (item) =>
       (item.reasons || []).join(', ') || item.evidence_hash,
-    actions: [
-      {
-        value: 'assign_existing_subcategory',
-        label: 'Assign existing Job Subcategory',
-        requiresTarget: true,
-        consequence:
-          'This accepts an existing governed Job Subcategory and updates the Job Intelligence Projection.',
-      },
-      {
-        value: 'mark_insufficient_evidence',
-        label: 'Mark insufficient evidence',
-        consequence:
-          'The Job remains Unassigned until new evidence is reviewed.',
-      },
-    ],
+    actions: canonicalActions,
+    getActions: (item) => (isSourceEvidenceReason(item) ? [] : canonicalActions),
+    isSourceEvidenceReason,
   },
   'skill-candidates': {
     queueSearchLabel: 'Search Skill Candidates',
-    loadQueue: ({ query, cursor, limit = 50 } = {}, options) =>
+    loadQueue: ({ query, cursor, page, limit = 10 } = {}, options) =>
       fetchSkillCandidates(
         {
           status: ['pending'],
           ...(query ? { search: query } : {}),
           ...(cursor ? { cursor } : {}),
+          ...(page && !cursor ? { page } : {}),
           limit,
         },
         options,
@@ -146,12 +171,13 @@ export const GOVERNANCE_AREA_ADAPTERS = {
   },
   'company-industries': {
     queueSearchLabel: 'Filter by Source Industry value',
-    loadQueue: ({ query, cursor, limit = 50 } = {}, options) =>
+    loadQueue: ({ query, cursor, page, limit = 10 } = {}, options) =>
       fetchCompanyIndustryReviewItems(
         {
           status: ['active'],
           ...(query ? { rawValue: query } : {}),
           ...(cursor ? { cursor } : {}),
+          ...(page && !cursor ? { page } : {}),
           limit,
         },
         options,

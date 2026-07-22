@@ -137,6 +137,7 @@ def list_company_industry_review_items(
     company_id: UUID | None = None,
     raw_value: str | None = None,
     cursor: str | None = None,
+    page: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> CompanyIndustryReviewPageSchema:
@@ -149,6 +150,7 @@ def list_company_industry_review_items(
                 company_id=company_id,
                 raw_value=raw_value,
                 cursor=cursor,
+                page=page,
                 limit=limit,
             )
         )

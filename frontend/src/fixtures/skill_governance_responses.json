@@ -225,6 +225,10 @@
       }
     ],
     "next_cursor": null,
-    "total": 3
+    "total": 3,
+    "page": null,
+    "limit": null,
+    "offset": null,
+    "page_count": null
   }
 }

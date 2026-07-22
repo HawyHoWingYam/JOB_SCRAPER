@@ -117,7 +117,8 @@ export async function apiFetchJson(url, options = {}) {
 
     return data;
   } catch (error) {
-    if (!failureLogged) {
+    const callerCancelled = error?.name === 'AbortError' && fetchOptions.signal?.aborted;
+    if (!failureLogged && !callerCancelled) {
       logError('api.request_failed', {
         requestId: effectiveRequestId,
         method,

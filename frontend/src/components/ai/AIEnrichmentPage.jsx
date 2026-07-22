@@ -43,6 +43,23 @@ function isTerminalRun(run) {
   return TERMINAL_RUN_STATUSES.has(normalizeRunStatus(run?.status));
 }
 
+function governanceScope(filters = {}, pendingLimit, detail = {}) {
+  const sourceId = detail.source_classification_id;
+  const sourceSite = sourceId?.includes(':') ? sourceId.split(':', 1)[0] : null;
+  const stableReason = /^[a-z0-9_]+$/.test(String(detail.reason || ''))
+    ? detail.reason
+    : null;
+  return {
+    ...filters,
+    ...(sourceSite && !filters.source_sites?.length
+      ? { source_sites: [sourceSite] }
+      : {}),
+    ...(stableReason ? { reason: stableReason } : {}),
+    ...(detail.job_ids?.length ? { jobIds: detail.job_ids } : {}),
+    ...(pendingLimit ? { pendingLimit } : {}),
+  };
+}
+
 function parseDateMs(value) {
   if (!value) {
     return null;
@@ -1011,9 +1028,15 @@ export default function AIEnrichmentPage() {
                       </li>
                     ))}
                   </ul>
-                  <a className="ai-governance-link" href={governanceHash('job-taxonomy')}>
-                    Open Job Taxonomy Review
-                  </a>
+                  {(preview.excluded_items || []).map((detail) => (
+                    <a
+                      key={`review-${detail.reason}-${detail.source_classification_id || 'unknown'}`}
+                      className="ai-governance-link"
+                      href={governanceHash('job-taxonomy', null, governanceScope(filters, normalizedLimit, detail))}
+                    >
+                      Review {Number(detail.count || 0).toLocaleString()} excluded jobs
+                    </a>
+                  ))}
                 </div>
               )}
 
@@ -1233,9 +1256,15 @@ export default function AIEnrichmentPage() {
                               </li>
                             ))}
                           </ul>
-                          <a className="ai-governance-link" href={governanceHash('job-taxonomy')}>
-                            Open Job Taxonomy Review
-                          </a>
+                          {excludedDetails.map((detail) => (
+                            <a
+                              key={`run-review-${detail.reason || 'reason'}-${detail.source_classification_id || 'unknown'}`}
+                              className="ai-governance-link"
+                              href={governanceHash('job-taxonomy', null, governanceScope({}, run.pending_limit, detail))}
+                            >
+                              Review {Number(detail.count || 0).toLocaleString()} excluded jobs
+                            </a>
+                          ))}
                         </div>
                       )}
 

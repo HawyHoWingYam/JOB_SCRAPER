@@ -135,6 +135,10 @@ class SkillCandidatePageSchema(BaseModel):
     items: list[SkillCandidateSchema]
     next_cursor: str | None
     total: int
+    page: int | None = None
+    limit: int | None = None
+    offset: int | None = None
+    page_count: int | None = None
 
 
 class SkillCreateTargetSchema(BaseModel):

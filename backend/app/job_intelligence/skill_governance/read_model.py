@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
 import json
+import math
 from typing import Any
 from uuid import UUID
 
@@ -306,6 +307,7 @@ class SkillCandidateQuery:
     statuses: tuple[str, ...] = ("pending",)
     search: str | None = None
     cursor: str | None = None
+    page: int | None = None
     limit: int = 50
 
     def __post_init__(self) -> None:
@@ -319,6 +321,11 @@ class SkillCandidateQuery:
                 "SKILL_CANDIDATE_LIMIT_INVALID",
                 "Skill Candidate page limit must be between 1 and 200",
             )
+        if self.page is not None and self.page < 1:
+            raise SkillGovernanceReadError(
+                "SKILL_CANDIDATE_PAGE_INVALID",
+                "Skill Candidate page must be at least 1",
+            )
 
 
 @dataclass(frozen=True)
@@ -326,13 +333,25 @@ class SkillCandidatePage:
     items: tuple[SkillCandidateView, ...]
     next_cursor: str | None
     total: int
+    page: int | None = None
+    limit: int | None = None
+    offset: int | None = None
+    page_count: int | None = None
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "items": [item.to_payload() for item in self.items],
             "next_cursor": self.next_cursor,
             "total": self.total,
         }
+        if self.page is not None:
+            payload.update(
+                page=self.page,
+                limit=self.limit,
+                offset=self.offset,
+                page_count=self.page_count,
+            )
+        return payload
 
 
 def _encode_cursor(candidate: SkillCandidate) -> str:
@@ -753,6 +772,38 @@ class SkillGovernanceReader:
             or 0
         )
         statement = select(SkillCandidate).where(*filters)
+        if query.page is not None:
+            offset = (query.page - 1) * query.limit
+            page_rows = self.db.scalars(
+                statement.order_by(
+                    SkillCandidate.last_seen_at.desc(),
+                    SkillCandidate.id.desc(),
+                )
+                .offset(offset)
+                .limit(query.limit)
+            ).all()
+            recommendation_rows = (
+                self._recommendation_rows(revision.id) if page_rows else []
+            )
+            return SkillCandidatePage(
+                items=tuple(
+                    self._candidate_view(
+                        row,
+                        recommendations=self._recommend_candidate(
+                            row,
+                            recommendation_rows,
+                            limit=5,
+                        ),
+                    )
+                    for row in page_rows
+                ),
+                next_cursor=None,
+                total=total,
+                page=query.page,
+                limit=query.limit,
+                offset=offset,
+                page_count=max(1, math.ceil(total / query.limit)),
+            )
         if query.cursor is not None:
             last_seen_at, candidate_id = _decode_cursor(query.cursor)
             statement = statement.where(

@@ -57,11 +57,19 @@ Frontend governance queue hashes are:
 
 ```text
 #job-intelligence/<area>?item=<stable-id>&q=<domain-filter>&cursor=<opaque-cursor>
+#job-intelligence/job-taxonomy?source_site=<source>&source_classification_id=<qualified-id>&job_id=<job-id>&reason=<reason>&pending_limit=<limit>&page=<page>
 ```
 
 `governanceAreas.js` owns the domain filter mapping: Canonical Review uses
 `job_id`, Skill Candidates use `search`, and Company Industry Review uses
 `raw_value`. React queue mechanics only pass `query`, `cursor`, and `limit`.
+
+Operator-scoped Canonical Review adds page mode as an additive contract. The
+frontend keeps repeated `job_id` values in the hash for a readable deep link,
+then serializes the selected set as repeated `job_ids` query values for the
+backend API; `job_id` remains the singular search field. Page responses expose
+`page`, `limit`, `offset`, and `page_count`, with the operator UI requesting
+10 items per page. Existing cursor mode remains valid for unscoped consumers.
 
 ### 3. Contracts
 
@@ -94,6 +102,16 @@ Frontend governance queue hashes are:
 - Governance decisions exist only in the trusted-local Governance workspace.
   Job Detail, Companies, AI Enrichment, Dashboard, and Browser remain read-only
   and deep-link into Governance.
+- A scoped AI Enrichment taxonomy link preserves source, qualified category /
+  subcategory IDs, dates, pending limit, exclusion reason, and job IDs. The
+  queue shows a scope banner and only that bounded pending slice. On narrow
+  screens, selecting an item hides the queue and shows the detail panel first;
+  the explicit Back action restores the queue and its focus.
+- `source_catalog_provenance_missing` and
+  `source_classification_paths_missing` are source-evidence reasons, not
+  Canonical Job Subcategory decisions. Their detail panel explains the
+  fail-closed preflight and, for the repairable reason, uses report-first
+  inspect plus explicitly confirmed, fingerprint-pinned apply.
 
 ### 4. Validation & Error Matrix
 
@@ -108,6 +126,8 @@ Frontend governance queue hashes are:
 | Queue filter/cursor changes | Abort stale request; URL and API receive the same domain filter/cursor |
 | Optional detail section fails | Keep evidence visible; name the partial failure and disable only dependent actions |
 | Decision returns stale version | Close stale confirmation, reload detail, explain conflict |
+| A deep link contains multiple selected jobs | Send them as `job_ids` to the API; never send repeated values through singular `job_id` |
+| Narrow selected-item view | Hide the queue only below the narrow breakpoint; Back must restore the scoped page and queue focus |
 | Container fixture test cannot see frontend copy | Mount frontend read-only; do not skip equality validation |
 
 ### 5. Good / Base / Bad Cases
@@ -151,6 +171,9 @@ Frontend governance queue hashes are:
 - Manual browser QA covers desktop and narrow width, long English/CJK labels,
   long hashes/IDs, tab and queue keyboard navigation, dialog focus/Escape, and
   zero document-level horizontal overflow.
+- Scoped browser QA also verifies AI → taxonomy deep-link context, `10 of N`
+  page mode, direct numeric page jumps, source-provenance inspect/confirm
+  gating, and a fresh page has no logged caller-cancelled request errors.
 
 ### 7. Wrong vs Correct
 

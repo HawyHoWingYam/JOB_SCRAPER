@@ -88,6 +88,38 @@ class _ExcludedTaxonomyGroup(TypedDict):
     job_ids: list[str]
 
 
+@dataclass(frozen=True)
+class PendingSelectionReport:
+    """Read-only, preflight-backed snapshot of one pending selection."""
+
+    matching_pending_count: int
+    selected_job_ids: tuple[str, ...]
+    supported_job_ids: tuple[str, ...]
+    excluded_reasons_by_job_id: dict[str, str]
+    excluded_items: tuple[_ExcludedTaxonomyGroup, ...]
+
+    @property
+    def selected_item_count(self) -> int:
+        return len(self.selected_job_ids)
+
+    @property
+    def effective_item_count(self) -> int:
+        return len(self.supported_job_ids)
+
+    @property
+    def excluded_item_count(self) -> int:
+        return len(self.excluded_reasons_by_job_id)
+
+    def to_preview_payload(self) -> dict[str, object]:
+        return {
+            "matching_pending_count": self.matching_pending_count,
+            "selected_item_count": self.selected_item_count,
+            "effective_item_count": self.effective_item_count,
+            "excluded_item_count": self.excluded_item_count,
+            "excluded_items": [dict(item) for item in self.excluded_items],
+        }
+
+
 class ActiveEnrichmentRunError(RuntimeError):
     def __init__(self, run_id: str):
         self.run_id = run_id
@@ -210,6 +242,12 @@ class EnrichmentRunService:
     def preview_pending_jobs(
         self, *, filters: PendingJobFilters, limit: int
     ) -> dict[str, object]:
+        return self.inspect_pending_selection(filters=filters, limit=limit).to_preview_payload()
+
+    def inspect_pending_selection(
+        self, *, filters: PendingJobFilters, limit: int
+    ) -> PendingSelectionReport:
+        """Resolve one oldest-first pending slice and its taxonomy preflight."""
         matching_count = int(
             self._query_pending_candidates(func.count(Job.id), filters=filters).scalar()
             or 0
@@ -218,13 +256,13 @@ class EnrichmentRunService:
         supported_jobs, excluded_reasons, excluded_items = self._preflight_jobs(
             selected_jobs
         )
-        return {
-            "matching_pending_count": matching_count,
-            "selected_item_count": len(selected_jobs),
-            "effective_item_count": len(supported_jobs),
-            "excluded_item_count": len(excluded_reasons),
-            "excluded_items": excluded_items,
-        }
+        return PendingSelectionReport(
+            matching_pending_count=matching_count,
+            selected_job_ids=tuple(str(job.id) for job in selected_jobs),
+            supported_job_ids=tuple(str(job.id) for job in supported_jobs),
+            excluded_reasons_by_job_id=dict(excluded_reasons),
+            excluded_items=tuple(excluded_items),
+        )
 
     def _select_pending_jobs(
         self,

@@ -288,8 +288,8 @@ describe('AIEnrichmentPage', () => {
     expect(card.getAllByText('Excluded 2')).toHaveLength(2);
     expect(card.getByText(/Farming \(offertoday:113000\)/)).toBeInTheDocument();
     expect(card.getByText(/No defensible internal taxonomy domain/)).toBeInTheDocument();
-    expect(card.getByRole('link', { name: 'Open Job Taxonomy Review' }))
-      .toHaveAttribute('href', '#job-intelligence/job-taxonomy');
+    expect(card.getByRole('link', { name: 'Review 2 excluded jobs' }))
+      .toHaveAttribute('href', '#job-intelligence/job-taxonomy?source_site=offertoday');
     expect(card.queryByRole('button', { name: /Retry failed/i })).not.toBeInTheDocument();
     expect(card.queryByRole('button', { name: /assign|accept|reject/i })).not.toBeInTheDocument();
   });

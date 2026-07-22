@@ -86,4 +86,28 @@ describe('job intelligence API', () => {
       note: 'Evidence reviewed',
     });
   });
+
+  it('serializes scoped page-mode taxonomy queue filters', async () => {
+    globalThis.fetch.mockResolvedValue(
+      responseJson({ items: [], next_cursor: null, total: 0, page: 1, limit: 10, offset: 0, page_count: 0 }),
+    );
+
+    await fetchCanonicalReviewItems({
+      status: ['active'],
+      reason: ['source_catalog_provenance_missing'],
+      jobIds: ['job-1'],
+      sourceSites: ['offertoday'],
+      sourceClassificationIds: ['offertoday:121000'],
+      sourceSubclassificationIds: ['offertoday:121015'],
+      postedDateFrom: '2026-07-01',
+      postedDateTo: '2026-07-22',
+      pendingLimit: 50,
+      page: 2,
+      limit: 10,
+    });
+
+    expect(globalThis.fetch.mock.calls[0][0]).toBe(
+      '/api/v1/job-intelligence/governance/job-taxonomy/review-items?status=active&reason=source_catalog_provenance_missing&job_ids=job-1&source_site=offertoday&source_classification_id=offertoday%3A121000&source_subclassification_id=offertoday%3A121015&posted_date_from=2026-07-01&posted_date_to=2026-07-22&pending_limit=50&page=2&limit=10',
+    );
+  });
 });

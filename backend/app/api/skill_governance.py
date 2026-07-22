@@ -140,6 +140,7 @@ def list_skill_candidates(
     status: list[str] | None = Query(default=None),
     search: str | None = None,
     cursor: str | None = None,
+    page: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> SkillCandidatePageSchema:
@@ -149,6 +150,7 @@ def list_skill_candidates(
                 statuses=tuple(status) if status is not None else ("pending",),
                 search=search,
                 cursor=cursor,
+                page=page,
                 limit=limit,
             )
         )

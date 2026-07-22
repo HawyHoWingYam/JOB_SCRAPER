@@ -197,4 +197,17 @@ describe('api client', () => {
     }
   });
 
+  it('does not log caller-cancelled requests as application failures', async () => {
+    const callerController = new AbortController();
+    globalThis.fetch = vi.fn(() => {
+      callerController.abort();
+      return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+    });
+
+    await expect(
+      apiFetchJson('/api/v1/capabilities', { signal: callerController.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(logErrorSpy).not.toHaveBeenCalled();
+  });
+
 });

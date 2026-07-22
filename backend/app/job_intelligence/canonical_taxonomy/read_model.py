@@ -4,6 +4,7 @@ import base64
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import math
 from typing import Literal
 from uuid import UUID
 
@@ -71,7 +72,9 @@ class CanonicalReviewQuery:
     statuses: tuple[str, ...] = ("active",)
     reason_codes: tuple[str, ...] = ()
     job_id: UUID | None = None
+    job_ids: tuple[UUID, ...] = ()
     cursor: str | None = None
+    page: int | None = None
     limit: int = 50
 
     def __post_init__(self) -> None:
@@ -79,6 +82,11 @@ class CanonicalReviewQuery:
             raise CanonicalReadError(
                 "CANONICAL_REVIEW_LIMIT_INVALID",
                 "Canonical review page limit must be between 1 and 200",
+            )
+        if self.page is not None and self.page < 1:
+            raise CanonicalReadError(
+                "CANONICAL_REVIEW_PAGE_INVALID",
+                "Canonical review page must be at least 1",
             )
         invalid_statuses = sorted(set(self.statuses) - _REVIEW_STATUSES)
         if invalid_statuses:
@@ -306,13 +314,25 @@ class CanonicalReviewPage:
     items: tuple[CanonicalReviewItemView, ...]
     next_cursor: str | None
     total: int
+    page: int | None = None
+    limit: int | None = None
+    offset: int | None = None
+    page_count: int | None = None
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload = {
             "items": [item.to_payload() for item in self.items],
             "next_cursor": self.next_cursor,
             "total": self.total,
         }
+        if self.page is not None:
+            payload.update(
+                page=self.page,
+                limit=self.limit,
+                offset=self.offset,
+                page_count=self.page_count,
+            )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -541,7 +561,29 @@ class CanonicalTaxonomyReader:
             )
         if query.job_id is not None:
             statement = statement.filter(JobTaxonomyReviewItem.job_id == query.job_id)
+        if query.job_ids:
+            statement = statement.filter(JobTaxonomyReviewItem.job_id.in_(query.job_ids))
         total = statement.count()
+        if query.page is not None:
+            offset = (query.page - 1) * query.limit
+            page_rows = (
+                statement.order_by(
+                    JobTaxonomyReviewItem.created_at.desc(),
+                    JobTaxonomyReviewItem.id.desc(),
+                )
+                .offset(offset)
+                .limit(query.limit)
+                .all()
+            )
+            return CanonicalReviewPage(
+                items=tuple(self._review_view(row) for row in page_rows),
+                next_cursor=None,
+                total=total,
+                page=query.page,
+                limit=query.limit,
+                offset=offset,
+                page_count=max(1, math.ceil(total / query.limit)),
+            )
         if query.cursor is not None:
             created_at, review_id = _decode_review_cursor(query.cursor)
             statement = statement.filter(

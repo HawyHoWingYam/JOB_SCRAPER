@@ -163,7 +163,11 @@
       }
     ],
     "next_cursor": null,
-    "total": 1
+    "total": 1,
+    "page": null,
+    "limit": null,
+    "offset": null,
+    "page_count": null
   },
   "mappings": [
     {

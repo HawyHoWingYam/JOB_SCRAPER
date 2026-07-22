@@ -7,15 +7,31 @@ function JsonEvidence({ value }) {
 }
 
 export default function EvidencePanel({ area, item }) {
+  const sourceEvidenceReason = (item?.reasons || []).find((reason) => (
+    reason === 'source_catalog_provenance_missing'
+    || reason === 'source_classification_paths_missing'
+  ));
   return (
     <section className="governance-panel">
       <h2>Evidence</h2>
       {area === 'job-taxonomy' && (
         <>
           <p><strong>Job:</strong> {item.job_id}</p>
-          <p><strong>Unassigned reasons:</strong> {(item.reasons || []).join(', ') || 'Unknown'}</p>
-          <p><strong>Evidence hash:</strong> <code>{item.evidence_hash}</code></p>
-          <JsonEvidence value={item.evidence_refs} />
+          <p><strong>Why it is paused:</strong> {sourceEvidenceReason
+            ? 'The source classification evidence is not yet safe to use for AI Enrichment.'
+            : ((item.reasons || []).join(', ') || 'The item has not been assigned yet.')}</p>
+          {sourceEvidenceReason && (
+            <p className="governance-muted">
+              The source path is evidence only until its governed catalog/version
+              provenance is verified. The repair action appears below.
+            </p>
+          )}
+          <details className="technical-evidence">
+            <summary>View technical evidence</summary>
+            <p><strong>Unassigned reasons:</strong> {(item.reasons || []).join(', ') || 'Unknown'}</p>
+            <p><strong>Evidence hash:</strong> <code>{item.evidence_hash}</code></p>
+            <JsonEvidence value={item.evidence_refs} />
+          </details>
         </>
       )}
       {area === 'skill-candidates' && (
@@ -24,7 +40,10 @@ export default function EvidencePanel({ area, item }) {
           <p><strong>Raw variants:</strong> {(item.raw_variants || []).join(', ')}</p>
           <p><strong>Affected Jobs:</strong> {item.affected_job_count}</p>
           <p><strong>Occurrences:</strong> {item.occurrence_count}</p>
-          <JsonEvidence value={item.evidence_summary} />
+          <details className="technical-evidence">
+            <summary>View technical evidence</summary>
+            <JsonEvidence value={item.evidence_summary} />
+          </details>
         </>
       )}
       {area === 'company-industries' && (
@@ -33,7 +52,10 @@ export default function EvidencePanel({ area, item }) {
           <p><strong>Source:</strong> {item.source_site || 'Unknown'}</p>
           <p><strong>Raw Industry evidence:</strong> {item.raw_value || 'Unknown'}</p>
           <p><strong>Review reason:</strong> {item.reason}</p>
-          <JsonEvidence value={item.provenance} />
+          <details className="technical-evidence">
+            <summary>View technical evidence</summary>
+            <JsonEvidence value={item.provenance} />
+          </details>
         </>
       )}
     </section>

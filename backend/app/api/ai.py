@@ -4,14 +4,13 @@ AI Enrichment API Endpoints
 
 import asyncio
 import logging
-from datetime import date
 from typing import List, Literal, Optional, TypedDict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 from app.database import SessionLocal, get_db
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.messaging.outbox_publisher import OutboxPublisher
@@ -21,6 +20,7 @@ from app.models.job import Job
 from app.models.job_subcategory import JobSubcategory
 from app.models.skill_governance import GovernedJobSkill, GovernedJobSkillMention
 from app.schemas import JobDetailSchema
+from app.schemas.job_intelligence import PendingSelectionScopeSchema
 from app.services.enrichment_run_service import (
     ActiveEnrichmentRunError,
     EnrichmentRunService,
@@ -30,7 +30,6 @@ from app.services.ai_runtime_settings_service import (
     ensure_profile_runtime_ready,
     ProfileRuntimeNotReadyError,
 )
-from app.services.source_catalog import list_supported_source_sites
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
@@ -57,95 +56,7 @@ class EnrichRequest(BaseModel):
         return self
 
 
-class PendingFiltersRequest(BaseModel):
-    source_sites: List[str] = Field(default_factory=list)
-    source_classification_ids: List[str] = Field(default_factory=list)
-    source_subclassification_ids: List[str] = Field(default_factory=list)
-    source_classification_names: List[str] = Field(default_factory=list)
-    source_subclassification_names: List[str] = Field(default_factory=list)
-    posted_date_from: Optional[date] = None
-    posted_date_to: Optional[date] = None
-
-    @field_validator(
-        "source_sites",
-        "source_classification_names",
-        "source_subclassification_names",
-        mode="before",
-    )
-    @classmethod
-    def normalize_values(cls, value):
-        values = value if isinstance(value, list) else []
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for item in values:
-            text_value = str(item or "").strip().lower()
-            if text_value and text_value not in seen:
-                seen.add(text_value)
-                normalized.append(text_value)
-        return normalized
-
-    @field_validator(
-        "source_classification_ids",
-        "source_subclassification_ids",
-        mode="before",
-    )
-    @classmethod
-    def normalize_source_classification_ids(cls, value):
-        values = value if isinstance(value, list) else []
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for item in values:
-            identity = str(item or "").strip()
-            if identity and identity not in seen:
-                seen.add(identity)
-                normalized.append(identity)
-        return normalized
-
-    @field_validator("source_classification_ids", "source_subclassification_ids")
-    @classmethod
-    def validate_source_classification_ids(cls, value: List[str]) -> List[str]:
-        supported = set(list_supported_source_sites())
-        invalid = []
-        for identity in value:
-            source_site, separator, native_id = identity.partition(":")
-            if not separator or source_site not in supported or not native_id:
-                invalid.append(identity)
-        if invalid:
-            raise ValueError(
-                "Source Classification IDs must be source-qualified: "
-                + ", ".join(invalid)
-            )
-        return value
-
-    @field_validator("source_sites")
-    @classmethod
-    def validate_sources(cls, value: List[str]) -> List[str]:
-        supported = set(list_supported_source_sites())
-        unsupported = [source for source in value if source not in supported]
-        if unsupported:
-            raise ValueError(f"Unsupported source site(s): {', '.join(unsupported)}")
-        return value
-
-    @model_validator(mode="after")
-    def validate_dates(self):
-        if (
-            self.posted_date_from is not None
-            and self.posted_date_to is not None
-            and self.posted_date_from > self.posted_date_to
-        ):
-            raise ValueError("posted_date_from must be on or before posted_date_to")
-        return self
-
-    def to_service_filters(self) -> PendingJobFilters:
-        return PendingJobFilters(
-            source_sites=tuple(self.source_sites),
-            source_classification_ids=tuple(self.source_classification_ids),
-            source_subclassification_ids=tuple(self.source_subclassification_ids),
-            source_classification_names=tuple(self.source_classification_names),
-            source_subclassification_names=tuple(self.source_subclassification_names),
-            posted_date_from=self.posted_date_from,
-            posted_date_to=self.posted_date_to,
-        )
+PendingFiltersRequest = PendingSelectionScopeSchema
 
 
 class PendingSelectionRequest(BaseModel):

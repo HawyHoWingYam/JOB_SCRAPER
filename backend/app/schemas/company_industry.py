@@ -114,6 +114,10 @@ class CompanyIndustryReviewPageSchema(BaseModel):
     items: list[CompanyIndustryReviewItemSchema]
     next_cursor: str | None
     total: int
+    page: int | None = None
+    limit: int | None = None
+    offset: int | None = None
+    page_count: int | None = None
 
 
 class SourceIndustryMappingSchema(BaseModel):

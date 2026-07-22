@@ -5,22 +5,32 @@ export default function GovernanceQueue({
   adapter,
   items,
   total,
+  page = null,
+  pageCount = null,
   query,
   nextCursor,
   selectedId,
   focusTarget,
   onFocusTargetHandled,
   onFilter,
+  onPreviousPage,
   onNextPage,
+  onPageChange,
   onSelect,
+  scoped = false,
 }) {
   const [draftQuery, setDraftQuery] = useState(query || '');
+  const [draftPage, setDraftPage] = useState(String(page || 1));
   const searchInputRef = useRef(null);
   const itemButtonRefs = useRef([]);
 
   useEffect(() => {
     setDraftQuery(query || '');
   }, [query]);
+
+  useEffect(() => {
+    setDraftPage(String(page || 1));
+  }, [page]);
 
   useEffect(() => {
     if (!focusTarget) return;
@@ -55,6 +65,18 @@ export default function GovernanceQueue({
     onFilter(draftQuery.trim());
   };
 
+  const applyPage = (event) => {
+    event.preventDefault();
+    const requestedPage = Number(draftPage);
+    if (!Number.isInteger(requestedPage) || requestedPage < 1 || !pageCount) {
+      setDraftPage(String(page || 1));
+      return;
+    }
+    onPageChange(Math.min(requestedPage, pageCount));
+  };
+
+  const isPageMode = Number.isInteger(page) && Number.isInteger(pageCount);
+
   return (
     <section className="governance-queue" aria-label={`${areaLabel} queue`}>
       <form className="governance-queue-filter" onSubmit={applyFilter}>
@@ -87,7 +109,9 @@ export default function GovernanceQueue({
       </div>
       {items.length === 0 && (
         <div className="governance-queue-empty" role="status">
-          {query
+          {scoped
+            ? 'No items remain in this AI Enrichment scope. The batch may have been resolved or changed.'
+            : query
             ? `No ${areaLabel} items match this filter.`
             : `No pending ${areaLabel} items.`}
         </div>
@@ -112,7 +136,43 @@ export default function GovernanceQueue({
           </li>
         ))}
       </ul>
-      {nextCursor && (
+      {isPageMode ? (
+        <form className="governance-queue-pagination" onSubmit={applyPage}>
+          <button
+            type="button"
+            onClick={onPreviousPage}
+            disabled={page <= 1}
+          >
+            Previous
+          </button>
+          <label>
+            Page
+            <input
+              aria-label="Queue page number"
+              type="number"
+              min="1"
+              max={pageCount}
+              value={draftPage}
+              onChange={(event) => setDraftPage(event.target.value)}
+            />
+            <span>of {pageCount}</span>
+          </label>
+          <button
+            type="submit"
+            className="governance-queue-page-go"
+            disabled={page >= pageCount}
+          >
+            Go
+          </button>
+          <button
+            type="button"
+            onClick={onNextPage}
+            disabled={page >= pageCount}
+          >
+            Next
+          </button>
+        </form>
+      ) : nextCursor ? (
         <button
           type="button"
           className="governance-queue-next"
@@ -120,7 +180,7 @@ export default function GovernanceQueue({
         >
           Next queue page
         </button>
-      )}
+      ) : null}
     </section>
   );
 }

@@ -4,6 +4,7 @@ import base64
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import math
 from uuid import UUID
 
 from sqlalchemy import and_, exists, or_
@@ -222,13 +223,25 @@ class CompanyIndustryReviewPage:
     items: tuple[CompanyIndustryReviewItemView, ...]
     next_cursor: str | None
     total: int
+    page: int | None = None
+    limit: int | None = None
+    offset: int | None = None
+    page_count: int | None = None
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload = {
             "items": [item.to_payload() for item in self.items],
             "next_cursor": self.next_cursor,
             "total": self.total,
         }
+        if self.page is not None:
+            payload.update(
+                page=self.page,
+                limit=self.limit,
+                offset=self.offset,
+                page_count=self.page_count,
+            )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -239,6 +252,7 @@ class CompanyIndustryReviewQuery:
     company_id: UUID | None = None
     raw_value: str | None = None
     cursor: str | None = None
+    page: int | None = None
     limit: int = 50
 
     def __post_init__(self) -> None:
@@ -253,6 +267,11 @@ class CompanyIndustryReviewQuery:
             raise CompanyIndustryReadError(
                 "COMPANY_INDUSTRY_REVIEW_LIMIT_INVALID",
                 "Company Industry review limit must be 1..200",
+            )
+        if self.page is not None and self.page < 1:
+            raise CompanyIndustryReadError(
+                "COMPANY_INDUSTRY_REVIEW_PAGE_INVALID",
+                "Company Industry review page must be at least 1",
             )
         if set(self.statuses) - allowed_statuses:
             raise CompanyIndustryReadError(
@@ -580,6 +599,26 @@ class CompanyIndustry:
                 CompanyIndustryReviewItem.raw_value.ilike(f"%{query.raw_value}%")
             )
         total = statement.count()
+        if query.page is not None:
+            offset = (query.page - 1) * query.limit
+            page_rows = (
+                statement.order_by(
+                    CompanyIndustryReviewItem.created_at.desc(),
+                    CompanyIndustryReviewItem.id.desc(),
+                )
+                .offset(offset)
+                .limit(query.limit)
+                .all()
+            )
+            return CompanyIndustryReviewPage(
+                items=tuple(self._review_view(row) for row in page_rows),
+                next_cursor=None,
+                total=total,
+                page=query.page,
+                limit=query.limit,
+                offset=offset,
+                page_count=max(1, math.ceil(total / query.limit)),
+            )
         if query.cursor is not None:
             created_at, review_id = _decode_review_cursor(query.cursor)
             statement = statement.filter(

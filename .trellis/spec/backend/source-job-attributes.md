@@ -65,6 +65,20 @@ SourceJobAttributes(db).repair_catalog_provenance(
 ) -> ProjectionResult
 ```
 
+The trusted-local governance adapters for a bounded AI pending batch are:
+
+```text
+POST /api/v1/job-intelligence/governance/source-catalog-provenance/inspect
+POST /api/v1/job-intelligence/governance/source-catalog-provenance/apply
+```
+
+Both requests carry one `scope` source plus qualified classification paths and
+an explicit `limit`. Inspect resolves the current active revision and returns
+the pending-selection summary, revision fingerprint, repairable Job IDs, and
+stable blockers. Apply requires the inspected revision ID/fingerprint,
+repairable Job IDs, and `confirmed=true`; it re-resolves the same bounded
+selection before writing and returns a preflight-backed recheck selection.
+
 Persistence is owned by `job_source_attribute_projections`,
 `job_source_classification_paths`,
 `job_source_classification_path_nodes`, `job_source_employment_labels`,
@@ -104,6 +118,10 @@ Persistence is owned by `job_source_attribute_projections`,
   `SourceJobAttributes.repair_catalog_provenance`, and emits one projection
   outbox event per changed Job. Exact replay changes no path and emits no
   duplicate event.
+- The provenance HTTP adapter must not widen a repair scope from the AI
+  pending batch or accept a legacy scalar as authority. Revision, fingerprint,
+  active-pointer, coverage, pending-only, and explicit-confirmation fences are
+  enforced at the backend module boundary, not in the UI.
 - A PostgreSQL path-row lock query that uses `with_for_update()` must use
   `selectinload()` for nullable child/revision relationships. `joinedload()`
   creates an outer join that PostgreSQL rejects as a lock target.
