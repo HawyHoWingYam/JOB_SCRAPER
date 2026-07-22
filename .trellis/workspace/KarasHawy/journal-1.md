@@ -1270,3 +1270,36 @@ Diagnosed the 15-second AbortError as the frontend timeout over a 22-second back
 ### Next Steps
 
 - None - task complete
+
+
+## Session 37: Automate Trellis GitHub issue lifecycle
+
+**Date**: 2026-07-22
+**Task**: Automate Trellis GitHub issue lifecycle
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Added project-local GitHub issue lifecycle sync for Trellis task start/archive hooks, explicit manual QA updates, idempotent gh mutations, public-safe issue summaries, regression tests, and executable spec contracts. Real GitHub issue smoke remains intentionally manual.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0df4740b` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
