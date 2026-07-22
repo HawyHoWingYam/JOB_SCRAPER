@@ -16,7 +16,8 @@ export default function EvidencePanel({ area, item }) {
       <h2>Evidence</h2>
       {area === 'job-taxonomy' && (
         <>
-          <p><strong>Job:</strong> {item.job_id}</p>
+          <p><strong>Job:</strong> {item.job_title || 'Job details unavailable'}</p>
+          <p><strong>Company:</strong> {item.company_name || 'Company unavailable'}</p>
           <p><strong>Why it is paused:</strong> {sourceEvidenceReason
             ? 'The source classification evidence is not yet safe to use for AI Enrichment.'
             : ((item.reasons || []).join(', ') || 'The item has not been assigned yet.')}</p>
@@ -28,6 +29,7 @@ export default function EvidencePanel({ area, item }) {
           )}
           <details className="technical-evidence">
             <summary>View technical evidence</summary>
+            <p><strong>Job UUID:</strong> <code>{item.job_id}</code></p>
             <p><strong>Unassigned reasons:</strong> {(item.reasons || []).join(', ') || 'Unknown'}</p>
             <p><strong>Evidence hash:</strong> <code>{item.evidence_hash}</code></p>
             <JsonEvidence value={item.evidence_refs} />

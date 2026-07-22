@@ -149,6 +149,35 @@ Respond with JSON only (no markdown, no extra keys):
 )
 
 
+TAXONOMY_ONLY_PROMPT = """You are a careful job-posting taxonomy analyst.
+
+Preserved Source Classification Paths (evidence only):
+__SOURCE_CLASSIFICATION_PATHS__
+
+Allowed governed stable-code targets:
+__TAXONOMY_CONTEXT__
+
+Job Title: __TITLE__
+Job Description (first 3200 chars):
+__DESCRIPTION__
+
+Return JSON only with this exact shape:
+{
+  "classification": {
+    "confidence": 0.0,
+    "reasoning": "",
+    "decision": "select_existing|fallback_default|create_new|invalid",
+    "target_code": "governed.stable.code or null"
+  }
+}
+
+Rules:
+- Select exactly one listed stable code only when the posting supports it.
+- Copy the stable code exactly; never invent a code or fallback.
+- If the candidates do not support a safe answer, return decision=invalid and target_code=null.
+"""
+
+
 class JobInsightExtractor:
     """Unified extractor that returns classification, skills, summary, and experience."""
 
@@ -322,6 +351,38 @@ class JobInsightExtractor:
             "skills": skills,
             "experience": experience,
             "confidence": self._coerce_confidence(result.get("confidence")),
+        }
+
+    async def extract_taxonomy(
+        self,
+        *,
+        title: str,
+        description: str,
+        taxonomy_candidates: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Classify only the governed Job Taxonomy.
+
+        Historical recovery deliberately uses a smaller prompt and does not
+        request or persist Skills, Summary, or Experience fields.
+        """
+        candidates = taxonomy_candidates or {}
+        replacements = {
+            "__SOURCE_CLASSIFICATION_PATHS__": self._format_source_paths(
+                candidates.get("source_classification_paths")
+            ),
+            "__TAXONOMY_CONTEXT__": self._format_taxonomy_context(candidates),
+            "__TITLE__": title,
+            "__DESCRIPTION__": self._build_description_context(description),
+        }
+        prompt = TAXONOMY_ONLY_PROMPT
+        for key, value in replacements.items():
+            prompt = prompt.replace(key, str(value))
+
+        result = await self._get_llm().generate_json(prompt)
+        return {
+            "classification": self._normalize_classification(
+                result.get("classification"), candidates
+            )
         }
 
     def _get_llm(self):

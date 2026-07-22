@@ -45,7 +45,12 @@ from app.models.source_catalog import (
     SourceCatalogCandidate,
     SourceCatalogRevision,
 )
+from app.models.source_job_attributes import (
+    JobSourceClassificationPath,
+    JobSourceClassificationPathNode,
+)
 from app.schemas.job_intelligence import (
+    CanonicalReviewItemsQuerySchema,
     CanonicalTaxonomyDecisionRequestSchema,
     CanonicalTaxonomyFixtureSchema,
 )
@@ -73,6 +78,8 @@ def canonical_api_db():
         SourceCatalogCandidate.__table__,
         SourceCatalogRevision.__table__,
         SourceCatalogActiveRevision.__table__,
+        JobSourceClassificationPath.__table__,
+        JobSourceClassificationPathNode.__table__,
         *GOVERNANCE_FOUNDATION_TABLES,
         *CANONICAL_JOB_TAXONOMY_TABLES,
     )
@@ -266,6 +273,8 @@ def test_review_reads_use_stable_cursor_pagination_and_reason_filters(
     assert second_page.next_cursor is None
     assert [item.id for item in filtered.items] == [state["review"].id]
     detail = taxonomy.get_review_item(state["review"].id)
+    assert detail.job_title == "Canonical API review"
+    assert detail.company_name == "Canonical API Company review"
     assert detail.evidence_refs == ({"kind": "fixture", "id": "review"},)
     assert detail.recommendations[0]["code"] == (
         "accounting.financial_accounting.accounts_receivable"
@@ -282,6 +291,7 @@ def test_versioned_job_intelligence_routes_return_typed_canonical_contracts(
     from app.api import router as api_router
     from app.api.job_intelligence import (
         list_job_taxonomy_review_items,
+        query_job_taxonomy_review_items,
         read_canonical_taxonomy_revision,
         read_canonical_taxonomy_tree,
         read_job_canonical_taxonomy,
@@ -318,6 +328,31 @@ def test_versioned_job_intelligence_routes_return_typed_canonical_contracts(
     assert unassigned_job_state.state == "unassigned"
     assert reviews.total == 1
     assert review.id == state["review"].id
+    assert reviews.items[0].job_title == "Canonical API review"
+    assert reviews.items[0].company_name == "Canonical API Company review"
+    body_query = query_job_taxonomy_review_items(
+        CanonicalReviewItemsQuerySchema(
+            status=["active"],
+            job_ids=[state["review_job"].id],
+            limit=10,
+        ),
+        db=canonical_api_db,
+    )
+    assert body_query.total == reviews.total
+    assert [item.id for item in body_query.items] == [reviews.items[0].id]
+    empty_body_query = query_job_taxonomy_review_items(
+        CanonicalReviewItemsQuerySchema(
+            status=["active"],
+            reason=["source_catalog_provenance_missing"],
+            source_site=["offertoday"],
+            source_classification_id=["offertoday:118000"],
+            job_ids=[uuid4()],
+            limit=10,
+        ),
+        db=canonical_api_db,
+    )
+    assert empty_body_query.total == 0
+    assert empty_body_query.items == []
     runtime_fixture = CanonicalTaxonomyFixtureSchema(
         revision=revision,
         tree=tree,
@@ -343,6 +378,7 @@ def test_versioned_job_intelligence_routes_return_typed_canonical_contracts(
         "/api/v1/job-intelligence/canonical-job-taxonomy/tree",
         "/api/v1/job-intelligence/jobs/{job_id}/canonical-taxonomy",
         "/api/v1/job-intelligence/governance/job-taxonomy/review-items",
+        "/api/v1/job-intelligence/governance/job-taxonomy/review-items/query",
         "/api/v1/job-intelligence/governance/job-taxonomy/review-items/{review_item_id}",
         "/api/v1/job-intelligence/governance/job-taxonomy/review-items/{review_item_id}/decision",
     } <= route_paths

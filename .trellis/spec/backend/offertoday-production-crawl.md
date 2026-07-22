@@ -103,6 +103,14 @@ the run. A hard stop prevents detail loading.
 A run whose conditions are all natural or page-cap partial finishes
 `completed`; any cap sets `listing_partial=true`.
 
+`listing_capped_condition_ids` is the runner's condition identity. Production
+also maps those conditions through the immutable runtime plan to ordered,
+source-qualified `listing_capped_classification_ids` for Task Control recovery.
+These IDs are emitted only for the per-condition `page_cap`
+retain-and-continue path. A whole-run `run_page_cap` is a separate hard stop
+and must not be presented as capped Query Targets or used to create a
+continuation draft.
+
 #### Batch classification and writes
 
 Validate response, cursor, endpoint, and identity before database access or
@@ -140,6 +148,7 @@ listing_condition_count
 listing_natural_condition_count
 listing_capped_condition_count
 listing_capped_condition_ids
+listing_capped_classification_ids
 distinct_it_result_ids
 supplemental_rows_observed
 distinct_supplemental_ids
@@ -603,61 +612,52 @@ except Exception as exc:
 The response policy, not the raw Playwright error string, decides whether the
 settled URL is an IP block, a generic WAF challenge, or transient transport.
 
-## Scenario: Listing-bound detail scope and truthful crawl-task history
+## Scenario: Versioned finite detail scope and truthful crawl-task history
 
 ### 1. Scope / Trigger
 
-Use this contract when changing durable Crawl Tasks ordering, the direct-run
-OfferToday detail scope control, detail target selection/resume behavior, or
-the distinct progress fields returned by crawl-task snapshots.
+Use this contract when changing durable Crawl Tasks ordering, versioned detail
+scope/limits, Dispatch Plan target selection, recovery/cancellation, or the
+normalized detail projections consumed by the Task Control Board.
 
-This boundary exists because mutable crawl metrics update both detail jobs and
-their source listing jobs. Activity timestamps are useful display evidence but
-are not stable history identity, and staging-row counts are not canonical job
-progress.
+The versioned contract replaces the old OfferToday-only behavior where
+`detail_limit` capped one recovery segment and the same task repeatedly queried
+a changing backlog. New code freezes one finite complete-run membership before
+dispatch. Legacy fields/events remain readable compatibility evidence only.
 
 ### 2. Signatures
 
 ```http
-POST /api/v1/crawl-jobs
+POST /api/v1/dispatch-plans
 Content-Type: application/json
 
 {
-  "source_site": "offertoday",
-  "crawl_phase": "detail",
-  "detail_scope": "listing_batch",
-  "source_listing_crawl_job_id": "<listing-crawl-uuid>",
-  "category_ids": [],
-  "detail_limit": 5000,
-  "detail_statuses": ["pending", "failed", "manual_action_required"],
-  "skip_existing": false
+  "version": 1,
+  "kind": "one_off",
+  "scope": {"version": 1, "source_site": "offertoday", "mode": "all", "rules": []},
+  "listing_settings": null,
+  "detail_settings": {
+    "version": 1,
+    "crawl_mode": "headless",
+    "backlog_scope": {"kind": "source_backlog"},
+    "limit": {"kind": "stop_after", "detail_run_cap": 5000},
+    "backlog_snapshot": null
+  }
 }
 ```
 
 ```http
+POST /api/v1/dispatch-plans/{plan_id}/dispatch
+{"confirmation_token":"...","expected_plan_fingerprint":"<sha256>"}
+
 GET /api/v1/crawl-jobs/tasks?page=<n>&page_size=<n>&time_range=all
+GET /api/v1/task-control-board?source_site=offertoday
 ```
 
 ```python
-CrawlJobRepository.list_crawl_task_page(
-    db,
-    *,
-    page,
-    page_size,
-    status,
-    source_site,
-    crawl_mode,
-    updated_since=None,
-) -> tuple[list[CrawlJob], int]
-
-build_crawl_task_snapshot(
-    crawl_job,
-    latest_event,
-    *,
-    now,
-    events=None,
-    category_lookup_cache=None,
-) -> dict[str, Any]
+DispatchPlanService.prepare(command, readiness, prepared_by) -> DispatchPreparationV1
+load_worker_startup_input(db, crawl_job_id, default_source_site) -> WorkerStartupInput
+build_crawl_task_snapshot(crawl_job, latest_event, *, now, events=None) -> dict[str, Any]
 ```
 
 ### 3. Contracts
@@ -674,107 +674,96 @@ queued_at DESC, created_at DESC, id DESC
 listing metric updates must not move an existing row. The API preserves
 repository order and the frontend must not sort by mutable activity time.
 
-#### Listing-bound versus global detail scope
+#### Explicit backlog scope and finite membership
 
-- OfferToday detail mode defaults to the source-wide global backlog. The
-  frontend leaves Listing Batch Scope empty and must not auto-select the newest
-  listing batch.
-- New detail requests persist `detail_scope=global` when the batch selector is
-  empty, or `detail_scope=listing_batch` plus
-  `source_listing_crawl_job_id` when a batch is explicitly selected.
-- Resume starts from the persisted scope and, when bound, the original batch
-  ID. It must not query for or replace the scope with a newer batch.
-- For `global`, selection filters only `source_site=offertoday`, eligible
-  statuses, and the existing terminal/identity-conflict sibling blocker. It
-  includes rows where `source_classification_id` is `NULL`.
-- For `listing_batch`, selection filters by the selected listing crawl-job ID
-  and includes that batch's null-classification rows.
-- Detail category IDs do not narrow either scope. Category expansion remains a
-  listing-phase concern, not a hidden filter on global detail recovery.
-- Group candidate rows by canonical `source_job_id` before applying
-  `detail_limit`; duplicate staging siblings produce one fetch target.
-- `detail_limit` is a per-segment cap. A successful segment automatically
-  continues in the same crawl task while the refreshed eligible global/bound
-  query is non-empty.
-- A manual-action/IP/WAF stop preserves completed progress and remains
-  `manual_action_required`; retryable failed targets stop continuation and
-  remain visible for a later operator-triggered run. Only an empty eligible
-  query may emit final `crawl.completed`.
-
-#### Distinct progress projection
-
-The task-list and active-progress paths batch-load these event types once for
-all task IDs in the requested set:
+`DetailBacklogScopeV1` has exactly three source-qualified variants:
 
 ```text
-crawl.detail_cohort_frozen
-crawl.detail_segment
-crawl.detail_attempt
-crawl.detail_reconciled
+source_backlog
+crawl_scope(scope=AuthoredCrawlScopeV1)
+listing_batch(source_listing_crawl_job_id=UUID)
 ```
 
-For OfferToday tasks with frozen-cohort evidence, snapshots expose:
+- `source_backlog` selects eligible canonical IDs for one Source and includes
+  null-classification rows. `crawl_scope` applies the reviewed source-native
+  classification expansion. `listing_batch` stays bound to the explicit
+  listing Crawl Job and includes that batch's null-classification rows.
+- No mode auto-selects the newest listing batch. Primitive `category_ids` and
+  empty-array defaults cannot narrow or replace a versioned backlog scope.
+- Preparation records a timezone-aware cutoff, groups eligible staging rows by
+  canonical `source_job_id`, and persists one ordered target plus every
+  contributing sibling row. Rows after the cutoff are not members.
+- `stop_after.detail_run_cap` is the complete-run target cap. It is applied
+  after canonical grouping. `entire_snapshot` freezes every eligible target
+  only when the count fits the absolute safety cap; otherwise preparation
+  fails with `BACKLOG_SAFETY_CAP_EXCEEDED`.
+- The stored target/row membership, cutoff, counts, and fingerprint are
+  immutable reviewed authority. Plan creation does not change staging status or
+  launch a crawl.
+
+#### Runtime, recovery, and cancellation
+
+- A worker loads the consumed plan by Crawl Job ID and processes only its
+  persisted targets/rows. Compatibility `request_payload`, later Catalog
+  publication, and later-eligible staging rows cannot extend the run.
+- Recovery Segment size is internal pacing. It may partition the frozen target
+  order but never increase `detail_run_cap` or query another cohort into the
+  same run. A successful final segment completes when plan membership is
+  settled even if live future backlog is non-empty.
+- IP/auth/WAF resume retains the original plan/fingerprint/membership and adds
+  only execution-generation/resume context. Completed and terminal targets are
+  not reset or fetched again.
+- Cancellation remains `cancelling -> cancelled`. Acknowledgement releases
+  only still-running plan membership to retryable state and preserves committed
+  outcomes. A new mutually exclusive run cannot rely on the cancel request
+  alone.
+- The old per-segment continuation fields remain normalized for historical
+  tasks. No new versioned path authors or executes that behavior.
+
+#### Normalized detail projection
+
+For a versioned run, immutable plan content supplies scope, cutoff, target
+count, limit kind, and complete-run cap. Mutable runtime metrics may supply
+outcomes only; they cannot redefine authority.
 
 ```text
-detail_distinct_target_total
-detail_distinct_succeeded
-detail_distinct_terminal_unavailable
-detail_distinct_failed
-detail_distinct_reconciled
-detail_distinct_remaining
-detail_scope
-detail_segment_index
-detail_segments_completed
-detail_segment_target_rows
-detail_backlog_pending
-detail_backlog_failed
-detail_backlog_manual_action_required
-detail_backlog_remaining
-detail_continuation_state
+detail_run_cap
+detail_snapshot_cutoff_at
+detail_snapshot_target_count
+detail_snapshot_fetched_count
+detail_snapshot_failed_count
+detail_snapshot_unavailable_count
+detail_snapshot_manual_action_count
+detail_snapshot_remaining_count
+detail_live_future_eligible_count
 ```
 
-For a segmented recovery, each frozen cohort describes one segment rather than
-the whole source backlog. Cumulative detail outcome fields union canonical
-`source_job_id` evidence across segments, while the `detail_backlog_*` fields
-come from a fresh eligible query after the segment. Do not use a segment target
-count or `detail_distinct_remaining` as the current global backlog remaining.
-Reconciled IDs were removed before the fetch cohort was frozen, so
-reconciliation is reported as adjacent scope and is not subtracted from the
-fresh backlog count.
-
-Count distinct canonical `source_job_id` values. `success` wins over terminal
-and failure; `terminal_unavailable` wins over failure. Non-retrying
-`invalid_payload`, `id_mismatch`, `persist_failure`, and exhausted
-`transient_transport` attempts are failed unless the same ID has success or
-terminal evidence. Recoverable `auth_expired`, `waf_challenge`, and
-`ip_blocked` attempts do not settle or inflate a target.
+The normalized board/API object is:
 
 ```text
-detail_backlog_remaining = distinct(pending U failed U manual_action_required)
+detail_snapshot.backlog_scope
+detail_snapshot.limit_kind
+detail_snapshot.cutoff_at
+detail_snapshot.target_count
+detail_snapshot.fetched_count
+detail_snapshot.saved_count
+detail_snapshot.failed_count
+detail_snapshot.unavailable_count
+detail_snapshot.manual_action_count
+detail_snapshot.remaining_count
+detail_snapshot.future_eligible_count
+detail_snapshot.detail_run_cap
 ```
 
-Do not reinterpret `detail_run_completed` as a job count; it is a staging-row
-metric. OfferToday `jobs_saved` fallback checks raw `metrics.jobs_saved` before
-ingest-only counters; other sources retain their existing ingest-first
-projection. Historical task/event readability is not a contract for this
-change.
-
-The Crawl Tasks list row and Task Details panel expose scope, segment work,
-and the refreshed backlog as separate values:
-
-```text
-Job Detail Crawl - Global backlog
-Detail targets <cumulative target count>
-Segment <index> targets <segment target count>
-Backlog remaining <fresh eligible count>
-Backlog failed <fresh failed count>       # non-zero only
-Manual review <fresh manual count>        # non-zero only
-```
+`remaining_count` means unresolved work inside the frozen plan.
+`future_eligible_count` means live eligible work outside that plan. They may
+both be non-zero and must never be added or substituted. Raw
+`detail_run_completed` remains a staging-row compatibility metric, not a
+canonical target count.
 
 `ScrapeProgressPanel` remains the intentionally compact live-status shell; it
-links to Crawl Tasks for durable task metrics and operator actions. Do not add
-new detail accounting to its retained legacy `ProgressItem` implementation,
-which is not part of the rendered shell.
+links to normalized Crawl Tasks/Task Details rather than parsing raw request or
+event payloads.
 
 ### 4. Validation & Error Matrix
 
@@ -782,88 +771,77 @@ which is not part of the rendered shell.
 |---|---|
 | Only `updated_at` or metrics change | Task ID order remains unchanged |
 | Queue/creation timestamps tie | `id DESC` resolves order deterministically |
-| Bound batch row has null classification | Include it when status is eligible |
-| Bound request also carries category IDs | Ignore category narrowing |
-| Global request carries category IDs | Ignore category narrowing and include null classifications |
-| Duplicate staging rows share one canonical ID | Fetch once after grouping |
-| Resume follows IP/auth/WAF stop | Preserve detail scope and original batch ID |
-| An ID has blocked attempts then success | Count one success, zero blocked settlement |
-| An ID has success plus duplicate attempts | Count the ID once |
-| Successful segment leaves eligible rows | Continue in the same crawl task |
-| Retryable failure remains after a segment | Stop automatic continuation and expose remaining failed rows |
-| Manual/IP/WAF stop occurs during a segment | Preserve progress; do not emit final completion |
+| Duplicate staging rows share one canonical ID | One target; persist every eligible sibling row |
+| Row becomes eligible after snapshot cutoff | Report as future backlog; never add to this plan |
+| Entire snapshot exceeds absolute cap | `BACKLOG_SAFETY_CAP_EXCEEDED`; persist no plan |
+| Prepared membership is empty | Block with `DETAIL_BACKLOG_EMPTY`; issue no confirmation token |
+| Compatibility payload claims other IDs/cap | Ignore it; consumed plan remains authority |
+| One target/row becomes ineligible before consume | Reject the whole plan as stale; claim nothing |
+| Resume follows IP/auth/WAF stop | Keep the same plan and unfinished membership |
+| Segment finishes while future backlog exists | Complete this finite run; expose future count separately |
+| Cancellation requested but not acknowledged | Keep `cancelling`; do not treat as stopped |
 | Listing condition reaches page cap | Preserve partial-listing semantics; do not classify as detail failure |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** Empty batch scope starts a global recovery, includes null-category
-  rows, processes multiple 5,000-target segments, and emits final completion
-  only after the refreshed eligible query is empty.
-- **Good:** An explicitly selected keyword/hybrid listing batch contains
-  null-category rows. Detail mode stays bound to that batch, survives an
-  IP-block resume, and does not pick up another batch.
-- **Bad:** History is sorted by `updated_at`, so downstream staging metrics move
-  an old listing task above a running detail task every polling interval.
-- **Bad:** A bound listing ID and `category_ids=[118000]` are both applied at the
-  repository query, silently excluding keyword/hybrid rows with null category.
-- **Bad:** `detail_run_completed=2464` is displayed as fetched jobs even though
-  duplicate staging siblings produced that row count.
+- **Good:** A source backlog has 8 canonical IDs represented by 11 staging
+  rows. A reviewed cap of 8 freezes all 8 targets and all 11 sibling rows. Two
+  internal segments process only those IDs; 5 later IDs appear solely as
+  `future_eligible_count=5`.
+- **Good:** A listing-batch plan includes a null-classification row, survives an
+  IP-block resume, and never switches to another batch.
+- **Base:** An empty eligible query produces a blocked review with zero frozen
+  targets and no launch token.
+- **Bad:** Runtime re-queries the global backlog after each segment until empty.
+  The reviewed cap becomes a segment size and one run can grow without bound.
+- **Bad:** JSX subtracts `detail_run_completed` from a plan target count or
+  labels future backlog as remaining-in-run.
 
 ### 6. Tests Required
 
-- `backend/tests/test_offertoday_global_detail_backlog.py`: global category
-  bypass, null-classification candidates, duplicate grouping, per-segment
-  limit, continuation, failed/manual stops, helper capability metadata, and
-  canonical classification preservation.
-- `test_crawl_job_regressions.py`: manual dispatch persists the selected listing
-  ID and IP-block resume retains it.
-- `test_offertoday_standalone_crawl.py`: detail manual-action resume context
-  contains `source_listing_crawl_job_id` and later targets remain untouched.
-- `backend/tests/test_crawl_task_snapshot_service.py`: segment/backlog field
-  projection plus existing normalized detail metrics. Distinct-event suites
-  cover duplicate attempts, recoverable blocks,
-  terminal/failure precedence, reconciled union, multiple resume cohorts,
-  active-path batch wiring, raw `jobs_saved`, and the historical
-  `1311/1305/6/95/0` projection.
-- `CrawlTasksPage.test.jsx`: running, manual-action, completed, and legacy
-  fallback summaries in both row chips and Task Details; partial listing remains
-  unchanged; frontend consumes API order.
-- `ScheduleManager.test.jsx`: empty global scope remains empty even when batch
-  data arrives asynchronously, explicit batch scope survives the same update,
-  and submitted payload carries the correct `detail_scope` and listing ID.
+- `backend/tests/test_dispatch_plan_service.py`: three backlog scopes, cutoff,
+  duplicate sibling membership, deterministic order/fingerprint, complete-run
+  cap, empty/over-cap/stale selection, future rows, resume, cancellation, and
+  transaction/concurrency rollback.
+- `backend/tests/test_versioned_listing_runtime.py`: all Source runtimes consume
+  only plan membership, segment without expansion, and publish future backlog
+  separately.
+- `backend/tests/test_crawl_task_snapshot_service.py`: snapshot authority wins
+  over mutable counters; remaining-in-snapshot and future backlog stay distinct;
+  cancellation/recovery remain normalized.
+- `backend/tests/test_crawl_control_api.py`: reviewed fingerprint dispatch plus
+  identical normalized detail/recovery projections in Crawl Tasks and Task
+  Control Board, with no raw request/event payload dependency.
+- Retain `test_offertoday_global_detail_backlog.py` only for legacy readability
+  and source selection regression; it does not define new versioned limits.
+- Run focused scope/plan/runtime/snapshot/cancellation tests and one complete
+  backend suite. PostgreSQL tests cover atomic claims, rollback, and row-lock
+  races.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```python
-rows = query.order_by(desc(CrawlJob.updated_at)).all()
-completed = int(metrics.get("detail_run_completed") or 0)
+while eligible_rows := repository.list_detail_candidates(source_site="offertoday"):
+    process(eligible_rows[:detail_limit])
 ```
 
-```jsx
-useEffect(() => setSourceListingCrawlJobId(newestEligibleBatch.id), [batches]);
-```
-
-This makes history jump on activity, calls staging rows completed jobs, and
-silently replaces the normal global recovery with one newest listing batch.
+This makes `detail_limit` a segment size and silently absorbs work that was not
+reviewed into the run.
 
 #### Correct
 
 ```python
-rows = query.order_by(
-    desc(CrawlJob.queued_at),
-    desc(CrawlJob.created_at),
-    desc(CrawlJob.id),
-).all()
-
-detail_progress = project_distinct_detail_events(events_by_job[crawl_job.id])
+startup = load_worker_startup_input(
+    db,
+    crawl_job_id=crawl_job.id,
+    default_source_site="offertoday",
+)
+runtime_plan = startup.detail_runtime_plan
+for segment in partition(runtime_plan.targets, recovery_segment_size):
+    process(segment)
 ```
 
-```jsx
-<option value="">Global OfferToday backlog (default)</option>
-<label>Listing Batch Scope (advanced)</label>
-```
-
-Immutable history identity, explicit scope, and one shared event projection
-keep the repository, API, and UI on the same units.
+The immutable plan defines complete-run membership; pacing only partitions it,
+and later eligible work belongs to a later reviewed plan.

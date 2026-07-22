@@ -32,7 +32,7 @@ export default function Dashboard({ onNavigateToAI }) {
     Promise.allSettled([
       fetch(apiPath('/stats/overview')),
       fetch(apiPath('/ai/overview')),
-      fetchGovernanceSummary(),
+      fetchGovernanceSummary({ retryTransient: false }),
     ])
       .then(async ([statsResult, aiOverviewResult, governanceResult]) => {
         if (statsResult.status !== 'fulfilled') {

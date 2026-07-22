@@ -1,6 +1,7 @@
 import asyncio
-from datetime import datetime, timezone
 import uuid
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -11,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.api.ai import (
     CreateRunRequest,
     PendingSelectionRequest,
+    _derive_excluded_details,
     get_pending_filter_options as get_pending_filter_options_endpoint,
     _run_execution_result,
     _serialize_runs,
@@ -302,6 +304,81 @@ def test_pending_preview_and_create_separate_unsupported_taxonomy_items(db, comp
             "count": 1,
             "reason": "source_mapping_excluded",
             "job_ids": [str(excluded.id)],
+        }
+    ]
+
+
+def test_exclusion_preview_prefers_authoritative_path_identity(db, company):
+    make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000106",
+        source_site="offertoday",
+        source_classification_id="offertoday:103000",
+        classification="Legacy scalar label",
+    )
+
+    class PathAwarePreflight:
+        def inspect(self, _job):
+            return CanonicalTaxonomyPreflightResult(
+                status="excluded",
+                reasons=("source_mapping_excluded",),
+                context=SimpleNamespace(
+                    source_classification_paths=(
+                        {
+                            "nodes": [
+                                {
+                                    "source_classification_id": "offertoday:118000",
+                                    "label": "資訊科技",
+                                }
+                            ]
+                        },
+                    )
+                ),
+            )
+
+    preview = EnrichmentRunService(
+        db,
+        taxonomy_preflight=PathAwarePreflight(),
+    ).preview_pending_jobs(filters=PendingJobFilters(), limit=50)
+
+    assert preview["excluded_items"][0]["source_classification_id"] == (
+        "offertoday:118000"
+    )
+    assert preview["excluded_items"][0]["source_classification_name"] == "資訊科技"
+
+
+def test_persisted_exclusion_details_prefer_authoritative_path_identity(db, company):
+    job = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000107",
+        source_site="offertoday",
+        source_classification_id="offertoday:103000",
+        classification="Legacy scalar label",
+    )
+    add_source_path(db, job, ("offertoday:118000", "資訊科技"))
+    run = make_run(
+        db,
+        run_id="run-authoritative-path",
+        status="completed",
+        created_at=datetime(2026, 7, 18, 12, 0),
+        completed_at=datetime(2026, 7, 18, 12, 1),
+        job_ids=[str(job.id)],
+    )
+    item = run.items[0]
+    item.status = "excluded"
+    item.error_message = "source_mapping_excluded"
+    run.excluded_items = 1
+    db.flush()
+
+    assert _derive_excluded_details(db, [run.id])[run.id] == [
+        {
+            "source_classification_id": "offertoday:118000",
+            "source_classification_name": "資訊科技",
+            "count": 1,
+            "reason": "source_mapping_excluded",
+            "job_ids": [str(job.id)],
         }
     ]
 

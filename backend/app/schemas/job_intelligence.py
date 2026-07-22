@@ -120,6 +120,62 @@ class PendingSelectionScopeSchema(BaseModel):
         )
 
 
+class CanonicalTaxonomyRecoveryScopeSchema(PendingSelectionScopeSchema):
+    """Bounded historical scope for Canonical-only taxonomy recovery."""
+
+    job_ids: list[UUID] = Field(default_factory=list)
+    reason_codes: list[str] = Field(
+        default_factory=lambda: [
+            "classifier_output_invalid",
+            "classifier_provenance_missing",
+        ]
+    )
+    pending_limit: int = Field(default=50_000, ge=1, le=50_000)
+
+    @field_validator("reason_codes", mode="before")
+    @classmethod
+    def normalize_reason_codes(cls, value):
+        values = value if isinstance(value, list) else []
+        normalized: list[str] = []
+        for item in values:
+            reason = str(item or "").strip()
+            if reason and reason not in normalized:
+                normalized.append(reason)
+        return normalized or [
+            "classifier_output_invalid",
+            "classifier_provenance_missing",
+        ]
+
+    def to_recovery_scope(self):
+        from app.services.canonical_taxonomy_recovery_service import (
+            CanonicalTaxonomyRecoveryScope,
+        )
+
+        return CanonicalTaxonomyRecoveryScope(
+            source_sites=tuple(self.source_sites),
+            source_classification_ids=tuple(self.source_classification_ids),
+            source_subclassification_ids=tuple(self.source_subclassification_ids),
+            posted_date_from=self.posted_date_from,
+            posted_date_to=self.posted_date_to,
+            job_ids=tuple(self.job_ids),
+            reason_codes=tuple(self.reason_codes),
+            pending_limit=self.pending_limit,
+        )
+
+
+class CanonicalTaxonomyRecoveryPreviewRequestSchema(BaseModel):
+    scope: CanonicalTaxonomyRecoveryScopeSchema
+
+
+class CanonicalTaxonomyRecoveryConfirmRequestSchema(
+    CanonicalTaxonomyRecoveryPreviewRequestSchema
+):
+    expected_scope_fingerprint: str = Field(min_length=1)
+    taxonomy_revision_id: UUID
+    mapping_revision_id: UUID
+    confirmed: bool
+
+
 class GovernanceAuditEventSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -335,6 +391,8 @@ class CanonicalJobStateSchema(BaseModel):
 class CanonicalReviewItemSchema(BaseModel):
     id: UUID
     job_id: UUID
+    job_title: str | None = None
+    company_name: str | None = None
     taxonomy_revision_id: UUID
     mapping_revision_id: UUID | None
     status: Literal[
@@ -364,6 +422,24 @@ class CanonicalReviewPageSchema(BaseModel):
     limit: int | None = None
     offset: int | None = None
     page_count: int | None = None
+
+
+class CanonicalReviewItemsQuerySchema(BaseModel):
+    """Body form of the Canonical Review query for large bounded scopes."""
+
+    status: list[str] = Field(default_factory=list)
+    reason: list[str] = Field(default_factory=list)
+    job_id: UUID | None = None
+    job_ids: list[UUID] = Field(default_factory=list)
+    source_site: list[str] = Field(default_factory=list)
+    source_classification_id: list[str] = Field(default_factory=list)
+    source_subclassification_id: list[str] = Field(default_factory=list)
+    posted_date_from: date | None = None
+    posted_date_to: date | None = None
+    pending_limit: int | None = Field(default=None, ge=1, le=5000)
+    cursor: str | None = None
+    page: int | None = Field(default=None, ge=1)
+    limit: int = Field(default=50, ge=1, le=200)
 
 
 class CanonicalTaxonomyDecisionRequestSchema(BaseModel):

@@ -17,10 +17,12 @@ function scopeFromParams(params) {
   const sourceClassificationIds = readArray(params, 'source_classification_id');
   const sourceSubclassificationIds = readArray(params, 'source_subclassification_id');
   const jobIds = readArray(params, 'job_id');
+  const sourceClassificationLabel = params.get('source_classification_label')?.trim();
   const source = {
     ...(sourceSites.length ? { sourceSites } : {}),
     ...(sourceClassificationIds.length ? { sourceClassificationIds } : {}),
     ...(sourceSubclassificationIds.length ? { sourceSubclassificationIds } : {}),
+    ...(sourceClassificationLabel ? { sourceClassificationLabel } : {}),
     ...(params.get('posted_date_from') ? { postedDateFrom: params.get('posted_date_from') } : {}),
     ...(params.get('posted_date_to') ? { postedDateTo: params.get('posted_date_to') } : {}),
     ...(readPositiveInteger(params.get('pending_limit'))
@@ -52,6 +54,11 @@ function appendScope(params, filters = {}) {
     'source_subclassification_id',
     filters.sourceSubclassificationIds || filters.source_subclassification_ids,
   );
+  const sourceClassificationLabel = filters.sourceClassificationLabel
+    || filters.source_classification_label;
+  if (sourceClassificationLabel) {
+    params.set('source_classification_label', String(sourceClassificationLabel));
+  }
   appendArray(params, 'job_id', filters.jobIds || filters.job_ids);
   if (filters.postedDateFrom || filters.posted_date_from) {
     params.set('posted_date_from', filters.postedDateFrom || filters.posted_date_from);

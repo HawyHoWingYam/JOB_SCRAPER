@@ -18,6 +18,11 @@ Use this contract when changing `AIEnrichmentPage`, its API payloads, run cards,
 - Filters cascade source -> classification -> subclassification, remain searchable, and clear hidden invalid selections.
 - Preview is debounced and aborts stale requests. Launch displays `effective_item_count` and is disabled for loading/error/zero/active/submitting.
 - Preview also displays `excluded_item_count` and grouped `excluded_items` details (source category ID/name, count, reason); excluded jobs are not included in the launch count.
+- Every exclusion deep link carries the detail's source-qualified
+  `source_classification_id` as the Governance filter when the current AI
+  filter is empty; the backend derives that detail from the preserved Source
+  Classification Path root and uses legacy Job scalar fields only as a
+  display fallback. The human-readable name remains display-only metadata.
 - Terminal `completed_with_exclusions` is an attention state, not a provider failure. Settled progress is `completed_items + failed_items + cancelled_items + excluded_items`; excluded items never enable retry.
 - Run creation may return `execution_result = "no_supported_items"` with `run_status = "completed_with_exclusions"`; the monitor still renders the persisted exclusion report.
 - All-pending acknowledgement never persists and requires a consequence-focused confirmation. Stop confirms in-flight work may finish.

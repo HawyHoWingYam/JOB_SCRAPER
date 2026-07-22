@@ -18,6 +18,7 @@ import EvidencePanel from './EvidencePanel';
 import GovernanceQueue from './GovernanceQueue';
 import RecommendationPanel from './RecommendationPanel';
 import ProvenanceRepairPanel from './ProvenanceRepairPanel';
+import CanonicalTaxonomyRecoveryPanel from './CanonicalTaxonomyRecoveryPanel';
 import { GOVERNANCE_AREA_ADAPTERS } from './governanceAreas';
 import {
   navigateGovernance,
@@ -68,10 +69,13 @@ function describeScope(scope) {
     ...(scope.sourceClassificationIds || []),
     ...(scope.sourceSubclassificationIds || []),
   ];
+  const category = scope.sourceClassificationLabel
+    ? `${scope.sourceClassificationLabel}${categories.length ? ` (${categories.join(', ')})` : ''}`
+    : categories.join(', ');
   const dates = scope.postedDateFrom || scope.postedDateTo
     ? `${scope.postedDateFrom || 'any date'} → ${scope.postedDateTo || 'today'}`
     : null;
-  return [source, categories.length ? categories.join(', ') : null, dates]
+  return [source, category || null, dates]
     .filter(Boolean)
     .join(' · ');
 }
@@ -108,12 +112,19 @@ export default function JobIntelligenceGovernancePage() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [detailRefreshVersion, setDetailRefreshVersion] = useState(0);
   const decisionTriggerRef = useRef(null);
+  const restoreQueueFocusRef = useRef(null);
 
   useEffect(() => {
     const handleHashChange = () => setRoute(parseGovernanceHash());
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
+
+  useEffect(() => {
+    if (route.itemId || !restoreQueueFocusRef.current) return;
+    setQueueFocusTarget(restoreQueueFocusRef.current);
+    restoreQueueFocusRef.current = null;
+  }, [route.itemId]);
 
   const loadSummary = useCallback(async (signal) => {
     try {
@@ -423,11 +434,22 @@ export default function JobIntelligenceGovernancePage() {
             <strong>Reviewing the current AI Enrichment scope</strong>
             <span>{describeScope(currentScope) || 'Bounded pending batch'}</span>
             {currentScope.reason && <small>Reason: {currentScope.reason}</small>}
+            <p className="governance-scope-guidance">
+              Any row can be selected to view its evidence. Provenance inspection
+              and repair apply to this bounded batch, not only the selected Job.
+            </p>
           </div>
           <button type="button" onClick={() => navigateGovernance(route.area)}>
             Clear scope
           </button>
         </section>
+      )}
+
+      {route.area === 'job-taxonomy' && Object.keys(currentScope).length > 0 && (
+        <CanonicalTaxonomyRecoveryPanel
+          scope={currentScope}
+          onComplete={() => setRefreshVersion((version) => version + 1)}
+        />
       )}
 
       <div
@@ -536,7 +558,7 @@ export default function JobIntelligenceGovernancePage() {
                   type="button"
                   className="governance-narrow-back"
                   onClick={() => {
-                    setQueueFocusTarget(route.itemId);
+                    restoreQueueFocusRef.current = route.itemId;
                     navigateGovernance(route.area, null, {
                       ...currentScope,
                       query: route.query,
@@ -550,7 +572,17 @@ export default function JobIntelligenceGovernancePage() {
               )}
               {detail.status === 'idle' && (
                 <div className="governance-state empty">
-                  Select an item to review its evidence and audit history.
+                  {Object.keys(currentScope).length > 0 ? (
+                    <>
+                      <strong>Choose any row to begin reviewing evidence.</strong>
+                      <p>
+                        This selection is only an entry point; batch provenance
+                        inspection and repair still apply to the current scope.
+                      </p>
+                    </>
+                  ) : (
+                    'Select an item to review its evidence and audit history.'
+                  )}
                 </div>
               )}
               {detail.status === 'loading' && (

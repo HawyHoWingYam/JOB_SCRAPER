@@ -99,8 +99,11 @@ export const GOVERNANCE_AREA_ADAPTERS = {
         },
         options,
       ),
-    queueLabel: (item) => `Job ${item.job_id}`,
-    queueMeta: (item) => (item.reasons || []).join(', ') || 'Unassigned',
+    queueLabel: (item) => item.job_title || 'Job details unavailable',
+    queueMeta: (item) => [
+      item.company_name || 'Company unavailable',
+      (item.reasons || []).join(', ') || 'Unassigned',
+    ].join(' · '),
     loadDetail: (id, options) => fetchCanonicalReviewItem(id, options),
     loadAudit: (id, options) =>
       fetchCanonicalAudit({ subjectId: id, limit: 50 }, options),

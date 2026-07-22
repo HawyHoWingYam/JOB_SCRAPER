@@ -185,6 +185,64 @@ class AIEnrichmentService:
 
         return results
 
+    async def classify_job_taxonomy(
+        self,
+        job: Job,
+        db: Session,
+    ) -> Dict[str, Any]:
+        """Re-evaluate only Canonical Job Taxonomy for one historical Job.
+
+        This is intentionally separate from ``enrich_job``.  The recovery
+        workflow must not update the Job's Summary, Skills, Experience, or
+        ``ai_enriched_at`` fields.
+        """
+        source_attributes = SourceJobAttributes(db).get(job.id)
+        canonical_taxonomy = CanonicalJobTaxonomy(db)
+        classifier_context = canonical_taxonomy.build_classifier_context(
+            source_attributes
+        )
+        if classifier_context.blocking_reasons:
+            evaluation = canonical_taxonomy.evaluate(
+                job.id,
+                source_attributes,
+                classifier_output=None,
+            )
+            return {
+                "status": "success",
+                "classifier_output": None,
+                "evaluation": evaluation,
+                "unresolved_reasons": list(classifier_context.blocking_reasons),
+            }
+
+        try:
+            insight = await self.insight_extractor.extract_taxonomy(
+                title=job.title,
+                description=job.description or "",
+                taxonomy_candidates=classifier_context.to_prompt_payload(),
+            )
+            classification = insight.get("classification") or {}
+        except LLMResponseFormatError:
+            # A malformed provider payload is classifier output failure, not a
+            # network failure.  Evaluate it through the same fail-closed path.
+            classification = {"decision": "invalid", "target_code": None}
+
+        classifier_output = self._canonical_classifier_output(
+            classification,
+            context=classifier_context,
+            llm_status=get_llm_status("jobs"),
+        )
+        evaluation = canonical_taxonomy.evaluate(
+            job.id,
+            source_attributes,
+            classifier_output,
+        )
+        return {
+            "status": "success",
+            "classifier_output": classifier_output,
+            "evaluation": evaluation,
+            "unresolved_reasons": list(evaluation.reasons),
+        }
+
     @staticmethod
     def _evaluation_payload(evaluation: EvaluationResult) -> dict[str, object]:
         return {

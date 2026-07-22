@@ -1,6 +1,9 @@
 import { createMonitoringId, logError } from '../monitoring';
 import { formatApiErrorDetail } from './errors';
 
+const TRANSIENT_STATUS_CODES = new Set([500, 502, 503, 504]);
+const TRANSIENT_RETRY_DELAYS_MS = [250, 500, 1000];
+
 export class ApiRequestError extends Error {
   constructor(
     message,
@@ -55,12 +58,38 @@ function mergeAbortSignals(callerSignal, timeoutSignal) {
   };
 }
 
+function waitForRetry(delayMs, signal) {
+  return new Promise((resolve, reject) => {
+    let timeout;
+    const abort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', abort);
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+    };
+    timeout = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, delayMs);
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
+
 export async function apiFetchJson(url, options = {}) {
-  const { timeoutMs = 15000, requestId = createMonitoringId('req'), ...fetchOptions } = options;
+  const {
+    timeoutMs = 15000,
+    requestId = createMonitoringId('req'),
+    retryTransient = false,
+    ...fetchOptions
+  } = options;
   const startedAt = Date.now();
   const headers = new Headers(fetchOptions.headers || {});
   const effectiveRequestId = headers.get('X-Request-ID') || requestId;
   const method = (fetchOptions.method || 'GET').toUpperCase();
+  const retryableMethod = method === 'GET' || (method === 'POST' && retryTransient);
   let failureLogged = false;
 
   headers.set('X-Request-ID', effectiveRequestId);
@@ -70,52 +99,86 @@ export async function apiFetchJson(url, options = {}) {
   const { signal, cleanup } = mergeAbortSignals(fetchOptions.signal, controller.signal);
 
   try {
-    const response = await fetch(url, {
-      ...fetchOptions,
-      headers,
-      signal,
-    });
-    const data = await response.json().catch(() => null);
+    let retryCount = 0;
+    while (retryCount <= TRANSIENT_RETRY_DELAYS_MS.length) {
+      try {
+        const response = await fetch(url, {
+          ...fetchOptions,
+          headers,
+          signal,
+        });
+        const data = await response.json().catch(() => null);
 
-    if (!response.ok) {
-      const envelope =
-        data?.detail && typeof data.detail === 'object' && !Array.isArray(data.detail)
-          ? data.detail
-          : data && typeof data === 'object' && !Array.isArray(data)
-            ? data
-            : null;
-      const rawDetail = data?.detail ?? data?.details ?? null;
-      const message =
-        (typeof envelope?.message === 'string' && envelope.message.trim()) ||
-        formatApiErrorDetail(rawDetail) ||
-        `Request failed with status ${response.status}`;
-      const responseRequestId =
-        response.headers?.get?.('X-Request-ID') ||
-        envelope?.requestId ||
-        envelope?.request_id ||
-        effectiveRequestId;
-      const details =
-        envelope?.details ?? envelope?.context ?? rawDetail;
+        if (!response.ok) {
+          const envelope =
+            data?.detail && typeof data.detail === 'object' && !Array.isArray(data.detail)
+              ? data.detail
+              : data && typeof data === 'object' && !Array.isArray(data)
+                ? data
+                : null;
+          const rawDetail = data?.detail ?? data?.details ?? null;
+          const message =
+            (typeof envelope?.message === 'string' && envelope.message.trim()) ||
+            formatApiErrorDetail(rawDetail) ||
+            `Request failed with status ${response.status}`;
+          const responseRequestId =
+            response.headers?.get?.('X-Request-ID') ||
+            envelope?.requestId ||
+            envelope?.request_id ||
+            effectiveRequestId;
+          const details =
+            envelope?.details ?? envelope?.context ?? rawDetail;
 
-      failureLogged = true;
-      logError('api.request_failed', {
-        requestId: responseRequestId,
-        method,
-        status: response.status,
-        url,
-        durationMs: Date.now() - startedAt,
-        detail: message,
-      });
-      throw new ApiRequestError(message, {
-        status: response.status,
-        code: envelope?.code || null,
-        details,
-        detail: rawDetail,
-        requestId: responseRequestId,
-      });
+          if (
+            retryTransient
+            && retryableMethod
+            && TRANSIENT_STATUS_CODES.has(response.status)
+            && retryCount < TRANSIENT_RETRY_DELAYS_MS.length
+          ) {
+            await waitForRetry(
+              TRANSIENT_RETRY_DELAYS_MS[retryCount],
+              signal,
+            );
+            retryCount += 1;
+            continue;
+          }
+
+          failureLogged = true;
+          logError('api.request_failed', {
+            requestId: responseRequestId,
+            method,
+            status: response.status,
+            url,
+            durationMs: Date.now() - startedAt,
+            detail: message,
+          });
+          throw new ApiRequestError(message, {
+            status: response.status,
+            code: envelope?.code || null,
+            details,
+            detail: rawDetail,
+            requestId: responseRequestId,
+          });
+        }
+
+        return data;
+      } catch (error) {
+        const callerCancelled = error?.name === 'AbortError' && fetchOptions.signal?.aborted;
+        const canRetryNetworkError =
+          retryTransient
+          && retryableMethod
+          && !callerCancelled
+          && !(error instanceof ApiRequestError)
+          && retryCount < TRANSIENT_RETRY_DELAYS_MS.length;
+        if (!canRetryNetworkError) throw error;
+
+        await waitForRetry(
+          TRANSIENT_RETRY_DELAYS_MS[retryCount],
+          signal,
+        );
+        retryCount += 1;
+      }
     }
-
-    return data;
   } catch (error) {
     const callerCancelled = error?.name === 'AbortError' && fetchOptions.signal?.aborted;
     if (!failureLogged && !callerCancelled) {

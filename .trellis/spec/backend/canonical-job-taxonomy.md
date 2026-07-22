@@ -68,9 +68,14 @@ GET  /api/v1/job-intelligence/canonical-job-taxonomy/revision
 GET  /api/v1/job-intelligence/canonical-job-taxonomy/tree
 GET  /api/v1/job-intelligence/jobs/{job_id}/canonical-taxonomy
 GET  /api/v1/job-intelligence/governance/job-taxonomy/review-items
+POST /api/v1/job-intelligence/governance/job-taxonomy/review-items/query
 GET  /api/v1/job-intelligence/governance/job-taxonomy/review-items/{id}
 POST /api/v1/job-intelligence/governance/job-taxonomy/review-items/{id}/decision
 ```
+
+The GET Review collection remains a compatibility route. Frontend queue
+queries use the JSON POST collection, and both routes delegate to the same
+`CanonicalJobTaxonomy.list_review_items()` read contract.
 
 PostgreSQL integration and migration tests require an explicitly disposable
 database whose name ends in `_test`:
@@ -266,3 +271,117 @@ db.commit()
 The classifier sees only governed allowed targets, `evaluate` remains
 flush-only, and every accepted or unresolved outcome retains reproducible
 provenance.
+
+## Scenario: Bounded historical Canonical Taxonomy recovery
+
+### 1. Scope / Trigger
+
+Use this workflow for active historical Review items whose only recoverable
+classifier reasons are `classifier_output_invalid` or
+`classifier_provenance_missing`. It is a Canonical-only recovery path and is
+not a replacement for Source Catalog provenance repair.
+
+### 2. Signatures
+
+```text
+POST /api/v1/job-intelligence/governance/job-taxonomy/recovery/preview
+POST /api/v1/job-intelligence/governance/job-taxonomy/recovery/runs
+GET  /api/v1/job-intelligence/governance/job-taxonomy/recovery/runs/{run_id}
+POST /api/v1/job-intelligence/governance/job-taxonomy/recovery/runs/{run_id}/retry-failed
+```
+
+The persisted run uses `EnrichmentRun.source_type =
+canonical_taxonomy_recovery`, `run_snapshot` for the pinned scope/revisions,
+and `EnrichmentRunItem.error_code` / `attempt_count` for item diagnostics.
+
+### 3. Contracts
+
+The preview scope accepts source-qualified IDs, source site, optional dates,
+an optional exact `job_ids` handoff list, `reason_codes`, and
+`pending_limit <= 50_000`. The response contains `selected_count`, counts by
+reason, a bounded sample, active taxonomy/mapping `{id, content_hash,
+lock_version}`, and a SHA-256 `scope_fingerprint`.
+
+Confirm recomputes the preview and requires `confirmed=true`, the expected
+taxonomy and mapping IDs, and the exact fingerprint. The run stores the exact
+selected Job IDs in `EnrichmentRun.job_ids`; when the handoff carries an exact
+list, `pending_limit` does not truncate that list. The worker processes items
+asynchronously in bounded run chunks and only calls the taxonomy-only
+classifier prompt. Skills, Summary, Experience, and `ai_enriched_at` are not
+written.
+
+Valid governed targets are assigned through `CanonicalJobTaxonomy.evaluate`.
+Unresolved output remains an active Review. Provider/network exhaustion is
+stored as `error_code=ai_upstream_failed`; only those failed items are eligible
+for the retry endpoint. Each processed Job also gets a job-taxonomy audit,
+idempotency record, and recovery outbox event.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Unsupported reason such as `source_catalog_provenance_missing` | Reject; keep the existing inspect/confirm Source repair flow |
+| Preview taxonomy/mapping/scope differs at confirm | `409 CANONICAL_TAXONOMY_RECOVERY_SCOPE_CHANGED`; create no run |
+| No eligible active Reviews | `409 CANONICAL_TAXONOMY_RECOVERY_NO_ITEMS` |
+| Active taxonomy or mapping changes during execution | Stop the run with drift failure; do not process later items |
+| Valid existing target with complete provenance | Assign through the existing evaluator |
+| Invalid/unresolved classifier result | Complete the recovery item; leave the active Review and do not mark insufficient evidence |
+| Final provider/network failure | Failed item with `ai_upstream_failed`; never `classifier_output_invalid` |
+| Retry request with non-recovery run or non-upstream failure | Reject; no new run |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** A 17,000-item exact handoff is confirmed once, stored as one
+  immutable Job snapshot, and processed asynchronously while the UI reports
+  progress and retries only upstream failures.
+- **Base:** The model returns a target outside the governed slice. The
+  evaluator creates/retains an active Review with a stable reason.
+- **Bad:** Reusing the ordinary pending selector and silently excluding Jobs
+  with `ai_enriched_at`; this makes historical Review recovery appear empty.
+- **Bad:** Calling the full AI enrichment pipeline; this changes Skills,
+  Summary, Experience, or enrichment timestamps during taxonomy recovery.
+- **Bad:** Converting a timeout into `classifier_output_invalid`, or adding a
+  batch `insufficient_evidence` action.
+
+### 6. Tests Required
+
+- Recovery service tests assert reason allow-listing, reason counts/sample,
+  fingerprint/version pinning, exact Job-list semantics, no-item behavior, and
+  confirm drift rejection.
+- Worker tests assert the recovery branch invokes the taxonomy-only processor,
+  stops on active revision drift, records `ai_upstream_failed`, and does not
+  emit ordinary `job.enriched` events.
+- Governance API tests assert preview/confirm/retry routes, 409 error codes,
+  and active historical Review selection even when `ai_enriched_at` is set.
+- AI classifier tests assert the taxonomy-only prompt and that no Skills,
+  Summary, Experience, or `ai_enriched_at` mutation occurs.
+- Run PostgreSQL tests only against a disposable `*_test` database and run
+  migration upgrade/downgrade checks for recovery columns.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+run = EnrichmentRunService(db).create_manual_pending_run(limit=5000)
+await run_full_ai_enrichment(run)
+```
+
+This excludes already-enriched historical Reviews and reruns unrelated AI
+projections.
+
+#### Correct
+
+```python
+preview = CanonicalTaxonomyRecoveryService(db).preview(scope)
+run = recovery.create_run(
+    scope,
+    expected_scope_fingerprint=preview.scope_fingerprint,
+    expected_taxonomy_revision_id=UUID(preview.taxonomy_revision["id"]),
+    expected_mapping_revision_id=UUID(preview.mapping_revision["id"]),
+    confirmed=True,
+)
+```
+
+The server rechecks the pinned active authority before dispatch, stores the
+exact bounded Job set, and runs only Canonical Taxonomy recovery.

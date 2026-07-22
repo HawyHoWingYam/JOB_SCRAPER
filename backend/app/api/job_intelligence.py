@@ -25,11 +25,14 @@ from app.job_intelligence.product_read_model import JobIntelligenceProductReadMo
 from app.schemas.job_intelligence import (
     CanonicalJobStateSchema,
     CanonicalReviewItemSchema,
+    CanonicalReviewItemsQuerySchema,
     CanonicalReviewPageSchema,
     CanonicalTaxonomyDecisionRequestSchema,
     CanonicalTaxonomyDecisionResultSchema,
     CanonicalTaxonomyRevisionSchema,
     CanonicalTaxonomyTreeSchema,
+    CanonicalTaxonomyRecoveryConfirmRequestSchema,
+    CanonicalTaxonomyRecoveryPreviewRequestSchema,
     GovernanceAuditPageSchema,
     PendingSelectionScopeSchema,
     PendingSelectionSummarySchema,
@@ -41,6 +44,11 @@ from app.schemas.job_intelligence import (
     ProvenanceRepairReportSchema,
 )
 from app.services.enrichment_run_service import EnrichmentRunService
+from app.services.canonical_taxonomy_recovery_service import (
+    CanonicalTaxonomyRecoveryError,
+    CanonicalTaxonomyRecoveryService,
+)
+from app.services.enrichment_run_service import ActiveEnrichmentRunError
 from app.schemas.job_intelligence_product import (
     JobIntelligenceGovernanceSummarySchema,
 )
@@ -124,6 +132,24 @@ def _decision_error(
     else:
         status_code = 422
     return HTTPException(status_code=status_code, detail=detail)
+
+
+def _recovery_error(exc: CanonicalTaxonomyRecoveryError) -> HTTPException:
+    status_code = 409 if exc.code in {
+        "CANONICAL_TAXONOMY_RECOVERY_SCOPE_CHANGED",
+        "CANONICAL_TAXONOMY_RECOVERY_NO_ITEMS",
+        "CANONICAL_TAXONOMY_RECOVERY_DRIFT",
+    } else 422
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+def _serialize_recovery_run(db: Session, run) -> dict[str, object]:
+    from app.api.ai import _serialize_single_run
+
+    return _serialize_single_run(run, db)
 
 
 @router.get(
@@ -248,6 +274,97 @@ def apply_source_catalog_provenance_repair(
     )
 
 
+@router.post("/governance/job-taxonomy/recovery/preview")
+def preview_canonical_taxonomy_recovery(
+    request: CanonicalTaxonomyRecoveryPreviewRequestSchema,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Preview only the bounded classifier failures eligible for recovery."""
+    try:
+        preview = CanonicalTaxonomyRecoveryService(db).preview(
+            request.scope.to_recovery_scope()
+        )
+    except CanonicalTaxonomyRecoveryError as exc:
+        raise _recovery_error(exc) from exc
+    return preview.to_payload()
+
+
+@router.post("/governance/job-taxonomy/recovery/runs")
+def create_canonical_taxonomy_recovery_run(
+    request: CanonicalTaxonomyRecoveryConfirmRequestSchema,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Confirm a pinned preview and queue its asynchronous recovery run."""
+    service = CanonicalTaxonomyRecoveryService(db)
+    try:
+        run = service.create_run(
+            request.scope.to_recovery_scope(),
+            expected_scope_fingerprint=request.expected_scope_fingerprint,
+            expected_taxonomy_revision_id=request.taxonomy_revision_id,
+            expected_mapping_revision_id=request.mapping_revision_id,
+            confirmed=request.confirmed,
+        )
+    except ActiveEnrichmentRunError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "active_run_exists", "run_id": exc.run_id},
+        ) from exc
+    except CanonicalTaxonomyRecoveryError as exc:
+        raise _recovery_error(exc) from exc
+
+    from app.api.ai import _publish_run_request
+
+    requested = _publish_run_request(
+        db,
+        service=EnrichmentRunService(db),
+        run_id=run.id,
+        source_service="canonical-taxonomy-recovery-api",
+    )
+    db.refresh(run)
+    payload = _serialize_recovery_run(db, run)
+    payload["execution_dispatched"] = requested
+    return payload
+
+
+@router.get("/governance/job-taxonomy/recovery/runs/{run_id}")
+def read_canonical_taxonomy_recovery_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    run = EnrichmentRunService(db).get_run(run_id)
+    if run is None or run.source_type != "canonical_taxonomy_recovery":
+        raise HTTPException(status_code=404, detail="Recovery run not found")
+    return _serialize_recovery_run(db, run)
+
+
+@router.post("/governance/job-taxonomy/recovery/runs/{run_id}/retry-failed")
+def retry_canonical_taxonomy_recovery_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    service = CanonicalTaxonomyRecoveryService(db)
+    try:
+        run = service.create_retry_run(run_id)
+    except ActiveEnrichmentRunError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "active_run_exists", "run_id": exc.run_id},
+        ) from exc
+    except CanonicalTaxonomyRecoveryError as exc:
+        raise _recovery_error(exc) from exc
+
+    from app.api.ai import _publish_run_request
+
+    _publish_run_request(
+        db,
+        service=EnrichmentRunService(db),
+        run_id=run.id,
+        source_service="canonical-taxonomy-recovery-api",
+    )
+    db.refresh(run)
+    return _serialize_recovery_run(db, run)
+
+
 @router.get(
     "/canonical-job-taxonomy/revision",
     response_model=CanonicalTaxonomyRevisionSchema,
@@ -311,6 +428,83 @@ def list_job_taxonomy_review_items(
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> CanonicalReviewPageSchema:
+    return _list_job_taxonomy_review_items(
+        status=status,
+        reason=reason,
+        job_id=job_id,
+        job_ids=job_ids,
+        source_site=source_site,
+        source_classification_id=source_classification_id,
+        source_subclassification_id=source_subclassification_id,
+        posted_date_from=posted_date_from,
+        posted_date_to=posted_date_to,
+        pending_limit=pending_limit,
+        cursor=cursor,
+        page=page,
+        limit=limit,
+        db=db,
+    )
+
+
+@router.post(
+    "/governance/job-taxonomy/review-items/query",
+    response_model=CanonicalReviewPageSchema,
+)
+def query_job_taxonomy_review_items(
+    request: CanonicalReviewItemsQuerySchema,
+    db: Session = Depends(get_db),
+) -> CanonicalReviewPageSchema:
+    """Query large bounded scopes without putting all IDs in the URL."""
+    return _list_job_taxonomy_review_items(
+        status=request.status or None,
+        reason=request.reason or None,
+        job_id=request.job_id,
+        job_ids=request.job_ids or None,
+        source_site=request.source_site or None,
+        source_classification_id=request.source_classification_id or None,
+        source_subclassification_id=request.source_subclassification_id or None,
+        posted_date_from=request.posted_date_from,
+        posted_date_to=request.posted_date_to,
+        pending_limit=request.pending_limit,
+        cursor=request.cursor,
+        page=request.page,
+        limit=request.limit,
+        db=db,
+    )
+
+
+def _resolved_query_value(value):
+    """Keep direct Python route calls equivalent to FastAPI-bound calls."""
+    return getattr(value, "default", value)
+
+
+def _list_job_taxonomy_review_items(
+    *,
+    status: list[str] | None,
+    reason: list[str] | None,
+    job_id: UUID | None,
+    job_ids: list[UUID] | None,
+    source_site: list[str] | None,
+    source_classification_id: list[str] | None,
+    source_subclassification_id: list[str] | None,
+    posted_date_from: date | None,
+    posted_date_to: date | None,
+    pending_limit: int | None,
+    cursor: str | None,
+    page: int | None,
+    limit: int,
+    db: Session,
+) -> CanonicalReviewPageSchema:
+    status = _resolved_query_value(status)
+    reason = _resolved_query_value(reason)
+    job_id = _resolved_query_value(job_id)
+    job_ids = _resolved_query_value(job_ids)
+    source_site = _resolved_query_value(source_site)
+    source_classification_id = _resolved_query_value(source_classification_id)
+    source_subclassification_id = _resolved_query_value(source_subclassification_id)
+    pending_limit = _resolved_query_value(pending_limit)
+    page = _resolved_query_value(page)
+    limit = _resolved_query_value(limit)
     try:
         scope = PendingSelectionScopeSchema(
             source_sites=source_site or [],
@@ -321,11 +515,26 @@ def list_job_taxonomy_review_items(
         )
         scoped_job_ids = tuple(job_ids or ())
         if scope.has_constraints or pending_limit is not None:
-            selection = EnrichmentRunService(db).inspect_pending_selection(
-                filters=scope.to_service_filters(),
-                limit=pending_limit or limit,
+            scoped_job_ids = tuple(
+                UUID(selected_job_id)
+                for selected_job_id in EnrichmentRunService(db).select_active_review_job_ids(
+                    filters=scope.to_service_filters(),
+                    reason_codes=reason or (),
+                    job_ids=scoped_job_ids,
+                    limit=pending_limit or 5000,
+                )
             )
-            scoped_job_ids = tuple(UUID(job_id) for job_id in selection.selected_job_ids)
+            if not scoped_job_ids:
+                offset = (page - 1) * limit if page is not None else None
+                return CanonicalReviewPageSchema(
+                    items=[],
+                    next_cursor=None,
+                    total=0,
+                    page=page,
+                    limit=limit if page is not None else None,
+                    offset=offset,
+                    page_count=1 if page is not None else None,
+                )
         query = CanonicalReviewQuery(
             statuses=tuple(status) if status is not None else ("active",),
             reason_codes=tuple(reason or ()),

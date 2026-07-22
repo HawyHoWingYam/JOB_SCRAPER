@@ -140,6 +140,8 @@
       {
         "id": "33000000-0000-4000-8000-000000000001",
         "job_id": "30000000-0000-4000-8000-000000000002",
+        "job_title": "Canonical Fixture Review Job",
+        "company_name": "Canonical Fixture Company",
         "taxonomy_revision_id": "10000000-0000-4000-8000-000000000001",
         "mapping_revision_id": "20000000-0000-4000-8000-000000000001",
         "status": "active",

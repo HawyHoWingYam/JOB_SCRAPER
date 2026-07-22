@@ -18,6 +18,10 @@ from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job_category import JobCategory
 from app.models.job import Job
 from app.models.job_subcategory import JobSubcategory
+from app.models.source_job_attributes import (
+    JobSourceClassificationPath,
+    JobSourceClassificationPathNode,
+)
 from app.models.skill_governance import GovernedJobSkill, GovernedJobSkillMention
 from app.schemas import JobDetailSchema
 from app.schemas.job_intelligence import PendingSelectionScopeSchema
@@ -169,11 +173,48 @@ def _derive_excluded_details(
         .order_by(EnrichmentRunItem.run_id.asc(), EnrichmentRunItem.position.asc())
         .all()
     )
+    root_rows = (
+        db.query(
+            JobSourceClassificationPath.job_id,
+            JobSourceClassificationPathNode.source_classification_id,
+            JobSourceClassificationPathNode.label,
+        )
+        .join(
+            JobSourceClassificationPathNode,
+            JobSourceClassificationPathNode.path_id
+            == JobSourceClassificationPath.id,
+        )
+        .filter(
+            JobSourceClassificationPath.job_id.in_(
+                [job_id for _run_id, job_id, _source_id, _source_name, _error in rows]
+            ),
+            JobSourceClassificationPathNode.source_position == 0,
+        )
+        .order_by(
+            JobSourceClassificationPath.job_id.asc(),
+            JobSourceClassificationPath.source_order.asc(),
+            JobSourceClassificationPath.id.asc(),
+        )
+        .all()
+    )
+    authoritative_categories: dict[str, tuple[str | None, str | None]] = {}
+    for job_id, source_id, source_name in root_rows:
+        authoritative_categories.setdefault(
+            str(job_id),
+            (
+                str(source_id).strip() if source_id is not None else None,
+                str(source_name).strip() if source_name is not None else None,
+            ),
+        )
     for run_id, job_id, source_id, source_name, error_message in rows:
-        normalized_source_id = (
+        authoritative_id, authoritative_name = authoritative_categories.get(
+            str(job_id),
+            (None, None),
+        )
+        normalized_source_id = authoritative_id or (
             str(source_id).strip() if source_id is not None else None
         ) or None
-        normalized_source_name = (
+        normalized_source_name = authoritative_name or (
             str(source_name).strip() if source_name is not None else None
         ) or None
         reason = str(error_message or "canonical_taxonomy_preflight_blocked")
@@ -265,6 +306,12 @@ def _serialize_run(
         ),
         "pending_gate_crawl_job_status": (pending_gate or {}).get("crawl_job_status"),
         "error_message": run.error_message,
+        "recovery": (
+            dict(run.run_snapshot)
+            if run.source_type == "canonical_taxonomy_recovery"
+            and isinstance(run.run_snapshot, dict)
+            else None
+        ),
     }
     if include_job_ids:
         payload["job_ids"] = list(run.job_ids or [])
@@ -325,6 +372,8 @@ def _serialize_item(item: EnrichmentRunItem) -> dict:
         "completed_at": item.completed_at.isoformat() if item.completed_at else None,
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "error_message": item.error_message,
+        "error_code": getattr(item, "error_code", None),
+        "attempt_count": int(getattr(item, "attempt_count", 0) or 0),
     }
 
 

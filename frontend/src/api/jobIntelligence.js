@@ -34,8 +34,26 @@ function queryPath(path, buildParams) {
   return apiPath(query ? `${path}?${query}` : path);
 }
 
+function canonicalReviewQueryBody(filters = {}) {
+  return {
+    status: filters.status || [],
+    reason: filters.reason || [],
+    ...(filters.jobId ? { job_id: filters.jobId } : {}),
+    job_ids: filters.jobIds || [],
+    source_site: filters.sourceSites || [],
+    source_classification_id: filters.sourceClassificationIds || [],
+    source_subclassification_id: filters.sourceSubclassificationIds || [],
+    posted_date_from: filters.postedDateFrom || null,
+    posted_date_to: filters.postedDateTo || null,
+    pending_limit: filters.pendingLimit || null,
+    cursor: filters.cursor || null,
+    page: filters.page || null,
+    limit: filters.limit || 50,
+  };
+}
+
 function getJson(path, options) {
-  return apiFetchJson(path, options);
+  return apiFetchJson(path, { retryTransient: true, ...options });
 }
 
 function postJson(path, body, options = {}) {
@@ -88,25 +106,11 @@ export function fetchCanonicalTree(options) {
 }
 
 export function fetchCanonicalReviewItems(filters = {}, options) {
-  const path = queryPath(
-    '/job-intelligence/governance/job-taxonomy/review-items',
-    (params) => {
-      appendValues(params, 'status', filters.status);
-      appendValues(params, 'reason', filters.reason);
-      if (filters.jobId) params.set('job_id', filters.jobId);
-      appendValues(params, 'job_ids', filters.jobIds);
-      appendValues(params, 'source_site', filters.sourceSites);
-      appendValues(params, 'source_classification_id', filters.sourceClassificationIds);
-      appendValues(params, 'source_subclassification_id', filters.sourceSubclassificationIds);
-      if (filters.postedDateFrom) params.set('posted_date_from', filters.postedDateFrom);
-      if (filters.postedDateTo) params.set('posted_date_to', filters.postedDateTo);
-      if (filters.pendingLimit) params.set('pending_limit', String(filters.pendingLimit));
-      if (filters.cursor) params.set('cursor', filters.cursor);
-      if (filters.page) params.set('page', String(filters.page));
-      if (filters.limit) params.set('limit', String(filters.limit));
-    },
+  return postJson(
+    apiPath('/job-intelligence/governance/job-taxonomy/review-items/query'),
+    canonicalReviewQueryBody(filters),
+    { ...options, retryTransient: true },
   );
-  return getJson(path, options);
 }
 
 export function fetchCanonicalReviewItem(reviewItemId, options) {
@@ -142,6 +146,68 @@ export function fetchCanonicalAudit(filters = {}, options) {
         if (filters.limit) params.set('limit', String(filters.limit));
       },
     ),
+    options,
+  );
+}
+
+function canonicalRecoveryScope(scope = {}) {
+  return {
+    source_sites: scope.sourceSites || scope.source_sites || [],
+    source_classification_ids:
+      scope.sourceClassificationIds || scope.source_classification_ids || [],
+    source_subclassification_ids:
+      scope.sourceSubclassificationIds || scope.source_subclassification_ids || [],
+    posted_date_from: scope.postedDateFrom || scope.posted_date_from || null,
+    posted_date_to: scope.postedDateTo || scope.posted_date_to || null,
+    job_ids: scope.jobIds || scope.job_ids || [],
+    reason_codes: scope.reasonCodes
+      || scope.reason_codes
+      || (scope.reason ? [scope.reason] : []),
+    pending_limit: Number(scope.pendingLimit || scope.pending_limit || 50000),
+  };
+}
+
+export function previewCanonicalTaxonomyRecovery(scope = {}, options) {
+  return postJson(
+    apiPath('/job-intelligence/governance/job-taxonomy/recovery/preview'),
+    { scope: canonicalRecoveryScope(scope) },
+    options,
+  );
+}
+
+export function createCanonicalTaxonomyRecoveryRun(
+  scope,
+  values,
+  options,
+) {
+  return postJson(
+    apiPath('/job-intelligence/governance/job-taxonomy/recovery/runs'),
+    {
+      scope: canonicalRecoveryScope(scope),
+      expected_scope_fingerprint: values.expectedScopeFingerprint,
+      taxonomy_revision_id: values.taxonomyRevisionId,
+      mapping_revision_id: values.mappingRevisionId,
+      confirmed: true,
+    },
+    options,
+  );
+}
+
+export function fetchCanonicalTaxonomyRecoveryRun(runId, options) {
+  return getJson(
+    apiPath(
+      `/job-intelligence/governance/job-taxonomy/recovery/runs/${encodeURIComponent(runId)}`,
+    ),
+    options,
+  );
+}
+
+export function retryCanonicalTaxonomyRecoveryRun(runId, options) {
+  return postJson(
+    apiPath(
+      `/job-intelligence/governance/job-taxonomy/recovery/runs/${encodeURIComponent(runId)}/retry-failed`,
+    ),
+    {},
     options,
   );
 }

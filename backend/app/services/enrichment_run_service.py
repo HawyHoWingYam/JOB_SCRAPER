@@ -20,6 +20,7 @@ from app.models.source_job_attributes import (
     JobSourceClassificationPath,
     JobSourceClassificationPathNode,
 )
+from app.models.canonical_job_taxonomy import JobTaxonomyReviewItem
 from app.models.skill_governance import (
     GovernedJobSkillMention,
     SkillCandidate,
@@ -277,6 +278,98 @@ class EnrichmentRunService:
             query = query.limit(limit)
         return query.all()
 
+    @staticmethod
+    def _excluded_source_category(
+        job: Job,
+        context,
+    ) -> tuple[str | None, str | None]:
+        """Use preserved Source path identity for exclusion display/scope links."""
+        source_id = str(job.source_classification_id or "").strip() or None
+        source_name = str(job.source_classification_name or "").strip() or None
+        for path in getattr(context, "source_classification_paths", ()) or ():
+            if not isinstance(path, dict):
+                continue
+            nodes = path.get("nodes")
+            if not isinstance(nodes, list) or not nodes:
+                continue
+            root = nodes[0]
+            if not isinstance(root, dict):
+                continue
+            path_id = str(
+                root.get("source_classification_id") or root.get("id") or ""
+            ).strip() or None
+            path_name = str(root.get("label") or "").strip() or None
+            if path_id or path_name:
+                return path_id or source_id, path_name or source_name
+        return source_id, source_name
+
+    def select_active_review_job_ids(
+        self,
+        *,
+        filters: PendingJobFilters | None = None,
+        reason_codes: Iterable[str] = (),
+        job_ids: Iterable[str] = (),
+        limit: int = 5000,
+    ) -> list[str]:
+        """Resolve historical active Canonical Reviews without pending semantics."""
+        normalized = filters or PendingJobFilters()
+        query = (
+            self.db.query(JobTaxonomyReviewItem.job_id, JobTaxonomyReviewItem.reasons)
+            .join(Job, Job.id == JobTaxonomyReviewItem.job_id)
+            .filter(
+                JobTaxonomyReviewItem.status == "active",
+                Job.is_deleted.is_(False),
+            )
+        )
+        normalized_job_ids = tuple(str(job_id) for job_id in job_ids if str(job_id))
+        if normalized_job_ids:
+            query = query.filter(Job.id.in_(normalized_job_ids))
+        if normalized.source_sites:
+            query = query.filter(func.lower(Job.source_site).in_(normalized.source_sites))
+        if normalized.source_classification_ids:
+            query = query.filter(
+                Job.source_classification_paths.any(
+                    JobSourceClassificationPath.nodes.any(
+                        and_(
+                            JobSourceClassificationPathNode.source_position == 0,
+                            JobSourceClassificationPathNode.source_classification_id.in_(
+                                normalized.source_classification_ids
+                            ),
+                        )
+                    )
+                )
+            )
+        if normalized.source_subclassification_ids:
+            query = query.filter(
+                Job.source_classification_paths.any(
+                    JobSourceClassificationPath.nodes.any(
+                        and_(
+                            JobSourceClassificationPathNode.source_position > 0,
+                            JobSourceClassificationPathNode.source_classification_id.in_(
+                                normalized.source_subclassification_ids
+                            ),
+                        )
+                    )
+                )
+            )
+        if normalized.posted_date_from is not None:
+            query = query.filter(func.date(Job.posted_date) >= normalized.posted_date_from)
+        if normalized.posted_date_to is not None:
+            query = query.filter(func.date(Job.posted_date) <= normalized.posted_date_to)
+
+        wanted = {str(reason) for reason in reason_codes if str(reason)}
+        selected: list[str] = []
+        for job_id, reasons in query.order_by(
+            JobTaxonomyReviewItem.created_at.asc(),
+            JobTaxonomyReviewItem.id.asc(),
+        ).all():
+            if wanted and not wanted.intersection(str(reason) for reason in (reasons or [])):
+                continue
+            selected.append(str(job_id))
+            if len(selected) >= limit:
+                break
+        return selected
+
     def _preflight_jobs(
         self,
         jobs: list[Job],
@@ -294,8 +387,10 @@ class EnrichmentRunService:
                 supported_jobs.append(job)
                 continue
 
-            source_id = str(job.source_classification_id or "").strip() or None
-            source_name = str(job.source_classification_name or "").strip() or None
+            source_id, source_name = self._excluded_source_category(
+                job,
+                handling.context,
+            )
             reason = handling.reason or "canonical_taxonomy_preflight_blocked"
             excluded_reasons[str(job.id)] = reason
             key = (
@@ -432,6 +527,7 @@ class EnrichmentRunService:
         trigger_crawl_job_id: str | uuid.UUID | None = None,
         initial_status: str = "pending",
         excluded_reasons_by_job_id: dict[str, str] | None = None,
+        run_snapshot: dict[str, object] | None = None,
     ) -> EnrichmentRun:
         """Persist a run and its pending items for internal `jobs.id` UUID values."""
         normalized_job_ids = [str(job_id) for job_id in job_ids]
@@ -465,6 +561,7 @@ class EnrichmentRunService:
             cancelled_items=0,
             excluded_items=excluded_count,
             completed_at=completed_at,
+            run_snapshot=run_snapshot,
         )
         self.db.add(run)
         self.db.flush()
@@ -1367,6 +1464,7 @@ class EnrichmentRunService:
 
         item.status = "running"
         item.started_at = item.started_at or timestamp
+        item.attempt_count = int(item.attempt_count or 0) + 1
         run.current_job_title = job_title
         run.error_message = None
         self.db.flush()
@@ -1404,18 +1502,24 @@ class EnrichmentRunService:
 
         if result.get("status") == "success":
             item.status = "completed"
-            item.error_message = None
-            self._enqueue_job_enriched_event(run=run, item=item)
+            item.error_message = (
+                str(result.get("error")) if result.get("error") else None
+            )
+            item.error_code = result.get("error_code")
+            if run.source_type != "canonical_taxonomy_recovery":
+                self._enqueue_job_enriched_event(run=run, item=item)
         elif result.get("status") == "excluded":
             item.status = "excluded"
             item.error_message = str(
                 result.get("error") or "canonical_taxonomy_preflight_blocked"
             )
+            item.error_code = result.get("error_code")
         else:
             item.status = "failed"
             item.error_message = str(
                 result.get("error") or "missing result for run item"
             )
+            item.error_code = str(result.get("error_code") or "enrichment_failed")
 
         item.completed_at = timestamp
 
@@ -1506,7 +1610,12 @@ class EnrichmentRunService:
         )
 
     async def execute_run(
-        self, run_id: str, enrichment_service=None, *, claim: bool = True
+        self,
+        run_id: str,
+        enrichment_service=None,
+        *,
+        claim: bool = True,
+        item_processor=None,
     ) -> EnrichmentRun:
         """Execute a persisted run and update item/run status from enrichment results."""
         from app.services.ai_enrichment_service import get_ai_enrichment_service
@@ -1574,8 +1683,13 @@ class EnrichmentRunService:
                         continue
 
                     try:
-                        result = await service.enrich_job_id(item.job_id)
+                        if item_processor is not None:
+                            result = await item_processor(job, self.db)
+                        else:
+                            result = await service.enrich_job_id(item.job_id)
                     except Exception as exc:
+                        if getattr(exc, "abort_run", False):
+                            raise
                         result = {
                             "job_id": str(item.job_id),
                             "status": "error",

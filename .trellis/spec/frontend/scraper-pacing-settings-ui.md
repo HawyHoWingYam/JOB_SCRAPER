@@ -6,7 +6,8 @@
 
 Use this contract when displaying or editing the global manual Job Detail pacing
 for JobsDB, CTGoodJobs, and OfferToday. It does not control listing or scheduled
-crawls and never edits the pacing snapshot of an existing task.
+crawls and never edits the pacing snapshot, frozen membership, or complete-run
+cap of an existing task.
 
 ### 2. Signatures
 
@@ -36,6 +37,11 @@ POST /api/v1/settings/scraper-pacing/{source_site}/reset
   `burst_pause_seconds`. The shared API helper owns URLs and summary formatting.
 - Active tasks do not disable Save. The warning states that edits affect new
   tasks only and links to Crawl Tasks.
+- Saved pacing is read only when preparing a future Dispatch Plan. Save/Reset
+  cannot mutate a prepared or consumed plan, expand its frozen detail
+  membership, or change its reviewed `detail_run_cap`.
+- `burst_size` is an execution pacing partition. It is never a detail target
+  limit, Recovery Segment continuation authority, or complete-run cap.
 - Direct Override fetches the same saved settings and renders the selected
   source only. It contains no pacing inputs and does not add pacing fields to
   the crawl-dispatch payload.
@@ -49,6 +55,8 @@ POST /api/v1/settings/scraper-pacing/{source_site}/reset
 | burst size not an integer in 1-1000 | field error; Save disabled |
 | burst pause outside 0-3600 | field error; Save disabled |
 | unchanged card | Save disabled |
+| settings change while a detail plan is active | save for future plans; active snapshot/membership/cap remain unchanged |
+| burst size differs from a plan run cap | show each in its own context; never treat burst size as the cap |
 | backend 422 | render formatted backend detail in that card's alert |
 | GET failure | render page-level alert; do not invent defaults |
 | Direct Override GET failure | render unavailable summary plus Settings link |
@@ -59,14 +67,21 @@ POST /api/v1/settings/scraper-pacing/{source_site}/reset
   rebuilt from the PUT response while JobsDB and OfferToday stay unchanged.
 - **Base:** Two detail tasks are active; the count and new-task-only warning are
   shown, but every valid card can still be saved.
+- **Base:** Changing burst size from 20 to 50 affects a subsequently prepared
+  plan only; an active 500-target plan keeps its frozen pacing and run cap.
 - **Bad:** Direct Override duplicates the four inputs and lets its local values
   drift from the server-owned Settings page.
+- **Bad:** A Save updates an active task or uses `burst_size` to enlarge its
+  frozen target membership.
 
 ### 6. Tests Required
 
 - Settings navigation preserves the existing AI Runtime screen.
 - Card tests cover independent state, Save/Reset response adoption, local
-  validation, backend 422 alerts, active count, and Crawl Tasks navigation.
+  validation, backend 422 alerts, active count, future-plan-only wording, and
+  Crawl Tasks navigation.
+- Backend/frontend integration assertions keep prepared/active plan pacing,
+  frozen membership, and `detail_run_cap` unchanged after settings mutation.
 - Direct Override summary tests assert exact selected-source values, no
   spinbuttons, and the Settings navigation action.
 - Run the full frontend test suite and production build.
@@ -92,7 +107,11 @@ setCards((current) => ({
   ...current,
   [source]: createCardState(response),
 }));
+
+// Existing task cards continue rendering task.detail_pacing and
+// task.detail_snapshot; they never read this newly saved settings response.
 ```
 
-The server response is the saved/effective source of truth and state ownership
-remains isolated by source.
+The server response is the saved source of truth for future preparation and
+state ownership remains isolated by source. Existing plans retain their own
+immutable snapshots.

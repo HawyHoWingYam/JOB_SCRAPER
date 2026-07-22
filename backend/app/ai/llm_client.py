@@ -370,6 +370,7 @@ class ZhipuClient(LLMClient):
 
     def __init__(self, api_key: str):
         self.api_key = api_key
+        self.model = "glm-4-flash"
         self._client = None
 
     def _get_client(self):
@@ -389,7 +390,7 @@ class ZhipuClient(LLMClient):
             response = await _call_with_retry(
                 "zhipu",
                 lambda: client.chat.completions.create(
-                    model="glm-4-flash",
+                    model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                 ),
             )
@@ -1039,6 +1040,7 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
         - configured_provider: str - provider selected by config/runtime settings
         - active_provider: str - actual provider being used
         - active_model: Optional[str] - active model if available
+        - model_version: Optional[str] - pinned runtime model identifier
         - is_degraded: bool - whether fallback to mock occurred
         - degradation_reason: Optional[str] - why degradation happened
     """
@@ -1083,6 +1085,10 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
         ),
         "active_model": _active_models.get(scope),
         "model": _active_models.get(scope),
+        # The configured provider model identifier is the runtime's stable
+        # model-version authority. Classifier provenance must capture it even
+        # when the provider does not expose a separate deployment revision.
+        "model_version": _active_models.get(scope),
         "is_degraded": _degraded_states.get(scope, False)
         or bool(_requires_test_states.get(scope)),
         "degradation_reason": _degradation_reasons.get(scope),

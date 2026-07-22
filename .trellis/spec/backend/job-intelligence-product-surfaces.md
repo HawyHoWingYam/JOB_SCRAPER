@@ -51,13 +51,15 @@ GET /api/v1/jobs/{job_id}
 GET /api/v1/companies
 GET /api/v1/companies/{company_id}
 GET /api/v1/jobs/{job_id}/recommendations
+GET /api/v1/job-intelligence/governance/job-taxonomy/review-items
+POST /api/v1/job-intelligence/governance/job-taxonomy/review-items/query
 ```
 
 Frontend governance queue hashes are:
 
 ```text
 #job-intelligence/<area>?item=<stable-id>&q=<domain-filter>&cursor=<opaque-cursor>
-#job-intelligence/job-taxonomy?source_site=<source>&source_classification_id=<qualified-id>&job_id=<job-id>&reason=<reason>&pending_limit=<limit>&page=<page>
+#job-intelligence/job-taxonomy?source_site=<source>&source_classification_id=<qualified-id>&source_classification_label=<display-label>&job_id=<job-id>&reason=<reason>&pending_limit=<limit>&page=<page>
 ```
 
 `governanceAreas.js` owns the domain filter mapping: Canonical Review uses
@@ -66,10 +68,19 @@ Frontend governance queue hashes are:
 
 Operator-scoped Canonical Review adds page mode as an additive contract. The
 frontend keeps repeated `job_id` values in the hash for a readable deep link,
-then serializes the selected set as repeated `job_ids` query values for the
-backend API; `job_id` remains the singular search field. Page responses expose
-`page`, `limit`, `offset`, and `page_count`, with the operator UI requesting
-10 items per page. Existing cursor mode remains valid for unscoped consumers.
+then sends every frontend queue query to POST `/review-items/query` as JSON.
+`job_ids` remains an array and `job_id` remains the singular search field. The
+GET route remains as a compatibility endpoint for existing callers. GET and
+POST must call the same backend read implementation and return the same
+`CanonicalReviewPageSchema`. Page responses expose `page`, `limit`, `offset`,
+and `page_count`, with the operator UI requesting 10 items per page. Existing
+cursor mode remains valid for unscoped consumers.
+Canonical Review item responses also expose nullable `job_title` and
+`company_name` fields. The read model obtains those labels with one bulk
+Job/Company projection per queue page (and one lookup for item detail); it must
+not dereference a Job relationship once per queue row. The hash's
+`source_classification_label` is display-only metadata from the AI handoff and
+is never sent as a queue filter or repair authority.
 
 ### 3. Contracts
 
@@ -103,10 +114,12 @@ backend API; `job_id` remains the singular search field. Page responses expose
   Job Detail, Companies, AI Enrichment, Dashboard, and Browser remain read-only
   and deep-link into Governance.
 - A scoped AI Enrichment taxonomy link preserves source, qualified category /
-  subcategory IDs, dates, pending limit, exclusion reason, and job IDs. The
-  queue shows a scope banner and only that bounded pending slice. On narrow
-  screens, selecting an item hides the queue and shows the detail panel first;
-  the explicit Back action restores the queue and its focus.
+  subcategory IDs, display-only category label, dates, pending limit, exclusion
+  reason, and job IDs. The queue shows a scope banner and only that bounded
+  pending slice. Any row is an evidence entry point; provenance inspection and
+  repair remain batch-scoped. On narrow screens, selecting an item hides the
+  queue and shows the detail panel first; the explicit Back action restores the
+  queue and its focus.
 - `source_catalog_provenance_missing` and
   `source_classification_paths_missing` are source-evidence reasons, not
   Canonical Job Subcategory decisions. Their detail panel explains the
@@ -126,7 +139,11 @@ backend API; `job_id` remains the singular search field. Page responses expose
 | Queue filter/cursor changes | Abort stale request; URL and API receive the same domain filter/cursor |
 | Optional detail section fails | Keep evidence visible; name the partial failure and disable only dependent actions |
 | Decision returns stale version | Close stale confirmation, reload detail, explain conflict |
+| Review Job/Company display label is missing | Keep the typed review item readable with nullable fields and a non-empty UI fallback; preserve UUID in technical detail |
+| Scoped display label is missing or changed | Keep ID-based scope/filter/repair behavior unchanged; treat the label as informational only |
 | A deep link contains multiple selected jobs | Send them as `job_ids` to the API; never send repeated values through singular `job_id` |
+| Frontend Canonical Review query has any scope or filter combination | Use POST `/review-items/query` with the complete JSON filter body; do not serialize `job_ids` into the URL |
+| A bounded `job_ids` scope resolves to no active Review rows | Return an empty page with `total=0`; never broaden the query to the global Review queue |
 | Narrow selected-item view | Hide the queue only below the narrow breakpoint; Back must restore the scoped page and queue focus |
 | Container fixture test cannot see frontend copy | Mount frontend read-only; do not skip equality validation |
 
@@ -143,10 +160,17 @@ backend API; `job_id` remains the singular search field. Page responses expose
   scalar.
 - **Base:** a deep-linked Review is no longer on the current queue page. Its
   typed detail still loads while the queue independently shows its empty page.
+- **Good:** a Review row shows `job_title` and `company_name`, while the exact
+  Job UUID stays under technical evidence and the scoped banner explains that
+  any row can start batch review.
 - **Bad:** count all `status='active'` Reviews without filtering the active
   revision, or expose every historical Company Industry review reference.
-- **Bad:** loop through recommendation candidates and call domain readers once
-  per candidate, or render `job.employment_type` as governed Employment Type.
+- **Bad:** loop through queue rows and load Job/Company labels one row at a
+  time, render UUID as the only operator-facing identity, or treat the
+  display-only category label as a scope filter.
+- **Good:** every frontend Canonical Review query uses the JSON query endpoint
+  and preserves every Job ID. If none of those IDs remain active Reviews, the
+  response is an explicit empty page rather than an unscoped queue.
 
 ### 6. Tests Required
 
@@ -159,12 +183,17 @@ backend API; `job_id` remains the singular search field. Page responses expose
   response models; exact-copy tests compare all four frontend fixtures.
 - `JobIntelligenceGovernancePage.test.jsx` covers peer tabs, trusted-local
   warning, server filters/cursors, deep links, queue keyboard focus, narrow Back,
-  partial errors, confirmation variants, stale conflict, and post-decision
-  focus.
+  partial errors, confirmation variants, stale conflict, post-decision focus,
+  title/company queue identity, technical UUID disclosure, and scoped batch
+  guidance.
 - `JobBrowser.test.jsx`, `FilterPanel.test.jsx`, `JobDetailModal.test.jsx`,
   `CompanyIndustryDisplay.test.jsx`, `AIEnrichmentPage.test.jsx`, and
   `Dashboard.test.jsx` prove canonical terminology, stable IDs, unavailable /
   Unassigned / Unknown states, and read-only deep links.
+- `jobIntelligence.test.js` covers JSON POST serialization for unscoped,
+  scoped, paginated, and large bounded queries; backend Canonical API tests
+  exercise both routes through the shared read path and assert that an
+  all-invalid bounded scope returns zero items.
 - Run PostgreSQL files sequentially against an explicitly disposable database
   whose name ends in `_test`. In the backend container, mount
   `frontend:/frontend:ro` for fixture equality tests.
@@ -173,7 +202,8 @@ backend API; `job_id` remains the singular search field. Page responses expose
   zero document-level horizontal overflow.
 - Scoped browser QA also verifies AI → taxonomy deep-link context, `10 of N`
   page mode, direct numeric page jumps, source-provenance inspect/confirm
-  gating, and a fresh page has no logged caller-cancelled request errors.
+  gating, human-readable title/company labels, display-only category context,
+  and a fresh page has no logged caller-cancelled request errors.
 
 ### 7. Wrong vs Correct
 
@@ -202,3 +232,62 @@ states = JobIntelligenceProductReadModel(db).get_governed_skill_name_states(
 
 One active governed authority drives metrics and one bulk read feeds every
 consumer result.
+
+#### Wrong: UUID-only queue identity and display metadata as authority
+
+```jsx
+queueLabel: (item) => `Job ${item.job_id}`
+fetchCanonicalReviewItems({ sourceClassificationLabel: label })
+```
+
+The first copy forces operators to choose by an internal identifier, and the
+second makes mutable presentation text part of the scope contract.
+
+#### Correct: human identity with technical traceability and ID authority
+
+```jsx
+queueLabel: (item) => item.job_title || 'Job details unavailable'
+queueMeta: (item) => `${item.company_name || 'Company unavailable'} · ${reason}`
+```
+
+The UI uses Job/Company labels for selection, keeps the UUID in technical
+detail, and sends only source-qualified IDs and the existing filter values to
+the backend.
+
+#### Wrong: put a Canonical Review scope in a GET URL
+
+```js
+fetch(`/review-items?job_ids=${jobIds.join('&job_ids=')}`)
+```
+
+Large batches can be rejected by the browser dev server or proxy with HTTP
+431 before the application handles the request, and even short requests do
+not need a cacheable URL for this dynamic queue.
+
+#### Correct: use JSON POST for the frontend query contract
+
+```js
+fetch('/review-items/query', {
+  method: 'POST',
+  body: JSON.stringify({ ...filters, job_ids: boundedJobIds }),
+})
+```
+
+The frontend always uses this JSON contract; the backend retains GET only for
+compatibility. Both routes use the same Canonical Review read implementation,
+and an empty bounded selection remains empty.
+
+### Historical Review recovery boundary
+
+The scoped Job Taxonomy queue must resolve active Review rows directly; it must
+not reuse the ordinary AI pending selector, because a Job can have
+`ai_enriched_at` set while its Canonical Review remains active. The batch
+recovery entry point is displayed at scope level and follows preview → explicit
+confirmation → asynchronous progress. Its authority is the source-qualified
+scope plus the server-pinned taxonomy revision, mapping revision, and scope
+fingerprint. The display-only category label never enters recovery filtering.
+
+Only `classifier_output_invalid` and `classifier_provenance_missing` may use
+this entry point. Source Catalog provenance and missing Source paths retain
+their separate repair/recollection guidance. Unresolved classifier results
+remain Review; there is no batch insufficient-evidence action.

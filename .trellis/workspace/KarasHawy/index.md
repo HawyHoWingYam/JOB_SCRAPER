@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
-- **Last Active**: 2026-07-20
+- **Total Sessions**: 35
+- **Last Active**: 2026-07-22
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1003 | Active |
+| `journal-1.md` | ~1239 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,13 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 35 | 2026-07-22 | Scoped AI Enrichment governance UI | `f7e357b8` | `codex/offertoday-it-coverage-20260702` |
+| 34 | 2026-07-22 | Finish Trellis session | `2710c73c` | `codex/offertoday-it-coverage-20260702` |
+| 33 | 2026-07-22 | Fix AI enrichment provenance recovery | `2710c73c` | `codex/offertoday-it-coverage-20260702` |
+| 32 | 2026-07-21 | Fix OfferToday scope catalog loading | `73645680` | `codex/offertoday-it-coverage-20260702` |
+| 31 | 2026-07-21 | Fix SkillChart dynamic bucket crash | `023ae1fd` | `codex/offertoday-it-coverage-20260702` |
+| 30 | 2026-07-21 | Complete Job Intelligence live rollout | `366bf3b8`, `9063508f`, `84917af9` | `codex/offertoday-it-coverage-20260702` |
+| 29 | 2026-07-21 | Complete Crawl Control UI program | `1a20e4e8`, `1836f7da`, `40099411`, `815a0c19` | `codex/offertoday-it-coverage-20260702` |
 | 28 | 2026-07-20 | Complete Job Intelligence parent integration | `56571eb3` | `codex/offertoday-it-coverage-20260702` |
 | 27 | 2026-07-20 | Complete Job Intelligence cutover rebuild | `b9ba7056`, `47c068bc` | `codex/offertoday-it-coverage-20260702` |
 | 26 | 2026-07-20 | Complete Job Intelligence Product Surfaces | `a65be5ed`, `0678e7fa` | `codex/offertoday-it-coverage-20260702` |

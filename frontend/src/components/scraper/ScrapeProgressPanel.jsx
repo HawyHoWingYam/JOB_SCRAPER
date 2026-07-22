@@ -27,16 +27,8 @@ function ScrapeProgressPanel({
     initialProgress = EMPTY_PROGRESS,
     recoveryStartedAt,
     recoveryWindowMs,
-    headedWorkerStatus = null,
-    sourceCatalog = {},
     onClose,
-    onNavigateToAI,
     onOpenCrawlTasks,
-    onResumeCrawlJob,
-    onCancelCrawlJob,
-    onOpenManualActionBrowser,
-    onGetManualActionReuseStatus,
-    onCloseManualActionWindows
 }) {
     const [progress, setProgress] = useState(initialProgress);
     const [isConnected, setIsConnected] = useState(false);

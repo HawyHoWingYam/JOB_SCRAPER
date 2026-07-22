@@ -255,7 +255,7 @@ describe('JobIntelligenceGovernancePage', () => {
 
   it('shows ten-item page controls and preserves the scoped route on a page jump', async () => {
     const user = userEvent.setup();
-    window.location.hash = '#job-intelligence/job-taxonomy?source_site=offertoday&reason=source_catalog_provenance_missing&page=1';
+    window.location.hash = '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_classification_label=%E8%B3%87%E8%A8%8A%E7%A7%91%E6%8A%80&reason=source_catalog_provenance_missing&page=1';
     api.fetchCanonicalReviewItems.mockResolvedValue({
       items: [],
       next_cursor: null,
@@ -269,6 +269,9 @@ describe('JobIntelligenceGovernancePage', () => {
     render(<JobIntelligenceGovernancePage />);
 
     expect(await screen.findByText('Page')).toBeInTheDocument();
+    expect(screen.getByText(/資訊科技 \(offertoday:118000\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Choose any row to begin reviewing evidence/)).toBeInTheDocument();
+    expect(screen.getByText('Showing 0 of 25 matching items')).toBeInTheDocument();
     const pageInput = screen.getByRole('spinbutton', { name: 'Queue page number' });
     await user.clear(pageInput);
     await user.type(pageInput, '3');
@@ -276,7 +279,7 @@ describe('JobIntelligenceGovernancePage', () => {
 
     await waitFor(() => {
       expect(window.location.hash).toBe(
-        '#job-intelligence/job-taxonomy?source_site=offertoday&reason=source_catalog_provenance_missing&page=3',
+        '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_classification_label=%E8%B3%87%E8%A8%8A%E7%A7%91%E6%8A%80&reason=source_catalog_provenance_missing&page=3',
       );
       expect(api.fetchCanonicalReviewItems).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -286,7 +289,51 @@ describe('JobIntelligenceGovernancePage', () => {
         }),
         expect.any(Object),
       );
+      expect(api.fetchCanonicalReviewItems.mock.calls.at(-1)[0])
+        .not.toHaveProperty('sourceClassificationLabel');
     });
+  });
+
+  it('does not auto-select the first scoped row and keeps missing labels readable', async () => {
+    const user = userEvent.setup();
+    const reviewItem = {
+      ...canonicalFixture.review_page.items[0],
+      job_title: null,
+      company_name: null,
+    };
+    window.location.hash = '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_classification_label=Information%20Technology&reason=source_catalog_provenance_missing';
+    api.fetchCanonicalReviewItems.mockResolvedValue({
+      items: [reviewItem],
+      next_cursor: null,
+      total: 1,
+      page: 1,
+      limit: 10,
+      offset: 0,
+      page_count: 1,
+    });
+    api.fetchCanonicalReviewItem.mockResolvedValue(reviewItem);
+
+    render(<JobIntelligenceGovernancePage />);
+
+    const row = await screen.findByRole('button', {
+      name: /Job details unavailable/,
+    });
+    expect(row).toHaveAttribute('aria-pressed', 'false');
+    expect(row).toHaveTextContent('Company unavailable');
+    expect(screen.getByText(/Choose any row to begin reviewing evidence/))
+      .toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Evidence' }))
+      .not.toBeInTheDocument();
+
+    await user.click(row);
+
+    const evidenceHeading = await screen.findByRole('heading', { name: 'Evidence' });
+    const evidencePanel = evidenceHeading.closest('section');
+    expect(evidencePanel).toBeInTheDocument();
+    expect(within(evidencePanel).getByText('Job details unavailable'))
+      .toBeInTheDocument();
+    expect(within(evidencePanel).getByText('Company unavailable'))
+      .toBeInTheDocument();
   });
 
   it('routes source provenance evidence to inspect and confirm instead of taxonomy decisions', async () => {
@@ -295,7 +342,7 @@ describe('JobIntelligenceGovernancePage', () => {
       ...canonicalFixture.review_page.items[0],
       reasons: ['source_catalog_provenance_missing'],
     };
-    window.location.hash = `#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A121000&reason=source_catalog_provenance_missing&pending_limit=50&item=${item.id}`;
+    window.location.hash = `#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&reason=source_catalog_provenance_missing&pending_limit=50&item=${item.id}`;
     api.fetchCanonicalReviewItem.mockResolvedValue(item);
     api.fetchCanonicalReviewItems.mockResolvedValue({
       items: [item],
@@ -316,7 +363,7 @@ describe('JobIntelligenceGovernancePage', () => {
     expect(api.inspectSourceCatalogProvenance).toHaveBeenCalledWith(
       expect.objectContaining({
         source_sites: ['offertoday'],
-        source_classification_ids: ['offertoday:121000'],
+        source_classification_ids: ['offertoday:118000'],
       }),
       50,
     );
@@ -442,7 +489,7 @@ describe('JobIntelligenceGovernancePage', () => {
     const reviewItem = canonicalFixture.review_page.items[0];
     await user.click(
       await screen.findByRole('button', {
-        name: new RegExp(reviewItem.job_id),
+        name: new RegExp(reviewItem.job_title),
       }),
     );
 
@@ -453,6 +500,8 @@ describe('JobIntelligenceGovernancePage', () => {
       screen.getAllByText('classifier_provenance_missing').length,
     ).toBeGreaterThan(0);
     expect(screen.getByText('Accounts Payable')).toBeInTheDocument();
+    await user.click(screen.getByText('View technical evidence'));
+    expect(screen.getByText(reviewItem.job_id)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Audit timeline' })).toBeInTheDocument();
 
     await user.click(
@@ -498,7 +547,7 @@ describe('JobIntelligenceGovernancePage', () => {
 
     const reviewItem = canonicalFixture.review_page.items[0];
     await user.click(await screen.findByRole('button', {
-      name: new RegExp(reviewItem.job_id),
+      name: new RegExp(reviewItem.job_title),
     }));
     await screen.findByRole('heading', { name: 'Evidence' });
     const trigger = screen.getByRole('button', { name: 'Mark insufficient evidence' });
@@ -537,7 +586,7 @@ describe('JobIntelligenceGovernancePage', () => {
     render(<JobIntelligenceGovernancePage />);
 
     await user.click(await screen.findByRole('button', {
-      name: new RegExp(reviewItem.job_id),
+      name: new RegExp(reviewItem.job_title),
     }));
 
     expect(await screen.findByText('Audit timeline: audit service offline'))

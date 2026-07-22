@@ -51,6 +51,12 @@ function governanceScope(filters = {}, pendingLimit, detail = {}) {
     : null;
   return {
     ...filters,
+    ...(sourceId && !filters.source_classification_ids?.length
+      ? { source_classification_ids: [sourceId] }
+      : {}),
+    ...(detail.source_classification_name
+      ? { sourceClassificationLabel: detail.source_classification_name }
+      : {}),
     ...(sourceSite && !filters.source_sites?.length
       ? { source_sites: [sourceSite] }
       : {}),

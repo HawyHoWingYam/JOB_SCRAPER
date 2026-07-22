@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.job_intelligence.foundation import normalized_content_hash
+from app.models.company import Company
 from app.models.canonical_job_taxonomy import (
     CanonicalJobCategory,
     CanonicalJobDomain,
@@ -264,6 +265,8 @@ class CanonicalJobStateView:
 class CanonicalReviewItemView:
     id: UUID
     job_id: UUID
+    job_title: str | None
+    company_name: str | None
     taxonomy_revision_id: UUID
     mapping_revision_id: UUID | None
     status: str
@@ -282,6 +285,8 @@ class CanonicalReviewItemView:
         return {
             "id": str(self.id),
             "job_id": str(self.job_id),
+            "job_title": self.job_title,
+            "company_name": self.company_name,
             "taxonomy_revision_id": str(self.taxonomy_revision_id),
             "mapping_revision_id": (
                 str(self.mapping_revision_id)
@@ -575,8 +580,12 @@ class CanonicalTaxonomyReader:
                 .limit(query.limit)
                 .all()
             )
+            labels = self._job_labels(page_rows)
             return CanonicalReviewPage(
-                items=tuple(self._review_view(row) for row in page_rows),
+                items=tuple(
+                    self._review_view(row, labels.get(row.job_id))
+                    for row in page_rows
+                ),
                 next_cursor=None,
                 total=total,
                 page=query.page,
@@ -604,8 +613,12 @@ class CanonicalTaxonomyReader:
             .all()
         )
         page_rows = rows[: query.limit]
+        labels = self._job_labels(page_rows)
         return CanonicalReviewPage(
-            items=tuple(self._review_view(row) for row in page_rows),
+            items=tuple(
+                self._review_view(row, labels.get(row.job_id))
+                for row in page_rows
+            ),
             next_cursor=(
                 _encode_review_cursor(page_rows[-1])
                 if len(rows) > query.limit and page_rows
@@ -622,7 +635,8 @@ class CanonicalTaxonomyReader:
                 "Canonical Job Taxonomy Review Item was not found",
                 context={"review_item_id": str(review_item_id)},
             )
-        return self._review_view(row)
+        labels = self._job_labels((row,))
+        return self._review_view(row, labels.get(row.job_id))
 
     def build_filters(
         self,
@@ -795,11 +809,36 @@ class CanonicalTaxonomyReader:
             decision_audit_id=row.decision_audit_id,
         )
 
+    def _job_labels(
+        self,
+        rows: tuple[JobTaxonomyReviewItem, ...] | list[JobTaxonomyReviewItem],
+    ) -> dict[UUID, tuple[str | None, str | None]]:
+        job_ids = tuple(dict.fromkeys(row.job_id for row in rows))
+        if not job_ids:
+            return {}
+        return {
+            job_id: (title, company_name)
+            for job_id, title, company_name in self.db.query(
+                Job.id,
+                Job.title,
+                Company.name,
+            )
+            .outerjoin(Company, Company.id == Job.company_id)
+            .filter(Job.id.in_(job_ids))
+            .all()
+        }
+
     @staticmethod
-    def _review_view(row: JobTaxonomyReviewItem) -> CanonicalReviewItemView:
+    def _review_view(
+        row: JobTaxonomyReviewItem,
+        job_labels: tuple[str | None, str | None] | None = None,
+    ) -> CanonicalReviewItemView:
+        job_title, company_name = job_labels or (None, None)
         return CanonicalReviewItemView(
             id=row.id,
             job_id=row.job_id,
+            job_title=job_title,
+            company_name=company_name,
             taxonomy_revision_id=row.taxonomy_revision_id,
             mapping_revision_id=row.mapping_revision_id,
             status=row.status,

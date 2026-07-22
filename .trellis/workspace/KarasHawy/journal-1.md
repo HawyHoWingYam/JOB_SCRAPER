@@ -1001,3 +1001,239 @@ Closed parent integration gaps: bounded the 17,596-Job staging lookup, retired l
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: Complete Crawl Control UI program
+
+**Date**: 2026-07-21
+**Task**: Complete Crawl Control UI program
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed and archived Source Catalog Governance, Task Control Wizard, and Task Control Board/normalized Task Details; CP10 remains live and stable; parent frontend integration passed 196 tests, full ESLint, and production build.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1a20e4e8` | (see git log) |
+| `1836f7da` | (see git log) |
+| `40099411` | (see git log) |
+| `815a0c19` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 30: Complete Job Intelligence live rollout
+
+**Date**: 2026-07-21
+**Task**: Complete Job Intelligence live rollout
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed manifest-bound live rebuild through Phase 13, reopened persistent writers after separate approval, passed target-environment API/search/worker smoke, drained the 74,452-row outbox, fixed retrieval sidecar import isolation, and recorded rollback/completion evidence.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `366bf3b8` | (see git log) |
+| `9063508f` | (see git log) |
+| `84917af9` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 31: Fix SkillChart dynamic bucket crash
+
+**Date**: 2026-07-21
+**Task**: Fix SkillChart dynamic bucket crash
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Fixed the dashboard black screen caused by SkillChart treating backend dashboard_bucket values as a closed enum. Dynamic buckets now append after predefined buckets, with a Product & Delivery regression test. Frontend tests, lint, and production build passed.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `023ae1fd` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 32: Fix OfferToday scope catalog loading
+
+**Date**: 2026-07-21
+**Task**: Fix OfferToday scope catalog loading
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Stabilized Task Control published catalog loading by waiting for draft URL stabilization, preserving same-source catalog state across hydrate, invalidating stale catalogs on source changes, and adding loading/retry UI. Added component and reducer regressions, passed 200 frontend tests, lint, build, and real Playwright UI validation against the Docker frontend.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `73645680` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 33: Fix AI enrichment provenance recovery
+
+**Date**: 2026-07-22
+**Task**: Fix AI enrichment provenance recovery
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed compact AI bootstrap projections, pinned source-catalog provenance through ingest/detail paths, added report-only OfferToday provenance coverage and operator-approved repair, fixed PostgreSQL FOR UPDATE eager-load locking, and verified backend/frontend quality gates. Local report covered 9,458 pending jobs and 9,602 paths; no --apply was run.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2710c73c` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 34: Finish Trellis session
+
+**Date**: 2026-07-22
+**Task**: Finish Trellis session
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Confirmed the AI enrichment provenance task is committed and archived. Remaining working-tree changes are unrelated existing work and were intentionally preserved.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2710c73c` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 35: Scoped AI Enrichment governance UI
+
+**Date**: 2026-07-22
+**Task**: Scoped AI Enrichment governance UI
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+完成单来源 IT AI Enrichment 的 scoped governance 流程：保留 AI 深链上下文，治理队列默认 10 条并支持页码跳转，修复多 job_id API 参数丢失，加入 provenance inspect/confirm/apply 说明与审计边界，窄屏选中后优先显示详情。通过真实 Chrome 入口验证桌面/窄屏、分页、来源筛选、provenance 检查和无横向溢出；前端 207 tests/build/lint 与后端 402 tests 通过。保留工作区原有无关 dirty changes。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f7e357b8` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

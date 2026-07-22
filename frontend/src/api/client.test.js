@@ -53,6 +53,48 @@ describe('api client', () => {
     );
   });
 
+  it('retries transient GET failures and only logs after the final attempt', async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    globalThis.fetch = vi.fn(() => {
+      attempts += 1;
+      if (attempts < 3) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: { message: 'backend warming up' } }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
+    });
+
+    try {
+      const request = apiFetchJson('/api/v1/capabilities', { retryTransient: true });
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(request).resolves.toEqual({ ok: true });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+      expect(logErrorSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry a request-size client error', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve({
+      ok: false,
+      status: 431,
+      json: async () => null,
+    }));
+
+    await expect(
+      apiFetchJson('/api/v1/job-intelligence/governance/job-taxonomy/review-items', {
+        retryTransient: true,
+      }),
+    ).rejects.toMatchObject({ status: 431 });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('reuses a caller supplied request id for headers and failure logs', async () => {
     globalThis.fetch = vi.fn(() =>
       Promise.resolve({

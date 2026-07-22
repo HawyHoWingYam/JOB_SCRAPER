@@ -11,6 +11,10 @@ from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.redis_stream_bus import RedisStreamBus, StreamMessage
 from app.messaging.topics import STREAM_CRAWL_PROGRESS, STREAM_JOB_LIFECYCLE
 from app.services.enrichment_run_service import EnrichmentRunService
+from app.services.canonical_taxonomy_recovery_service import (
+    RECOVERY_SOURCE_TYPE,
+    CanonicalTaxonomyRecoveryService,
+)
 from app.services.startup_recovery_service import StartupRecoveryService
 
 configure_logging(settings.log_level, settings.scraper_log_level)
@@ -143,11 +147,26 @@ class EnrichmentWorkerService:
                 claimed_run = service.claim_run(run_id)
                 if claimed_run is not None:
                     try:
-                        await service.execute_run(
-                            run_id,
-                            enrichment_service=self.enrichment_service,
-                            claim=False,
-                        )
+                        if claimed_run.source_type == RECOVERY_SOURCE_TYPE:
+                            recovery_service = CanonicalTaxonomyRecoveryService(
+                                db,
+                                enrichment_service=self.enrichment_service,
+                            )
+                            await service.execute_run(
+                                run_id,
+                                claim=False,
+                                item_processor=lambda job, item_db: recovery_service.process_job(
+                                    run_id,
+                                    job,
+                                    item_db,
+                                ),
+                            )
+                        else:
+                            await service.execute_run(
+                                run_id,
+                                enrichment_service=self.enrichment_service,
+                                claim=False,
+                            )
                     except Exception as exc:
                         db.rollback()
                         service.mark_run_failed(run_id, str(exc))

@@ -289,7 +289,10 @@ describe('AIEnrichmentPage', () => {
     expect(card.getByText(/Farming \(offertoday:113000\)/)).toBeInTheDocument();
     expect(card.getByText(/No defensible internal taxonomy domain/)).toBeInTheDocument();
     expect(card.getByRole('link', { name: 'Review 2 excluded jobs' }))
-      .toHaveAttribute('href', '#job-intelligence/job-taxonomy?source_site=offertoday');
+      .toHaveAttribute(
+        'href',
+        '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A113000&source_classification_label=Farming',
+      );
     expect(card.queryByRole('button', { name: /Retry failed/i })).not.toBeInTheDocument();
     expect(card.queryByRole('button', { name: /assign|accept|reject/i })).not.toBeInTheDocument();
   });

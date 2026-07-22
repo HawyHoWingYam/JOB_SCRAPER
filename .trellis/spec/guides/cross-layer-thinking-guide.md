@@ -116,6 +116,11 @@ After implementation:
 - [ ] Tested with edge cases (null, empty, invalid)
 - [ ] Verified error handling at each boundary
 - [ ] Checked data survives round-trip
+- [ ] For bounded arrays crossing an HTTP boundary, chose a transport that
+      cannot overflow URL/header limits (prefer JSON POST for dynamic query
+      bodies) and asserted that the scope semantics are preserved
+- [ ] If a bounded identifier scope resolves to no rows, asserted an explicit
+      empty result rather than an accidental unscoped fallback
 - [ ] Checked that consumers import shared decoders / projections instead of
       casting payload fields locally
 - [ ] Checked that derived state points back to the source event identifier
