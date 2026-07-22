@@ -220,6 +220,57 @@ describe('AIEnrichmentPage', () => {
     expect(within(cards[1]).getByText('run-failed-3')).toBeInTheDocument();
   });
 
+  it('keeps partial bootstrap truthful when one console request times out', async () => {
+    vi.useFakeTimers();
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+      if (url.includes('/ai/pending/filter-options')) {
+        return jsonResponse({ sources: [] });
+      }
+      if (url.includes('/ai/overview')) {
+        return new Promise(() => {});
+      }
+      if (url.includes('/ai/runs')) {
+        return jsonResponse({ runs: [] });
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    render(<AIEnrichmentPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(8000);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/Refresh failed: Overview request timed out after 8000ms/)).toBeInTheDocument();
+    expect(screen.getByText('Unavailable / Unavailable')).toBeInTheDocument();
+    expect(screen.getAllByText('Unavailable')).toHaveLength(2);
+    expect(screen.getAllByTestId('run-monitor-card')).toHaveLength(2);
+  });
+
+  it('does not fabricate queue metrics when both bootstrap requests fail', async () => {
+    vi.useFakeTimers();
+    globalThis.fetch = vi.fn((input) => {
+      const url = String(input);
+      if (url.includes('/ai/pending/filter-options')) {
+        return jsonResponse({ sources: [] });
+      }
+      return Promise.reject(new Error('bootstrap unavailable'));
+    });
+
+    render(<AIEnrichmentPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(8000);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/Failed to load AI operations data: bootstrap unavailable/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('AI enrichment summary')).not.toBeInTheDocument();
+    expect(screen.queryByText('0 / 0')).not.toBeInTheDocument();
+  });
+
   it('shows the latest two terminal runs when there is no active run', async () => {
     installFetch({ overviewPayload: { ...overview, active_runs: 0 }, runs: [failedRun, completedRun] });
     render(<AIEnrichmentPage />);

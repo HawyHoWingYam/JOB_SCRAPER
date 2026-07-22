@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
@@ -257,6 +257,33 @@ class SourceJobAttributeEvidence:
             "work_arrangements": list(self.work_arrangements),
             "working_day_labels": list(self.working_day_labels),
         }
+
+    def with_catalog_revision(
+        self,
+        revision: SourceCatalogRevisionRef,
+    ) -> SourceJobAttributeEvidence:
+        """Bind missing classification paths to an already-authorized revision."""
+
+        if revision.source_site != self.source_site:
+            raise ValueError(
+                "Source Catalog revision does not belong to Source Job Attribute evidence"
+            )
+
+        paths: list[SourceClassificationPathEvidence] = []
+        for path in self.classification_paths:
+            existing = path.source_catalog_revision
+            if existing is not None and existing != revision:
+                raise ValueError(
+                    "Source Classification Path catalog revision does not match "
+                    "the authorized revision"
+                )
+            paths.append(
+                replace(
+                    path,
+                    source_catalog_revision=existing or revision,
+                )
+            )
+        return replace(self, classification_paths=tuple(paths))
 
     @classmethod
     def from_payload(cls, value: Any) -> SourceJobAttributeEvidence:

@@ -13,6 +13,7 @@ from app.api.ai import (
     PendingSelectionRequest,
     get_pending_filter_options as get_pending_filter_options_endpoint,
     _run_execution_result,
+    _serialize_runs,
     _serialize_single_run,
     router,
 )
@@ -676,3 +677,20 @@ def test_monitor_returns_active_plus_latest_terminal_or_latest_two_terminals(db)
     db.flush()
     assert [run.id for run in service.list_runs_for_monitor()] == [active.id, latest.id]
     assert older.id not in [run.id for run in service.list_runs_for_monitor()]
+
+
+def test_compact_run_projection_omits_job_ids_but_detail_projection_keeps_them(db):
+    run = make_run(
+        db,
+        run_id="compact-projection",
+        status="completed",
+        created_at=datetime(2026, 7, 18, 14, 0),
+        completed_at=datetime(2026, 7, 18, 14, 1),
+        job_ids=[str(uuid.uuid4()), str(uuid.uuid4())],
+    )
+
+    compact = _serialize_runs([run], db, include_job_ids=False)[0]
+    detail = _serialize_single_run(run, db)
+
+    assert "job_ids" not in compact
+    assert detail["job_ids"] == run.job_ids

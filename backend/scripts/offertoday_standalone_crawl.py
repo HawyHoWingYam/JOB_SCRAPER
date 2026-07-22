@@ -37,6 +37,9 @@ from app.scraper.manual_action import (  # noqa: E402
     normalize_manual_action_payload,
 )
 from app.config import settings  # noqa: E402
+from app.job_intelligence.source_attributes import (  # noqa: E402
+    SourceCatalogRevisionRef,
+)
 from app.scraper.log_events import build_scrape_log_event  # noqa: E402
 from app.services.crawl_job_runtime import (  # noqa: E402
     CrawlJobRuntime,
@@ -1536,6 +1539,20 @@ async def _run_detail_phase(
         source_listing_crawl_job_id=source_listing_crawl_job_id,
         detail_scope=detail_scope,
     )
+    detail_runtime_plan: DetailRuntimePlan | None = getattr(
+        args,
+        "detail_runtime_plan",
+        None,
+    )
+    source_catalog_revision = (
+        SourceCatalogRevisionRef(
+            source_site=detail_runtime_plan.source_site,
+            revision_id=detail_runtime_plan.catalog_revision_id,
+            fingerprint=detail_runtime_plan.catalog_revision_fingerprint,
+        )
+        if detail_runtime_plan is not None
+        else None
+    )
 
     try:
         if crawl_phase == "detail":
@@ -1904,6 +1921,7 @@ async def _run_detail_phase(
                 detail_crawl_job_id=crawl_job_id,
                 fetch_detail=fetch_detail,
                 crawl_mode=crawl_mode,
+                source_catalog_revision=source_catalog_revision,
             )
         except CrawlCancellationRequested:
             raise

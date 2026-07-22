@@ -27,6 +27,11 @@ from app.job_intelligence.source_attributes.rebuild import (
     SourceJobAttributeRebuildReport,
     SourceRebuildInspection,
 )
+from app.job_intelligence.source_attributes.provenance_repair import (
+    ProvenanceRepairApplyResult,
+    ProvenanceRepairReport,
+    SourceCatalogProvenanceRepair,
+)
 
 __all__ = [
     "CTGoodJobsSourceEvidenceAdapter",
@@ -48,4 +53,7 @@ __all__ = [
     "SourceJobAttributes",
     "SourceJobAttributesView",
     "SourceRebuildInspection",
+    "ProvenanceRepairApplyResult",
+    "ProvenanceRepairReport",
+    "SourceCatalogProvenanceRepair",
 ]

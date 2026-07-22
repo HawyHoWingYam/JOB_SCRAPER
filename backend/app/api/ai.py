@@ -290,6 +290,7 @@ def _serialize_run(
     run: EnrichmentRun,
     db: Optional[Session] = None,
     *,
+    include_job_ids: bool = True,
     last_failed_job_titles: Optional[dict[str, Optional[str]]] = None,
     pending_gate: Optional[dict[str, object]] = None,
     excluded_details: Optional[list[ExcludedDetail]] = None,
@@ -314,14 +315,13 @@ def _serialize_run(
             resolved_failed_title = last_failed_job_titles.get(run.id)
         elif db is not None:
             resolved_failed_title = _derive_last_failed_job_title(db, run.id)
-    return {
+    payload = {
         "id": run.id,
         "source_type": run.source_type,
         "trigger_crawl_job_id": str(run.trigger_crawl_job_id)
         if getattr(run, "trigger_crawl_job_id", None)
         else None,
         "status": run.status,
-        "job_ids": list(run.job_ids or []),
         "total_items": run.total_items,
         "pending_items": run.pending_items,
         "completed_items": run.completed_items,
@@ -355,10 +355,16 @@ def _serialize_run(
         "pending_gate_crawl_job_status": (pending_gate or {}).get("crawl_job_status"),
         "error_message": run.error_message,
     }
+    if include_job_ids:
+        payload["job_ids"] = list(run.job_ids or [])
+    return payload
 
 
 def _serialize_runs(
-    runs: list[EnrichmentRun], db: Optional[Session] = None
+    runs: list[EnrichmentRun],
+    db: Optional[Session] = None,
+    *,
+    include_job_ids: bool = True,
 ) -> list[dict]:
     failed_title_map: Optional[dict[str, Optional[str]]] = None
     excluded_details_map: dict[str, list[ExcludedDetail]] = {}
@@ -379,6 +385,7 @@ def _serialize_runs(
         _serialize_run(
             run,
             db,
+            include_job_ids=include_job_ids,
             last_failed_job_titles=failed_title_map,
             pending_gate=pending_gate_map.get(run.id),
             excluded_details=excluded_details_map.get(run.id),
@@ -387,8 +394,13 @@ def _serialize_runs(
     ]
 
 
-def _serialize_single_run(run: EnrichmentRun, db: Optional[Session] = None) -> dict:
-    return _serialize_runs([run], db)[0]
+def _serialize_single_run(
+    run: EnrichmentRun,
+    db: Optional[Session] = None,
+    *,
+    include_job_ids: bool = True,
+) -> dict:
+    return _serialize_runs([run], db, include_job_ids=include_job_ids)[0]
 
 
 def _serialize_item(item: EnrichmentRunItem) -> dict:
@@ -554,7 +566,11 @@ async def get_ai_overview(db: Session = Depends(get_db)):
         "failed_jobs": overview["failed_jobs"],
         "failed_items": overview["failed_items"],
         "last_completed_run": (
-            _serialize_single_run(overview["last_completed_run"], db)
+            _serialize_single_run(
+                overview["last_completed_run"],
+                db,
+                include_job_ids=False,
+            )
             if overview["last_completed_run"] is not None
             else None
         ),
@@ -745,7 +761,13 @@ async def list_enrichment_runs(
             source_type=source_type,
             limit=limit,
         )
-    return {"runs": _serialize_runs(runs, db)}
+    return {
+        "runs": _serialize_runs(
+            runs,
+            db,
+            include_job_ids=not monitor,
+        )
+    }
 
 
 @router.get("/runs/{run_id}")

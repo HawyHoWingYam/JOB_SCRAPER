@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timezone
 import os
 from uuid import UUID
@@ -24,6 +25,7 @@ from app.job_intelligence.source_attributes import (
     EMPLOYMENT_TYPE_SEEDS,
     JobsDBSourceEvidenceAdapter,
     OfferTodaySourceEvidenceAdapter,
+    SourceCatalogProvenanceRepair,
     SourceCatalogRevisionRef,
     SourceClassificationNodeEvidence,
     SourceClassificationPathEvidence,
@@ -40,7 +42,11 @@ from app.models.job import Job
 from app.models.job_category import JobCategory
 from app.models.job_domain import JobDomain
 from app.models.job_subcategory import JobSubcategory
-from app.models.source_catalog import SourceCatalogCandidate, SourceCatalogRevision
+from app.models.source_catalog import (
+    SourceCatalogActiveRevision,
+    SourceCatalogCandidate,
+    SourceCatalogRevision,
+)
 from app.models.source_job_attributes import (
     SOURCE_JOB_ATTRIBUTE_TABLES,
     EmploymentType,
@@ -50,6 +56,7 @@ from app.models.source_job_attributes import (
     JobSourceClassificationPathNode,
     JobSourceEmploymentLabel,
 )
+from app.source_catalog.domain import DiscoveredCatalog
 from app.schemas.job import JobDetailSchema
 from app.schemas.job_search import JobSearchFiltersSchema
 from app.services.jobsdb_detail_repair_service import JobsDBDetailRepairService
@@ -75,6 +82,7 @@ def source_attribute_db():
         *GOVERNANCE_FOUNDATION_TABLES,
         SourceCatalogCandidate.__table__,
         SourceCatalogRevision.__table__,
+        SourceCatalogActiveRevision.__table__,
         *SOURCE_JOB_ATTRIBUTE_TABLES,
         *CANONICAL_JOB_TAXONOMY_TABLES,
     )
@@ -632,6 +640,227 @@ def test_known_catalog_revision_round_trips_as_independent_source_identity(
         "catalog_revision": revision_ref,
         "provenance_limited": False,
     }
+
+
+def test_missing_catalog_revision_can_be_overlaid_at_projection_boundary(
+    source_attribute_db,
+):
+    candidate = SourceCatalogCandidate(
+        source_site="jobsdb",
+        fingerprint="d" * 64,
+        normalized_payload={"version": 1, "nodes": []},
+        source_payload={"categories": []},
+        provenance={"method": "fixture"},
+        diff={},
+        validation_summary={},
+        state="published",
+    )
+    source_attribute_db.add(candidate)
+    source_attribute_db.flush()
+    revision = SourceCatalogRevision(
+        source_site="jobsdb",
+        sequence=4,
+        fingerprint="d" * 64,
+        normalized_payload={"version": 1, "nodes": []},
+        source_payload={"categories": []},
+        provenance={"method": "fixture"},
+        candidate_id=candidate.id,
+        publication_metadata={},
+        published_by="local-operator",
+    )
+    job = Job(
+        job_id="job-overlay",
+        source_site="jobsdb",
+        source_job_id="job-overlay",
+        company=Company(
+            company_id="company-overlay",
+            source_site="jobsdb",
+            name="Overlay Example Limited",
+        ),
+        title="Overlay Engineer",
+    )
+    source_attribute_db.add_all([revision, job])
+    source_attribute_db.flush()
+    revision_ref = SourceCatalogRevisionRef(
+        source_site="jobsdb",
+        revision_id=revision.id,
+        fingerprint=revision.fingerprint,
+    )
+    evidence = JobsDBSourceEvidenceAdapter().extract(
+        {
+            "classifications": [
+                {"classification": {"id": "6281", "description": "IT"}}
+            ]
+        },
+        provenance=Provenance(
+            method="overlay-fixture",
+            source_site="jobsdb",
+            evidence_refs=({"kind": "fixture", "id": "overlay"},),
+            captured_at=datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+
+    service = SourceJobAttributes(source_attribute_db)
+    first = service.project(
+        job.id,
+        evidence,
+        source_catalog_revision=revision_ref,
+    )
+    outbox_count = source_attribute_db.query(EventOutbox).count()
+    second = service.project(
+        job.id,
+        evidence,
+        source_catalog_revision=revision_ref,
+    )
+
+    assert first.changed is True
+    assert second.changed is False
+    assert source_attribute_db.query(EventOutbox).count() == outbox_count
+    assert first.view.source_classification_paths[0].source_catalog_revision == revision_ref
+
+
+def test_provenance_repair_reports_coverage_and_is_idempotent(source_attribute_db):
+    normalized_payload = {
+        "version": 1,
+        "source_site": "offertoday",
+        "nodes": [
+            {
+                "node_key": "offertoday:118000",
+                "source_site": "offertoday",
+                "classification_id": "offertoday:118000",
+                "native_id": 118000,
+                "native_label": "Information Technology",
+                "parent_node_key": None,
+                "native_path": ["Information Technology"],
+                "depth": 0,
+                "selectable": True,
+                "supports_exact": True,
+                "supports_subtree": True,
+                "queryable": True,
+                "alias_of_node_key": None,
+                "query_semantics_hash": None,
+                "source_metadata": {},
+            }
+        ],
+        "capabilities": {
+            "supports_all_scope": True,
+            "all_scope_root_node_keys": ["offertoday:118000"],
+            "recommended_scope": None,
+        },
+    }
+    catalog_fingerprint = DiscoveredCatalog.from_payloads(
+        normalized_payload=normalized_payload,
+        source_payload={},
+        provenance={"method": "fixture"},
+    ).fingerprint
+    candidate = SourceCatalogCandidate(
+        source_site="offertoday",
+        fingerprint=catalog_fingerprint,
+        normalized_payload=normalized_payload,
+        source_payload={},
+        provenance={"method": "fixture"},
+        diff={},
+        validation_summary={},
+        state="published",
+    )
+    source_attribute_db.add(candidate)
+    source_attribute_db.flush()
+    revision = SourceCatalogRevision(
+        source_site="offertoday",
+        sequence=1,
+        fingerprint=catalog_fingerprint,
+        normalized_payload=normalized_payload,
+        source_payload={},
+        provenance={"method": "fixture"},
+        candidate_id=candidate.id,
+        publication_metadata={},
+        published_by="local-operator",
+    )
+    source_attribute_db.add(revision)
+    source_attribute_db.flush()
+    source_attribute_db.add(
+        SourceCatalogActiveRevision(
+            source_site="offertoday",
+            revision_id=revision.id,
+            updated_by="local-operator",
+        )
+    )
+    company = Company(
+        company_id="repair-company",
+        source_site="offertoday",
+        source_company_id="repair-company",
+        name="Repair Example Limited",
+    )
+    job = Job(
+        job_id="repair-job",
+        source_site="offertoday",
+        source_job_id="repair-job",
+        company=company,
+        title="Repair Engineer",
+    )
+    source_attribute_db.add(job)
+    source_attribute_db.flush()
+    evidence = OfferTodaySourceEvidenceAdapter().extract(
+        {
+            "jobFunctions": [
+                {"code": "118000", "name": "Information Technology"}
+            ]
+        },
+        provenance=Provenance(
+            method="repair-fixture",
+            source_site="offertoday",
+            evidence_refs=({"kind": "fixture", "id": "repair"},),
+            captured_at=datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc),
+        ),
+    )
+    SourceJobAttributes(source_attribute_db).project(job.id, evidence)
+    source_attribute_db.commit()
+
+    service = SourceCatalogProvenanceRepair(source_attribute_db)
+    report = service.inspect(
+        source_site="offertoday",
+        revision_id=revision.id,
+        pending_only=False,
+    )
+    assert report.to_payload()["repairable_job_ids"] == [str(job.id)]
+    assert {
+        "jobs": report.jobs_inspected,
+        "missing": report.missing_provenance_paths,
+        "repairable": report.repairable_jobs,
+        "unknown": report.unknown_classification_ids,
+        "allowed": report.write_allowed,
+    } == {
+        "jobs": 1,
+        "missing": 1,
+        "repairable": 1,
+        "unknown": (),
+        "allowed": True,
+    }
+    assert replace(report, missing_path_jobs=1).coverage_complete is False
+
+    applied = service.apply(
+        report,
+        expected_revision_id=revision.id,
+        expected_fingerprint=revision.fingerprint,
+        batch_size=1,
+    )
+    assert (applied.changed_jobs, applied.changed_paths) == (1, 1)
+    assert SourceJobAttributes(source_attribute_db).get(
+        job.id
+    ).source_classification_paths[0].source_catalog_revision == SourceCatalogRevisionRef(
+        source_site="offertoday",
+        revision_id=revision.id,
+        fingerprint=revision.fingerprint,
+    )
+
+    source_attribute_db.expire_all()
+    replay = service.inspect(
+        source_site="offertoday",
+        revision_id=revision.id,
+        pending_only=False,
+    )
+    assert replay.repairable_jobs == 0
+    assert replay.already_bound_paths == 1
 
 
 def test_catalog_revision_delete_is_restricted_and_job_delete_cascades(

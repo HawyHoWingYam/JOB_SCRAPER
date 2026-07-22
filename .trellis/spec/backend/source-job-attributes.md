@@ -53,6 +53,16 @@ Historical recovery uses:
 ```python
 SourceJobAttributeRebuildInspector(db).inspect(job_ids=None) -> SourceJobAttributeRebuildReport
 SourceJobAttributeRebuildInspector(db).recover(job_ids=None) -> tuple[RecoveredSourceJobAttribute, ...]
+
+SourceCatalogProvenanceRepair(db).inspect(
+    source_site, revision_id, job_ids=None, pending_only=True
+) -> ProvenanceRepairReport
+SourceCatalogProvenanceRepair(db).apply(
+    report, expected_revision_id, expected_fingerprint, batch_size=100
+) -> ProvenanceRepairApplyResult
+SourceJobAttributes(db).repair_catalog_provenance(
+    job_id, source_catalog_revision
+) -> ProjectionResult
 ```
 
 Persistence is owned by `job_source_attribute_projections`,
@@ -86,6 +96,17 @@ Persistence is owned by `job_source_attribute_projections`,
 - Exact normalized evidence replay is a no-op and emits no second
   `job.source_attributes_changed` outbox event. Changed evidence replaces the
   projection children and emits one event in the caller's transaction.
+- Historical Source Catalog provenance repair is report-first and fail-closed:
+  inspection reconstructs the selected immutable revision and validates its
+  fingerprint and every stored Source classification identity before any
+  write. Apply requires the reviewed revision ID/fingerprint, rechecks the
+  active pointer inside each batch, fills only NULL path revision FKs through
+  `SourceJobAttributes.repair_catalog_provenance`, and emits one projection
+  outbox event per changed Job. Exact replay changes no path and emits no
+  duplicate event.
+- A PostgreSQL path-row lock query that uses `with_for_update()` must use
+  `selectinload()` for nullable child/revision relationships. `joinedload()`
+  creates an outer join that PostgreSQL rejects as a lock target.
 - Collected payloads must omit legacy `employment_type` and scalar Source
   classification/subclassification keys. `create_job` and `upsert_job` are
   retired generic repository writers; `POST /api/v1/jobs` returns
@@ -148,6 +169,9 @@ Persistence is owned by `job_source_attribute_projections`,
 | Generic `POST /api/v1/jobs` is called | HTTP 410 with `COLLECTED_JOB_CREATE_RETIRED` |
 | Unknown Employment Type code or unrecognized legacy label filter | HTTP/Pydantic 422 validation failure |
 | Exact evidence replay | `changed=false`; no duplicate outbox row |
+| Provenance repair revision/source/fingerprint mismatch or active-pointer drift | Reject the inspection/apply; never rewrite an existing non-NULL path binding |
+| Provenance repair sees an uncovered or incompatible identity/path | Report the stable blocker and keep the affected Job excluded |
+| Provenance repair exact replay | `changed_jobs=0` for already-bound paths; no duplicate projection event |
 | Malformed bounded label marker | Retain evidence, map no type, count malformed but not unknown |
 | Historical evidence has no catalog revision | Keep the path queryable with `provenance_limited=true` |
 | Historical lookup exceeds 100 distinct Source keys | Issue multiple bounded read-only staging SELECTs and merge to the same deterministic report/recovery result |
@@ -179,7 +203,9 @@ Persistence is owned by `job_source_attribute_projections`,
   outbox rollback, Primary/source/catalog constraints, `RESTRICT`/`CASCADE`,
   OR-within/AND-across filters, API views, deterministic rebuild counters, and
   a forced small-batch assertion that checks bounded parameter counts plus
-  cross-batch/cross-Source evidence merging.
+  cross-batch/cross-Source evidence merging. Provenance repair tests must also
+  assert complete/unknown identity coverage, revision drift fencing, bounded
+  batches, exact replay idempotence, and one outbox event per changed Job.
 - `test_source_job_attribute_ingest.py` and
   `test_source_job_attribute_architecture.py`: every collected writer is
   inventoried, projects before commit, cannot use human-governance Interfaces,
@@ -222,6 +248,23 @@ db.commit()
 
 The caller owns one atomic Job/projection/outbox transaction and exact replay
 remains idempotent.
+
+#### Correct: locked provenance repair
+
+```python
+report = SourceCatalogProvenanceRepair(db).inspect(
+    source_site="offertoday",
+    revision_id=published_revision_id,
+)
+SourceCatalogProvenanceRepair(db).apply(
+    report,
+    expected_revision_id=published_revision_id,
+    expected_fingerprint=report.revision_fingerprint,
+)
+```
+
+The repair command is report-only by default. It must not infer the active
+revision or bypass canonical taxonomy preflight.
 
 #### Wrong: one whole-corpus staging lookup
 

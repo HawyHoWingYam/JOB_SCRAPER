@@ -129,6 +129,8 @@ def _detail_runtime_plan(
         dispatch_plan_id=uuid4(),
         dispatch_plan_fingerprint="d" * 64,
         source_site=source_site,
+        catalog_revision_id=uuid4(),
+        catalog_revision_fingerprint="c" * 64,
         crawl_mode="headed" if source_site == "ctgoodjobs" else "headless",
         backlog_scope_kind="source_backlog",
         source_listing_crawl_job_id=None,
@@ -699,6 +701,12 @@ async def test_jobsdb_and_ctgoodjobs_detail_loops_receive_frozen_runtime_plan(
     assert jobsdb_runtime.calls[0]["request_payload"][
         "request_payload_authoritative"
     ] is False
+    assert jobsdb_runtime.calls[0]["request_payload"]["catalog_revision_id"] == str(
+        jobsdb_plan.catalog_revision_id
+    )
+    assert jobsdb_runtime.calls[0]["request_payload"][
+        "catalog_revision_fingerprint"
+    ] == jobsdb_plan.catalog_revision_fingerprint
 
     ctgoodjobs_plan = _detail_runtime_plan("ctgoodjobs", target_count=0)
     ctgoodjobs_args = SimpleNamespace(

@@ -12,9 +12,11 @@ from app.config import settings
 from app.database import SessionLocal
 from app.logging_config import configure_logging
 from app.job_intelligence.source_attributes import (
+    SourceCatalogRevisionRef,
     SourceJobAttributeEvidence,
     SourceJobAttributes,
 )
+from app.crawl_control.dispatch_plan_service import DispatchPlanService
 from app.job_intelligence.company_industry import (
     project_company_industry as project_company_industry_evidence,
 )
@@ -150,6 +152,11 @@ class IngestWorkerService:
         source_site = normalize_source_site(canonical_job["source_site"])
         source_job_id = str(canonical_job["source_job_id"]).strip()
         skip_existing = self._resolve_skip_existing(db, crawl_job_id=crawl_job_id)
+        source_catalog_revision = self._resolve_source_catalog_revision(
+            db,
+            crawl_job_id=crawl_job_id,
+            source_site=source_site,
+        )
 
         company_data = self._build_company_data(canonical_job)
         company, _company_action = self.company_repository.upsert_company(
@@ -166,7 +173,12 @@ class IngestWorkerService:
             skip_existing=skip_existing,
             auto_commit=False,
         )
-        self.project_source_attributes(db, job, canonical_job)
+        self.project_source_attributes(
+            db,
+            job,
+            canonical_job,
+            source_catalog_revision=source_catalog_revision,
+        )
         if listing_id is not None:
             self.crawl_job_listing_repository.attach_published_job(
                 db,
@@ -246,7 +258,14 @@ class IngestWorkerService:
             source_job_id=source_job_id,
         )
 
-    def project_source_attributes(self, db, job, canonical_job: dict[str, Any]):
+    def project_source_attributes(
+        self,
+        db,
+        job,
+        canonical_job: dict[str, Any],
+        *,
+        source_catalog_revision: SourceCatalogRevisionRef | None = None,
+    ):
         source_attribute_payload = canonical_job.get("source_attribute_evidence")
         if source_attribute_payload is None:
             raise InvalidIngestPayloadError(
@@ -260,12 +279,72 @@ class IngestWorkerService:
             return SourceJobAttributes(
                 db,
                 outbox_repository=self.event_outbox_repository,
-            ).project(job.id, source_attribute_evidence)
+            ).project(
+                job.id,
+                source_attribute_evidence,
+                source_catalog_revision=source_catalog_revision,
+            )
         except (KeyError, TypeError, ValueError) as exc:
             raise InvalidIngestPayloadError(
                 "invalid_source_attribute_evidence",
                 f"Invalid Source Job Attribute evidence: {exc}",
             ) from exc
+
+    def _resolve_source_catalog_revision(
+        self,
+        db,
+        *,
+        crawl_job_id: str | None,
+        source_site: str,
+    ) -> SourceCatalogRevisionRef | None:
+        """Resolve only immutable Dispatch Plan authority; never active defaults."""
+
+        if not crawl_job_id:
+            return None
+        try:
+            crawl_job_uuid = uuid.UUID(str(crawl_job_id))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+        crawl_job = self.crawl_job_repository.get_crawl_job_by_id(
+            db,
+            crawl_job_uuid,
+        )
+        if crawl_job is None:
+            return None
+        has_plan_fields = (
+            crawl_job.dispatch_plan_id is not None
+            or crawl_job.dispatch_plan_fingerprint is not None
+        )
+        if not has_plan_fields:
+            return None
+
+        try:
+            authority = DispatchPlanService(db).load_execution_authority(
+                crawl_job.id
+            )
+        except Exception as exc:
+            raise InvalidIngestPayloadError(
+                "source_catalog_authority_invalid",
+                f"Unable to load versioned source catalog authority: {exc}",
+            ) from exc
+        if authority is None:
+            raise InvalidIngestPayloadError(
+                "source_catalog_authority_missing",
+                "Versioned Crawl Job has no Dispatch Plan authority",
+            )
+
+        content = authority.dispatch_plan.content
+        if content.source_site != source_site:
+            raise InvalidIngestPayloadError(
+                "source_catalog_authority_source_mismatch",
+                "Dispatch Plan source does not match collected Job source",
+            )
+        return SourceCatalogRevisionRef(
+            source_site=content.source_site,
+            revision_id=content.catalog_revision_id,
+            fingerprint=content.resolved_scope.catalog_revision_fingerprint,
+        )
 
     def project_company_industry(self, db, company, canonical_job: dict[str, Any]):
         try:

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from app.job_intelligence.source_attributes import (
+    SourceCatalogRevisionRef,
     SourceJobAttributeEvidence,
     SourceJobAttributes,
 )
@@ -148,6 +149,7 @@ class OfferTodayDetailPipeline:
         detail_crawl_job_id,
         fetch_detail: DetailFetcher,
         crawl_mode: str | None = None,
+        source_catalog_revision: SourceCatalogRevisionRef | None = None,
     ) -> OfferTodayDetailProcessResult:
         prepared_payload: dict[str, Any] | None = None
         persisted_detail_payload: dict[str, Any] | None = None
@@ -371,6 +373,7 @@ class OfferTodayDetailPipeline:
             detail_payload=persisted_detail_payload,
             failure_detail_payload=classification.raw_payload,
             canonical_job=canonical_job,
+            source_catalog_revision=source_catalog_revision,
         )
 
     def _transition_running(self, *, listing_ids, detail_crawl_job_id) -> None:
@@ -504,6 +507,7 @@ class OfferTodayDetailPipeline:
         detail_payload: dict[str, Any],
         failure_detail_payload: dict[str, Any] | None,
         canonical_job,
+        source_catalog_revision: SourceCatalogRevisionRef | None,
     ) -> OfferTodayDetailProcessResult:
         db = self.session_factory()
         try:
@@ -541,6 +545,7 @@ class OfferTodayDetailPipeline:
                 SourceJobAttributeEvidence.from_payload(
                     canonical_job.source_attribute_evidence
                 ),
+                source_catalog_revision=source_catalog_revision,
             )
             self.crawl_runtime.transition_detail_completed(
                 db,
