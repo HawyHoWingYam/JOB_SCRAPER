@@ -14,6 +14,7 @@ import CrawlTasksPage, {
   AUTO_REFRESH_MS,
   CANCELLATION_REFRESH_MS,
 } from "./CrawlTasksPage";
+import { DRAFT_PREFIX } from "../../features/taskControl/wizard/wizardDraft";
 
 vi.mock("../../api/client", () => ({
   apiFetchJson: vi.fn(),
@@ -247,6 +248,74 @@ describe("CrawlTasksPage list projections", () => {
     expect(screen.getByText("Backlog failed 20")).toBeInTheDocument();
     expect(screen.getByText("Manual review 11")).toBeInTheDocument();
   });
+
+  it("distinguishes a completed partial listing from a complete crawl", async () => {
+    const task = {
+      ...listingTask,
+      crawl_job_id: "partial-listing-task",
+      status: "completed",
+      source_site: "offertoday",
+      listing_completed: true,
+      listing_partial: true,
+      listing_condition_count: 23,
+      listing_capped_condition_count: 5,
+      listing_workload: {
+        query_target_count: 23,
+        page_depth: 40,
+        estimated_max_pages: 920,
+        run_page_cap: 1000,
+        pages_requested: 408,
+      },
+    };
+    apiFetchJson.mockImplementation(async (url) => {
+      if (isDetailRequest(url)) return normalizedTaskDetail({ id: task.crawl_job_id, status: "completed", sourceSite: "offertoday" });
+      return listPayload([task]);
+    });
+    render(<CrawlTasksPage />);
+
+    expect(await screen.findByText("Completed with partial listing")).toBeInTheDocument();
+    expect(screen.getByText("5 of 23 query targets reached the page-depth limit.")).toBeInTheDocument();
+    expect(screen.getByText("Pages requested 408/920")).toBeInTheDocument();
+    expect(screen.getByText("Run page cap 1,000")).toBeInTheDocument();
+    expect(screen.queryByText("Listing Complete")).not.toBeInTheDocument();
+  });
+
+  it("keeps cancelled partial listings labelled by their terminal status", async () => {
+    const task = {
+      ...listingTask,
+      crawl_job_id: "cancelled-partial-listing-task",
+      status: "cancelled",
+      listing_completed: false,
+      listing_partial: true,
+      listing_condition_count: 23,
+      listing_capped_condition_count: 5,
+    };
+    apiFetchJson.mockImplementation(async (url) => {
+      if (!isDetailRequest(url)) return listPayload([task]);
+      const detail = normalizedTaskDetail({
+        id: task.crawl_job_id,
+        status: "cancelled",
+        sourceSite: "offertoday",
+        actions: [],
+      });
+      detail.listing_recovery = {
+        version: 1,
+        listing_partial: true,
+        query_target_count: 23,
+        capped_query_target_count: 5,
+        page_depth: 40,
+        pages_requested: 408,
+        capped_classification_ids: ["offertoday:100001"],
+        continuation_supported: false,
+      };
+      return detail;
+    });
+    render(<CrawlTasksPage />);
+
+    expect(await screen.findByText("cancelled")).toBeInTheDocument();
+    expect(screen.queryByText("Completed with partial listing")).not.toBeInTheDocument();
+    expect(screen.queryByText(/reached the page-depth limit/)).not.toBeInTheDocument();
+  });
 });
 
 describe("CrawlTasksPage normalized Task Details", () => {
@@ -304,6 +373,45 @@ describe("CrawlTasksPage normalized Task Details", () => {
     expect(screen.getByText("Complete the verification challenge.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Resume manual action" })).toBeEnabled();
     expect(screen.queryByText(/request_payload|manual_action\s*:/i)).not.toBeInTheDocument();
+  });
+
+  it("offers a reviewed one-off run for capped Query Targets", async () => {
+    const user = userEvent.setup();
+    apiFetchJson.mockImplementation(async (url) => {
+      if (!isDetailRequest(url)) {
+        return listPayload([{ ...listingTask, status: "completed", listing_completed: true, listing_partial: true }]);
+      }
+      const detail = normalizedTaskDetail({ id: "listing-task", status: "completed", sourceSite: "offertoday" });
+      detail.listing_recovery = {
+        version: 1,
+        listing_partial: true,
+        query_target_count: 23,
+        capped_query_target_count: 5,
+        page_depth: 40,
+        pages_requested: 408,
+        capped_classification_ids: ["offertoday:100001", "offertoday:100002"],
+        continuation_supported: true,
+      };
+      return detail;
+    });
+    render(<CrawlTasksPage />);
+
+    const continueButton = await screen.findByRole("button", { name: "Continue capped query targets" });
+    await user.click(continueButton);
+
+    expect(window.location.hash).toMatch(/^#scheduler\/one-off\/new\?/);
+    const draftKey = Object.keys(window.sessionStorage).find((key) => key.startsWith(DRAFT_PREFIX));
+    expect(draftKey).toBeTruthy();
+    const draft = JSON.parse(window.sessionStorage.getItem(draftKey));
+    expect(draft).toMatchObject({
+      intent: "listing",
+      scope: { mode: "rules" },
+      execution: { page_depth: 40, run_page_cap: 200 },
+    });
+    expect(draft.scope.rules).toEqual([
+      { kind: "exact", classification_id: "offertoday:100001" },
+      { kind: "exact", classification_id: "offertoday:100002" },
+    ]);
   });
 
   it("uses an accessible cancellation dialog and restores focus", async () => {

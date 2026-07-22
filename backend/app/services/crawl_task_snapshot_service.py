@@ -104,6 +104,24 @@ def _optional_text(value: Any) -> str | None:
     return normalized or None
 
 
+def _string_values(*values: Any) -> tuple[str, ...]:
+    """Normalize a bounded, ordered list of string IDs from event payloads."""
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if isinstance(value, set):
+            candidates = sorted(value, key=lambda item: str(item))
+        else:
+            candidates = value if isinstance(value, (list, tuple)) else ()
+        for candidate in candidates:
+            normalized = str(candidate or "").strip()
+            if normalized and normalized not in seen:
+                result.append(normalized)
+                seen.add(normalized)
+    return tuple(result)
+
+
 def _project_recovery_attempt(
     events: list[Any] | None,
 ) -> dict[str, Any] | None:
@@ -893,6 +911,11 @@ def build_crawl_task_snapshot(
         listing_completed_payload.get("listing_capped_condition_count"),
         metrics.get("listing_capped_condition_count", 0),
     )
+    listing_capped_classification_ids = _string_values(
+        event_payload.get("listing_capped_classification_ids"),
+        listing_completed_payload.get("listing_capped_classification_ids"),
+        metrics.get("listing_capped_classification_ids"),
+    )
     jobs_skipped_existing = _max_count(
         event_payload.get("jobs_skipped_existing"),
         metrics.get("jobs_skipped_existing", 0),
@@ -1320,6 +1343,7 @@ def build_crawl_task_snapshot(
         "listing_condition_count": listing_condition_count,
         "listing_natural_condition_count": listing_natural_condition_count,
         "listing_capped_condition_count": listing_capped_condition_count,
+        "listing_capped_classification_ids": listing_capped_classification_ids,
         "waf_challenge": waf_challenge,
         "waf_challenge_message": waf_event_payload.get("message") if waf_challenge else None,
         "waf_challenge_url": waf_event_payload.get("challenge_url") if waf_challenge else None,

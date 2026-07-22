@@ -16,6 +16,7 @@ from app.schemas.scraper_pacing import DetailPacingConfig
 from app.crawl_control.task_control_board_contracts import (
     DetailSnapshotProjectionV1,
     ListingWorkloadProjectionV1,
+    ListingRecoveryProjectionV1,
     RecoveryAttemptProjectionV1,
     RunAuthorityProjectionV1,
 )
@@ -150,11 +151,13 @@ class CrawlTaskListItemSchema(BaseModel):
     latest_issue_text: str | None = None
     request_payload: dict | None = None
     detail_pacing: DetailPacingConfig | None = None
+    listing_recovery: ListingRecoveryProjectionV1 | None = None
     listing_completed: bool = False
     listing_partial: bool = False
     listing_condition_count: int = 0
     listing_natural_condition_count: int = 0
     listing_capped_condition_count: int = 0
+    listing_capped_classification_ids: list[str] = Field(default_factory=list)
 
 
 class CrawlTaskListResponse(BaseModel):

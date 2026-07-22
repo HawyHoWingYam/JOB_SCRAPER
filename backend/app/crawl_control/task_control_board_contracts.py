@@ -86,6 +86,37 @@ class ListingWorkloadProjectionV1(FrozenContract):
         return self
 
 
+class ListingRecoveryProjectionV1(FrozenContract):
+    """Normalized continuation facts for a page-depth-capped listing run."""
+
+    version: Literal[1] = 1
+    listing_partial: bool
+    query_target_count: int = Field(ge=0)
+    capped_query_target_count: int = Field(ge=0)
+    page_depth: int = Field(ge=0)
+    pages_requested: int = Field(ge=0)
+    capped_classification_ids: tuple[str, ...] = ()
+    continuation_supported: bool
+
+    @model_validator(mode="after")
+    def validate_recovery_shape(self) -> ListingRecoveryProjectionV1:
+        if self.capped_query_target_count > self.query_target_count:
+            raise ValueError("Capped Query Target count exceeds the listing scope")
+        if any(not str(item).strip() for item in self.capped_classification_ids):
+            raise ValueError("Capped classification IDs must be non-empty")
+        if self.capped_classification_ids and (
+            len(self.capped_classification_ids) > self.capped_query_target_count
+        ):
+            raise ValueError("Capped classification IDs exceed the capped count")
+        if self.continuation_supported and not (
+            self.listing_partial and self.capped_classification_ids
+        ):
+            raise ValueError(
+                "Listing continuation requires a partial run and target IDs"
+            )
+        return self
+
+
 class DetailSnapshotProjectionV1(FrozenContract):
     version: Literal[1] = 1
     backlog_scope: dict[str, Any]
@@ -378,6 +409,7 @@ class CrawlTaskDetailProjectionV1(FrozenContract):
     completed_at: datetime | None = None
     updated_at: datetime
     detail_pacing: dict[str, Any] | None = None
+    listing_recovery: ListingRecoveryProjectionV1 | None = None
     issue: CrawlTaskIssueProjectionV1 | None = None
     manual_action_guidance: ManualActionGuidanceProjectionV1 | None = None
     recovery_attempt: RecoveryAttemptProjectionV1 | None = None

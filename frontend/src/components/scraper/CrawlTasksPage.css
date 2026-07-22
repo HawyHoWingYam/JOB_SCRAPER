@@ -129,6 +129,12 @@
     text-transform: capitalize;
 }
 
+.crawl-task-status.status-partial {
+    border-color: rgba(233, 185, 73, 0.6);
+    background: var(--color-warning-bg);
+    color: var(--color-warning);
+}
+
 .crawl-task-id {
     color: var(--color-text-secondary);
     font-size: var(--text-sm);
@@ -170,6 +176,30 @@
     border-color: rgba(233, 185, 73, 0.4);
     background: var(--color-warning-bg);
     color: var(--color-warning);
+}
+
+.crawl-tasks-listing-partial {
+    border: 1px solid rgba(233, 185, 73, 0.45);
+    border-radius: var(--radius-md);
+    background: linear-gradient(145deg, rgba(233, 185, 73, 0.1), rgba(255, 255, 255, 0.02));
+    padding: var(--space-3);
+}
+
+.crawl-tasks-listing-partial h3 {
+    margin: 0 0 var(--space-2);
+}
+
+.crawl-tasks-listing-partial p {
+    margin: var(--space-2) 0 0;
+    color: var(--color-text-secondary);
+    line-height: 1.5;
+}
+
+.crawl-tasks-continue-button {
+    margin-top: var(--space-3);
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #fff;
 }
 
 .crawl-tasks-action-note {

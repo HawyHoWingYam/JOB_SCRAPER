@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
+
+from app.crawl_control.task_control_board_contracts import (
+    ListingRecoveryProjectionV1,
+)
 from app.services.crawl_task_snapshot_service import build_crawl_task_snapshot
+from app.crawl_control.task_control_board_service import build_crawl_task_detail_projection
 
 
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
@@ -59,6 +65,126 @@ def test_snapshot_preserves_raw_ids_as_optional_and_uses_larger_counter() -> Non
     )
 
     assert snapshot["raw_job_ids_collected"] == 5
+
+
+def test_snapshot_preserves_page_depth_partial_listing_targets_for_recovery() -> None:
+    capped_ids = ["offertoday:100001", "offertoday:100002"]
+    event = _event(
+        {
+            "phase": 1,
+            "listing_partial": True,
+            "listing_condition_count": 23,
+            "listing_capped_condition_count": 5,
+            "listing_capped_classification_ids": capped_ids,
+            "pages_processed": 408,
+        }
+    )
+    crawl_job = _crawl_job(
+        source_site="offertoday",
+        request_payload={
+            "crawl_phase": "listing",
+            "category_ids": list(range(23)),
+            "max_pages": 40,
+        },
+        metrics={
+            "pages_processed": 408,
+            "listing_partial": True,
+            "listing_condition_count": 23,
+            "listing_capped_condition_count": 5,
+            "listing_capped_classification_ids": capped_ids,
+        },
+    )
+    snapshot = build_crawl_task_snapshot(
+        crawl_job,
+        event,
+        now=NOW,
+        events=[event],
+    )
+
+    assert snapshot["listing_partial"] is True
+    assert snapshot["listing_condition_count"] == 23
+    assert snapshot["listing_capped_condition_count"] == 5
+    assert snapshot["listing_capped_classification_ids"] == tuple(capped_ids)
+
+    detail = build_crawl_task_detail_projection(crawl_job, normalized=snapshot)
+    assert detail.listing_recovery is not None
+    assert detail.listing_recovery.listing_partial is True
+    assert detail.listing_recovery.capped_query_target_count == 5
+    assert detail.listing_recovery.capped_classification_ids == tuple(capped_ids)
+    assert detail.listing_recovery.continuation_supported is True
+
+    malformed_event = _event(
+        {
+            "phase": 1,
+            "listing_partial": True,
+            "listing_condition_count": 23,
+            "listing_capped_condition_count": 1,
+            "listing_capped_classification_ids": ["100001"],
+            "pages_processed": 408,
+        }
+    )
+    malformed_job = _crawl_job(
+        source_site="offertoday",
+        request_payload=crawl_job.request_payload,
+        metrics={
+            **crawl_job.metrics,
+            "listing_capped_condition_count": 1,
+            "listing_capped_classification_ids": ["100001"],
+        },
+    )
+    malformed_snapshot = build_crawl_task_snapshot(
+        malformed_job,
+        malformed_event,
+        now=NOW,
+        events=[malformed_event],
+    )
+    malformed_detail = build_crawl_task_detail_projection(
+        malformed_job,
+        normalized=malformed_snapshot,
+    )
+    assert malformed_detail.listing_recovery is not None
+    assert malformed_detail.listing_recovery.continuation_supported is False
+
+    cancelled = _crawl_job(
+        source_site="offertoday",
+        status="cancelled",
+        request_payload=crawl_job.request_payload,
+        metrics=crawl_job.metrics,
+    )
+    cancelled_snapshot = build_crawl_task_snapshot(
+        cancelled,
+        event,
+        now=NOW,
+        events=[event],
+    )
+    assert build_crawl_task_detail_projection(
+        cancelled,
+        normalized=cancelled_snapshot,
+    ).listing_recovery is None
+
+
+def test_listing_recovery_contract_rejects_invalid_capped_shape() -> None:
+    with pytest.raises(ValueError, match="Capped Query Target count"):
+        ListingRecoveryProjectionV1(
+            listing_partial=True,
+            query_target_count=2,
+            capped_query_target_count=3,
+            page_depth=40,
+            pages_requested=10,
+            capped_classification_ids=("offertoday:100001",),
+            continuation_supported=True,
+        )
+
+    with pytest.raises(ValueError, match="non-empty"):
+        ListingRecoveryProjectionV1(
+            listing_partial=True,
+            query_target_count=2,
+            capped_query_target_count=1,
+            page_depth=40,
+            pages_requested=10,
+            capped_classification_ids=("",),
+            continuation_supported=False,
+        )
 
 
 def test_snapshot_omits_raw_ids_value_for_historical_task_without_field() -> None:

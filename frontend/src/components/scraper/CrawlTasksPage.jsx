@@ -18,6 +18,8 @@ import { formatScraperSourceLabel } from "./listingBatchLabel";
 import { cancelCrawlJob } from "./crawlTaskActions";
 import { getCrawlTaskDetail, resumeManualTask } from "../../features/taskControl/board/boardApi";
 import { buildCrawlTaskRoute, parseCrawlTaskRoute } from "../../features/taskControl/board/boardRoute";
+import { buildControlRoute, newDraftId } from "../../features/taskControl/shared/controlRoute";
+import { createWizardDraft, writeDraft } from "../../features/taskControl/wizard/wizardDraft";
 import ConfirmActionDialog from "../../features/taskControl/shared/ConfirmActionDialog";
 import CrawlTaskDetails from "./CrawlTaskDetails";
 import "./CrawlTasksPage.css";
@@ -148,8 +150,14 @@ function buildListingMetricSummary(task) {
   const rawJobIdsCollected = task?.raw_job_ids_collected;
   const detailTargetRows = Number(task?.detail_target_rows || 0);
   const listingsStaged = Number(task?.listings_staged || 0);
-  const currentPage = Number(task?.current_page || 0);
-  const totalPages = Number(task?.total_pages || 0);
+  const workload = task?.listing_workload || {};
+  const currentPage = Number(
+    workload.pages_requested ?? task?.current_page ?? 0,
+  );
+  const totalPages = Number(
+    workload.estimated_max_pages ?? task?.total_pages ?? 0,
+  );
+  const runPageCap = Number(workload.run_page_cap || 0);
 
   if (jobIdsCollected > 0) {
     summary.push(`IDs ${formatCount(jobIdsCollected)}`);
@@ -173,11 +181,11 @@ function buildListingMetricSummary(task) {
 
   if (currentPage > 0 || totalPages > 0) {
     if (normalizedSourceSite === "offertoday") {
-      const maximumBudget =
-        totalPages > 0 ? ` / max ${formatCount(totalPages)}` : "";
-      summary.push(
-        `Query requests ${formatCount(currentPage)}${maximumBudget}`,
-      );
+      const maximumBudget = totalPages > 0 ? `/${formatCount(totalPages)}` : "/?";
+      summary.push(`Pages requested ${formatCount(currentPage)}${maximumBudget}`);
+      if (runPageCap > 0 && runPageCap !== totalPages) {
+        summary.push(`Run page cap ${formatCount(runPageCap)}`);
+      }
     } else {
       summary.push(`Pages ${formatCountPair(currentPage, totalPages)}`);
     }
@@ -271,26 +279,28 @@ function buildScopeHint(task) {
 
 function buildIssueSummary(task) {
   const listingPartialSummary = (() => {
-    if (!task?.listing_partial) {
+    if (!isCompletedListingTask(task) || !task?.listing_partial) {
       return null;
     }
 
     const cappedConditions = Number(task?.listing_capped_condition_count || 0);
-    const totalConditions = Number(task?.listing_condition_count || 0);
+    const totalConditions = Number(
+      task?.listing_condition_count || task?.listing_workload?.query_target_count || 0,
+    );
     if (cappedConditions > 0 && totalConditions > 0) {
-      return `Partial listing: ${formatCount(cappedConditions)} of ${formatCount(totalConditions)} query conditions reached the configured page cap.`;
+      return `${formatCount(cappedConditions)} of ${formatCount(totalConditions)} query targets reached the page-depth limit.`;
     }
     if (cappedConditions > 0) {
-      return `Partial listing: ${formatCount(cappedConditions)} query conditions reached the configured page cap.`;
+      return `${formatCount(cappedConditions)} query targets reached the page-depth limit.`;
     }
-    return "Partial listing: one or more query conditions reached the configured page cap.";
+    return "Some query targets reached the page-depth limit before listing was exhausted.";
   })();
 
   return (
+    listingPartialSummary ||
     task?.latest_issue_text ||
     task?.error ||
     task?.status_reason ||
-    listingPartialSummary ||
     null
   );
 }
@@ -302,11 +312,85 @@ function formatStatusLabel(status) {
 function buildStatusLabel(task) {
   if (isCompletedListingTask(task)) {
     return task?.listing_partial
-      ? "Listing Complete (Partial)"
-      : "Listing Complete";
+      ? "Completed with partial listing"
+      : "Completed";
   }
 
   return formatStatusLabel(task?.status);
+}
+
+function createCappedListingDraft(detail) {
+  const run = detail?.run;
+  const recovery = detail?.listingRecovery || run?.listingRecovery;
+  const classificationIds = Array.isArray(recovery?.cappedClassificationIds)
+    ? recovery.cappedClassificationIds.filter(Boolean)
+    : [];
+  if (!run || !recovery?.continuationSupported || classificationIds.length === 0) {
+    return null;
+  }
+
+  const sourceSite = run.sourceSite;
+  const sourcePrefix = `${String(sourceSite || '').trim().toLowerCase()}:`;
+  if (
+    !String(sourceSite || '').trim() ||
+    classificationIds.some(
+      (classificationId) =>
+        !String(classificationId).toLowerCase().startsWith(sourcePrefix),
+    )
+  ) {
+    return null;
+  }
+  const draftId = newDraftId();
+  const pageDepth = Math.max(
+    1,
+    Number(recovery.pageDepth || run.listingWorkload?.page_depth || 1),
+  );
+  const targetCount = Math.max(
+    classificationIds.length,
+    Number(recovery.cappedQueryTargetCount || classificationIds.length),
+  );
+  const systemCap = 1000;
+  const runPageCap = Math.min(Math.max(targetCount * pageDepth, 1), systemCap);
+  const draft = createWizardDraft(
+    {
+      flow: "one_off",
+      mode: "create",
+      automationId: null,
+      sourceSite,
+    },
+    sourceSite,
+  );
+  draft.step = "review";
+  draft.intent = "listing";
+  draft.scope = {
+    mode: "rules",
+    rules: classificationIds.map((classificationId) => ({
+      kind: "exact",
+      classification_id: classificationId,
+    })),
+  };
+  draft.execution = {
+    page_depth: pageDepth,
+    run_page_cap: runPageCap,
+    crawl_mode: run.mode,
+  };
+  let storage = null;
+  try {
+    storage = window.sessionStorage;
+  } catch {
+    storage = null;
+  }
+  writeDraft(storage, draftId, draft);
+  const route = buildControlRoute({
+    flow: "one_off",
+    mode: "create",
+    automationId: null,
+    sourceSite,
+    draftId,
+    step: "review",
+  });
+  window.location.hash = route;
+  return draftId;
 }
 
 function isCancellingTask(task) {
@@ -493,6 +577,10 @@ export default function CrawlTasksPage() {
     window.location.hash = buildCrawlTaskRoute(crawlJobId);
     setActionState({ pending: null, error: null, notice: null });
   }, []);
+
+  const handleContinueCappedListing = useCallback(() => {
+    createCappedListingDraft(selectedTaskDetail);
+  }, [selectedTaskDetail]);
 
   const runTaskAction = useCallback(
     async (actionKey, actionLabel, action) => {
@@ -712,7 +800,7 @@ export default function CrawlTasksPage() {
                   >
                     <div className="crawl-task-row-topline">
                       <span
-                        className={`crawl-task-status status-${task.status || "unknown"}`}
+                        className={`crawl-task-status ${isCompletedListingTask(task) && task.listing_partial ? "status-partial" : `status-${task.status || "unknown"}`}`}
                       >
                         {buildStatusLabel(task)}
                       </span>
@@ -775,6 +863,7 @@ export default function CrawlTasksPage() {
               actionState={actionState}
               onAction={handleNormalizedAction}
               onOpenEvents={handleOpenEvents}
+              onContinueCappedListing={handleContinueCappedListing}
             />
           ) : (
             <div className="crawl-tasks-empty">

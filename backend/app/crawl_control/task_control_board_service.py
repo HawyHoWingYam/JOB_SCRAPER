@@ -30,6 +30,7 @@ from app.crawl_control.task_control_board_contracts import (
     CrawlTaskDetailProjectionV1,
     CrawlTaskIssueProjectionV1,
     DetailSnapshotProjectionV1,
+    ListingRecoveryProjectionV1,
     ListingWorkloadProjectionV1,
     ManualActionGuidanceProjectionV1,
     RecoveryAttemptProjectionV1,
@@ -457,6 +458,59 @@ def _run_actions(crawl_job, normalized: Mapping[str, Any]) -> tuple[BoardActionV
     )
 
 
+def _listing_recovery(
+    *,
+    crawl_job,
+    normalized: Mapping[str, Any],
+    run: CrawlControlRunProjectionV1,
+) -> ListingRecoveryProjectionV1 | None:
+    status = str(normalized.get("status") or crawl_job.status).strip().lower()
+    if (
+        status != "completed"
+        or run.crawl_phase != "listing"
+        or run.listing_workload is None
+    ):
+        return None
+
+    raw_ids = normalized.get("listing_capped_classification_ids")
+    if isinstance(raw_ids, set):
+        raw_ids = sorted(raw_ids, key=lambda item: str(item))
+    capped_ids = (
+        tuple(str(item).strip() for item in raw_ids if str(item).strip())
+        if isinstance(raw_ids, (list, tuple, set))
+        else ()
+    )
+    listing_partial = bool(normalized.get("listing_partial"))
+    if not listing_partial:
+        return None
+    capped_count = max(
+        _to_int(normalized.get("listing_capped_condition_count")),
+        len(capped_ids),
+    )
+    source_site = str(crawl_job.source_site or "").strip().lower()
+    source_prefix = f"{source_site}:"
+    ids_are_source_qualified = bool(capped_ids) and all(
+        item.lower().startswith(source_prefix) for item in capped_ids
+    )
+    return ListingRecoveryProjectionV1(
+        listing_partial=listing_partial,
+        query_target_count=run.listing_workload.query_target_count,
+        capped_query_target_count=min(
+            capped_count,
+            run.listing_workload.query_target_count,
+        ),
+        page_depth=run.listing_workload.page_depth,
+        pages_requested=run.listing_workload.pages_requested,
+        capped_classification_ids=capped_ids,
+        continuation_supported=bool(
+            listing_partial
+            and capped_ids
+            and ids_are_source_qualified
+            and source_site in {"offertoday", "jobsdb", "ctgoodjobs"}
+        ),
+    )
+
+
 def build_crawl_task_detail_projection(
     crawl_job,
     *,
@@ -472,6 +526,11 @@ def build_crawl_task_detail_projection(
         completed_at=(_aware_utc(crawl_job.completed_at) if crawl_job.completed_at else None),
         updated_at=_aware_utc(crawl_job.updated_at),
         detail_pacing=(dict(normalized["detail_pacing"]) if isinstance(normalized.get("detail_pacing"), Mapping) else None),
+        listing_recovery=_listing_recovery(
+            crawl_job=crawl_job,
+            normalized=normalized,
+            run=run,
+        ),
         issue=_issue_projection(normalized),
         manual_action_guidance=_manual_action_guidance(normalized),
         recovery_attempt=run.recovery_attempt,

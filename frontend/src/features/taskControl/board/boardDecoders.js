@@ -55,6 +55,21 @@ function decodeIssue(value, path) {
   };
 }
 
+function decodeListingRecovery(value, path) {
+  if (value == null) return null;
+  const row = object(value, path);
+  if (row.version !== 1) throw new BoardPayloadError(`${path}.version`, 'expected 1');
+  return {
+    listingPartial: Boolean(row.listing_partial),
+    queryTargetCount: integer(row.query_target_count, `${path}.query_target_count`),
+    cappedQueryTargetCount: integer(row.capped_query_target_count, `${path}.capped_query_target_count`),
+    pageDepth: integer(row.page_depth, `${path}.page_depth`),
+    pagesRequested: integer(row.pages_requested, `${path}.pages_requested`),
+    cappedClassificationIds: array(row.capped_classification_ids, `${path}.capped_classification_ids`).map((item, index) => string(item, `${path}.capped_classification_ids[${index}]`)),
+    continuationSupported: Boolean(row.continuation_supported),
+  };
+}
+
 function decodeRun(value, path) {
   const row = object(value, path);
   return {
@@ -173,6 +188,7 @@ export function decodeTaskDetail(value) {
     completedAt: row.completed_at || null,
     updatedAt: row.updated_at,
     detailPacing: row.detail_pacing == null ? null : object(row.detail_pacing, '$.detail_pacing'),
+    listingRecovery: decodeListingRecovery(row.listing_recovery, '$.listing_recovery'),
     issue: decodeIssue(row.issue, '$.issue'),
     manualActionGuidance: row.manual_action_guidance || null,
     recoveryAttempt: row.recovery_attempt || null,

@@ -1130,7 +1130,31 @@ def _listing_result_evidence(result) -> dict[str, Any]:
     return evidence
 
 
-def _listing_metrics(result, staging_sink) -> dict[str, Any]:
+def _capped_classification_ids(result, runtime_plan=None) -> tuple[str, ...]:
+    """Map capped runner conditions back to immutable Query Target IDs."""
+
+    capped_condition_ids = set(getattr(result, "capped_condition_ids", ()) or ())
+    if not capped_condition_ids or runtime_plan is None:
+        return ()
+
+    classification_ids: list[str] = []
+    for target in runtime_plan.targets:
+        parameters = target.query_target.parameters
+        if not isinstance(parameters, OfferTodayQueryTargetParametersV1):
+            continue
+        condition = OfferTodayListingCondition(
+            search_family="catalog_category",
+            category_id=parameters.category_code,
+            keyword=parameters.keyword,
+            endpoint=parameters.endpoint,
+            rcd_type=parameters.rcd_type,
+        )
+        if condition.condition_id in capped_condition_ids:
+            classification_ids.append(target.query_target.classification_id)
+    return tuple(classification_ids)
+
+
+def _listing_metrics(result, staging_sink, runtime_plan=None) -> dict[str, Any]:
     reconciliation = staging_sink.reconciliation
     accepted_ids = set(result.accepted_job_ids)
     supplemental_ids = set(getattr(result, "supplemental_job_ids", ()))
@@ -1138,6 +1162,7 @@ def _listing_metrics(result, staging_sink) -> dict[str, Any]:
     capped_condition_ids = tuple(
         getattr(result, "capped_condition_ids", ())
     )
+    capped_classification_ids = _capped_classification_ids(result, runtime_plan)
     return {
         "listing_partial": bool(getattr(result, "is_partial", False)),
         "listing_condition_count": len(outcomes),
@@ -1146,6 +1171,7 @@ def _listing_metrics(result, staging_sink) -> dict[str, Any]:
         ),
         "listing_capped_condition_count": len(capped_condition_ids),
         "listing_capped_condition_ids": list(capped_condition_ids),
+        "listing_capped_classification_ids": list(capped_classification_ids),
         "distinct_it_result_ids": len(accepted_ids),
         "raw_job_ids_collected": int(
             getattr(staging_sink, "raw_job_ids_collected", 0) or 0
@@ -1407,7 +1433,7 @@ async def _run_listing_phase(
         )
         return execution
 
-    listing_metrics = _listing_metrics(result, staging_sink)
+    listing_metrics = _listing_metrics(result, staging_sink, runtime_plan)
     crawl_runtime.merge_metrics(
         crawl_job_id=crawl_job_id,
         metrics_patch=listing_metrics,
@@ -2730,6 +2756,7 @@ async def main() -> None:
                 listing_metrics = _listing_metrics(
                     listing_result,
                     listing_execution.staging_sink,
+                    runtime_plan,
                 )
                 new_jobs_count = int(
                     listing_metrics.get("new_detail_targets", 0) or 0
