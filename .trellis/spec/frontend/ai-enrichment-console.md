@@ -22,7 +22,10 @@ Use this contract when changing `AIEnrichmentPage`, its API payloads, run cards,
   `source_classification_id` as the Governance filter when the current AI
   filter is empty; the backend derives that detail from the preserved Source
   Classification Path root and uses legacy Job scalar fields only as a
-  display fallback. The human-readable name remains display-only metadata.
+  display fallback. The human-readable name remains display-only metadata. The
+  link also carries the bounded `job_ids` and stable exclusion `reason`; the
+  Governance Source Catalog inspect request must round-trip both so a large
+  batch is not expanded back to the entire pending source scope.
 - Terminal `completed_with_exclusions` is an attention state, not a provider failure. Settled progress is `completed_items + failed_items + cancelled_items + excluded_items`; excluded items never enable retry.
 - Run creation may return `execution_result = "no_supported_items"` with `run_status = "completed_with_exclusions"`; the monitor still renders the persisted exclusion report.
 - All-pending acknowledgement never persists and requires a consequence-focused confirmation. Stop confirms in-flight work may finish.
@@ -34,6 +37,9 @@ Use this contract when changing `AIEnrichmentPage`, its API payloads, run cards,
 - `409 active_run_exists` -> show active run ID and refresh monitor/overview.
 - Storage read/write failure -> fall back to in-memory defaults; operations remain usable.
 - Exclusion detail missing or malformed -> retain the count/status and render an empty detail list; never reinterpret the count as failed.
+- Source provenance check for a large bounded batch -> resolve its active Review
+  IDs and return the read-only report within the normal request timeout; do not
+  rerun full Canonical preflight once per Job.
 
 ## 5. Good / Base / Bad Cases
 

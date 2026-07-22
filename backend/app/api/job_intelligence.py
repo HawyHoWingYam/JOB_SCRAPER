@@ -43,7 +43,10 @@ from app.schemas.job_intelligence import (
     ProvenanceRepairInspectResponseSchema,
     ProvenanceRepairReportSchema,
 )
-from app.services.enrichment_run_service import EnrichmentRunService
+from app.services.enrichment_run_service import (
+    EnrichmentRunService,
+    PendingSelectionReport,
+)
 from app.services.canonical_taxonomy_recovery_service import (
     CanonicalTaxonomyRecoveryError,
     CanonicalTaxonomyRecoveryService,
@@ -95,6 +98,52 @@ def _provenance_excluded_ids(report) -> tuple[UUID, ...]:
 
 def _repair_report_schema(report) -> ProvenanceRepairReportSchema:
     return ProvenanceRepairReportSchema.model_validate(report.to_payload())
+
+
+def _source_provenance_selection(
+    service: EnrichmentRunService,
+    request: ProvenanceRepairInspectRequestSchema,
+) -> PendingSelectionReport:
+    """Resolve the existing source-provenance exclusion batch without LLM preflight.
+
+    The AI exclusion handoff already records the active Review rows that belong
+    to this bounded batch. Re-running the full Canonical preflight for thousands
+    of Jobs performs several database reads per Job and can exceed the browser's
+    request timeout. The source repair report below performs its own fail-closed
+    path and catalog checks, so this selection step only needs the persisted
+    source-provenance Review reason and pending filters.
+    """
+    scope = request.scope
+    filters = scope.to_service_filters()
+    selected_job_ids = service.select_active_review_job_ids(
+        filters=filters,
+        reason_codes=("source_catalog_provenance_missing",),
+        job_ids=scope.job_ids,
+        limit=request.limit,
+        pending_only=True,
+    )
+    selected = tuple(selected_job_ids)
+    return PendingSelectionReport(
+        matching_pending_count=service.count_pending_jobs(
+            filters=filters,
+            job_ids=scope.job_ids,
+        ),
+        selected_job_ids=selected,
+        supported_job_ids=(),
+        excluded_reasons_by_job_id={
+            job_id: "source_catalog_provenance_missing" for job_id in selected
+        },
+        excluded_items=(),
+    )
+
+
+def _uses_bounded_source_provenance_selection(
+    request: ProvenanceRepairInspectRequestSchema,
+) -> bool:
+    return (
+        request.scope.reason == "source_catalog_provenance_missing"
+        or bool(request.scope.job_ids)
+    )
 
 
 def _read_error(exc: CanonicalReadError) -> HTTPException:
@@ -174,10 +223,14 @@ def inspect_source_catalog_provenance_repair(
     """Inspect the current bounded AI selection without writing."""
     try:
         source_site = _single_scope_source(request.scope)
-        selection = EnrichmentRunService(db).inspect_pending_selection(
-            filters=request.scope.to_service_filters(),
-            limit=request.limit,
-        )
+        service = EnrichmentRunService(db)
+        if _uses_bounded_source_provenance_selection(request):
+            selection = _source_provenance_selection(service, request)
+        else:
+            selection = service.inspect_pending_selection(
+                filters=request.scope.to_service_filters(),
+                limit=request.limit,
+            )
         repair_ids = _provenance_excluded_ids(selection)
         report = SourceCatalogProvenanceRepair(db).inspect_active(
             source_site=source_site,
@@ -212,10 +265,14 @@ def apply_source_catalog_provenance_repair(
 
     try:
         source_site = _single_scope_source(request.scope)
-        selection = EnrichmentRunService(db).inspect_pending_selection(
-            filters=request.scope.to_service_filters(),
-            limit=request.limit,
-        )
+        service = EnrichmentRunService(db)
+        if _uses_bounded_source_provenance_selection(request):
+            selection = _source_provenance_selection(service, request)
+        else:
+            selection = service.inspect_pending_selection(
+                filters=request.scope.to_service_filters(),
+                limit=request.limit,
+            )
         current_report = SourceCatalogProvenanceRepair(db).inspect_active(
             source_site=source_site,
             job_ids=_provenance_excluded_ids(selection),
@@ -259,10 +316,13 @@ def apply_source_catalog_provenance_repair(
             expected_revision_id=request.revision_id,
             expected_fingerprint=request.expected_fingerprint,
         )
-        recheck = EnrichmentRunService(db).inspect_pending_selection(
-            filters=request.scope.to_service_filters(),
-            limit=request.limit,
-        )
+        if _uses_bounded_source_provenance_selection(request):
+            recheck = _source_provenance_selection(service, request)
+        else:
+            recheck = service.inspect_pending_selection(
+                filters=request.scope.to_service_filters(),
+                limit=request.limit,
+            )
     except HTTPException:
         raise
     except ValueError as exc:

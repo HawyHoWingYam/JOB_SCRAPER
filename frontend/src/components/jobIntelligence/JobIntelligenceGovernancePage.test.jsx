@@ -342,7 +342,7 @@ describe('JobIntelligenceGovernancePage', () => {
       ...canonicalFixture.review_page.items[0],
       reasons: ['source_catalog_provenance_missing'],
     };
-    window.location.hash = `#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&reason=source_catalog_provenance_missing&pending_limit=50&item=${item.id}`;
+    window.location.hash = `#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&reason=source_catalog_provenance_missing&job_id=${item.job_id}&pending_limit=50&item=${item.id}`;
     api.fetchCanonicalReviewItem.mockResolvedValue(item);
     api.fetchCanonicalReviewItems.mockResolvedValue({
       items: [item],
@@ -364,6 +364,8 @@ describe('JobIntelligenceGovernancePage', () => {
       expect.objectContaining({
         source_sites: ['offertoday'],
         source_classification_ids: ['offertoday:118000'],
+        job_ids: [item.job_id],
+        reason: 'source_catalog_provenance_missing',
       }),
       50,
     );

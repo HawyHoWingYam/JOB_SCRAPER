@@ -22,6 +22,7 @@ from app.api.ai import (
     _serialize_single_run,
     router,
 )
+from app.api.job_intelligence import _source_provenance_selection
 from app.job_intelligence.canonical_taxonomy import CanonicalTaxonomyPreflightResult
 from app.models.company import Company
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
@@ -36,6 +37,7 @@ from app.services.enrichment_run_service import (
     EnrichmentRunService,
     PendingJobFilters,
 )
+from app.schemas.job_intelligence import ProvenanceRepairInspectRequestSchema
 from app.services import enrichment_run_service as enrichment_run_module
 
 
@@ -251,6 +253,43 @@ def test_pending_request_normalizes_values_and_enforces_safe_scope():
         CreateRunRequest.model_validate(
             {"mode": "batch", "job_ids": [str(uuid.uuid4())]}
         )
+
+
+def test_source_provenance_selection_keeps_the_bounded_review_batch():
+    first_job = uuid.UUID("10000000-0000-0000-0000-000000000001")
+    second_job = uuid.UUID("10000000-0000-0000-0000-000000000002")
+    request = ProvenanceRepairInspectRequestSchema.model_validate(
+        {
+            "scope": {
+                "source_sites": ["offertoday"],
+                "source_classification_ids": ["offertoday:118000"],
+                "job_ids": [str(first_job), str(second_job)],
+                "reason": "source_catalog_provenance_missing",
+            },
+            "limit": 5000,
+        }
+    )
+
+    class FakeService:
+        def count_pending_jobs(self, *, filters, job_ids):
+            assert filters.source_sites == ("offertoday",)
+            assert job_ids == [first_job, second_job]
+            return 12
+
+        def select_active_review_job_ids(self, **kwargs):
+            assert kwargs["job_ids"] == [first_job, second_job]
+            assert kwargs["reason_codes"] == ("source_catalog_provenance_missing",)
+            assert kwargs["pending_only"] is True
+            return [str(first_job), str(second_job)]
+
+    report = _source_provenance_selection(FakeService(), request)
+
+    assert report.matching_pending_count == 12
+    assert report.selected_job_ids == (str(first_job), str(second_job))
+    assert report.excluded_reasons_by_job_id == {
+        str(first_job): "source_catalog_provenance_missing",
+        str(second_job): "source_catalog_provenance_missing",
+    }
 
 
 def test_pending_preview_and_create_separate_unsupported_taxonomy_items(db, company):

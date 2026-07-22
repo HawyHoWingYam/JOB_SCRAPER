@@ -245,14 +245,24 @@ class EnrichmentRunService:
     ) -> dict[str, object]:
         return self.inspect_pending_selection(filters=filters, limit=limit).to_preview_payload()
 
+    def count_pending_jobs(
+        self,
+        *,
+        filters: PendingJobFilters | None = None,
+        job_ids: Iterable[str] = (),
+    ) -> int:
+        """Return the current pending population without running taxonomy preflight."""
+        query = self._query_pending_candidates(func.count(Job.id), filters=filters)
+        normalized_job_ids = tuple(str(job_id) for job_id in job_ids if str(job_id))
+        if normalized_job_ids:
+            query = query.filter(Job.id.in_(normalized_job_ids))
+        return int(query.scalar() or 0)
+
     def inspect_pending_selection(
         self, *, filters: PendingJobFilters, limit: int
     ) -> PendingSelectionReport:
         """Resolve one oldest-first pending slice and its taxonomy preflight."""
-        matching_count = int(
-            self._query_pending_candidates(func.count(Job.id), filters=filters).scalar()
-            or 0
-        )
+        matching_count = self.count_pending_jobs(filters=filters)
         selected_jobs = self._select_pending_jobs(filters=filters, limit=limit)
         supported_jobs, excluded_reasons, excluded_items = self._preflight_jobs(
             selected_jobs
@@ -310,8 +320,9 @@ class EnrichmentRunService:
         reason_codes: Iterable[str] = (),
         job_ids: Iterable[str] = (),
         limit: int = 5000,
+        pending_only: bool = False,
     ) -> list[str]:
-        """Resolve historical active Canonical Reviews without pending semantics."""
+        """Resolve active Canonical Reviews, optionally within pending work."""
         normalized = filters or PendingJobFilters()
         query = (
             self.db.query(JobTaxonomyReviewItem.job_id, JobTaxonomyReviewItem.reasons)
@@ -321,6 +332,12 @@ class EnrichmentRunService:
                 Job.is_deleted.is_(False),
             )
         )
+        if pending_only:
+            query = query.filter(
+                Job.ai_enriched_at.is_(None),
+                Job.source_attribute_projection.has(),
+                ~self._reserved_job_exists(),
+            )
         normalized_job_ids = tuple(str(job_id) for job_id in job_ids if str(job_id))
         if normalized_job_ids:
             query = query.filter(Job.id.in_(normalized_job_ids))

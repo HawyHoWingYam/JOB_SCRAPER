@@ -5,6 +5,7 @@ import {
   createCanonicalTaxonomyRecoveryRun,
   fetchCanonicalReviewItems,
   fetchGovernanceSummary,
+  inspectSourceCatalogProvenance,
   previewCanonicalTaxonomyRecovery,
   fetchSkillCandidates,
 } from './jobIntelligence';
@@ -216,6 +217,38 @@ describe('job intelligence API', () => {
       taxonomy_revision_id: 'taxonomy-1',
       mapping_revision_id: 'mapping-1',
       confirmed: true,
+    });
+  });
+
+  it('keeps the bounded source-provenance batch in the inspect request', async () => {
+    globalThis.fetch.mockResolvedValue(
+      responseJson({ selection: {}, report: {} }),
+    );
+
+    await inspectSourceCatalogProvenance(
+      {
+        sourceSites: ['offertoday'],
+        sourceClassificationIds: ['offertoday:118000'],
+        jobIds: ['job-1', 'job-2'],
+        reason: 'source_catalog_provenance_missing',
+      },
+      5000,
+    );
+
+    expect(globalThis.fetch.mock.calls[0][0]).toBe(
+      '/api/v1/job-intelligence/governance/source-catalog-provenance/inspect',
+    );
+    expect(JSON.parse(globalThis.fetch.mock.calls[0][1].body)).toEqual({
+      scope: {
+        source_sites: ['offertoday'],
+        source_classification_ids: ['offertoday:118000'],
+        source_subclassification_ids: [],
+        posted_date_from: null,
+        posted_date_to: null,
+        job_ids: ['job-1', 'job-2'],
+        reason: 'source_catalog_provenance_missing',
+      },
+      limit: 5000,
     });
   });
 });

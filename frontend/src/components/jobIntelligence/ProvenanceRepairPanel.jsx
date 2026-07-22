@@ -14,6 +14,8 @@ function toApiScope(scope = {}) {
     source_subclassification_ids: scope.sourceSubclassificationIds || [],
     posted_date_from: scope.postedDateFrom || null,
     posted_date_to: scope.postedDateTo || null,
+    job_ids: scope.jobIds || [],
+    reason: scope.reason || null,
   };
 }
 
@@ -24,8 +26,11 @@ export default function ProvenanceRepairPanel({ scope = {}, item, onComplete }) 
   const [confirmed, setConfirmed] = useState(false);
   const [error, setError] = useState(null);
   const limit = Number(scope.pendingLimit) > 0 ? Number(scope.pendingLimit) : DEFAULT_LIMIT;
-  const apiScope = useMemo(() => toApiScope(scope), [scope]);
   const reason = item?.reasons?.[0];
+  const apiScope = useMemo(
+    () => toApiScope({ ...scope, reason: scope.reason || reason }),
+    [scope, reason],
+  );
   const isProvenanceMissing = reason === 'source_catalog_provenance_missing';
 
   useEffect(() => {

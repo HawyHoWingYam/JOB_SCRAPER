@@ -120,6 +120,13 @@ class PendingSelectionScopeSchema(BaseModel):
         )
 
 
+class ProvenanceRepairScopeSchema(PendingSelectionScopeSchema):
+    """Bounded source-repair handoff, including the persisted exclusion batch."""
+
+    job_ids: list[UUID] = Field(default_factory=list)
+    reason: str | None = None
+
+
 class CanonicalTaxonomyRecoveryScopeSchema(PendingSelectionScopeSchema):
     """Bounded historical scope for Canonical-only taxonomy recovery."""
 
@@ -217,7 +224,7 @@ class PendingSelectionSummarySchema(BaseModel):
 
 
 class ProvenanceRepairInspectRequestSchema(BaseModel):
-    scope: PendingSelectionScopeSchema
+    scope: ProvenanceRepairScopeSchema
     limit: int = Field(ge=1, le=5000)
 
 
