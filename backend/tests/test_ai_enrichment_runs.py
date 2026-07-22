@@ -1,7 +1,10 @@
 import asyncio
+import runpy
+import sys
 import uuid
 from datetime import datetime, timezone
-from types import SimpleNamespace
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -771,3 +774,39 @@ def test_compact_run_projection_omits_job_ids_but_detail_projection_keeps_them(d
 
     assert "job_ids" not in compact
     assert detail["job_ids"] == run.job_ids
+
+
+def test_recovery_metadata_migration_matches_enrichment_run_models(monkeypatch):
+    added_columns: list[tuple[str, str, object | None]] = []
+    dropped_columns: list[tuple[str, str]] = []
+
+    alembic_stub = ModuleType("alembic")
+    alembic_stub.op = SimpleNamespace(
+        add_column=lambda table, column: added_columns.append(
+            (table, column.name, column.server_default)
+        ),
+        drop_column=lambda table, name: dropped_columns.append((table, name)),
+    )
+    monkeypatch.setitem(sys.modules, "alembic", alembic_stub)
+
+    migration = runpy.run_path(
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "20260722_120000_add_canonical_taxonomy_recovery_metadata.py"
+    )
+    migration["upgrade"]()
+    migration["downgrade"]()
+
+    assert migration["down_revision"] == "20260720_210000"
+    assert [(table, name) for table, name, _default in added_columns] == [
+        ("enrichment_runs", "run_snapshot"),
+        ("enrichment_run_items", "error_code"),
+        ("enrichment_run_items", "attempt_count"),
+    ]
+    assert str(added_columns[2][2].arg) == "0"
+    assert dropped_columns == [
+        ("enrichment_run_items", "attempt_count"),
+        ("enrichment_run_items", "error_code"),
+        ("enrichment_runs", "run_snapshot"),
+    ]

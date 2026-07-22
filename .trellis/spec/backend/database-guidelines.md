@@ -90,6 +90,79 @@ Seed validation accumulates all domain-owned issues and sorts by JSON path,
 code, related ID, message, and severity. Foundation owns report determinism, not
 domain hierarchy or mapping rules.
 
+### Schema migration synchronization
+
+#### 1. Scope / Trigger
+
+Use this contract whenever an ORM model gains a persisted column or table used
+by an API, worker, or serializer. A model change is incomplete until the
+Alembic revision is present in the repository and the bootstrap path reaches
+that revision.
+
+#### 2. Signatures
+
+```text
+bootstrap_database(db_engine=engine) -> None
+alembic upgrade head
+```
+
+The local Compose `db-bootstrap` service runs `bootstrap_database`, which
+upgrades an existing stamped database and stamps/ upgrades a fresh one.
+
+#### 3. Contracts
+
+- Every new mapped column has one forward migration and a reversible downgrade.
+- The migration's `down_revision` is the current repository head and its
+  `revision` becomes the only head after the change.
+- Existing stamped databases converge to the repository head before API and
+  worker services query the changed model.
+- API serializers may expose nullable recovery metadata, but they must not
+  assume an older schema can select the new ORM columns.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| ORM column exists but migration is absent | Do not ship; migration-head check fails before deployment |
+| Database revision is behind the model | Run `db-bootstrap` / `alembic upgrade head` before starting API workers |
+| API queries a missing mapped column | PostgreSQL `UndefinedColumn` is an operational schema-drift failure, not an empty result |
+| Migration is applied | AI overview/runs queries select recovery metadata and return HTTP 200 |
+
+#### 5. Good / Base / Bad Cases
+
+- **Good:** `EnrichmentRun.run_snapshot`, `EnrichmentRunItem.error_code`, and
+  `attempt_count` are added by revision `20260722_120000`, then the disposable
+  database reports that revision as `head`.
+- **Base:** An existing local volume is at the previous revision; rerun the
+  one-shot `db-bootstrap` service and verify `alembic_version` before opening
+  the AI Enrichment page.
+- **Bad:** Commit the ORM/API changes while leaving the migration untracked;
+  `/api/v1/ai/overview` or `/api/v1/ai/runs` then returns 500 from an
+  `UndefinedColumn` query.
+
+#### 6. Tests Required
+
+- A migration unit test asserts the revision lineage, exact added columns,
+  server default for non-null counters, and reverse drop order.
+- A disposable PostgreSQL check runs `alembic upgrade head`, then queries the
+  changed API endpoints and asserts HTTP 200.
+- CI or release checks assert exactly one Alembic head and that the database
+  revision equals the repository head before API smoke tests.
+
+#### 7. Wrong vs Correct
+
+```python
+# Wrong: model/API change without a checked-in migration.
+attempt_count = Column(Integer, nullable=False, default=0)
+
+# Correct: pair the model field with an Alembic upgrade and downgrade,
+# then converge existing databases before serving requests.
+op.add_column(
+    "enrichment_run_items",
+    sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0"),
+)
+```
+
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
