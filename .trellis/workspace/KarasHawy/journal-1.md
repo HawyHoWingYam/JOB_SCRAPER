@@ -1237,3 +1237,36 @@ Confirmed the AI enrichment provenance task is committed and archived. Remaining
 ### Next Steps
 
 - None - task complete
+
+
+## Session 36: Fix source provenance batch inspect timeout
+
+**Date**: 2026-07-22
+**Task**: Fix source provenance batch inspect timeout
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Diagnosed the 15-second AbortError as the frontend timeout over a 22-second backend Canonical preflight for large source-provenance scopes. The inspect/apply flow now round-trips bounded job IDs and reason, resolves active Review IDs with pending fences, preserves Source Catalog fail-closed report/apply checks, and completes the OfferToday IT check in under one second. Added cross-layer regression coverage, specs, lint/build, full frontend tests, backend tests, and browser verification.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `006122ee` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
