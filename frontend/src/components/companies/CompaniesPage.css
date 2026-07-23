@@ -44,12 +44,38 @@
 
 .companies-subtitle,
 .companies-batch-hint,
+.companies-web-search-help,
+.companies-progress-mode,
 .companies-progress-summary,
 .companies-progress-current {
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--text-sm);
     line-height: 1.6;
+}
+
+.companies-web-search-option {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-text-primary);
+    font-size: var(--text-sm);
+    font-weight: 700;
+}
+
+.companies-web-search-option input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--color-primary);
+}
+
+.companies-web-search-help.unavailable {
+    color: var(--color-warning, var(--color-accent-hover));
+}
+
+.companies-progress-mode {
+    color: var(--color-primary-hover);
+    font-weight: 700;
 }
 
 .companies-hero-stats {

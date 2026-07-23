@@ -163,6 +163,11 @@ export default function useCompanyEnrichmentRun({
   const [currentRun, setCurrentRun] = useState(null);
   const [runItemsByCompanyId, setRunItemsByCompanyId] = useState({});
   const [isCreatingRun, setIsCreatingRun] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [webSearchCapability, setWebSearchCapability] = useState({
+    available: false,
+    reason: 'Checking Company Web Search capability...',
+  });
   const [isPageVisible, setIsPageVisible] = useState(() => {
     if (typeof document === 'undefined') {
       return true;
@@ -338,6 +343,46 @@ export default function useCompanyEnrichmentRun({
   }, [apiUrl, updateCurrentRun]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadWebSearchCapability = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/api/v1/capabilities`);
+        if (!response.ok) {
+          throw new Error('Failed to load Company Web Search capability');
+        }
+        const payload = await response.json();
+        const capability = payload?.ai?.companies?.web_search || {};
+        if (!cancelled && mountedRef.current) {
+          const available = capability.available === true;
+          setWebSearchCapability({
+            available,
+            reason: available
+              ? null
+              : capability.reason || 'Test the Company profile to enable Web Search.',
+          });
+          if (!available) {
+            setWebSearchEnabled(false);
+          }
+        }
+      } catch (error) {
+        if (!cancelled && mountedRef.current) {
+          setWebSearchCapability({
+            available: false,
+            reason: error.message,
+          });
+          setWebSearchEnabled(false);
+        }
+      }
+    };
+
+    loadWebSearchCapability();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUrl]);
+
+  useEffect(() => {
     if (!isActiveRun(currentRun) || !isPageVisible) {
       return undefined;
     }
@@ -417,9 +462,20 @@ export default function useCompanyEnrichmentRun({
     try {
       const response = await fetch(`${apiUrl}/api/v1/companies/enrichment-runs`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          web_search_enabled: webSearchEnabled,
+        }),
       });
       if (!response.ok) {
-        throw new Error('Failed to start company enrichment run');
+        const errorPayload = await response.json().catch(() => null);
+        throw new Error(
+          typeof errorPayload?.detail === 'string'
+            ? errorPayload.detail
+            : 'Failed to start company enrichment run',
+        );
       }
 
       const payload = await response.json();
@@ -431,7 +487,12 @@ export default function useCompanyEnrichmentRun({
 
       const runPayload = payload.run || payload;
       updateCurrentRun(runPayload);
-      setActionMessage('Global backlog run started.');
+      setWebSearchEnabled(false);
+      setActionMessage(
+        runPayload.web_search_enabled
+          ? 'Global backlog run started with Web Search.'
+          : 'Global backlog run started.',
+      );
 
       if (isActiveRun(runPayload)) {
         try {
@@ -491,6 +552,9 @@ export default function useCompanyEnrichmentRun({
     remainingCount,
     batchButtonLabel,
     terminalMessage,
+    webSearchEnabled,
+    setWebSearchEnabled,
+    webSearchCapability,
     createRun,
     getCompanyRunState,
   };

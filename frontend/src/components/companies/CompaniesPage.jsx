@@ -92,6 +92,9 @@ function CompaniesPage() {
     remainingCount,
     batchButtonLabel,
     terminalMessage,
+    webSearchEnabled,
+    setWebSearchEnabled,
+    webSearchCapability,
     createRun,
     getCompanyRunState,
   } = useCompanyEnrichmentRun({
@@ -169,6 +172,11 @@ function CompaniesPage() {
                 <span>Global backlog run</span>
                 <strong>{hasQueuedRun ? 'Queued' : `${progressValue}%`}</strong>
               </div>
+              <p className="companies-progress-mode">
+                {currentRun.web_search_enabled
+                  ? 'Web Search enabled'
+                  : 'Web Search disabled'}
+              </p>
               <p className="companies-progress-summary">
                 {hasQueuedRun
                   ? 'Queued for execution'
@@ -256,6 +264,33 @@ function CompaniesPage() {
           <div className="companies-batch-group">
             <p className="companies-batch-hint">
               Targets all companies without AI descriptions.
+            </p>
+            <label className="companies-web-search-option">
+              <input
+                type="checkbox"
+                checked={webSearchEnabled}
+                onChange={(event) => setWebSearchEnabled(event.target.checked)}
+                disabled={
+                  isLoading
+                  || isCreatingRun
+                  || hasActiveRun
+                  || !webSearchCapability.available
+                }
+                aria-describedby="company-web-search-help"
+              />
+              <span>Use Web Search for this run</span>
+            </label>
+            <p
+              id="company-web-search-help"
+              className={
+                webSearchCapability.available
+                  ? 'companies-web-search-help'
+                  : 'companies-web-search-help unavailable'
+              }
+            >
+              {webSearchCapability.available
+                ? 'Uses the configured Company profile to verify public company information.'
+                : webSearchCapability.reason}
             </p>
             <button
               type="button"

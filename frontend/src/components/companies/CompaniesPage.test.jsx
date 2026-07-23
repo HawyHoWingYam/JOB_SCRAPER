@@ -40,6 +40,8 @@ describe('CompaniesPage', () => {
   let createdRunResponse;
   let companyRequests;
   let createdRunCalls;
+  let createdRunBodies;
+  let webSearchCapability;
 
   beforeEach(() => {
     companyPages = {
@@ -126,6 +128,12 @@ describe('CompaniesPage', () => {
     };
     companyRequests = [];
     createdRunCalls = 0;
+    createdRunBodies = [];
+    webSearchCapability = {
+      available: true,
+      reason: null,
+      last_test_status: 'passed',
+    };
 
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
@@ -152,8 +160,19 @@ describe('CompaniesPage', () => {
         return mockJsonResponse(payload);
       }
 
+      if (url.pathname === '/api/v1/capabilities' && (!init.method || init.method === 'GET')) {
+        return mockJsonResponse({
+          ai: {
+            companies: {
+              web_search: webSearchCapability,
+            },
+          },
+        });
+      }
+
       if (url.pathname === '/api/v1/companies/enrichment-runs' && init.method === 'POST') {
         createdRunCalls += 1;
+        createdRunBodies.push(JSON.parse(init.body));
         return mockJsonResponse(createdRunResponse);
       }
 
@@ -194,6 +213,63 @@ describe('CompaniesPage', () => {
     expect(screen.getByText('Cyan Retail')).toBeInTheDocument();
     expect(screen.getByText(/page 1 of 2/i)).toBeInTheDocument();
     expect(screen.getByText(/descriptions ready on page/i)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /use web search for this run/i })).not.toBeChecked();
+  });
+
+  it('sends Web Search only when explicitly enabled for the Company run', async () => {
+    const user = userEvent.setup();
+    createdRunResponse.web_search_enabled = true;
+    runResponsesById['run-1'] = [
+      {
+        ...createdRunResponse,
+        status: 'running',
+        pending_items: 2,
+        started_at: '2026-04-19T10:00:00Z',
+      },
+    ];
+    render(<CompaniesPage />);
+
+    const searchOption = await screen.findByRole('checkbox', {
+      name: /use web search for this run/i,
+    });
+    await waitFor(() => expect(searchOption).toBeEnabled());
+    await user.click(searchOption);
+    await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
+
+    expect(createdRunBodies).toEqual([{ web_search_enabled: true }]);
+    expect(await screen.findByText(/^web search enabled$/i)).toBeInTheDocument();
+  });
+
+  it('displays the persisted mode of an already-active Company run', async () => {
+    currentRunResponses = [
+      {
+        ...createdRunResponse,
+        id: 'existing-run',
+        status: 'pending',
+        web_search_enabled: true,
+      },
+    ];
+    runItemsById['existing-run'] = [];
+
+    render(<CompaniesPage />);
+
+    expect(await screen.findByText(/^web search enabled$/i)).toBeInTheDocument();
+    expect(createdRunCalls).toBe(0);
+  });
+
+  it('disables Company Web Search with the upstream probe reason', async () => {
+    webSearchCapability = {
+      available: false,
+      reason: 'The Krill Web Search probe was rejected.',
+      last_test_status: 'failed',
+    };
+    render(<CompaniesPage />);
+
+    const searchOption = await screen.findByRole('checkbox', {
+      name: /use web search for this run/i,
+    });
+    expect(searchOption).toBeDisabled();
+    expect(screen.getByText(/krill web search probe was rejected/i)).toBeInTheDocument();
   });
 
   it('resets to page 1 when search or status filters change', async () => {
@@ -317,6 +393,7 @@ describe('CompaniesPage', () => {
     await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
 
     expect(createdRunCalls).toBe(1);
+    expect(createdRunBodies).toEqual([{ web_search_enabled: false }]);
 
     await waitFor(() => {
       expect(companyRequests.at(-1)).toBe('status=pending&q=&page=1&page_size=25');
