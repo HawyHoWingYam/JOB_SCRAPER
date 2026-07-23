@@ -5,10 +5,11 @@ import uuid
 from types import SimpleNamespace
 from typing import List, Optional
 
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import NoResultFound
 
+from app.ai.llm_client import safe_llm_error_message
 from app.models import Company
 from app.models.company_enrichment_run import (
     CompanyEnrichmentRun,
@@ -31,7 +32,7 @@ class CompanyEnrichmentRunService:
         return (
             self.db.query(Company.id)
             .filter(
-                Company.is_deleted == False,
+                Company.is_deleted.is_(False),
                 or_(Company.ai_description.is_(None), Company.ai_description == ""),
             )
             .order_by(Company.created_at.asc(), Company.name.asc(), Company.id.asc())
@@ -211,6 +212,7 @@ class CompanyEnrichmentRunService:
     def create_pending_run(
         self,
         force_company_ids: Optional[List[str]] = None,
+        web_search_enabled: bool = False,
     ) -> Optional[CompanyEnrichmentRun]:
         if force_company_ids is None:
             company_ids = [company_id for (company_id,) in self._pending_company_query().all()]
@@ -222,7 +224,7 @@ class CompanyEnrichmentRunService:
                     self.db.query(Company.id)
                     .filter(
                         Company.id.in_(normalized_company_ids),
-                        Company.is_deleted == False,
+                        Company.is_deleted.is_(False),
                     )
                     .all()
                 )
@@ -242,6 +244,7 @@ class CompanyEnrichmentRunService:
             pending_items=len(company_ids),
             completed_items=0,
             failed_items=0,
+            web_search_enabled=bool(web_search_enabled),
         )
         self.db.add(run)
         self.db.flush()
@@ -268,8 +271,6 @@ class CompanyEnrichmentRunService:
         timestamp = utc_now()
         completed_items = 0
         failed_items = 0
-        first_error_message = None
-
         for item in items:
             if item.status == "completed":
                 completed_items += 1
@@ -319,7 +320,7 @@ class CompanyEnrichmentRunService:
                 self.db.query(Company)
                 .filter(
                     Company.id.in_(company_ids),
-                    Company.is_deleted == False,
+                    Company.is_deleted.is_(False),
                 )
                 .all()
             )
@@ -363,14 +364,18 @@ class CompanyEnrichmentRunService:
                             company_names_by_id[item.company_id],
                         )
                         if hasattr(service, "enrich_company_id"):
-                            await service.enrich_company_id(item.company_id)
+                            await service.enrich_company_id(
+                                item.company_id,
+                                web_search_enabled=bool(run.web_search_enabled),
+                            )
                         else:
                             await service.enrich_company_description(
                                 company_snapshots_by_id[item.company_id],
                                 self.db,
+                                web_search_enabled=bool(run.web_search_enabled),
                             )
                     except Exception as exc:
-                        error_message = str(exc)
+                        error_message = safe_llm_error_message(exc)
                     finally:
                         self._update_item_finished(
                             run_id,
@@ -383,7 +388,13 @@ class CompanyEnrichmentRunService:
             workers = [asyncio.create_task(worker()) for _ in range(concurrency)]
             await asyncio.gather(*workers)
         except Exception as exc:
-            return self.mark_run_failed(run_id, str(exc))
+            failed_run = self.mark_run_failed(
+                run_id,
+                safe_llm_error_message(exc),
+            )
+            if failed_run is None:
+                raise NoResultFound(f"Company Enrichment run not found: {run_id}")
+            return failed_run
 
         self.db.expire_all()
         run = self.db.query(CompanyEnrichmentRun).filter(CompanyEnrichmentRun.id == run_id).one()

@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, Uuid, false
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -18,6 +18,12 @@ class CompanyEnrichmentRun(Base):
     pending_items = Column(Integer, nullable=False)
     completed_items = Column(Integer, nullable=False, default=0)
     failed_items = Column(Integer, nullable=False, default=0)
+    web_search_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     current_company_name = Column(String(255), nullable=True)

@@ -67,6 +67,13 @@ def get_profile_runtime_metadata(scope: str) -> Any:
                 last_test_latency_ms=None,
                 last_test_fingerprint=None,
                 last_successful_test_fingerprint=None,
+                web_search_last_test_status="untested",
+                web_search_last_tested_at=None,
+                web_search_last_test_error=None,
+                web_search_last_test_latency_ms=None,
+                web_search_last_test_fingerprint=None,
+                web_search_available=False,
+                web_search_reason="Test the Company profile to verify Web Search support.",
                 requires_test=False,
                 is_ready=False,
                 is_degraded=False,
@@ -86,7 +93,7 @@ def _runtime_status(scope: str) -> dict[str, Any]:
     if last_tested_at and hasattr(last_tested_at, "isoformat"):
         last_tested_at = last_tested_at.isoformat()
 
-    return {
+    status = {
         "available": bool(metadata.is_ready),
         "is_ready": bool(metadata.is_ready),
         "is_degraded": bool(getattr(metadata, "is_degraded", False)),
@@ -102,6 +109,29 @@ def _runtime_status(scope: str) -> dict[str, Any]:
         or getattr(metadata, "last_test_error", None),
         "last_tested_at": last_tested_at,
     }
+    if scope == "companies":
+        status["web_search"] = {
+            "available": bool(
+                getattr(metadata, "web_search_available", False)
+            ),
+            "reason": getattr(metadata, "web_search_reason", None),
+            "last_test_status": getattr(
+                metadata, "web_search_last_test_status", "untested"
+            ),
+            "last_tested_at": getattr(
+                metadata, "web_search_last_tested_at", None
+            ),
+            "last_test_error": getattr(
+                metadata, "web_search_last_test_error", None
+            ),
+            "last_test_latency_ms": getattr(
+                metadata, "web_search_last_test_latency_ms", None
+            ),
+            "last_test_fingerprint": getattr(
+                metadata, "web_search_last_test_fingerprint", None
+            ),
+        }
+    return status
 
 
 def _sidecar_capability(url: str | None, *, configured_reason: str) -> dict[str, Any]:

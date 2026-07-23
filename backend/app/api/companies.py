@@ -1,9 +1,10 @@
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import case, func, or_
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 from uuid import UUID
 import uuid
+from app.ai.llm_client import safe_llm_error_message
 from app.database import SessionLocal, get_db
 from app.job_intelligence.company_industry import (
     CompanyIndustry,
@@ -17,7 +18,11 @@ from app.schemas import CompanyCreateSchema, CompanyProductSchema, CompanySchema
 from app.services.company_enrichment_service import CompanyEnrichmentService
 from app.utils.time import utc_now
 from app.services.company_enrichment_run_service import CompanyEnrichmentRunService
-from app.services.ai_runtime_settings_service import ensure_profile_runtime_ready, ProfileRuntimeNotReadyError
+from app.services.ai_runtime_settings_service import (
+    AIRuntimeSettingsService,
+    ProfileRuntimeNotReadyError,
+    ensure_profile_runtime_ready,
+)
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -55,6 +60,7 @@ class CompanyEnrichmentRunSchema(BaseModel):
     pending_items: int
     completed_items: int
     failed_items: int
+    web_search_enabled: bool = False
     started_at: str | None = None
     completed_at: str | None = None
     current_company_id: str | None = None
@@ -76,6 +82,14 @@ class CompanyBatchEnrichmentRequest(BaseModel):
     """Request payload for batch company description enrichment."""
 
     company_ids: list[UUID] = Field(..., min_length=1, max_length=50)
+
+
+class CompanyEnrichmentRunRequest(BaseModel):
+    """Options for a persisted global Company Enrichment run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    web_search_enabled: bool = False
 
 
 class CompanyBatchEnrichmentResponse(BaseModel):
@@ -122,6 +136,7 @@ def _serialize_run(run, db: Session | None = None) -> dict:
         "pending_items": run.pending_items,
         "completed_items": run.completed_items,
         "failed_items": run.failed_items,
+        "web_search_enabled": bool(getattr(run, "web_search_enabled", False)),
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "current_company_id": current_company_id,
@@ -137,13 +152,17 @@ async def _run_persisted_company_enrichment(run_id: str) -> None:
         await CompanyEnrichmentRunService(db).execute_run(run_id)
         db.commit()
     except Exception as exc:
+        safe_error = safe_llm_error_message(exc)
         db.rollback()
         try:
-            CompanyEnrichmentRunService(db).mark_run_failed(run_id, str(exc))
+            CompanyEnrichmentRunService(db).mark_run_failed(
+                run_id,
+                safe_error,
+            )
             db.commit()
         except Exception:
             db.rollback()
-        raise
+        raise RuntimeError(safe_error) from None
     finally:
         db.close()
 
@@ -151,6 +170,7 @@ async def _run_persisted_company_enrichment(run_id: str) -> None:
 @router.post("/enrichment-runs")
 async def create_company_enrichment_run(
     background_tasks: BackgroundTasks,
+    request: CompanyEnrichmentRunRequest | None = Body(default=None),
     db: Session = Depends(get_db),
 ):
     """Create or resume a persisted company enrichment run."""
@@ -164,7 +184,19 @@ async def create_company_enrichment_run(
     if active_run is not None:
         return _serialize_run(active_run, db)
 
-    run = service.create_pending_run()
+    web_search_enabled = bool(request and request.web_search_enabled)
+    if web_search_enabled:
+        metadata = AIRuntimeSettingsService(db).get_profile_runtime_metadata(
+            "companies"
+        )
+        if not metadata.web_search_available:
+            raise HTTPException(
+                status_code=409,
+                detail=metadata.web_search_reason
+                or "Company Web Search is unavailable for this profile.",
+            )
+
+    run = service.create_pending_run(web_search_enabled=web_search_enabled)
     if run is None:
         return {"status": "empty", "run": None}
 
@@ -228,7 +260,7 @@ async def list_companies(
 ):
     """List all companies with pagination."""
     ai_missing_clause = or_(Company.ai_description.is_(None), Company.ai_description == "")
-    query = db.query(Company).filter(Company.is_deleted == False)
+    query = db.query(Company).filter(Company.is_deleted.is_(False))
     if q:
         query = query.filter(Company.name.ilike(f"%{q}%"))
     if status == "pending":
@@ -276,7 +308,7 @@ async def list_companies(
 async def get_company(company_id: UUID, db: Session = Depends(get_db)):
     """Get a specific company by ID."""
     company = db.query(Company).filter(
-        Company.id == company_id, Company.is_deleted == False
+        Company.id == company_id, Company.is_deleted.is_(False)
     ).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -346,7 +378,7 @@ async def enrich_company_description(
 
     company = db.query(Company).filter(
         Company.id == company_id,
-        Company.is_deleted == False,
+        Company.is_deleted.is_(False),
     ).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -370,7 +402,7 @@ async def batch_enrich_company_descriptions(
         db.query(Company)
         .filter(
             Company.id.in_(requested_ids),
-            Company.is_deleted == False,
+            Company.is_deleted.is_(False),
         )
         .all()
     )

@@ -49,10 +49,16 @@ def normalize_company_description(text: str) -> str:
 class CompanyEnrichmentService:
     """Generate concise AI descriptions for companies."""
 
-    def __init__(self):
-        self.llm = get_llm_client("companies")
+    def __init__(self, llm=None):
+        self.llm = llm or get_llm_client("companies")
 
-    async def enrich_company_description(self, company, db: Session, force: bool = False) -> dict:
+    async def enrich_company_description(
+        self,
+        company,
+        db: Session,
+        force: bool = False,
+        web_search_enabled: bool = False,
+    ) -> dict:
         """Generate and persist a concise AI description for a company."""
         if self._has_ai_description(company) and not force:
             return {
@@ -60,7 +66,11 @@ class CompanyEnrichmentService:
                 "ai_description": company.ai_description,
             }
 
-        company.ai_description = await self._generate_company_description(company, db)
+        company.ai_description = await self._generate_company_description(
+            company,
+            db,
+            web_search_enabled=web_search_enabled,
+        )
         db.commit()
         db.refresh(company)
         return {
@@ -68,7 +78,12 @@ class CompanyEnrichmentService:
             "ai_description": company.ai_description,
         }
 
-    async def enrich_company_id(self, company_id, force: bool = False) -> dict:
+    async def enrich_company_id(
+        self,
+        company_id,
+        force: bool = False,
+        web_search_enabled: bool = False,
+    ) -> dict:
         """Generate a company description using an isolated DB session."""
         db = SessionLocal()
         try:
@@ -76,23 +91,38 @@ class CompanyEnrichmentService:
                 db.query(Company)
                 .filter(
                     Company.id == company_id,
-                    Company.is_deleted == False,
+                    Company.is_deleted.is_(False),
                 )
                 .first()
             )
             if company is None:
                 raise NoResultFound(f"Company not found for enrichment: {company_id}")
-            return await self.enrich_company_description(company, db, force=force)
+            return await self.enrich_company_description(
+                company,
+                db,
+                force=force,
+                web_search_enabled=web_search_enabled,
+            )
         finally:
             db.close()
 
-    async def enrich_company_descriptions(self, companies, db: Session, force: bool = False) -> dict:
+    async def enrich_company_descriptions(
+        self,
+        companies,
+        db: Session,
+        force: bool = False,
+        web_search_enabled: bool = False,
+    ) -> dict:
         """Generate and persist concise AI descriptions for a batch of companies."""
         enriched_companies = []
         for company in companies:
             if self._has_ai_description(company) and not force:
                 continue
-            company.ai_description = await self._generate_company_description(company, db)
+            company.ai_description = await self._generate_company_description(
+                company,
+                db,
+                web_search_enabled=web_search_enabled,
+            )
             enriched_companies.append(company)
 
         if enriched_companies:
@@ -115,23 +145,32 @@ class CompanyEnrichmentService:
         """Return whether the company already has a usable AI description."""
         return bool((company.ai_description or "").strip())
 
-    async def _generate_company_description(self, company, db: Session) -> str:
+    async def _generate_company_description(
+        self,
+        company,
+        db: Session,
+        *,
+        web_search_enabled: bool = False,
+    ) -> str:
         """Generate company description text from recent hiring signals."""
         jobs = (
             db.query(Job)
             .filter(
                 Job.company_id == company.id,
-                Job.is_deleted == False,
+                Job.is_deleted.is_(False),
             )
             .order_by(Job.posted_date.desc(), Job.created_at.desc())
             .limit(5)
             .all()
         )
 
-        allow_web_search = bool(getattr(self.llm, "supports_web_search", lambda: False)())
         description = await self.llm.generate(
-            self._build_company_prompt(company, jobs, allow_web_search=allow_web_search),
-            web_search=allow_web_search,
+            self._build_company_prompt(
+                company,
+                jobs,
+                allow_web_search=web_search_enabled,
+            ),
+            web_search=web_search_enabled,
         )
         return normalize_company_description(description)
 

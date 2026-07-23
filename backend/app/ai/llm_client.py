@@ -9,10 +9,12 @@ Provides a unified interface for multiple LLM providers:
 """
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
 import importlib
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Callable
@@ -43,6 +45,8 @@ TRANSIENT_ERROR_TERMS = (
     "connection refused",
     "connection error",
     "server disconnected",
+    "peer closed",
+    "incomplete body",
     "temporarily unavailable",
     "try again later",
     "rate limit",
@@ -50,9 +54,24 @@ TRANSIENT_ERROR_TERMS = (
     "resource_exhausted",
     "unavailable",
 )
+TRANSIENT_EXCEPTION_CLASS_NAMES = {
+    "ConnectError",
+    "ConnectTimeout",
+    "ConnectionError",
+    "NetworkError",
+    "PoolTimeout",
+    "ReadError",
+    "ReadTimeout",
+    "RemoteProtocolError",
+    "TimeoutError",
+    "WriteError",
+    "WriteTimeout",
+}
 RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0)
-DEFAULT_CUSTOM_RESPONSE_TIMEOUT_SECONDS = 60.0
-WEB_SEARCH_CUSTOM_RESPONSE_TIMEOUT_SECONDS = 120.0
+CUSTOM_RETRY_DELAYS_SECONDS = (1.0,)
+DEFAULT_CUSTOM_RESPONSE_TIMEOUT_SECONDS = 120.0
+WEB_SEARCH_CUSTOM_RESPONSE_TIMEOUT_SECONDS = 180.0
+DEFAULT_CUSTOM_MAX_OUTPUT_TOKENS = 4096
 
 
 class LLMUpstreamError(RuntimeError):
@@ -85,17 +104,25 @@ class LLMProfileNotReadyError(RuntimeError):
         self.code = code
 
 
-def _preview_text(value: Optional[str], limit: int = 1000) -> str:
-    """Format raw provider output for logs and error messages."""
+def _safe_raw_response_preview(value: Optional[str]) -> str:
+    """Describe raw provider output without exposing generated or echoed content."""
     if value is None:
         return "<empty>"
-
     text = value.strip()
     if not text:
         return "<empty>"
-    if len(text) <= limit:
+    if text in {"{}", "[]"}:
         return text
-    return f"{text[:limit]}...<truncated>"
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return f"<non-json body length={len(text.encode('utf-8'))}>"
+    if isinstance(payload, dict):
+        keys = sorted(str(key) for key in payload.keys())[:20]
+        return f"<json object keys={keys}>"
+    if isinstance(payload, list):
+        return f"<json array items={len(payload)}>"
+    return f"<json {type(payload).__name__}>"
 
 
 class LLMResponseFormatError(LLMUpstreamError):
@@ -108,12 +135,12 @@ class LLMResponseFormatError(LLMUpstreamError):
         raw_response: str,
         extracted_text: str,
     ):
-        raw_preview = _preview_text(raw_response)
-        extracted_preview = _preview_text(extracted_text)
+        raw_preview = _safe_raw_response_preview(raw_response)
+        body_hash = hashlib.sha256(raw_response.encode("utf-8")).hexdigest()
         message = (
             f"{provider_name} response was not valid JSON. "
-            f"Extracted text preview: {extracted_preview}. "
-            f"Raw response preview: {raw_preview}"
+            f"Extracted text shape: {_safe_raw_response_preview(extracted_text)}. "
+            f"Raw response preview: {raw_preview}. body_sha256={body_hash}"
         )
         super().__init__(
             message,
@@ -123,6 +150,24 @@ class LLMResponseFormatError(LLMUpstreamError):
         )
         self.raw_response = raw_response
         self.extracted_text = extracted_text
+
+
+class LLMResponseShapeError(LLMUpstreamError):
+    """Raised when a successful provider response has no usable final output."""
+
+    def __init__(self, *, provider_name: str, detail: str, raw_response: str):
+        body_hash = hashlib.sha256(raw_response.encode("utf-8")).hexdigest()
+        super().__init__(
+            (
+                f"{provider_name} response shape was invalid: {detail}. "
+                f"Raw response preview: {_safe_raw_response_preview(raw_response)}. "
+                f"body_sha256={body_hash}"
+            ),
+            provider_name=provider_name,
+            retryable=False,
+            status_code=None,
+        )
+        self.raw_response = raw_response
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -154,6 +199,12 @@ def _is_transient_upstream_exception(exc: Exception) -> bool:
     if status_code in TRANSIENT_STATUS_CODES:
         return True
 
+    if any(
+        cls.__name__ in TRANSIENT_EXCEPTION_CLASS_NAMES
+        for cls in type(exc).__mro__
+    ):
+        return True
+
     message = str(exc).lower()
     return any(term in message for term in TRANSIENT_ERROR_TERMS)
 
@@ -161,14 +212,10 @@ def _is_transient_upstream_exception(exc: Exception) -> bool:
 def _raise_upstream_error(provider_name: str, exc: Exception) -> None:
     status_code = _extract_status_code(exc)
     retryable = _is_transient_upstream_exception(exc)
-    detail = str(exc).strip()
-    if not detail:
-        detail = type(exc).__name__.strip()
     message = f"{provider_name} upstream request failed"
     if status_code is not None:
         message += f" with status {status_code}"
-    if detail:
-        message += f": {detail}"
+    message += f" (error_type={type(exc).__name__})"
     raise LLMUpstreamError(
         message,
         provider_name=provider_name,
@@ -177,9 +224,14 @@ def _raise_upstream_error(provider_name: str, exc: Exception) -> None:
     ) from exc
 
 
-async def _call_with_retry(provider_name: str, operation: Callable[[], Any]) -> Any:
+async def _call_with_retry(
+    provider_name: str,
+    operation: Callable[[], Any],
+    *,
+    retry_delays: tuple[float, ...] = RETRY_DELAYS_SECONDS,
+) -> Any:
     """Retry transient upstream failures with bounded backoff."""
-    max_attempts = len(RETRY_DELAYS_SECONDS) + 1
+    max_attempts = len(retry_delays) + 1
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -192,16 +244,52 @@ async def _call_with_retry(provider_name: str, operation: Callable[[], Any]) -> 
             if not retryable or attempt == max_attempts:
                 _raise_upstream_error(provider_name, exc)
 
-            delay = RETRY_DELAYS_SECONDS[attempt - 1]
+            delay = retry_delays[attempt - 1]
             logger.warning(
-                "Transient %s upstream error on attempt %s/%s: %s. Retrying in %.1fs",
+                "Transient %s upstream error on attempt %s/%s "
+                "error_type=%s status=%s; retrying in %.1fs",
                 provider_name,
                 attempt,
                 max_attempts,
-                exc,
+                type(exc).__name__,
+                _extract_status_code(exc),
                 delay,
             )
             await asyncio.sleep(delay)
+
+
+def _log_custom_response_metadata(
+    response: Any,
+    *,
+    endpoint_kind: str,
+    elapsed_ms: int,
+) -> None:
+    """Log bounded response metadata without prompts, credentials, or full bodies."""
+    body = response.text or ""
+    headers = response.headers
+    logger.debug(
+        "Custom LLM response endpoint=%s status=%s content_type=%s "
+        "content_length=%s received_length=%s request_id=%s elapsed_ms=%s body_sha256=%s",
+        endpoint_kind,
+        response.status_code,
+        headers.get("content-type"),
+        headers.get("content-length"),
+        len(body.encode("utf-8")),
+        headers.get("x-request-id") or headers.get("request-id"),
+        elapsed_ms,
+        hashlib.sha256(body.encode("utf-8")).hexdigest(),
+    )
+
+
+def safe_llm_error_message(exc: Exception) -> str:
+    """Return a bounded error summary safe for logs, APIs, and persistence."""
+    if isinstance(exc, LLMUpstreamError):
+        return str(exc)
+    status_code = _extract_status_code(exc)
+    summary = f"LLM operation failed (error_type={type(exc).__name__}"
+    if status_code is not None:
+        summary += f", status={status_code}"
+    return f"{summary})"
 
 
 def _import_google_genai():
@@ -272,6 +360,10 @@ class LLMClient(ABC):
         """Return whether this client supports the web_search generation flag."""
         return False
 
+    async def probe_web_search(self, prompt: str) -> Dict[str, Any]:
+        """Attempt and verify the provider's native web-search contract."""
+        raise LLMCapabilityError("This provider does not support web search")
+
     def _extract_json(
         self,
         text: str,
@@ -308,10 +400,11 @@ class LLMClient(ABC):
 
         raw_payload = raw_response if raw_response is not None else text
         logger.warning(
-            "Failed to parse JSON from %s response. Extracted text preview: %s | Raw response preview: %s",
+            "Failed to parse JSON from %s response. "
+            "Extracted text shape: %s | Raw response preview: %s",
             provider_name,
-            _preview_text(text),
-            _preview_text(raw_payload),
+            _safe_raw_response_preview(text),
+            _safe_raw_response_preview(raw_payload),
         )
         raise LLMResponseFormatError(
             provider_name=provider_name,
@@ -351,7 +444,7 @@ class GeminiClient(LLMClient):
         except LLMUpstreamError:
             raise
         except Exception as e:
-            logger.error(f"Gemini generation error: {e}")
+            logger.error("Gemini generation error: %s", safe_llm_error_message(e))
             raise
 
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
@@ -398,7 +491,7 @@ class ZhipuClient(LLMClient):
         except LLMUpstreamError:
             raise
         except Exception as e:
-            logger.error(f"Zhipu generation error: {e}")
+            logger.error("Zhipu generation error: %s", safe_llm_error_message(e))
             raise
 
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
@@ -492,7 +585,7 @@ class AnthropicClient(LLMClient):
         except LLMUpstreamError:
             raise
         except Exception as e:
-            logger.error(f"Anthropic generation error: {e}")
+            logger.error("Anthropic generation error: %s", safe_llm_error_message(e))
             raise
 
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
@@ -572,10 +665,13 @@ class OpenAIResponsesClient(LLMClient):
             "model": self.model,
             "input": input_payload,
             "stream": False,
-            "max_output_tokens": kwargs.get("max_output_tokens", 1024),
+            "max_output_tokens": kwargs.get(
+                "max_output_tokens", DEFAULT_CUSTOM_MAX_OUTPUT_TOKENS
+            ),
         }
         if web_search:
             payload["tools"] = [{"type": "web_search"}]
+            payload["reasoning"] = {"effort": "low"}
 
         async def do_request():
             timeout_seconds = (
@@ -583,27 +679,47 @@ class OpenAIResponsesClient(LLMClient):
                 if web_search
                 else DEFAULT_CUSTOM_RESPONSE_TIMEOUT_SECONDS
             )
+            started_at = time.perf_counter()
             async with httpx.AsyncClient(timeout=timeout_seconds) as client:
                 response = await client.post(
                     f"{self.base_url}/responses",
                     headers=headers,
                     json=payload,
                 )
+            _log_custom_response_metadata(
+                response,
+                endpoint_kind="responses_web_search" if web_search else "responses",
+                elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+            )
             response.raise_for_status()
             return response
 
-        response = await _call_with_retry("custom", do_request)
+        response = await _call_with_retry(
+            "custom",
+            do_request,
+            retry_delays=CUSTOM_RETRY_DELAYS_SECONDS,
+        )
         return response.text
 
     async def generate(self, prompt: str, **kwargs) -> str:
         """Generate text using an OpenAI-compatible Responses endpoint."""
         try:
             raw_response = await self._request_response_text(prompt, **kwargs)
-            return self._extract_response_text(raw_response)
+            text = self._extract_response_text(raw_response)
+            if not text:
+                raise LLMResponseShapeError(
+                    provider_name="custom",
+                    detail="missing final message text",
+                    raw_response=raw_response,
+                )
+            return text
         except LLMUpstreamError:
             raise
         except Exception as e:
-            logger.error(f"OpenAI responses generation error: {e}")
+            logger.error(
+                "OpenAI responses generation error: %s",
+                safe_llm_error_message(e),
+            )
             raise
 
     async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
@@ -617,6 +733,53 @@ class OpenAIResponsesClient(LLMClient):
             raw_response=raw_response,
         )
 
+    async def probe_web_search(self, prompt: str) -> Dict[str, Any]:
+        """Verify that Responses executed search and returned a final message."""
+        raw_response = await self._request_response_text(prompt, web_search=True)
+        try:
+            payload = json.loads(raw_response)
+        except json.JSONDecodeError as exc:
+            raise LLMResponseShapeError(
+                provider_name="custom",
+                detail="web search probe returned non-JSON output",
+                raw_response=raw_response,
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise LLMResponseShapeError(
+                provider_name="custom",
+                detail="web search probe returned a non-object JSON envelope",
+                raw_response=raw_response,
+            )
+
+        response_envelope = payload.get("response") or {}
+        if not isinstance(response_envelope, dict):
+            response_envelope = {}
+        output = response_envelope.get("output") or payload.get("output") or []
+        if not isinstance(output, list):
+            output = []
+        output_types = [
+            str(item.get("type") or "") for item in output if isinstance(item, dict)
+        ]
+        if "web_search_call" not in output_types:
+            raise LLMResponseShapeError(
+                provider_name="custom",
+                detail="web search probe returned no web_search_call item",
+                raw_response=raw_response,
+            )
+
+        final_text = self._extract_response_text(raw_response)
+        if not final_text:
+            raise LLMResponseShapeError(
+                provider_name="custom",
+                detail="web search probe returned no final message",
+                raw_response=raw_response,
+            )
+        return {
+            "ok": True,
+            "output_types": output_types,
+        }
+
     def _extract_response_text(self, text: str) -> str:
         """Extract the final response text from JSON or SSE event streams."""
         parsed_text = self._extract_response_text_from_json_payload(text)
@@ -624,24 +787,46 @@ class OpenAIResponsesClient(LLMClient):
             return parsed_text
 
         deltas = []
+        saw_terminal_event = False
         for line in text.splitlines():
             if not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
-            if not payload or payload == "[DONE]":
+            if not payload:
+                continue
+            if payload == "[DONE]":
+                saw_terminal_event = True
                 continue
             parsed_text = self._extract_response_text_from_json_payload(payload)
             if parsed_text is not None:
                 return parsed_text
             try:
                 event = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
+            except json.JSONDecodeError as exc:
+                raise LLMResponseShapeError(
+                    provider_name="custom",
+                    detail="malformed SSE event",
+                    raw_response=text,
+                ) from exc
+            if not isinstance(event, dict):
+                raise LLMResponseShapeError(
+                    provider_name="custom",
+                    detail="SSE event was not a JSON object",
+                    raw_response=text,
+                )
             if event.get("type") == "response.output_text.delta":
                 delta = event.get("delta")
-                if delta:
+                if isinstance(delta, str) and delta:
                     deltas.append(delta)
+            elif event.get("type") in {"response.completed", "response.done"}:
+                saw_terminal_event = True
 
+        if deltas and not saw_terminal_event:
+            raise LLMResponseShapeError(
+                provider_name="custom",
+                detail="incomplete SSE stream missing terminal event",
+                raw_response=text,
+            )
         return "".join(deltas).strip()
 
     def _extract_response_text_from_json_payload(self, payload: str) -> Optional[str]:
@@ -651,24 +836,45 @@ class OpenAIResponsesClient(LLMClient):
         except json.JSONDecodeError:
             return None
 
+        if not isinstance(data, dict):
+            raise LLMResponseShapeError(
+                provider_name="custom",
+                detail="response envelope was not a JSON object",
+                raw_response=payload,
+            )
+
         if data.get("type") == "response.output_text.done":
             return (data.get("text") or "").strip()
 
-        message = (data.get("choices") or [{}])[0].get("message") or {}
+        choices = data.get("choices") or []
+        first_choice = choices[0] if isinstance(choices, list) and choices else {}
+        if not isinstance(first_choice, dict):
+            first_choice = {}
+        message = first_choice.get("message") or {}
+        if not isinstance(message, dict):
+            message = {}
         content = message.get("content")
         if isinstance(content, str) and content.strip():
             return content.strip()
 
         response = data.get("response") or {}
+        if not isinstance(response, dict):
+            response = {}
         output = response.get("output") or []
         if not output:
             output = data.get("output") or []
+        if not isinstance(output, list):
+            output = []
         last_message_text = None
         for item in output:
+            if not isinstance(item, dict):
+                continue
             if item.get("type") != "message":
                 continue
             message_parts = []
             for part in item.get("content") or []:
+                if not isinstance(part, dict):
+                    continue
                 if part.get("type") == "output_text" and part.get("text"):
                     message_parts.append(part["text"].strip())
             if message_parts:
@@ -680,6 +886,119 @@ class OpenAIResponsesClient(LLMClient):
             return last_message_text
 
         return None
+
+    def supports_web_search(self) -> bool:
+        return True
+
+
+class OpenAIChatCompletionsClient(LLMClient):
+    """OpenAI-compatible Chat Completions with opt-in Responses Web Search."""
+
+    def __init__(self, api_key: str, model: str, base_url: str):
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self._responses_client = OpenAIResponsesClient(api_key, model, base_url)
+
+    async def _request_chat_text(self, prompt: str, **kwargs) -> str:
+        _consume_web_search_flag(
+            kwargs,
+            provider_name="custom chat completions",
+            supported=False,
+        )
+        _consume_image_kwargs(
+            kwargs,
+            provider_name="custom chat completions",
+            supported=False,
+        )
+        httpx = _import_httpx()
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": kwargs.get("max_tokens", DEFAULT_CUSTOM_MAX_OUTPUT_TOKENS),
+        }
+
+        async def do_request():
+            started_at = time.perf_counter()
+            async with httpx.AsyncClient(
+                timeout=DEFAULT_CUSTOM_RESPONSE_TIMEOUT_SECONDS
+            ) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+            _log_custom_response_metadata(
+                response,
+                endpoint_kind="chat_completions",
+                elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+            )
+            response.raise_for_status()
+            return response
+
+        response = await _call_with_retry(
+            "custom chat completions",
+            do_request,
+            retry_delays=CUSTOM_RETRY_DELAYS_SECONDS,
+        )
+        raw_response = response.text
+        try:
+            data = response.json()
+        except (TypeError, ValueError) as exc:
+            raise LLMResponseShapeError(
+                provider_name="custom chat completions",
+                detail="response body was not JSON",
+                raw_response=raw_response,
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise LLMResponseShapeError(
+                provider_name="custom chat completions",
+                detail="response envelope was not a JSON object",
+                raw_response=raw_response,
+            )
+
+        choices = data.get("choices") or []
+        message = choices[0].get("message") if choices else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise LLMResponseShapeError(
+                provider_name="custom chat completions",
+                detail="missing choices[0].message.content",
+                raw_response=raw_response,
+            )
+        return content.strip()
+
+    async def generate(self, prompt: str, **kwargs) -> str:
+        if bool(kwargs.pop("web_search", False)):
+            return await self._responses_client.generate(
+                prompt,
+                web_search=True,
+                **kwargs,
+            )
+        return await self._request_chat_text(prompt, **kwargs)
+
+    async def generate_json(self, prompt: str, **kwargs) -> Dict[str, Any]:
+        if bool(kwargs.pop("web_search", False)):
+            return await self._responses_client.generate_json(
+                prompt,
+                web_search=True,
+                **kwargs,
+            )
+        json_prompt = f"{prompt}\n\nRespond with valid JSON only, no markdown."
+        text = await self._request_chat_text(json_prompt, **kwargs)
+        return self._extract_json(
+            text,
+            provider_name="custom chat completions",
+            raw_response=text,
+        )
+
+    async def probe_web_search(self, prompt: str) -> Dict[str, Any]:
+        return await self._responses_client.probe_web_search(prompt)
 
     def supports_web_search(self) -> bool:
         return True
@@ -782,10 +1101,18 @@ class ProviderSpec:
     builder: Callable[[EffectiveAIRuntimeSettings], LLMClient]
 
 
+def _required_runtime_value(value: Optional[str], field_name: str) -> str:
+    if not value:
+        raise ValueError(f"Missing required runtime setting: {field_name}")
+    return value
+
+
 def _build_anthropic_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
     return AnthropicClient(
-        runtime_settings.anthropic_api_key,
-        runtime_settings.anthropic_model,
+        _required_runtime_value(
+            runtime_settings.anthropic_api_key, "anthropic_api_key"
+        ),
+        _required_runtime_value(runtime_settings.anthropic_model, "anthropic_model"),
         runtime_settings.anthropic_base_url,
     )
 
@@ -793,25 +1120,36 @@ def _build_anthropic_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLM
 def _build_custom_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
     if runtime_settings.custom_api_format == "openai_responses":
         return OpenAIResponsesClient(
-            runtime_settings.custom_api_key,
-            runtime_settings.custom_model,
-            runtime_settings.custom_base_url,
+            _required_runtime_value(runtime_settings.custom_api_key, "custom_api_key"),
+            _required_runtime_value(runtime_settings.custom_model, "custom_model"),
+            _required_runtime_value(runtime_settings.custom_base_url, "custom_base_url"),
+        )
+    if runtime_settings.custom_api_format == "openai_chat_completions":
+        return OpenAIChatCompletionsClient(
+            _required_runtime_value(runtime_settings.custom_api_key, "custom_api_key"),
+            _required_runtime_value(runtime_settings.custom_model, "custom_model"),
+            _required_runtime_value(runtime_settings.custom_base_url, "custom_base_url"),
         )
 
     return AnthropicClient(
-        runtime_settings.custom_api_key,
-        runtime_settings.custom_model,
+        _required_runtime_value(runtime_settings.custom_api_key, "custom_api_key"),
+        _required_runtime_value(runtime_settings.custom_model, "custom_model"),
         runtime_settings.custom_base_url,
         DEFAULT_ANTHROPIC_HEADERS,
     )
 
 
 def _build_gemini_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
-    return GeminiClient(runtime_settings.gemini_api_key, runtime_settings.gemini_model)
+    return GeminiClient(
+        _required_runtime_value(runtime_settings.gemini_api_key, "gemini_api_key"),
+        _required_runtime_value(runtime_settings.gemini_model, "gemini_model"),
+    )
 
 
 def _build_zhipu_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
-    return ZhipuClient(runtime_settings.zhipu_api_key)
+    return ZhipuClient(
+        _required_runtime_value(runtime_settings.zhipu_api_key, "zhipu_api_key")
+    )
 
 
 def _build_mock_client(runtime_settings: EffectiveAIRuntimeSettings) -> LLMClient:
@@ -888,7 +1226,8 @@ def _load_profile_metadata(scope: str):
     try:
         return AIRuntimeSettingsService(db).get_profile_runtime_metadata(scope)
     except Exception as exc:
-        logger.debug("Profile metadata load failed for scope '%s': %s", scope, exc)
+        safe_error = safe_llm_error_message(exc)
+        logger.debug("Profile metadata load failed for scope '%s': %s", scope, safe_error)
         return type(
             "ProfileMetadataFallback",
             (),
@@ -897,12 +1236,19 @@ def _load_profile_metadata(scope: str):
                 "requires_test": True,
                 "last_test_status": "untested",
                 "last_tested_at": None,
-                "last_test_error": str(exc),
+                "last_test_error": safe_error,
                 "last_test_provider": None,
                 "last_test_model": None,
                 "last_test_latency_ms": None,
                 "last_test_fingerprint": None,
                 "last_successful_test_fingerprint": None,
+                "web_search_last_test_status": "untested",
+                "web_search_last_tested_at": None,
+                "web_search_last_test_error": safe_error,
+                "web_search_last_test_latency_ms": None,
+                "web_search_last_test_fingerprint": None,
+                "web_search_available": False,
+                "web_search_reason": safe_error,
             },
         )()
     finally:
@@ -1070,7 +1416,11 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
             scope
         ] = metadata.last_successful_test_fingerprint
 
-    client = _client_instances.get(scope)
+    web_search_available = bool(
+        scope == "companies"
+        and metadata is not None
+        and getattr(metadata, "web_search_available", False)
+    )
     return {
         "provider": _provider_names.get(scope, "") or configured_provider or None,
         "configured_provider": configured_provider or None,
@@ -1092,7 +1442,40 @@ def get_llm_status(scope: str = "jobs") -> Dict[str, Any]:
         "is_degraded": _degraded_states.get(scope, False)
         or bool(_requires_test_states.get(scope)),
         "degradation_reason": _degradation_reasons.get(scope),
-        "supports_web_search": bool(client.supports_web_search()) if client else False,
+        "supports_web_search": web_search_available,
+        "web_search": {
+            "available": web_search_available,
+            "reason": (
+                getattr(metadata, "web_search_reason", None)
+                if metadata is not None
+                else "Company Web Search capability is unavailable."
+            ),
+            "last_test_status": (
+                getattr(metadata, "web_search_last_test_status", "untested")
+                if metadata is not None
+                else "untested"
+            ),
+            "last_tested_at": (
+                getattr(metadata, "web_search_last_tested_at", None)
+                if metadata is not None
+                else None
+            ),
+            "last_test_error": (
+                getattr(metadata, "web_search_last_test_error", None)
+                if metadata is not None
+                else None
+            ),
+            "last_test_latency_ms": (
+                getattr(metadata, "web_search_last_test_latency_ms", None)
+                if metadata is not None
+                else None
+            ),
+            "last_test_fingerprint": (
+                getattr(metadata, "web_search_last_test_fingerprint", None)
+                if metadata is not None
+                else None
+            ),
+        },
         "requires_test": _requires_test_states.get(scope, False),
         "is_ready": _ready_states.get(scope, False),
         "last_test_status": _last_test_statuses.get(scope),

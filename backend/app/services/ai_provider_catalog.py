@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-CUSTOM_API_FORMAT_OPTIONS = (
+CUSTOM_API_FORMAT_OPTIONS: tuple[dict[str, str], ...] = (
     {"value": "anthropic", "label": "Anthropic"},
+    {
+        "value": "openai_chat_completions",
+        "label": "OpenAI Chat Completions (+ Responses Web Search)",
+    },
     {"value": "openai_responses", "label": "OpenAI Responses"},
 )
 
-_PROVIDER_DEFINITIONS = (
+_PROVIDER_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "key": "anthropic",
         "label": "Anthropic",

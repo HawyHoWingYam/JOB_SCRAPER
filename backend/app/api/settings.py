@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.ai.llm_client import refresh_llm_status, reset_client
+from app.ai.llm_client import refresh_llm_status, reset_client, safe_llm_error_message
 from app.crawl_cancellation import ACTIVE_MANUAL_DETAIL_STATUSES
 from app.database import get_db
 from app.repositories.crawl_job_repository import CrawlJobRepository
@@ -158,14 +158,28 @@ def _build_ai_settings_response(service: AIRuntimeSettingsService) -> dict:
     }
 
 
-async def _run_model_probe(client) -> dict:
+async def _run_model_probe(client, scope: str) -> dict:
     started_at = time.perf_counter()
-    text = await client.generate("Reply with OK only.")
+    if scope == "jobs":
+        parsed = await client.generate_json(
+            "Return a JSON object with exactly these values: "
+            'status="ok", items=["alpha", "beta", "gamma"], count=3.'
+        )
+        if (
+            parsed.get("status") != "ok"
+            or parsed.get("items") != ["alpha", "beta", "gamma"]
+            or parsed.get("count") != 3
+        ):
+            raise ValueError("Representative JSON probe returned unexpected values")
+        response_preview = '{"status":"ok","items":[...],"count":3}'
+    else:
+        text = await client.generate("Reply with OK only.")
+        response_preview = "OK" if (text or "").strip() else "<empty>"
     latency_ms = int((time.perf_counter() - started_at) * 1000)
     return {
         "ok": True,
         "latency_ms": latency_ms,
-        "response_preview": (text or "").strip()[:80],
+        "response_preview": response_preview,
     }
 
 
@@ -181,17 +195,16 @@ async def _run_web_search_probe(client) -> dict:
 
     started_at = time.perf_counter()
     try:
-        await client.generate(
-            "Search the web for recent public information about OpenAI and reply with OK only.",
-            web_search=True,
+        probe_result = await client.probe_web_search(
+            "Search the web for the official OpenAI home page and reply with OK only."
         )
     except Exception as exc:
         return {
             "attempted": True,
             "supported": True,
             "ok": False,
-            "latency_ms": None,
-            "error_message": str(exc),
+            "latency_ms": int((time.perf_counter() - started_at) * 1000),
+            "error_message": safe_llm_error_message(exc),
         }
 
     latency_ms = int((time.perf_counter() - started_at) * 1000)
@@ -201,6 +214,7 @@ async def _run_web_search_probe(client) -> dict:
         "ok": True,
         "latency_ms": latency_ms,
         "error_message": None,
+        "output_types": probe_result.get("output_types", []),
     }
 
 
@@ -216,7 +230,7 @@ async def probe_profile_configuration(
     fingerprint = service.build_config_fingerprint(scope, draft_values)
     try:
         client = service.build_draft_client(scope, draft_values)
-        model_check = await _run_model_probe(client)
+        model_check = await _run_model_probe(client, scope)
         result = {
             "ok": True,
             "scope": scope,
@@ -281,6 +295,20 @@ async def test_ai_settings_profile(
             config_fingerprint=result.get("config_fingerprint"),
             error_message=None,
         )
+        if request.scope == "companies":
+            web_search_check = result.get("web_search_check") or {}
+            if web_search_check.get("ok"):
+                web_search_status = "passed"
+            elif web_search_check.get("attempted"):
+                web_search_status = "failed"
+            else:
+                web_search_status = "unsupported"
+            service.record_company_web_search_test_result(
+                status=web_search_status,
+                latency_ms=web_search_check.get("latency_ms"),
+                config_fingerprint=result.get("config_fingerprint"),
+                error_message=web_search_check.get("error_message"),
+            )
         db.commit()
         result["scope"] = request.scope
         return result
@@ -288,6 +316,7 @@ async def test_ai_settings_profile(
         db.rollback()
         raise HTTPException(status_code=422, detail=_format_validation_errors(exc)) from exc
     except Exception as exc:
+        safe_error = safe_llm_error_message(exc)
         fingerprint = None
         try:
             draft_values = service.draft_profile_values_from_payload(
@@ -309,7 +338,7 @@ async def test_ai_settings_profile(
             ),
             latency_ms=None,
             config_fingerprint=fingerprint,
-            error_message=str(exc),
+            error_message=safe_error,
         )
         db.commit()
         raise HTTPException(
@@ -317,7 +346,7 @@ async def test_ai_settings_profile(
             detail={
                 "ok": False,
                 "scope": request.scope,
-                "error_message": str(exc),
+                "error_message": safe_error,
                 "config_fingerprint": fingerprint,
             },
         ) from exc

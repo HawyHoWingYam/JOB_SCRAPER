@@ -16,10 +16,14 @@ from app.config import (
 )
 from app.database import SessionLocal
 from app.models.app_runtime_settings import AppRuntimeSettings
+from app.services.ai_provider_catalog import CUSTOM_API_FORMAT_OPTIONS
 from app.utils.time import utc_now
 
 RUNTIME_SCOPES = ("jobs", "companies")
 PROFILE_TEST_STATUSES = ("untested", "passed", "failed")
+CUSTOM_API_FORMAT_VALUES = {
+    str(option["value"]) for option in CUSTOM_API_FORMAT_OPTIONS
+}
 SECRET_FIELD_NAMES = {
     "anthropic_api_key",
     "gemini_api_key",
@@ -85,6 +89,11 @@ PERSISTED_FIELD_NAMES = (
     "companies_last_test_latency_ms",
     "companies_last_test_fingerprint",
     "companies_last_successful_test_fingerprint",
+    "companies_web_search_last_test_status",
+    "companies_web_search_last_tested_at",
+    "companies_web_search_last_test_error",
+    "companies_web_search_last_test_latency_ms",
+    "companies_web_search_last_test_fingerprint",
 )
 PROFILE_FIELD_NAME_MAP = {
     "jobs": {
@@ -169,6 +178,13 @@ class ProfileRuntimeMetadata:
     last_successful_test_fingerprint: Optional[str]
     requires_test: bool
     is_ready: bool
+    web_search_last_test_status: str
+    web_search_last_tested_at: Optional[str]
+    web_search_last_test_error: Optional[str]
+    web_search_last_test_latency_ms: Optional[int]
+    web_search_last_test_fingerprint: Optional[str]
+    web_search_available: bool
+    web_search_reason: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -260,6 +276,55 @@ class AIRuntimeSettingsService:
         requires_test = bool(configured_provider) and config_fingerprint != last_successful
         is_ready = bool(configured_provider) and not requires_test and last_status == "passed"
         tested_at = values.get(test_fields["tested_at"])
+        web_search_status = "not_applicable"
+        web_search_tested_at = None
+        web_search_error = None
+        web_search_latency_ms = None
+        web_search_fingerprint = None
+        web_search_available = False
+        web_search_reason: Optional[str] = (
+            "Web Search is available only for Company Enrichment."
+        )
+        if scope == "companies":
+            web_search_status = (
+                values.get("companies_web_search_last_test_status") or "untested"
+            )
+            raw_web_search_tested_at = values.get(
+                "companies_web_search_last_tested_at"
+            )
+            web_search_tested_at = (
+                raw_web_search_tested_at.isoformat()
+                if raw_web_search_tested_at
+                else None
+            )
+            web_search_error = values.get("companies_web_search_last_test_error")
+            web_search_latency_ms = values.get(
+                "companies_web_search_last_test_latency_ms"
+            )
+            web_search_fingerprint = values.get(
+                "companies_web_search_last_test_fingerprint"
+            )
+            fingerprint_matches = bool(
+                config_fingerprint
+                and web_search_fingerprint == config_fingerprint
+            )
+            web_search_available = bool(
+                is_ready
+                and web_search_status == "passed"
+                and fingerprint_matches
+            )
+            if web_search_available:
+                web_search_reason = None
+            elif not is_ready:
+                web_search_reason = "Test the Company profile successfully first."
+            elif not fingerprint_matches:
+                web_search_reason = (
+                    "Test the current Company profile to verify Web Search support."
+                )
+            else:
+                web_search_reason = web_search_error or (
+                    "The configured Company provider did not pass the Web Search probe."
+                )
 
         return ProfileRuntimeMetadata(
             scope=scope,
@@ -275,6 +340,13 @@ class AIRuntimeSettingsService:
             last_successful_test_fingerprint=last_successful,
             requires_test=requires_test,
             is_ready=is_ready,
+            web_search_last_test_status=web_search_status,
+            web_search_last_tested_at=web_search_tested_at,
+            web_search_last_test_error=web_search_error,
+            web_search_last_test_latency_ms=web_search_latency_ms,
+            web_search_last_test_fingerprint=web_search_fingerprint,
+            web_search_available=web_search_available,
+            web_search_reason=web_search_reason,
         )
 
     def ensure_profile_runtime_ready(self, scope: str) -> EffectiveAIRuntimeSettings:
@@ -346,6 +418,28 @@ class AIRuntimeSettingsService:
         if ok:
             setattr(row, test_fields["success_fingerprint"], config_fingerprint)
 
+        self.db.add(row)
+        self.db.flush()
+        self.db.refresh(row)
+        return row
+
+    def record_company_web_search_test_result(
+        self,
+        *,
+        status: str,
+        latency_ms: Optional[int],
+        config_fingerprint: Optional[str],
+        error_message: Optional[str],
+    ) -> AppRuntimeSettings:
+        if status not in {"passed", "failed", "unsupported"}:
+            raise ValueError(f"Unsupported Web Search test status '{status}'")
+
+        row = self.get_or_create()
+        row.companies_web_search_last_test_status = status
+        row.companies_web_search_last_tested_at = utc_now()
+        row.companies_web_search_last_test_error = error_message
+        row.companies_web_search_last_test_latency_ms = latency_ms
+        row.companies_web_search_last_test_fingerprint = config_fingerprint
         self.db.add(row)
         self.db.flush()
         self.db.refresh(row)
@@ -474,7 +568,7 @@ class AIRuntimeSettingsService:
             if candidate is None:
                 candidate = getattr(settings, "ai_enrichment_run_concurrency", None)
         try:
-            value = int(candidate)
+            value = int(candidate if candidate is not None else 0)
         except (TypeError, ValueError):
             value = AI_ENRICHMENT_RUN_CONCURRENCY_MIN
         return max(AI_ENRICHMENT_RUN_CONCURRENCY_MIN, min(value, AI_ENRICHMENT_RUN_CONCURRENCY_MAX))
@@ -569,11 +663,13 @@ class AIRuntimeSettingsService:
             ),
         )
         for field_name, fallback_value in concurrency_specs:
-            effective_concurrency = candidate.get(field_name)
-            if effective_concurrency is None:
-                effective_concurrency = fallback_value
+            raw_concurrency = candidate.get(field_name)
+            if raw_concurrency is None:
+                raw_concurrency = fallback_value
             try:
-                effective_concurrency = int(effective_concurrency)
+                effective_concurrency: Optional[int] = int(
+                    raw_concurrency if raw_concurrency is not None else 0
+                )
             except (TypeError, ValueError):
                 effective_concurrency = None
 
@@ -639,6 +735,23 @@ class AIRuntimeSettingsService:
                     }
                 )
 
+        if (
+            provider == "custom"
+            and effective.custom_api_format not in CUSTOM_API_FORMAT_VALUES
+        ):
+            errors.append(
+                {
+                    "loc": [
+                        self._validation_loc_for_field(scope, "custom_api_format")
+                    ],
+                    "msg": (
+                        "Unsupported custom API format "
+                        f"'{effective.custom_api_format}'"
+                    ),
+                    "type": "value_error.custom_api_format",
+                }
+            )
+
         return errors
 
     def _build_effective_settings(
@@ -686,6 +799,18 @@ class AIRuntimeSettingsService:
                 scope,
                 f"{scope} profile is missing required settings: {', '.join(missing)}",
                 code="profile_missing_settings",
+            )
+        if (
+            provider == "custom"
+            and effective.custom_api_format not in CUSTOM_API_FORMAT_VALUES
+        ):
+            raise ProfileRuntimeNotReadyError(
+                scope,
+                (
+                    f"{scope} profile has unsupported custom API format "
+                    f"'{effective.custom_api_format}'"
+                ),
+                code="profile_invalid_custom_api_format",
             )
 
     @staticmethod
