@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.api import settings as settings_api
+from app.api.settings import AISettingsTestRequest
 from app.models.app_runtime_settings import AppRuntimeSettings
 from app.services.ai_runtime_settings_service import (
     AIRuntimeSettingsService,
+    ProfileRuntimeNotReadyError,
     RuntimeSettingsValidationError,
 )
 
@@ -114,3 +119,63 @@ def test_unknown_custom_api_format_is_rejected():
     finally:
         db.close()
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ai_configuration_test_preserves_profile_readiness_diagnostic(
+    monkeypatch,
+):
+    class FakeDb:
+        def __init__(self):
+            self.commits = 0
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            pass
+
+    class FakeService:
+        def __init__(self):
+            self.recorded_error = None
+
+        def draft_profile_values_from_payload(self, scope, payload):
+            return payload
+
+        def build_config_fingerprint(self, scope, values):
+            return f"{scope}:test-fingerprint"
+
+        def record_profile_test_result(self, scope, **kwargs):
+            self.recorded_error = kwargs["error_message"]
+
+    fake_db = FakeDb()
+    fake_service = FakeService()
+    expected_message = "jobs profile is missing required settings: gemini_api_key"
+
+    async def fail_probe(scope, profile_payload, service):
+        raise ProfileRuntimeNotReadyError(
+            scope,
+            expected_message,
+            code="profile_missing_settings",
+        )
+
+    monkeypatch.setattr(
+        settings_api,
+        "AIRuntimeSettingsService",
+        lambda db: fake_service,
+    )
+    monkeypatch.setattr(settings_api, "probe_profile_configuration", fail_probe)
+
+    with pytest.raises(HTTPException) as raised:
+        await settings_api.test_ai_settings_profile(
+            AISettingsTestRequest(
+                scope="jobs",
+                profile={"llm_provider": "gemini"},
+            ),
+            fake_db,
+        )
+
+    assert raised.value.status_code == 422
+    assert raised.value.detail["error_message"] == expected_message
+    assert fake_service.recorded_error == expected_message
+    assert fake_db.commits == 1

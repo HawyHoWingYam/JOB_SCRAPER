@@ -7,13 +7,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from app.ai.llm_client import refresh_llm_status, reset_client, safe_llm_error_message
+from app.ai.llm_client import (
+    LLMProfileNotReadyError,
+    refresh_llm_status,
+    reset_client,
+    safe_llm_error_message,
+)
 from app.crawl_cancellation import ACTIVE_MANUAL_DETAIL_STATUSES
 from app.database import get_db
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.services.ai_provider_catalog import build_ai_provider_catalog
 from app.services.ai_runtime_settings_service import (
     AIRuntimeSettingsService,
+    ProfileRuntimeNotReadyError,
     RuntimeSettingsValidationError,
 )
 from app.schemas.scraper_pacing import (
@@ -27,6 +33,7 @@ from app.services.scraper_pacing_settings_service import (
 )
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
+MAX_AI_TEST_ERROR_MESSAGE_LENGTH = 512
 
 
 @router.get("/scraper-pacing", response_model=ScraperPacingSettingsListResponse)
@@ -156,6 +163,16 @@ def _build_ai_settings_response(service: AIRuntimeSettingsService) -> dict:
         "company_runtime_status": company_status,
         "provider_catalog": build_ai_provider_catalog(),
     }
+
+
+def _safe_ai_test_error_message(exc: Exception) -> str:
+    """Keep profile-readiness diagnostics while bounding provider failures."""
+    if isinstance(exc, (ProfileRuntimeNotReadyError, LLMProfileNotReadyError)):
+        message = str(exc).strip()
+        if len(message) <= MAX_AI_TEST_ERROR_MESSAGE_LENGTH:
+            return message
+        return f"{message[:MAX_AI_TEST_ERROR_MESSAGE_LENGTH - 3]}..."
+    return safe_llm_error_message(exc)
 
 
 async def _run_model_probe(client, scope: str) -> dict:
@@ -316,7 +333,7 @@ async def test_ai_settings_profile(
         db.rollback()
         raise HTTPException(status_code=422, detail=_format_validation_errors(exc)) from exc
     except Exception as exc:
-        safe_error = safe_llm_error_message(exc)
+        safe_error = _safe_ai_test_error_message(exc)
         fingerprint = None
         try:
             draft_values = service.draft_profile_values_from_payload(

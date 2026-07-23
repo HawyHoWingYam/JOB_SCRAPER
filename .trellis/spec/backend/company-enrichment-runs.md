@@ -109,6 +109,12 @@ app_runtime_settings.companies_web_search_last_test_fingerprint VARCHAR(128) NUL
   shape, exception type, and body SHA-256.
 - A raw preview may show only safe shape information such as `{}`, `[]`, JSON
   top-level keys/count, or non-JSON byte length.
+- AI profile configuration probes may return a bounded (maximum 512-character)
+  `detail.error_message` for `ProfileRuntimeNotReadyError` and
+  `LLMProfileNotReadyError`, because their messages contain only the profile
+  scope and required setting/provider-format names. Do not pass arbitrary
+  provider or transport exception text through this path; keep those errors
+  behind `safe_llm_error_message` summaries.
 - Never include credentials, authorization headers, prompts, full job/company
   text, model output text, provider error bodies, citations, or webpage content.
 
@@ -121,6 +127,7 @@ app_runtime_settings.companies_web_search_last_test_fingerprint VARCHAR(128) NUL
 | Company run requests search with current passed probe | Persist `true`; use Responses search during execution |
 | Company search probe is absent, failed, unsupported, or stale | Capability unavailable; requested run returns 409 |
 | Company ordinary probe passes but search probe fails | Ordinary Company generation remains ready |
+| AI profile configuration probe rejects an incomplete draft | Return 422 with a bounded actionable `detail.error_message`; do not replace it with a generic exception-type summary |
 | Active run exists and new request uses a different mode | Return active run's persisted mode unchanged |
 | Search-enabled item gets timeout/connection/429/5xx | Retry once, then fail item if still unsuccessful |
 | Search-enabled item gets 400, malformed envelope, missing final text, or invalid JSON | Fail immediately; no fallback |
@@ -140,6 +147,9 @@ app_runtime_settings.companies_web_search_last_test_fingerprint VARCHAR(128) NUL
   relay accepts the operation and removes operator intent.
 - Bad: catch a search error and silently call ordinary generation. The saved
   result would be labeled as searched when it was not.
+- Bad: run `safe_llm_error_message` over a profile-readiness validation error
+  and return only `LLM operation failed (error_type=ProfileRuntimeNotReadyError)`;
+  the operator cannot tell which setting to correct.
 - Bad: log `str(exc)` or an extracted response preview. Provider exceptions and
   outputs can echo prompts, authorization data, or searched content.
 
@@ -154,6 +164,9 @@ app_runtime_settings.companies_web_search_last_test_fingerprint VARCHAR(128) NUL
   citations, and webpage content are absent from exception messages and logs.
 - Runtime settings tests assert passed/failed/unsupported search states and
   exact fingerprint invalidation without blocking ordinary Company readiness.
+- Settings API tests assert incomplete Job and Company profile probes preserve
+  their bounded readiness diagnostic in the 422 `detail.error_message` field,
+  while arbitrary provider failures remain summarized.
 - API/service tests assert default false, 409 when unavailable, active-run mode
   precedence, persisted execution intent, missing-description-only targeting,
   no fallback/persistence on search failure, and migration upgrade/downgrade.
@@ -190,3 +203,11 @@ description = await llm.generate(
 Create the run only after the current-fingerprint capability gate passes. Let a
 search failure fail the item, and record only bounded exception type/status and
 response shape/hash diagnostics.
+
+For profile configuration tests, preserve only the typed readiness diagnostics:
+
+```python
+if isinstance(exc, (ProfileRuntimeNotReadyError, LLMProfileNotReadyError)):
+    return bounded_message(str(exc), limit=512)
+return safe_llm_error_message(exc)
+```

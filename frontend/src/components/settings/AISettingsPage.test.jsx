@@ -1061,6 +1061,42 @@ describe("AISettingsPage", () => {
     expect(screen.getByText(/111 ms/i)).toBeInTheDocument();
   });
 
+  it("shows the server diagnostic when either profile configuration test returns 422", async () => {
+    const user = userEvent.setup();
+    testProfileResponse.mockImplementation(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      const profileLabel =
+        body.scope === "companies" ? "Companies" : "AI Enrichment";
+
+      return mockJsonResponse(
+        {
+          detail: {
+            error_message: `${profileLabel} profile is missing required settings: api key`,
+          },
+        },
+        { ok: false, status: 422 },
+      );
+    });
+
+    render(<AISettingsPage />);
+
+    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+
+    await user.click(
+      screen.getByRole("button", { name: /test ai enrichment configuration/i }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /ai enrichment profile is missing required settings: api key/i,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: /test companies configuration/i }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /companies profile is missing required settings: api key/i,
+    );
+  });
+
   it("shows a companies web search warning when the model passes but web search is unsupported", async () => {
     const user = userEvent.setup();
     testProfileResponse.mockImplementation(async (_url, init) => {
