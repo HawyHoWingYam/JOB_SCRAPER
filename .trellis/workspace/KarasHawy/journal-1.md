@@ -1303,3 +1303,38 @@ Added project-local GitHub issue lifecycle sync for Trellis task start/archive h
 ### Next Steps
 
 - None - task complete
+
+
+## Session 38: Krill Grok Company Web Search
+
+**Date**: 2026-07-23
+**Task**: Krill Grok Company Web Search
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Added Krill Chat Completions for ordinary enrichment, explicit capability-gated Company Web Search through Responses, persisted per-run intent, safe diagnostics and bounded retries, Companies UI control, migrations, tests, and executable specs.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6992bd85` | (see git log) |
+| `b8282d0a` | (see git log) |
+| `8f998864` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
