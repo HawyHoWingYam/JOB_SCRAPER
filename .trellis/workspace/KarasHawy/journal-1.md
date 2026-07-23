@@ -1338,3 +1338,36 @@ Added Krill Chat Completions for ordinary enrichment, explicit capability-gated 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 39: Fix AI enrichment configuration test diagnostics
+
+**Date**: 2026-07-23
+**Task**: Fix AI enrichment configuration test diagnostics
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Preserved bounded profile-readiness diagnostics for AI settings configuration tests, added backend and frontend regression coverage, updated the AI diagnostics spec, and archived the task. Validation: 25 related backend tests, 223 frontend tests, ESLint, and Ruff passed; backend tests/ had two pre-existing Docker fixture path failures; root pytest is blocked by tmp_stress_test.py collection.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5716be81` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
