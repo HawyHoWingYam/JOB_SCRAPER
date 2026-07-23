@@ -7,6 +7,7 @@ import {
   cancelCrawlJob,
   getTaskControlBoard,
   permanentlyDeleteAutomation,
+  resetBrowserProfile,
   resumeManualTask,
   reviewAutomationDelete,
   transitionAutomation,
@@ -22,6 +23,7 @@ function actionLabel(action) {
     view_task: 'Task', view_logs: 'Logs', open_catalog: 'Catalog', edit: 'Edit', run_now: 'Run now',
     pause: 'Pause', resume: 'Resume', archive: 'Archive', restore: 'Restore',
     delete_review: 'Delete permanently', cancel: 'Cancel', resume_manual_action: 'Resume',
+    reset_browser_profile: 'Reset browser profile',
   }[action] || action;
 }
 
@@ -132,6 +134,17 @@ export default function TaskControlBoardPage({ hash = window.location.hash }) {
       }
       return;
     }
+    if (action === 'reset_browser_profile') {
+      dispatch({ type: 'mutationStarted', entityId: entity.id, kind: action });
+      try {
+        await resetBrowserProfile(entity.id);
+        dispatch({ type: 'mutationSucceeded', entityId: entity.id, kind: action, notice: 'Browser profile reset completed.' });
+        await loadBoard();
+      } catch (error) {
+        dispatch({ type: 'mutationFailed', error: controlError(error) });
+      }
+      return;
+    }
     await mutateAutomation(entity, action);
   };
 
@@ -163,8 +176,8 @@ export default function TaskControlBoardPage({ hash = window.location.hash }) {
   };
 
   const renderActions = (actions, entity) => (
-    <div className="board-actions">{actions.map((action) => (
-      <button key={action.action} type="button" disabled={!action.enabled || busy} title={action.reasonCode || undefined} onClick={(event) => handleAction(action, entity, event)}>{actionLabel(action.action)}</button>
+    <div className="board-actions">{actions.map((action, index) => (
+      <button key={`${action.action}-${index}`} type="button" disabled={!action.enabled || busy} title={action.reasonCode || undefined} onClick={(event) => handleAction(action, entity, event)}>{actionLabel(action.action)}</button>
     ))}</div>
   );
 

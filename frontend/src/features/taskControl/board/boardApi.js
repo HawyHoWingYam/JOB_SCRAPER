@@ -49,4 +49,11 @@ export async function resumeManualTask(taskId, strategy = 'fresh_profile') {
   );
 }
 
+export async function resetBrowserProfile(taskId) {
+  return apiFetchJson(
+    apiPath(`/crawl-jobs/${encodeURIComponent(taskId)}/reset-browser-profile`),
+    json({}, 'POST'),
+  );
+}
+
 export { cancelCrawlJob };

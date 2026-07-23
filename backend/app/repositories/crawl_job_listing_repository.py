@@ -13,6 +13,35 @@ from app.models.crawl_job_listing import CrawlJobListing
 from app.utils.time import utc_now
 
 
+def _detail_category_filter_values(
+    source_site: str,
+    category_ids: Iterable[str | int] | None,
+) -> list[str]:
+    """Accept source-qualified IDs while matching native staging values.
+
+    Crawl-control contracts identify Source Classifications as
+    ``<source>:<native-id>``. Listing staging historically stores the native
+    token, so include both representations at this persistence boundary.
+    """
+
+    normalized_source_site = str(source_site).strip().lower()
+    values: list[str] = []
+    seen: set[str] = set()
+    for category_id in category_ids or ():
+        value = str(category_id).strip()
+        if not value:
+            continue
+        candidates = [value]
+        prefix, separator, native_id = value.partition(":")
+        if separator and prefix == normalized_source_site and native_id:
+            candidates.append(native_id)
+        for candidate in candidates:
+            if candidate not in seen:
+                values.append(candidate)
+                seen.add(candidate)
+    return values
+
+
 class CrawlJobListingRepository:
     """Repository for listing-stage staging rows and detail execution state."""
 
@@ -271,11 +300,10 @@ class CrawlJobListingRepository:
                     CrawlJobListing.crawl_job_id == source_listing_crawl_job_id
                 )
 
-            normalized_category_ids = [
-                str(category_id).strip()
-                for category_id in (category_ids or [])
-                if str(category_id).strip()
-            ]
+            normalized_category_ids = _detail_category_filter_values(
+                normalized_source_site,
+                category_ids,
+            )
             if normalized_category_ids:
                 query = query.filter(
                     CrawlJobListing.source_classification_id.in_(
@@ -761,4 +789,3 @@ class CrawlJobListingRepository:
         else:
             db.flush()
         return listing
-

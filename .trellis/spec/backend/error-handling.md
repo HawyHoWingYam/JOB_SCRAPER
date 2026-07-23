@@ -45,6 +45,12 @@ normalize_manual_action_payload(
 ) -> dict[str, Any]
 
 resolve_manual_action_cdp_connect_host(configured_host: str | None) -> str
+
+launch_browser_process(
+    *, browser_channel, browser_profile_path, blocked_url, ...
+) -> dict[str, Any]
+
+_resolve_host_browser_profile_path(browser_profile_path: str) -> Path
 ```
 
 The only product continuation endpoint is explicit:
@@ -60,13 +66,15 @@ POST /api/v1/crawl-jobs/{crawl_job_id}/resume
 | Source | `ip_blocked` evidence | Non-IP result |
 |---|---|---|
 | CTGoodJobs | HTTP 403/429 or explicit IP/rate-limit/access-block marker in bounded navigation evidence | Generic Cloudflare/human verification is `waf_challenge`; proxy/display/profile failures keep their own classes |
-| JobsDB | HTTP 403/429 or explicit IP/rate-limit/access-block marker in listing/detail response evidence | Generic interstitial is `waf_challenge`; other HTTP/network/parser behavior remains transport/failure |
+| JobsDB | HTTP 403/429 without an explicit challenge header, or an explicit IP/rate-limit/access-block marker in listing/detail response evidence | Generic interstitial is `waf_challenge`; `cf-mitigated: challenge` is strong WAF evidence even when the status is 403; other HTTP/network/parser behavior remains transport/failure |
 | OfferToday | Exact API code `-1000035` or verify URL query `code=-1000035` | Other verify URLs are `waf_challenge`; failed fetch on a normal URL is transient transport |
 
 DNS, connection reset, timeout, malformed JSON/HTML, parser failure, and auth
 failure must never become `ip_blocked` without separate positive evidence.
 Classify IP evidence before generic WAF markers because a blocked response may
-also render a challenge page. Never store or log the inspected response body.
+also render a challenge page. An explicit `cf-mitigated: challenge` response
+header is stronger than a generic 403 and must classify as `waf_challenge`.
+Never store or log the inspected response body.
 
 #### Pause payload and state
 
@@ -144,11 +152,35 @@ that actually share the configured JobsDB/CTGoodJobs headed browser. OfferToday
 must preserve its event-provided Edge/profile metadata and must not inherit
 JobsDB-only defaults.
 
+JobsDB browser-profile recovery is fail-closed. A fresh-profile Resume may make
+one automatic cleanup/retry after process and registry liveness both prove the
+task-owned profile is dead; a second launch failure becomes a new manual action.
+Reset deletes only a profile under the task-owned temporary-profile root. Fixed profiles retain their
+cookies/login data and only stale singleton markers plus registry state are
+removed. Unknown liveness never mutates profile state.
+
+The host manual-action helper is cross-platform. It resolves `chromium`,
+`chrome`, and `msedge` through host-native application/PATH candidates, then
+falls back to the installed Playwright Chromium executable for the `chromium`
+channel. `JOBSDB_HEADED_BROWSER_EXECUTABLE_PATH` overrides discovery when set.
+When the API worker runs in Docker, a profile under
+`/app/.host_browser_profiles/...` is translated to the bind-mounted
+`backend/.host_browser_profiles/...` path only for the local browser process;
+the API-visible path remains the registry key used by the worker's CDP attach.
+The helper must prove the translated profile parent exists before launch or
+close operations.
+
+Normal headless JobsDB execution never calls the helper. For a supported WAF
+challenge, the operator explicitly uses the helper to open a separate headed
+verification browser, completes the challenge, and chooses
+`reuse_open_browser` for that recovery attempt.
+
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
 |---|---|
 | HTTP 403/429 on CTGoodJobs/JobsDB | Typed `ip_blocked`; immediate manual action |
+| HTTP 403 with `cf-mitigated: challenge` | Typed `waf_challenge`; verification-browser guidance |
 | Explicit IP/rate-limit marker on a 200 page | Typed `ip_blocked`; no generic challenge retry |
 | Generic Cloudflare/human-verification page | `waf_challenge`, not IP |
 | OfferToday exact code `-1000035` | Typed `ip_blocked`, code preserved, no transient retry |
@@ -164,6 +196,9 @@ JobsDB-only defaults.
 | OfferToday legacy event lacks browser fields | Do not synthesize JobsDB browser/profile values; reusable-browser support remains false |
 | Container adapter resolves configured CDP host | Connect to the resolved host and registered debug port |
 | CDP attach raises or exposes no context | Emit bounded attach failure; return resumable `reuse_open_browser_unavailable`; consume zero targets |
+| Host helper receives `browser_channel=chromium` | Resolve a macOS/Linux/Windows executable or installed Playwright Chromium; otherwise return 409 with install/configuration guidance |
+| Host helper receives a container `/app/.host_browser_profiles/...` path | Translate only the local process path; preserve the original path in the live-browser registry |
+| Host process inspection is unavailable or incomplete | Fail closed; do not remove registry state or claim the profile is safe to reset |
 | Latest resume event has no later outcome | Show accepted/waiting feedback and disable both Resume actions |
 | Later manual-action event resolves the attempt | Show its stage/classification/message and permit another explicit action |
 
@@ -186,8 +221,14 @@ JobsDB-only defaults.
   still resumable.
 - **Good:** JobsDB in Docker resolves `host.docker.internal`, attaches to the
   registered host-browser debug port, and continues the same target scope.
+- **Good:** A macOS helper receives `/app/.host_browser_profiles/chromium`,
+  launches Playwright Chromium from the bind-mounted backend profile, and
+  registers `/app/...` so the container worker can attach over CDP.
 - **Bad:** The helper reports connected, so the frontend automatically resumes
   or allows repeated Resume clicks before the previous event has an outcome.
+- **Bad:** A macOS helper treats `chromium` as an unsupported branded channel,
+  or launches with the container-only `/app` path and silently removes the
+  registry entry when it cannot inspect host processes.
 
 ### 6. Tests Required
 
@@ -213,6 +254,9 @@ JobsDB-only defaults.
   `CrawlTasksPage.test.jsx` cover attempt ordering, durable returned outcome,
   local request pending state, and disabled repeated Resume actions while the
   event-derived attempt is unresolved.
+- `backend/tests/test_host_manual_action_helper.py` covers macOS Chromium
+  discovery, Playwright fallback, container-to-host profile translation,
+  Chromium process matching, and reachable CDP smoke behavior.
 
 ### 7. Wrong vs Correct
 
@@ -302,6 +346,20 @@ logger.info(
     )
 )
 browser = chromium.connect_over_cdp(f"http://{connect_host}:{port}")
+```
+
+#### Wrong: treat the API profile path as a host filesystem path
+
+```python
+process_launcher([executable, f"--user-data-dir={browser_profile_path}"])
+```
+
+#### Correct: translate only at the host process boundary
+
+```python
+host_profile = _resolve_host_browser_profile_path(browser_profile_path)
+process_launcher([executable, f"--user-data-dir={host_profile}"])
+registry.register(browser_profile_path=browser_profile_path, ...)
 ```
 
 ---

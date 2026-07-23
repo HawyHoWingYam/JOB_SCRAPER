@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI
@@ -16,6 +17,7 @@ from app.api import crawl_control as crawl_control_api
 from app.api import crawl_jobs as crawl_jobs_api
 from app.api import schedules as schedules_api
 from app.api import router as production_api_router
+from app.crawl_control import task_control_board_service as task_control_board_service_api
 from app.crawl_control.task_control_board_contracts import (
     RunAuthorityProjectionV1,
 )
@@ -267,7 +269,7 @@ def test_scope_preview_returns_normalized_workload_and_stable_revision_error(
         "page_depth": 2,
         "estimated_max_pages": 50,
         "run_page_cap": 100,
-        "system_run_page_cap": 1000,
+        "system_run_page_cap": 5000,
         "within_operator_cap": True,
         "within_system_cap": True,
     }
@@ -1083,6 +1085,156 @@ def test_run_projections_normalize_the_latest_recovery_attempt(
     assert board_run["recovery_attempt"] == recovery_attempt
     assert "request_payload" not in board_run
     assert "events" not in board_run
+
+
+def test_reset_browser_profile_records_safe_reset_without_changing_task_scope(
+    crawl_control_client,
+    monkeypatch,
+    tmp_path,
+):
+    client, _revision_id = crawl_control_client
+    repository = CrawlJobRepository()
+    request_db = client.app.state.session_factory()
+    profile_path = str(tmp_path / "fixed-profile")
+    try:
+        crawl_job = repository.create_crawl_job(
+            request_db,
+            source_site="jobsdb",
+            trigger_type="manual",
+            status="manual_action_required",
+            request_payload={
+                "crawl_phase": "detail",
+                "crawl_mode": "headless",
+                "detail_limit": 10,
+            },
+            requested_by="operator-1",
+            auto_commit=False,
+        )
+        repository.append_event(
+            request_db,
+            crawl_job_id=crawl_job.id,
+            event_type="crawl.manual_action_required",
+            payload={
+                "manual_action": {
+                    "source_site": "jobsdb",
+                    "stage": "browser_profile_in_use",
+                    "browser_channel": "chromium",
+                    "browser_profile_path": profile_path,
+                    "profile_scope": "fixed_profile",
+                    "resume_supported": True,
+                }
+            },
+            emitted_by="jobsdb-crawl",
+            auto_commit=False,
+        )
+        request_db.commit()
+        crawl_job_id = str(crawl_job.id)
+    finally:
+        request_db.close()
+
+
+    def fake_reset(path, **kwargs):
+        assert path == profile_path
+        assert kwargs["profile_scope"] == "fixed_profile"
+        assert kwargs["browser_channel"] == "chromium"
+        return SimpleNamespace(
+            available=True,
+            profile_path=path,
+            profile_scope="fixed_profile",
+            liveness=SimpleNamespace(state="dead"),
+            removed_lock_markers=("SingletonLock",),
+            recreated=False,
+        )
+
+    monkeypatch.setattr(crawl_jobs_api, "reset_profile", fake_reset)
+
+    response = client.post(
+        f"/api/v1/crawl-jobs/{crawl_job_id}/reset-browser-profile"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "reset",
+        "crawl_job_id": crawl_job_id,
+        "profile_scope": "fixed_profile",
+        "liveness": "dead",
+        "removed_lock_markers": ["SingletonLock"],
+        "recreated": False,
+    }
+
+    request_db = client.app.state.session_factory()
+    try:
+        event = (
+            request_db.query(CrawlJobEvent)
+            .filter(
+                CrawlJobEvent.crawl_job_id == UUID(crawl_job_id),
+                CrawlJobEvent.event_type == "crawl.browser_profile_reset",
+            )
+            .one()
+        )
+        assert event.payload["profile_scope"] == "fixed_profile"
+        assert event.payload["recreated"] is False
+    finally:
+        request_db.close()
+
+
+def test_manual_profile_guidance_uses_event_browser_channel_for_liveness(
+    monkeypatch,
+):
+    observed: dict[str, object] = {}
+
+    def fake_inspect(profile_path, *, browser_channel=None):
+        observed["profile_path"] = profile_path
+        observed["browser_channel"] = browser_channel
+        return SimpleNamespace(state="dead", reason="no_active_browser_session")
+
+    monkeypatch.setattr(task_control_board_service_api, "inspect_profile", fake_inspect)
+
+    guidance = task_control_board_service_api._manual_action_guidance(
+        {
+            "source_site": "jobsdb",
+            "manual_action": {
+                "stage": "browser_profile_in_use",
+                "browser_channel": "chromium",
+                "browser_profile_path": "/var/lib/jobsdb/fixed-profile",
+                "resume_supported": True,
+            },
+        }
+    )
+
+    assert guidance is not None
+    assert observed == {
+        "profile_path": "/var/lib/jobsdb/fixed-profile",
+        "browser_channel": "chromium",
+    }
+    assert guidance.reset_supported is True
+    assert guidance.profile_scope == "fixed_profile"
+    assert guidance.resume_strategies == ("fresh_profile",)
+
+
+def test_reset_capability_is_not_projected_for_non_jobsdb_manual_actions(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        task_control_board_service_api,
+        "inspect_profile",
+        lambda *_args, **_kwargs: SimpleNamespace(state="dead", reason=None),
+    )
+
+    guidance = task_control_board_service_api._manual_action_guidance(
+        {
+            "source_site": "ctgoodjobs",
+            "manual_action": {
+                "stage": "browser_profile_in_use",
+                "browser_profile_path": "/var/lib/jobsdb/fixed-profile",
+                "reset_supported": True,
+                "resume_supported": True,
+            },
+        }
+    )
+
+    assert guidance is not None
+    assert guidance.reset_supported is False
 
 
 def test_detail_run_projections_keep_frozen_plan_membership_and_live_counts(

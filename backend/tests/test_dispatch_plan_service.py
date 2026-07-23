@@ -626,7 +626,7 @@ def test_prepare_rejects_listing_workload_above_reviewed_cap(dispatch_db):
     assert over_cap.value.context == {
         "estimated_max_pages": 2,
         "run_page_cap": 1,
-        "system_run_page_cap": 1000,
+        "system_run_page_cap": 5000,
     }
 
 
@@ -926,6 +926,42 @@ def test_offertoday_future_terminal_sibling_cannot_change_snapshot_cutoff(
     )
 
     assert [row.id for row in selected] == [pending.id]
+
+
+def test_offertoday_detail_scope_matches_source_qualified_category_ids(dispatch_db):
+    _engine, _factory, db, _revision = dispatch_db
+    cutoff = datetime(2026, 7, 20, 10, 0, tzinfo=UTC)
+    pending = CrawlJobListing(
+        crawl_job_id=uuid4(),
+        source_site="offertoday",
+        source_job_id="offertoday-job",
+        source_url="https://www.offertoday.com/jobs/offertoday-job",
+        source_classification_id="118000",
+        listing_payload={"job_id": "offertoday-job"},
+        detail_status="pending",
+        created_at=cutoff - timedelta(minutes=1),
+        updated_at=cutoff - timedelta(minutes=1),
+    )
+    db.add(pending)
+    db.commit()
+
+    selected = CrawlJobListingRepository().list_detail_candidates(
+        db,
+        source_site="offertoday",
+        category_ids=("offertoday:118000",),
+        eligible_at_or_before=cutoff,
+    )
+
+    assert [row.id for row in selected] == [pending.id]
+
+    native_selected = CrawlJobListingRepository().list_detail_candidates(
+        db,
+        source_site="offertoday",
+        category_ids=(118000,),
+        eligible_at_or_before=cutoff,
+    )
+
+    assert [row.id for row in native_selected] == [pending.id]
 
 
 def test_empty_detail_snapshot_is_persisted_as_blocked_review(dispatch_db):

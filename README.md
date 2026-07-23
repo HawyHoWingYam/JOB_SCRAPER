@@ -89,8 +89,8 @@ Typical local setup:
 docker compose up -d postgres-db redis-mq backend-api frontend-ui
 docker compose --profile workers up -d crawl-worker ingest-worker enrichment-worker
 
-# Then run the headed crawl worker on the Windows host.
-python backend\scripts\prepare_headed_crawl_worker_host.py
+# Then run the headed crawl worker on the host.
+python backend/scripts/prepare_headed_crawl_worker_host.py
 
 # Or launch it in a dedicated visible cmd window.
 python backend\scripts\prepare_headed_crawl_worker_host.py
@@ -100,7 +100,9 @@ Recommended profile setup:
 
 - use a dedicated browser profile directory via `JOBSDB_HEADED_BROWSER_USER_DATA_DIR`
 - container-owned headed automation now defaults to Playwright `chromium`
-- host-side manual/browser-helper flows can still target `JOBSDB_HEADED_BROWSER_CHANNEL=msedge` or `chrome`
+- the host-side manual/browser helper supports `chromium`, `msedge`, and `chrome` on
+  macOS, Linux, and Windows; for Playwright Chromium install the browser once with
+  `python -m playwright install chromium` in the host helper environment
 - open a JobsDB or CTGoodJobs page once in that automation profile and complete any anti-bot challenge before relying on automated headed runs
 - keep the script running while you want headed JobsDB jobs to keep progressing
 - if you want a separate persistent window without blocking your current shell, run `prepare_headed_crawl_worker_host.py` in a new terminal

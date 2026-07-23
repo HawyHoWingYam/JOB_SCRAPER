@@ -163,6 +163,10 @@ def normalize_manual_action_payload(
         resume_context = dict(resume_context)
     normalized["resume_context"] = resume_context
 
+    for context_key in ("profile_scope", "browser_channel", "browser_profile_path"):
+        if not normalized.get(context_key) and resume_context.get(context_key):
+            normalized[context_key] = resume_context[context_key]
+
     classification = str(
         normalized.get("classification")
         or resume_context.get("classification")

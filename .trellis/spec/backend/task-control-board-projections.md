@@ -19,6 +19,14 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 - V1 remains the default. V2 must be explicitly requested; do not replace the V1 response model in place.
 - Task Detail reuses `build_crawl_task_snapshot` and `build_crawl_control_run_projection` so list, Board, and direct detail agree.
 - Manual guidance is bounded and may expose only normalized message/instructions/capabilities. A resumable normalized manual action always supports the baseline `fresh_profile` path; `reuse_open_browser` appears only when explicitly normalized as supported.
+- Browser-profile recovery fields are capability-gated: `reset_supported` is
+  true only for a JobsDB profile-lock action whose liveness probe proves the
+  profile is dead. Unknown or live liveness stays disabled and exposes the
+  bounded `reset_reason`; `profile_scope` distinguishes task-owned temporary
+  profiles from fixed reusable-browser profiles.
+- `reset_browser_profile` is an active-run action only while the task is
+  `manual_action_required`; the Task Details and Board clients route it to the
+  crawl-task reset endpoint, never to Automation lifecycle transitions.
 - Ordinary projections exclude `request_payload`, raw `manual_action`, cookies, browser state, raw event payloads, and unbounded identifiers.
 
 ### 4. Validation & Error Matrix

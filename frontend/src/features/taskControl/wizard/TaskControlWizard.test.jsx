@@ -91,7 +91,7 @@ function review(inputFingerprint = 'review-fingerprint') {
       page_depth: 2,
       estimated_max_pages: 6,
       run_page_cap: 20,
-      system_run_page_cap: 1000,
+      system_run_page_cap: 5000,
     },
     detailPreview: null,
     scheduleSummary: {

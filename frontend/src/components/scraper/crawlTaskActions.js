@@ -91,6 +91,13 @@ export async function resumeCrawlJob(crawlJobId, strategy) {
   });
 }
 
+export async function resetBrowserProfile(crawlJobId) {
+  return apiFetchJson(`${API_BASE}/crawl-jobs/${crawlJobId}/reset-browser-profile`, {
+    method: "POST",
+    requestId: createMonitoringId("req"),
+  });
+}
+
 export async function getCrawlJobEvents(crawlJobId, limit = 100) {
   const boundedLimit = Math.min(Math.max(Number(limit) || 100, 1), 1000);
   return apiFetchJson(

@@ -54,11 +54,13 @@ def resolve_runtime_paths(
     )
     backend_dir = resolved_repo_root / "backend"
     venv_dir = backend_dir / ".host_worker_venv"
+    venv_bin_dir = "Scripts" if os.name == "nt" else "bin"
+    venv_python_name = "python.exe" if os.name == "nt" else "python"
     return HostRuntimePaths(
         repo_root=resolved_repo_root,
         backend_dir=backend_dir,
         venv_dir=venv_dir,
-        venv_python=venv_dir / "Scripts" / "python.exe",
+        venv_python=venv_dir / venv_bin_dir / venv_python_name,
         profile_dir=backend_dir / ".host_browser_profiles" / browser_channel,
         requirements_file=backend_dir / "requirements-headed-host.txt",
         requirements_marker_file=venv_dir / ".requirements.sha256",

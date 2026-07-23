@@ -256,6 +256,7 @@ BoardActionKind = Literal[
     "delete_review",
     "cancel",
     "resume_manual_action",
+    "reset_browser_profile",
 ]
 
 
@@ -298,6 +299,9 @@ class ManualActionGuidanceProjectionV1(FrozenContract):
         Literal["fresh_profile", "reuse_open_browser"], ...
     ] = ()
     worker_ready: bool | None = None
+    reset_supported: bool = False
+    reset_reason: str | None = Field(default=None, max_length=200)
+    profile_scope: str | None = Field(default=None, max_length=64)
 
 
 class AutomationScheduleProjectionV1(FrozenContract):

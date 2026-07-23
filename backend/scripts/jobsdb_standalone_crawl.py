@@ -140,6 +140,12 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     )
     args.detail_statuses = list(request_payload.get("detail_statuses") or args.detail_statuses)
     args.resume_strategy = str(request_payload.get("resume_strategy") or args.resume_strategy)
+    args.manual_action_browser_channel = str(
+        request_payload.get("manual_action_browser_channel") or ""
+    ).strip()
+    args.manual_action_browser_profile_path = str(
+        request_payload.get("manual_action_browser_profile_path") or ""
+    ).strip()
     args.skip_existing = bool(request_payload.get("skip_existing"))
     args.is_resume = bool(request_payload.get("is_resume"))
     args.detail_pacing = request_payload.get("detail_pacing")
@@ -178,8 +184,16 @@ def _apply_detail_runtime_plan(
     args.skip_existing = False
     args.is_resume = runtime_plan.resume_context is not None
     args.detail_pacing = None
+    args.manual_action_browser_channel = ""
+    args.manual_action_browser_profile_path = ""
     if runtime_plan.resume_context is not None:
         args.resume_strategy = runtime_plan.resume_context.resume_strategy
+        args.manual_action_browser_channel = (
+            runtime_plan.resume_context.browser_channel or ""
+        )
+        args.manual_action_browser_profile_path = (
+            runtime_plan.resume_context.browser_profile_path or ""
+        )
 
 
 def _resolve_source_listing_crawl_job_id(args) -> str | None:
@@ -258,8 +272,14 @@ def _build_manual_action_payload(
 ) -> dict[str, Any]:
     payload = exc.to_payload(
         crawl_mode=args.crawl_mode,
-        browser_channel=settings.jobsdb_headed_browser_channel,
-        browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
+        browser_channel=(
+            dict(exc.resume_context or {}).get("browser_channel")
+            or settings.jobsdb_headed_browser_channel
+        ),
+        browser_profile_path=(
+            dict(exc.resume_context or {}).get("browser_profile_path")
+            or settings.jobsdb_headed_browser_user_data_dir
+        ),
     )
     runtime_plan = getattr(args, "listing_runtime_plan", None)
     resume_context: dict[str, Any]
@@ -581,6 +601,12 @@ def _build_detail_scraper_request_payload(args) -> dict[str, Any]:
         "is_resume": args.is_resume,
         "resume_strategy": args.resume_strategy,
         "resume_context": _build_detail_request_payload(args),
+        "manual_action_browser_channel": getattr(
+            args, "manual_action_browser_channel", ""
+        ),
+        "manual_action_browser_profile_path": getattr(
+            args, "manual_action_browser_profile_path", ""
+        ),
     }
 
 
@@ -589,6 +615,12 @@ async def _detail_scraper_context(args) -> AsyncIterator[Any]:
     if _should_use_headed_detail_scraper(args):
         async with JobsDBBrowserDetailScraper(
             request_payload=_build_detail_scraper_request_payload(args),
+            browser_channel=(
+                getattr(args, "manual_action_browser_channel", "") or None
+            ),
+            user_data_dir=(
+                getattr(args, "manual_action_browser_profile_path", "") or None
+            ),
             cancellation_token=resolve_cancellation_token(args),
         ) as scraper:
             yield scraper

@@ -375,6 +375,81 @@ describe("CrawlTasksPage normalized Task Details", () => {
     expect(screen.queryByText(/request_payload|manual_action\s*:/i)).not.toBeInTheDocument();
   });
 
+  it("refreshes the list and normalized details after explicit recovery", async () => {
+    const user = userEvent.setup();
+    const recoveryDetail = normalizedTaskDetail({
+      id: "listing-task",
+      status: "manual_action_required",
+      actions: [],
+    });
+    recoveryDetail.manual_action_guidance = {
+      source_site: "jobsdb",
+      message: "Complete the challenge, then resume.",
+      instructions: ["Complete the challenge."],
+      resume_supported: true,
+      resume_strategies: ["fresh_profile"],
+    };
+    apiFetchJson.mockImplementation(async (url, options = {}) => {
+      if (isDetailRequest(url)) return recoveryDetail;
+      if (`${url}`.endsWith("/crawl-jobs/listing-task/resume")) {
+        expect(options.method).toBe("POST");
+        return { status: "queued" };
+      }
+      return listPayload();
+    });
+    render(<CrawlTasksPage />);
+
+    const resumeButton = await screen.findByRole("button", {
+      name: "Resume with Fresh Profile",
+    });
+    const detailRequestsBefore = apiFetchJson.mock.calls.filter(([url]) =>
+      isDetailRequest(url),
+    ).length;
+    const listRequestsBefore = apiFetchJson.mock.calls.filter(([url]) =>
+      `${url}`.includes("/crawl-jobs/tasks?"),
+    ).length;
+
+    await user.click(resumeButton);
+
+    await waitFor(() => {
+      expect(
+        apiFetchJson.mock.calls.filter(([url]) => isDetailRequest(url)).length,
+      ).toBeGreaterThan(detailRequestsBefore);
+      expect(
+        apiFetchJson.mock.calls.filter(([url]) =>
+          `${url}`.includes("/crawl-jobs/tasks?"),
+        ).length,
+      ).toBeGreaterThan(listRequestsBefore);
+    });
+  });
+
+  it("shows the fail-closed Reset diagnostic when profile liveness is unknown", async () => {
+    apiFetchJson.mockImplementation(async (url) => {
+      if (!isDetailRequest(url)) return listPayload();
+      const detail = normalizedTaskDetail({
+        id: "listing-task",
+        status: "manual_action_required",
+        actions: [],
+      });
+      detail.manual_action_guidance = {
+        source_site: "jobsdb",
+        stage: "browser_profile_in_use",
+        message: "The worker profile needs operator review.",
+        resume_supported: true,
+        resume_strategies: ["fresh_profile"],
+        reset_supported: false,
+        reset_reason: "browser_session_reachability_unknown",
+      };
+      return detail;
+    });
+    render(<CrawlTasksPage />);
+
+    expect(await screen.findByTestId("crawl-task-reset-unavailable")).toHaveTextContent(
+      "Browser profile reset is unavailable: browser session reachability unknown.",
+    );
+    expect(screen.queryByRole("button", { name: "Reset Browser Profile" })).not.toBeInTheDocument();
+  });
+
   it("offers a reviewed one-off run for capped Query Targets", async () => {
     const user = userEvent.setup();
     apiFetchJson.mockImplementation(async (url) => {

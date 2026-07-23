@@ -553,6 +553,20 @@ def test_generic_cloudflare_challenge_is_not_relabelled_as_ip_block() -> None:
     ) is None
 
 
+def test_cloudflare_mitigated_challenge_overrides_403_ip_classification() -> None:
+    evidence = classify_public_access_evidence(
+        status_code=403,
+        final_url="https://hk.jobsdb.com/job/93444650",
+        headers={"CF-Mitigated": "challenge"},
+        text="Just a moment...",
+    )
+
+    assert evidence is not None
+    assert evidence.classification == "waf_challenge"
+    assert evidence.reason == "cloudflare_mitigated_challenge"
+    assert evidence.status_code == 403
+
+
 def test_content_anomaly_is_resumable_without_ip_guidance() -> None:
     error = build_session_recovery_manual_action(
         source_site="ctgoodjobs",
@@ -644,6 +658,20 @@ async def test_jobsdb_listing_and_detail_classify_ip_and_waf() -> None:
         with pytest.raises(ManualActionRequiredError) as detail_error:
             await JobDetailScraper().fetch_job_detail("123456", client=client)
     assert detail_error.value.classification == "ip_blocked"
+
+    async def status_cf_challenge(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            headers={"cf-mitigated": "challenge"},
+            text="Just a moment...",
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(status_cf_challenge)
+    ) as client:
+        with pytest.raises(ManualActionRequiredError) as challenge_error:
+            await JobDetailScraper().fetch_job_detail("123456", client=client)
+    assert challenge_error.value.classification == "waf_challenge"
 
     async def browser_fetcher(_url: str) -> str:
         return "Just a moment... cf-challenge"

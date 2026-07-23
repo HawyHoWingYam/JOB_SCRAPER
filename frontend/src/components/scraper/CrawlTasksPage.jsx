@@ -582,6 +582,16 @@ export default function CrawlTasksPage() {
     createCappedListingDraft(selectedTaskDetail);
   }, [selectedTaskDetail]);
 
+  const handleRecoveryChanged = useCallback(
+    async () => {
+      await Promise.all([
+        loadTasks({ reason: "recovery" }),
+        loadSelectedTaskDetail(),
+      ]);
+    },
+    [loadSelectedTaskDetail, loadTasks],
+  );
+
   const runTaskAction = useCallback(
     async (actionKey, actionLabel, action) => {
       if (!selectedTaskId) {
@@ -864,6 +874,7 @@ export default function CrawlTasksPage() {
               onAction={handleNormalizedAction}
               onOpenEvents={handleOpenEvents}
               onContinueCappedListing={handleContinueCappedListing}
+              onRecoveryChanged={handleRecoveryChanged}
             />
           ) : (
             <div className="crawl-tasks-empty">

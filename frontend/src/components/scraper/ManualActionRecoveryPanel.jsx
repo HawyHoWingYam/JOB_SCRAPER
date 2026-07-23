@@ -16,6 +16,7 @@ import {
   getManualActionHelperHealth,
   getManualActionReuseStatus,
   openManualActionBrowser,
+  resetBrowserProfile,
   resumeCrawlJob,
 } from "./crawlTaskActions";
 
@@ -28,9 +29,9 @@ function extractErrorMessage(error, fallbackMessage) {
   return fallbackMessage;
 }
 
-function buildPowerShellStartCommand(workdir, command) {
-  const escapedWorkdir = `${workdir}`.replace(/'/g, "''");
-  return `Set-Location '${escapedWorkdir}'; ${command}`;
+function buildHelperStartCommand(workdir, command) {
+  const escapedWorkdir = `${workdir}`.replace(/"/g, '\\"');
+  return `cd "${escapedWorkdir}"; ${command}`;
 }
 
 function formatManualActionInstructions(value) {
@@ -78,6 +79,9 @@ export default function ManualActionRecoveryPanel({
   const reuseSupported =
     resumeSupported &&
     task?.manual_action?.reuse_open_browser_supported === true;
+  const resetSupported =
+    task?.manual_action?.reset_supported === true;
+  const resetReason = `${task?.manual_action?.reset_reason || ""}`.trim();
   const taskId = task?.crawl_job_id;
   const sourceLabel = formatScraperSourceLabel(
     task?.manual_action?.source_site || task?.source_site,
@@ -90,8 +94,8 @@ export default function ManualActionRecoveryPanel({
   const helperStartCommand =
     capability?.manual_start_command ||
     DEFAULT_MANUAL_ACTION_HELPER_START_COMMAND;
-  const powerShellStartCommand = useMemo(
-    () => buildPowerShellStartCommand(helperStartWorkdir, helperStartCommand),
+  const helperStartCommandWithDirectory = useMemo(
+    () => buildHelperStartCommand(helperStartWorkdir, helperStartCommand),
     [helperStartCommand, helperStartWorkdir],
   );
 
@@ -277,12 +281,12 @@ export default function ManualActionRecoveryPanel({
           "Clipboard access is unavailable. Copy the command from Advanced troubleshooting.",
         );
       }
-      await window.navigator.clipboard.writeText(powerShellStartCommand);
+      await window.navigator.clipboard.writeText(helperStartCommandWithDirectory);
       setActionState({
         pending: null,
         error: null,
         notice:
-          "Helper command copied. Paste it into PowerShell; this page is checking for the helper.",
+          "Helper command copied. Paste it into a terminal; this page is checking for the helper.",
       });
       setPollHelper(true);
     } catch (error) {
@@ -330,6 +334,25 @@ export default function ManualActionRecoveryPanel({
         status: "disconnected",
         detail: "profile_windows_closed",
       });
+    }
+  }
+
+  async function handleResetProfile() {
+    const confirmed = window.confirm(
+      `Reset the safe ${sourceLabel} browser profile for crawl job ${taskId}? Completed crawl progress will be preserved.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    const outcome = await runAction(
+      "reset_profile",
+      "Reset browser profile",
+      () => resetBrowserProfile(taskId),
+      { refreshTask: true },
+    );
+    if (outcome.ok) {
+      setPollReuse(false);
+      setReuseState({ status: "disconnected", detail: "profile_reset" });
     }
   }
 
@@ -448,7 +471,7 @@ export default function ManualActionRecoveryPanel({
                   : "Host helper is offline"}
               </strong>
               <p>
-                Copy the start command, then paste it into PowerShell from the
+                Copy the start command, then paste it into a terminal from the
                 repository root. It starts in <code>{helperStartWorkdir}</code>;
                 this page will detect it automatically.
               </p>
@@ -565,6 +588,38 @@ export default function ManualActionRecoveryPanel({
             <RotateCcw size={16} aria-hidden="true" />
             <span>Resume with Fresh Profile</span>
           </button>
+        </div>
+      )}
+
+      {resetSupported && (
+        <div className="manual-action-fallback">
+          <div>
+            <strong>Profile lock detected — safe reset available</strong>
+            <p>
+              Reset clears the stale worker profile state without deleting
+              completed crawl progress.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="manual-action-secondary-button"
+            data-testid="crawl-task-reset-profile"
+            disabled={anyPending || recoveryOutcomePending}
+            onClick={() => void handleResetProfile()}
+          >
+            <RotateCcw size={16} aria-hidden="true" />
+            <span>Reset Browser Profile</span>
+          </button>
+        </div>
+      )}
+
+      {resetReason && !resetSupported && (
+        <div
+          className="crawl-tasks-action-note"
+          data-testid="crawl-task-reset-unavailable"
+          role="status"
+        >
+          Browser profile reset is unavailable: {resetReason.replace(/_/g, " ")}.
         </div>
       )}
 

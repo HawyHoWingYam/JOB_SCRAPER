@@ -5,13 +5,21 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from app.config import settings
+from app.crawl_modes import resolve_crawl_mode
 from app.manual_actions.live_browser_registry import get_live_browser_registry
 from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.browser_launch import launch_persistent_context_with_fallback
 from app.scraper.log_events import build_scrape_log_event
+from app.scraper.jobsdb_profile_recovery import (
+    PROFILE_SCOPE_FIXED,
+    PROFILE_SCOPE_FRESH,
+    cleanup_orphan_profiles,
+    cleanup_profile,
+    fresh_profile_path,
+)
 from app.scraper.manual_action import (
     ManualActionRequiredError,
     RESUME_STRATEGY_FRESH_PROFILE,
@@ -44,6 +52,13 @@ class JobsDBBrowserDetailScraper:
     ):
         self.request_payload = dict(request_payload or {})
         self.resume_strategy = self.request_payload.get("resume_strategy") or RESUME_STRATEGY_FRESH_PROFILE
+        try:
+            self.crawl_mode = resolve_crawl_mode(
+                "jobsdb",
+                self.request_payload.get("crawl_mode"),
+            )
+        except ValueError:
+            self.crawl_mode = resolve_crawl_mode("jobsdb")
         self.page_content_fetcher = page_content_fetcher
         self.sync_page_content_fetcher = sync_page_content_fetcher
         self.browser_channel = browser_channel or settings.jobsdb_headed_browser_channel
@@ -64,6 +79,10 @@ class JobsDBBrowserDetailScraper:
         self._last_page_title: str | None = None
         self._last_page_url: str | None = None
         self._last_response_status: int | None = None
+        self._last_response_headers: dict[str, str] | None = None
+        self._resolved_user_data_dir: Path | None = None
+        self._profile_scope = PROFILE_SCOPE_FIXED
+        self._stale_profile_retry_attempted = False
 
     async def __aenter__(self):
         if self.page_content_fetcher is None and self.sync_page_content_fetcher is None:
@@ -86,6 +105,26 @@ class JobsDBBrowserDetailScraper:
             finally:
                 self._executor.shutdown(wait=True)
                 self._executor = None
+                if (
+                    self._profile_scope == PROFILE_SCOPE_FRESH
+                    and self._resolved_user_data_dir is not None
+                    and (
+                        exc_type is None
+                        or not issubclass(exc_type, ManualActionRequiredError)
+                    )
+                ):
+                    try:
+                        cleanup_profile(
+                            self._resolved_user_data_dir,
+                            profile_scope=PROFILE_SCOPE_FRESH,
+                            browser_channel=self.browser_channel,
+                        )
+                    except Exception as cleanup_error:
+                        logger.warning(
+                            "jobsdb_browser_profile_cleanup_failed crawl_job_id=%s error_type=%s",
+                            self.request_payload.get("crawl_job_id"),
+                            type(cleanup_error).__name__,
+                        )
         return None
 
     async def fetch_job_detail(self, job_id: str, client=None) -> dict | None:
@@ -105,6 +144,7 @@ class JobsDBBrowserDetailScraper:
             final_url=self._last_page_url or url,
             title=self._last_page_title,
             text=html if len(html) <= 65536 else html[:4096],
+            headers=self._last_response_headers,
         )
         if access_evidence is not None or self._looks_like_interstitial(html):
             classification = (
@@ -133,14 +173,16 @@ class JobsDBBrowserDetailScraper:
                     reason=evidence.get("reason"),
                 )
             )
-            raise build_session_recovery_manual_action(
+            manual_action = build_session_recovery_manual_action(
                 source_site="jobsdb",
                 stage="detail_page",
                 blocked_url=self._last_page_url or url,
                 referer=settings.jobsdb_base_url,
                 classification=classification,
                 evidence=evidence,
+                resume_context=self._browser_resume_context(),
             )
+            raise manual_action
         detail = parse_jobsdb_detail_page(html, job_id=job_id)
         logger.debug(
             build_scrape_log_event(
@@ -157,12 +199,14 @@ class JobsDBBrowserDetailScraper:
         self.cancellation_token.raise_if_cancelled()
         if self.page_content_fetcher is not None:
             self._last_response_status = None
+            self._last_response_headers = None
             self._last_page_title = None
             self._last_page_url = url
             return await self.page_content_fetcher(url)
         fetcher = self.sync_page_content_fetcher or self._fetch_page_content_sync
         if self._executor is None:
             self._last_response_status = None
+            self._last_response_headers = None
             self._last_page_title = None
             self._last_page_url = url
             return await asyncio.to_thread(fetcher, url)
@@ -186,27 +230,47 @@ class JobsDBBrowserDetailScraper:
                 "crawl_job_id": self.request_payload.get("crawl_job_id"),
                 "strategy": self.resume_strategy,
                 "source_site": "jobsdb",
+                "crawl_mode": self.crawl_mode,
             },
         )
 
         launch_kwargs = {
-            "headless": False,
+            "headless": self.crawl_mode == "headless",
         }
         if self.executable_path:
             launch_kwargs["executable_path"] = self.executable_path
         else:
             launch_kwargs["channel"] = self.browser_channel
 
-        launch_result = launch_persistent_context_with_fallback(
-            self._sync_playwright.chromium,
-            user_data_dir=str(self._resolve_user_data_dir()),
-            browser_channel=self.browser_channel,
-            executable_path=self.executable_path,
-            headless=False,
-            extra_launch_kwargs={
-                key: value for key, value in launch_kwargs.items() if key != "headless"
-            },
-        )
+        profile_path = self._resolve_user_data_dir()
+        try:
+            launch_result = launch_persistent_context_with_fallback(
+                self._sync_playwright.chromium,
+                user_data_dir=str(profile_path),
+                browser_channel=self.browser_channel,
+                executable_path=self.executable_path,
+                headless=self.crawl_mode == "headless",
+                extra_launch_kwargs={
+                    key: value
+                    for key, value in launch_kwargs.items()
+                    if key != "headless"
+                },
+            )
+        except Exception as exc:
+            if not self._retry_stale_profile_once(exc, profile_path):
+                raise
+            launch_result = launch_persistent_context_with_fallback(
+                self._sync_playwright.chromium,
+                user_data_dir=str(profile_path),
+                browser_channel=self.browser_channel,
+                executable_path=self.executable_path,
+                headless=self.crawl_mode == "headless",
+                extra_launch_kwargs={
+                    key: value
+                    for key, value in launch_kwargs.items()
+                    if key != "headless"
+                },
+            )
         if launch_result.attempted_fallback:
             logger.warning(
                 "jobsdb_browser_channel_fallback requested=%s resolved=%s crawl_job_id=%s",
@@ -234,6 +298,7 @@ class JobsDBBrowserDetailScraper:
                 source="jobsdb",
                 crawl_job_id=self.request_payload.get("crawl_job_id"),
                 strategy=self.resume_strategy,
+                crawl_mode=self.crawl_mode,
                 cdp_host=cdp_host,
                 cdp_connect_host=cdp_connect_host,
                 debug_port=session.debug_port,
@@ -253,6 +318,7 @@ class JobsDBBrowserDetailScraper:
                     source="jobsdb",
                     crawl_job_id=self.request_payload.get("crawl_job_id"),
                     strategy=self.resume_strategy,
+                    crawl_mode=self.crawl_mode,
                     cdp_host=cdp_host,
                     cdp_connect_host=cdp_connect_host,
                     debug_port=session.debug_port,
@@ -270,6 +336,7 @@ class JobsDBBrowserDetailScraper:
                     source="jobsdb",
                     crawl_job_id=self.request_payload.get("crawl_job_id"),
                     strategy=self.resume_strategy,
+                    crawl_mode=self.crawl_mode,
                     cdp_host=cdp_host,
                     cdp_connect_host=cdp_connect_host,
                     debug_port=session.debug_port,
@@ -289,6 +356,7 @@ class JobsDBBrowserDetailScraper:
                 source="jobsdb",
                 crawl_job_id=self.request_payload.get("crawl_job_id"),
                 strategy=self.resume_strategy,
+                crawl_mode=self.crawl_mode,
                 cdp_host=cdp_host,
                 cdp_connect_host=cdp_connect_host,
                 debug_port=session.debug_port,
@@ -308,6 +376,7 @@ class JobsDBBrowserDetailScraper:
         self._last_page_title = None
         self._last_page_url = None
         self._last_response_status = None
+        self._last_response_headers = None
 
     async def _cleanup_failed_startup(self, loop) -> None:
         if self._executor is None:
@@ -338,10 +407,18 @@ class JobsDBBrowserDetailScraper:
         self._wait_for_timeout_with_cancellation(3000)
         response_status = getattr(response, "status", None)
         self._last_response_status = (
-            response_status if type(response_status) is int else None
+            response_status
+            if isinstance(response_status, int) and not isinstance(response_status, bool)
+            else None
         )
         self._last_page_title = self._sync_page.title()
         self._last_page_url = str(getattr(self._sync_page, "url", url) or url)
+        all_headers = getattr(response, "all_headers", None)
+        self._last_response_headers = (
+            {str(key): str(value) for key, value in all_headers().items()}
+            if callable(all_headers)
+            else None
+        )
         return self._sync_page.content()
 
     def _wait_for_timeout_with_cancellation(self, timeout_ms: int) -> None:
@@ -371,28 +448,129 @@ class JobsDBBrowserDetailScraper:
         )
 
     def _raise_if_profile_in_use(self, exc: Exception) -> None:
-        message = str(exc or "")
-        if "launch_persistent_context" not in message or "Target page, context or browser has been closed" not in message:
+        if not self._is_profile_lock_error(exc):
             return
 
         raise ManualActionRequiredError(
             source_site="jobsdb",
             stage="browser_profile_in_use",
             blocked_url=settings.jobsdb_base_url,
-            message="Close all Edge windows using the automation profile, then click Resume.",
-            action_type="close_browser_window",
-            instructions=[
-                "Close all Edge windows that use the listed automation profile.",
-                "Return to the app and click Resume.",
-            ],
+            message=(
+                "The headless worker browser profile could not start. Reset the "
+                "worker profile if it is stale, then resume this crawl."
+                if self.crawl_mode == "headless"
+                else "Close all Edge windows using the automation profile, then click Resume."
+            ),
+            action_type=(
+                "profile_recovery"
+                if self.crawl_mode == "headless"
+                else "close_browser_window"
+            ),
+            instructions=(
+                [
+                    "Use Reset Browser Profile when the worker confirms no active browser session remains.",
+                    "Return to the task and resume with Fresh Profile or the explicit verification browser.",
+                ]
+                if self.crawl_mode == "headless"
+                else [
+                    "Close all Edge windows that use the listed automation profile.",
+                    "Return to the app and click Resume.",
+                ]
+            ),
+            resume_context=self._browser_resume_context(),
         ) from exc
 
+    @staticmethod
+    def _is_profile_lock_error(exc: Exception) -> bool:
+        message = str(exc or "")
+        return (
+            "launch_persistent_context" in message
+            and "Target page, context or browser has been closed" in message
+        )
+
+    def _retry_stale_profile_once(self, exc: Exception, profile_path: Path) -> bool:
+        if (
+            not self.request_payload.get("is_resume")
+            or self._profile_scope != PROFILE_SCOPE_FRESH
+            or self._stale_profile_retry_attempted
+            or not self._is_profile_lock_error(exc)
+        ):
+            return False
+        self._stale_profile_retry_attempted = True
+        try:
+            reset_result = cleanup_profile(
+                profile_path,
+                profile_scope=PROFILE_SCOPE_FRESH,
+                browser_channel=self.browser_channel,
+            )
+        except Exception as cleanup_error:
+            logger.info(
+                "jobsdb_browser_profile_retry_unavailable crawl_job_id=%s error_type=%s",
+                self.request_payload.get("crawl_job_id"),
+                type(cleanup_error).__name__,
+            )
+            return False
+        if not reset_result.available:
+            logger.info(
+                "jobsdb_browser_profile_retry_blocked crawl_job_id=%s reason=%s liveness=%s",
+                self.request_payload.get("crawl_job_id"),
+                reset_result.reason,
+                reset_result.liveness.state,
+            )
+            return False
+        logger.info(
+            "jobsdb_browser_profile_retry_after_safe_reset crawl_job_id=%s",
+            self.request_payload.get("crawl_job_id"),
+        )
+        return True
+
     def _resolve_user_data_dir(self) -> Path:
+        if self._resolved_user_data_dir is not None:
+            return self._resolved_user_data_dir
+
+        if (
+            self.resume_strategy == RESUME_STRATEGY_FRESH_PROFILE
+            and self.request_payload.get("crawl_job_id")
+        ):
+            try:
+                cleanup_orphan_profiles(
+                    configured_path=self.user_data_dir,
+                    browser_channel=self.browser_channel,
+                )
+            except Exception as cleanup_error:
+                logger.info(
+                    "jobsdb_browser_profile_orphan_cleanup_skipped crawl_job_id=%s error_type=%s",
+                    self.request_payload.get("crawl_job_id"),
+                    type(cleanup_error).__name__,
+                )
+            self._resolved_user_data_dir = fresh_profile_path(
+                str(self.request_payload["crawl_job_id"]),
+                configured_path=self.user_data_dir,
+                browser_channel=self.browser_channel,
+            )
+            self._profile_scope = PROFILE_SCOPE_FRESH
+            self._resolved_user_data_dir.mkdir(parents=True, exist_ok=True)
+            return self._resolved_user_data_dir
+
         if self.user_data_dir:
-            return Path(self.user_data_dir)
+            self._resolved_user_data_dir = Path(self.user_data_dir)
+            return self._resolved_user_data_dir
 
         local_appdata = os.environ.get("LOCALAPPDATA")
         if local_appdata:
-            return Path(local_appdata) / "job_scraper" / "playwright" / self.browser_channel
+            self._resolved_user_data_dir = (
+                Path(local_appdata) / "job_scraper" / "playwright" / self.browser_channel
+            )
+            return self._resolved_user_data_dir
 
-        return Path(".playwright") / self.browser_channel
+        self._resolved_user_data_dir = Path(".playwright") / self.browser_channel
+        return self._resolved_user_data_dir
+
+    def _browser_resume_context(self) -> dict[str, Any]:
+        profile_path = self._resolve_user_data_dir()
+        return {
+            "crawl_mode": self.crawl_mode,
+            "browser_channel": self.browser_channel,
+            "browser_profile_path": str(profile_path),
+            "profile_scope": self._profile_scope,
+        }

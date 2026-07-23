@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   cancelCrawlJob: vi.fn(),
   getTaskControlBoard: vi.fn(),
   permanentlyDeleteAutomation: vi.fn(),
+  resetBrowserProfile: vi.fn(),
   resumeManualTask: vi.fn(),
   reviewAutomationDelete: vi.fn(),
   transitionAutomation: vi.fn(),
@@ -64,6 +65,43 @@ describe('TaskControlBoardPage', () => {
     render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
     await user.click(await screen.findByRole('button', { name: 'Pause' }));
     await waitFor(() => expect(api.transitionAutomation).toHaveBeenCalledWith('automation-1', 'pause', 7));
+    await waitFor(() => expect(api.getTaskControlBoard.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it('renders repeated action descriptors without duplicate React keys', async () => {
+    api.getTaskControlBoard.mockResolvedValue({
+      ...board,
+      activeRuns: [{
+        ...board.activeRuns[0],
+        actions: [action('view_task'), action('view_task')],
+      }],
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
+
+    await screen.findByRole('heading', { name: 'Active runs' });
+    expect(consoleError).not.toHaveBeenCalledWith(
+      expect.stringContaining('Encountered two children with the same key'),
+    );
+    consoleError.mockRestore();
+  });
+
+  it('routes safe profile reset actions to the crawl-task recovery endpoint', async () => {
+    const user = userEvent.setup();
+    api.getTaskControlBoard.mockResolvedValue({
+      ...board,
+      activeRuns: [{
+        ...board.activeRuns[0],
+        actions: [action('reset_browser_profile')],
+      }],
+    });
+    api.resetBrowserProfile.mockResolvedValue({ status: 'reset' });
+
+    render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
+    await user.click(await screen.findByRole('button', { name: 'Reset browser profile' }));
+
+    await waitFor(() => expect(api.resetBrowserProfile).toHaveBeenCalledWith('task-1'));
     await waitFor(() => expect(api.getTaskControlBoard.mock.calls.length).toBeGreaterThan(1));
   });
 });

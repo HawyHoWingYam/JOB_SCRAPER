@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.crawl_phases import resolve_crawl_phase
+from app.config import settings
 from app.crawl_control.task_control_board_contracts import (
     CrawlTaskDetailProjectionV1,
 )
@@ -20,7 +21,14 @@ from app.request_monitoring import build_monitoring_log_event
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.schedule_repository import ScheduleRepository
-from app.scraper.manual_action import ResumeStrategy
+from app.scraper.manual_action import ResumeStrategy, normalize_manual_action_payload
+from app.scraper.jobsdb_profile_recovery import (
+    PROFILE_SCOPE_FIXED,
+    PROFILE_SCOPE_FRESH,
+    fresh_profile_path,
+    is_task_owned_profile,
+    reset_profile,
+)
 from app.schemas.crawl_job import (
     CrawlJobCreateRequest,
     CrawlJobEventsResponse,
@@ -391,6 +399,113 @@ async def resume_crawl_job(
         )
     except Exception as exc:
         _raise_action_http_error(exc)
+
+
+@router.post("/{crawl_job_id}/reset-browser-profile")
+async def reset_browser_profile(
+    crawl_job_id: UUID,
+    db: Session = Depends(get_db),
+):
+    crawl_job = crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
+    if crawl_job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "CRAWL_TASK_NOT_FOUND",
+                "message": "Crawl task not found",
+                "context": {"crawl_job_id": str(crawl_job_id)},
+            },
+        )
+    if crawl_job.status != "manual_action_required":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Crawl task must be manual_action_required before its browser profile can be reset",
+        )
+
+    latest_event = crawl_job_repository.get_latest_manual_action_event(db, crawl_job_id)
+    if latest_event is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Crawl task has no manual-action profile to reset",
+        )
+    latest_payload = dict(latest_event.payload or {})
+    manual_action = normalize_manual_action_payload(
+        latest_payload.get("manual_action"),
+        source_site=crawl_job.source_site,
+        request_payload=(
+            latest_payload.get("request_payload")
+            or crawl_job.request_payload
+            or {}
+        ),
+        default_browser_channel=settings.jobsdb_headed_browser_channel,
+        default_browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
+    )
+    stage = str(manual_action.get("stage") or "").strip().lower()
+    if crawl_job.source_site != "jobsdb" or stage not in {
+        "browser_profile_in_use",
+        "profile_lock",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The latest manual action does not expose a resettable JobsDB browser profile",
+        )
+
+    profile_path = str(manual_action.get("browser_profile_path") or "").strip()
+    if not profile_path:
+        profile_path = str(
+            fresh_profile_path(
+                str(crawl_job_id),
+                configured_path=settings.jobsdb_headed_browser_user_data_dir,
+                browser_channel=settings.jobsdb_headed_browser_channel,
+            )
+        )
+    profile_scope = str(manual_action.get("profile_scope") or "").strip()
+    if profile_scope not in {PROFILE_SCOPE_FIXED, PROFILE_SCOPE_FRESH}:
+        profile_scope = PROFILE_SCOPE_FRESH if is_task_owned_profile(profile_path) else PROFILE_SCOPE_FIXED
+
+    reset_result = reset_profile(
+        profile_path,
+        profile_scope=profile_scope,
+        browser_channel=(
+            str(manual_action.get("browser_channel") or "").strip()
+            or settings.jobsdb_headed_browser_channel
+        ),
+    )
+    if not reset_result.available:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "BROWSER_PROFILE_RESET_UNAVAILABLE",
+                "message": "Browser profile reset is disabled until the worker confirms no active browser session remains.",
+                "reason": reset_result.reason,
+                "liveness": reset_result.liveness.state,
+                "profile_scope": reset_result.profile_scope,
+            },
+        )
+
+    crawl_job_repository.append_event(
+        db,
+        crawl_job_id=crawl_job_id,
+        event_type="crawl.browser_profile_reset",
+        payload={
+            "crawl_job_id": str(crawl_job_id),
+            "source_site": crawl_job.source_site,
+            "profile_scope": reset_result.profile_scope,
+            "liveness": reset_result.liveness.state,
+            "removed_lock_markers": list(reset_result.removed_lock_markers),
+            "recreated": reset_result.recreated,
+            "profile_path": reset_result.profile_path,
+        },
+        emitted_by="api",
+    )
+    return {
+        "status": "reset",
+        "crawl_job_id": str(crawl_job_id),
+        "profile_scope": reset_result.profile_scope,
+        "liveness": reset_result.liveness.state,
+        "removed_lock_markers": list(reset_result.removed_lock_markers),
+        "recreated": reset_result.recreated,
+    }
 
 
 @router.post("/{crawl_job_id}/cancel", response_model=CrawlJobSchema)

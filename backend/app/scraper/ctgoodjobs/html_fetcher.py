@@ -151,6 +151,7 @@ async def fetch_html_document(
                         if len(response.text) <= 65536
                         else response.text[:4096]
                     ),
+                    headers=response.headers,
                 )
                 if (
                     access_evidence is not None

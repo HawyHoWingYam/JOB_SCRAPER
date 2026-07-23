@@ -37,7 +37,7 @@ from app.source_catalog.domain import (
 )
 
 
-DEFAULT_LISTING_SYSTEM_RUN_PAGE_CAP = 1000
+DEFAULT_LISTING_SYSTEM_RUN_PAGE_CAP = 5000
 
 
 def evaluate_listing_workload(

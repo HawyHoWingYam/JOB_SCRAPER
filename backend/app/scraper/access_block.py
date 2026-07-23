@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -63,17 +64,36 @@ def classify_public_access_evidence(
     final_url: str | None = None,
     title: str | None = None,
     text: str | None = None,
+    headers: Mapping[str, Any] | None = None,
 ) -> PublicAccessEvidence | None:
     """Classify only positive public-page IP or WAF evidence.
 
     Network exceptions, DNS failures, timeouts, parser failures, and auth state
     are deliberately absent from this boundary and therefore remain non-IP.
+    Cloudflare's explicit ``cf-mitigated: challenge`` response header is strong
+    WAF evidence and takes precedence over a generic 403 status.
     The returned reason is a compact marker identifier; response bodies are
     never retained.
     """
 
-    normalized_status = status_code if type(status_code) is int else None
+    normalized_status = (
+        status_code
+        if isinstance(status_code, int) and not isinstance(status_code, bool)
+        else None
+    )
     normalized_url = str(final_url or "").strip() or None
+    normalized_headers = {
+        str(key).strip().lower(): str(value).strip().lower()
+        for key, value in (headers or {}).items()
+        if str(key).strip()
+    }
+    if normalized_headers.get("cf-mitigated") == "challenge":
+        return PublicAccessEvidence(
+            classification="waf_challenge",
+            status_code=normalized_status,
+            final_url=normalized_url,
+            reason="cloudflare_mitigated_challenge",
+        )
     if normalized_status in {403, 429}:
         return PublicAccessEvidence(
             classification="ip_blocked",

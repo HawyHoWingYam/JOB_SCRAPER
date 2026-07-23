@@ -79,6 +79,7 @@ class CategoryListScraper:
                 status_code=response.status_code,
                 final_url=str(response.url),
                 text=access_text,
+                headers=response.headers,
             )
             if access_evidence is not None:
                 raise build_session_recovery_manual_action(

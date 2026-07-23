@@ -688,6 +688,11 @@ listing_batch(source_listing_crawl_job_id=UUID)
   null-classification rows. `crawl_scope` applies the reviewed source-native
   classification expansion. `listing_batch` stays bound to the explicit
   listing Crawl Job and includes that batch's null-classification rows.
+- Crawl Scope contracts use source-qualified IDs such as
+  `offertoday:118000`, while historical staging rows may persist the native
+  token `118000`. Detail candidate queries must match both the qualified and
+  native representations at the repository boundary; they must never fall
+  back to an unscoped query when the qualified filter has no direct match.
 - No mode auto-selects the newest listing batch. Primitive `category_ids` and
   empty-array defaults cannot narrow or replace a versioned backlog scope.
 - Preparation records a timezone-aware cutoff, groups eligible staging rows by
@@ -775,6 +780,7 @@ event payloads.
 | Row becomes eligible after snapshot cutoff | Report as future backlog; never add to this plan |
 | Entire snapshot exceeds absolute cap | `BACKLOG_SAFETY_CAP_EXCEEDED`; persist no plan |
 | Prepared membership is empty | Block with `DETAIL_BACKLOG_EMPTY`; issue no confirmation token |
+| Qualified Crawl Scope ID targets native staging values | Match qualified and native ID representations; do not report a false empty backlog |
 | Compatibility payload claims other IDs/cap | Ignore it; consumed plan remains authority |
 | One target/row becomes ineligible before consume | Reject the whole plan as stale; claim nothing |
 | Resume follows IP/auth/WAF stop | Keep the same plan and unfinished membership |
@@ -792,6 +798,8 @@ event payloads.
   IP-block resume, and never switches to another batch.
 - **Base:** An empty eligible query produces a blocked review with zero frozen
   targets and no launch token.
+- **Good:** `offertoday:118000` matches staging rows persisted with native
+  `118000`, so the reviewed classification scope freezes those eligible jobs.
 - **Bad:** Runtime re-queries the global backlog after each segment until empty.
   The reviewed cap becomes a segment size and one run can grow without bound.
 - **Bad:** JSX subtracts `detail_run_completed` from a plan target count or
