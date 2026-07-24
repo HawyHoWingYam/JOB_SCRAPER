@@ -101,6 +101,11 @@ Persistence is owned by `job_source_attribute_projections`,
   as `<malformed:null>` or `<malformed:array>`. Never serialize the malformed
   object, array contents, cookies, sessions, or secrets into evidence rows.
   Markers have no lookup key, mapping, or governed Employment Type.
+- CTGoodJobs detail collection preserves typed evidence across the production
+  `parse_detail_page -> merge_ctgoodjobs_job -> build_ctgoodjobs_canonical_job`
+  boundary. Merge prefers detail evidence and uses listing evidence only when
+  detail evidence is absent; it must not rebuild an allowlisted payload that
+  silently drops `source_attribute_evidence`.
 
 #### Transactions and persistence
 
@@ -184,6 +189,8 @@ Persistence is owned by `job_source_attribute_projections`,
 | Primary has no non-empty basis or evidence has multiple Primaries | `ValueError`; no partial writes |
 | Collected payload contains any legacy Source Job Attribute key | `ValueError` before database access |
 | Authoritative ingest has no typed `source_attribute_evidence` | `InvalidIngestPayloadError(reason="missing_source_attribute_evidence")` |
+| CTGoodJobs detail evidence is present before merge | Preserve the exact detail payload through canonical construction; do not fall back to listing evidence |
+| CTGoodJobs detail evidence is absent but listing evidence exists | Preserve the listing evidence; ingest remains responsible for typed validation |
 | Generic `POST /api/v1/jobs` is called | HTTP 410 with `COLLECTED_JOB_CREATE_RETIRED` |
 | Unknown Employment Type code or unrecognized legacy label filter | HTTP/Pydantic 422 validation failure |
 | Exact evidence replay | `changed=false`; no duplicate outbox row |
@@ -216,7 +223,9 @@ Persistence is owned by `job_source_attribute_projections`,
 ### 6. Tests Required
 
 - `test_source_job_attribute_adapters.py`: complete per-Source arrays, bounded
-  malformed markers, governed mappings, and Work Arrangement separation.
+  malformed markers, governed mappings, Work Arrangement separation, and
+  CTGoodJobs parser/merge/canonical evidence transport with detail precedence
+  plus listing fallback.
 - `test_source_job_attributes.py`: PostgreSQL replacement/replay/concurrency,
   outbox rollback, Primary/source/catalog constraints, `RESTRICT`/`CASCADE`,
   OR-within/AND-across filters, API views, deterministic rebuild counters, and
@@ -252,6 +261,11 @@ db.commit()
 This bypasses source identity, projection replacement, bounded evidence, and
 the projection outbox event.
 
+```python
+# Wrong: rebuilding the CTGoodJobs merge result without its typed evidence.
+merged = {"job_id": detail["job_id"], "title": detail["title"]}
+```
+
 #### Correct
 
 ```python
@@ -266,6 +280,15 @@ db.commit()
 
 The caller owns one atomic Job/projection/outbox transaction and exact replay
 remains idempotent.
+
+```python
+# Correct: use the shared detail-first merge rule for evidence as well as fields.
+merged["source_attribute_evidence"] = _choose(
+    detail_job,
+    list_job,
+    "source_attribute_evidence",
+)
+```
 
 #### Correct: locked provenance repair
 

@@ -9,6 +9,7 @@ from app.job_intelligence.source_attributes import (
     OfferTodaySourceEvidenceAdapter,
     SourceClassificationContext,
 )
+from app.scraper.ctgoodjobs.merge import merge_ctgoodjobs_job
 from app.sources.contracts import (
     build_ctgoodjobs_canonical_job,
     build_jobsdb_canonical_job,
@@ -426,6 +427,68 @@ def test_ctgoodjobs_canonical_payload_transports_json_ld_employment_evidence():
         "paths": [["ctgoodjobs:021"]],
         "employment_codes": ["full_time", "temporary"],
     }
+
+
+def test_ctgoodjobs_merge_preserves_detail_source_attribute_evidence():
+    parsed = parse_ctgoodjobs_detail_page(
+        """
+        <html>
+          <head>
+            <title>Infrastructure Engineer</title>
+            <script type="application/ld+json">
+              {
+                "@context": "https://schema.org",
+                "@type": "JobPosting",
+                "employmentType": ["FULL_TIME", "TEMPORARY"]
+              }
+            </script>
+          </head>
+        </html>
+        """,
+        source_classification_id="ctgoodjobs:021",
+        source_classification_name="Information Technology",
+        source_classification_slug="information-technology",
+        url="https://jobs.ctgoodjobs.hk/job/ct-job-6",
+    )
+    expected_evidence = parsed["source_attribute_evidence"]
+
+    merged = merge_ctgoodjobs_job(
+        category={
+            "source_classification_id": "ctgoodjobs:021",
+            "name": "Information Technology",
+            "slug": "information-technology",
+        },
+        list_job={
+            "job_id": "ct-job-6",
+            "title": "Infrastructure Engineer",
+            "source_attribute_evidence": {"source_site": "listing-sentinel"},
+        },
+        detail_job=parsed,
+    )
+    canonical = build_ctgoodjobs_canonical_job(merged).to_dict()
+
+    assert canonical["source_attribute_evidence"] == expected_evidence
+
+
+def test_ctgoodjobs_merge_falls_back_to_listing_source_attribute_evidence():
+    listing_evidence = {
+        "source_site": "ctgoodjobs",
+        "classification_paths": [],
+        "employment_labels": [],
+        "work_arrangements": [],
+    }
+
+    merged = merge_ctgoodjobs_job(
+        category=None,
+        list_job={
+            "job_id": "ct-job-7",
+            "title": "Support Engineer",
+            "source_attribute_evidence": listing_evidence,
+        },
+        detail_job={"job_id": "ct-job-7", "title": "Support Engineer"},
+    )
+
+    assert merged["source_attribute_evidence"] == listing_evidence
 
 
 def test_jobsdb_detail_canonical_payload_transports_scalar_detail_evidence():

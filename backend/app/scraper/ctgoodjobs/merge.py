@@ -109,6 +109,11 @@ def merge_ctgoodjobs_job(
         "source_classification_id": source_classification_id,
         "source_classification_name": source_classification_name,
         "source_classification_slug": source_classification_slug,
+        "source_attribute_evidence": _choose(
+            detail_job,
+            list_job,
+            "source_attribute_evidence",
+        ),
     }
 
     # Carry through raw payloads for debugging if present.
