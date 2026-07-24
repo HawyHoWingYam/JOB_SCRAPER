@@ -1371,3 +1371,38 @@ Preserved bounded profile-readiness diagnostics for AI settings configuration te
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: CTGoodJobs headless profile recovery
+
+**Date**: 2026-07-24
+**Task**: CTGoodJobs headless profile recovery
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Made CTGoodJobs headless-first across crawl and catalog paths, extracted configured-root-safe shared browser profile recovery, added explicit CTGoodJobs manual recovery controls, validated backend/frontend gates and live canaries, and documented the cross-layer contracts.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c8db77dc` | (see git log) |
+| `f4c039d3` | (see git log) |
+| `6da2f0f2` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
