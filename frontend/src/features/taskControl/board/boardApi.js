@@ -56,4 +56,14 @@ export async function resetBrowserProfile(taskId) {
   );
 }
 
+export async function dismissFailedRunAttention(taskId, expectedFailureEventSequence) {
+  return apiFetchJson(
+    apiPath(`/crawl-jobs/${encodeURIComponent(taskId)}/dismiss-failed-attention`),
+    json({
+      version: 1,
+      expected_failure_event_sequence: expectedFailureEventSequence,
+    }),
+  );
+}
+
 export { cancelCrawlJob };

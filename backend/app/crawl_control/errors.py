@@ -131,6 +131,46 @@ class DetailRunConflictError(CrawlControlError):
         )
 
 
+class CrawlTaskNotFoundError(CrawlControlError):
+    def __init__(self, crawl_job_id: Any) -> None:
+        super().__init__(
+            "CRAWL_TASK_NOT_FOUND",
+            "Crawl task not found",
+            context={"crawl_job_id": str(crawl_job_id)},
+        )
+
+
+class FailedAttentionStateInvalidError(CrawlControlError):
+    def __init__(self, *, crawl_job_id: Any, current_status: str) -> None:
+        super().__init__(
+            "FAILED_ATTENTION_STATE_INVALID",
+            "Only a terminal failed crawl task can be dismissed from attention",
+            context={
+                "crawl_job_id": str(crawl_job_id),
+                "current_status": current_status,
+            },
+        )
+
+
+class FailedAttentionRevisionConflictError(CrawlControlError):
+    def __init__(
+        self,
+        *,
+        crawl_job_id: Any,
+        expected_failure_event_sequence: int,
+        current_failure_event_sequence: int | None,
+    ) -> None:
+        super().__init__(
+            "FAILED_ATTENTION_REVISION_CONFLICT",
+            "The failed-run attention revision changed before dismissal",
+            context={
+                "crawl_job_id": str(crawl_job_id),
+                "expected_failure_event_sequence": expected_failure_event_sequence,
+                "current_failure_event_sequence": current_failure_event_sequence,
+            },
+        )
+
+
 class AutomationNotFoundError(CrawlControlError):
     def __init__(self, automation_id: Any) -> None:
         super().__init__(

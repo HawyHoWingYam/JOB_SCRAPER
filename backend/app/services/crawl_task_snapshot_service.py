@@ -5,6 +5,9 @@ from typing import Any
 
 from app.config import settings
 from app.crawl_modes import resolve_crawl_mode
+from app.crawl_control.failed_run_attention import (
+    FAILED_ATTENTION_DISMISSED_EVENT_TYPE,
+)
 from app.database import SessionLocal
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.scraper.manual_action import normalize_manual_action_payload
@@ -722,6 +725,14 @@ def build_crawl_task_snapshot(
     events: list[Any] | None = None,
     category_lookup_cache: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
+    if (
+        getattr(latest_event, "event_type", None)
+        == FAILED_ATTENTION_DISMISSED_EVENT_TYPE
+    ):
+        latest_event = _latest_event_of_types(
+            events,
+            PROGRESS_CONTEXT_EVENT_TYPES,
+        )
     event_payload = latest_event.payload if latest_event and isinstance(latest_event.payload, dict) else {}
     latest_event_type = getattr(latest_event, "event_type", None)
     listing_completed_event = latest_event if latest_event_type == "listing_completed" else _latest_event_of_type(

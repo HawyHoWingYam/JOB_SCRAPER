@@ -257,6 +257,7 @@ BoardActionKind = Literal[
     "cancel",
     "resume_manual_action",
     "reset_browser_profile",
+    "dismiss_failed_run",
 ]
 
 
@@ -369,8 +370,22 @@ class BoardAttentionItemV2(FrozenContract):
     summary: str = Field(min_length=1, max_length=1000)
     entity_kind: Literal["run", "automation", "catalog"]
     entity_id: str = Field(min_length=1, max_length=255)
+    failure_event_sequence: int | None = Field(default=None, ge=1)
     primary_action: BoardActionV1
     secondary_actions: tuple[BoardActionV1, ...] = ()
+
+
+class DismissFailedAttentionRequestV1(FrozenContract):
+    version: Literal[1] = 1
+    expected_failure_event_sequence: int = Field(ge=1)
+
+
+class DismissFailedAttentionResponseV1(FrozenContract):
+    version: Literal[1] = 1
+    crawl_job_id: UUID
+    failure_event_sequence: int = Field(ge=1)
+    dismissal_event_sequence: int = Field(ge=1)
+    replayed: bool
 
 
 class BoardActiveRunV2(FrozenContract):

@@ -17,6 +17,10 @@ from app.crawl_control.dispatch_plan_contracts import (
     DispatchPlanSnapshotV1,
 )
 from app.crawl_control.errors import DispatchPlanFingerprintMismatchError
+from app.crawl_control.failed_run_attention import (
+    FAILED_ATTENTION_EVENT_TYPES,
+    project_failed_attention_state,
+)
 from app.crawl_control.task_control_board_contracts import (
     AutomationLatestOutcomeV1,
     AutomationRowProjectionV1,
@@ -748,6 +752,11 @@ class TaskControlBoardProjectionService:
             crawl_job_ids=crawl_job_ids,
             event_types=PROGRESS_CONTEXT_EVENT_TYPES,
         )
+        failed_attention_events = self.crawl_job_repository.list_events_by_job_ids(
+            self.db,
+            crawl_job_ids=crawl_job_ids,
+            event_types=set(FAILED_ATTENTION_EVENT_TYPES),
+        )
         now = utc_now()
         category_lookup_cache: dict[str, dict[str, str]] = {}
         run_entries = []
@@ -867,7 +876,16 @@ class TaskControlBoardProjectionService:
                         actions=actions,
                     )
                 )
-            attention = self._run_attention(run, issue=issue, actions=actions)
+            failed_attention = project_failed_attention_state(
+                failed_attention_events.get(row.id, ())
+            )
+            attention = self._run_attention(
+                run,
+                issue=issue,
+                actions=actions,
+                failure_event_sequence=failed_attention.failure_event_sequence,
+                failure_dismissed=failed_attention.dismissed,
+            )
             if attention is not None:
                 attention_by_source[run.source_site].append(attention)
 
@@ -979,6 +997,8 @@ class TaskControlBoardProjectionService:
         *,
         issue: CrawlTaskIssueProjectionV1 | None,
         actions: tuple[BoardActionV1, ...],
+        failure_event_sequence: int | None = None,
+        failure_dismissed: bool = False,
     ) -> BoardAttentionItemV2 | None:
         action_by_kind = {action.action: action for action in actions}
         if run.status == "manual_action_required":
@@ -996,6 +1016,8 @@ class TaskControlBoardProjectionService:
             summary = "Committed work remains visible while the worker reaches a terminal acknowledgement."
             primary = action_by_kind["view_task"]
         elif run.status == "failed":
+            if failure_dismissed:
+                return None
             kind = "failed_run"
             priority = 40
             code = issue.code if issue and issue.code else "RUN_FAILED"
@@ -1014,9 +1036,27 @@ class TaskControlBoardProjectionService:
             summary=summary,
             entity_kind="run",
             entity_id=str(run.crawl_job_id),
+            failure_event_sequence=(
+                failure_event_sequence if kind == "failed_run" else None
+            ),
             primary_action=primary,
             secondary_actions=(
                 action_by_kind["view_task"],
                 action_by_kind["view_logs"],
+                *(
+                    (
+                        BoardActionV1(
+                            action="dismiss_failed_run",
+                            enabled=failure_event_sequence is not None,
+                            reason_code=(
+                                None
+                                if failure_event_sequence is not None
+                                else "FAILED_EVENT_REVISION_UNAVAILABLE"
+                            ),
+                        ),
+                    )
+                    if kind == "failed_run"
+                    else ()
+                ),
             ),
         )

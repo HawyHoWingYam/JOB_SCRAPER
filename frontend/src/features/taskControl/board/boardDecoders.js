@@ -22,6 +22,10 @@ const integer = (value, path) => {
   if (!Number.isInteger(value) || value < 0) throw new BoardPayloadError(path, 'expected non-negative integer');
   return value;
 };
+const positiveInteger = (value, path) => {
+  if (!Number.isInteger(value) || value < 1) throw new BoardPayloadError(path, 'expected positive integer');
+  return value;
+};
 
 function decodeAction(value, path) {
   const row = object(value, path);
@@ -148,6 +152,7 @@ export function decodeBoard(value) {
         summary: string(attention.summary, `$.needs_attention[${index}].summary`),
         entityKind: string(attention.entity_kind, `$.needs_attention[${index}].entity_kind`),
         entityId: string(attention.entity_id, `$.needs_attention[${index}].entity_id`),
+        failureEventSequence: attention.failure_event_sequence == null ? null : positiveInteger(attention.failure_event_sequence, `$.needs_attention[${index}].failure_event_sequence`),
         primaryAction: decodeAction(attention.primary_action, `$.needs_attention[${index}].primary_action`),
         secondaryActions: array(attention.secondary_actions, `$.needs_attention[${index}].secondary_actions`).map((action, actionIndex) => decodeAction(action, `$.needs_attention[${index}].secondary_actions[${actionIndex}]`)),
       };

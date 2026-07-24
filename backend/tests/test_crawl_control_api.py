@@ -86,6 +86,7 @@ def test_crawl_control_contracts_are_registered_in_production_openapi():
         "/api/v1/dispatch-plans/{plan_id}/dispatch": {"post"},
         "/api/v1/task-control-board": {"get"},
         "/api/v1/crawl-jobs/tasks": {"get"},
+        "/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention": {"post"},
     }
     for path, methods in expected_operations.items():
         assert methods <= set(paths[path])
@@ -890,6 +891,197 @@ def test_control_board_rejects_an_unsupported_source_with_a_stable_error(
         "code": "SOURCE_SITE_UNSUPPORTED",
         "message": "Unsupported Crawl Control source_site",
         "context": {"source_site": "unknown-source"},
+    }
+
+
+def test_failed_run_attention_dismissal_is_revision_safe_and_idempotent(
+    crawl_control_client,
+):
+    client, _revision_id = crawl_control_client
+    session_factory = client.app.state.session_factory
+    repository = CrawlJobRepository()
+    db = session_factory()
+    try:
+        crawl_job = repository.create_crawl_job(
+            db,
+            source_site="jobsdb",
+            trigger_type="manual",
+            request_payload={
+                "source_site": "jobsdb",
+                "crawl_phase": "listing",
+                "crawl_mode": "headless",
+                "max_pages": 1,
+                "category_ids": [],
+            },
+            requested_by="test",
+        )
+        repository.record_runtime_event(
+            db,
+            crawl_job_id=crawl_job.id,
+            status="failed",
+            event_type="crawl.failed",
+            payload={"error": "synthetic terminal failure"},
+            emitted_by="test",
+            completed_at=crawl_job.queued_at,
+            error_message="synthetic terminal failure",
+        )
+        failure = repository.list_events(
+            db,
+            crawl_job.id,
+            event_types={"crawl.failed"},
+        )[-1]
+        crawl_job_id = str(crawl_job.id)
+        failure_sequence = failure.sequence_no
+    finally:
+        db.close()
+
+    board_before = client.get(
+        "/api/v1/task-control-board",
+        params={"version": 2, "source_site": "jobsdb"},
+    )
+    assert board_before.status_code == 200
+    failed_item = next(
+        item
+        for item in board_before.json()["needs_attention"]
+        if item["entity_id"] == crawl_job_id
+    )
+    assert failed_item["kind"] == "failed_run"
+    assert failed_item["failure_event_sequence"] == failure_sequence
+    assert failed_item["secondary_actions"][-1]["action"] == "dismiss_failed_run"
+
+    first = client.post(
+        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        json={"expected_failure_event_sequence": failure_sequence},
+    )
+    assert first.status_code == 200
+    assert first.json() == {
+        "version": 1,
+        "crawl_job_id": crawl_job_id,
+        "failure_event_sequence": failure_sequence,
+        "dismissal_event_sequence": failure_sequence + 1,
+        "replayed": False,
+    }
+
+    repeated = client.post(
+        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        json={"expected_failure_event_sequence": failure_sequence},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json() == {**first.json(), "replayed": True}
+
+    db = session_factory()
+    try:
+        dismissals = repository.list_events(
+            db,
+            UUID(crawl_job_id),
+            event_types={"crawl.failed_attention_dismissed"},
+        )
+        assert len(dismissals) == 1
+        assert dismissals[0].emitted_by == "local-operator"
+        assert dismissals[0].payload == {
+            "crawl_job_id": crawl_job_id,
+            "failure_event_sequence": failure_sequence,
+            "actor": "local-operator",
+        }
+    finally:
+        db.close()
+
+    board_after = client.get(
+        "/api/v1/task-control-board",
+        params={"version": 2, "source_site": "jobsdb"},
+    )
+    assert board_after.status_code == 200
+    assert all(
+        item["entity_id"] != crawl_job_id
+        for item in board_after.json()["needs_attention"]
+    )
+    task_after = client.get(f"/api/v1/crawl-jobs/tasks/{crawl_job_id}")
+    assert task_after.status_code == 200
+    assert task_after.json()["persisted_status"] == "failed"
+    assert task_after.json()["issue"]["summary"] == "synthetic terminal failure"
+
+    db = session_factory()
+    try:
+        next_failure = repository.append_event(
+            db,
+            crawl_job_id=UUID(crawl_job_id),
+            event_type="crawl.failed",
+            payload={"error": "new terminal failure"},
+            emitted_by="test",
+        )
+        next_failure_sequence = next_failure.sequence_no
+    finally:
+        db.close()
+
+    board_with_new_failure = client.get(
+        "/api/v1/task-control-board",
+        params={"version": 2, "source_site": "jobsdb"},
+    ).json()
+    next_item = next(
+        item
+        for item in board_with_new_failure["needs_attention"]
+        if item["entity_id"] == crawl_job_id
+    )
+    assert next_item["failure_event_sequence"] == next_failure_sequence
+
+    stale = client.post(
+        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        json={"expected_failure_event_sequence": failure_sequence},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "FAILED_ATTENTION_REVISION_CONFLICT"
+
+
+def test_failed_run_attention_dismissal_rejects_a_non_failed_task(
+    crawl_control_client,
+):
+    client, _revision_id = crawl_control_client
+    session_factory = client.app.state.session_factory
+    db = session_factory()
+    try:
+        crawl_job = CrawlJobRepository().create_crawl_job(
+            db,
+            source_site="ctgoodjobs",
+            trigger_type="manual",
+            request_payload={"crawl_phase": "listing"},
+            requested_by="test",
+        )
+        crawl_job_id = str(crawl_job.id)
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        json={"expected_failure_event_sequence": 1},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "FAILED_ATTENTION_STATE_INVALID",
+        "message": "Only a terminal failed crawl task can be dismissed from attention",
+        "context": {
+            "crawl_job_id": crawl_job_id,
+            "current_status": "queued",
+        },
+    }
+
+
+def test_failed_run_attention_dismissal_rejects_an_unknown_task(
+    crawl_control_client,
+):
+    client, _revision_id = crawl_control_client
+    crawl_job_id = uuid4()
+
+    response = client.post(
+        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        json={"expected_failure_event_sequence": 1},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "CRAWL_TASK_NOT_FOUND",
+        "message": "Crawl task not found",
+        "context": {"crawl_job_id": str(crawl_job_id)},
     }
 
 

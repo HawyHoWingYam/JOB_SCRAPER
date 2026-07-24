@@ -12,7 +12,11 @@ from app.crawl_phases import resolve_crawl_phase
 from app.config import settings
 from app.crawl_control.task_control_board_contracts import (
     CrawlTaskDetailProjectionV1,
+    DismissFailedAttentionRequestV1,
+    DismissFailedAttentionResponseV1,
 )
+from app.crawl_control.errors import CrawlControlError
+from app.crawl_control.failed_run_attention import FailedRunAttentionService
 from app.crawl_control.task_control_board_service import (
     build_crawl_task_detail_projection,
 )
@@ -57,6 +61,7 @@ crawl_job_repository = CrawlJobRepository()
 crawl_job_listing_repository = CrawlJobListingRepository()
 schedule_repository = ScheduleRepository()
 dispatch_service = CrawlJobDispatchService()
+failed_run_attention_service = FailedRunAttentionService()
 
 
 class ResumeCrawlJobRequest(BaseModel):
@@ -81,6 +86,15 @@ def _resolve_time_range_start(time_range: str):
 
 
 def _raise_action_http_error(exc: Exception) -> None:
+    if isinstance(exc, CrawlControlError):
+        raise HTTPException(
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+                if exc.code == "CRAWL_TASK_NOT_FOUND"
+                else status.HTTP_409_CONFLICT
+            ),
+            detail=exc.to_detail(),
+        ) from exc
     if isinstance(exc, ValueError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     if isinstance(exc, RuntimeError):
@@ -396,6 +410,25 @@ async def resume_crawl_job(
             crawl_job_id=crawl_job_id,
             requested_by="api",
             strategy=request.strategy,
+        )
+    except Exception as exc:
+        _raise_action_http_error(exc)
+
+
+@router.post(
+    "/{crawl_job_id}/dismiss-failed-attention",
+    response_model=DismissFailedAttentionResponseV1,
+)
+async def dismiss_failed_attention(
+    crawl_job_id: UUID,
+    request: DismissFailedAttentionRequestV1,
+    db: Session = Depends(get_db),
+) -> DismissFailedAttentionResponseV1:
+    try:
+        return failed_run_attention_service.dismiss(
+            db,
+            crawl_job_id=crawl_job_id,
+            expected_failure_event_sequence=request.expected_failure_event_sequence,
         )
     except Exception as exc:
         _raise_action_http_error(exc)

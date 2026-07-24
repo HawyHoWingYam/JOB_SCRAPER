@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   cancelCrawlJob: vi.fn(),
+  dismissFailedRunAttention: vi.fn(),
   getTaskControlBoard: vi.fn(),
   permanentlyDeleteAutomation: vi.fn(),
   resetBrowserProfile: vi.fn(),
@@ -103,5 +104,47 @@ describe('TaskControlBoardPage', () => {
 
     await waitFor(() => expect(api.resetBrowserProfile).toHaveBeenCalledWith('task-1'));
     await waitFor(() => expect(api.getTaskControlBoard.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it('dismisses only a failed-run attention revision immediately and refetches', async () => {
+    const user = userEvent.setup();
+    api.getTaskControlBoard.mockResolvedValue({
+      ...board,
+      needsAttention: [{
+        id: 'run:failed-task:failed_run', kind: 'failed_run', priority: 40,
+        sourceSite: 'jobsdb', code: 'RUN_FAILED', title: 'Run failed', summary: 'Old failure',
+        entityKind: 'run', entityId: 'failed-task', failureEventSequence: 7,
+        primaryAction: action('view_task'),
+        secondaryActions: [action('view_task'), action('view_logs'), action('dismiss_failed_run')],
+      }],
+    });
+    api.dismissFailedRunAttention.mockResolvedValue({ replayed: false });
+
+    render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
+    await user.click(await screen.findByRole('button', { name: 'Dismiss' }));
+
+    await waitFor(() => expect(api.dismissFailedRunAttention).toHaveBeenCalledWith('failed-task', 7));
+    await waitFor(() => expect(api.getTaskControlBoard.mock.calls.length).toBeGreaterThan(1));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('keeps a failed-run dismissal error visible', async () => {
+    const user = userEvent.setup();
+    api.getTaskControlBoard.mockResolvedValue({
+      ...board,
+      needsAttention: [{
+        id: 'run:failed-task:failed_run', kind: 'failed_run', priority: 40,
+        sourceSite: 'jobsdb', code: 'RUN_FAILED', title: 'Run failed', summary: 'Old failure',
+        entityKind: 'run', entityId: 'failed-task', failureEventSequence: 7,
+        primaryAction: action('view_task'),
+        secondaryActions: [action('dismiss_failed_run')],
+      }],
+    });
+    api.dismissFailedRunAttention.mockRejectedValue(new Error('Dismiss was stale'));
+
+    render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
+    await user.click(await screen.findByRole('button', { name: 'Dismiss' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Dismiss was stale');
   });
 });

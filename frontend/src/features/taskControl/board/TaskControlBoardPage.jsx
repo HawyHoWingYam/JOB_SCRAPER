@@ -5,6 +5,7 @@ import { formatControlDateTime } from '../shared/controlTime';
 import ConfirmActionDialog from '../shared/ConfirmActionDialog';
 import {
   cancelCrawlJob,
+  dismissFailedRunAttention,
   getTaskControlBoard,
   permanentlyDeleteAutomation,
   resetBrowserProfile,
@@ -24,6 +25,7 @@ function actionLabel(action) {
     pause: 'Pause', resume: 'Resume', archive: 'Archive', restore: 'Restore',
     delete_review: 'Delete permanently', cancel: 'Cancel', resume_manual_action: 'Resume',
     reset_browser_profile: 'Reset browser profile',
+    dismiss_failed_run: 'Dismiss',
   }[action] || action;
 }
 
@@ -145,6 +147,17 @@ export default function TaskControlBoardPage({ hash = window.location.hash }) {
       }
       return;
     }
+    if (action === 'dismiss_failed_run') {
+      dispatch({ type: 'mutationStarted', entityId: entity.id, kind: action });
+      try {
+        await dismissFailedRunAttention(entity.id, entity.failureEventSequence);
+        dispatch({ type: 'mutationSucceeded', entityId: entity.id, kind: action, notice: 'Failed-run attention dismissed.' });
+        await loadBoard();
+      } catch (error) {
+        dispatch({ type: 'mutationFailed', error: controlError(error) });
+      }
+      return;
+    }
     await mutateAutomation(entity, action);
   };
 
@@ -200,7 +213,7 @@ export default function TaskControlBoardPage({ hash = window.location.hash }) {
 
       {board?.allClear && <section className="board-all-clear"><h2>All clear</h2><p>No attention items, active runs, or upcoming Automations for {SOURCE_LABELS[sourceSite]}.</p></section>}
 
-      {board?.needsAttention.length > 0 && <section className="board-section"><h2>Needs attention</h2><div className="attention-list">{board.needsAttention.map((item) => <article key={item.id} className="attention-card"><p className="board-code">{item.code}</p><h3>{item.title}</h3><p>{item.summary}</p>{renderActions([item.primaryAction, ...item.secondaryActions], { id: item.entityId, sourceSite: item.sourceSite })}</article>)}</div></section>}
+      {board?.needsAttention.length > 0 && <section className="board-section"><h2>Needs attention</h2><div className="attention-list">{board.needsAttention.map((item) => <article key={item.id} className="attention-card"><p className="board-code">{item.code}</p><h3>{item.title}</h3><p>{item.summary}</p>{renderActions([item.primaryAction, ...item.secondaryActions], { id: item.entityId, sourceSite: item.sourceSite, failureEventSequence: item.failureEventSequence })}</article>)}</div></section>}
 
       {board?.activeRuns.length > 0 && <section className="board-section"><h2>Active runs</h2><div className="active-run-list">{board.activeRuns.map(({ run, issue, manualActionGuidance, actions }) => <article key={run.id} className="active-run-card"><div><p className="board-code">{run.phase} · {run.mode}</p><h3>{run.status}</h3><RunProgress run={run} />{issue && <p className="board-warning">{issue.code || issue.issueClass}: {issue.summary}</p>}{manualActionGuidance && <p>{manualActionGuidance.message}</p>}</div>{renderActions(actions, { id: run.id, sourceSite: run.sourceSite })}</article>)}</div></section>}
 
