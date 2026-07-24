@@ -1,0 +1,29 @@
+{
+  "id": "jobsdb-profile-recovery",
+  "name": "jobsdb-profile-recovery",
+  "title": "Recover stale JobsDB browser profiles",
+  "description": "Make browser profile lock/manual-action recovery actionable in container/headless environments, including stale lock cleanup and frontend guidance.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-23",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-23-jobsdb-detail-recovery",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 20,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/20"
+  }
+}
