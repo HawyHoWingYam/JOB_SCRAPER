@@ -1,0 +1,34 @@
+{
+  "id": "dismiss-failed-board-attention",
+  "name": "dismiss-failed-board-attention",
+  "title": "Dismiss terminal failed runs from Task Control Board attention",
+  "description": "Add a revision-safe, source-neutral Dismiss action for terminal failed-run Board attention while retaining task history.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "backend/frontend task-control board failed-run attention dismissal",
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-24",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "backend/app/crawl_control/task_control_board_contracts.py",
+    "backend/app/crawl_control/task_control_board_service.py",
+    "backend/app/api/crawl_jobs.py",
+    "frontend/src/features/taskControl/board/TaskControlBoardPage.jsx"
+  ],
+  "notes": "",
+  "meta": {
+    "github_issue": 23,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/23"
+  }
+}

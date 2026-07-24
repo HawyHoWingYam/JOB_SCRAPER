@@ -63,3 +63,67 @@ const phase = task.request_payload?.crawl_phase;
 const detail = await getCrawlTaskDetail(taskId, { signal });
 renderAuthority(detail.run.authority);
 ```
+
+## Scenario: Immediate failed-run attention dismissal
+
+### 1. Scope / Trigger
+
+Use this contract only for Board V2 attention items whose backend kind is
+`failed_run` and whose backend actions include enabled `dismiss_failed_run`.
+
+### 2. Signatures
+
+```javascript
+dismissFailedRunAttention(taskId, expectedFailureEventSequence)
+```
+
+The command posts `version: 1` and `expected_failure_event_sequence` to the
+crawl-task dismissal endpoint. `decodeBoard` maps the nullable backend field to
+`failureEventSequence` and requires any non-null value to be a positive integer.
+
+### 3. Contracts
+
+- Render the label `Dismiss` only from the server-declared action; do not infer
+  it from status, source, error text, or item ID.
+- Invoke the mutation immediately. Do not open confirmation, Undo, Restore, or
+  add the action to Task Details.
+- Pass the exact decoded failure sequence and reload Board V2 after success so
+  attention cards and Source counts reflect server projection.
+- Reuse the Board mutation busy/error surface. A rejected stale revision stays
+  visible and must not be hidden optimistically.
+
+### 4. Validation & Error Matrix
+
+| Condition | UI behavior |
+|---|---|
+| Non-null sequence is zero, negative, fractional, or a string | Decoder rejects the Board payload |
+| Dismiss succeeds | Show mutation notice and refetch the Board |
+| Dismiss returns structured conflict | Keep the card and show the existing error alert |
+| Other attention or active-run kind | No Dismiss action unless the backend explicitly supplies one |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** click Dismiss on failure sequence 7, call the endpoint once, then
+  render the refreshed attention count.
+- **Base:** a failed historical item with disabled Dismiss remains readable.
+- **Bad:** parse sequence 7 from `item_id`, hide locally before the server
+  accepts it, or reuse an old sequence after Board refresh.
+
+### 6. Tests Required
+
+- Decoder tests cover positive sequence, nullable non-failed attention, and
+  malformed sequence rejection.
+- Board tests cover failed-only label rendering, immediate API arguments,
+  refetch without a dialog, and visible mutation failure.
+- Run scoped ESLint/Vitest and the full frontend test/build gate.
+
+### 7. Wrong vs Correct
+
+```javascript
+// Wrong: local-only hiding can conceal a rejected stale revision.
+setAttention(items => items.filter(item => item.entityId !== taskId));
+
+// Correct: fence the mutation and reload the server-owned projection.
+await dismissFailedRunAttention(taskId, item.failureEventSequence);
+await loadBoard();
+```

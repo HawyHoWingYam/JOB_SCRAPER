@@ -77,3 +77,84 @@ for source in SUPPORTED_BOARD_SOURCES:
     )
     rows.extend(source_rows)
 ```
+
+## Scenario: Dismiss one terminal failed-run attention revision
+
+### 1. Scope / Trigger
+
+Use this contract when an operator no longer wants one exact terminal
+`crawl.failed` result shown in Board V2 `Needs attention`. This is a Board
+acknowledgement only; it is not a crawl lifecycle transition or task deletion.
+
+### 2. Signatures
+
+```http
+POST /api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention
+Content-Type: application/json
+
+{
+  "version": 1,
+  "expected_failure_event_sequence": 3
+}
+```
+
+A `failed_run` `BoardAttentionItemV2` exposes the same positive sequence as
+`failure_event_sequence` and advertises `dismiss_failed_run` as a secondary
+action. Persistence appends `crawl.failed_attention_dismissed` with the target
+sequence and actor `local-operator`.
+
+### 3. Contracts
+
+- Lock the Crawl Job row before inspecting status or events.
+- Accept only persisted status `failed` and only the latest `crawl.failed`
+  sequence. Repeating the same job/sequence returns the first dismissal with
+  `replayed=true` and appends no duplicate event.
+- Suppress `failed_run` only when its current failure sequence has a matching
+  dismissal. A later failure has a new sequence and appears again.
+- The dismissal event is not a lifecycle/progress event. Task snapshots,
+  Task Details, Events, Logs, and persisted status continue to project the
+  underlying failure.
+- This contract is source-neutral for JobsDB, CTGoodJobs, and OfferToday and
+  requires no schema migration because it reuses Crawl Job event history.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Crawl Job does not exist | 404 `CRAWL_TASK_NOT_FOUND` |
+| Current status is not `failed` | 409 `FAILED_ATTENTION_STATE_INVALID` |
+| Expected sequence is not the latest failure | 409 `FAILED_ATTENTION_REVISION_CONFLICT` with current sequence |
+| Same failure was already dismissed | 200 with original dismissal sequence and `replayed=true` |
+| Later `crawl.failed` follows a dismissal | New failed attention with the later sequence |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** sequence 3 is dismissed once; Board attention disappears while
+  Task Details remains `failed`; sequence 5 later fails and appears again.
+- **Base:** a historical failed run without a recoverable failure-event
+  sequence remains visible but its Dismiss action is disabled.
+- **Bad:** filtering the Crawl Job itself, matching only by task ID, or treating
+  the dismissal as the latest lifecycle event hides history or a newer failure.
+
+### 6. Tests Required
+
+- Backend API/projection tests cover action/sequence serialization, successful
+  suppression, one-event idempotency and actor payload, preserved Task Details,
+  stale revision, non-failed, not-found, and later-failure visibility.
+- Snapshot tests prove a dismissal event cannot replace the latest lifecycle
+  failure projection.
+- Frontend decoder tests require a positive sequence; interaction tests prove
+  immediate mutation, server refetch, no dialog, and durable error feedback.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: acknowledges whichever failure happens to be current at write time.
+dismiss_failed_attention(crawl_job_id)
+
+# Correct: fence the write to the revision rendered by the Board.
+dismiss_failed_attention(
+    crawl_job_id,
+    expected_failure_event_sequence=item.failure_event_sequence,
+)
+```
