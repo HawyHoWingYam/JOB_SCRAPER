@@ -1406,3 +1406,37 @@ Made CTGoodJobs headless-first across crawl and catalog paths, extracted configu
 ### Next Steps
 
 - None - task complete
+
+
+## Session 41: Dismiss failed Board attention
+
+**Date**: 2026-07-24
+**Task**: Dismiss failed Board attention
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Added a source-neutral, revision-safe Dismiss action for terminal failed-run Board attention; preserved failed task history, verified restart durability/idempotency, and dismissed the historical CTGoodJobs failure.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `66bdb723` | (see git log) |
+| `19d21314` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
