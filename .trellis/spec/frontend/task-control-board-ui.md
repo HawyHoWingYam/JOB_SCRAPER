@@ -20,11 +20,20 @@ Use this composition for `#scheduler` operations and `#crawl-tasks?task=<id>` de
 - Board renders backend section membership/order and sends displayed Automation revision or fresh delete-review token with mutations.
 - Task Details renders normalized authority, listing/detail workload, immutable pacing, issue/guidance, recovery, actions, and an audit-events link.
 - Cancellation uses the shared focus-trapped confirmation dialog, calls the existing helper, and polls at one second while status is `cancelling`; only the backend can report `cancelled`.
+- Manual recovery keeps polling the declared Host Helper health endpoint while it
+  is offline, including when the operator starts the helper outside the copy
+  button flow. The `Open Verification Browser` action appears only after a
+  successful health check.
 - JobsDB and CTGoodJobs Task Details use the same normalized recovery panel.
   Fresh Profile is the baseline explicit resume; Reset follows
   `reset_supported`; Open Browser follows helper health; Reuse Open Browser
   follows both helper/session evidence and `reuse_open_browser_supported`.
   The panel never infers availability from raw failure text.
+- Terminal detail snapshots may render normalized remaining-work diagnostics,
+  but Task Details does not offer `Start detail recovery run` or synthesize a
+  new one-off draft. Human verification continues through the same-task manual
+  recovery panel; ordinary failed/cancelled detail work is restarted through a
+  separately operator-authored run.
 - Ordinary UI must not read or render raw `request_payload`, raw `manual_action`, or raw event payloads.
 
 ### 4. Validation & Error Matrix
@@ -38,6 +47,8 @@ Use this composition for `#scheduler` operations and `#crawl-tasks?task=<id>` de
 | cancellation request fails | keep dialog/action context and show the error |
 | component unmounts or route changes | abort request and clear polling interval |
 | CTGoodJobs profile-lock task | Render capability-gated Reset/Fresh/Open/Reuse controls; do not replace them with an ambiguous generic Resume |
+| terminal detail snapshot has remaining work | Render normalized read-only counts; no recovery-run button or hidden draft mutation |
+| completed listing rows are being consumed downstream | Render the backend-owned completed listing state; do not infer detail recovery from row counts |
 
 ### 5. Good/Base/Bad Cases
 
@@ -50,6 +61,8 @@ Use this composition for `#scheduler` operations and `#crawl-tasks?task=<id>` de
 - Route encode/decode plus hash back/forward and Source changes.
 - Board loading, all-clear, stale prior-good, table/disclosure, lifecycle/CAS, delete review, and dialog focus.
 - Direct Task success/not-found, listing/detail/legacy rendering, safe guidance, and raw-payload absence.
+- Terminal detail backlog rendering asserts that no `Start detail recovery run`
+  action is present, while manual-action tests retain Fresh/Open/Reuse behavior.
 - Cancellation confirmation, API failure, one-second polling, terminal behavior, and unmount cleanup.
 - Scoped ESLint, focused Vitest, production build, then one complete frontend gate at parent integration.
 

@@ -277,6 +277,49 @@ def test_snapshot_common_detail_metrics_are_numeric_zeros() -> None:
     assert snapshot["detail_remaining_count"] == 0
 
 
+def test_completed_listing_ignores_independently_owned_detail_row_states() -> None:
+    completed = _event({"phase": 1}, event_type="crawl.completed")
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(
+            source_site="ctgoodjobs",
+            status="completed",
+            request_payload={"crawl_phase": "listing"},
+            metrics={
+                "listings_staged": 3017,
+                "detail_running": 2986,
+                "detail_failed": 31,
+            },
+        ),
+        completed,
+        now=NOW,
+        events=[completed],
+    )
+
+    assert snapshot["operator_state"] == "completed"
+    assert snapshot["metric_scope"] == "listing_run"
+
+
+def test_completed_detail_run_with_frozen_remaining_work_is_backlog() -> None:
+    snapshot = build_crawl_task_snapshot(
+        _crawl_job(
+            request_payload={"crawl_phase": "detail"},
+            metrics={
+                "detail_snapshot_cutoff_at": NOW.isoformat(),
+                "detail_snapshot_target_count": 100,
+                "detail_snapshot_fetched_count": 7,
+                "detail_snapshot_remaining_count": 93,
+                "detail_run_completed": 7,
+            },
+        ),
+        _event({"phase": 2}, event_type="crawl.completed"),
+        now=NOW,
+        events=[],
+    )
+
+    assert snapshot["operator_state"] == "completed_with_downstream_backlog"
+    assert snapshot["metric_scope"] == "backlog_pool"
+
+
 def test_versioned_snapshot_remaining_is_separate_from_live_future_backlog() -> None:
     event = _event(
         {

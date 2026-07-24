@@ -310,6 +310,12 @@ function formatStatusLabel(status) {
 }
 
 function buildStatusLabel(task) {
+  if (task?.operator_state === "completed_with_downstream_backlog") {
+    return "Completed with downstream backlog";
+  }
+  if (task?.operator_state === "stale_downstream_backlog") {
+    return "Terminal with downstream backlog";
+  }
   if (isCompletedListingTask(task)) {
     return task?.listing_partial
       ? "Completed with partial listing"
@@ -317,6 +323,18 @@ function buildStatusLabel(task) {
   }
 
   return formatStatusLabel(task?.status);
+}
+
+function buildStatusClassName(task) {
+  if (
+    task?.operator_state === "completed_with_downstream_backlog" ||
+    task?.operator_state === "stale_downstream_backlog"
+  ) {
+    return "status-backlog";
+  }
+  return isCompletedListingTask(task) && task.listing_partial
+    ? "status-partial"
+    : `status-${task.status || "unknown"}`;
 }
 
 function createCappedListingDraft(detail) {
@@ -810,7 +828,7 @@ export default function CrawlTasksPage() {
                   >
                     <div className="crawl-task-row-topline">
                       <span
-                        className={`crawl-task-status ${isCompletedListingTask(task) && task.listing_partial ? "status-partial" : `status-${task.status || "unknown"}`}`}
+                        className={`crawl-task-status ${buildStatusClassName(task)}`}
                       >
                         {buildStatusLabel(task)}
                       </span>

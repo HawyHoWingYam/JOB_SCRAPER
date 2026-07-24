@@ -76,6 +76,27 @@ queried future count but cannot replace those authority fields. Every count is
 in distinct canonical `source_job_id` units even when one target owns several
 staging rows.
 
+When a finite detail run reaches a terminal Crawl Job state while
+`detail_snapshot_remaining_count > 0`, the normalized operator state is
+`completed_with_downstream_backlog` (or `stale_downstream_backlog` for a
+failed/cancelled run) and the metric scope is `backlog_pool`. The raw
+`detail_pending`/`detail_running` counters are not sufficient for this
+decision: versioned snapshot counters are authoritative and may be the only
+remaining-work signal after a worker exits between target transitions.
+
+This backlog state belongs only to the independent run whose requested
+`crawl_phase` is `detail`. A listing run owns listing collection and staging;
+later mutations of its rows by another detail run (`detail_pending`,
+`detail_running`, `detail_failed`, or `last_detail_crawl_job_id`) must not
+reclassify a completed listing run as downstream backlog. Completed listing
+status remains governed by its listing workload and partial-listing contract.
+
+The default detail candidate query may reclaim a row whose `detail_status` is
+`running` only when its `last_detail_crawl_job_id` belongs to a terminal Crawl
+Job and that owner has no active execution generation. Rows owned by an active
+execution remain excluded. Explicit `statuses` filters retain their exact
+selection semantics.
+
 `remaining_count` and `future_eligible_count` describe different sets. Do not
 add them, use future work to keep the current task running, or present future
 work as failure to complete the reviewed plan.
@@ -122,6 +143,9 @@ separate value and must be labeled as later-run work.
 | Finite plan completes with future work | Current run may complete; future stays for a later plan |
 | Zero values | Numeric zero fields and visible zero labels |
 | Historic task lacks snapshot authority | Use one bounded source-specific fallback only |
+| Terminal owner left a row `running` | Include it in a new default backlog snapshot only when no active execution remains |
+| Active owner still has a `running` row | Exclude it and preserve the active-run conflict/review guard |
+| Completed listing rows are owned or mutated by an independent detail run | Keep the listing operator state `completed`; expose no detail-recovery authority on the listing run |
 | Frontend receives raw request/event fields | Ignore them; render normalized projections |
 
 ### 5. Good / Base / Bad Cases
@@ -135,17 +159,25 @@ separate value and must be labeled as later-run work.
   targets to 27 future targets.
 - **Bad:** Runtime reports `detail_run_cap=999`, overriding the reviewed plan
   cap of 10 in history.
+- **Bad:** A run with `fetched=7` and `remaining=93` is rendered as ordinary
+  `Completed`, or a new review reports an empty backlog solely because those 93
+  rows still carry a terminal run's stale `running` owner.
+- **Bad:** A completed listing run is labelled downstream backlog because its
+  staged rows are currently `running` under a different detail run.
 
 ### 6. Tests Required
 
 - `backend/tests/test_crawl_task_snapshot_service.py`: versioned authority
   precedence, common conservation, numeric zeros, future/snapshot separation,
-  cancellation/recovery, and bounded historical fallback.
+  cancellation/recovery, bounded historical fallback, and completed-listing
+  independence from downstream detail row states.
 - `backend/tests/test_crawl_control_api.py`: Crawl Tasks and Board return the
   same `DetailSnapshotProjectionV1`; mutable target/cap metrics cannot alter
   frozen plan content; raw request/events are absent from board projections.
 - `backend/tests/test_dispatch_plan_service.py`: canonical target/sibling-row
   membership, cap/cutoff/fingerprint, exact claims, future work, and rollback.
+- `backend/tests/test_dispatch_plan_service.py`: reclaim terminal-owner stale
+  `running` rows while excluding rows with an active execution generation.
 - Frontend Crawl Tasks/Task Details tests assert exact common ordering, visible
   zeros, separate future work, and no raw-payload parsing.
 - Run focused/full backend tests, frontend tests, and the production build.
@@ -171,6 +203,21 @@ const future = Number(task.detail_snapshot?.future_eligible_count ?? 0);
 
 The backend projection owns normalization; rendering keeps current-run and
 later-run work distinct.
+
+Do not derive operator state only from mutable detail counters. First fence the
+decision to an actual detail run, then include the normalized finite-snapshot
+remainder:
+
+```python
+if requested_crawl_phase == "listing":
+    operator_state = status
+else:
+    has_backlog = (
+        detail_pending > 0
+        or detail_running > 0
+        or detail_remaining_count > 0
+    )
+```
 
 ## Scenario: Completed listing with per-Query-Target page-depth caps
 

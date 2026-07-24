@@ -591,22 +591,27 @@ def _derive_progress_status(
 def _derive_operator_state(
     status: str,
     *,
+    crawl_phase: str | None = None,
     jobs_saved: int,
     jobs_settled: int,
     save_total: int,
     detail_pending: int,
     detail_running: int,
     detail_manual_action_required: int,
+    detail_remaining: int = 0,
 ) -> str:
     if status in ACTIVE_CRAWL_JOB_STATUSES or status == "ai_running":
         return "live"
     if status in ACTIONABLE_CRAWL_JOB_STATUSES:
         return "manual_action_required"
+    if crawl_phase == "listing":
+        return status
     has_downstream_backlog = (
         (save_total > 0 and jobs_settled < save_total)
         or detail_pending > 0
         or detail_running > 0
         or detail_manual_action_required > 0
+        or detail_remaining > 0
     )
     if status == "completed" and has_downstream_backlog:
         return "completed_with_downstream_backlog"
@@ -661,6 +666,7 @@ def _derive_metric_scope(
     detail_completed: int,
     detail_failed: int,
     detail_manual_action_required: int,
+    detail_remaining: int = 0,
 ) -> str:
     if status == "manual_action_required":
         return "manual_action"
@@ -674,6 +680,7 @@ def _derive_metric_scope(
             detail_completed,
             detail_failed,
             detail_manual_action_required,
+            detail_remaining,
         )
     )
     if operator_state in {"completed_with_downstream_backlog", "stale_downstream_backlog"} and backlog_counts_visible:
@@ -1185,12 +1192,14 @@ def build_crawl_task_snapshot(
     )
     operator_state = _derive_operator_state(
         status,
+        crawl_phase=requested_crawl_phase or None,
         jobs_saved=jobs_saved,
         jobs_settled=jobs_settled,
         save_total=save_total,
         detail_pending=detail_pending,
         detail_running=detail_running,
         detail_manual_action_required=detail_manual_action_required,
+        detail_remaining=detail_remaining_count,
     )
     metric_scope = _derive_metric_scope(
         status=status,
@@ -1203,6 +1212,7 @@ def build_crawl_task_snapshot(
         detail_completed=detail_completed,
         detail_failed=detail_failed,
         detail_manual_action_required=detail_manual_action_required,
+        detail_remaining=detail_remaining_count,
     )
 
     detail_job_index = event_payload.get("detail_job_index")

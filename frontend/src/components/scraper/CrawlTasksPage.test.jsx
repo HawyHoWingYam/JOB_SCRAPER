@@ -42,6 +42,7 @@ function normalizedTaskDetail({
   status = "running",
   phase = "listing",
   sourceSite = "jobsdb",
+  operatorState,
   actions,
 } = {}) {
   return {
@@ -80,7 +81,7 @@ function normalizedTaskDetail({
       recovery_attempt: null,
     },
     persisted_status: status,
-    operator_state: status === "cancelling" ? "cancellation_pending" : null,
+    operator_state: operatorState ?? (status === "cancelling" ? "cancellation_pending" : null),
     queued_at: "2026-07-15T12:00:00Z",
     started_at: "2026-07-15T12:01:00Z",
     completed_at: null,
@@ -120,6 +121,7 @@ function detailId(url) {
 
 afterEach(() => {
   cleanup();
+  window.sessionStorage.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.clearAllMocks();
@@ -319,6 +321,70 @@ describe("CrawlTasksPage list projections", () => {
 });
 
 describe("CrawlTasksPage normalized Task Details", () => {
+  it("labels terminal detail backlog without offering a recovery run", async () => {
+    const backlogTask = {
+      ...listingTask,
+      crawl_job_id: "backlog-task",
+      status: "completed",
+      crawl_phase: "detail",
+      phase: 2,
+      operator_state: "completed_with_downstream_backlog",
+      detail_target_count: 3906,
+      detail_fetched_count: 1,
+      detail_saved_count: 1,
+      detail_remaining_count: 3905,
+    };
+    apiFetchJson.mockImplementation(async (url) => {
+      if (!isDetailRequest(url)) return listPayload([backlogTask]);
+      return normalizedTaskDetail({
+        id: "backlog-task",
+        status: "completed",
+        phase: "detail",
+        operatorState: "completed_with_downstream_backlog",
+      });
+    });
+    const detail = normalizedTaskDetail({
+      id: "backlog-task",
+      status: "completed",
+      phase: "detail",
+      operatorState: "completed_with_downstream_backlog",
+    });
+    detail.run.authority = {
+      authority_kind: "dispatch_plan",
+      authored_scope: {
+        mode: "rules",
+        rules: [{ kind: "exact", classification_id: "jobsdb:6281" }],
+      },
+    };
+    detail.run.detail_snapshot = {
+      backlog_scope: { kind: "crawl_scope" },
+      target_count: 3906,
+      fetched_count: 1,
+      saved_count: 1,
+      failed_count: 0,
+      unavailable_count: 0,
+      manual_action_count: 0,
+      remaining_count: 3905,
+      future_eligible_count: 0,
+      detail_run_cap: 5000,
+    };
+    apiFetchJson.mockImplementation(async (url) => {
+      if (!isDetailRequest(url)) return listPayload([backlogTask]);
+      return detail;
+    });
+
+    render(<CrawlTasksPage />);
+
+    expect(await screen.findByText("Completed with downstream backlog")).toBeInTheDocument();
+    expect(await screen.findByTestId("crawl-task-downstream-backlog")).toHaveTextContent(
+      "3,905 detail targets remain in the frozen snapshot",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Start detail recovery run" }),
+    ).not.toBeInTheDocument();
+    expect(window.location.hash).toBe("#crawl-tasks");
+  });
+
   it("loads a deep-linked task directly even when it is absent from the list", async () => {
     window.history.replaceState(null, "", "#crawl-tasks?task=deep%2Flink%20task");
     apiFetchJson.mockImplementation(async (url) => {
