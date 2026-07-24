@@ -437,7 +437,7 @@ export default function SourceCatalogsPage() {
             </button>
           </div>
           <ResourceError resource={state.validation} onRetry={refresh} />
-          {state.source === 'ctgoodjobs' && <div className="catalog-headed-note" role="note"><strong>Headed only.</strong> CTgoodjobs live validation never offers headless execution.</div>}
+          {state.source === 'ctgoodjobs' && <div className="catalog-headed-note" role="note"><strong>Server-selected browser mode.</strong> Validation evidence records whether the bounded smoke used headless or headed Chromium.</div>}
           {!state.validation.value?.length ? <div className="catalog-empty" role="status">No durable validation runs yet.</div> : (
             <div className="catalog-validation-grid">
               {[
@@ -445,7 +445,7 @@ export default function SourceCatalogsPage() {
                 ['live_smoke', 'Changed-target bounded live smoke'],
               ].map(([kind, title]) => {
                 const runs = state.validation.value.filter((run) => run.validationKind === kind);
-                return <div key={kind}><h3>{title}</h3>{!runs.length ? <p>No runs required.</p> : <ul>{runs.map((run) => <li key={run.id}><div><Status tone={run.status === 'passed' ? 'success' : run.status === 'failed' ? 'danger' : 'warning'}>{run.status}</Status><strong>{run.classificationId || 'Full catalog'}</strong><span>Attempt {run.attempt}</span></div><code>{run.targetHashPrefix}</code><p>{formatJsonSummary(run.evidence)}</p>{run.error && <p className="catalog-error-inline">{formatJsonSummary(run.error)}</p>}{run.manualAction && <div className="catalog-manual-action"><strong>Manual action required{state.source === 'ctgoodjobs' ? ' — headed only' : ''}</strong><p>{formatJsonSummary(run.manualAction)}</p><button type="button" disabled={mutationBusy} onClick={handleValidation}>Resume / retry validation</button></div>}</li>)}</ul>}</div>;
+                return <div key={kind}><h3>{title}</h3>{!runs.length ? <p>No runs required.</p> : <ul>{runs.map((run) => <li key={run.id}><div><Status tone={run.status === 'passed' ? 'success' : run.status === 'failed' ? 'danger' : 'warning'}>{run.status}</Status><strong>{run.classificationId || 'Full catalog'}</strong><span>Attempt {run.attempt}</span></div><code>{run.targetHashPrefix}</code><p>{formatJsonSummary(run.evidence)}</p>{run.error && <p className="catalog-error-inline">{formatJsonSummary(run.error)}</p>}{run.manualAction && <div className="catalog-manual-action"><strong>Manual action required</strong><p>{formatJsonSummary(run.manualAction)}</p><button type="button" disabled={mutationBusy} onClick={handleValidation}>Resume / retry validation</button></div>}</li>)}</ul>}</div>;
               })}
             </div>
           )}

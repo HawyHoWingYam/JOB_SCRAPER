@@ -64,8 +64,8 @@ export function wizardReducer(state, action) {
         intent: action.intent,
         scope: null,
         execution: action.intent === 'listing'
-          ? { page_depth: 1, run_page_cap: 100, crawl_mode: state.draft.source_site === 'ctgoodjobs' ? 'headed' : 'headless' }
-          : { backlog_kind: 'crawl_scope', limit_kind: 'stop_after', detail_run_cap: 100, crawl_mode: state.draft.source_site === 'ctgoodjobs' ? 'headed' : 'headless' },
+          ? { page_depth: 1, run_page_cap: 100, crawl_mode: 'headless' }
+          : { backlog_kind: 'crawl_scope', limit_kind: 'stop_after', detail_run_cap: 100, crawl_mode: 'headless' },
       });
     case 'scopeChanged':
       return invalidateAuthority(state, { ...state.draft, scope: action.scope });

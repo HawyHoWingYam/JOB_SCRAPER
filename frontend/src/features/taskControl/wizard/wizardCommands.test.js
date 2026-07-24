@@ -37,7 +37,7 @@ describe('wizard command builders', () => {
     expect(configuration.detail_settings).toBeNull();
   });
 
-  it('rejects empty and cross-source scope and forces CTgoodjobs headed mode', () => {
+  it('rejects empty and cross-source scope and preserves explicit CTgoodjobs mode', () => {
     const empty = { ...listingDraft(), scope: { mode: 'rules', rules: [] } };
     expect(() => buildOneOffRun(empty, published)).toThrow(/Choose explicit all/);
     const crossSource = { ...listingDraft(), source_site: 'offertoday' };
@@ -47,7 +47,7 @@ describe('wizard command builders', () => {
       catalog: { sourceSite: 'ctgoodjobs', capabilities: { supportsAllScope: true } },
     };
     const ct = { ...listingDraft(), flow: 'one_off', source_site: 'ctgoodjobs' };
-    expect(buildOneOffRun(ct, ctPublished).listing_settings.crawl_mode).toBe('headed');
+    expect(buildOneOffRun(ct, ctPublished).listing_settings.crawl_mode).toBe('headless');
   });
 
   it('paired detail draft copies no plan or runtime authority', () => {

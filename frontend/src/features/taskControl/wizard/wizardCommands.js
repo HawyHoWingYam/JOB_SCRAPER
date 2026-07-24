@@ -35,7 +35,7 @@ export function buildAuthoredScope(draft, published) {
 function listingSettings(draft) {
   return {
     version: 1,
-    crawl_mode: draft.source_site === 'ctgoodjobs' ? 'headed' : draft.execution.crawl_mode || 'headless',
+    crawl_mode: draft.execution.crawl_mode || 'headless',
     page_depth: positiveInteger(draft.execution.page_depth, 'Page Depth'),
     run_page_cap: positiveInteger(draft.execution.run_page_cap, 'Run Page Cap'),
   };
@@ -56,7 +56,7 @@ function detailSettings(draft, scope) {
     : { kind: 'stop_after', detail_run_cap: positiveInteger(draft.execution.detail_run_cap, 'Detail Run Cap') };
   return {
     version: 1,
-    crawl_mode: draft.source_site === 'ctgoodjobs' ? 'headed' : draft.execution.crawl_mode || 'headless',
+    crawl_mode: draft.execution.crawl_mode || 'headless',
     backlog_scope: backlogScope,
     limit,
     backlog_snapshot: null,
@@ -155,7 +155,7 @@ export function pairedDetailDraft(draft) {
       backlog_kind: 'crawl_scope',
       limit_kind: 'stop_after',
       detail_run_cap: 100,
-      crawl_mode: draft.source_site === 'ctgoodjobs' ? 'headed' : 'headless',
+      crawl_mode: draft.execution.crawl_mode || 'headless',
     },
     schedule: { ...draft.schedule, name: `${draft.schedule.name} details`, initial_state: 'paused' },
   };

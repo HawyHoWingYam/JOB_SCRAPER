@@ -200,7 +200,7 @@ describe('TaskControlWizard', () => {
     expect(await screen.findByText('Reviewed plan dispatched.')).toBeInTheDocument();
   });
 
-  it('enforces headed-only execution for CTgoodjobs', async () => {
+  it('allows an explicit headless execution mode for CTgoodjobs', async () => {
     const ctPublished = {
       revision: { id: 'catalog-ct-1', sourceSite: 'ctgoodjobs' },
       catalog: { sourceSite: 'ctgoodjobs', capabilities: { supportsAllScope: true }, nodes: [] },
@@ -210,8 +210,13 @@ describe('TaskControlWizard', () => {
 
     render(<TaskControlWizard hash="#scheduler/automation/new?draft=ct-draft&source=ctgoodjobs" />);
 
-    expect(await screen.findByText('Headed only.')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Crawl mode')).not.toBeInTheDocument();
+    const mode = await screen.findByLabelText('Crawl mode');
+    expect(mode).toHaveValue('headless');
+    fireEvent.change(mode, { target: { value: 'headed' } });
+    expect(mode).toHaveValue('headed');
+    fireEvent.change(mode, { target: { value: 'headless' } });
+    expect(mode).toHaveValue('headless');
+    expect(screen.getByText(/Headless is supported for automatic runs/)).toBeInTheDocument();
   });
 
   it('loads the OfferToday scope catalog after the draft URL becomes stable', async () => {

@@ -160,12 +160,12 @@ describe('SourceCatalogsPage', () => {
     defaultResponses();
   });
 
-  it('loads current state without discovering and renders headed-only manual action', async () => {
+  it('loads current state without discovering and renders server-selected validation mode', async () => {
     render(<SourceCatalogsPage />);
 
     expect(await screen.findByText('Information Technology')).toBeInTheDocument();
     expect(api.discoverCandidate).not.toHaveBeenCalled();
-    expect(screen.getByText(/Headed only/)).toBeInTheDocument();
+    expect(screen.getByText(/Server-selected browser mode/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resume / retry validation' })).toBeEnabled();
     expect(screen.getByText(/Canonical clean_match: Technology/)).toBeInTheDocument();
   });

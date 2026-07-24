@@ -375,15 +375,16 @@ describe("CrawlTasksPage normalized Task Details", () => {
     expect(screen.queryByText(/request_payload|manual_action\s*:/i)).not.toBeInTheDocument();
   });
 
-  it("refreshes the list and normalized details after explicit recovery", async () => {
+  it.each(["jobsdb", "ctgoodjobs"])("refreshes the list and normalized %s details after explicit recovery", async (sourceSite) => {
     const user = userEvent.setup();
     const recoveryDetail = normalizedTaskDetail({
       id: "listing-task",
       status: "manual_action_required",
+      sourceSite,
       actions: [],
     });
     recoveryDetail.manual_action_guidance = {
-      source_site: "jobsdb",
+      source_site: sourceSite,
       message: "Complete the challenge, then resume.",
       instructions: ["Complete the challenge."],
       resume_supported: true,

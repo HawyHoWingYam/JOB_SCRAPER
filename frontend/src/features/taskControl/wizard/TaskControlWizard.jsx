@@ -111,7 +111,8 @@ function ExecutionStep({ draft, dispatch }) {
 
       <details className="control-subpanel">
         <summary>Advanced execution</summary>
-        {draft.source_site === 'ctgoodjobs' ? <p><strong>Headed only.</strong> CTgoodjobs requires headed-worker/manual-action readiness.</p> : <label className="control-field">Crawl mode<select value={draft.execution.crawl_mode || 'headless'} onChange={(event) => setExecution({ crawl_mode: event.target.value })}><option value="headless">Headless</option><option value="headed">Headed</option></select></label>}
+        <label className="control-field">Crawl mode<select value={draft.execution.crawl_mode || 'headless'} onChange={(event) => setExecution({ crawl_mode: event.target.value })}><option value="headless">Headless</option><option value="headed">Headed</option></select></label>
+        {draft.source_site === 'ctgoodjobs' && <p>Headless is supported for automatic runs. Choose headed only for explicit debugging or operator recovery.</p>}
       </details>
 
       {automationFlow && (
