@@ -1087,10 +1087,12 @@ def test_run_projections_normalize_the_latest_recovery_attempt(
     assert "events" not in board_run
 
 
+@pytest.mark.parametrize("source_site", ["jobsdb", "ctgoodjobs"])
 def test_reset_browser_profile_records_safe_reset_without_changing_task_scope(
     crawl_control_client,
     monkeypatch,
     tmp_path,
+    source_site,
 ):
     client, _revision_id = crawl_control_client
     repository = CrawlJobRepository()
@@ -1099,7 +1101,7 @@ def test_reset_browser_profile_records_safe_reset_without_changing_task_scope(
     try:
         crawl_job = repository.create_crawl_job(
             request_db,
-            source_site="jobsdb",
+            source_site=source_site,
             trigger_type="manual",
             status="manual_action_required",
             request_payload={
@@ -1116,7 +1118,7 @@ def test_reset_browser_profile_records_safe_reset_without_changing_task_scope(
             event_type="crawl.manual_action_required",
             payload={
                 "manual_action": {
-                    "source_site": "jobsdb",
+                    "source_site": source_site,
                     "stage": "browser_profile_in_use",
                     "browser_channel": "chromium",
                     "browser_profile_path": profile_path,
@@ -1124,7 +1126,7 @@ def test_reset_browser_profile_records_safe_reset_without_changing_task_scope(
                     "resume_supported": True,
                 }
             },
-            emitted_by="jobsdb-crawl",
+            emitted_by=f"{source_site}-crawl",
             auto_commit=False,
         )
         request_db.commit()
@@ -1182,6 +1184,11 @@ def test_manual_profile_guidance_uses_event_browser_channel_for_liveness(
     monkeypatch,
 ):
     observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        task_control_board_service_api.settings,
+        "jobsdb_headed_browser_user_data_dir",
+        "/var/lib/jobsdb/fixed-profile",
+    )
 
     def fake_inspect(profile_path, *, browser_channel=None):
         observed["profile_path"] = profile_path
@@ -1212,9 +1219,14 @@ def test_manual_profile_guidance_uses_event_browser_channel_for_liveness(
     assert guidance.resume_strategies == ("fresh_profile",)
 
 
-def test_reset_capability_is_not_projected_for_non_jobsdb_manual_actions(
+def test_reset_capability_is_projected_for_ctgoodjobs_profile_locks(
     monkeypatch,
 ):
+    monkeypatch.setattr(
+        task_control_board_service_api.settings,
+        "jobsdb_headed_browser_user_data_dir",
+        "/var/lib/jobsdb/fixed-profile",
+    )
     monkeypatch.setattr(
         task_control_board_service_api,
         "inspect_profile",
@@ -1234,7 +1246,36 @@ def test_reset_capability_is_not_projected_for_non_jobsdb_manual_actions(
     )
 
     assert guidance is not None
+    assert guidance.reset_supported is True
+
+
+def test_reset_capability_rejects_profile_outside_configured_root(monkeypatch):
+    monkeypatch.setattr(
+        task_control_board_service_api.settings,
+        "jobsdb_headed_browser_user_data_dir",
+        "/var/lib/jobsdb/configured-profile",
+    )
+    monkeypatch.setattr(
+        task_control_board_service_api,
+        "inspect_profile",
+        lambda *_args, **_kwargs: pytest.fail("unowned profile must not be inspected"),
+    )
+
+    guidance = task_control_board_service_api._manual_action_guidance(
+        {
+            "source_site": "ctgoodjobs",
+            "manual_action": {
+                "stage": "browser_profile_in_use",
+                "browser_profile_path": "/tmp/unrelated/fixed-profile",
+                "reset_supported": True,
+                "resume_supported": True,
+            },
+        }
+    )
+
+    assert guidance is not None
     assert guidance.reset_supported is False
+    assert guidance.reset_reason == "profile_ownership_unverified"
 
 
 def test_detail_run_projections_keep_frozen_plan_membership_and_live_counts(

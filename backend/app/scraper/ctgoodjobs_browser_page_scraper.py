@@ -5,11 +5,23 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from app.config import settings
+from app.crawl_modes import resolve_crawl_mode
 from app.manual_actions.live_browser_registry import get_live_browser_registry
 from app.scraper.browser_launch import launch_persistent_context_with_fallback
+from app.scraper.browser_profile_recovery import (
+    PROFILE_SCOPE_FIXED,
+    PROFILE_SCOPE_FRESH,
+    PROFILE_SCOPE_OPERATION,
+    cleanup_orphan_profiles,
+    cleanup_profile,
+    delete_owned_profile,
+    fresh_profile_path,
+    is_profile_lock_error,
+    operation_profile_path,
+)
 from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
 from app.scraper.ctgoodjobs.html_fetcher import CTGoodJobsFetchError, looks_like_interstitial_html
@@ -61,6 +73,10 @@ class CTGoodJobsBrowserPageScraper:
     ):
         self.request_payload = dict(request_payload or {})
         self.resume_strategy = self.request_payload.get("resume_strategy") or RESUME_STRATEGY_FRESH_PROFILE
+        self.crawl_mode = resolve_crawl_mode(
+            "ctgoodjobs",
+            self.request_payload.get("crawl_mode"),
+        )
         self.page_content_fetcher = page_content_fetcher
         self.sync_page_content_fetcher = sync_page_content_fetcher
         self.browser_channel = browser_channel or settings.jobsdb_headed_browser_channel
@@ -85,17 +101,21 @@ class CTGoodJobsBrowserPageScraper:
         self._last_response_status: int | None = None
         self._proxy_runtime = build_ctgoodjobs_proxy_runtime(settings_source=settings)
         self._proxy_lease = None
+        self._resolved_user_data_dir: Path | None = None
+        self._profile_scope = PROFILE_SCOPE_FIXED
+        self._stale_profile_retry_attempted = False
 
     async def __aenter__(self):
         if self.page_content_fetcher is None and self.sync_page_content_fetcher is None:
-            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ctgoodjobs-headed")
+            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ctgoodjobs-browser")
             loop = asyncio.get_running_loop()
             try:
                 await loop.run_in_executor(self._executor, self._start_sync_runtime)
             except Exception as exc:
                 await self._cleanup_failed_startup(loop)
                 if self.resume_strategy == RESUME_STRATEGY_FRESH_PROFILE:
-                    self._raise_if_headed_display_unavailable(exc)
+                    if self.crawl_mode == "headed":
+                        self._raise_if_headed_display_unavailable(exc)
                     self._raise_if_profile_in_use(exc)
                 raise
         return self
@@ -108,6 +128,28 @@ class CTGoodJobsBrowserPageScraper:
             finally:
                 self._executor.shutdown(wait=True)
                 self._executor = None
+                if (
+                    self._profile_scope in {PROFILE_SCOPE_FRESH, PROFILE_SCOPE_OPERATION}
+                    and self._resolved_user_data_dir is not None
+                    and (
+                        exc_type is None
+                        or self.request_payload.get("cleanup_profile_on_manual_action") is True
+                        or not issubclass(exc_type, ManualActionRequiredError)
+                    )
+                ):
+                    try:
+                        delete_owned_profile(
+                            self._resolved_user_data_dir,
+                            profile_scope=self._profile_scope,
+                            browser_channel=self.browser_channel,
+                            configured_path=self.user_data_dir,
+                        )
+                    except Exception as cleanup_error:
+                        logger.warning(
+                            "ctgoodjobs_browser_profile_cleanup_failed crawl_job_id=%s error_type=%s",
+                            self.request_payload.get("crawl_job_id"),
+                            type(cleanup_error).__name__,
+                        )
         return None
 
     async def fetch_page_html(
@@ -155,6 +197,7 @@ class CTGoodJobsBrowserPageScraper:
                         referer=referer,
                         classification="ip_blocked",
                         evidence=access_evidence.to_payload(),
+                        resume_context=self._browser_resume_context(),
                     )
                 if self._looks_like_interstitial(html):
                     if self._proxy_runtime.enabled:
@@ -185,6 +228,7 @@ class CTGoodJobsBrowserPageScraper:
                         referer=referer,
                         classification="waf_challenge",
                         evidence=challenge_evidence,
+                        resume_context=self._browser_resume_context(),
                     )
                 if stage == "detail_page":
                     unavailable_evidence = classify_ctgoodjobs_detail_page(
@@ -261,12 +305,11 @@ class CTGoodJobsBrowserPageScraper:
                 "crawl_job_id": self.request_payload.get("crawl_job_id"),
                 "strategy": self.resume_strategy,
                 "source_site": "ctgoodjobs",
+                "crawl_mode": self.crawl_mode,
             },
         )
 
-        launch_kwargs = {
-            "headless": False,
-        }
+        launch_kwargs = {"headless": self.crawl_mode == "headless"}
         if self.executable_path:
             launch_kwargs["executable_path"] = self.executable_path
         else:
@@ -281,16 +324,31 @@ class CTGoodJobsBrowserPageScraper:
             if proxy_config:
                 launch_kwargs["proxy"] = proxy_config
 
-        launch_result = launch_persistent_context_with_fallback(
-            self._sync_playwright.chromium,
-            user_data_dir=str(self._resolve_user_data_dir()),
-            browser_channel=self.browser_channel,
-            executable_path=self.executable_path,
-            headless=False,
-            extra_launch_kwargs={
-                key: value for key, value in launch_kwargs.items() if key != "headless"
-            },
-        )
+        profile_path = self._resolve_user_data_dir()
+        try:
+            launch_result = launch_persistent_context_with_fallback(
+                self._sync_playwright.chromium,
+                user_data_dir=str(profile_path),
+                browser_channel=self.browser_channel,
+                executable_path=self.executable_path,
+                headless=self.crawl_mode == "headless",
+                extra_launch_kwargs={
+                    key: value for key, value in launch_kwargs.items() if key != "headless"
+                },
+            )
+        except Exception as exc:
+            if not self._retry_stale_profile_once(exc, profile_path):
+                raise
+            launch_result = launch_persistent_context_with_fallback(
+                self._sync_playwright.chromium,
+                user_data_dir=str(profile_path),
+                browser_channel=self.browser_channel,
+                executable_path=self.executable_path,
+                headless=self.crawl_mode == "headless",
+                extra_launch_kwargs={
+                    key: value for key, value in launch_kwargs.items() if key != "headless"
+                },
+            )
         if launch_result.attempted_fallback:
             logger.warning(
                 "ctgoodjobs_browser_channel_fallback requested=%s resolved=%s crawl_job_id=%s",
@@ -425,6 +483,7 @@ class CTGoodJobsBrowserPageScraper:
                 "Reopen the visible browser for this automation profile and try Reuse Open Browser again.",
                 "If no visible browser is available, resume with Fresh Profile instead.",
             ],
+            resume_context=self._browser_resume_context(),
         )
 
     def _fetch_page_content_sync(self, url: str) -> str:
@@ -435,7 +494,9 @@ class CTGoodJobsBrowserPageScraper:
         self._wait_for_timeout_with_cancellation(3000)
         response_status = getattr(response, "status", None)
         self._last_response_status = (
-            response_status if type(response_status) is int else None
+            response_status
+            if isinstance(response_status, int) and not isinstance(response_status, bool)
+            else None
         )
         self._last_page_title = self._sync_page.title()
         self._last_page_url = str(getattr(self._sync_page, "url", url) or url)
@@ -500,7 +561,7 @@ class CTGoodJobsBrowserPageScraper:
         message = str(exc or "")
         if any(marker in message for marker in HEADED_DISPLAY_UNAVAILABLE_MARKERS):
             return
-        if "launch_persistent_context" not in message or "Target page, context or browser has been closed" not in message:
+        if not is_profile_lock_error(exc):
             return
 
         logger.warning(
@@ -513,13 +574,67 @@ class CTGoodJobsBrowserPageScraper:
             source_site="ctgoodjobs",
             stage="browser_profile_in_use",
             blocked_url=f"{CTGOODJOBS_BASE_URL}/jobs",
-            message="Close all Edge windows using the automation profile, then click Resume.",
-            action_type="close_browser_window",
-            instructions=[
-                "Close all Edge windows that use the listed automation profile.",
-                "Return to the app and click Resume.",
-            ],
+            message=(
+                "The headless worker browser profile could not start. Reset the "
+                "worker profile if it is stale, then resume this crawl."
+                if self.crawl_mode == "headless"
+                else "Close the browser using the automation profile, then click Resume."
+            ),
+            action_type=(
+                "profile_recovery"
+                if self.crawl_mode == "headless"
+                else "close_browser_window"
+            ),
+            instructions=(
+                [
+                    "Use Reset Browser Profile when the worker confirms no active browser session remains.",
+                    "Return to the task and resume with Fresh Profile or the explicit verification browser.",
+                ]
+                if self.crawl_mode == "headless"
+                else [
+                    "Close the browser that uses the listed automation profile.",
+                    "Return to the app and click Resume.",
+                ]
+            ),
+            resume_context=self._browser_resume_context(),
         ) from exc
+
+    def _retry_stale_profile_once(self, exc: Exception, profile_path: Path) -> bool:
+        if (
+            not self.request_payload.get("is_resume")
+            or self._profile_scope != PROFILE_SCOPE_FRESH
+            or self._stale_profile_retry_attempted
+            or not is_profile_lock_error(exc)
+        ):
+            return False
+        self._stale_profile_retry_attempted = True
+        try:
+            reset_result = cleanup_profile(
+                profile_path,
+                profile_scope=PROFILE_SCOPE_FRESH,
+                browser_channel=self.browser_channel,
+                configured_path=self.user_data_dir,
+            )
+        except Exception as cleanup_error:
+            logger.info(
+                "ctgoodjobs_browser_profile_retry_unavailable crawl_job_id=%s error_type=%s",
+                self.request_payload.get("crawl_job_id"),
+                type(cleanup_error).__name__,
+            )
+            return False
+        if not reset_result.available:
+            logger.info(
+                "ctgoodjobs_browser_profile_retry_blocked crawl_job_id=%s reason=%s liveness=%s",
+                self.request_payload.get("crawl_job_id"),
+                reset_result.reason,
+                reset_result.liveness.state,
+            )
+            return False
+        logger.info(
+            "ctgoodjobs_browser_profile_retry_after_safe_reset crawl_job_id=%s",
+            self.request_payload.get("crawl_job_id"),
+        )
+        return True
 
     def _raise_if_proxy_unavailable(self, exc: Exception) -> None:
         message = str(exc or "")
@@ -539,11 +654,58 @@ class CTGoodJobsBrowserPageScraper:
         ) from exc
 
     def _resolve_user_data_dir(self) -> Path:
+        if self._resolved_user_data_dir is not None:
+            return self._resolved_user_data_dir
+
+        if self.resume_strategy == RESUME_STRATEGY_FRESH_PROFILE:
+            owner_id = self.request_payload.get("crawl_job_id")
+            operation_id = self.request_payload.get("profile_operation_id")
+            if owner_id or operation_id:
+                try:
+                    cleanup_orphan_profiles(
+                        configured_path=self.user_data_dir,
+                        browser_channel=self.browser_channel,
+                    )
+                except Exception as cleanup_error:
+                    logger.info(
+                        "ctgoodjobs_browser_profile_orphan_cleanup_skipped crawl_job_id=%s error_type=%s",
+                        owner_id,
+                        type(cleanup_error).__name__,
+                    )
+                if owner_id:
+                    self._resolved_user_data_dir = fresh_profile_path(
+                        str(owner_id),
+                        configured_path=self.user_data_dir,
+                        browser_channel=self.browser_channel,
+                    )
+                    self._profile_scope = PROFILE_SCOPE_FRESH
+                else:
+                    self._resolved_user_data_dir = operation_profile_path(
+                        str(operation_id),
+                        configured_path=self.user_data_dir,
+                        browser_channel=self.browser_channel,
+                    )
+                    self._profile_scope = PROFILE_SCOPE_OPERATION
+                self._resolved_user_data_dir.mkdir(parents=True, exist_ok=True)
+                return self._resolved_user_data_dir
+
         if self.user_data_dir:
-            return Path(self.user_data_dir)
+            self._resolved_user_data_dir = Path(self.user_data_dir)
+            return self._resolved_user_data_dir
 
         local_appdata = os.environ.get("LOCALAPPDATA")
         if local_appdata:
-            return Path(local_appdata) / "job_scraper" / "playwright" / self.browser_channel
+            self._resolved_user_data_dir = Path(local_appdata) / "job_scraper" / "playwright" / self.browser_channel
+            return self._resolved_user_data_dir
 
-        return Path(".playwright") / self.browser_channel
+        self._resolved_user_data_dir = Path(".playwright") / self.browser_channel
+        return self._resolved_user_data_dir
+
+    def _browser_resume_context(self) -> dict[str, Any]:
+        profile_path = self._resolve_user_data_dir()
+        return {
+            "crawl_mode": self.crawl_mode,
+            "browser_channel": self.browser_channel,
+            "browser_profile_path": str(profile_path),
+            "profile_scope": self._profile_scope,
+        }

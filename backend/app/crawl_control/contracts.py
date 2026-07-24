@@ -124,7 +124,7 @@ class CTgoodjobsQueryTargetParametersV1(FrozenContract):
         pattern=r"^/jobs/jobs-in-[a-z0-9]+(?:-[a-z0-9]+)*$",
         strict=True,
     )
-    crawl_mode: Literal["headed"] = "headed"
+    crawl_mode: Literal["headless", "headed"] = "headed"
 
 
 class OfferTodayQueryTargetParametersV1(FrozenContract):

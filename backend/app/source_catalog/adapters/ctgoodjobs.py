@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from typing import Any
 import re
 from urllib.parse import urlparse, urlsplit
+from uuid import uuid4
 
+from app.crawl_modes import resolve_crawl_mode
 from app.scraper.ctgoodjobs.category_registry import (
     CTGOODJOBS_BASE_URL,
     CTGoodJobsCategory,
@@ -77,14 +79,18 @@ class CTgoodjobsSourceCatalogAdapter:
         ]
         | None = None,
         browser_scraper_factory: Callable[[], Any] | None = None,
+        crawl_mode: str | None = None,
     ) -> None:
+        self._crawl_mode = resolve_crawl_mode("ctgoodjobs", crawl_mode)
         self._category_provider = category_provider or _discover_ctgoodjobs_categories
         self._browser_scraper_factory = browser_scraper_factory or (
             lambda: CTGoodJobsBrowserPageScraper(
                 request_payload={
-                    "crawl_mode": "headed",
+                    "crawl_mode": self._crawl_mode,
                     "crawl_phase": "catalog_validation",
                     "max_pages": 1,
+                    "profile_operation_id": f"catalog-{uuid4()}",
+                    "cleanup_profile_on_manual_action": True,
                 },
                 max_attempts=1,
             )
@@ -114,7 +120,7 @@ class CTgoodjobsSourceCatalogAdapter:
                 payload={
                     "native_id": category.ctgoodjobs_id,
                     "url_path": url_path,
-                    "crawl_mode": "headed",
+                    "crawl_mode": self._crawl_mode,
                 },
             )
             nodes.append(
@@ -203,7 +209,7 @@ class CTgoodjobsSourceCatalogAdapter:
                 payload={
                     "native_id": native_id,
                     "url_path": url_path,
-                    "crawl_mode": "headed",
+                    "crawl_mode": self._crawl_mode,
                 },
             ),
         )
@@ -224,19 +230,19 @@ class CTgoodjobsSourceCatalogAdapter:
                 "code": exc.code,
                 "classification": exc.classification,
                 "stage": exc.stage,
-                "crawl_mode": "headed",
+                "crawl_mode": self._crawl_mode,
                 "target_hash_prefix": target.fingerprint[:12],
             }
         except Exception as exc:
             return {
                 "status": "failed",
                 "error_type": type(exc).__name__,
-                "crawl_mode": "headed",
+                "crawl_mode": self._crawl_mode,
                 "target_hash_prefix": target.fingerprint[:12],
             }
         return {
             "status": "passed" if page_html.strip() else "failed",
-            "crawl_mode": "headed",
+            "crawl_mode": self._crawl_mode,
             "content_length": min(len(page_html), 1_000_000),
             "target_hash_prefix": target.fingerprint[:12],
         }

@@ -279,6 +279,18 @@ async def test_jobsdb_resume_fresh_profile_retries_once_after_safe_stale_reset(
             )
         ),
     )
+    monkeypatch.setattr(
+        jobsdb_browser_module,
+        "delete_owned_profile",
+        lambda path, **_kwargs: (
+            cleanup_calls.append(path)
+            or SimpleNamespace(
+                available=True,
+                liveness=SimpleNamespace(state="dead"),
+                reason=None,
+            )
+        ),
+    )
 
     scraper = JobsDBBrowserDetailScraper(
         request_payload={
@@ -385,6 +397,7 @@ def test_reset_profile_recreates_task_owned_profile_without_preserving_browser_s
         profile,
         profile_scope=PROFILE_SCOPE_FRESH,
         browser_channel="chromium",
+        configured_path=str(tmp_path),
         process_lister=lambda: [],
         registry=registry,
     )
@@ -410,6 +423,7 @@ def test_reset_profile_fixed_profile_only_removes_lock_markers(tmp_path: Path) -
         profile,
         profile_scope=PROFILE_SCOPE_FIXED,
         browser_channel="msedge",
+        configured_path=str(profile),
         process_lister=lambda: [],
         registry=registry,
     )
@@ -430,6 +444,7 @@ def test_reset_profile_fails_closed_when_process_liveness_is_unknown(tmp_path: P
     result = reset_profile(
         profile,
         profile_scope=PROFILE_SCOPE_FIXED,
+        configured_path=str(profile),
         process_lister=lambda: (_ for _ in ()).throw(
             RuntimeError("process inspection unavailable")
         ),
@@ -452,6 +467,7 @@ def test_reset_profile_refuses_a_matching_live_process(tmp_path: Path) -> None:
         profile,
         profile_scope=PROFILE_SCOPE_FIXED,
         browser_channel="chromium",
+        configured_path=str(profile),
         process_lister=lambda: [
             {
                 "pid": 123,

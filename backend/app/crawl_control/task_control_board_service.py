@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from app.config import settings
 from app.crawl_control.contracts import (
     DetailSettingsV1,
     ListingSettingsV1,
@@ -50,9 +51,10 @@ from app.crawl_phases import resolve_crawl_phase
 from app.services.source_catalog import resolve_default_max_pages
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.source_catalog_repository import SourceCatalogRepository
-from app.scraper.jobsdb_profile_recovery import (
+from app.scraper.browser_profile_recovery import (
     PROFILE_SCOPE_FIXED,
     inspect_profile,
+    is_fixed_profile,
     is_task_owned_profile,
 )
 from app.utils.time import utc_now
@@ -419,30 +421,43 @@ def _manual_action_guidance(
         strategies.append("reuse_open_browser")
     profile_scope = str(raw.get("profile_scope") or "").strip() or None
     profile_stage = str(raw.get("stage") or "").strip().lower()
-    is_jobsdb_profile_lock = source_site == "jobsdb" and profile_stage in {
+    is_resettable_profile_lock = source_site in {"jobsdb", "ctgoodjobs"} and profile_stage in {
         "browser_profile_in_use",
         "profile_lock",
     }
     reset_supported = (
-        bool(raw.get("reset_supported")) if is_jobsdb_profile_lock else False
+        bool(raw.get("reset_supported")) if is_resettable_profile_lock else False
     )
     reset_reason = str(raw.get("reset_reason") or "").strip() or None
-    if is_jobsdb_profile_lock:
+    if is_resettable_profile_lock:
         profile_path = str(raw.get("browser_profile_path") or "").strip()
         if profile_path:
-            profile_scope = profile_scope or (
-                "fresh_profile"
-                if is_task_owned_profile(profile_path)
-                else PROFILE_SCOPE_FIXED
+            browser_channel = (
+                str(raw.get("browser_channel") or "").strip() or None
             )
-            liveness = inspect_profile(
+            task_owned = is_task_owned_profile(
                 profile_path,
-                browser_channel=(
-                    str(raw.get("browser_channel") or "").strip() or None
-                ),
+                configured_path=settings.jobsdb_headed_browser_user_data_dir,
+                browser_channel=browser_channel,
             )
-            reset_supported = liveness.state == "dead"
-            reset_reason = None if reset_supported else liveness.reason
+            fixed_profile = is_fixed_profile(
+                profile_path,
+                configured_path=settings.jobsdb_headed_browser_user_data_dir,
+                browser_channel=browser_channel,
+            )
+            profile_scope = profile_scope or (
+                "fresh_profile" if task_owned else PROFILE_SCOPE_FIXED
+            )
+            if not (task_owned or fixed_profile):
+                reset_supported = False
+                reset_reason = "profile_ownership_unverified"
+            else:
+                liveness = inspect_profile(
+                    profile_path,
+                    browser_channel=browser_channel,
+                )
+                reset_supported = liveness.state == "dead"
+                reset_reason = None if reset_supported else liveness.reason
     return ManualActionGuidanceProjectionV1(
         source_site=source_site,
         action_type=(str(raw.get("action_type"))[:100] if raw.get("action_type") else None),

@@ -22,7 +22,7 @@ from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.scraper.manual_action import ResumeStrategy, normalize_manual_action_payload
-from app.scraper.jobsdb_profile_recovery import (
+from app.scraper.browser_profile_recovery import (
     PROFILE_SCOPE_FIXED,
     PROFILE_SCOPE_FRESH,
     fresh_profile_path,
@@ -441,13 +441,13 @@ async def reset_browser_profile(
         default_browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
     )
     stage = str(manual_action.get("stage") or "").strip().lower()
-    if crawl_job.source_site != "jobsdb" or stage not in {
+    if crawl_job.source_site not in {"jobsdb", "ctgoodjobs"} or stage not in {
         "browser_profile_in_use",
         "profile_lock",
     }:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="The latest manual action does not expose a resettable JobsDB browser profile",
+            detail="The latest manual action does not expose a resettable browser profile",
         )
 
     profile_path = str(manual_action.get("browser_profile_path") or "").strip()
@@ -461,7 +461,15 @@ async def reset_browser_profile(
         )
     profile_scope = str(manual_action.get("profile_scope") or "").strip()
     if profile_scope not in {PROFILE_SCOPE_FIXED, PROFILE_SCOPE_FRESH}:
-        profile_scope = PROFILE_SCOPE_FRESH if is_task_owned_profile(profile_path) else PROFILE_SCOPE_FIXED
+        profile_scope = (
+            PROFILE_SCOPE_FRESH
+            if is_task_owned_profile(
+                profile_path,
+                configured_path=settings.jobsdb_headed_browser_user_data_dir,
+                browser_channel=settings.jobsdb_headed_browser_channel,
+            )
+            else PROFILE_SCOPE_FIXED
+        )
 
     reset_result = reset_profile(
         profile_path,
@@ -470,6 +478,7 @@ async def reset_browser_profile(
             str(manual_action.get("browser_channel") or "").strip()
             or settings.jobsdb_headed_browser_channel
         ),
+        configured_path=settings.jobsdb_headed_browser_user_data_dir,
     )
     if not reset_result.available:
         raise HTTPException(

@@ -70,7 +70,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--category-ids", type=str, default="")
     parser.add_argument("--max-pages", type=int, default=1)
     parser.add_argument("--detail-limit", type=int, default=100)
-    parser.add_argument("--crawl-mode", choices=["headed"], default="headed")
+    parser.add_argument("--crawl-mode", choices=["headless", "headed"], default="headless")
     parser.add_argument("--crawl-phase", choices=["full", "listing", "detail"], default="full")
     parser.add_argument("--source-listing-crawl-job-id", type=str, default="")
     parser.add_argument("--detail-statuses", type=str, default="pending,manual_action_required")
@@ -1080,8 +1080,6 @@ async def main(argv: Sequence[str] | None = None) -> int:
     _apply_request_payload_defaults(args, startup.request_payload)
     _apply_listing_runtime_plan(args, startup.listing_runtime_plan)
     _apply_detail_runtime_plan(args, startup.detail_runtime_plan)
-    if str(args.crawl_mode).strip().lower() != "headed":
-        raise RuntimeError("CTgoodjobs supports headed crawl mode only")
     args.cancellation_token = CrawlCancellationToken(
         crawl_job_id=args.crawl_job_id,
         execution_generation=args.execution_generation or None,

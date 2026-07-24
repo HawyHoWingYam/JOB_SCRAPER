@@ -6,17 +6,15 @@ from typing import Optional
 SUPPORTED_CRAWL_MODES = {"headless", "headed"}
 DEFAULT_CRAWL_MODE_BY_SOURCE = {
     "jobsdb": "headed",
-    "ctgoodjobs": "headed",
+    "ctgoodjobs": "headless",
     "offertoday": "headless",
 }
 SUPPORTED_CRAWL_MODES_BY_SOURCE = {
     "jobsdb": ("headless", "headed"),
-    "ctgoodjobs": ("headed",),
+    "ctgoodjobs": ("headless", "headed"),
     "offertoday": ("headless", "headed"),
 }
-LEGACY_CRAWL_MODE_UPGRADES = {
-    ("ctgoodjobs", "headless"): "headed",
-}
+LEGACY_CRAWL_MODE_UPGRADES: dict[tuple[str, str], str] = {}
 
 
 def normalize_source_site(source_site: Optional[str]) -> str:

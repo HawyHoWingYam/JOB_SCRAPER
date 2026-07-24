@@ -13,12 +13,14 @@ from app.manual_actions.live_browser_registry import get_live_browser_registry
 from app.scraper.access_block import classify_public_access_evidence
 from app.scraper.browser_launch import launch_persistent_context_with_fallback
 from app.scraper.log_events import build_scrape_log_event
-from app.scraper.jobsdb_profile_recovery import (
+from app.scraper.browser_profile_recovery import (
     PROFILE_SCOPE_FIXED,
     PROFILE_SCOPE_FRESH,
     cleanup_orphan_profiles,
     cleanup_profile,
+    delete_owned_profile,
     fresh_profile_path,
+    is_profile_lock_error,
 )
 from app.scraper.manual_action import (
     ManualActionRequiredError,
@@ -114,10 +116,11 @@ class JobsDBBrowserDetailScraper:
                     )
                 ):
                     try:
-                        cleanup_profile(
+                        delete_owned_profile(
                             self._resolved_user_data_dir,
                             profile_scope=PROFILE_SCOPE_FRESH,
                             browser_channel=self.browser_channel,
+                            configured_path=self.user_data_dir,
                         )
                     except Exception as cleanup_error:
                         logger.warning(
@@ -482,11 +485,7 @@ class JobsDBBrowserDetailScraper:
 
     @staticmethod
     def _is_profile_lock_error(exc: Exception) -> bool:
-        message = str(exc or "")
-        return (
-            "launch_persistent_context" in message
-            and "Target page, context or browser has been closed" in message
-        )
+        return is_profile_lock_error(exc)
 
     def _retry_stale_profile_once(self, exc: Exception, profile_path: Path) -> bool:
         if (
@@ -502,6 +501,7 @@ class JobsDBBrowserDetailScraper:
                 profile_path,
                 profile_scope=PROFILE_SCOPE_FRESH,
                 browser_channel=self.browser_channel,
+                configured_path=self.user_data_dir,
             )
         except Exception as cleanup_error:
             logger.info(

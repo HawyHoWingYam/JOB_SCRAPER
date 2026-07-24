@@ -130,7 +130,7 @@ def test_ctgoodjobs_catalog_compiles_known_native_paths_without_slug_guessing():
         "classification_id": "ctgoodjobs:021",
         "native_id": "021",
         "url_path": "/jobs/jobs-in-information-technology",
-        "crawl_mode": "headed",
+        "crawl_mode": "headless",
     }
     assert accounting.payload["url_path"] == "/jobs/jobs-in-accounting-auditing"
     assert accounting.fingerprint != information_technology.fingerprint
@@ -184,7 +184,7 @@ def test_ctgoodjobs_spider_uses_only_published_paths_and_rejects_unknown_before_
     ]
     assert all(request.meta["playwright"] is True for request in requests)
     assert CtgoodjobsSpider.custom_settings["PLAYWRIGHT_LAUNCH_OPTIONS"] == {
-        "headless": False
+        "headless": True
     }
 
     def reject_unknown(_source, _ids):
@@ -198,6 +198,33 @@ def test_ctgoodjobs_spider_uses_only_published_paths_and_rejects_unknown_before_
     with pytest.raises(SourceCatalogError) as unknown:
         list(CtgoodjobsSpider(category_ids="ctgoodjobs:999").start_requests())
     assert unknown.value.code == "SOURCE_CLASSIFICATION_UNKNOWN"
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_catalog_target_and_smoke_preserve_explicit_headless_mode():
+    class Browser:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def fetch_page_html(self, *_args, **_kwargs):
+            return "<html><body>parser-valid fixture</body></html>"
+
+    adapter = CTgoodjobsSourceCatalogAdapter(
+        category_provider=get_static_ctgoodjobs_categories,
+        browser_scraper_factory=Browser,
+        crawl_mode="headless",
+    )
+    catalog = adapter.discover()
+    node = next(
+        item for item in catalog.nodes if item.classification_id == "ctgoodjobs:021"
+    )
+    target = adapter.compile(node)[0]
+
+    assert target.payload["crawl_mode"] == "headless"
+    assert (await adapter.smoke(target))["crawl_mode"] == "headless"
 
 
 def test_ctgoodjobs_standalone_uses_published_url_before_headed_fetch(monkeypatch):
