@@ -20,10 +20,12 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 - Task Detail reuses `build_crawl_task_snapshot` and `build_crawl_control_run_projection` so list, Board, and direct detail agree.
 - Manual guidance is bounded and may expose only normalized message/instructions/capabilities. A resumable normalized manual action always supports the baseline `fresh_profile` path; `reuse_open_browser` appears only when explicitly normalized as supported.
 - Browser-profile recovery fields are capability-gated: `reset_supported` is
-  true only for a JobsDB profile-lock action whose liveness probe proves the
-  profile is dead. Unknown or live liveness stays disabled and exposes the
-  bounded `reset_reason`; `profile_scope` distinguishes task-owned temporary
-  profiles from fixed reusable-browser profiles.
+  true only for a JobsDB or CTGoodJobs profile-lock action whose canonical path
+  is proven to be the configured fixed profile or a task-owned child and whose
+  liveness probe proves the profile dead. Unknown/live liveness or unverified
+  ownership stays disabled and exposes the bounded `reset_reason`;
+  `profile_scope` distinguishes task-owned temporary profiles from fixed
+  reusable-browser profiles.
 - `reset_browser_profile` is an active-run action only while the task is
   `manual_action_required`; the Task Details and Board clients route it to the
   crawl-task reset endpoint, never to Automation lifecycle transitions.
@@ -38,6 +40,7 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 | `run_limit` outside 1..100 | FastAPI 422 |
 | unknown Task UUID | 404 `CRAWL_TASK_NOT_FOUND` with the requested ID |
 | action is invalid for current status/lifecycle | action remains present with `enabled=false` and a reason code |
+| profile lock points outside the configured browser-profile root | Reset is disabled with `profile_ownership_unverified`; do not probe or mutate it |
 
 ### 5. Good/Base/Bad Cases
 
@@ -52,6 +55,8 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 - Assert direct Task Detail shares authority/workload values with the dispatched run.
 - Assert structured not-found behavior and absence of raw payload/manual-action fields.
 - Assert server-declared action truth for active, cancelling, terminal, and manual-action states.
+- Assert both JobsDB and CTGoodJobs expose Reset only for owned/configured,
+  proven-dead profiles; live, unknown, and unowned paths stay disabled.
 
 ### 7. Wrong vs Correct
 

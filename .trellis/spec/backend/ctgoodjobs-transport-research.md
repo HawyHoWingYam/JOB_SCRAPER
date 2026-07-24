@@ -9,10 +9,11 @@ CTGoodJobs transport comparison in
 `backend/scripts/ctgoodjobs_headless_probe.py`.
 
 The probe compares plain HTTP, fresh Playwright headless, stateful Playwright
-headless, and a headed baseline. It does not authorize a production
-`crawl_modes.py` change or an automatic transport fallback. A successful live
-window proves bounded operational viability under the frozen threshold; it does
-not prove that an IP/session will never encounter WAF.
+headless, and a headed baseline. Production changed to headless-first only after
+separate bounded listing, detail, and catalog canaries returned parser-valid
+content. Research results never authorize an automatic transport fallback, and
+a successful live window does not prove that an IP/session will never encounter
+WAF.
 
 Runtime evidence lives under
 `backend/runtime/ctgoodjobs-headless-research/<run-id>/`, remains ignored, and
@@ -68,9 +69,9 @@ resolve_probe_exit_code(...) -> int
 - `stateful-headless` reuses two or more temporary persistent contexts.
 - `headed-baseline` uses the same persistent-context shape with visibility
   enabled.
-- Transport labels are research facts. Never use the production CTGoodJobs CLI
-  `--crawl-mode headless` as evidence because current mode normalization upgrades
-  that label to headed and the production adapter launches `headless=False`.
+- Transport labels are research facts. The production CTGoodJobs CLI now keeps
+  `--crawl-mode headless` and defaults to it, but production smoke is not a
+  substitute for the probe's frozen multi-arm evidence threshold.
 
 #### Classification order
 
@@ -123,6 +124,12 @@ An arm is `operationally_viable` only when all of these hold:
 Smaller, partial, or failed comparisons remain conditional. A successful window
 does not remove the existing operator-driven WAF recovery boundary. Do not
 automatically cascade from HTTP to browser after positive access evidence.
+
+The rollout canary recorded parser-valid fresh/stateful headless listing and
+detail results plus a passing published-catalog adapter smoke. The smaller
+artifact remains conditional (verification exit `3`) because it is below this
+research spec's full viability threshold; that exit does not invalidate the
+separate bounded production rollout gate.
 
 ### 4. Validation & Error Matrix
 

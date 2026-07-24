@@ -116,7 +116,7 @@ or history by interpreting display text.
 | Source | Query Target and final request contract |
 |---|---|
 | JobsDB | `jobsdb.classification`; both standalone and Scrapy call the shared JobsDB request builder and send `classification=<native_id>`. |
-| CTgoodjobs | `ctgoodjobs.category`; use only the published, validated `url_path`; unknown IDs fail before navigation; catalog smoke and production crawling remain headed. |
+| CTgoodjobs | `ctgoodjobs.category`; use only the published, validated `url_path`; unknown IDs fail before navigation; catalog smoke defaults to headless and uses a unique operation-owned profile. Explicit headed remains supported. |
 | OfferToday | `offertoday.category`; send one bounded browse request with `jobFunctionCodes=[category_code]`, empty keyword, and explicit strategy metadata. |
 
 OfferToday classification-only execution always uses `default_to_it=False` and
@@ -134,6 +134,10 @@ It is never an executable fallback. Runtime code must not call `discover()`.
   target fingerprint.
 - Smoke is bounded to one target/page, plus OfferToday warmup. It performs no
   detail crawl, staging write, or catalog publication.
+- CTGoodJobs smoke creates `<configured-root>/operations/catalog-<uuid>` and
+  passes `crawl_mode=headless` unless the caller explicitly requests headed.
+  The adapter requests cleanup on success, failure, and manual-action exit;
+  lazy TTL orphan reaping is crash recovery, not the normal cleanup path.
 - Persist only allowlisted scalar evidence. Never persist or log bodies,
   cookies, auth/session data, browser state, or unbounded ID lists.
 - A stale worker cannot overwrite a reclaimed validation result. Failed and
@@ -160,6 +164,8 @@ It is never an executable fallback. Runtime code must not call `discover()`.
 | Latest validation needs operator action | `CATALOG_MANUAL_ACTION_REQUIRED` |
 | Review expired/reused, active pointer changed, or impact digest changed | `CATALOG_IMPACT_STALE`; roll back all mutation writes |
 | CTgoodjobs path has scheme, host, query, fragment, or invalid category shape | Reject compilation before navigation |
+| Concurrent CTGoodJobs catalog validation and crawl execution | Distinct operation/task profiles; never borrow the fixed verification profile |
+| CTGoodJobs catalog smoke exits with manual action | Remove the operation-owned profile in the scraper context exit |
 | OfferToday classification compilation produces zero/multiple/keyword targets | Reject as non-executable |
 | Smoke result contains body, cookies, nested objects, or unknown fields | Drop them before persistence; keep only allowlisted bounded scalars |
 
@@ -222,7 +228,7 @@ can navigate before an unknown classification is rejected.
 ```python
 plan = load_published_query_plan("ctgoodjobs", classification_ids)
 for entry in plan.entries:
-    assert entry.target.payload["crawl_mode"] == "headed"
+    assert entry.target.payload["crawl_mode"] == "headless"
     await browser.goto(f"https://jobs.ctgoodjobs.hk{entry.target.payload['url_path']}")
 ```
 

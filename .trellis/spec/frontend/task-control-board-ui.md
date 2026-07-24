@@ -20,6 +20,11 @@ Use this composition for `#scheduler` operations and `#crawl-tasks?task=<id>` de
 - Board renders backend section membership/order and sends displayed Automation revision or fresh delete-review token with mutations.
 - Task Details renders normalized authority, listing/detail workload, immutable pacing, issue/guidance, recovery, actions, and an audit-events link.
 - Cancellation uses the shared focus-trapped confirmation dialog, calls the existing helper, and polls at one second while status is `cancelling`; only the backend can report `cancelled`.
+- JobsDB and CTGoodJobs Task Details use the same normalized recovery panel.
+  Fresh Profile is the baseline explicit resume; Reset follows
+  `reset_supported`; Open Browser follows helper health; Reuse Open Browser
+  follows both helper/session evidence and `reuse_open_browser_supported`.
+  The panel never infers availability from raw failure text.
 - Ordinary UI must not read or render raw `request_payload`, raw `manual_action`, or raw event payloads.
 
 ### 4. Validation & Error Matrix
@@ -32,6 +37,7 @@ Use this composition for `#scheduler` operations and `#crawl-tasks?task=<id>` de
 | direct Task is unknown | render the structured detail error |
 | cancellation request fails | keep dialog/action context and show the error |
 | component unmounts or route changes | abort request and clear polling interval |
+| CTGoodJobs profile-lock task | Render capability-gated Reset/Fresh/Open/Reuse controls; do not replace them with an ambiguous generic Resume |
 
 ### 5. Good/Base/Bad Cases
 

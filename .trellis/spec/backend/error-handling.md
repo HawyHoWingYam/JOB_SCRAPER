@@ -155,9 +155,16 @@ JobsDB-only defaults.
 JobsDB browser-profile recovery is fail-closed. A fresh-profile Resume may make
 one automatic cleanup/retry after process and registry liveness both prove the
 task-owned profile is dead; a second launch failure becomes a new manual action.
-Reset deletes only a profile under the task-owned temporary-profile root. Fixed profiles retain their
-cookies/login data and only stale singleton markers plus registry state are
-removed. Unknown liveness never mutates profile state.
+The same contract applies to CTGoodJobs. Shared primitives live in
+`browser_profile_recovery.py`; `jobsdb_profile_recovery.py` is compatibility-only.
+Task profiles live at `<configured-root>/tasks/<crawl-job-id>` and non-task browser
+operations at `<configured-root>/operations/<operation-id>`. Reset and terminal
+cleanup require canonical containment beneath that configured root, the expected
+ownership directory, and proven-dead liveness. Path traversal, an unrelated root,
+or a symlinked owner/profile directory fails closed before process inspection or
+recursive deletion. Fixed profiles must equal the configured root; they retain
+cookies/login data and remove only stale singleton markers plus registry state.
+Unknown liveness never mutates profile state.
 
 The host manual-action helper is cross-platform. It resolves `chromium`,
 `chrome`, and `msedge` through host-native application/PATH candidates, then
@@ -174,6 +181,10 @@ Normal headless JobsDB execution never calls the helper. For a supported WAF
 challenge, the operator explicitly uses the helper to open a separate headed
 verification browser, completes the challenge, and chooses
 `reuse_open_browser` for that recovery attempt.
+
+Routine CTGoodJobs listing and detail execution follows the same headless-first
+boundary. Headed remains an explicit debug/manual-recovery mode; a WAF/IP/human
+verification signal never triggers a hidden headless-to-headed retry.
 
 ### 4. Validation & Error Matrix
 
@@ -199,6 +210,9 @@ verification browser, completes the challenge, and chooses
 | Host helper receives `browser_channel=chromium` | Resolve a macOS/Linux/Windows executable or installed Playwright Chromium; otherwise return 409 with install/configuration guidance |
 | Host helper receives a container `/app/.host_browser_profiles/...` path | Translate only the local process path; preserve the original path in the live-browser registry |
 | Host process inspection is unavailable or incomplete | Fail closed; do not remove registry state or claim the profile is safe to reset |
+| Temporary profile is outside the configured `tasks/` or `operations/` root, contains traversal, or resolves through a symlinked owner | `temporary_profile_not_owned`; do not inspect or delete it |
+| Fixed profile does not equal the configured profile root | `fixed_profile_not_configured`; do not remove singleton markers |
+| CTGoodJobs stale ProcessSingleton on the first fresh-profile resume launch | One proven-dead reset/retry; a second failure returns structured manual action |
 | Latest resume event has no later outcome | Show accepted/waiting feedback and disable both Resume actions |
 | Later manual-action event resolves the attempt | Show its stage/classification/message and permit another explicit action |
 
@@ -257,6 +271,12 @@ verification browser, completes the challenge, and chooses
 - `backend/tests/test_host_manual_action_helper.py` covers macOS Chromium
   discovery, Playwright fallback, container-to-host profile translation,
   Chromium process matching, and reachable CDP smoke behavior.
+- `backend/tests/test_jobsdb_profile_recovery.py` covers shared lock recognition,
+  dead-zombie handling, configured-root containment, path traversal, unrelated
+  roots, symlinked owner rejection, and task/operation/fixed mutation boundaries.
+- `backend/tests/test_ctgoodjobs_browser_page_scraper.py` covers CTGoodJobs mode
+  propagation, owned profiles, one stale-lock retry, checkpoint metadata, and
+  catalog/manual-action cleanup behavior.
 
 ### 7. Wrong vs Correct
 

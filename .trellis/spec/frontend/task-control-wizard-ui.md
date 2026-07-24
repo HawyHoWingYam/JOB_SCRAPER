@@ -28,7 +28,9 @@ under `#scheduler/*`. The legacy `#scheduler` board remains reachable.
   consumption.
 - Run saved configuration never edits the Automation. Run with changes creates
   a distinct One-off draft with Automation ID/revision cleared.
-- CTgoodjobs is headed-only. OfferToday `offertoday:118000` is a visible
+- CTGoodJobs supports `headless` and `headed`; new drafts default to headless.
+  Headed is explicitly labelled for debugging/operator recovery, and React does
+  not rewrite a selected mode. OfferToday `offertoday:118000` is a visible
   recommendation, never an implicit default. React never compiles Query Targets.
 
 ### Published catalog request lifecycle

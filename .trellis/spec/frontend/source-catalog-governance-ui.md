@@ -55,8 +55,9 @@ new ApiRequestError(message, {
 - `details` retains `details`, `context`, or legacy `detail` payloads;
   `detail` remains available. Prefer the response `X-Request-ID`, then body
   request ID, then the caller request ID.
-- CTgoodjobs live validation is always labelled headed-only. There is no
-  headless selector.
+- CTGoodJobs validation displays the server-selected browser mode. Routine
+  validation defaults to headless; the Governance UI does not invent a headed
+  requirement or compile transport policy locally.
 - Publish and rollback first obtain a current backend impact review token.
   Success invalidates local resources and refetches authoritative state; React
   never moves the active revision optimistically.
@@ -71,7 +72,7 @@ new ApiRequestError(message, {
 | `CATALOG_NOT_PUBLISHED` | Show setup-required state; execution remains blocked |
 | `CATALOG_CANDIDATE_STALE` | Show stale-candidate state and require authoritative refresh |
 | `CATALOG_VALIDATION_REQUIRED` / `FAILED` | Keep publish disabled and show durable validation state |
-| `CATALOG_MANUAL_ACTION_REQUIRED` | Show backend action/evidence and headed-only CTgoodjobs retry |
+| `CATALOG_MANUAL_ACTION_REQUIRED` | Show backend action/evidence and the explicit operator recovery path; do not silently change browser mode |
 | `CATALOG_IMPACT_STALE` | Discard review token and require a new impact review |
 | Late response for old `requestVersion` | Reducer ignores it |
 | Network refresh failure with prior value | Keep value visible with stale/error banner |
@@ -92,7 +93,7 @@ new ApiRequestError(message, {
 ### 6. Tests Required
 
 - `SourceCatalogsPage.test.jsx`: read-only initial load, source/hash keyboard
-  navigation, headed-only manual action, impact-before-confirmation, dialog
+  navigation, server-selected CTGoodJobs mode/manual action, impact-before-confirmation, dialog
   focus/Escape/restore, and stale reducer suppression.
 - `sourceCatalogsApi.test.js`: route fallback and malformed-response rejection.
 - `api/client.test.js`: legacy `detail`, structured `code/details`, and server
