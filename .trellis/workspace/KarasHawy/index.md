@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 41
-- **Last Active**: 2026-07-24
+- **Total Sessions**: 42
+- **Last Active**: 2026-07-25
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1442 | Active |
+| `journal-1.md` | ~1477 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 42 | 2026-07-25 | Fix CTGoodJobs detail evidence semantics | `cb36b56f`, `c9cf4c85`, `3e316b11` | `codex/offertoday-it-coverage-20260702` |
 | 41 | 2026-07-24 | Dismiss failed Board attention | `66bdb723`, `19d21314` | `codex/offertoday-it-coverage-20260702` |
 | 40 | 2026-07-24 | CTGoodJobs headless profile recovery | `c8db77dc`, `f4c039d3`, `6da2f0f2` | `codex/offertoday-it-coverage-20260702` |
 | 39 | 2026-07-23 | Fix AI enrichment configuration test diagnostics | `5716be81` | `codex/offertoday-it-coverage-20260702` |

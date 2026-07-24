@@ -1440,3 +1440,38 @@ Added a source-neutral, revision-safe Dismiss action for terminal failed-run Boa
 ### Next Steps
 
 - None - task complete
+
+
+## Session 42: Fix CTGoodJobs detail evidence semantics
+
+**Date**: 2026-07-25
+**Task**: Fix CTGoodJobs detail evidence semantics
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Preserved CTGoodJobs source attribute evidence through merge, made crawl task operator-state derivation phase-aware, removed detail recovery-run UI while retaining manual browser verification recovery, updated specs/tests, and completed all focused backend/frontend quality gates.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cb36b56f` | (see git log) |
+| `c9cf4c85` | (see git log) |
+| `3e316b11` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
