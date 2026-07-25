@@ -37,6 +37,30 @@ def test_ctgoodjobs_explicit_page_state_is_terminal_unavailable() -> None:
     assert evidence.reason == "job_no_longer_available"
 
 
+def test_ctgoodjobs_live_expired_page_is_terminal_unavailable() -> None:
+    evidence = classify_ctgoodjobs_detail_page(
+        status_code=200,
+        final_url="https://jobs.ctgoodjobs.hk/job/10185476/network-engineer",
+        title=(
+            "Network Engineer - The Wing On Department Stores "
+            "(Hong Kong) Limited | CTgoodjobs"
+        ),
+        html=(
+            '<section class="jd--edge jd--expired full-height">'
+            '<div class="container"><div class="msg">'
+            '<h3>Sorry, this job has expired.</h3>'
+            '<div class="job__info">'
+            '<div class="job__title">Network Engineer</div>'
+            '<div class="job__company">'
+            "The Wing On Department Stores (Hong Kong) Limited"
+            "</div></div></div></div></section>"
+        ),
+    )
+
+    assert evidence is not None
+    assert evidence.reason == "job_expired"
+
+
 def test_ctgoodjobs_job_description_text_is_not_page_state_evidence() -> None:
     assert (
         classify_ctgoodjobs_detail_page(

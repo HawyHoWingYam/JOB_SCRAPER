@@ -422,6 +422,11 @@ consecutive_count = 2
   document title or an explicitly labelled page-state container (for example
   `data-page-state="job-not-found"`). Never scan arbitrary body prefixes or job
   descriptions for generic expiry phrases.
+- CTGoodJobs' live expired-detail representation uses the source-owned
+  `jd--expired` class and the top-level message `This job has expired`. Treat
+  that class as an explicit page-state container, but still require a known
+  unavailable marker within the captured container; the class token alone is
+  not terminal evidence.
 - The first allowlisted structural anomaly is `failed` and crawling continues.
 - The immediately consecutive identical anomaly marks the current target
   `manual_action_required`, emits `content_anomaly`, and stops later requests.
@@ -438,6 +443,7 @@ consecutive_count = 2
 | Explicit WAF marker plus `job not found` text | WAF manual action wins |
 | Positive WAF marker on attempt 1 of N | Immediate manual action; one request total |
 | HTTP 404/410 without WAF evidence | `terminal_unavailable`; continue next target |
+| HTTP 200 `jd--expired` state with known expiry marker | `terminal_unavailable` with reason `job_expired`; continue next target |
 | Expiry phrase inside an ordinary job description | Normal/unknown page state |
 | First `missing_company_identity` | `failed`; continue |
 | Second consecutive `missing_company_identity` | `content_anomaly`; stop |
@@ -458,7 +464,8 @@ consecutive_count = 2
 ### 6. Tests Required
 
 - `backend/tests/test_ctgoodjobs_page_state.py` covers HTTP and explicit page
-  state evidence plus missing-field/body-text non-classification.
+  state evidence, the live `jd--expired` representation, and
+  missing-field/body-text non-classification.
 - `backend/tests/test_cross_source_ip_recovery.py` covers WAF precedence,
   resumable `content_anomaly`, non-IP guidance, and resume status selection.
 - `backend/tests/test_cross_source_crawl_logging.py` covers first/second anomaly

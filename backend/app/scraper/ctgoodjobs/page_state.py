@@ -21,6 +21,7 @@ _UNAVAILABLE_STATE_TOKENS = (
     "job_not_found",
     "job-expired",
     "job_expired",
+    "jd--expired",
     "job-removed",
     "job_removed",
     "job-unavailable",
@@ -121,7 +122,11 @@ def classify_ctgoodjobs_detail_page(
 ) -> CTGoodJobsTerminalUnavailableEvidence | None:
     """Classify only explicit top-level CTGoodJobs unavailable evidence."""
 
-    normalized_status = status_code if type(status_code) is int else None
+    normalized_status = (
+        status_code
+        if isinstance(status_code, int) and not isinstance(status_code, bool)
+        else None
+    )
     normalized_url = str(final_url or "").strip()
     if normalized_status in {404, 410}:
         return CTGoodJobsTerminalUnavailableEvidence(
