@@ -34,7 +34,7 @@ from scripts import jobsdb_standalone_crawl as jobsdb_crawl
 from scripts import offertoday_standalone_crawl as offertoday_crawl
 
 
-def _published_jobsdb_plan(*_args, **_kwargs):
+def _jobsdb_plan(*_args, **_kwargs):
     return SimpleNamespace(
         entries=(
             SimpleNamespace(
@@ -45,7 +45,7 @@ def _published_jobsdb_plan(*_args, **_kwargs):
     )
 
 
-def _published_offertoday_plan(*_args, **_kwargs):
+def _offertoday_plan(*_args, **_kwargs):
     return SimpleNamespace(
         entries=(
             SimpleNamespace(
@@ -265,7 +265,7 @@ async def test_jobsdb_listing_logs_page_stage_and_terminal_summary(
 
     monkeypatch.setattr(jobsdb_crawl, "CategoryListScraper", FakeCategoryScraper)
     monkeypatch.setattr(
-        jobsdb_crawl, "load_published_query_plan", _published_jobsdb_plan
+        jobsdb_crawl, "load_source_query_plan", _jobsdb_plan
     )
     args = SimpleNamespace(
         crawl_job_id="jobsdb-listing-task",
@@ -363,8 +363,8 @@ async def test_offertoday_empty_listing_logs_start_stage_and_terminal_summary(
 ) -> None:
     monkeypatch.setattr(
         offertoday_crawl,
-        "load_published_query_plan",
-        _published_offertoday_plan,
+        "load_source_query_plan",
+        _offertoday_plan,
     )
     class HealthyBrowser:
         async def require_healthy_session(self) -> None:
@@ -473,8 +473,8 @@ async def test_offertoday_listing_ip_block_logs_manual_and_terminal_summary(
 ) -> None:
     monkeypatch.setattr(
         offertoday_crawl,
-        "load_published_query_plan",
-        _published_offertoday_plan,
+        "load_source_query_plan",
+        _offertoday_plan,
     )
     blocked_url = (
         "https://www.offertoday.com/web/passport/cm/verify.html?"

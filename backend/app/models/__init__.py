@@ -34,14 +34,7 @@ from app.models.company_enrichment_run import (
 )
 from app.models.app_runtime_settings import AppRuntimeSettings
 from app.models.scraper_pacing_settings import ScraperPacingSettings
-from app.models.source_catalog import (
-    SourceCatalogActiveRevision,
-    SourceCatalogCandidate,
-    SourceCatalogChangeReview,
-    SourceCatalogPublication,
-    SourceCatalogRevision,
-    SourceCatalogValidationRun,
-)
+from app.models.source_classification import SourceClassification
 from app.models.governance import (
     GovernanceAuditEvent,
     GovernanceIdempotencyRecord,
@@ -123,12 +116,7 @@ __all__ = [
     "CompanyEnrichmentRunItem",
     "AppRuntimeSettings",
     "ScraperPacingSettings",
-    "SourceCatalogActiveRevision",
-    "SourceCatalogCandidate",
-    "SourceCatalogChangeReview",
-    "SourceCatalogPublication",
-    "SourceCatalogRevision",
-    "SourceCatalogValidationRun",
+    "SourceClassification",
     "GovernanceAuditEvent",
     "GovernanceIdempotencyRecord",
     "GovernanceRevision",

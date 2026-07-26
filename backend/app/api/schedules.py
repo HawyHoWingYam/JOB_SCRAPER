@@ -30,12 +30,10 @@ from app.schemas.schedule import (
 )
 from app.services.crawl_request_validation import (
     normalize_source_site,
-    validate_published_category_ids,
+    validate_active_category_ids,
 )
-from app.source_catalog.errors import SourceCatalogError
 from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
-from app.services.source_catalog import is_supported_source_site, resolve_default_max_pages
-from app.services.source_catalog_service import SourceCatalogService
+from app.services.source_sites import is_supported_source_site, resolve_default_max_pages
 
 logger = logging.getLogger(__name__)
 
@@ -51,39 +49,27 @@ def _compatibility_scope(
     source_site: str,
     category_ids: list[int | str] | None,
 ) -> tuple[AuthoredCrawlScopeV1, int]:
-    catalogs = SourceCatalogService(db)
     if category_ids:
-        published, selected_nodes = catalogs.validate_classifications(
-            source_site,
-            category_ids,
+        classification_ids = tuple(
+            str(category_id)
+            if str(category_id).startswith(f"{source_site}:")
+            else f"{source_site}:{category_id}"
+            for category_id in category_ids
         )
-        compiled = catalogs.compile_nodes(published, selected_nodes)
-        scope = AuthoredCrawlScopeV1.model_validate(
-            {
-                "source_site": source_site,
-                "reviewed_catalog_revision_id": published.revision.id,
-                "mode": "rules",
-                "rules": [
-                    {
-                        "kind": "exact",
-                        "classification_id": node.classification_id,
-                    }
-                    for node in selected_nodes
-                ],
-            }
+        scope = AuthoredCrawlScopeV1(
+            source_site=source_site,
+            mode="selected",
+            classification_ids=classification_ids,
         )
-        return scope, len(compiled)
+        resolved = CrawlScopeService(db).preview(scope).resolved_scope
+        return resolved.authored_scope, resolved.query_target_count
 
-    published, _selected_nodes, targets = catalogs.resolve_scope(
-        source_site,
-        mode="all",
-    )
     scope = AuthoredCrawlScopeV1(
         source_site=source_site,
-        reviewed_catalog_revision_id=published.revision.id,
         mode="all",
     )
-    return scope, len(targets)
+    resolved = CrawlScopeService(db).preview(scope).resolved_scope
+    return resolved.authored_scope, resolved.query_target_count
 
 
 def _compatibility_configuration(
@@ -124,7 +110,7 @@ def _compatibility_configuration(
     else:
         backlog_scope = (
             {"kind": "crawl_scope", "scope": scope.model_dump(mode="json")}
-            if scope.mode == "rules"
+            if scope.mode == "selected"
             else {"kind": "source_backlog"}
         )
         detail_settings = {
@@ -211,9 +197,9 @@ def _updated_compatibility_configuration(
         )
     else:
         scope = current.scope
-        query_target_count = CrawlScopeService(
-            SourceCatalogService(db)
-        ).preview(scope).resolved_scope.query_target_count
+        query_target_count = CrawlScopeService(db).preview(
+            scope
+        ).resolved_scope.query_target_count
 
     crawl_phase = updates.get("crawl_phase") or current.crawl_phase
     crawl_mode = updates.get("crawl_mode") or current.crawl_mode
@@ -261,7 +247,7 @@ def _updated_compatibility_configuration(
                     "kind": "crawl_scope",
                     "scope": scope.model_dump(mode="json"),
                 }
-                if scope.mode == "rules"
+                if scope.mode == "selected"
                 else {"kind": "source_backlog"}
             )
             detail_settings = {
@@ -294,12 +280,11 @@ def _updated_compatibility_configuration(
 
 
 def _crawl_control_http_error(
-    exc: CrawlControlError | SourceCatalogError,
+    exc: CrawlControlError,
 ) -> HTTPException:
     status_code = {
         "AUTOMATION_NOT_FOUND": status.HTTP_404_NOT_FOUND,
         "DISPATCH_PLAN_NOT_FOUND": status.HTTP_404_NOT_FOUND,
-        "CATALOG_NOT_PUBLISHED": status.HTTP_404_NOT_FOUND,
         "SOURCE_CLASSIFICATION_UNKNOWN": status.HTTP_404_NOT_FOUND,
         "SOURCE_CLASSIFICATION_NOT_EXECUTABLE": (
             status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -355,18 +340,9 @@ async def _validate_effective_category_ids(
     category_ids: list[int | str] | None,
     db: Session,
 ) -> None:
-    """Validate source-aware category ids against the published revision."""
+    """Validate source-aware category ids against active top-level categories."""
     try:
-        validate_published_category_ids(db, source_site, category_ids)
-    except SourceCatalogError as exc:
-        raise HTTPException(
-            status_code=(
-                404
-                if exc.code in {"CATALOG_NOT_PUBLISHED", "SOURCE_CLASSIFICATION_UNKNOWN"}
-                else 422
-            ),
-            detail=exc.to_detail(),
-        ) from exc
+        validate_active_category_ids(db, source_site, category_ids)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -455,7 +431,7 @@ async def create_schedule(
             actor=AUTOMATION_MUTATION_ACTOR,
             initial_state="active" if data.is_active else "paused",
         )
-    except (CrawlControlError, SourceCatalogError) as exc:
+    except CrawlControlError as exc:
         raise _crawl_control_http_error(exc) from exc
     schedule = repository.get_schedule_by_id(
         db,
@@ -550,7 +526,7 @@ async def update_schedule(
                         expected_revision=projection.snapshot.revision,
                         actor=AUTOMATION_MUTATION_ACTOR,
                     )
-        except (CrawlControlError, SourceCatalogError) as exc:
+        except CrawlControlError as exc:
             raise _crawl_control_http_error(exc) from exc
         schedule = repository.get_schedule_by_id(db, schedule_id)
         if schedule is None:

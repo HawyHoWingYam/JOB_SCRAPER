@@ -17,7 +17,6 @@ from app.models.canonical_job_taxonomy import (
     CanonicalJobSubcategory,
     CanonicalJobTaxonomyActiveMappingRevision,
     CanonicalJobTaxonomyActiveRevision,
-    CanonicalJobTaxonomyMappingCoverage,
     JobTaxonomyAssignment,
     JobTaxonomyReviewItem,
     SourceJobTaxonomyMapping,
@@ -31,8 +30,6 @@ from app.utils.time import utc_now
 _REVIEW_REASON_ORDER = (
     "source_classification_paths_missing",
     "unsupported_source",
-    "source_catalog_provenance_missing",
-    "source_catalog_provenance_mismatch",
     "source_mapping_missing",
     "source_mapping_excluded",
     "source_mapping_unmapped",
@@ -169,25 +166,21 @@ class CanonicalJobTaxonomy:
         deterministic_ids, allowed_ids = self._mapping_target_ids(mappings)
         target_ids = tuple(dict.fromkeys([*deterministic_ids, *allowed_ids]))
         blocking_reasons = [*evidence_reasons]
-        blocking_reasons.extend(
-            "source_mapping_excluded"
-            if mapping.disposition == "excluded"
-            else "source_mapping_unmapped"
-            for mapping in mappings
-            if mapping.disposition in {"excluded", "unmapped"}
+        mapping_conflict = len(deterministic_ids) > 1 or (
+            deterministic_ids
+            and allowed_ids
+            and deterministic_ids[0] not in allowed_ids
         )
+        if mapping_conflict or not target_ids:
+            target_ids = self._all_assignable_subcategory_ids(
+                taxonomy_revision_id=active_taxonomy.revision_id,
+            )
         targets = self._classifier_targets(
             target_ids,
             taxonomy_revision_id=active_taxonomy.revision_id,
         )
         if not blocking_reasons:
-            if len(deterministic_ids) > 1 or (
-                deterministic_ids
-                and allowed_ids
-                and deterministic_ids[0] not in allowed_ids
-            ):
-                blocking_reasons.append("conflicting_mapping")
-            elif not target_ids or len(targets) != len(target_ids):
+            if not target_ids or len(targets) != len(target_ids):
                 blocking_reasons.append("canonical_target_invalid")
 
         return CanonicalClassifierContext(
@@ -480,44 +473,10 @@ class CanonicalJobTaxonomy:
         if not evidence.source_classification_paths:
             return [], [], ("source_classification_paths_missing",)
 
-        coverage = (
-            self.db.query(CanonicalJobTaxonomyMappingCoverage)
-            .filter(
-                CanonicalJobTaxonomyMappingCoverage.mapping_revision_id
-                == mapping_revision_id,
-                CanonicalJobTaxonomyMappingCoverage.source_site == evidence.source_site,
-            )
-            .one_or_none()
-        )
-        if coverage is None:
-            unsupported_source_refs = [
-                {
-                    "kind": "source-classification-path",
-                    "id": str(path.id),
-                    "source_site": evidence.source_site,
-                    "source_order": path.source_order,
-                    "source_catalog_revision_id": (
-                        str(path.source_catalog_revision.revision_id)
-                        if path.source_catalog_revision is not None
-                        else None
-                    ),
-                    "source_classification_ids": [
-                        node.source_classification_id for node in path.nodes
-                    ],
-                }
-                for path in evidence.source_classification_paths
-            ]
-            return (
-                [],
-                unsupported_source_refs,
-                ("unsupported_source",),
-            )
-
         ordered_identity_ids: list[str] = []
         source_refs: list[dict[str, object]] = []
         evidence_reasons: list[str] = []
         for path in evidence.source_classification_paths:
-            revision = path.source_catalog_revision
             identities = [node.source_classification_id for node in path.nodes]
             ordered_identity_ids.extend(identities)
             source_refs.append(
@@ -526,20 +485,9 @@ class CanonicalJobTaxonomy:
                     "id": str(path.id),
                     "source_site": evidence.source_site,
                     "source_order": path.source_order,
-                    "source_catalog_revision_id": (
-                        str(revision.revision_id) if revision is not None else None
-                    ),
                     "source_classification_ids": identities,
                 }
             )
-            if revision is None:
-                evidence_reasons.append("source_catalog_provenance_missing")
-            elif (
-                revision.source_site != evidence.source_site
-                or revision.revision_id != coverage.source_catalog_revision_id
-                or revision.fingerprint != coverage.source_catalog_fingerprint
-            ):
-                evidence_reasons.append("source_catalog_provenance_mismatch")
 
         unique_identity_ids = list(dict.fromkeys(ordered_identity_ids))
         rows = (
@@ -554,11 +502,6 @@ class CanonicalJobTaxonomy:
             .all()
         )
         by_identity = {row.source_classification_id: row for row in rows}
-        missing = [
-            identity for identity in unique_identity_ids if identity not in by_identity
-        ]
-        if missing:
-            evidence_reasons.append("source_mapping_missing")
         return (
             [
                 by_identity[identity]
@@ -567,6 +510,24 @@ class CanonicalJobTaxonomy:
             ],
             source_refs,
             tuple(dict.fromkeys(evidence_reasons)),
+        )
+
+    def _all_assignable_subcategory_ids(
+        self,
+        *,
+        taxonomy_revision_id: UUID,
+    ) -> tuple[UUID, ...]:
+        return tuple(
+            row.id
+            for row in self.db.query(CanonicalJobSubcategory)
+            .filter(
+                CanonicalJobSubcategory.revision_id == taxonomy_revision_id,
+                CanonicalJobSubcategory.is_assignable.is_(True),
+            )
+            .order_by(
+                CanonicalJobSubcategory.source_order, CanonicalJobSubcategory.code
+            )
+            .all()
         )
 
     def _active_revisions(
@@ -705,32 +666,11 @@ class CanonicalJobTaxonomy:
         deterministic_targets = list(deterministic_target_ids)
         allowed_targets = list(allowed_target_ids)
 
-        blocking_reasons = tuple(
-            dict.fromkeys(
-                "source_mapping_excluded"
-                if mapping.disposition == "excluded"
-                else "source_mapping_unmapped"
-                for mapping in mappings
-                if mapping.disposition in {"excluded", "unmapped"}
-            )
-        )
-        if blocking_reasons:
-            return _MappingPolicyOutcome(
-                target_id=None,
-                method=None,
-                reasons=blocking_reasons,
-                recommendation_ids=tuple(allowed_targets),
-            )
-
         if len(deterministic_targets) > 1:
-            return _MappingPolicyOutcome(
-                target_id=None,
-                method=None,
-                reasons=("conflicting_mapping",),
-                recommendation_ids=tuple(
-                    dict.fromkeys([*deterministic_targets, *allowed_targets])
-                ),
+            allowed_targets = list(
+                dict.fromkeys([*deterministic_targets, *allowed_targets])
             )
+            deterministic_targets = []
         if not deterministic_targets and classifier_output is None:
             return _MappingPolicyOutcome(
                 target_id=None,
@@ -790,7 +730,7 @@ class CanonicalJobTaxonomy:
                     reasons=("canonical_target_unknown",),
                     recommendation_ids=tuple(allowed_targets),
                 )
-            if selected.id not in allowed_targets:
+            if allowed_targets and selected.id not in allowed_targets:
                 return _MappingPolicyOutcome(
                     target_id=None,
                     method=None,

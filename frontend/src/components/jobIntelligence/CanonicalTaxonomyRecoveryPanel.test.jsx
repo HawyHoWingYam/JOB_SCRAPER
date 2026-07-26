@@ -71,7 +71,7 @@ describe('CanonicalTaxonomyRecoveryPanel', () => {
   it('does not offer taxonomy recovery for source evidence failures', () => {
     render(
       <CanonicalTaxonomyRecoveryPanel
-        scope={{ ...scope, reason: 'source_catalog_provenance_missing' }}
+        scope={{ ...scope, reason: 'source_classification_paths_missing' }}
       />,
     );
     expect(screen.queryByText('Re-run Job Taxonomy only')).not.toBeInTheDocument();

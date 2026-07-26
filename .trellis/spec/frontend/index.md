@@ -22,7 +22,6 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
 | [Scraper Pacing Settings UI](./scraper-pacing-settings-ui.md) | Settings cards, future-plan-only pacing, Direct Override summary, and active-task warning | Active |
 | [Crawl Task Pacing Snapshot UI](./crawl-task-pacing-snapshot-ui.md) | Finite detail snapshot/pacing rendering and cancellation lifecycle controls | Active |
-| [Source Catalog Governance UI](./source-catalog-governance-ui.md) | Read-only catalog loading, strict decoders, durable validation, impact-gated publish/rollback, and structured errors | Active |
 | [Task Control Wizard UI](./task-control-wizard-ui.md) | History-visible authoring, recoverable drafts, server review/plan authority, cancellation, and focus | Active |
 | [Task Control Board UI](./task-control-board-ui.md) | Source-scoped operations, normalized Task deep links, lifecycle actions, and acknowledged cancellation | Active |
 | [AI Enrichment Operations Console](./ai-enrichment-console.md) | Monitoring-first two-slot UI, filtered preview, persistence, retry, and cooperative Stop | Active |

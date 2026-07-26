@@ -16,20 +16,22 @@ export function wizardDraftFingerprint(draft) {
   });
 }
 
-export function buildAuthoredScope(draft, published) {
-  const catalogSource = published?.catalog?.sourceSite;
-  const revision = published?.revision;
-  if (!revision || catalogSource !== draft.source_site || revision.sourceSite !== draft.source_site) {
-    throw new Error('Route, draft, Catalog, and command Source must agree');
+export function buildAuthoredScope(draft, sourceClassifications) {
+  if (sourceClassifications?.sourceSite !== draft.source_site) {
+    throw new Error('Route, draft, classifications, and command Source must agree');
   }
   if (draft.scope?.mode === 'all') {
-    if (!published.catalog.capabilities.supportsAllScope) throw new Error('This Source does not support explicit all scope');
-    return { version: 1, source_site: draft.source_site, reviewed_catalog_revision_id: revision.id, mode: 'all', rules: [] };
+    return { source_site: draft.source_site, mode: 'all', classification_ids: [] };
   }
-  const rules = (draft.scope?.rules || []).filter((rule) => rule.classification_id?.startsWith(`${draft.source_site}:`) && ['exact', 'subtree'].includes(rule.kind));
-  if (!rules.length) throw new Error('Choose explicit all scope or at least one Exact/Subtree rule');
-  const deduped = [...new Map(rules.map((rule) => [`${rule.kind}:${rule.classification_id}`, rule])).values()];
-  return { version: 1, source_site: draft.source_site, reviewed_catalog_revision_id: revision.id, mode: 'rules', rules: deduped.map(({ kind, classification_id }) => ({ kind, classification_id })) };
+  const activeIds = new Set(
+    (sourceClassifications.classifications || [])
+      .filter((item) => item.active)
+      .map((item) => item.id),
+  );
+  const selectedIds = [...new Set(draft.scope?.classification_ids || [])]
+    .filter((id) => activeIds.has(id));
+  if (!selectedIds.length) throw new Error('Choose all categories or at least one active category');
+  return { source_site: draft.source_site, mode: 'selected', classification_ids: selectedIds };
 }
 
 function listingSettings(draft) {
@@ -63,9 +65,9 @@ function detailSettings(draft, scope) {
   };
 }
 
-export function buildAutomationConfiguration(draft, published) {
+export function buildAutomationConfiguration(draft, sourceClassifications) {
   if (!draft.intent) throw new Error('Choose Discover listings or Enrich job details');
-  const scope = buildAuthoredScope(draft, published);
+  const scope = buildAuthoredScope(draft, sourceClassifications);
   const name = String(draft.schedule.name || '').trim();
   if (!name) throw new Error('Automation name is required');
   return {
@@ -80,22 +82,22 @@ export function buildAutomationConfiguration(draft, published) {
   };
 }
 
-export function buildAutomationReviewRequest(draft, published) {
+export function buildAutomationReviewRequest(draft, sourceClassifications) {
   return {
-    configuration: buildAutomationConfiguration(draft, published),
+    configuration: buildAutomationConfiguration(draft, sourceClassifications),
     ...(draft.mode === 'edit' ? { automation_id: draft.automation_id, expected_revision: draft.expected_revision } : {}),
   };
 }
 
-export function buildAutomationMutation(draft, published, review) {
-  const configuration = buildAutomationConfiguration(draft, published);
+export function buildAutomationMutation(draft, sourceClassifications, review) {
+  const configuration = buildAutomationConfiguration(draft, sourceClassifications);
   return draft.mode === 'edit'
     ? { expected_revision: draft.expected_revision, configuration, review_fingerprint: review.inputFingerprint }
     : { configuration, review_fingerprint: review.inputFingerprint, initial_state: draft.schedule.initial_state || 'paused' };
 }
 
-export function buildOneOffRun(draft, published) {
-  const scope = buildAuthoredScope(draft, published);
+export function buildOneOffRun(draft, sourceClassifications) {
+  const scope = buildAuthoredScope(draft, sourceClassifications);
   return {
     version: 1,
     kind: 'one_off',
@@ -121,7 +123,7 @@ export function draftFromAutomation(route, automation) {
     step: route.flow === 'run_now' ? 'review' : 'intent',
     run_choice: route.flow === 'run_now' ? 'saved' : null,
     intent: listing ? 'listing' : 'detail',
-    scope: { mode: scope.mode, rules: scope.rules || [] },
+    scope: { mode: scope.mode, classification_ids: scope.classification_ids || [] },
     execution: listing ? {
       page_depth: listing.page_depth,
       run_page_cap: listing.run_page_cap,

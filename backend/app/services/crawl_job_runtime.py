@@ -885,6 +885,17 @@ class CrawlJobRuntime:
                     else payload.get("category_ids") or []
                 )
             if detail_runtime_plan is None:
+                # Resume payloads retain their historical status list for
+                # audit compatibility, but the operator flow also needs to
+                # reclaim rows left ``running`` by this task when its worker
+                # stopped for manual action. Omitting the explicit filter
+                # lets the repository apply its stale-owner/active-execution
+                # safety check instead of broadening ``running`` blindly.
+                candidate_statuses = (
+                    None
+                    if payload.get("is_resume")
+                    else payload.get("detail_statuses")
+                )
                 selected_rows = (
                     self.crawl_job_listing_repository.list_detail_candidates(
                         db,
@@ -892,8 +903,11 @@ class CrawlJobRuntime:
                         source_listing_crawl_job_id=source_listing_crawl_job_id,
                         detail_scope=detail_scope or None,
                         category_ids=category_ids,
-                        statuses=payload.get("detail_statuses"),
+                        statuses=candidate_statuses,
                         source_job_ids=source_job_ids,
+                        detail_crawl_job_id=(
+                            detail_crawl_job_id if payload.get("is_resume") else None
+                        ),
                         limit=None,
                     )
                     if source_job_ids is None or source_job_ids
@@ -1329,7 +1343,15 @@ class CrawlJobRuntime:
                 else None
             )
             if resume_statuses:
-                should_fetch = authoritative_status in resume_statuses
+                # A manual-action pause can occur after this crawl has
+                # claimed the remainder of the frozen snapshot. Those rows
+                # stay ``running`` while the task is paused, so a same-task
+                # resume must reclaim them without broadening the resume
+                # cohort to rows owned by another crawl.
+                should_fetch = authoritative_status in resume_statuses or (
+                    authoritative_status == "running"
+                    and authoritative_owner == current_owner
+                )
             else:
                 should_fetch = authoritative_status in {
                     "pending",

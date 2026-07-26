@@ -381,11 +381,8 @@ function createCappedListingDraft(detail) {
   draft.step = "review";
   draft.intent = "listing";
   draft.scope = {
-    mode: "rules",
-    rules: classificationIds.map((classificationId) => ({
-      kind: "exact",
-      classification_id: classificationId,
-    })),
+    mode: "selected",
+    classification_ids: classificationIds,
   };
   draft.execution = {
     page_depth: pageDepth,

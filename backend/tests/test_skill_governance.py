@@ -61,11 +61,6 @@ from app.models.skill_governance import (
     SkillTaxonomyActiveRevision,
     SkillTaxonomyRelease,
 )
-from app.models.source_catalog import (
-    SourceCatalogActiveRevision,
-    SourceCatalogCandidate,
-    SourceCatalogRevision,
-)
 from app.models.source_job_attributes import SOURCE_JOB_ATTRIBUTE_TABLES
 from app.schemas.skill_governance import (
     SkillCandidateDecisionRequestSchema,
@@ -89,9 +84,6 @@ def skill_governance_db():
         Company.__table__,
         Job.__table__,
         EventOutbox.__table__,
-        SourceCatalogCandidate.__table__,
-        SourceCatalogRevision.__table__,
-        SourceCatalogActiveRevision.__table__,
         *GOVERNANCE_FOUNDATION_TABLES,
         *SKILL_GOVERNANCE_TABLES,
         *SOURCE_JOB_ATTRIBUTE_TABLES,

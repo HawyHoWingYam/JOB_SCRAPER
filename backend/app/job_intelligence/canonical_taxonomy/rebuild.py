@@ -257,10 +257,7 @@ class CanonicalTaxonomyRebuildInspector:
             return {}
         rows = (
             self.db.query(JobSourceClassificationPath)
-            .options(
-                selectinload(JobSourceClassificationPath.nodes),
-                joinedload(JobSourceClassificationPath.source_catalog_revision),
-            )
+            .options(selectinload(JobSourceClassificationPath.nodes))
             .filter(JobSourceClassificationPath.job_id.in_(job_ids))
             .order_by(
                 JobSourceClassificationPath.job_id,
@@ -320,8 +317,6 @@ class CanonicalTaxonomyRebuildInspector:
     ) -> dict[str, object]:
         coverage_by_source = {
             coverage.source_site: {
-                "source_catalog_revision_id": str(coverage.source_catalog_revision_id),
-                "source_catalog_fingerprint": (coverage.source_catalog_fingerprint),
                 "identity_set_hash": coverage.identity_set_hash,
                 "identity_count": coverage.identity_count,
             }
@@ -344,8 +339,6 @@ class CanonicalTaxonomyRebuildInspector:
                 "excluded_mapping_jobs": 0,
                 "unmapped_mapping_jobs": 0,
                 "conflicting_mapping_jobs": 0,
-                "source_catalog_provenance_missing_jobs": 0,
-                "source_catalog_provenance_mismatch_jobs": 0,
             }
         )
         for job in jobs:
@@ -356,27 +349,9 @@ class CanonicalTaxonomyRebuildInspector:
             missing_mapping = False
             excluded = False
             unmapped = False
-            provenance_missing = False
-            provenance_mismatch = False
             deterministic_targets: set[UUID] = set()
             allowed_targets: set[UUID] = set()
             for path in paths:
-                coverage = next(
-                    (
-                        item
-                        for item in coverages
-                        if item.source_site == path.source_site
-                    ),
-                    None,
-                )
-                if path.source_catalog_revision_id is None:
-                    provenance_missing = True
-                elif (
-                    coverage is None
-                    or path.source_catalog_revision_id
-                    != coverage.source_catalog_revision_id
-                ):
-                    provenance_mismatch = True
                 for node in path.nodes:
                     mapping = mapping_by_identity.get(
                         (path.source_site, node.source_classification_id)
@@ -403,14 +378,6 @@ class CanonicalTaxonomyRebuildInspector:
                 (excluded, "excluded_mapping_jobs"),
                 (unmapped, "unmapped_mapping_jobs"),
                 (conflict, "conflicting_mapping_jobs"),
-                (
-                    provenance_missing,
-                    "source_catalog_provenance_missing_jobs",
-                ),
-                (
-                    provenance_mismatch,
-                    "source_catalog_provenance_mismatch_jobs",
-                ),
             ):
                 if condition:
                     policy_counts[key] += 1

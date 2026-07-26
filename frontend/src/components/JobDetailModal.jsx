@@ -504,9 +504,6 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                               ? `Primary (${humanizeContractValue(path.primary_basis)})`
                               : 'Not declared Primary'}
                           </span>
-                          {path.provenance_limited && (
-                            <span>Historical catalog revision unavailable</span>
-                          )}
                         </li>
                       ))}
                     </ul>

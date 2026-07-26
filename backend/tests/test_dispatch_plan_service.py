@@ -68,11 +68,6 @@ from app.models.schedule import (
     ScrapeSchedule,
 )
 from app.models.scraper_pacing_settings import ScraperPacingSettings
-from app.models.source_catalog import (
-    SourceCatalogActiveRevision,
-    SourceCatalogCandidate,
-    SourceCatalogRevision,
-)
 from app.repositories.crawl_job_listing_repository import (
     CrawlJobListingRepository,
 )
@@ -86,7 +81,7 @@ from app.services.crawl_job_execution_launcher import (
 )
 from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
 from app.services.crawl_job_runtime import CrawlJobRuntime
-from app.source_catalog.domain import SourceQueryTarget, payload_fingerprint
+from app.source_classifications.domain import SourceQueryTarget, payload_fingerprint
 
 
 @compiles(PostgreSQLUUID, "sqlite")
@@ -96,9 +91,6 @@ def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
 
 def _dispatch_test_tables():
     return (
-        SourceCatalogCandidate.__table__,
-        SourceCatalogRevision.__table__,
-        SourceCatalogActiveRevision.__table__,
         ScrapeSchedule.__table__,
         AutomationRevision.__table__,
         CrawlJob.__table__,
@@ -127,7 +119,7 @@ def dispatch_db():
     Base.metadata.create_all(engine, tables=tables)
     factory = sessionmaker(bind=engine)
     db = factory()
-    revision = _create_catalog_revision(db)
+    revision = _classification_fixture()
     db.add(
         ScraperPacingSettings(
             source_site="jobsdb",
@@ -164,7 +156,7 @@ def postgres_dispatch_db():
     Base.metadata.create_all(engine, tables=tables)
     factory = sessionmaker(bind=engine)
     db = factory()
-    revision = _create_catalog_revision(db)
+    revision = _classification_fixture()
     db.add(
         ScraperPacingSettings(
             source_site="jobsdb",
@@ -183,66 +175,18 @@ def postgres_dispatch_db():
         engine.dispose()
 
 
-def _create_catalog_revision(
-    db,
-    *,
-    sequence: int = 1,
-    activate: bool = True,
-) -> SourceCatalogRevision:
-    candidate_fingerprint = f"{sequence:064x}"
-    revision_fingerprint = f"{sequence + 1000:064x}"
-    candidate = SourceCatalogCandidate(
-        source_site="jobsdb",
-        fingerprint=candidate_fingerprint,
-        normalized_payload={"version": 1, "nodes": []},
-        source_payload={"categories": []},
-        provenance={"method": "fixture"},
-        diff={},
-        validation_summary={"status": "passed"},
-        state="published",
-    )
-    db.add(candidate)
-    db.flush()
-    revision = SourceCatalogRevision(
-        source_site="jobsdb",
-        sequence=sequence,
-        fingerprint=revision_fingerprint,
-        normalized_payload={"version": 1, "nodes": []},
-        source_payload={"categories": []},
-        provenance={"method": "fixture"},
-        candidate_id=candidate.id,
-        publication_metadata={},
-        published_by="operator@example.com",
-    )
-    db.add(revision)
-    db.flush()
-    if activate:
-        pointer = db.get(SourceCatalogActiveRevision, "jobsdb")
-        if pointer is None:
-            db.add(
-                SourceCatalogActiveRevision(
-                    source_site="jobsdb",
-                    revision_id=revision.id,
-                    updated_by="operator@example.com",
-                )
-            )
-        else:
-            pointer.revision_id = revision.id
-            pointer.updated_by = "operator@example.com"
-    db.commit()
-    db.refresh(revision)
-    return revision
+def _classification_fixture() -> SimpleNamespace:
+    return SimpleNamespace(id=uuid4(), fingerprint="b" * 64)
 
 
-def _scope(revision_id: UUID) -> AuthoredCrawlScopeV1:
+def _scope(_revision_id: UUID) -> AuthoredCrawlScopeV1:
     return AuthoredCrawlScopeV1(
         source_site="jobsdb",
-        reviewed_catalog_revision_id=revision_id,
         mode="all",
     )
 
 
-def _resolved_scope(revision: SourceCatalogRevision) -> ResolvedRunScopeV1:
+def _resolved_scope(revision: SimpleNamespace) -> ResolvedRunScopeV1:
     scope = _scope(revision.id)
     source_target = SourceQueryTarget(
         adapter="jobsdb.classification",
@@ -258,8 +202,6 @@ def _resolved_scope(revision: SourceCatalogRevision) -> ResolvedRunScopeV1:
     )
     return ResolvedRunScopeV1(
         source_site="jobsdb",
-        catalog_revision_id=revision.id,
-        catalog_revision_fingerprint=revision.fingerprint,
         authored_scope=scope,
         selected_classifications=(selected,),
         classification_expansion_hash=payload_fingerprint(
@@ -276,13 +218,12 @@ def _resolved_scope(revision: SourceCatalogRevision) -> ResolvedRunScopeV1:
     )
 
 
-def _listing_content(revision: SourceCatalogRevision) -> DispatchPlanContentV1:
+def _listing_content(revision: SimpleNamespace) -> DispatchPlanContentV1:
     resolved = _resolved_scope(revision)
     return DispatchPlanContentV1(
         source_site="jobsdb",
         crawl_phase="listing",
         trigger_kind="one_off",
-        catalog_revision_id=revision.id,
         authored_scope=resolved.authored_scope,
         resolved_scope=resolved,
         listing_settings=ListingSettingsV1(
@@ -293,13 +234,12 @@ def _listing_content(revision: SourceCatalogRevision) -> DispatchPlanContentV1:
     )
 
 
-def _detail_content(revision: SourceCatalogRevision) -> DispatchPlanContentV1:
+def _detail_content(revision: SimpleNamespace) -> DispatchPlanContentV1:
     resolved = _resolved_scope(revision)
     return DispatchPlanContentV1(
         source_site="jobsdb",
         crawl_phase="detail",
         trigger_kind="one_off",
-        catalog_revision_id=revision.id,
         authored_scope=resolved.authored_scope,
         resolved_scope=resolved,
         detail_settings=DetailSettingsV1.model_validate(
@@ -313,7 +253,7 @@ def _detail_content(revision: SourceCatalogRevision) -> DispatchPlanContentV1:
 
 
 def _detail_content_with_settings(
-    revision: SourceCatalogRevision,
+    revision: SimpleNamespace,
     settings: dict,
 ) -> DispatchPlanContentV1:
     content = _detail_content(revision)
@@ -343,7 +283,7 @@ def _service(db, now: list[datetime], *, repository=None) -> DispatchPlanService
 
 
 class _FixtureScopeService:
-    def __init__(self, revision: SourceCatalogRevision) -> None:
+    def __init__(self, revision: SimpleNamespace) -> None:
         self.resolved_scope = _resolved_scope(revision)
 
     def preview(self, scope, *, listing_settings=None):
@@ -440,7 +380,7 @@ class _TrackingAutomationRepository(AutomationRepository):
 def _request_plan_service(
     db,
     now: list[datetime],
-    revision: SourceCatalogRevision,
+    revision: SimpleNamespace,
     *,
     readiness_check=None,
     automation_repository=None,
@@ -457,7 +397,7 @@ def _request_plan_service(
     )
 
 
-def _one_off_listing_run(revision: SourceCatalogRevision) -> OneOffRunV1:
+def _one_off_listing_run(revision: SimpleNamespace) -> OneOffRunV1:
     return OneOffRunV1(
         scope=_scope(revision.id),
         listing_settings=ListingSettingsV1(
@@ -468,7 +408,7 @@ def _one_off_listing_run(revision: SourceCatalogRevision) -> OneOffRunV1:
     )
 
 
-def _one_off_detail_run(revision: SourceCatalogRevision) -> OneOffRunV1:
+def _one_off_detail_run(revision: SimpleNamespace) -> OneOffRunV1:
     return OneOffRunV1(
         scope=_scope(revision.id),
         detail_settings=DetailSettingsV1.model_validate(
@@ -482,7 +422,7 @@ def _one_off_detail_run(revision: SourceCatalogRevision) -> OneOffRunV1:
 
 
 def _listing_automation_configuration(
-    revision: SourceCatalogRevision,
+    revision: SimpleNamespace,
 ) -> AutomationConfigurationV1:
     return AutomationConfigurationV1(
         name="JobsDB listing",
@@ -498,7 +438,7 @@ def _listing_automation_configuration(
 
 
 def _detail_automation_configuration(
-    revision: SourceCatalogRevision,
+    revision: SimpleNamespace,
 ) -> AutomationConfigurationV1:
     return AutomationConfigurationV1(
         name="JobsDB detail",
@@ -989,6 +929,70 @@ def test_empty_detail_snapshot_is_persisted_as_blocked_review(dispatch_db):
     assert preparation.confirmation_token is None
 
 
+def test_detail_review_reclaims_rows_left_running_by_terminal_run(dispatch_db):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    previous_run = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "detail"},
+    )
+    previous_run.status = "completed"
+    previous_run.completed_at = now[0]
+    stale_running = _staging_row(
+        source_job_id="stale-running",
+        crawl_job_id=uuid4(),
+        created_at=now[0] - timedelta(minutes=1),
+        detail_status="running",
+    )
+    stale_running.last_detail_crawl_job_id = previous_run.id
+    active_owner = CrawlJobRepository().create_crawl_job(
+        db,
+        source_site="jobsdb",
+        trigger_type="manual",
+        request_payload={"crawl_phase": "detail"},
+    )
+    active_owner.status = "completed"
+    active_owner.completed_at = now[0]
+    active_running = _staging_row(
+        source_job_id="active-running",
+        crawl_job_id=uuid4(),
+        created_at=now[0] - timedelta(minutes=1),
+        detail_status="running",
+    )
+    active_running.last_detail_crawl_job_id = active_owner.id
+    db.add(stale_running)
+    db.add(active_running)
+    db.add(
+        CrawlJobExecution(
+            crawl_job_id=active_owner.id,
+            generation=uuid4(),
+            launcher_instance_id="fixture",
+            status="running",
+            command=["fixture"],
+        )
+    )
+    db.commit()
+
+    preparation = _service(db, now).prepare(
+        _detail_content_with_settings(
+            revision,
+            {
+                "crawl_mode": "headless",
+                "backlog_scope": {"kind": "source_backlog"},
+                "limit": {"kind": "stop_after", "detail_run_cap": 100},
+            },
+        ),
+        readiness=_ready(now[0]),
+        prepared_by="operator@example.com",
+    )
+
+    assert [target.source_job_id for target in preparation.plan.targets] == [
+        "stale-running"
+    ]
+
+
 def test_versioned_detail_runtime_uses_only_frozen_membership_and_tracks_future(
     dispatch_db,
 ):
@@ -1194,6 +1198,12 @@ def test_versioned_content_anomaly_resume_retries_failed_and_manual_membership(
             created_at=now[0] - timedelta(seconds=30),
             listing_rank=3,
         ),
+        _staging_row(
+            source_job_id="running-before-resume",
+            crawl_job_id=uuid4(),
+            created_at=now[0] - timedelta(seconds=15),
+            listing_rank=4,
+        ),
     )
     db.add_all(rows)
     db.commit()
@@ -1226,6 +1236,8 @@ def test_versioned_content_anomaly_resume_retries_failed_and_manual_membership(
     rows[1].last_detail_crawl_job_id = crawl_job.id
     rows[2].detail_status = "manual_action_required"
     rows[2].last_detail_crawl_job_id = crawl_job.id
+    rows[3].detail_status = "running"
+    rows[3].last_detail_crawl_job_id = crawl_job.id
     crawl_job.status = "manual_action_required"
     db.commit()
     manual_action = build_session_recovery_manual_action(
@@ -1290,6 +1302,7 @@ def test_versioned_content_anomaly_resume_retries_failed_and_manual_membership(
     assert loaded.fetch_cohort_source_job_ids == (
         "failed-before-resume",
         "manual-before-resume",
+        "running-before-resume",
     )
 
 
@@ -1944,59 +1957,6 @@ def test_post_commit_launch_failure_releases_only_claimed_detail_membership(
         event_type="crawl.detail_launch_failed_recovered",
     ).one()
     assert recovery.payload["records"][0]["listing_id"] == str(row.id)
-
-
-def test_prepared_dispatch_rejects_catalog_revision_drift_but_consumed_run_survives_later_publication(
-    dispatch_db,
-):
-    _engine, _factory, db, revision = dispatch_db
-    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
-    plan_service = _request_plan_service(db, now, revision)
-    stale_preparation = plan_service.prepare_run(
-        _one_off_listing_run(revision),
-        prepared_by="operator@example.com",
-    )
-    second_revision = _create_catalog_revision(db, sequence=2)
-    dispatch_service = CrawlJobDispatchService(
-        execution_launcher=_NoopLauncher(),
-        dispatch_plan_service_factory=lambda current_db: _request_plan_service(
-            current_db,
-            now,
-            revision,
-        ),
-    )
-    with pytest.raises(DispatchPlanStaleError) as stale:
-        dispatch_service.dispatch_prepared_plan(
-            db,
-            plan_id=stale_preparation.plan.plan_id,
-            confirmation_token=stale_preparation.confirmation_token,
-            requested_by="operator@example.com",
-        )
-    assert stale.value.context["reason"] == "catalog_revision_changed"
-    assert plan_service.get(stale_preparation.plan.plan_id).state == "prepared"
-
-    pointer = db.get(SourceCatalogActiveRevision, "jobsdb")
-    pointer.revision_id = revision.id
-    db.commit()
-    preparation = plan_service.prepare_run(
-        _one_off_listing_run(revision),
-        prepared_by="operator@example.com",
-    )
-    result = dispatch_service.dispatch_prepared_plan(
-        db,
-        plan_id=preparation.plan.plan_id,
-        confirmation_token=preparation.confirmation_token,
-        requested_by="operator@example.com",
-    )
-    pointer = db.get(SourceCatalogActiveRevision, "jobsdb")
-    pointer.revision_id = second_revision.id
-    db.commit()
-
-    authority = DispatchPlanService(db).load_execution_authority(
-        result.crawl_job.id
-    )
-    assert authority is not None
-    assert authority.dispatch_plan.content.catalog_revision_id == revision.id
 
 
 def test_prepared_detail_dispatch_rechecks_eligibility_and_active_conflict(

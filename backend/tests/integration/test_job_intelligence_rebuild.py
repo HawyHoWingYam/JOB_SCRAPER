@@ -42,15 +42,9 @@ from app.models.skill_governance import (
     GovernedJobSkillMention,
     SkillCandidate,
 )
-from app.models.source_catalog import (
-    SourceCatalogActiveRevision,
-    SourceCatalogCandidate,
-    SourceCatalogRevision,
-)
-from app.source_catalog.domain import (
-    CatalogNodeSnapshot,
-    CatalogScopeCapabilities,
-    DiscoveredCatalog,
+from app.services.source_classification_registry import (
+    ObservedSourceClassification,
+    SourceClassificationRegistry,
 )
 
 
@@ -128,7 +122,7 @@ class RecordingWriterControl:
         }
 
 
-def _publish_fixture_catalogs(db) -> None:
+def _publish_fixture_classifications(db) -> None:
     mapping = json.loads(
         (
             Path(__file__).parents[2]
@@ -142,66 +136,19 @@ def _publish_fixture_catalogs(db) -> None:
         entries_by_source.setdefault(str(entry["source_site"]), []).append(entry)
 
     for source_site, entries in sorted(entries_by_source.items()):
-        nodes = tuple(
-            CatalogNodeSnapshot(
-                node_key=str(entry["source_classification_id"]),
-                source_site=source_site,
+        observations = tuple(
+            ObservedSourceClassification(
                 classification_id=str(entry["source_classification_id"]),
                 native_id=str(entry["source_classification_id"]).split(":", 1)[1],
-                native_label=str(entry["source_label"]),
-                parent_node_key=None,
-                native_path=(str(entry["source_label"]),),
+                label=str(entry["source_label"]),
                 depth=0,
-                selectable=True,
-                supports_exact=False,
-                supports_subtree=False,
-                queryable=False,
-                alias_of_node_key=None,
-                query_semantics_hash=None,
             )
             for entry in entries
         )
-        catalog = DiscoveredCatalog(
-            source_site=source_site,
-            nodes=nodes,
-            capabilities=CatalogScopeCapabilities(
-                supports_all_scope=False,
-                all_scope_root_node_keys=(),
-            ),
-            source_payload={"fixture_source": source_site},
-            provenance={"fixture": True},
-        )
-        candidate = SourceCatalogCandidate(
-            source_site=source_site,
-            fingerprint=catalog.fingerprint,
-            normalized_payload=catalog.normalized_payload(),
-            source_payload=dict(catalog.source_payload),
-            provenance=dict(catalog.provenance),
-            diff={},
-            validation_summary={"valid": True},
-            state="published",
-        )
-        db.add(candidate)
-        db.flush()
-        revision = SourceCatalogRevision(
-            source_site=source_site,
-            sequence=1,
-            fingerprint=catalog.fingerprint,
-            normalized_payload=catalog.normalized_payload(),
-            source_payload=dict(catalog.source_payload),
-            provenance=dict(catalog.provenance),
-            candidate_id=candidate.id,
-            publication_metadata={"fixture": True},
-            published_by="integration-fixture",
-        )
-        db.add(revision)
-        db.flush()
-        db.add(
-            SourceCatalogActiveRevision(
-                source_site=source_site,
-                revision_id=revision.id,
-                updated_by="integration-fixture",
-            )
+        SourceClassificationRegistry(db).synchronize(
+            source_site,
+            observations,
+            complete=True,
         )
     db.commit()
 
@@ -249,7 +196,7 @@ def test_postgres_inventory_separates_preserved_core_from_legacy_projection(
         )
         db.add_all([job, unsupported_job])
         db.commit()
-        _publish_fixture_catalogs(db)
+        _publish_fixture_classifications(db)
 
         embedding_model = FakeEmbeddingModel()
         writer_control = RecordingWriterControl()
@@ -403,7 +350,6 @@ def test_postgres_inventory_separates_preserved_core_from_legacy_projection(
             "employment_type_assignments": 1,
             "jobs_inspected": 2,
             "projected_jobs": 1,
-            "provenance_limited_jobs": 1,
             "unrecoverable_jobs": 1,
         }
         employment_output = environment.run_cutover_phase(
@@ -440,7 +386,7 @@ def test_postgres_inventory_separates_preserved_core_from_legacy_projection(
         }
         reviews = db.query(JobTaxonomyReviewItem).all()
         assert {review.job_id: review.reasons for review in reviews} == {
-            job.id: ["source_catalog_provenance_missing"],
+            job.id: ["classifier_provenance_missing"],
             unsupported_job.id: ["source_classification_paths_missing"],
         }
         assert {review.status for review in reviews} == {"active"}

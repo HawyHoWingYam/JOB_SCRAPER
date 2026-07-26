@@ -51,8 +51,6 @@ function createJobPayload(overrides = {}) {
         ],
         is_primary: false,
         primary_basis: null,
-        catalog_revision: null,
-        provenance_limited: true,
         provenance: { method: 'jobsdb-listing-payload' },
       },
     ],

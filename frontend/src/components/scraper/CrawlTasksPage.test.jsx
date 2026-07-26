@@ -352,8 +352,8 @@ describe("CrawlTasksPage normalized Task Details", () => {
     detail.run.authority = {
       authority_kind: "dispatch_plan",
       authored_scope: {
-        mode: "rules",
-        rules: [{ kind: "exact", classification_id: "jobsdb:6281" }],
+        mode: "selected",
+        classification_ids: ["jobsdb:6281"],
       },
     };
     detail.run.detail_snapshot = {
@@ -547,12 +547,12 @@ describe("CrawlTasksPage normalized Task Details", () => {
     const draft = JSON.parse(window.sessionStorage.getItem(draftKey));
     expect(draft).toMatchObject({
       intent: "listing",
-      scope: { mode: "rules" },
+      scope: { mode: "selected" },
       execution: { page_depth: 40, run_page_cap: 200 },
     });
-    expect(draft.scope.rules).toEqual([
-      { kind: "exact", classification_id: "offertoday:100001" },
-      { kind: "exact", classification_id: "offertoday:100002" },
+    expect(draft.scope.classification_ids).toEqual([
+      "offertoday:100001",
+      "offertoday:100002",
     ]);
   });
 

@@ -30,7 +30,6 @@ from app.crawl_control.task_control_board_contracts import (
     BoardActiveRunV2,
     BoardAttentionItemV2,
     BoardSourceSummaryV2,
-    CatalogHealthProjectionV1,
     CrawlControlRunProjectionV1,
     CrawlTaskDetailProjectionV1,
     CrawlTaskIssueProjectionV1,
@@ -52,9 +51,8 @@ from app.crawl_cancellation import (
 )
 from app.crawl_modes import resolve_crawl_mode
 from app.crawl_phases import resolve_crawl_phase
-from app.services.source_catalog import resolve_default_max_pages
+from app.services.source_sites import resolve_default_max_pages
 from app.repositories.crawl_job_repository import CrawlJobRepository
-from app.repositories.source_catalog_repository import SourceCatalogRepository
 from app.scraper.browser_profile_recovery import (
     PROFILE_SCOPE_FIXED,
     inspect_profile,
@@ -101,7 +99,6 @@ def _plan_content_from_record(plan) -> DispatchPlanContentV1:
         trigger_kind=plan.trigger_kind,
         automation_id=plan.automation_id_snapshot,
         expected_automation_revision=plan.expected_automation_revision,
-        catalog_revision_id=plan.catalog_revision_id,
         authored_scope=plan.authored_scope,
         resolved_scope=plan.resolved_scope,
         listing_settings=plan.listing_settings,
@@ -297,7 +294,6 @@ def build_crawl_control_run_projection(
             dispatch_plan_id=plan_id,
             dispatch_plan_fingerprint=fingerprint,
             plan_state=plan_state,
-            catalog_revision_id=content.catalog_revision_id,
             automation_id=content.automation_id,
             automation_revision=content.expected_automation_revision,
             authored_scope=content.authored_scope,
@@ -622,19 +618,6 @@ def _automation_actions(projection) -> tuple[BoardActionV1, ...]:
     )
 
 
-def _catalog_health(revision, *, source_site: SourceSite) -> CatalogHealthProjectionV1:
-    if revision is None:
-        return CatalogHealthProjectionV1(source_site=source_site, state="unpublished")
-    return CatalogHealthProjectionV1(
-        source_site=source_site,
-        state="healthy",
-        revision_id=revision.id,
-        sequence=revision.sequence,
-        fingerprint=revision.fingerprint,
-        published_at=_aware_utc(revision.published_at),
-    )
-
-
 class TaskControlBoardProjectionService:
     """Build one normalized Automation/run board without exposing raw payloads."""
 
@@ -776,14 +759,6 @@ class TaskControlBoardProjectionService:
                 )
             )
 
-        active_revisions = {
-            revision.source_site: revision
-            for revision in SourceCatalogRepository().list_active_revisions(self.db)
-        }
-        catalog_health = {
-            source: _catalog_health(active_revisions.get(source), source_site=source)
-            for source in SUPPORTED_BOARD_SOURCES
-        }
         active_by_automation = {}
         latest_by_automation = {}
         for _row, normalized, run in run_entries:
@@ -799,18 +774,11 @@ class TaskControlBoardProjectionService:
         for projection in automation_projections:
             snapshot = projection.snapshot
             configuration = snapshot.configuration
-            health = catalog_health[configuration.scope.source_site]
-            if (
-                health.revision_id is not None
-                and health.revision_id != configuration.scope.reviewed_catalog_revision_id
-            ):
-                health = health.model_copy(update={"state": "stale"})
             current_run = active_by_automation.get(snapshot.automation_id)
             resolved_summary = None
             if current_run is not None and current_run.authority.resolved_scope is not None:
                 resolved = current_run.authority.resolved_scope
                 resolved_summary = ResolvedScopeSummaryV1(
-                    catalog_revision_id=resolved.catalog_revision_id,
                     selected_classification_count=len(resolved.selected_classifications),
                     query_target_count=resolved.query_target_count,
                 )
@@ -846,7 +814,6 @@ class TaskControlBoardProjectionService:
                         next_run_at=projection.next_run_at,
                     ),
                     latest_outcome=latest_outcome,
-                    catalog_health=health,
                     resolved_scope_summary=resolved_summary,
                     current_run=current_run,
                     scope_review_reason=snapshot.scope_review_reason,
@@ -889,24 +856,6 @@ class TaskControlBoardProjectionService:
             if attention is not None:
                 attention_by_source[run.source_site].append(attention)
 
-        for source in SUPPORTED_BOARD_SOURCES:
-            health = catalog_health[source]
-            if health.state == "unpublished":
-                attention_by_source[source].append(
-                    BoardAttentionItemV2(
-                        item_id=f"catalog:{source}",
-                        kind="catalog_unpublished",
-                        priority=0,
-                        source_site=source,
-                        code="CATALOG_NOT_PUBLISHED",
-                        title="Source Catalog is not published",
-                        summary="Execution remains blocked until a validated Source Catalog revision is published.",
-                        entity_kind="catalog",
-                        entity_id=source,
-                        primary_action=BoardActionV1(action="open_catalog", enabled=True),
-                    )
-                )
-
         for automation in automation_rows:
             if automation.lifecycle_state == "scope_review_required":
                 attention_by_source[automation.source_site].append(
@@ -917,27 +866,10 @@ class TaskControlBoardProjectionService:
                         source_site=automation.source_site,
                         code=(automation.scope_review_reason.code if automation.scope_review_reason else "SCOPE_REVIEW_REQUIRED"),
                         title=f"{automation.name} needs scope review",
-                        summary=(automation.scope_review_reason.message if automation.scope_review_reason else "Review this Automation against the current Source Catalog."),
+                        summary=(automation.scope_review_reason.message if automation.scope_review_reason else "Review this Automation scope."),
                         entity_kind="automation",
                         entity_id=str(automation.automation_id),
                         primary_action=BoardActionV1(action="edit", enabled=True),
-                        secondary_actions=(BoardActionV1(action="open_catalog", enabled=True),),
-                    )
-                )
-            elif automation.catalog_health.state == "stale":
-                attention_by_source[automation.source_site].append(
-                    BoardAttentionItemV2(
-                        item_id=f"automation:{automation.automation_id}:catalog",
-                        kind="catalog_stale",
-                        priority=30,
-                        source_site=automation.source_site,
-                        code="AUTOMATION_CATALOG_STALE",
-                        title=f"{automation.name} uses an older Catalog revision",
-                        summary="Review the Source scope before the next dispatch.",
-                        entity_kind="automation",
-                        entity_id=str(automation.automation_id),
-                        primary_action=BoardActionV1(action="edit", enabled=True),
-                        secondary_actions=(BoardActionV1(action="open_catalog", enabled=True),),
                     )
                 )
 
@@ -973,7 +905,6 @@ class TaskControlBoardProjectionService:
                 attention_count=len(attention_by_source[source]),
                 active_run_count=len(active_runs_by_source[source]),
                 upcoming_count=len(upcoming_by_source[source]),
-                catalog_health=catalog_health[source],
             )
             for source in SUPPORTED_BOARD_SOURCES
         )

@@ -24,7 +24,7 @@ from app.repositories.schedule_repository import ScheduleRepository
 from app.services.crawl_request_validation import normalize_source_site, validate_category_ids_for_source_site
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.services.source_category_registry import get_source_category_registry
-from app.services.source_catalog import is_supported_source_site
+from app.services.source_sites import is_supported_source_site
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)

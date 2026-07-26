@@ -8,7 +8,6 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
-    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -29,15 +28,6 @@ class CrawlDispatchPlan(Base):
 
     __tablename__ = "crawl_dispatch_plans"
     __table_args__ = (
-        ForeignKeyConstraint(
-            ["catalog_revision_id", "source_site"],
-            [
-                "source_catalog_revisions.id",
-                "source_catalog_revisions.source_site",
-            ],
-            name="fk_crawl_dispatch_plans_catalog_revision_source",
-            ondelete="RESTRICT",
-        ),
         UniqueConstraint(
             "plan_fingerprint",
             name="uq_crawl_dispatch_plans_fingerprint",
@@ -130,7 +120,6 @@ class CrawlDispatchPlan(Base):
     )
     automation_id_snapshot = Column(UUID(as_uuid=True), nullable=True, index=True)
     expected_automation_revision = Column(Integer, nullable=True)
-    catalog_revision_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     authored_scope = Column(JSON, nullable=False)
     resolved_scope = Column(JSON, nullable=False)
     listing_settings = Column(JSON(none_as_null=True), nullable=True)
@@ -298,7 +287,6 @@ _PLAN_IMMUTABLE_FIELDS = (
     "automation_id",
     "automation_id_snapshot",
     "expected_automation_revision",
-    "catalog_revision_id",
     "authored_scope",
     "resolved_scope",
     "listing_settings",

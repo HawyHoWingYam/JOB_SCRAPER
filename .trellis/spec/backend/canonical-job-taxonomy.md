@@ -112,11 +112,9 @@ constraint tests at the live development corpus.
 
 #### Reviewed mapping authority
 
-- One mapping release pins one published immutable Source Catalog revision per
-  covered Source by revision ID, sequence, fingerprint, identity-set hash, and
-  identity count. Materialization reconstructs the persisted catalog and fails
-  closed on publication absence, fingerprint drift, or missing/extra identity
-  coverage.
+- One mapping release records each covered Source by `source_site`, current
+  active-classification `identity_set_hash`, and `identity_count`. It does not
+  pin or depend on a Source Catalog revision.
 - Every mapping-eligible Source classification has exactly one disposition:
   `deterministic`, `allowed_slice`, `excluded`, or `unmapped`.
   `deterministic` has one target, `allowed_slice` has one or more targets, and
@@ -124,12 +122,14 @@ constraint tests at the live development corpus.
   in the pinned taxonomy revision.
 - Legacy `default_path`, proposed-domain constants, labels, and static
   registries are evidence only. The 15 CTgoodjobs proposal-only IDs remain an
-  explicit warning; when those identities are present in the pinned active
-  Source Catalog they receive explicit `unmapped` entries and block automation.
-- Hierarchical Source catalogs require an explicit entry for every non-alias
-  classification identity. OfferToday child entries may inherit the reviewed
-  parent root disposition and target slice only when the inherited slice is
-  unchanged and the entry records the parent identity as review evidence.
+  explicit warning; when those identities are present as ordinary active
+  classifications they may receive explicit `unmapped` entries and block automation.
+- Mapping materialization validates every supplied mapping identity against
+  the ordinary active classifications for that Source. Partial coverage is
+  allowed: a newly synchronized classification does not invalidate an active
+  mapping release, while a Job that needs a missing mapping still fails closed.
+- Crawl authoring is top-level only. Preserved child classifications are source
+  evidence and do not create an independent crawl-authoring requirement.
 - For all preserved paths: any missing/excluded/unmapped entry blocks
   automation; deterministic targets must converge; allowed targets form a
   canonical-order union; a convergent deterministic target must belong to that
@@ -151,6 +151,10 @@ constraint tests at the live development corpus.
 - Blocking, invalid, fallback/default, `create_new`, missing-provenance,
   unknown-target, and out-of-slice outcomes create/update review and create no
   assignment or legacy/new taxonomy node.
+- `source_mapping_missing` is a Source-to-Canonical release coverage problem,
+  not a human assignment opportunity. Product consumers must explain that a
+  compatible mapping release must be published before AI Enrichment can run;
+  assigning a Canonical Job Subcategory cannot repair the missing mapping row.
 - `AIEnrichmentService` is the outer transaction owner for automatic
   enrichment. Human `assign_existing_subcategory` and
   `mark_insufficient_evidence` actions use Foundation
@@ -187,9 +191,8 @@ constraint tests at the live development corpus.
 | INSERT/UPDATE/DELETE content after ready | PostgreSQL immutability error |
 | Active pointer targets materializing/orphan/hash-mismatched release | Reject before pointer mutation |
 | Active pointer CAS version is stale or pointer DELETE attempted | Activation conflict / PostgreSQL rejection |
-| Covered Source has no published catalog | `CATALOG_NOT_PUBLISHED` |
-| Persisted catalog payload fingerprint differs from revision | `CATALOG_FINGERPRINT_MISMATCH` |
-| Mapping identities are missing or extra | `CANONICAL_MAPPING_COVERAGE_MISMATCH` with stable sets |
+| Source has no active ordinary classifications | Reject mapping materialization for that Source |
+| Mapping references an unknown or inactive classification | `CANONICAL_MAPPING_COVERAGE_MISMATCH` |
 | Deterministic targets conflict or disagree with allowed union | Review `conflicting_mapping`; no assignment |
 | Any path is excluded/unmapped/missing | Stable review reason; no LLM assignment |
 | AI output is fallback/default or `create_new` | Review `fallback_output` / `create_new_forbidden` |
@@ -278,8 +281,7 @@ provenance.
 
 Use this workflow for active historical Review items whose only recoverable
 classifier reasons are `classifier_output_invalid` or
-`classifier_provenance_missing`. It is a Canonical-only recovery path and is
-not a replacement for Source Catalog provenance repair.
+`classifier_provenance_missing`. It is a Canonical-only recovery path.
 
 ### 2. Signatures
 
@@ -320,7 +322,7 @@ idempotency record, and recovery outbox event.
 
 | Condition | Required result |
 |---|---|
-| Unsupported reason such as `source_catalog_provenance_missing` | Reject; keep the existing inspect/confirm Source repair flow |
+| Unsupported source-evidence reason | Reject; require recollection or the relevant domain workflow |
 | Preview taxonomy/mapping/scope differs at confirm | `409 CANONICAL_TAXONOMY_RECOVERY_SCOPE_CHANGED`; create no run |
 | No eligible active Reviews | `409 CANONICAL_TAXONOMY_RECOVERY_NO_ITEMS` |
 | Active taxonomy or mapping changes during execution | Stop the run with drift failure; do not process later items |

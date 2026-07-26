@@ -17,9 +17,6 @@ const JobIntelligenceGovernancePage = lazy(
       './components/jobIntelligence/JobIntelligenceGovernancePage'
     ),
 );
-const SourceCatalogsPage = lazy(
-  () => import('./features/sourceCatalogs/SourceCatalogsPage'),
-);
 const TaskControlWizard = lazy(
   () => import('./features/taskControl/wizard/TaskControlWizard'),
 );
@@ -79,7 +76,6 @@ function App() {
             {activeView === 'job-intelligence' && (
               <JobIntelligenceGovernancePage />
             )}
-            {activeView === 'source-catalogs' && <SourceCatalogsPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
             {activeView === 'settings' && (
               <AISettingsPage

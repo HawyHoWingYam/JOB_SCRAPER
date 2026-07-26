@@ -22,8 +22,7 @@ from app.crawl_control.dispatch_plan_contracts import (
 )
 from app.crawl_control.errors import AutomationRevisionConflictError
 from app.crawl_control.scope_service import CrawlScopeService
-from app.services.source_catalog_service import SourceCatalogService
-from app.source_catalog.domain import payload_fingerprint
+from app.source_classifications.domain import payload_fingerprint
 from app.utils.time import utc_now
 
 
@@ -61,9 +60,7 @@ class AutomationReviewService:
         clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self.db = db
-        self.scope_service = scope_service or CrawlScopeService(
-            SourceCatalogService(db)
-        )
+        self.scope_service = scope_service or CrawlScopeService(db)
         self.automation_service = automation_service or AutomationService(db)
         self.detail_backlog_builder = (
             detail_backlog_builder or DetailBacklogSnapshotBuilder()
@@ -102,7 +99,6 @@ class AutomationReviewService:
                 source_site=configuration.scope.source_site,
                 crawl_phase="detail",
                 trigger_kind="one_off",
-                catalog_revision_id=scope_preview.resolved_scope.catalog_revision_id,
                 authored_scope=configuration.scope,
                 resolved_scope=scope_preview.resolved_scope,
                 detail_settings=configuration.detail_settings,
@@ -168,7 +164,6 @@ class AutomationReviewService:
             input_fingerprint=fingerprint,
             automation_id=request.automation_id,
             expected_revision=request.expected_revision,
-            catalog_revision_id=scope_preview.resolved_scope.catalog_revision_id,
             authored_scope=configuration.scope,
             resolved_scope=scope_preview.resolved_scope,
             listing_workload=scope_preview.listing_workload,
@@ -253,7 +248,6 @@ class AutomationReviewService:
                     str(request.automation_id) if request.automation_id else None
                 ),
                 "expected_revision": request.expected_revision,
-                "catalog_revision_id": str(resolved_scope.catalog_revision_id),
                 "resolved_scope_fingerprint": resolved_scope.fingerprint,
                 "listing_workload": (
                     listing_workload.model_dump(mode="json")

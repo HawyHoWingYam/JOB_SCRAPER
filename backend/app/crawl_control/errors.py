@@ -206,7 +206,6 @@ class AutomationReviewStaleError(CrawlControlError):
         current_fingerprint: str,
         automation_id: Any | None = None,
         current_revision: int | None = None,
-        catalog_revision_id: Any | None = None,
     ) -> None:
         super().__init__(
             "AUTOMATION_REVIEW_STALE",
@@ -221,11 +220,6 @@ class AutomationReviewStaleError(CrawlControlError):
                 **(
                     {"current_revision": current_revision}
                     if current_revision is not None
-                    else {}
-                ),
-                **(
-                    {"catalog_revision_id": str(catalog_revision_id)}
-                    if catalog_revision_id is not None
                     else {}
                 ),
             },

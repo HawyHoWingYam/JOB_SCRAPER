@@ -19,7 +19,7 @@ from app.crawl_control.listing_runtime import ListingRuntimePlan
 from app.crawl_control.runtime_authority import (
     load_listing_runtime_plan_for_worker,
 )
-from app.source_catalog.runtime import load_published_query_plan
+from app.source_classifications.runtime import load_source_query_plan
 from app.sources.jobsdb.request import build_jobsdb_search_url
 
 from job_scraper_spiders.items import CrawlProgressItem, JobDetailItem, ListingItem
@@ -91,7 +91,7 @@ class JobsdbSpider(scrapy.Spider):
             )
             return
 
-        plan = load_published_query_plan("jobsdb", self._category_ids)
+        plan = load_source_query_plan("jobsdb", self._category_ids)
         for entry in plan.entries:
             cat_id = entry.node.classification_id
             native_id = int(entry.target.payload["native_id"])

@@ -39,7 +39,10 @@ from app.schemas.crawl_job import (
     CrawlJobSchema,
     CrawlTaskListResponse,
 )
-from app.services.crawl_request_validation import normalize_source_site, validate_published_category_ids
+from app.services.crawl_request_validation import (
+    normalize_source_site,
+    validate_active_category_ids,
+)
 from app.services.crawl_job_dispatch_service import (
     ActiveManualDetailCrawlConflict,
     CrawlJobDispatchService,
@@ -49,8 +52,7 @@ from app.services.crawl_task_snapshot_service import (
     build_crawl_task_snapshot,
 )
 from app.services.headed_crawl_runtime import HeadedCrawlWorkerUnavailableError
-from app.source_catalog.errors import SourceCatalogError
-from app.services.source_catalog import is_supported_source_site, resolve_default_max_pages
+from app.services.source_sites import is_supported_source_site, resolve_default_max_pages
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -108,16 +110,7 @@ async def _validate_effective_category_ids(
     db: Session,
 ) -> None:
     try:
-        validate_published_category_ids(db, source_site, category_ids)
-    except SourceCatalogError as exc:
-        raise HTTPException(
-            status_code=(
-                status.HTTP_404_NOT_FOUND
-                if exc.code in {"CATALOG_NOT_PUBLISHED", "SOURCE_CLASSIFICATION_UNKNOWN"}
-                else status.HTTP_422_UNPROCESSABLE_ENTITY
-            ),
-            detail=exc.to_detail(),
-        ) from exc
+        validate_active_category_ids(db, source_site, category_ids)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 

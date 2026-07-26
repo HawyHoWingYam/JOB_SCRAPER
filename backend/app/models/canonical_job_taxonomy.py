@@ -340,12 +340,6 @@ class CanonicalJobTaxonomyMappingRevision(Base):
 class CanonicalJobTaxonomyMappingCoverage(Base):
     __tablename__ = "canonical_job_taxonomy_mapping_coverages"
     __table_args__ = (
-        ForeignKeyConstraint(
-            ["source_catalog_revision_id", "source_site"],
-            ["source_catalog_revisions.id", "source_catalog_revisions.source_site"],
-            name="fk_canonical_job_mapping_coverage_catalog_source",
-            ondelete="RESTRICT",
-        ),
         UniqueConstraint(
             "id",
             "mapping_revision_id",
@@ -362,12 +356,11 @@ class CanonicalJobTaxonomyMappingCoverage(Base):
             name="ck_canonical_job_mapping_coverage_source",
         ),
         CheckConstraint(
-            "source_catalog_sequence > 0 AND identity_count >= 0",
+            "identity_count >= 0",
             name="ck_canonical_job_mapping_coverage_counts",
         ),
         CheckConstraint(
-            "source_catalog_fingerprint ~ '^[0-9a-f]{64}$' "
-            "AND identity_set_hash ~ '^[0-9a-f]{64}$'",
+            "identity_set_hash ~ '^[0-9a-f]{64}$'",
             name="ck_canonical_job_mapping_coverage_hashes",
         ),
     )
@@ -382,9 +375,6 @@ class CanonicalJobTaxonomyMappingCoverage(Base):
         nullable=False,
     )
     source_site = Column(String(32), nullable=False)
-    source_catalog_revision_id = Column(UUID(as_uuid=True), nullable=False, index=True)
-    source_catalog_sequence = Column(Integer, nullable=False)
-    source_catalog_fingerprint = Column(String(64), nullable=False)
     identity_set_hash = Column(String(64), nullable=False)
     identity_count = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)

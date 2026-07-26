@@ -41,7 +41,6 @@ from app.models.schedule import (
     ScheduleExecution,
     ScrapeSchedule,
 )
-from app.models.source_catalog import SourceCatalogCandidate, SourceCatalogRevision
 from app.database import Base
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.scheduler_service import SchedulerService, _normalize_next_run_at
@@ -60,7 +59,7 @@ class StubScopeService:
     def preview(self, scope, *, listing_settings=None):
         self.calls.append((scope, listing_settings))
         if self.reject:
-            raise ScopeReviewRequiredError("Fixture Source Catalog advanced")
+            raise ScopeReviewRequiredError("Fixture classification scope changed")
         return SimpleNamespace(resolved_scope=scope, listing_workload=None)
 
 
@@ -75,8 +74,6 @@ def automation_db():
         cursor.close()
 
     tables = (
-        SourceCatalogCandidate.__table__,
-        SourceCatalogRevision.__table__,
         AUTOMATION_CONTROL_TABLES[0],
         CrawlJob.__table__,
         CrawlJobListing.__table__,
@@ -96,7 +93,6 @@ def automation_db():
 def _scope() -> AuthoredCrawlScopeV1:
     return AuthoredCrawlScopeV1(
         source_site="offertoday",
-        reviewed_catalog_revision_id=uuid4(),
         mode="all",
     )
 

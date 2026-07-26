@@ -40,11 +40,6 @@ from app.models.job import Job
 from app.models.job_category import JobCategory
 from app.models.job_domain import JobDomain
 from app.models.job_subcategory import JobSubcategory
-from app.models.source_catalog import (
-    SourceCatalogActiveRevision,
-    SourceCatalogCandidate,
-    SourceCatalogRevision,
-)
 from app.models.source_job_attributes import (
     JobSourceClassificationPath,
     JobSourceClassificationPathNode,
@@ -75,9 +70,6 @@ def canonical_api_db():
         JobSubcategory.__table__,
         Job.__table__,
         EventOutbox.__table__,
-        SourceCatalogCandidate.__table__,
-        SourceCatalogRevision.__table__,
-        SourceCatalogActiveRevision.__table__,
         JobSourceClassificationPath.__table__,
         JobSourceClassificationPathNode.__table__,
         *GOVERNANCE_FOUNDATION_TABLES,
@@ -343,7 +335,7 @@ def test_versioned_job_intelligence_routes_return_typed_canonical_contracts(
     empty_body_query = query_job_taxonomy_review_items(
         CanonicalReviewItemsQuerySchema(
             status=["active"],
-            reason=["source_catalog_provenance_missing"],
+            reason=["source_classification_paths_missing"],
             source_site=["offertoday"],
             source_classification_id=["offertoday:118000"],
             job_ids=[uuid4()],

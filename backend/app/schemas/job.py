@@ -86,14 +86,6 @@ class JobTaxonomySchema(BaseModel):
     path: str
 
 
-class SourceCatalogRevisionSchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    source_site: str
-    revision_id: UUID
-    fingerprint: str
-
-
 class SourceClassificationNodeSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -113,8 +105,6 @@ class SourceClassificationPathSchema(BaseModel):
     nodes: list[SourceClassificationNodeSchema] = Field(default_factory=list)
     is_primary: bool
     primary_basis: Optional[str] = None
-    catalog_revision: Optional[SourceCatalogRevisionSchema] = None
-    provenance_limited: bool
     provenance: dict[str, Any]
 
 

@@ -102,12 +102,6 @@ class JobSourceClassificationPath(Base):
             "OR (NOT is_primary AND primary_basis IS NULL)",
             name="ck_job_source_classification_path_primary_basis",
         ),
-        ForeignKeyConstraint(
-            ["source_catalog_revision_id", "source_site"],
-            ["source_catalog_revisions.id", "source_catalog_revisions.source_site"],
-            name="fk_job_source_classification_path_catalog_source",
-            ondelete="RESTRICT",
-        ),
         Index(
             "ux_job_source_classification_primary",
             "job_id",
@@ -125,11 +119,6 @@ class JobSourceClassificationPath(Base):
         index=True,
     )
     source_site = Column(String(32), nullable=False, index=True)
-    source_catalog_revision_id = Column(
-        UUID(as_uuid=True),
-        nullable=True,
-        index=True,
-    )
     source_order = Column(Integer, nullable=False)
     path_fingerprint = Column(String(64), nullable=False)
     is_primary = Column(Boolean, nullable=False, default=False)
@@ -143,23 +132,7 @@ class JobSourceClassificationPath(Base):
         cascade="all, delete-orphan",
         order_by="JobSourceClassificationPathNode.source_position",
     )
-    source_catalog_revision = relationship("SourceCatalogRevision")
     job = relationship("Job", back_populates="source_classification_paths")
-
-    @property
-    def catalog_revision(self) -> dict[str, str] | None:
-        revision = self.source_catalog_revision
-        if revision is None:
-            return None
-        return {
-            "source_site": revision.source_site,
-            "revision_id": str(revision.id),
-            "fingerprint": revision.fingerprint,
-        }
-
-    @property
-    def provenance_limited(self) -> bool:
-        return self.source_catalog_revision_id is None
 
 
 class JobSourceClassificationPathNode(Base):

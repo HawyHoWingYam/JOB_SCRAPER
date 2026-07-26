@@ -42,7 +42,7 @@ from scripts import jobsdb_standalone_crawl as jobsdb_crawl
 from scripts import offertoday_standalone_crawl as offertoday_crawl
 
 
-def _published_jobsdb_plan(*_args, **_kwargs):
+def _jobsdb_plan(*_args, **_kwargs):
     return SimpleNamespace(
         entries=(
             SimpleNamespace(
@@ -53,7 +53,7 @@ def _published_jobsdb_plan(*_args, **_kwargs):
     )
 
 
-def _published_offertoday_plan(*_args, **_kwargs):
+def _offertoday_plan(*_args, **_kwargs):
     return SimpleNamespace(
         entries=(
             SimpleNamespace(
@@ -356,8 +356,8 @@ async def test_offertoday_listing_resumes_same_task_after_preflight_ip_stop(
 ) -> None:
     monkeypatch.setattr(
         offertoday_crawl,
-        "load_published_query_plan",
-        _published_offertoday_plan,
+        "load_source_query_plan",
+        _offertoday_plan,
     )
     blocked_url = (
         "https://www.offertoday.com/web/passport/cm/verify.html?"
@@ -788,7 +788,7 @@ async def test_jobsdb_standalone_resume_replays_committed_pages_idempotently(
 
     monkeypatch.setattr(jobsdb_crawl, "CategoryListScraper", FakeCategoryScraper)
     monkeypatch.setattr(
-        jobsdb_crawl, "load_published_query_plan", _published_jobsdb_plan
+        jobsdb_crawl, "load_source_query_plan", _jobsdb_plan
     )
     runtime = _IdempotentListingRuntime()
     args = SimpleNamespace(

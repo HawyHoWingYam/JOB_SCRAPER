@@ -16,7 +16,7 @@ from app.crawl_control.contracts import (
     ResolvedRunScopeV1,
     SHA256_PATTERN,
 )
-from app.source_catalog.domain import payload_fingerprint
+from app.source_classifications.domain import payload_fingerprint
 
 
 DispatchPlanState: TypeAlias = Literal["prepared", "consumed", "expired"]
@@ -105,7 +105,6 @@ class DispatchPlanContentV1(FrozenContract):
     trigger_kind: DispatchTriggerKind
     automation_id: UUID | None = None
     expected_automation_revision: int | None = Field(default=None, ge=1)
-    catalog_revision_id: UUID
     authored_scope: AuthoredCrawlScopeV1
     resolved_scope: ResolvedRunScopeV1
     listing_settings: ListingSettingsV1 | None = None
@@ -135,9 +134,6 @@ class DispatchPlanContentV1(FrozenContract):
             raise ValueError("Dispatch Plan and Resolved Crawl Scope sources differ")
         if self.resolved_scope.authored_scope != self.authored_scope:
             raise ValueError("Dispatch Plan Authored and Resolved Crawl Scopes differ")
-        if self.resolved_scope.catalog_revision_id != self.catalog_revision_id:
-            raise ValueError("Dispatch Plan catalog revisions differ")
-
         if self.detail_settings is not None:
             backlog_scope = self.detail_settings.backlog_scope
             if backlog_scope.kind == "crawl_scope":

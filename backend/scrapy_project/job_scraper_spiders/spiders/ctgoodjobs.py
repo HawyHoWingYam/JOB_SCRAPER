@@ -22,7 +22,7 @@ from app.scraper.ctgoodjobs.category_registry import (
     CTGOODJOBS_BASE_URL,
 )
 from app.scraper.ctgoodjobs.list_scraper import category_page_url
-from app.source_catalog.runtime import load_published_query_plan
+from app.source_classifications.runtime import load_source_query_plan
 from job_scraper_spiders.downloaders.ctgoodjobs_proxy_middleware import (  # noqa: F401 — register middleware
     CtgoodjobsProxyMiddleware,
 )
@@ -98,7 +98,7 @@ class CtgoodjobsSpider(scrapy.Spider):
             )
             return
 
-        plan = load_published_query_plan("ctgoodjobs", self._category_ids)
+        plan = load_source_query_plan("ctgoodjobs", self._category_ids)
         for entry in plan.entries:
             cat_id = entry.node.classification_id
             cat_name = entry.node.native_label
@@ -120,11 +120,7 @@ class CtgoodjobsSpider(scrapy.Spider):
                         "page": page,
                         "url": url,
                     },
-                    meta={
-                        "playwright": True,
-                        "source_catalog_revision_id": str(plan.revision_id),
-                        "source_catalog_fingerprint": plan.revision_fingerprint,
-                    },
+                    meta={"playwright": True},
                     dont_filter=True,
                 )
 

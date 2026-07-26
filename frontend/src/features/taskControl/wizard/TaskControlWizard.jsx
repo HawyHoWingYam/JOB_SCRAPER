@@ -6,7 +6,7 @@ import {
   dispatchPlan,
   getAutomation,
   getCrawlJob,
-  getPublishedCatalog,
+  getSourceClassifications,
   prepareDispatchPlan,
   reviewAutomation,
   updateAutomation,
@@ -141,7 +141,7 @@ function ReviewProjection({ state, route }) {
     return (
       <div className="review-stack">
         {review.before && <section className="control-subpanel"><h3>Edit before / after</h3><p>Before: {review.before.configuration.name} · r{review.before.revision}</p><p>After: {state.draft.schedule.name} · expected r{state.draft.expected_revision}</p></section>}
-        <section className="control-subpanel"><h3>Server-owned scope</h3><dl className="review-facts"><div><dt>Catalog revision</dt><dd>{review.catalogRevisionId}</dd></div><div><dt>Authored mode</dt><dd>{review.authoredScope.mode}</dd></div><div><dt>Resolved Query Targets</dt><dd>{review.resolvedScope.query_target_count}</dd></div><div><dt>Review fingerprint</dt><dd><code>{review.inputFingerprint.slice(0, 16)}</code></dd></div></dl></section>
+        <section className="control-subpanel"><h3>Server-owned scope</h3><dl className="review-facts"><div><dt>Authored mode</dt><dd>{review.authoredScope.mode}</dd></div><div><dt>Resolved Query Targets</dt><dd>{review.resolvedScope.query_target_count}</dd></div><div><dt>Review fingerprint</dt><dd><code>{review.inputFingerprint.slice(0, 16)}</code></dd></div></dl></section>
         {workload && <section className="control-subpanel"><h3>Listing workload</h3><p>{workload.query_target_count} targets × {workload.page_depth} depth = <strong>{workload.estimated_max_pages}</strong> estimated maximum pages.</p><p>Run Page Cap {workload.run_page_cap}; system ceiling {workload.system_run_page_cap}.</p></section>}
         {detail && <section className="control-subpanel"><h3>Detail preview (not frozen)</h3><p>{detail.eligible_now_count} eligible now; {detail.selected_now_count} would be selected by the current cap.</p><p>Future scheduled membership is frozen only when the Automation becomes due. Absolute safety cap: {detail.absolute_safety_cap}.</p></section>}
         <section className="control-subpanel"><h3>Schedule and readiness</h3><p>{review.scheduleSummary.human_summary}</p><p>Next: {formatControlDateTime(review.scheduleSummary.next_run_at, review.scheduleSummary.timezone)}</p><p>Status: <strong>{review.readiness.status}</strong></p>{review.readiness.blockingErrors.map((error) => <p key={error.code} className="control-error">{error.code}: {error.message}</p>)}</section>
@@ -181,8 +181,8 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
   const [state, dispatch] = useReducer(wizardReducer, initialBundle, (bundle) => createWizardState(bundle.draft, bundle.notice));
   const headingRef = useRef(null);
   const dialogTriggerRef = useRef(null);
-  const catalogVersionRef = useRef(0);
-  const [catalogRetry, setCatalogRetry] = useState(0);
+  const classificationRequestVersionRef = useRef(0);
+  const [classificationRetry, setClassificationRetry] = useState(0);
 
   useEffect(() => {
     if (draftRoute.kind !== 'wizard') return;
@@ -209,16 +209,16 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
   useEffect(() => {
     if (route.kind !== 'wizard' || !route.draftId) return undefined;
     const controller = new AbortController();
-    const version = catalogVersionRef.current + 1;
-    catalogVersionRef.current = version;
-    dispatch({ type: 'catalogStarted', version });
-    getPublishedCatalog(state.draft.source_site, { signal: controller.signal })
-      .then((value) => dispatch({ type: 'catalogSucceeded', value, version }))
+    const version = classificationRequestVersionRef.current + 1;
+    classificationRequestVersionRef.current = version;
+    dispatch({ type: 'classificationsStarted', version });
+    getSourceClassifications(state.draft.source_site, { signal: controller.signal })
+      .then((value) => dispatch({ type: 'classificationsSucceeded', value, version }))
       .catch((error) => {
-        if (!controller.signal.aborted) dispatch({ type: 'catalogFailed', error: controlError(error), version });
+        if (!controller.signal.aborted) dispatch({ type: 'classificationsFailed', error: controlError(error), version });
       });
     return () => controller.abort();
-  }, [catalogRetry, route.draftId, route.kind, state.draft.source_site]);
+  }, [classificationRetry, route.draftId, route.kind, state.draft.source_site]);
 
   useEffect(() => {
     if (route.kind !== 'wizard' || !route.automationId) return undefined;
@@ -236,18 +236,18 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
   }, [route, state.draft.expected_revision]);
 
   const requestAuthority = useCallback(async () => {
-    if (!state.catalog.value) return;
+    if (!state.classifications.value) return;
     const draftFingerprint = wizardDraftFingerprint(state.draft);
     const kind = route.flow === 'automation' ? 'review' : 'plan';
     dispatch({ type: 'authorityStarted', kind, draftFingerprint });
     try {
       let value;
       if (route.flow === 'automation') {
-        value = await reviewAutomation(buildAutomationReviewRequest(state.draft, state.catalog.value));
+        value = await reviewAutomation(buildAutomationReviewRequest(state.draft, state.classifications.value));
       } else if (route.flow === 'run_now') {
         value = await prepareDispatchPlan({ version: 1, kind: 'saved_automation', automation_id: state.automation.value.id, expected_revision: state.automation.value.revision });
       } else {
-        value = await prepareDispatchPlan(buildOneOffRun(state.draft, state.catalog.value));
+        value = await prepareDispatchPlan(buildOneOffRun(state.draft, state.classifications.value));
       }
       if (wizardDraftFingerprint(state.draft) !== draftFingerprint) return;
       const conflictError = value.readiness?.blockingErrors?.find((error) => error.code === 'DETAIL_RUN_CONFLICT');
@@ -255,7 +255,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
     } catch (error) {
       dispatch({ type: 'authorityFailed', kind, error: controlError(error), draftFingerprint });
     }
-  }, [route.flow, state.automation.value, state.catalog.value, state.draft]);
+  }, [route.flow, state.automation.value, state.classifications.value, state.draft]);
 
   useEffect(() => {
     if (state.draft.step !== 'review' || route.kind !== 'wizard') return;
@@ -318,7 +318,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
     try {
       let result;
       if (route.flow === 'automation') {
-        const request = buildAutomationMutation(state.draft, state.catalog.value, state.review.value);
+        const request = buildAutomationMutation(state.draft, state.classifications.value, state.review.value);
         const mutationResult = state.draft.mode === 'edit'
           ? await updateAutomation(state.draft.automation_id, request)
           : await createAutomation(request);
@@ -366,7 +366,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
     <section className="task-control-wizard">
       <header className="wizard-header"><div><button type="button" className="wizard-back-board" onClick={() => { window.location.hash = buildControlRoute({ kind: 'board' }); }}>← Back to board</button><p className="wizard-eyebrow">Task Control authoring</p><h1>{route.flow === 'automation' ? (route.mode === 'edit' ? 'Edit Automation' : 'New Automation') : route.flow === 'run_now' ? 'Run Automation now' : 'New One-off run'}</h1></div><button type="button" onClick={(event) => { dialogTriggerRef.current = event.currentTarget; hasMeaningfulDraft(state.draft) ? dispatch({ type: 'dialogOpened', dialog: { kind: 'discard' } }) : discard(); }}>Discard draft</button></header>
       {state.notice && <p role="status" className="control-warning">{state.notice}</p>}
-      {state.catalog.error && <p role="alert" className="control-error">{state.catalog.error.message}</p>}
+      {state.classifications.error && <p role="alert" className="control-error">{state.classifications.error.message}</p>}
       {state.automation.error && <p role="alert" className="control-error">{state.automation.error.message}</p>}
 
       <ol className="wizard-progress" aria-label="Wizard progress">{STEP_ORDER.map((step, index) => <li key={step} aria-current={state.draft.step === step ? 'step' : undefined}><span>{index + 1}</span>{stepTitle(step)}</li>)}</ol>
@@ -375,9 +375,9 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
         <main className="wizard-main">
           <h2 ref={headingRef} tabIndex="-1">{stepTitle(state.draft.step)}</h2>
           {state.draft.step === 'intent' && <IntentStep draft={state.draft} dispatch={dispatch} route={route} automation={state.automation.value} onRunWithChanges={runWithChanges} />}
-          {state.draft.step === 'scope' && state.catalog.status === 'loading' && <p role="status" className="control-empty">Loading published source catalog…</p>}
-          {state.draft.step === 'scope' && state.catalog.status === 'error' && !state.catalog.value && <div className="control-error" role="status"><p>Published source catalog could not be loaded.</p><button type="button" onClick={() => setCatalogRetry((current) => current + 1)}>Retry loading catalog</button></div>}
-          {state.draft.step === 'scope' && state.catalog.value && <SourceScopeTree sourceSite={state.draft.source_site} catalog={state.catalog.value.catalog} scope={state.draft.scope} onChange={(scope) => dispatch({ type: 'scopeChanged', scope })} />}
+          {state.draft.step === 'scope' && state.classifications.status === 'loading' && <p role="status" className="control-empty">Loading major categories…</p>}
+          {state.draft.step === 'scope' && state.classifications.status === 'error' && !state.classifications.value && <div className="control-error" role="status"><p>Major categories could not be loaded.</p><button type="button" onClick={() => setClassificationRetry((current) => current + 1)}>Retry loading categories</button></div>}
+          {state.draft.step === 'scope' && state.classifications.value && <SourceScopeTree sourceSite={state.draft.source_site} classifications={state.classifications.value.classifications} scope={state.draft.scope} onChange={(scope) => dispatch({ type: 'scopeChanged', scope })} />}
           {state.draft.step === 'execution' && <ExecutionStep draft={state.draft} dispatch={dispatch} />}
           {state.draft.step === 'review' && route.flow === 'run_now' && <IntentStep draft={state.draft} dispatch={dispatch} route={route} automation={state.automation.value} onRunWithChanges={runWithChanges} />}
           {state.draft.step === 'review' && <ReviewProjection state={state} route={route} />}
@@ -387,7 +387,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
           {state.result && <div className="control-success" role="status"><strong>{route.flow === 'automation' ? 'Automation saved.' : 'Reviewed plan dispatched.'}</strong>{route.flow !== 'automation' && <a href={`#crawl-tasks?task=${encodeURIComponent(state.result.crawlJobId)}`}>View task</a>}{route.flow === 'automation' && state.draft.intent === 'listing' && <button type="button" onClick={createPairedDetail}>Create separate detail Automation draft</button>}<button type="button" onClick={() => { window.location.hash = buildControlRoute({ kind: 'board' }); }}>Back to board</button></div>}
           <nav className="wizard-actions" aria-label="Wizard actions">{currentStepIndex > 0 && state.draft.step !== 'review' && <button type="button" onClick={goBack}>Back</button>}{state.draft.step !== 'review' ? <button type="button" disabled={!isStepComplete(state.draft)} onClick={goNext}>Continue</button> : <><button type="button" onClick={requestAuthority} disabled={busy}>{authority.status === 'loading' ? 'Reviewing…' : 'Refresh review'}</button><button type="button" disabled={!ready || busy || Boolean(state.result)} onClick={saveOrDispatch}>{busy ? 'Working…' : route.flow === 'automation' ? 'Save reviewed Automation' : 'Confirm and start'}</button></>}</nav>
         </main>
-        <aside className="wizard-summary" aria-label="Live draft summary"><h2>Live summary</h2><dl><div><dt>Flow</dt><dd>{route.flow.replace('_', ' ')}</dd></div><div><dt>Source</dt><dd>{SOURCE_LABELS[state.draft.source_site]}</dd></div><div><dt>Intent</dt><dd>{state.draft.intent || 'Not chosen'}</dd></div><div><dt>Scope</dt><dd>{state.draft.scope?.mode || 'Not chosen'}{state.draft.scope?.rules?.length ? ` · ${state.draft.scope.rules.length} rule(s)` : ''}</dd></div><div><dt>Catalog</dt><dd>{state.catalog.value?.revision?.id || state.catalog.status}</dd></div><div><dt>Draft</dt><dd>{route.draftId || 'Creating…'}</dd></div></dl>{route.mode !== 'edit' && route.flow !== 'run_now' && <label className="control-field">Source<select value={state.draft.source_site} onChange={(event) => { const sourceSite = event.target.value; dispatch({ type: 'sourceChanged', sourceSite }); window.location.hash = buildControlRoute({ ...route, sourceSite }); }}><option value="jobsdb">JobsDB</option><option value="ctgoodjobs">CTgoodjobs</option><option value="offertoday">OfferToday</option></select></label>}</aside>
+        <aside className="wizard-summary" aria-label="Live draft summary"><h2>Live summary</h2><dl><div><dt>Flow</dt><dd>{route.flow.replace('_', ' ')}</dd></div><div><dt>Source</dt><dd>{SOURCE_LABELS[state.draft.source_site]}</dd></div><div><dt>Intent</dt><dd>{state.draft.intent || 'Not chosen'}</dd></div><div><dt>Scope</dt><dd>{state.draft.scope?.mode || 'Not chosen'}{state.draft.scope?.classification_ids?.length ? ` · ${state.draft.scope.classification_ids.length} selected` : ''}</dd></div><div><dt>Categories</dt><dd>{state.classifications.status}</dd></div><div><dt>Draft</dt><dd>{route.draftId || 'Creating…'}</dd></div></dl>{route.mode !== 'edit' && route.flow !== 'run_now' && <label className="control-field">Source<select value={state.draft.source_site} onChange={(event) => { const sourceSite = event.target.value; dispatch({ type: 'sourceChanged', sourceSite }); window.location.hash = buildControlRoute({ ...route, sourceSite }); }}><option value="jobsdb">JobsDB</option><option value="ctgoodjobs">CTgoodjobs</option><option value="offertoday">OfferToday</option></select></label>}</aside>
       </div>
 
       {state.dialog?.kind === 'discard' && <ConfirmActionDialog title="Discard this draft?" summary="This clears only the browser draft. It does not mutate an Automation, plan, or run." confirmLabel="Discard draft" pending={false} error={null} restoreFocusRef={dialogTriggerRef} onCancel={() => dispatch({ type: 'dialogClosed' })} onConfirm={discard} />}

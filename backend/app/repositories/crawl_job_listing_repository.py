@@ -4,11 +4,12 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.crawl_phases import DEFAULT_DETAIL_RETRY_STATUSES, resolve_detail_statuses
 from app.models.crawl_job import CrawlJob
+from app.models.crawl_job_execution import CrawlJobExecution
 from app.models.crawl_job_listing import CrawlJobListing
 from app.utils.time import utc_now
 
@@ -251,6 +252,7 @@ class CrawlJobListingRepository:
         category_ids: Iterable[str | int] | None = None,
         statuses: Iterable[str] | None = None,
         source_job_ids: Iterable[str] | None = None,
+        detail_crawl_job_id=None,
         eligible_at_or_before: datetime | None = None,
         limit: int | None = None,
         offset: int = 0,
@@ -275,7 +277,48 @@ class CrawlJobListingRepository:
             crawl_phase="detail",
             detail_statuses=statuses,
         )
-        query = query.filter(CrawlJobListing.detail_status.in_(normalized_statuses))
+        if statuses is None:
+            stale_running_owner = (
+                select(CrawlJob.id)
+                .where(
+                    CrawlJob.id == CrawlJobListing.last_detail_crawl_job_id,
+                    CrawlJob.status.in_(
+                        ("completed", "failed", "cancelled")
+                    ),
+                    ~select(CrawlJobExecution.id)
+                    .where(
+                        CrawlJobExecution.crawl_job_id
+                        == CrawlJobListing.last_detail_crawl_job_id,
+                        CrawlJobExecution.status.in_(
+                            ("launching", "running", "stop_requested")
+                        ),
+                    )
+                    .correlate(CrawlJobListing)
+                    .exists(),
+                )
+                .correlate(CrawlJobListing)
+                .exists()
+            )
+            query = query.filter(
+                or_(
+                    CrawlJobListing.detail_status.in_(normalized_statuses),
+                    and_(
+                        CrawlJobListing.detail_status == "running",
+                        or_(
+                            stale_running_owner,
+                            and_(
+                                detail_crawl_job_id is not None,
+                                CrawlJobListing.last_detail_crawl_job_id
+                                == detail_crawl_job_id,
+                            ),
+                        ),
+                    ),
+                )
+            )
+        else:
+            query = query.filter(
+                CrawlJobListing.detail_status.in_(normalized_statuses)
+            )
         if eligible_at_or_before is not None:
             query = query.filter(
                 CrawlJobListing.created_at <= eligible_at_or_before

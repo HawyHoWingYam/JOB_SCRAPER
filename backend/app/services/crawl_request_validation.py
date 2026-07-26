@@ -93,18 +93,28 @@ def validate_category_ids_for_source_site(
             raise ValueError("CTGoodJobs category_ids must be strings with the ctgoodjobs: prefix")
 
 
-def validate_published_category_ids(
+def validate_active_category_ids(
     db,
     source_site: str | None,
     category_ids: Sequence[CategoryId] | None,
 ) -> None:
-    """Validate primitive compatibility IDs against the one active revision."""
+    """Validate primitive compatibility IDs against active top-level categories."""
 
     validate_category_ids_for_source_site(source_site, category_ids)
     if not category_ids:
         return
-    from app.services.source_catalog_service import SourceCatalogService
+    from app.services.source_classification_registry import SourceClassificationRegistry
 
-    SourceCatalogService(db).validate_classifications(
-        normalize_source_site(source_site), category_ids
-    )
+    normalized_source = normalize_source_site(source_site)
+    active_ids = {
+        row.classification_id
+        for row in SourceClassificationRegistry(db).list_top_level(normalized_source)
+    }
+    requested_ids = {
+        str(category_id)
+        if str(category_id).startswith(f"{normalized_source}:")
+        else f"{normalized_source}:{category_id}"
+        for category_id in category_ids
+    }
+    if not requested_ids.issubset(active_ids):
+        raise ValueError("category_ids must reference active top-level classifications")

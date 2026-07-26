@@ -1397,11 +1397,6 @@ def build_crawl_task_snapshot(
             "dispatch_plan_fingerprint": (
                 authority.dispatch_plan_fingerprint
             ),
-            "catalog_revision_id": (
-                str(authority.catalog_revision_id)
-                if authority.catalog_revision_id is not None
-                else None
-            ),
             "automation_id": (
                 str(authority.automation_id)
                 if authority.automation_id is not None

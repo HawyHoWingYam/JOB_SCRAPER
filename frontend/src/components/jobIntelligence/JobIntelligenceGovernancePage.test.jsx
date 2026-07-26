@@ -25,8 +25,6 @@ const api = vi.hoisted(() => ({
   fetchCompanyIndustryTree: vi.fn(),
   fetchCompanyIndustryMappings: vi.fn(),
   decideCompanyIndustryReviewItem: vi.fn(),
-  inspectSourceCatalogProvenance: vi.fn(),
-  applySourceCatalogProvenance: vi.fn(),
 }));
 
 vi.mock('../../api/jobIntelligence', async () => {
@@ -60,8 +58,6 @@ describe('JobIntelligenceGovernancePage', () => {
     api.fetchCompanyIndustryTree.mockReset();
     api.fetchCompanyIndustryMappings.mockReset();
     api.decideCompanyIndustryReviewItem.mockReset();
-    api.inspectSourceCatalogProvenance.mockReset();
-    api.applySourceCatalogProvenance.mockReset();
     api.fetchGovernanceSummary.mockResolvedValue(productFixture.summary);
     api.fetchCanonicalReviewItems.mockResolvedValue({
       items: [],
@@ -120,27 +116,6 @@ describe('JobIntelligenceGovernancePage', () => {
       audit_event_id: '90000000-0000-0000-0000-000000000003',
       version: 2,
       replayed: false,
-    });
-    api.inspectSourceCatalogProvenance.mockResolvedValue({
-      selection: {
-        effective_item_count: 0,
-        excluded_item_count: 1,
-      },
-      report: {
-        jobs_inspected: 1,
-        repairable_jobs: 1,
-        already_bound_paths: 0,
-        missing_path_jobs: 0,
-        unknown_identity_jobs: [],
-        write_blockers: [],
-        revision_id: 'revision-1',
-        revision_fingerprint: 'fingerprint-1',
-        repairable_job_ids: ['job-1'],
-      },
-    });
-    api.applySourceCatalogProvenance.mockResolvedValue({
-      selection: { effective_item_count: 1, excluded_item_count: 0 },
-      repair: { changed_jobs: 1 },
     });
   });
 
@@ -255,7 +230,7 @@ describe('JobIntelligenceGovernancePage', () => {
 
   it('shows ten-item page controls and preserves the scoped route on a page jump', async () => {
     const user = userEvent.setup();
-    window.location.hash = '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_classification_label=%E8%B3%87%E8%A8%8A%E7%A7%91%E6%8A%80&reason=source_catalog_provenance_missing&page=1';
+    window.location.hash = '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_classification_label=%E8%B3%87%E8%A8%8A%E7%A7%91%E6%8A%80&reason=classifier_provenance_missing&page=1';
     api.fetchCanonicalReviewItems.mockResolvedValue({
       items: [],
       next_cursor: null,
@@ -279,11 +254,11 @@ describe('JobIntelligenceGovernancePage', () => {
 
     await waitFor(() => {
       expect(window.location.hash).toBe(
-        '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_classification_label=%E8%B3%87%E8%A8%8A%E7%A7%91%E6%8A%80&reason=source_catalog_provenance_missing&page=3',
+        '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_classification_label=%E8%B3%87%E8%A8%8A%E7%A7%91%E6%8A%80&reason=classifier_provenance_missing&page=3',
       );
       expect(api.fetchCanonicalReviewItems).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          reason: ['source_catalog_provenance_missing'],
+          reason: ['classifier_provenance_missing'],
           page: 3,
           limit: 10,
         }),
@@ -301,7 +276,7 @@ describe('JobIntelligenceGovernancePage', () => {
       job_title: null,
       company_name: null,
     };
-    window.location.hash = '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_classification_label=Information%20Technology&reason=source_catalog_provenance_missing';
+    window.location.hash = '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_classification_label=Information%20Technology&reason=classifier_provenance_missing';
     api.fetchCanonicalReviewItems.mockResolvedValue({
       items: [reviewItem],
       next_cursor: null,
@@ -334,56 +309,6 @@ describe('JobIntelligenceGovernancePage', () => {
       .toBeInTheDocument();
     expect(within(evidencePanel).getByText('Company unavailable'))
       .toBeInTheDocument();
-  });
-
-  it('routes source provenance evidence to inspect and confirm instead of taxonomy decisions', async () => {
-    const user = userEvent.setup();
-    const item = {
-      ...canonicalFixture.review_page.items[0],
-      reasons: ['source_catalog_provenance_missing'],
-    };
-    window.location.hash = `#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&reason=source_catalog_provenance_missing&job_id=${item.job_id}&pending_limit=50&item=${item.id}`;
-    api.fetchCanonicalReviewItem.mockResolvedValue(item);
-    api.fetchCanonicalReviewItems.mockResolvedValue({
-      items: [item],
-      next_cursor: null,
-      total: 1,
-      page: 1,
-      limit: 10,
-      offset: 0,
-      page_count: 1,
-    });
-
-    render(<JobIntelligenceGovernancePage />);
-
-    expect(await screen.findByText(/source classification evidence is not yet safe/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Assign existing Job Subcategory' })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Check whether this batch can be repaired' }));
-    expect(await screen.findByText('Safe to repair')).toBeInTheDocument();
-    expect(api.inspectSourceCatalogProvenance).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source_sites: ['offertoday'],
-        source_classification_ids: ['offertoday:118000'],
-        job_ids: [item.job_id],
-        reason: 'source_catalog_provenance_missing',
-      }),
-      50,
-    );
-    await user.click(screen.getByRole('checkbox'));
-    await user.click(screen.getByRole('button', { name: 'Confirm provenance repair' }));
-
-    await waitFor(() => {
-      expect(api.applySourceCatalogProvenance).toHaveBeenCalledWith(
-        expect.objectContaining({ source_sites: ['offertoday'] }),
-        expect.objectContaining({
-          revisionId: 'revision-1',
-          expectedFingerprint: 'fingerprint-1',
-          repairableJobIds: ['job-1'],
-        }),
-      );
-    });
-    expect(await screen.findByRole('link', { name: 'Return to AI Enrichment' }))
-      .toHaveAttribute('href', '#ai');
   });
 
   it('supports queue arrow-key focus and explicit narrow-detail back navigation', async () => {

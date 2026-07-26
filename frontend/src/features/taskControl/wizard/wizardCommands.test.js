@@ -5,19 +5,18 @@ import {
   pairedDetailDraft,
 } from './wizardCommands';
 
-const published = {
-  revision: { id: 'revision-1', sourceSite: 'jobsdb' },
-  catalog: {
-    sourceSite: 'jobsdb',
-    capabilities: { supportsAllScope: true },
-  },
+const classifications = {
+  sourceSite: 'jobsdb',
+  classifications: [
+    { id: 'jobsdb:6281', label: 'Information Technology', active: true },
+  ],
 };
 
 function listingDraft() {
   return {
     flow: 'automation', mode: 'create', automation_id: null,
     expected_revision: null, source_site: 'jobsdb', intent: 'listing',
-    scope: { mode: 'all', rules: [] },
+    scope: { mode: 'all', classification_ids: [] },
     execution: { crawl_mode: 'headless', page_depth: 2, run_page_cap: 50 },
     schedule: {
       name: 'JobsDB listing', description: '', cron_expression: '0 4 * * *',
@@ -27,27 +26,26 @@ function listingDraft() {
 }
 
 describe('wizard command builders', () => {
-  it('emits an explicit reviewed listing command', () => {
-    const configuration = buildAutomationConfiguration(listingDraft(), published);
+  it('emits an ordinary all-category listing command', () => {
+    const configuration = buildAutomationConfiguration(listingDraft(), classifications);
     expect(configuration.scope).toEqual({
-      version: 1, source_site: 'jobsdb', reviewed_catalog_revision_id: 'revision-1',
-      mode: 'all', rules: [],
+      source_site: 'jobsdb', mode: 'all', classification_ids: [],
     });
     expect(configuration.listing_settings.run_page_cap).toBe(50);
     expect(configuration.detail_settings).toBeNull();
   });
 
   it('rejects empty and cross-source scope and preserves explicit CTgoodjobs mode', () => {
-    const empty = { ...listingDraft(), scope: { mode: 'rules', rules: [] } };
-    expect(() => buildOneOffRun(empty, published)).toThrow(/Choose explicit all/);
+    const empty = { ...listingDraft(), scope: { mode: 'selected', classification_ids: [] } };
+    expect(() => buildOneOffRun(empty, classifications)).toThrow(/Choose all categories/);
     const crossSource = { ...listingDraft(), source_site: 'offertoday' };
-    expect(() => buildOneOffRun(crossSource, published)).toThrow(/Source must agree/);
-    const ctPublished = {
-      revision: { id: 'revision-ct', sourceSite: 'ctgoodjobs' },
-      catalog: { sourceSite: 'ctgoodjobs', capabilities: { supportsAllScope: true } },
+    expect(() => buildOneOffRun(crossSource, classifications)).toThrow(/Source must agree/);
+    const ctClassifications = {
+      sourceSite: 'ctgoodjobs',
+      classifications: [],
     };
     const ct = { ...listingDraft(), flow: 'one_off', source_site: 'ctgoodjobs' };
-    expect(buildOneOffRun(ct, ctPublished).listing_settings.crawl_mode).toBe('headless');
+    expect(buildOneOffRun(ct, ctClassifications).listing_settings.crawl_mode).toBe('headless');
   });
 
   it('paired detail draft copies no plan or runtime authority', () => {

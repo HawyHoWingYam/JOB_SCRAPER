@@ -2,7 +2,7 @@ import { resolveDefaultCrawlMode } from './crawlMode';
 import { resolveDefaultCrawlPhase } from './crawlPhase';
 import { resolveDefaultMaxPages } from './maxPages';
 
-const EMPTY_SOURCE_CATALOG = {};
+const EMPTY_SOURCE_SITES = {};
 
 export function normalizeCategoryIdsForSource(sourceSite, categoryIds) {
     if (!Array.isArray(categoryIds)) {
@@ -29,7 +29,7 @@ export function normalizeCategoryIdsForSource(sourceSite, categoryIds) {
 export function buildImmediateScrapePayload(
     form,
     sourceSite,
-    sourceCatalog = EMPTY_SOURCE_CATALOG,
+    sourceSites = EMPTY_SOURCE_SITES,
 ) {
     const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
     const categoryIds = normalizeCategoryIdsForSource(sourceSite, form?.category_ids);
@@ -62,13 +62,13 @@ export function buildImmediateScrapePayload(
         payload: {
             source_site: sourceSite,
             crawl_phase: crawlPhase,
-            crawl_mode: form?.crawl_mode || resolveDefaultCrawlMode(sourceSite, sourceCatalog),
+            crawl_mode: form?.crawl_mode || resolveDefaultCrawlMode(sourceSite, sourceSites),
             category_ids: crawlPhase === 'detail' && sourceSite === 'offertoday'
                 ? []
                 : categoryIds,
             max_pages: Number.isInteger(maxPages)
                 ? maxPages
-                : resolveDefaultMaxPages(sourceSite, sourceCatalog),
+                : resolveDefaultMaxPages(sourceSite, sourceSites),
             detail_limit: crawlPhase === 'detail' ? detailLimit : 100,
             // Listing skips already-published jobs; detail retries persisted backlog rows.
             skip_existing: crawlPhase !== 'detail',

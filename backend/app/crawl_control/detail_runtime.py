@@ -26,7 +26,7 @@ from app.models.crawl_job_listing import CrawlJobListing
 from app.repositories.crawl_job_listing_repository import (
     CrawlJobListingRepository,
 )
-from app.source_catalog.domain import payload_fingerprint
+from app.source_classifications.domain import payload_fingerprint
 
 
 DEFAULT_DETAIL_BACKLOG_SAFETY_CAP = 100_000
@@ -83,8 +83,6 @@ class DetailRuntimePlan:
     dispatch_plan_id: UUID
     dispatch_plan_fingerprint: str
     source_site: str
-    catalog_revision_id: UUID
-    catalog_revision_fingerprint: str
     crawl_mode: str
     backlog_scope_kind: str
     source_listing_crawl_job_id: UUID | None
@@ -128,8 +126,6 @@ class DetailRuntimePlan:
         return {
             "dispatch_plan_id": str(self.dispatch_plan_id),
             "dispatch_plan_fingerprint": self.dispatch_plan_fingerprint,
-            "catalog_revision_id": str(self.catalog_revision_id),
-            "catalog_revision_fingerprint": self.catalog_revision_fingerprint,
             "detail_backlog_scope": self.backlog_scope_kind,
             "detail_snapshot_cutoff_at": self.snapshot_cutoff_at.isoformat(),
             "detail_snapshot_eligible_target_count": self.eligible_target_count,
@@ -415,8 +411,6 @@ def build_detail_runtime_plan(
         dispatch_plan_id=snapshot.plan_id,
         dispatch_plan_fingerprint=snapshot.plan_fingerprint,
         source_site=content.source_site,
-        catalog_revision_id=content.catalog_revision_id,
-        catalog_revision_fingerprint=content.resolved_scope.catalog_revision_fingerprint,
         crawl_mode=settings.crawl_mode,
         backlog_scope_kind=settings.backlog_scope.kind,
         source_listing_crawl_job_id=source_listing_crawl_job_id,

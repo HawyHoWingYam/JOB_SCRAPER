@@ -41,7 +41,6 @@ class SystemWriterStateProvider:
     }
     _PROCESS_PATTERN_BY_WRITER = {
         "manual-action-helper": "app.workers.run_manual_action_helper",
-        "source-catalog-admin": "source_catalog_admin",
     }
 
     def __init__(

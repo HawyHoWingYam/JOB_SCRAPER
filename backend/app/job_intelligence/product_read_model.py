@@ -261,18 +261,6 @@ class JobIntelligenceJobDetailView:
                     ],
                     "is_primary": path.is_primary,
                     "primary_basis": path.primary_basis,
-                    "catalog_revision": (
-                        {
-                            "source_site": path.source_catalog_revision.source_site,
-                            "revision_id": str(
-                                path.source_catalog_revision.revision_id
-                            ),
-                            "fingerprint": (path.source_catalog_revision.fingerprint),
-                        }
-                        if path.source_catalog_revision is not None
-                        else None
-                    ),
-                    "provenance_limited": path.provenance_limited,
                     "provenance": dict(path.provenance),
                 }
                 for path in view.source_classification_paths
@@ -799,7 +787,10 @@ class JobIntelligenceProductReadModel:
     def _source_attributes(
         self,
         job_id: UUID,
-    ) -> tuple[SourceJobAttributesView | None, JobIntelligenceDomainAvailabilityView,]:
+    ) -> tuple[
+        SourceJobAttributesView | None,
+        JobIntelligenceDomainAvailabilityView,
+    ]:
         try:
             view = SourceJobAttributes(self.db).get(job_id)
         except ValueError:
@@ -815,7 +806,10 @@ class JobIntelligenceProductReadModel:
     def _canonical_job_state(
         self,
         job_id: UUID,
-    ) -> tuple[CanonicalJobStateView | None, JobIntelligenceDomainAvailabilityView,]:
+    ) -> tuple[
+        CanonicalJobStateView | None,
+        JobIntelligenceDomainAvailabilityView,
+    ]:
         reader = CanonicalJobTaxonomy(self.db)
         try:
             reader.get_active_revision()
@@ -854,7 +848,10 @@ class JobIntelligenceProductReadModel:
     def _skill_job_state(
         self,
         job_id: UUID,
-    ) -> tuple[JobSkillStateView | None, JobIntelligenceDomainAvailabilityView,]:
+    ) -> tuple[
+        JobSkillStateView | None,
+        JobIntelligenceDomainAvailabilityView,
+    ]:
         try:
             view = SkillGovernanceReader(self.db).get_job_state(job_id)
         except SkillGovernanceReadError as exc:

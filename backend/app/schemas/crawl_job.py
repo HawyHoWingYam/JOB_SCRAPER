@@ -133,7 +133,6 @@ class CrawlTaskListItemSchema(BaseModel):
     crawl_phase: str
     dispatch_plan_id: str | None = None
     dispatch_plan_fingerprint: str | None = None
-    catalog_revision_id: str | None = None
     automation_id: str | None = None
     automation_revision: int | None = None
     authored_scope: dict | None = None

@@ -84,7 +84,6 @@ def test_jobsdb_adapter_preserves_every_source_path_and_employment_label():
                 ],
                 "source_declared_primary": False,
                 "primary_basis": None,
-                "source_catalog_revision": None,
                 "provenance": provenance.to_payload(),
             },
             {
@@ -100,7 +99,6 @@ def test_jobsdb_adapter_preserves_every_source_path_and_employment_label():
                 ],
                 "source_declared_primary": False,
                 "primary_basis": None,
-                "source_catalog_revision": None,
                 "provenance": provenance.to_payload(),
             },
         ],
@@ -159,7 +157,6 @@ def test_ctgoodjobs_adapter_preserves_root_context_and_first_employment_evidence
         classification_context=SourceClassificationContext(
             source_classification_id="ctgoodjobs:021",
             label="Information Technology",
-            source_catalog_revision=None,
             provenance=context_provenance,
         ),
     )
@@ -180,7 +177,6 @@ def test_ctgoodjobs_adapter_preserves_root_context_and_first_employment_evidence
                 ],
                 "source_declared_primary": False,
                 "primary_basis": None,
-                "source_catalog_revision": None,
                 "provenance": context_provenance.to_payload(),
             }
         ],

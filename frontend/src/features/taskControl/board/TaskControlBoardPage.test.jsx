@@ -21,10 +21,9 @@ const action = (name, enabled = true) => ({ action: name, enabled, reasonCode: e
 const automation = {
   id: 'automation-1', revision: 7, lifecycleState: 'active', name: 'Morning listings',
   sourceSite: 'jobsdb', phase: 'listing', mode: 'headless',
-  authoredScope: { mode: 'all', rules: [] },
+  authoredScope: { mode: 'all', classification_ids: [] },
   schedule: { cronExpression: '0 4 * * *', timezone: 'Asia/Hong_Kong', humanSummary: 'Daily at 04:00 · Asia/Hong_Kong', nextRunAt: '2099-07-21T00:00:00Z' },
   latestOutcome: null,
-  catalogHealth: { sourceSite: 'jobsdb', state: 'healthy', revisionId: 'catalog-1' },
   resolvedScopeSummary: { query_target_count: 25 }, currentRun: null, scopeReviewReason: null,
   actions: [action('edit'), action('run_now'), action('pause'), action('resume', false), action('archive')],
   createdAt: '2026-07-21T00:00:00Z', updatedAt: '2026-07-21T00:00:00Z', lastRunAt: null,
@@ -32,9 +31,9 @@ const automation = {
 const board = {
   selectedSource: 'jobsdb',
   sourceSummaries: [
-    { sourceSite: 'jobsdb', state: 'running', attentionCount: 0, activeRunCount: 1, upcomingCount: 1, catalogHealth: automation.catalogHealth },
-    { sourceSite: 'ctgoodjobs', state: 'attention', attentionCount: 2, activeRunCount: 0, upcomingCount: 0, catalogHealth: { state: 'unpublished' } },
-    { sourceSite: 'offertoday', state: 'all_clear', attentionCount: 0, activeRunCount: 0, upcomingCount: 0, catalogHealth: { state: 'healthy' } },
+    { sourceSite: 'jobsdb', state: 'running', attentionCount: 0, activeRunCount: 1, upcomingCount: 1 },
+    { sourceSite: 'ctgoodjobs', state: 'attention', attentionCount: 2, activeRunCount: 0, upcomingCount: 0 },
+    { sourceSite: 'offertoday', state: 'all_clear', attentionCount: 0, activeRunCount: 0, upcomingCount: 0 },
   ],
   needsAttention: [],
   activeRuns: [{

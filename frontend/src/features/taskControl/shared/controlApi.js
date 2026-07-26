@@ -1,13 +1,13 @@
 import { apiPath } from '../../../api/base';
 import { apiFetchJson, ApiRequestError } from '../../../api/client';
 import { cancelCrawlJob } from '../../../components/scraper/crawlTaskActions';
-import { getPublishedCatalog as getGovernedPublishedCatalog } from '../../sourceCatalogs/sourceCatalogsApi';
 import {
   decodeAutomation,
   decodeAutomationReview,
   decodeCrawlJob,
   decodeDispatchPreparation,
   decodeDispatchResult,
+  decodeSourceClassifications,
 } from './controlDecoders';
 
 const json = (body, method = 'POST') => ({
@@ -16,8 +16,13 @@ const json = (body, method = 'POST') => ({
   body: JSON.stringify(body),
 });
 
-export function getPublishedCatalog(source, options) {
-  return getGovernedPublishedCatalog(source, options);
+export async function getSourceClassifications(source, { signal } = {}) {
+  return decodeSourceClassifications(
+    await apiFetchJson(
+      apiPath(`/source-classifications/${encodeURIComponent(source)}`),
+      { signal },
+    ),
+  );
 }
 
 export async function getAutomation(id, { signal } = {}) {

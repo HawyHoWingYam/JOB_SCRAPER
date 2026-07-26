@@ -167,20 +167,6 @@ function canonicalRecoveryScope(scope = {}) {
   };
 }
 
-function provenanceRepairScope(scope = {}) {
-  return {
-    source_sites: scope.sourceSites || scope.source_sites || [],
-    source_classification_ids:
-      scope.sourceClassificationIds || scope.source_classification_ids || [],
-    source_subclassification_ids:
-      scope.sourceSubclassificationIds || scope.source_subclassification_ids || [],
-    posted_date_from: scope.postedDateFrom || scope.posted_date_from || null,
-    posted_date_to: scope.postedDateTo || scope.posted_date_to || null,
-    job_ids: scope.jobIds || scope.job_ids || [],
-    reason: scope.reason || null,
-  };
-}
-
 export function previewCanonicalTaxonomyRecovery(scope = {}, options) {
   return postJson(
     apiPath('/job-intelligence/governance/job-taxonomy/recovery/preview'),
@@ -400,29 +386,6 @@ export function fetchCompanyIndustryAudit(filters = {}, options) {
         if (filters.limit) params.set('limit', String(filters.limit));
       },
     ),
-    options,
-  );
-}
-
-export function inspectSourceCatalogProvenance(scope, limit, options) {
-  return postJson(
-    apiPath('/job-intelligence/governance/source-catalog-provenance/inspect'),
-    { scope: provenanceRepairScope(scope), limit },
-    options,
-  );
-}
-
-export function applySourceCatalogProvenance(scope, values, options) {
-  return postJson(
-    apiPath('/job-intelligence/governance/source-catalog-provenance/apply'),
-    {
-      scope: provenanceRepairScope(scope),
-      limit: values.limit,
-      revision_id: values.revisionId,
-      expected_fingerprint: values.expectedFingerprint,
-      repairable_job_ids: values.repairableJobIds,
-      confirmed: true,
-    },
     options,
   );
 }

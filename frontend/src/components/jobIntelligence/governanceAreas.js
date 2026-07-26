@@ -68,8 +68,7 @@ const canonicalActions = [
 
 function isSourceEvidenceReason(item) {
   return (item?.reasons || []).some((reason) => (
-    reason === 'source_catalog_provenance_missing'
-    || reason === 'source_classification_paths_missing'
+    reason === 'source_classification_paths_missing'
   ));
 }
 

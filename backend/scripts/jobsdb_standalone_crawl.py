@@ -50,7 +50,7 @@ from app.services.crawl_cancellation_token import (  # noqa: E402
 )
 from app.services.detail_pacing import build_detail_pacing_controller  # noqa: E402
 from app.sources.contracts import build_jobsdb_canonical_job  # noqa: E402
-from app.source_catalog.runtime import load_published_query_plan  # noqa: E402
+from app.source_classifications.runtime import load_source_query_plan  # noqa: E402
 from app.workers.run_ingest_worker import IngestWorkerService  # noqa: E402
 
 JOBSDB_SOURCE_SITE = "jobsdb"
@@ -316,7 +316,7 @@ async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatc
         None,
     )
     if runtime_plan is None:
-        query_plan = load_published_query_plan(
+        query_plan = load_source_query_plan(
             JOBSDB_SOURCE_SITE,
             args.category_ids,
         )

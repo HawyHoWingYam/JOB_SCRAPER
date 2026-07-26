@@ -5,7 +5,6 @@ from typing import Any
 
 from app.job_intelligence.foundation import Provenance
 from app.job_intelligence.source_attributes.contracts import (
-    SourceCatalogRevisionRef,
     SourceClassificationContext,
     SourceClassificationNodeEvidence,
     SourceClassificationPathEvidence,
@@ -131,13 +130,7 @@ class JobsDBSourceEvidenceAdapter:
         payload: Mapping[str, Any],
         *,
         provenance: Provenance,
-        source_catalog_revision: SourceCatalogRevisionRef | None = None,
     ) -> SourceJobAttributeEvidence:
-        if (
-            source_catalog_revision is not None
-            and source_catalog_revision.source_site != self.source_site
-        ):
-            raise ValueError("Source Catalog revision does not belong to jobsdb")
         classifications = payload.get("classifications")
         paths: list[SourceClassificationPathEvidence] = []
         if isinstance(classifications, list):
@@ -168,7 +161,6 @@ class JobsDBSourceEvidenceAdapter:
                         nodes=tuple(nodes),
                         source_declared_primary=False,
                         primary_basis=None,
-                        source_catalog_revision=source_catalog_revision,
                         provenance=provenance,
                     )
                 )
@@ -255,9 +247,6 @@ class CTGoodJobsSourceEvidenceAdapter:
                     ),
                     source_declared_primary=False,
                     primary_basis=None,
-                    source_catalog_revision=(
-                        classification_context.source_catalog_revision
-                    ),
                     provenance=classification_context.provenance,
                 )
             )
@@ -461,7 +450,6 @@ class OfferTodaySourceEvidenceAdapter:
                             nodes=nodes,
                             source_declared_primary=False,
                             primary_basis=None,
-                            source_catalog_revision=None,
                             provenance=provenance,
                         )
                     )

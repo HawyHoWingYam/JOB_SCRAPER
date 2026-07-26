@@ -15,9 +15,6 @@ describe('app hash routing', () => {
 
   it('keeps existing single-segment views and rejects unknown hashes', () => {
     expect(resolveAppView('#jobs')).toBe('jobs');
-    expect(resolveAppView('#source-catalogs?source=ctgoodjobs')).toBe(
-      'source-catalogs',
-    );
     expect(resolveAppView('#unknown')).toBe('dashboard');
   });
 });

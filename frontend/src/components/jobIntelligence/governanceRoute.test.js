@@ -39,13 +39,13 @@ describe('governance hash routing', () => {
       posted_date_from: '2026-07-01',
       posted_date_to: '2026-07-22',
       pendingLimit: 50,
-      reason: 'source_catalog_provenance_missing',
+      reason: 'classifier_provenance_missing',
       page: 3,
       jobIds: ['job-1', 'job-2'],
     });
 
     expect(hash).toBe(
-      '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_subclassification_id=offertoday%3A121015&source_classification_label=%E8%B3%87%E8%A8%8A%E7%A7%91%E6%8A%80&job_id=job-1&job_id=job-2&posted_date_from=2026-07-01&posted_date_to=2026-07-22&pending_limit=50&reason=source_catalog_provenance_missing&page=3',
+      '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A118000&source_subclassification_id=offertoday%3A121015&source_classification_label=%E8%B3%87%E8%A8%8A%E7%A7%91%E6%8A%80&job_id=job-1&job_id=job-2&posted_date_from=2026-07-01&posted_date_to=2026-07-22&pending_limit=50&reason=classifier_provenance_missing&page=3',
     );
     expect(parseGovernanceHash(hash)).toEqual({
       area: 'job-taxonomy',
@@ -59,7 +59,7 @@ describe('governance hash routing', () => {
         postedDateFrom: '2026-07-01',
         postedDateTo: '2026-07-22',
         pendingLimit: 50,
-        reason: 'source_catalog_provenance_missing',
+        reason: 'classifier_provenance_missing',
         jobIds: ['job-1', 'job-2'],
       },
     });

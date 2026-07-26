@@ -4,7 +4,7 @@ export function createWizardState(draft, notice = null) {
   return {
     draft,
     notice,
-    catalog: { status: 'idle', value: null, error: null, requestVersion: 0 },
+    classifications: { status: 'idle', value: null, error: null, requestVersion: 0 },
     automation: { status: 'idle', value: null, error: null },
     review: { status: 'idle', value: null, draftFingerprint: null, error: null },
     plan: { status: 'idle', value: null, draftFingerprint: null, error: null },
@@ -26,12 +26,12 @@ function invalidateAuthority(state, draft) {
   };
 }
 
-function resetCatalog(state) {
+function resetClassifications(state) {
   return {
     status: 'idle',
     value: null,
     error: null,
-    requestVersion: state.catalog.requestVersion + 1,
+    requestVersion: state.classifications.requestVersion + 1,
   };
 }
 
@@ -41,9 +41,9 @@ export function wizardReducer(state, action) {
       const nextState = createWizardState(action.draft, action.notice);
       return {
         ...nextState,
-        catalog: state.draft.source_site === action.draft.source_site
-          ? state.catalog
-          : resetCatalog(state),
+        classifications: state.draft.source_site === action.draft.source_site
+          ? state.classifications
+          : resetClassifications(state),
       };
     }
     case 'notice':
@@ -56,7 +56,7 @@ export function wizardReducer(state, action) {
         execution: {},
         step: 'intent',
       });
-      return { ...nextState, catalog: resetCatalog(state) };
+      return { ...nextState, classifications: resetClassifications(state) };
     }
     case 'intentChanged':
       return invalidateAuthority(state, {
@@ -77,14 +77,14 @@ export function wizardReducer(state, action) {
       return { ...state, draft: { ...state.draft, run_choice: action.value } };
     case 'stepChanged':
       return { ...state, draft: { ...state.draft, step: action.step } };
-    case 'catalogStarted':
-      return { ...state, catalog: { ...state.catalog, status: 'loading', error: null, requestVersion: action.version } };
-    case 'catalogSucceeded':
-      if (action.version !== state.catalog.requestVersion) return state;
-      return { ...state, catalog: { ...state.catalog, status: 'success', value: action.value, error: null } };
-    case 'catalogFailed':
-      if (action.version !== state.catalog.requestVersion) return state;
-      return { ...state, catalog: { ...state.catalog, status: 'error', error: action.error } };
+    case 'classificationsStarted':
+      return { ...state, classifications: { ...state.classifications, status: 'loading', error: null, requestVersion: action.version } };
+    case 'classificationsSucceeded':
+      if (action.version !== state.classifications.requestVersion) return state;
+      return { ...state, classifications: { ...state.classifications, status: 'success', value: action.value, error: null } };
+    case 'classificationsFailed':
+      if (action.version !== state.classifications.requestVersion) return state;
+      return { ...state, classifications: { ...state.classifications, status: 'error', error: action.error } };
     case 'automationStarted':
       return { ...state, automation: { status: 'loading', value: null, error: null } };
     case 'automationSucceeded':
@@ -117,7 +117,7 @@ export function wizardReducer(state, action) {
 
 export function isStepComplete(draft, step = draft.step) {
   if (step === 'intent') return Boolean(draft.intent);
-  if (step === 'scope') return draft.scope?.mode === 'all' || (draft.scope?.mode === 'rules' && draft.scope.rules?.length > 0);
+  if (step === 'scope') return draft.scope?.mode === 'all' || (draft.scope?.mode === 'selected' && draft.scope.classification_ids?.length > 0);
   if (step === 'execution') {
     if (draft.intent === 'listing') {
       return Number(draft.execution.page_depth) > 0 && Number(draft.execution.run_page_cap) > 0;

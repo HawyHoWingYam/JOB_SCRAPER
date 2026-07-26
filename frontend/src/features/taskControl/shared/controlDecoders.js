@@ -32,6 +32,27 @@ function list(value, path) {
   return value;
 }
 
+export function decodeSourceClassifications(value) {
+  const row = object(value, '$');
+  const sourceSite = string(row.source_site, '$.source_site');
+  return {
+    sourceSite,
+    classifications: list(row.classifications, '$.classifications').map((item, index) => {
+      const classification = object(item, `$.classifications[${index}]`);
+      const id = string(classification.id, `$.classifications[${index}].id`);
+      if (!id.startsWith(`${sourceSite}:`)) {
+        throw new ControlPayloadError(`$.classifications[${index}].id`, 'expected Source-qualified ID');
+      }
+      return {
+        id,
+        label: string(classification.label, `$.classifications[${index}].label`),
+        nativeId: string(classification.native_id, `$.classifications[${index}].native_id`),
+        active: classification.active === true,
+      };
+    }),
+  };
+}
+
 function decodeReadiness(value, path) {
   const row = object(value, path);
   return {
@@ -72,7 +93,6 @@ export function decodeAutomationReview(value) {
     inputFingerprint: string(row.input_fingerprint, '$.input_fingerprint'),
     automationId: row.automation_id == null ? null : string(row.automation_id, '$.automation_id'),
     expectedRevision: row.expected_revision == null ? null : integer(row.expected_revision, '$.expected_revision', { minimum: 1 }),
-    catalogRevisionId: string(row.catalog_revision_id, '$.catalog_revision_id'),
     authoredScope: object(row.authored_scope, '$.authored_scope'),
     resolvedScope: object(row.resolved_scope, '$.resolved_scope'),
     listingWorkload: row.listing_workload == null ? null : object(row.listing_workload, '$.listing_workload'),

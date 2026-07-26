@@ -116,15 +116,12 @@ is never sent as a queue filter or repair authority.
 - A scoped AI Enrichment taxonomy link preserves source, qualified category /
   subcategory IDs, display-only category label, dates, pending limit, exclusion
   reason, and job IDs. The queue shows a scope banner and only that bounded
-  pending slice. Any row is an evidence entry point; provenance inspection and
-  repair remain batch-scoped. On narrow screens, selecting an item hides the
+  pending slice. Any row is an evidence entry point. On narrow screens, selecting an item hides the
   queue and shows the detail panel first; the explicit Back action restores the
   queue and its focus.
-- `source_catalog_provenance_missing` and
-  `source_classification_paths_missing` are source-evidence reasons, not
-  Canonical Job Subcategory decisions. Their detail panel explains the
-  fail-closed preflight and, for the repairable reason, uses report-first
-  inspect plus explicitly confirmed, fingerprint-pinned apply.
+- `source_classification_paths_missing` is a source-evidence reason, not a
+  Canonical Job Subcategory decision. Its detail panel explains that the Job
+  requires source-evidence recollection.
 
 ### 4. Validation & Error Matrix
 
@@ -288,47 +285,5 @@ scope plus the server-pinned taxonomy revision, mapping revision, and scope
 fingerprint. The display-only category label never enters recovery filtering.
 
 Only `classifier_output_invalid` and `classifier_provenance_missing` may use
-this entry point. Source Catalog provenance and missing Source paths retain
-their separate repair/recollection guidance. Unresolved classifier results
-remain Review; there is no batch insufficient-evidence action.
-
-### Source Catalog provenance inspect boundary
-
-The report-first Source Catalog repair endpoint accepts the same source/date
-scope plus the bounded `job_ids` and `reason` carried by an AI exclusion
-deep link:
-
-```text
-POST /api/v1/job-intelligence/governance/source-catalog-provenance/inspect
-{ "scope": {
-    "source_sites": [...],
-    "source_classification_ids": [...],
-    "source_subclassification_ids": [...],
-    "posted_date_from": "YYYY-MM-DD" | null,
-    "posted_date_to": "YYYY-MM-DD" | null,
-    "job_ids": [UUID, ...],
-    "reason": "source_catalog_provenance_missing"
-  }, "limit": 1..5000 }
-```
-
-When the source-provenance reason is present, selection resolves active Review
-rows for that bounded batch and applies pending-work fences without rerunning
-the full Canonical taxonomy preflight for every Job. The Source Catalog repair
-report remains the fail-closed authority for path identity, active revision,
-unknown IDs, and write blockers. This keeps a large check below the frontend
-request timeout and never broadens a missing/empty `job_ids` scope into the
-global Review queue.
-
-| Source inspect condition | Required result |
-|---|---|
-| Bounded active Review IDs are present | Inspect only those pending Jobs; return 200 without Canonical preflight N+1 work |
-| A bounded ID is no longer pending or active | Exclude it from the repair set; report current batch state, never repair it |
-| Active Review rows resolve to no Jobs | Return an explicit empty selection/report; do not fall back to all pending Jobs |
-| Source Catalog revision/path coverage drifts | Keep existing report blocker and fingerprint-pinned apply fence |
-
-**Wrong:** invoke `inspect_pending_selection()` for a 5000-item source repair
-check and rerun Canonical preflight for every Job.
-
-**Correct:** resolve the active `source_catalog_provenance_missing` Review IDs
-from the bounded handoff, then call `SourceCatalogProvenanceRepair.inspect_active`
-for those IDs; apply still rechecks the exact repairable subset and revision.
+this entry point. Missing Source paths retain recollection guidance. Unresolved
+classifier results remain Review; there is no batch insufficient-evidence action.

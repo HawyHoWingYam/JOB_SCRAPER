@@ -19,7 +19,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+)
 logger = logging.getLogger("offertoday-crawl")
 
 BACKEND = str(Path(__file__).resolve().parents[1])
@@ -37,9 +39,6 @@ from app.scraper.manual_action import (  # noqa: E402
     normalize_manual_action_payload,
 )
 from app.config import settings  # noqa: E402
-from app.job_intelligence.source_attributes import (  # noqa: E402
-    SourceCatalogRevisionRef,
-)
 from app.scraper.log_events import build_scrape_log_event  # noqa: E402
 from app.services.crawl_job_runtime import (  # noqa: E402
     CrawlJobRuntime,
@@ -86,7 +85,7 @@ from app.sources.offertoday.search_space import (  # noqa: E402
     build_offertoday_listing_conditions,
     normalize_offertoday_keywords,
 )
-from app.source_catalog.runtime import load_published_query_plan  # noqa: E402
+from app.source_classifications.runtime import load_source_query_plan  # noqa: E402
 from app.sources.offertoday.response_policy import (  # noqa: E402
     OfferTodayResponseKind,
 )
@@ -129,17 +128,22 @@ async def _check_and_handle_waf_challenge(
         return False
 
     logger.warning(
-        "OfferToday WAF challenge detected at %s. "
-        "%s",
+        "OfferToday WAF challenge detected at %s. " "%s",
         current_url,
-        "Waiting for manual verification in browser window." if headed
+        "Waiting for manual verification in browser window."
+        if headed
         else "Headless mode — cannot complete challenge automatically. Retrying warmup.",
     )
 
     if crawl_job_id and db:
         try:
             from app.models.crawl_job import CrawlJobEvent
-            seq = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id == crawl_job_id).count()
+
+            seq = (
+                db.query(CrawlJobEvent)
+                .filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
+                .count()
+            )
             _write_progress_event(
                 db,
                 crawl_job_id=crawl_job_id,
@@ -163,7 +167,10 @@ async def _check_and_handle_waf_challenge(
         return True  # caller will decide whether to abort or retry
 
     try:
-        logger.info("Waiting up to %ds for user to complete WAF verification…", _WAF_MANUAL_TIMEOUT_SECONDS)
+        logger.info(
+            "Waiting up to %ds for user to complete WAF verification…",
+            _WAF_MANUAL_TIMEOUT_SECONDS,
+        )
         challenge_url = current_url
         await page.wait_for_url(
             lambda current_url: _WAF_CHALLENGE_PATH not in current_url,
@@ -174,7 +181,11 @@ async def _check_and_handle_waf_challenge(
             try:
                 from app.models.crawl_job import CrawlJobEvent
 
-                seq = db.query(CrawlJobEvent).filter(CrawlJobEvent.crawl_job_id == crawl_job_id).count()
+                seq = (
+                    db.query(CrawlJobEvent)
+                    .filter(CrawlJobEvent.crawl_job_id == crawl_job_id)
+                    .count()
+                )
                 _write_progress_event(
                     db,
                     crawl_job_id=crawl_job_id,
@@ -216,10 +227,14 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--crawl-job-id", type=str, default="")
     parser.add_argument("--execution-generation", type=str, default="")
-    parser.add_argument("--crawl-phase", choices=["full", "listing", "detail"], default="full")
+    parser.add_argument(
+        "--crawl-phase", choices=["full", "listing", "detail"], default="full"
+    )
     parser.add_argument("--source-listing-crawl-job-id", type=str, default="")
     parser.add_argument("--detail-limit", type=int, default=100)
-    parser.add_argument("--detail-statuses", type=str, default="pending,manual_action_required")
+    parser.add_argument(
+        "--detail-statuses", type=str, default="pending,manual_action_required"
+    )
     parser.add_argument(
         "--headed",
         action="store_true",
@@ -307,7 +322,9 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
         if isinstance(keywords, str):
             args.keywords = keywords
         else:
-            args.keywords = ",".join(str(keyword) for keyword in keywords if str(keyword).strip())
+            args.keywords = ",".join(
+                str(keyword) for keyword in keywords if str(keyword).strip()
+            )
     if request_payload.get("max_pages") is not None:
         args.max_pages = int(request_payload["max_pages"])
     if request_payload.get("resume_strategy"):
@@ -325,7 +342,9 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
         args.source_listing_crawl_job_id = str(
             request_payload.get("source_listing_crawl_job_id") or ""
         )
-    requested_detail_scope = str(request_payload.get("detail_scope") or "").strip().lower()
+    requested_detail_scope = (
+        str(request_payload.get("detail_scope") or "").strip().lower()
+    )
     if requested_detail_scope:
         args.detail_scope = requested_detail_scope
     elif requested_phase == "detail":
@@ -338,7 +357,9 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
         args.detail_limit = int(request_payload["detail_limit"])
     detail_statuses = request_payload.get("detail_statuses")
     if detail_statuses:
-        args.detail_statuses = ",".join(str(status) for status in detail_statuses if str(status).strip())
+        args.detail_statuses = ",".join(
+            str(status) for status in detail_statuses if str(status).strip()
+        )
     args.manual_action_browser_channel = str(
         request_payload.get("manual_action_browser_channel") or ""
     ).strip()
@@ -414,7 +435,9 @@ def _resolve_detail_scope(
             else None,
             runtime_plan.backlog_scope_kind,
         )
-    requested_source_listing_crawl_job_id = str(args.source_listing_crawl_job_id or "").strip() or None
+    requested_source_listing_crawl_job_id = (
+        str(args.source_listing_crawl_job_id or "").strip() or None
+    )
     requested_scope = str(getattr(args, "detail_scope", "") or "").strip().lower()
     if requested_scope and requested_scope not in {"global", "listing_batch"}:
         raise ValueError(f"Unsupported OfferToday detail scope: {requested_scope}")
@@ -531,9 +554,7 @@ def _build_manual_action_payload(
         resume_context = {
             "crawl_phase": crawl_phase,
             "crawl_mode": "headed" if args.headed else "headless",
-            "category_ids": _parse_catalog_classification_ids(
-                args.category_ids
-            ),
+            "category_ids": _parse_catalog_classification_ids(args.category_ids),
             "skip_existing": bool(args.skip_existing),
             "resume_strategy": str(
                 args.resume_strategy or RESUME_STRATEGY_FRESH_PROFILE
@@ -577,14 +598,14 @@ def _build_result_manual_action_payload(
     request_payload: dict[str, Any],
 ) -> dict[str, Any]:
     normalized_classification = str(classification or "").strip().lower()
-    resume_supported = (
-        normalized_classification in RESUMABLE_SESSION_CLASSIFICATIONS
-    )
+    resume_supported = normalized_classification in RESUMABLE_SESSION_CLASSIFICATIONS
     identity_audit = normalized_classification in _IDENTITY_AUDIT_CLASSIFICATIONS
     action_type = (
         "session_recovery"
         if resume_supported
-        else "identity_audit" if identity_audit else "operator_review"
+        else "identity_audit"
+        if identity_audit
+        else "operator_review"
     )
     payload: dict[str, Any] = {
         "action_type": action_type,
@@ -634,7 +655,9 @@ async def _run_runtime_probe(
     keywords: str | Sequence[str] | None,
     smoke_test: bool,
 ) -> int:
-    listing_payload = _build_probe_listing_payload(category_ids=category_ids, keywords=keywords)
+    listing_payload = _build_probe_listing_payload(
+        category_ids=category_ids, keywords=keywords
+    )
     async with OfferTodayBrowserRuntime(
         headed=headed,
         auth_state_path=auth_state or None,
@@ -642,7 +665,9 @@ async def _run_runtime_probe(
     ) as runtime:
         page = runtime._page
         if page is not None:
-            await _check_and_handle_waf_challenge(page, headed=headed, crawl_job_id="", db=None)
+            await _check_and_handle_waf_challenge(
+                page, headed=headed, crawl_job_id="", db=None
+            )
         try:
             session_check = await runtime.check_session(listing_payload=listing_payload)
         except Exception as exc:
@@ -697,7 +722,9 @@ async def _fetch_detail_json_with_identifiers(
     return dict(result or {})
 
 
-def _write_progress_event(db, *, crawl_job_id: str, sequence_no: int, event_type: str, payload: dict) -> None:
+def _write_progress_event(
+    db, *, crawl_job_id: str, sequence_no: int, event_type: str, payload: dict
+) -> None:
     """Write a CrawlJobEvent row visible to the frontend progress API."""
     from app.models.crawl_job import CrawlJobEvent
 
@@ -740,11 +767,11 @@ def _parse_catalog_classification_ids(value: Any) -> list[int | str]:
     return parsed
 
 
-def _resolve_published_listing_category_ids(value: Any) -> list[int]:
+def _resolve_listing_category_ids(value: Any) -> list[int]:
     category_ids = _parse_catalog_classification_ids(value)
     if not category_ids:
         return []
-    plan = load_published_query_plan("offertoday", category_ids)
+    plan = load_source_query_plan("offertoday", category_ids)
     return [int(entry.target.payload["category_code"]) for entry in plan.entries]
 
 
@@ -759,9 +786,7 @@ def _build_request_listing_conditions(
         for target in runtime_plan.targets:
             parameters = target.query_target.parameters
             if not isinstance(parameters, OfferTodayQueryTargetParametersV1):
-                raise RuntimeError(
-                    "OfferToday Dispatch Plan contains another adapter"
-                )
+                raise RuntimeError("OfferToday Dispatch Plan contains another adapter")
             conditions.append(
                 OfferTodayListingCondition(
                     search_family="catalog_category",
@@ -775,7 +800,7 @@ def _build_request_listing_conditions(
 
     category_ids = _parse_catalog_classification_ids(category_value)
     if category_ids and keywords:
-        plan = load_published_query_plan("offertoday", category_ids)
+        plan = load_source_query_plan("offertoday", category_ids)
         validated_native_ids = [
             int(entry.target.payload["category_code"]) for entry in plan.entries
         ]
@@ -796,7 +821,7 @@ def _build_request_listing_conditions(
             category_endpoint="search",
             rcd_type=None,
         )
-    plan = load_published_query_plan("offertoday", category_ids)
+    plan = load_source_query_plan("offertoday", category_ids)
     return [
         OfferTodayListingCondition(
             search_family="catalog_category",
@@ -811,7 +836,9 @@ def _build_request_listing_conditions(
 
 def _normalize_detail_statuses(value: Any) -> list[str]:
     raw_values = str(value or "").split(",") if isinstance(value, str) else value or []
-    return [str(raw_value).strip() for raw_value in raw_values if str(raw_value).strip()]
+    return [
+        str(raw_value).strip() for raw_value in raw_values if str(raw_value).strip()
+    ]
 
 
 _build_listing_staging_payload = build_offertoday_listing_staging_payload
@@ -924,8 +951,7 @@ class CrawlJobListingObservationSink:
                 "SCRAPE_LISTING_PAGE_RETRY"
                 if observation.retry_reason
                 else "SCRAPE_LISTING_MANUAL_ACTION"
-                if observation.classification
-                in RESUMABLE_SESSION_CLASSIFICATIONS
+                if observation.classification in RESUMABLE_SESSION_CLASSIFICATIONS
                 else "SCRAPE_LISTING_PAGE_FAIL"
             )
             logger.warning(
@@ -1024,9 +1050,7 @@ class OfferTodayCrawlStagingSink(OfferTodayReconciledListingStagingSink):
                 ),
                 job_ids=len(rows),
                 listings_staged=self.rows_created - rows_created_before,
-                jobs_skipped_existing=(
-                    self.skipped_existing - skipped_before
-                ),
+                jobs_skipped_existing=(self.skipped_existing - skipped_before),
                 cumulative_pages=self.observation_sink.successful_page_count,
                 cumulative_job_ids=self.rows_seen,
                 cumulative_listings_staged=self.rows_created,
@@ -1098,8 +1122,7 @@ def _listing_result_evidence(result) -> dict[str, Any]:
             observation
             for observation in reversed(tuple(result.observations))
             if str(getattr(observation, "stop_reason", "") or "") == stop_reason
-            or str(getattr(observation, "classification", "") or "")
-            == stop_reason
+            or str(getattr(observation, "classification", "") or "") == stop_reason
         ),
         None,
     )
@@ -1114,9 +1137,7 @@ def _listing_result_evidence(result) -> dict[str, Any]:
         ),
         "accepted_job_id_count": len(result.accepted_job_ids),
         "listing_partial": bool(getattr(result, "is_partial", False)),
-        "capped_condition_ids": list(
-            getattr(result, "capped_condition_ids", ())
-        ),
+        "capped_condition_ids": list(getattr(result, "capped_condition_ids", ())),
     }
     if stopping_observation is not None:
         blocked_url = str(
@@ -1159,9 +1180,7 @@ def _listing_metrics(result, staging_sink, runtime_plan=None) -> dict[str, Any]:
     accepted_ids = set(result.accepted_job_ids)
     supplemental_ids = set(getattr(result, "supplemental_job_ids", ()))
     outcomes = tuple(result.condition_outcomes)
-    capped_condition_ids = tuple(
-        getattr(result, "capped_condition_ids", ())
-    )
+    capped_condition_ids = tuple(getattr(result, "capped_condition_ids", ()))
     capped_classification_ids = _capped_classification_ids(result, runtime_plan)
     return {
         "listing_partial": bool(getattr(result, "is_partial", False)),
@@ -1180,9 +1199,7 @@ def _listing_metrics(result, staging_sink, runtime_plan=None) -> dict[str, Any]:
             getattr(result, "supplemental_rows_observed", 0) or 0
         ),
         "distinct_supplemental_ids": len(supplemental_ids),
-        "supplemental_result_overlap_count": len(
-            accepted_ids & supplemental_ids
-        ),
+        "supplemental_result_overlap_count": len(accepted_ids & supplemental_ids),
         "supplemental_identity_issue_count": int(
             getattr(result, "supplemental_identity_issue_count", 0) or 0
         ),
@@ -1234,7 +1251,11 @@ async def _run_listing_phase(
         observation_sink=observation_sink,
         crawl_mode=crawl_mode,
     )
-    runner = listing_runner(browser_runtime) if isinstance(listing_runner, type) else listing_runner
+    runner = (
+        listing_runner(browser_runtime)
+        if isinstance(listing_runner, type)
+        else listing_runner
+    )
     if hasattr(runner, "_sleep"):
         runner._sleep = cancellation_token.sleep
 
@@ -1250,9 +1271,7 @@ async def _run_listing_phase(
                     else min(int(args.max_pages), MAX_PAGES_GLOBAL)
                 ),
                 run_page_cap=(
-                    runtime_plan.run_page_cap
-                    if runtime_plan is not None
-                    else None
+                    runtime_plan.run_page_cap if runtime_plan is not None else None
                 ),
                 unique_job_cap=None,
                 require_empty_confirmation=runtime_plan is None,
@@ -1488,9 +1507,7 @@ async def _run_listing_phase(
                 "detail_scope": "listing_batch",
                 "source_listing_crawl_job_id": crawl_job_id,
                 "detail_limit": int(args.detail_limit),
-                "detail_statuses": _normalize_detail_statuses(
-                    args.detail_statuses
-                ),
+                "detail_statuses": _normalize_detail_statuses(args.detail_statuses),
                 "skip_existing": bool(args.skip_existing),
             },
             detail_crawl_job_id=crawl_job_id,
@@ -1565,21 +1582,6 @@ async def _run_detail_phase(
         source_listing_crawl_job_id=source_listing_crawl_job_id,
         detail_scope=detail_scope,
     )
-    detail_runtime_plan: DetailRuntimePlan | None = getattr(
-        args,
-        "detail_runtime_plan",
-        None,
-    )
-    source_catalog_revision = (
-        SourceCatalogRevisionRef(
-            source_site=detail_runtime_plan.source_site,
-            revision_id=detail_runtime_plan.catalog_revision_id,
-            fingerprint=detail_runtime_plan.catalog_revision_fingerprint,
-        )
-        if detail_runtime_plan is not None
-        else None
-    )
-
     try:
         if crawl_phase == "detail":
             cancellation_token.raise_if_cancelled()
@@ -1665,17 +1667,12 @@ async def _run_detail_phase(
             detail_load_result.fetch_cohort_source_job_ids
         ),
         "fetch_cohort_hash": str(detail_load_result.fetch_cohort_hash),
-        "reconciled_source_job_ids": list(
-            detail_load_result.reconciled_source_job_ids
-        ),
+        "reconciled_source_job_ids": list(detail_load_result.reconciled_source_job_ids),
         "identity_conflict_ids": list(detail_load_result.identity_conflict_ids),
         "identity_conflict_evidence": [
-            dict(evidence)
-            for evidence in detail_load_result.identity_conflict_evidence
+            dict(evidence) for evidence in detail_load_result.identity_conflict_evidence
         ],
-        "fetch_cohort_distinct": len(
-            detail_load_result.fetch_cohort_source_job_ids
-        ),
+        "fetch_cohort_distinct": len(detail_load_result.fetch_cohort_source_job_ids),
         "detail_scope": detail_scope,
         "segment_index": int(segment_index),
         "segment_target_rows": int(detail_load_result.target_rows),
@@ -1746,9 +1743,7 @@ async def _run_detail_phase(
             "detail_outcomes": dict(outcome_counts),
             "detail_success": detail_success,
             "detail_failure": max(
-                sum(outcome_counts.values())
-                - detail_success
-                - terminal_unavailable,
+                sum(outcome_counts.values()) - detail_success - terminal_unavailable,
                 0,
             ),
             "new_detail_targets": int(
@@ -1811,9 +1806,7 @@ async def _run_detail_phase(
                     0,
                 ),
                 detail_selected_rows=detail_load_result.selected_rows,
-                detail_skipped_existing_rows=(
-                    detail_load_result.skipped_existing_rows
-                ),
+                detail_skipped_existing_rows=(detail_load_result.skipped_existing_rows),
                 detail_target_rows=detail_load_result.target_rows,
                 processed=metrics["detail_processed_targets"],
                 succeeded=metrics["detail_success"],
@@ -1827,12 +1820,9 @@ async def _run_detail_phase(
 
     if detail_load_result.identity_conflict_ids:
         evidence = {
-            "identity_conflict_ids": list(
-                detail_load_result.identity_conflict_ids
-            ),
+            "identity_conflict_ids": list(detail_load_result.identity_conflict_ids),
             "identity_conflict_evidence": [
-                dict(record)
-                for record in detail_load_result.identity_conflict_evidence
+                dict(record) for record in detail_load_result.identity_conflict_evidence
             ],
         }
         crawl_runtime.merge_metrics(
@@ -1923,9 +1913,7 @@ async def _run_detail_phase(
     for index, runtime_target in enumerate(detail_load_result.targets, start=1):
         cancellation_token.raise_if_cancelled()
         item_started_at = time.perf_counter()
-        raw_source_job_id = str(
-            runtime_target.get("source_job_id") or ""
-        ).strip()
+        raw_source_job_id = str(runtime_target.get("source_job_id") or "").strip()
         logger.info(
             build_scrape_log_event(
                 "SCRAPE_DETAIL_ITEM_START",
@@ -1947,7 +1935,6 @@ async def _run_detail_phase(
                 detail_crawl_job_id=crawl_job_id,
                 fetch_detail=fetch_detail,
                 crawl_mode=crawl_mode,
-                source_catalog_revision=source_catalog_revision,
             )
         except CrawlCancellationRequested:
             raise
@@ -1959,9 +1946,7 @@ async def _run_detail_phase(
                     crawl_job_id=crawl_job_id,
                     crawl_phase="detail",
                     crawl_mode=crawl_mode,
-                    source_listing_crawl_job_id=(
-                        source_listing_crawl_job_id
-                    ),
+                    source_listing_crawl_job_id=(source_listing_crawl_job_id),
                     detail_index=index,
                     detail_total=total_targets,
                     source_job_id=raw_source_job_id,
@@ -2026,15 +2011,11 @@ async def _run_detail_phase(
                 ),
                 outcome=result.outcome.value,
                 classification=result.outcome.value,
-                cumulative_processed=current_metrics[
-                    "detail_processed_targets"
-                ],
+                cumulative_processed=current_metrics["detail_processed_targets"],
                 cumulative_succeeded=current_metrics["detail_success"],
                 cumulative_failed=current_metrics["detail_failure"],
                 cumulative_saved=current_metrics["jobs_saved"],
-                cumulative_terminal_unavailable=current_metrics[
-                    "terminal_unavailable"
-                ],
+                cumulative_terminal_unavailable=current_metrics["terminal_unavailable"],
             )
         )
 
@@ -2146,11 +2127,7 @@ async def _run_detail_recovery(
         None,
     )
     runtime_segments = (
-        iter(
-            detail_runtime_plan.iter_segments(
-                DEFAULT_DETAIL_RECOVERY_SEGMENT_SIZE
-            )
-        )
+        iter(detail_runtime_plan.iter_segments(DEFAULT_DETAIL_RECOVERY_SEGMENT_SIZE))
         if detail_runtime_plan is not None
         else None
     )
@@ -2303,7 +2280,9 @@ async def _run_detail_recovery(
         last_result = segment_result
         cumulative_target_rows += int(segment_result.detail_load_result.target_rows)
         for outcome, count in segment_result.outcome_counts.items():
-            cumulative_outcomes[outcome] = cumulative_outcomes.get(outcome, 0) + int(count)
+            cumulative_outcomes[outcome] = cumulative_outcomes.get(outcome, 0) + int(
+                count
+            )
         jobs_created += int(segment_result.jobs_created)
         jobs_updated += int(segment_result.jobs_updated)
         companies_created += int(segment_result.companies_created)
@@ -2367,9 +2346,7 @@ async def _run_detail_recovery(
                         segment_result.detail_load_result.target_rows
                     ),
                     "continuation_state": "manual_action_required",
-                    "detail_backlog_remaining": metrics[
-                        "detail_backlog_remaining"
-                    ],
+                    "detail_backlog_remaining": metrics["detail_backlog_remaining"],
                 },
             )
             return build_aggregate_result(
@@ -2394,9 +2371,7 @@ async def _run_detail_recovery(
                     **dict(completion_payload or {}),
                     "detail_scope": detail_scope,
                     "detail_segments_completed": segment_index,
-                    "detail_backlog_remaining": metrics[
-                        "detail_backlog_remaining"
-                    ],
+                    "detail_backlog_remaining": metrics["detail_backlog_remaining"],
                 },
                 metrics=metrics,
             )
@@ -2406,16 +2381,11 @@ async def _run_detail_recovery(
             )
 
         if (
-            (
-                versioned_snapshot_exhausted
-                if detail_runtime_plan is not None
-                else int(next_load_result.target_rows) == 0
-            )
-            and not next_load_result.identity_conflict_ids
-        ):
-            reconciled_source_job_ids.update(
-                next_load_result.reconciled_source_job_ids
-            )
+            versioned_snapshot_exhausted
+            if detail_runtime_plan is not None
+            else int(next_load_result.target_rows) == 0
+        ) and not next_load_result.identity_conflict_ids:
+            reconciled_source_job_ids.update(next_load_result.reconciled_source_job_ids)
             metrics = build_cumulative_metrics(
                 backlog_result=next_load_result,
                 continuation_state="completed",
@@ -2503,7 +2473,8 @@ def _persist_listing_checkpoint(
             total_pages=total_pages,
             job_ids=listing_batch_result.job_ids_seen,
             listings_staged=listing_batch_result.rows_staged,
-            jobs_skipped_existing=jobs_skipped_existing + listing_batch_result.skipped_existing,
+            jobs_skipped_existing=jobs_skipped_existing
+            + listing_batch_result.skipped_existing,
         )
     )
     crawl_runtime.write_progress_event(
@@ -2519,7 +2490,8 @@ def _persist_listing_checkpoint(
             "total_pages": total_pages,
             "job_ids_collected": listing_batch_result.job_ids_seen,
             "listings_staged": listing_batch_result.rows_staged,
-            "jobs_skipped_existing": jobs_skipped_existing + listing_batch_result.skipped_existing,
+            "jobs_skipped_existing": jobs_skipped_existing
+            + listing_batch_result.skipped_existing,
             "phase": 1,
         },
     )
@@ -2550,15 +2522,9 @@ async def main() -> None:
             crawl_job_id=args.crawl_job_id or None,
             crawl_phase=crawl_phase,
             crawl_mode="headed" if args.headed else "headless",
-            category_ids=(
-                args.category_ids or None
-                if runtime_plan is None
-                else None
-            ),
+            category_ids=(args.category_ids or None if runtime_plan is None else None),
             query_target_count=(
-                runtime_plan.query_target_count
-                if runtime_plan is not None
-                else None
+                runtime_plan.query_target_count if runtime_plan is not None else None
             ),
             keywords=args.keywords or None,
             max_pages=args.max_pages,
@@ -2579,7 +2545,7 @@ async def main() -> None:
             )
         ]
         if runtime_plan is not None
-        else _resolve_published_listing_category_ids(args.category_ids)
+        else _resolve_listing_category_ids(args.category_ids)
     )
     keywords = normalize_offertoday_keywords(args.keywords)
     if args.check or args.smoke_test:
@@ -2758,9 +2724,7 @@ async def main() -> None:
                     listing_execution.staging_sink,
                     runtime_plan,
                 )
-                new_jobs_count = int(
-                    listing_metrics.get("new_detail_targets", 0) or 0
-                )
+                new_jobs_count = int(listing_metrics.get("new_detail_targets", 0) or 0)
                 jobs_skipped_existing = int(
                     listing_execution.staging_sink.skipped_existing
                 )
@@ -2794,9 +2758,7 @@ async def main() -> None:
                             source="offertoday",
                             crawl_job_id=cj_id,
                             crawl_phase="listing",
-                            crawl_mode=(
-                                "headed" if args.headed else "headless"
-                            ),
+                            crawl_mode=("headed" if args.headed else "headless"),
                             classification=listing_result.stop_reason,
                             pages_processed=page_count,
                             listings_staged=listing_count,
@@ -2813,9 +2775,7 @@ async def main() -> None:
                 )
                 else None
             )
-            detail_target_rows = int(
-                getattr(detail_load_result, "target_rows", 0) or 0
-            )
+            detail_target_rows = int(getattr(detail_load_result, "target_rows", 0) or 0)
             detail_selected_rows = int(
                 getattr(detail_load_result, "selected_rows", 0) or 0
             )
@@ -2879,15 +2839,9 @@ async def main() -> None:
                             source="offertoday",
                             crawl_job_id=cj_id,
                             crawl_phase="detail",
-                            crawl_mode=(
-                                "headed" if args.headed else "headless"
-                            ),
-                            source_listing_crawl_job_id=(
-                                source_listing_crawl_job_id
-                            ),
-                            detail_processed=(
-                                detail_phase_result.processed_targets
-                            ),
+                            crawl_mode=("headed" if args.headed else "headless"),
+                            source_listing_crawl_job_id=(source_listing_crawl_job_id),
+                            detail_processed=(detail_phase_result.processed_targets),
                             stop_reason=detail_phase_result.stop_reason,
                         )
                     )
@@ -3003,9 +2957,7 @@ async def main() -> None:
                 classification="identity_conflict",
                 evidence={
                     "identity_conflict_ids": list(exc.source_job_ids),
-                    "identity_conflict_evidence": [
-                        dict(item) for item in exc.evidence
-                    ],
+                    "identity_conflict_evidence": [dict(item) for item in exc.evidence],
                 },
                 request_payload=request_payload,
             )
@@ -3073,7 +3025,13 @@ async def main() -> None:
     finally:
         db.close()
 
-    logger.info("Crawl done: pages=%d listings=%d ok=%d fail=%d", page_count, listing_count, detail_ok, detail_fail)
+    logger.info(
+        "Crawl done: pages=%d listings=%d ok=%d fail=%d",
+        page_count,
+        listing_count,
+        detail_ok,
+        detail_fail,
+    )
 
 
 if __name__ == "__main__":

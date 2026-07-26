@@ -6,8 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.source_catalog.domain import (
-    CatalogNodeSnapshot,
+from app.source_classifications.domain import (
     SourceQueryTarget,
     is_source_qualified_classification_id,
     payload_fingerprint,
@@ -31,53 +30,25 @@ class FrozenContract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class CrawlScopeRuleV1(FrozenContract):
-    kind: Literal["exact", "subtree"]
-    classification_id: str = Field(min_length=3, max_length=255)
-
-    @field_validator("classification_id")
-    @classmethod
-    def require_source_qualified_identity(cls, value: str) -> str:
-        source_site, separator, _token = value.partition(":")
-        if not separator or not is_source_qualified_classification_id(
-            value, source_site
-        ):
-            raise ValueError(
-                "Source Classification identity must be exactly <source>:<token>"
-            )
-        return value
-
-
 class AuthoredCrawlScopeV1(FrozenContract):
-    version: Literal[1] = 1
     source_site: SourceSite
-    reviewed_catalog_revision_id: UUID
-    mode: Literal["all", "rules"]
-    rules: tuple[CrawlScopeRuleV1, ...] = Field(default_factory=tuple)
+    mode: Literal["all", "selected"]
+    classification_ids: tuple[str, ...] = Field(default_factory=tuple)
 
-    @field_validator("rules")
+    @field_validator("classification_ids")
     @classmethod
-    def stable_deduplicate_rules(
-        cls, value: tuple[CrawlScopeRuleV1, ...]
-    ) -> tuple[CrawlScopeRuleV1, ...]:
-        rules: list[CrawlScopeRuleV1] = []
-        seen: set[tuple[str, str]] = set()
-        for rule in value:
-            identity = (rule.kind, rule.classification_id)
-            if identity not in seen:
-                rules.append(rule)
-                seen.add(identity)
-        return tuple(rules)
+    def stable_deduplicate_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(value))
 
     @model_validator(mode="after")
     def validate_scope_shape(self) -> AuthoredCrawlScopeV1:
-        if self.mode == "all" and self.rules:
-            raise ValueError("All scope cannot contain Exact/Subtree rules")
-        if self.mode == "rules" and not self.rules:
-            raise ValueError("Rules scope requires at least one Exact/Subtree rule")
-        for rule in self.rules:
+        if self.mode == "all" and self.classification_ids:
+            raise ValueError("All scope cannot contain selected classifications")
+        if self.mode == "selected" and not self.classification_ids:
+            raise ValueError("Selected scope requires at least one classification")
+        for classification_id in self.classification_ids:
             if not is_source_qualified_classification_id(
-                rule.classification_id, self.source_site
+                classification_id, self.source_site
             ):
                 raise ValueError(
                     "Every Source Classification identity must belong to source_site"
@@ -94,17 +65,20 @@ class SelectedClassificationSnapshotV1(FrozenContract):
     query_semantics_hash: str = Field(pattern=SHA256_PATTERN)
 
     @classmethod
-    def from_catalog_node(
-        cls, node: CatalogNodeSnapshot
-    ) -> SelectedClassificationSnapshotV1:
-        if node.classification_id is None or node.query_semantics_hash is None:
-            raise ValueError("Selected Source Classification is not queryable")
+    def from_registry_row(cls, row) -> SelectedClassificationSnapshotV1:
+        query_semantics_hash = payload_fingerprint(
+            {
+                "classification_id": row.classification_id,
+                "native_id": row.native_id,
+                "query_metadata": dict(row.query_metadata or {}),
+            }
+        )
         return cls(
-            node_key=node.node_key,
-            classification_id=node.classification_id,
-            native_label=node.native_label,
-            native_path=node.native_path,
-            query_semantics_hash=node.query_semantics_hash,
+            node_key=row.classification_id,
+            classification_id=row.classification_id,
+            native_label=row.label,
+            native_path=(row.label,),
+            query_semantics_hash=query_semantics_hash,
         )
 
 
@@ -199,8 +173,6 @@ class CrawlScopeWarningV1(FrozenContract):
 class ResolvedRunScopeV1(FrozenContract):
     version: Literal[1] = 1
     source_site: SourceSite
-    catalog_revision_id: UUID
-    catalog_revision_fingerprint: str = Field(pattern=SHA256_PATTERN)
     authored_scope: AuthoredCrawlScopeV1
     selected_classifications: tuple[SelectedClassificationSnapshotV1, ...]
     classification_expansion_hash: str = Field(pattern=SHA256_PATTERN)

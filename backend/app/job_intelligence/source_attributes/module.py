@@ -3,13 +3,12 @@ from __future__ import annotations
 from collections import defaultdict
 from uuid import UUID, uuid4
 
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, joinedload
 
 from app.job_intelligence.foundation import normalized_content_hash
 from app.job_intelligence.source_attributes.contracts import (
     EmploymentTypeView,
     ProjectionResult,
-    SourceCatalogRevisionRef,
     SourceClassificationNodeView,
     SourceClassificationPathView,
     SourceEmploymentLabelView,
@@ -17,7 +16,6 @@ from app.job_intelligence.source_attributes.contracts import (
     SourceJobAttributesView,
 )
 from app.models.job import Job
-from app.models.source_catalog import SourceCatalogRevision
 from app.models.source_job_attributes import (
     EmploymentType,
     JobEmploymentType,
@@ -27,7 +25,6 @@ from app.models.source_job_attributes import (
     JobSourceEmploymentLabel,
 )
 from app.repositories.event_outbox_repository import EventOutboxRepository
-from app.utils.time import utc_now
 
 
 EMPLOYMENT_TYPE_SEEDS = (
@@ -55,8 +52,6 @@ class SourceJobAttributes:
         self,
         job_id: UUID,
         evidence: SourceJobAttributeEvidence,
-        *,
-        source_catalog_revision: SourceCatalogRevisionRef | None = None,
     ) -> ProjectionResult:
         job = (
             self.db.query(Job).filter(Job.id == job_id).with_for_update().one_or_none()
@@ -67,10 +62,7 @@ class SourceJobAttributes:
             raise ValueError(
                 "Source Job Attribute evidence Source does not match its Job"
             )
-        if source_catalog_revision is not None:
-            evidence = evidence.with_catalog_revision(source_catalog_revision)
         self._validate_evidence(evidence)
-        self._validate_catalog_revisions(evidence)
 
         evidence_hash = normalized_content_hash(evidence.to_payload())
         projection = self.db.get(JobSourceAttributeProjection, job_id)
@@ -100,11 +92,6 @@ class SourceJobAttributes:
                 id=uuid4(),
                 job_id=job_id,
                 source_site=evidence.source_site,
-                source_catalog_revision_id=(
-                    path_evidence.source_catalog_revision.revision_id
-                    if path_evidence.source_catalog_revision is not None
-                    else None
-                ),
                 source_order=path_evidence.source_order,
                 path_fingerprint=normalized_content_hash(
                     [node.source_classification_id for node in path_evidence.nodes]
@@ -192,10 +179,7 @@ class SourceJobAttributes:
 
         paths = (
             self.db.query(JobSourceClassificationPath)
-            .options(
-                joinedload(JobSourceClassificationPath.nodes),
-                joinedload(JobSourceClassificationPath.source_catalog_revision),
-            )
+            .options(joinedload(JobSourceClassificationPath.nodes))
             .filter(JobSourceClassificationPath.job_id == job_id)
             .order_by(JobSourceClassificationPath.source_order)
             .all()
@@ -243,117 +227,6 @@ class SourceJobAttributes:
                 )
                 for label in labels
             ),
-        )
-
-    def repair_catalog_provenance(
-        self,
-        job_id: UUID,
-        revision: SourceCatalogRevisionRef,
-    ) -> ProjectionResult:
-        """Bind only missing path provenance through the projection boundary.
-
-        The caller owns catalog identity coverage checks. This method owns the
-        row lock, source/revision validation, projection metadata transition,
-        and one outbox event for a changed Job. Existing path bindings are
-        never rewritten.
-        """
-
-        job = (
-            self.db.query(Job).filter(Job.id == job_id).with_for_update().one_or_none()
-        )
-        if job is None:
-            raise ValueError(f"Job {job_id} does not exist")
-        if job.source_site != revision.source_site:
-            raise ValueError("Source Catalog revision Source does not match Job")
-
-        revision_row = (
-            self.db.query(SourceCatalogRevision)
-            .filter(SourceCatalogRevision.id == revision.revision_id)
-            .with_for_update()
-            .one_or_none()
-        )
-        if revision_row is None:
-            raise ValueError("Source Catalog revision does not exist")
-        if (
-            revision_row.source_site != revision.source_site
-            or revision_row.fingerprint != revision.fingerprint
-        ):
-            raise ValueError("Source Catalog revision identity does not match")
-
-        paths = (
-            self.db.query(JobSourceClassificationPath)
-            .options(
-                selectinload(JobSourceClassificationPath.nodes),
-                selectinload(JobSourceClassificationPath.source_catalog_revision),
-            )
-            .filter(JobSourceClassificationPath.job_id == job_id)
-            .order_by(JobSourceClassificationPath.source_order)
-            .with_for_update()
-            .all()
-        )
-        for path in paths:
-            if path.source_site != job.source_site:
-                raise ValueError("Source Classification Path Source does not match Job")
-            if (
-                path.source_catalog_revision_id is not None
-                and path.source_catalog_revision_id != revision.revision_id
-            ):
-                raise ValueError(
-                    "Existing Source Classification Path catalog revision does not match"
-                )
-
-        missing_paths = [
-            path
-            for path in paths
-            if path.source_catalog_revision_id is None
-        ]
-        projection = self.db.get(JobSourceAttributeProjection, job_id)
-        if projection is None:
-            raise ValueError(f"Job {job_id} has no Source Job Attribute projection")
-        if not missing_paths:
-            return ProjectionResult(
-                changed=False,
-                version=projection.version,
-                view=self.get(job_id),
-            )
-
-        for path in missing_paths:
-            path.source_catalog_revision_id = revision.revision_id
-            path.source_catalog_revision = revision_row
-
-        projection.version += 1
-        projection.evidence_hash = normalized_content_hash(
-            {
-                "version": 1,
-                "kind": "source-catalog-provenance-repair",
-                "previous_evidence_hash": projection.evidence_hash,
-                "revision": revision.to_payload(),
-                "path_ids": [str(path.id) for path in missing_paths],
-            }
-        )
-        projection.captured_at = utc_now()
-        self.outbox_repository.enqueue(
-            self.db,
-            topic="job-intelligence-projections",
-            aggregate_type="job",
-            aggregate_id=str(job_id),
-            event_type="job.source_attributes_changed",
-            source_service="source-job-attributes",
-            payload={
-                "job_id": str(job_id),
-                "source_site": job.source_site,
-                "version": projection.version,
-                "evidence_hash": projection.evidence_hash,
-                "change": "catalog_provenance_repair",
-                "catalog_revision_id": str(revision.revision_id),
-            },
-            auto_commit=False,
-        )
-        self.db.flush()
-        return ProjectionResult(
-            changed=True,
-            version=projection.version,
-            view=self.get(job_id),
         )
 
     def build_filters(
@@ -406,25 +279,6 @@ class SourceJobAttributes:
             JobEmploymentType.job_id == job_id
         ).delete(synchronize_session=False)
 
-    def _validate_catalog_revisions(
-        self,
-        evidence: SourceJobAttributeEvidence,
-    ) -> None:
-        for path in evidence.classification_paths:
-            reference = path.source_catalog_revision
-            if reference is None:
-                continue
-            revision = self.db.get(SourceCatalogRevision, reference.revision_id)
-            if revision is None:
-                raise ValueError("Source Catalog revision does not exist")
-            if (
-                reference.source_site != evidence.source_site
-                or revision.source_site != evidence.source_site
-            ):
-                raise ValueError("Source Catalog revision Source does not match")
-            if revision.fingerprint != reference.fingerprint:
-                raise ValueError("Source Catalog revision fingerprint does not match")
-
     @staticmethod
     def _validate_evidence(evidence: SourceJobAttributeEvidence) -> None:
         primary_paths = 0
@@ -451,7 +305,6 @@ class SourceJobAttributes:
         self,
         path: JobSourceClassificationPath,
     ) -> SourceClassificationPathView:
-        revision = path.source_catalog_revision
         return SourceClassificationPathView(
             id=path.id,
             source_order=path.source_order,
@@ -467,15 +320,5 @@ class SourceJobAttributes:
             ),
             is_primary=path.is_primary,
             primary_basis=path.primary_basis,
-            source_catalog_revision=(
-                SourceCatalogRevisionRef(
-                    source_site=revision.source_site,
-                    revision_id=revision.id,
-                    fingerprint=revision.fingerprint,
-                )
-                if revision is not None
-                else None
-            ),
-            provenance_limited=revision is None,
             provenance=path.provenance,
         )

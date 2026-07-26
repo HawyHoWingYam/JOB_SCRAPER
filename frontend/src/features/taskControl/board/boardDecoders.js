@@ -36,18 +36,6 @@ function decodeAction(value, path) {
   };
 }
 
-function decodeHealth(value, path) {
-  const row = object(value, path);
-  return {
-    sourceSite: string(row.source_site, `${path}.source_site`),
-    state: string(row.state, `${path}.state`),
-    revisionId: row.revision_id == null ? null : string(row.revision_id, `${path}.revision_id`),
-    sequence: row.sequence == null ? null : integer(row.sequence, `${path}.sequence`),
-    fingerprint: row.fingerprint == null ? null : string(row.fingerprint, `${path}.fingerprint`),
-    publishedAt: row.published_at || null,
-  };
-}
-
 function decodeIssue(value, path) {
   if (value == null) return null;
   const row = object(value, path);
@@ -113,7 +101,6 @@ function decodeAutomation(value, path) {
       nextRunAt: schedule.next_run_at || null,
     },
     latestOutcome: row.latest_outcome == null ? null : object(row.latest_outcome, `${path}.latest_outcome`),
-    catalogHealth: decodeHealth(row.catalog_health, `${path}.catalog_health`),
     resolvedScopeSummary: row.resolved_scope_summary == null ? null : object(row.resolved_scope_summary, `${path}.resolved_scope_summary`),
     currentRun: row.current_run == null ? null : decodeRun(row.current_run, `${path}.current_run`),
     scopeReviewReason: row.scope_review_reason || null,
@@ -137,7 +124,6 @@ export function decodeBoard(value) {
         attentionCount: integer(summary.attention_count, `$.source_summaries[${index}].attention_count`),
         activeRunCount: integer(summary.active_run_count, `$.source_summaries[${index}].active_run_count`),
         upcomingCount: integer(summary.upcoming_count, `$.source_summaries[${index}].upcoming_count`),
-        catalogHealth: decodeHealth(summary.catalog_health, `$.source_summaries[${index}].catalog_health`),
       };
     }),
     needsAttention: array(row.needs_attention, '$.needs_attention').map((item, index) => {

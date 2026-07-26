@@ -790,7 +790,7 @@ function buildListingRunMetricLines({
 }
 
 function buildQueuedHeadedWorkerMessage(headedWorkerStatus) {
-    const startCommand = headedWorkerStatus?.start_command || 'python backend\\scripts\\prepare_headed_crawl_worker_host.py';
+    const startCommand = headedWorkerStatus?.start_command || 'python3 backend/scripts/prepare_headed_crawl_worker_host.py';
     return `Headed worker is offline. Start ${startCommand}.`;
 }
 
@@ -809,7 +809,7 @@ function ProgressItem({
     data,
     clientStreamId,
     headedWorkerStatus,
-    sourceCatalog = {},
+    sourceSites = {},
     onNavigateToAI,
     onResumeCrawlJob,
     onCancelCrawlJob,
@@ -946,7 +946,7 @@ function ProgressItem({
         && `${request_payload?.crawl_mode || crawl_mode || ''}`.trim().toLowerCase() === 'headed';
     const headedWorkerUnavailable =
         isQueuedHeadedRun
-        && sourceRequiresExternalHeadedWorker(runtimeSourceSite, sourceCatalog)
+        && sourceRequiresExternalHeadedWorker(runtimeSourceSite, sourceSites)
         && headedWorkerStatus?.available === false;
     if (headedWorkerUnavailable) {
         taskStatusSignals.push('Headed worker offline');

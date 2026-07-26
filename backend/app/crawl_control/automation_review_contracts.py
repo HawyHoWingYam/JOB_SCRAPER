@@ -71,7 +71,6 @@ class AutomationReviewV1(FrozenContract):
     input_fingerprint: str = Field(pattern=SHA256_PATTERN)
     automation_id: UUID | None = None
     expected_revision: int | None = Field(default=None, ge=1)
-    catalog_revision_id: UUID
     authored_scope: AuthoredCrawlScopeV1
     resolved_scope: ResolvedRunScopeV1
     listing_workload: ListingWorkloadPreviewV1 | None = None
@@ -89,6 +88,4 @@ class AutomationReviewV1(FrozenContract):
             )
         if self.resolved_scope.authored_scope != self.authored_scope:
             raise ValueError("Automation review scope projections differ")
-        if self.resolved_scope.catalog_revision_id != self.catalog_revision_id:
-            raise ValueError("Automation review catalog revisions differ")
         return self

@@ -53,7 +53,6 @@ from app.repositories.crawl_job_listing_repository import (
     CrawlJobListingRepository,
 )
 from app.repositories.crawl_job_repository import CrawlJobRepository
-from app.repositories.source_catalog_repository import SourceCatalogRepository
 from app.services.scraper_pacing_settings_service import (
     ScraperPacingSettingsService,
 )
@@ -99,7 +98,6 @@ class DispatchPlanService:
         automation_repository: AutomationRepository | None = None,
         crawl_job_repository: CrawlJobRepository | None = None,
         crawl_job_listing_repository: CrawlJobListingRepository | None = None,
-        source_catalog_repository: SourceCatalogRepository | None = None,
         scope_service=None,
         runtime_readiness_check: Callable[..., None] = _ensure_runtime_readiness,
     ) -> None:
@@ -112,15 +110,10 @@ class DispatchPlanService:
         self.crawl_job_listing_repository = (
             crawl_job_listing_repository or CrawlJobListingRepository()
         )
-        self.source_catalog_repository = (
-            source_catalog_repository or SourceCatalogRepository()
-        )
         if scope_service is None:
-            from app.services.source_catalog_service import SourceCatalogService
-
             from app.crawl_control.scope_service import CrawlScopeService
 
-            scope_service = CrawlScopeService(SourceCatalogService(db))
+            scope_service = CrawlScopeService(db)
         self.scope_service = scope_service
         self._clock = clock
         self._token_factory = token_factory or (lambda: secrets.token_urlsafe(32))
@@ -159,7 +152,6 @@ class DispatchPlanService:
                         "listing" if listing_settings is not None else "detail"
                     ),
                     trigger_kind="one_off",
-                    catalog_revision_id=preview.resolved_scope.catalog_revision_id,
                     authored_scope=preview.resolved_scope.authored_scope,
                     resolved_scope=preview.resolved_scope,
                     listing_settings=listing_settings,
@@ -240,7 +232,6 @@ class DispatchPlanService:
                     trigger_kind=effective_trigger,
                     automation_id=automation.id,
                     expected_automation_revision=request.expected_revision,
-                    catalog_revision_id=resolved_scope.catalog_revision_id,
                     authored_scope=resolved_scope.authored_scope,
                     resolved_scope=resolved_scope,
                     listing_settings=configuration.listing_settings,
@@ -446,27 +437,6 @@ class DispatchPlanService:
         except Exception:
             self.db.rollback()
             raise
-
-    def lock_current_catalog(
-        self,
-        snapshot: DispatchPlanSnapshotV1,
-    ) -> None:
-        pointer = self.source_catalog_repository.get_active_pointer_for_update(
-            self.db,
-            source_site=snapshot.content.source_site,
-        )
-        if pointer is None:
-            raise DispatchPlanStaleError(
-                "Dispatch Plan source catalog is no longer published",
-                plan_id=snapshot.plan_id,
-                reason="catalog_unpublished",
-            )
-        if pointer.revision_id != snapshot.content.catalog_revision_id:
-            raise DispatchPlanStaleError(
-                "Dispatch Plan source catalog revision changed before dispatch",
-                plan_id=snapshot.plan_id,
-                reason="catalog_revision_changed",
-            )
 
     def lock_current_automation(
         self,
@@ -951,7 +921,6 @@ class DispatchPlanService:
             trigger_kind=plan.trigger_kind,
             automation_id=plan.automation_id_snapshot,
             expected_automation_revision=plan.expected_automation_revision,
-            catalog_revision_id=plan.catalog_revision_id,
             authored_scope=plan.authored_scope,
             resolved_scope=plan.resolved_scope,
             listing_settings=plan.listing_settings,

@@ -8,8 +8,7 @@ function JsonEvidence({ value }) {
 
 export default function EvidencePanel({ area, item }) {
   const sourceEvidenceReason = (item?.reasons || []).find((reason) => (
-    reason === 'source_catalog_provenance_missing'
-    || reason === 'source_classification_paths_missing'
+    reason === 'source_classification_paths_missing'
   ));
   return (
     <section className="governance-panel">
@@ -19,12 +18,11 @@ export default function EvidencePanel({ area, item }) {
           <p><strong>Job:</strong> {item.job_title || 'Job details unavailable'}</p>
           <p><strong>Company:</strong> {item.company_name || 'Company unavailable'}</p>
           <p><strong>Why it is paused:</strong> {sourceEvidenceReason
-            ? 'The source classification evidence is not yet safe to use for AI Enrichment.'
+            ? 'The source classification path is missing, so AI Enrichment cannot use this Job yet.'
             : ((item.reasons || []).join(', ') || 'The item has not been assigned yet.')}</p>
           {sourceEvidenceReason && (
             <p className="governance-muted">
-              The source path is evidence only until its governed catalog/version
-              provenance is verified. The repair action appears below.
+              This requires source data to be recollected; choosing a Canonical Job Subcategory cannot create source evidence.
             </p>
           )}
           <details className="technical-evidence">

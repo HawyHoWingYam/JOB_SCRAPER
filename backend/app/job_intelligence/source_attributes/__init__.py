@@ -8,7 +8,6 @@ from app.job_intelligence.source_attributes.adapters import (
 from app.job_intelligence.source_attributes.contracts import (
     EmploymentTypeView,
     ProjectionResult,
-    SourceCatalogRevisionRef,
     SourceClassificationContext,
     SourceClassificationNodeEvidence,
     SourceClassificationPathEvidence,
@@ -27,11 +26,6 @@ from app.job_intelligence.source_attributes.rebuild import (
     SourceJobAttributeRebuildReport,
     SourceRebuildInspection,
 )
-from app.job_intelligence.source_attributes.provenance_repair import (
-    ProvenanceRepairApplyResult,
-    ProvenanceRepairReport,
-    SourceCatalogProvenanceRepair,
-)
 
 __all__ = [
     "CTGoodJobsSourceEvidenceAdapter",
@@ -41,7 +35,6 @@ __all__ = [
     "OfferTodaySourceEvidenceAdapter",
     "ProjectionResult",
     "RecoveredSourceJobAttribute",
-    "SourceCatalogRevisionRef",
     "SourceClassificationContext",
     "SourceClassificationNodeEvidence",
     "SourceClassificationPathEvidence",
@@ -53,7 +46,4 @@ __all__ = [
     "SourceJobAttributes",
     "SourceJobAttributesView",
     "SourceRebuildInspection",
-    "ProvenanceRepairApplyResult",
-    "ProvenanceRepairReport",
-    "SourceCatalogProvenanceRepair",
 ]

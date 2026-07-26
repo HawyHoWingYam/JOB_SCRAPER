@@ -50,8 +50,6 @@ from app.schemas.crawl_control import (
     DispatchPlanDispatchResponseV1,
 )
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
-from app.services.source_catalog_service import SourceCatalogService
-from app.source_catalog.errors import SourceCatalogError
 
 
 router = APIRouter(tags=["crawl-control"])
@@ -65,7 +63,6 @@ SUPPORTED_CONTROL_SOURCE_SITES = frozenset(
 _CRAWL_CONTROL_ERROR_STATUS = {
     "AUTOMATION_NOT_FOUND": status.HTTP_404_NOT_FOUND,
     "DISPATCH_PLAN_NOT_FOUND": status.HTTP_404_NOT_FOUND,
-    "CATALOG_NOT_PUBLISHED": status.HTTP_404_NOT_FOUND,
     "SOURCE_CLASSIFICATION_UNKNOWN": status.HTTP_404_NOT_FOUND,
     "SCOPE_RULE_INVALID": status.HTTP_422_UNPROCESSABLE_CONTENT,
     "WORKLOAD_CAP_EXCEEDED": status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -85,7 +82,7 @@ _CRAWL_CONTROL_ERROR_STATUS = {
 
 
 def crawl_control_http_error(
-    exc: CrawlControlError | SourceCatalogError,
+    exc: CrawlControlError,
 ) -> HTTPException:
     return HTTPException(
         status_code=_CRAWL_CONTROL_ERROR_STATUS.get(
@@ -132,11 +129,11 @@ def preview_crawl_scope(
     db: Session = Depends(get_db),
 ) -> CrawlScopePreviewV1:
     try:
-        return CrawlScopeService(SourceCatalogService(db)).preview(
+        return CrawlScopeService(db).preview(
             request.scope,
             listing_settings=request.listing_settings,
         )
-    except (CrawlControlError, SourceCatalogError) as exc:
+    except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
 
 
@@ -178,7 +175,7 @@ def review_automation(
 ) -> AutomationReviewV1:
     try:
         return AutomationReviewService(db).review(request)
-    except (CrawlControlError, SourceCatalogError) as exc:
+    except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
 
 
@@ -194,7 +191,6 @@ def _require_current_automation_review(
             current_fingerprint=current.input_fingerprint,
             automation_id=request.automation_id,
             current_revision=request.expected_revision,
-            catalog_revision_id=current.catalog_revision_id,
         )
     return current
 
@@ -239,7 +235,7 @@ def create_automation(
             actor=AUTOMATION_API_ACTOR,
             initial_state=request.initial_state,
         )
-    except (CrawlControlError, SourceCatalogError) as exc:
+    except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
     _set_automation_revision_headers(response, projection)
     return projection
@@ -271,7 +267,7 @@ def update_automation(
             configuration=request.configuration,
             actor=AUTOMATION_API_ACTOR,
         )
-    except (CrawlControlError, SourceCatalogError) as exc:
+    except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
     _set_automation_revision_headers(response, projection)
     return projection
@@ -315,7 +311,7 @@ def _transition_automation(
             )
         else:
             raise ValueError(f"Unsupported Automation operation: {operation}")
-    except (CrawlControlError, SourceCatalogError) as exc:
+    except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
     _set_automation_revision_headers(response, projection)
     return projection
@@ -449,7 +445,7 @@ def prepare_dispatch_plan(
             request,
             prepared_by=AUTOMATION_API_ACTOR,
         )
-    except (CrawlControlError, SourceCatalogError) as exc:
+    except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
 
 

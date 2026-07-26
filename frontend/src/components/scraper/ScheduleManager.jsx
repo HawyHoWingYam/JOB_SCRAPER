@@ -30,7 +30,7 @@ const CATEGORY_API_BASE = `${API_BASE_URL}/api`;
 const DIRECT_OVERRIDE_RUN_KEY = 'scheduler.directOverrideRun';
 const DIRECT_OVERRIDE_RECOVERY_WINDOW_MS = 20_000;
 const EMPTY_PROGRESS = {};
-const EMPTY_SOURCE_CATALOG = {};
+const EMPTY_SOURCE_SITES = {};
 
 function readDirectOverrideRunMarker() {
     try {
@@ -149,7 +149,7 @@ function buildManualActionHelperUnavailableMessage(actionLabel) {
 
 function buildHeadedWorkerUnavailableMessage(headedWorkerStatus) {
     const heartbeatStatus = `${headedWorkerStatus?.heartbeat_status || ''}`.trim().toLowerCase();
-    const startCommand = headedWorkerStatus?.start_command || 'python backend\\scripts\\prepare_headed_crawl_worker_host.py';
+    const startCommand = headedWorkerStatus?.start_command || 'python3 backend/scripts/prepare_headed_crawl_worker_host.py';
 
     if (heartbeatStatus === 'stale') {
         return `Headed crawl worker is offline. Restart ${startCommand} before launching a headed run.`;
@@ -297,19 +297,19 @@ function buildImmediateRunSummary(form, sourceSite, categories) {
 function buildImmediateRunReadiness(
     form,
     sourceSite,
-    sourceCatalog = EMPTY_SOURCE_CATALOG,
+    sourceSites = EMPTY_SOURCE_SITES,
     headedWorkerStatus = null,
 ) {
-    const request = buildImmediateScrapePayload(form, sourceSite, sourceCatalog);
+    const request = buildImmediateScrapePayload(form, sourceSite, sourceSites);
     const crawlPhase = form?.crawl_phase || resolveDefaultCrawlPhase();
-    const crawlMode = form?.crawl_mode || resolveDefaultCrawlMode(sourceSite, sourceCatalog);
+    const crawlMode = form?.crawl_mode || resolveDefaultCrawlMode(sourceSite, sourceSites);
     const selectedSectorCount = Array.isArray(form?.category_ids) ? form.category_ids.length : 0;
     const hasBatchFilter = Boolean(`${form?.source_listing_crawl_job_id ?? ''}`.trim());
 
     // Only runtimes that explicitly depend on an external headed worker should block launch here.
     if (
         crawlMode === 'headed'
-        && sourceRequiresExternalHeadedWorker(sourceSite, sourceCatalog)
+        && sourceRequiresExternalHeadedWorker(sourceSite, sourceSites)
         && headedWorkerStatus?.available === false
     ) {
         return {
@@ -378,7 +378,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToS
     const [schedules, setSchedules] = useState([]);
     const [categories, setCategories] = useState([]);
     const [capabilities, setCapabilities] = useState(null);
-    const sourceCatalog = capabilities?.sources ?? EMPTY_SOURCE_CATALOG;
+    const sourceSites = capabilities?.sources ?? EMPTY_SOURCE_SITES;
     const [listingBatches, setListingBatches] = useState([]);
     const [currentSourceSite, setCurrentSourceSite] = useState('jobsdb');
     const [scraperPacingState, setScraperPacingState] = useState({
@@ -396,7 +396,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToS
         crawl_phase: resolveDefaultCrawlPhase(),
         crawl_mode: '',
         category_ids: [],
-        max_pages: resolveDefaultMaxPages('jobsdb', sourceCatalog),
+        max_pages: resolveDefaultMaxPages('jobsdb', sourceSites),
         detail_limit: 100,
         source_listing_crawl_job_id: '',
     }));
@@ -418,9 +418,9 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToS
     const listingBatchesCacheRef = useRef(new Map());
 
     const syncImmediateFormWithSourceDefaults = useCallback(() => {
-        const crawlModeOptions = getCrawlModeOptionsForSource(currentSourceSite, sourceCatalog);
-        const nextDefaultCrawlMode = resolveDefaultCrawlMode(currentSourceSite, sourceCatalog);
-        const nextDefaultMaxPages = resolveDefaultMaxPages(currentSourceSite, sourceCatalog);
+        const crawlModeOptions = getCrawlModeOptionsForSource(currentSourceSite, sourceSites);
+        const nextDefaultCrawlMode = resolveDefaultCrawlMode(currentSourceSite, sourceSites);
+        const nextDefaultMaxPages = resolveDefaultMaxPages(currentSourceSite, sourceSites);
 
         setImmediateForm((prev) => {
             const currentMaxPages = Number.parseInt(`${prev.max_pages ?? ''}`, 10);
@@ -455,7 +455,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToS
                 max_pages: nextMaxPages,
             };
         });
-    }, [currentSourceSite, sourceCatalog]);
+    }, [currentSourceSite, sourceSites]);
 
     useEffect(() => {
         syncImmediateFormWithSourceDefaults();
@@ -939,7 +939,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToS
             setError('Scheduler dispatch is unavailable in the current runtime profile.');
             return;
         }
-        const request = buildImmediateScrapePayload(immediateForm, currentSourceSite, sourceCatalog);
+        const request = buildImmediateScrapePayload(immediateForm, currentSourceSite, sourceSites);
         if (request.error) {
             setError(request.error);
             return;
@@ -1026,10 +1026,10 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToS
     const filteredSchedules = schedules.filter(
         (schedule) => (schedule.source_site || 'jobsdb') === currentSourceSite
     );
-    const hasRuntimeSourceCatalog = Object.keys(sourceCatalog).length > 0;
-    const sourceMetadataUnavailable = capabilities !== null && !hasRuntimeSourceCatalog;
-    const sourceOptions = hasRuntimeSourceCatalog
-        ? Object.entries(sourceCatalog).map(([value, sourceMetadata]) => ({
+    const hasRuntimeSourceSites = Object.keys(sourceSites).length > 0;
+    const sourceMetadataUnavailable = capabilities !== null && !hasRuntimeSourceSites;
+    const sourceOptions = hasRuntimeSourceSites
+        ? Object.entries(sourceSites).map(([value, sourceMetadata]) => ({
             value,
             label: sourceMetadata?.label || formatSourceLabel(value),
         }))
@@ -1037,12 +1037,12 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToS
     const selectedListingBatch = listingBatches.find(
         (batch) => batch.crawl_job_id === immediateForm.source_listing_crawl_job_id
     ) || null;
-    const immediateCrawlModeOptions = getCrawlModeOptionsForSource(currentSourceSite, sourceCatalog);
+    const immediateCrawlModeOptions = getCrawlModeOptionsForSource(currentSourceSite, sourceSites);
     const immediateRunSummary = buildImmediateRunSummary(immediateForm, currentSourceSite, categories);
     const immediateRunReadiness = buildImmediateRunReadiness(
         immediateForm,
         currentSourceSite,
-        sourceCatalog,
+        sourceSites,
         headedWorkerStatus,
     );
     const immediateRunModeCopy = buildImmediateRunModeCopy(immediateForm);
@@ -1196,7 +1196,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToS
                     recoveryStartedAt={progressPanelState.recoveryStartedAt}
                     recoveryWindowMs={DIRECT_OVERRIDE_RECOVERY_WINDOW_MS}
                     headedWorkerStatus={headedWorkerStatus}
-                    sourceCatalog={sourceCatalog}
+                    sourceSites={sourceSites}
                     onClose={handleProgressClose}
                     onNavigateToAI={onNavigateToAI}
                     onOpenCrawlTasks={onNavigateToCrawlTasks}
@@ -1461,7 +1461,7 @@ function ScheduleManager({ onNavigateToAI, onNavigateToCrawlTasks, onNavigateToS
                     <ScheduleForm
                         categories={categories}
                         sourceSite={currentSourceSite}
-                        sourceCatalog={sourceCatalog}
+                        sourceSites={sourceSites}
                         onSubmit={handleCreate}
                         onCancel={() => setShowForm(false)}
                         onSourceScopedDirtyChange={setCreateFormHasSourceSelections}

@@ -15,7 +15,7 @@ from app.crawl_modes import resolve_crawl_mode
 from app.models.crawl_job import CrawlJob
 from app.models.schedule import AutomationRevision, ScrapeSchedule, ScheduleExecution
 from app.schemas.schedule import normalize_source_site
-from app.services.source_catalog import is_supported_source_site
+from app.services.source_sites import is_supported_source_site
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)

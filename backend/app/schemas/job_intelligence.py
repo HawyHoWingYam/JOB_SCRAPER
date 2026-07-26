@@ -58,7 +58,7 @@ class PendingSelectionScopeSchema(BaseModel):
     @field_validator("source_classification_ids", "source_subclassification_ids")
     @classmethod
     def validate_source_classification_ids(cls, value: list[str]) -> list[str]:
-        from app.services.source_catalog import list_supported_source_sites
+        from app.services.source_sites import list_supported_source_sites
 
         supported = set(list_supported_source_sites())
         invalid = []
@@ -76,7 +76,7 @@ class PendingSelectionScopeSchema(BaseModel):
     @field_validator("source_sites")
     @classmethod
     def validate_sources(cls, value: list[str]) -> list[str]:
-        from app.services.source_catalog import list_supported_source_sites
+        from app.services.source_sites import list_supported_source_sites
 
         supported = set(list_supported_source_sites())
         unsupported = [source for source in value if source not in supported]
@@ -118,13 +118,6 @@ class PendingSelectionScopeSchema(BaseModel):
             posted_date_from=self.posted_date_from,
             posted_date_to=self.posted_date_to,
         )
-
-
-class ProvenanceRepairScopeSchema(PendingSelectionScopeSchema):
-    """Bounded source-repair handoff, including the persisted exclusion batch."""
-
-    job_ids: list[UUID] = Field(default_factory=list)
-    reason: str | None = None
 
 
 class CanonicalTaxonomyRecoveryScopeSchema(PendingSelectionScopeSchema):
@@ -210,76 +203,6 @@ class GovernanceAuditPageSchema(BaseModel):
     @classmethod
     def from_contract(cls, page: AuditPage) -> GovernanceAuditPageSchema:
         return cls.model_validate(page)
-
-
-class PendingSelectionSummarySchema(BaseModel):
-    matching_pending_count: int
-    selected_item_count: int
-    effective_item_count: int
-    excluded_item_count: int
-    selected_job_ids: list[UUID] = Field(default_factory=list)
-    supported_job_ids: list[UUID] = Field(default_factory=list)
-    excluded_reasons_by_job_id: dict[str, str] = Field(default_factory=dict)
-    excluded_items: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class ProvenanceRepairInspectRequestSchema(BaseModel):
-    scope: ProvenanceRepairScopeSchema
-    limit: int = Field(ge=1, le=5000)
-
-
-class ProvenanceRepairApplyRequestSchema(ProvenanceRepairInspectRequestSchema):
-    revision_id: UUID
-    expected_fingerprint: str = Field(min_length=1)
-    repairable_job_ids: list[UUID] = Field(default_factory=list)
-    confirmed: bool
-
-
-class ProvenanceRepairReportSchema(BaseModel):
-    source_site: str
-    revision_id: UUID
-    revision_fingerprint: str
-    revision_sequence: int
-    active_revision_id: UUID | None
-    active_revision_fingerprint: str | None
-    revision_is_active: bool
-    jobs_inspected: int
-    paths_inspected: int
-    missing_provenance_paths: int
-    already_bound_paths: int
-    repairable_jobs: int
-    repairable_paths: int
-    missing_path_jobs: int
-    empty_path_jobs: int
-    incompatible_revision_jobs: int
-    incompatible_revision_paths: int
-    source_mismatch_jobs: int
-    source_mismatch_paths: int
-    unknown_identity_jobs: list[dict[str, Any]]
-    unknown_classification_ids: list[str]
-    repairable_job_ids: list[UUID]
-    pending_only: bool
-    coverage_complete: bool
-    write_blockers: list[str]
-
-
-class ProvenanceRepairInspectResponseSchema(BaseModel):
-    selection: PendingSelectionSummarySchema
-    report: ProvenanceRepairReportSchema
-
-
-class ProvenanceRepairApplyResultSchema(BaseModel):
-    source_site: str
-    revision_id: UUID
-    changed_jobs: int
-    changed_paths: int
-    skipped_jobs: int
-    batches_committed: int
-
-
-class ProvenanceRepairApplyResponseSchema(BaseModel):
-    selection: PendingSelectionSummarySchema
-    repair: ProvenanceRepairApplyResultSchema
 
 
 class CanonicalCountsSchema(BaseModel):

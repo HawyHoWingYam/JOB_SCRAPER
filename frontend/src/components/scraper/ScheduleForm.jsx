@@ -4,7 +4,7 @@ import { getCrawlModeOptionsForSource, resolveDefaultCrawlMode } from './crawlMo
 import { CRAWL_PHASE_OPTIONS, resolveDefaultCrawlPhase } from './crawlPhase';
 import { resolveDefaultMaxPages } from './maxPages';
 
-const EMPTY_SOURCE_CATALOG = {};
+const EMPTY_SOURCE_SITES = {};
 
 // Cron presets
 const CRON_PRESETS = [
@@ -20,8 +20,8 @@ function formatSourceLabel(sourceSite) {
     return sourceSite === 'ctgoodjobs' ? 'CTgoodjobs' : 'JobsDB';
 }
 
-function resolveSourceLabel(sourceSite, sourceCatalog = EMPTY_SOURCE_CATALOG) {
-    return sourceCatalog[sourceSite]?.label || formatSourceLabel(sourceSite);
+function resolveSourceLabel(sourceSite, sourceSites = EMPTY_SOURCE_SITES) {
+    return sourceSites[sourceSite]?.label || formatSourceLabel(sourceSite);
 }
 
 function ScheduleForm({
@@ -30,7 +30,7 @@ function ScheduleForm({
     categories,
     isLoading,
     sourceSite,
-    sourceCatalog = EMPTY_SOURCE_CATALOG,
+    sourceSites = EMPTY_SOURCE_SITES,
     onSourceScopedDirtyChange,
 }) {
     const [formData, setFormData] = useState({
@@ -40,7 +40,7 @@ function ScheduleForm({
         crawlPhase: resolveDefaultCrawlPhase(),
         crawlMode: '',
         categoryIds: [],
-        maxPages: resolveDefaultMaxPages(sourceSite, sourceCatalog),
+        maxPages: resolveDefaultMaxPages(sourceSite, sourceSites),
         detailLimit: 100,
     });
     const previousSourceSiteRef = useRef(sourceSite);
@@ -54,9 +54,9 @@ function ScheduleForm({
     }, [formData.categoryIds, onSourceScopedDirtyChange]);
 
     useEffect(() => {
-        const crawlModeOptions = getCrawlModeOptionsForSource(sourceSite, sourceCatalog);
-        const nextDefaultCrawlMode = resolveDefaultCrawlMode(sourceSite, sourceCatalog);
-        const nextDefaultMaxPages = resolveDefaultMaxPages(sourceSite, sourceCatalog);
+        const crawlModeOptions = getCrawlModeOptionsForSource(sourceSite, sourceSites);
+        const nextDefaultCrawlMode = resolveDefaultCrawlMode(sourceSite, sourceSites);
+        const nextDefaultMaxPages = resolveDefaultMaxPages(sourceSite, sourceSites);
 
         setFormData(prev => {
             const previousSourceSite = previousSourceSiteRef.current;
@@ -87,7 +87,7 @@ function ScheduleForm({
             };
         });
         previousSourceSiteRef.current = sourceSite;
-    }, [sourceCatalog, sourceSite]);
+    }, [sourceSites, sourceSite]);
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -121,14 +121,14 @@ function ScheduleForm({
             name: formData.name,
             cron_expression: cronExpression,
             crawl_phase: formData.crawlPhase,
-            crawl_mode: formData.crawlMode || resolveDefaultCrawlMode(sourceSite, sourceCatalog),
+            crawl_mode: formData.crawlMode || resolveDefaultCrawlMode(sourceSite, sourceSites),
             category_ids: formData.categoryIds,
-            max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite, sourceCatalog),
+            max_pages: Number.isInteger(maxPages) ? maxPages : resolveDefaultMaxPages(sourceSite, sourceSites),
             detail_limit: Number.isInteger(detailLimit) ? detailLimit : 100,
         });
     };
 
-    const sourceLabel = resolveSourceLabel(sourceSite, sourceCatalog);
+    const sourceLabel = resolveSourceLabel(sourceSite, sourceSites);
     const isDetailPhase = formData.crawlPhase === 'detail';
     const recurringGuidance = `Use automations for recurring crawls on ${sourceLabel}.`;
     const phaseGuidance = isDetailPhase
@@ -137,7 +137,7 @@ function ScheduleForm({
     const volumeGuidance = isDetailPhase
         ? 'How many staged listings this automation should expand per run.'
         : 'Pages per run for each selected sector.';
-    const crawlModeOptions = getCrawlModeOptionsForSource(sourceSite, sourceCatalog);
+    const crawlModeOptions = getCrawlModeOptionsForSource(sourceSite, sourceSites);
 
     return (
         <form onSubmit={handleSubmit} className="schedule-form">

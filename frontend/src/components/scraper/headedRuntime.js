@@ -1,5 +1,5 @@
-export function resolveHeadedRuntimeMode(sourceSite, sourceCatalog = {}) {
-  const runtimeMode = sourceCatalog?.[sourceSite]?.headed_runtime_mode;
+export function resolveHeadedRuntimeMode(sourceSite, sourceSites = {}) {
+  const runtimeMode = sourceSites?.[sourceSite]?.headed_runtime_mode;
 
   if (typeof runtimeMode === 'string' && runtimeMode.trim()) {
     return runtimeMode;
@@ -8,6 +8,6 @@ export function resolveHeadedRuntimeMode(sourceSite, sourceCatalog = {}) {
   return 'source_executor';
 }
 
-export function sourceRequiresExternalHeadedWorker(sourceSite, sourceCatalog = {}) {
-  return resolveHeadedRuntimeMode(sourceSite, sourceCatalog) === 'external_worker';
+export function sourceRequiresExternalHeadedWorker(sourceSite, sourceSites = {}) {
+  return resolveHeadedRuntimeMode(sourceSite, sourceSites) === 'external_worker';
 }

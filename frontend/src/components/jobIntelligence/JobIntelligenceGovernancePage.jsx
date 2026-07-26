@@ -17,7 +17,6 @@ import DecisionDialog from './DecisionDialog';
 import EvidencePanel from './EvidencePanel';
 import GovernanceQueue from './GovernanceQueue';
 import RecommendationPanel from './RecommendationPanel';
-import ProvenanceRepairPanel from './ProvenanceRepairPanel';
 import CanonicalTaxonomyRecoveryPanel from './CanonicalTaxonomyRecoveryPanel';
 import { GOVERNANCE_AREA_ADAPTERS } from './governanceAreas';
 import {
@@ -618,17 +617,6 @@ export default function JobIntelligenceGovernancePage() {
                     </div>
                   )}
                   <EvidencePanel area={route.area} item={detail.item} />
-                  <ProvenanceRepairPanel
-                    scope={currentScope}
-                    item={detail.item}
-                    onComplete={(payload) => {
-                      setFeedback({
-                        kind: 'success',
-                        message: `Provenance repair completed for ${payload.repair?.changed_jobs || 0} jobs. Recheck AI Enrichment before running.`,
-                      });
-                      setRefreshVersion((version) => version + 1);
-                    }}
-                  />
                   {route.area === 'company-industries' && (
                     <CompanyIndustryContextPanel
                       tree={detail.resources.tree}

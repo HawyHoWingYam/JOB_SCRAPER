@@ -9,7 +9,7 @@ const api = vi.hoisted(() => ({
   dispatchPlan: vi.fn(),
   getAutomation: vi.fn(),
   getCrawlJob: vi.fn(),
-  getPublishedCatalog: vi.fn(),
+  getSourceClassifications: vi.fn(),
   prepareDispatchPlan: vi.fn(),
   reviewAutomation: vi.fn(),
   updateAutomation: vi.fn(),
@@ -27,32 +27,19 @@ vi.mock('../shared/controlApi', () => api);
 import TaskControlWizard from './TaskControlWizard';
 import { DRAFT_PREFIX } from './wizardDraft';
 
-const published = {
-  revision: { id: 'catalog-r7', sourceSite: 'jobsdb' },
-  catalog: {
-    sourceSite: 'jobsdb',
-    capabilities: { supportsAllScope: true },
-    nodes: [],
-  },
+const classifications = {
+  sourceSite: 'jobsdb',
+  classifications: [],
 };
 
-const offertodayPublished = {
-  revision: { id: 'catalog-offertoday-r7', sourceSite: 'offertoday' },
-  catalog: {
-    sourceSite: 'offertoday',
-    capabilities: { supportsAllScope: true },
-    nodes: [{
-      nodeKey: 'offertoday:118000',
-      classificationId: 'offertoday:118000',
-      nativeLabel: 'Information Technology',
-      nativePath: ['Information Technology'],
-      parentNodeKey: null,
-      selectable: true,
-      supportsExact: true,
-      supportsSubtree: true,
-      sourceMetadata: {},
-    }],
-  },
+const offertodayClassifications = {
+  sourceSite: 'offertoday',
+  classifications: [{
+    id: 'offertoday:118000',
+    label: 'Information Technology',
+    nativeId: '118000',
+    active: true,
+  }],
 };
 
 function draft({ flow = 'automation', sourceSite = 'jobsdb', step = 'review' } = {}) {
@@ -66,7 +53,7 @@ function draft({ flow = 'automation', sourceSite = 'jobsdb', step = 'review' } =
     source_site: sourceSite,
     step,
     intent: 'listing',
-    scope: { mode: 'all', rules: [] },
+    scope: { mode: 'all', classification_ids: [] },
     execution: { page_depth: 2, run_page_cap: 20, crawl_mode: 'headless' },
     schedule: {
       name: 'Morning listings',
@@ -83,7 +70,6 @@ function review(inputFingerprint = 'review-fingerprint') {
     inputFingerprint,
     automationId: null,
     expectedRevision: null,
-    catalogRevisionId: 'catalog-r7',
     authoredScope: { mode: 'all' },
     resolvedScope: { query_target_count: 3 },
     listingWorkload: {
@@ -136,11 +122,9 @@ function automation() {
       cron_expression: '0 4 * * *',
       timezone: 'Asia/Hong_Kong',
       scope: {
-        version: 1,
         source_site: 'jobsdb',
-        reviewed_catalog_revision_id: 'catalog-r7',
         mode: 'all',
-        rules: [],
+        classification_ids: [],
       },
       listing_settings: { version: 1, crawl_mode: 'headless', page_depth: 2, run_page_cap: 20 },
       detail_settings: null,
@@ -156,7 +140,7 @@ describe('TaskControlWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     globalThis.sessionStorage.clear();
-    api.getPublishedCatalog.mockResolvedValue(published);
+    api.getSourceClassifications.mockResolvedValue(classifications);
   });
 
   it('saves an Automation only with the exact current server review fingerprint', async () => {
@@ -176,7 +160,7 @@ describe('TaskControlWizard', () => {
       initial_state: 'paused',
       configuration: {
         name: 'Morning listings',
-        scope: { reviewed_catalog_revision_id: 'catalog-r7', mode: 'all' },
+        scope: { source_site: 'jobsdb', mode: 'all', classification_ids: [] },
       },
     });
   });
@@ -201,11 +185,11 @@ describe('TaskControlWizard', () => {
   });
 
   it('allows an explicit headless execution mode for CTgoodjobs', async () => {
-    const ctPublished = {
-      revision: { id: 'catalog-ct-1', sourceSite: 'ctgoodjobs' },
-      catalog: { sourceSite: 'ctgoodjobs', capabilities: { supportsAllScope: true }, nodes: [] },
+    const ctClassifications = {
+      sourceSite: 'ctgoodjobs',
+      classifications: [],
     };
-    api.getPublishedCatalog.mockResolvedValue(ctPublished);
+    api.getSourceClassifications.mockResolvedValue(ctClassifications);
     storeDraft('ct-draft', draft({ sourceSite: 'ctgoodjobs', step: 'execution' }));
 
     render(<TaskControlWizard hash="#scheduler/automation/new?draft=ct-draft&source=ctgoodjobs" />);
@@ -219,38 +203,36 @@ describe('TaskControlWizard', () => {
     expect(screen.getByText(/Headless is supported for automatic runs/)).toBeInTheDocument();
   });
 
-  it('loads the OfferToday scope catalog after the draft URL becomes stable', async () => {
-    let resolveCatalog;
-    api.getPublishedCatalog.mockImplementation(() => new Promise((resolve) => {
-      resolveCatalog = resolve;
+  it('loads OfferToday major categories after the draft URL becomes stable', async () => {
+    let resolveClassifications;
+    api.getSourceClassifications.mockImplementation(() => new Promise((resolve) => {
+      resolveClassifications = resolve;
     }));
     const { rerender } = render(<TaskControlWizard hash="#scheduler/one-off/new?source=offertoday&step=scope" />);
 
     rerender(<TaskControlWizard hash="#scheduler/one-off/new?source=offertoday&draft=offertoday-draft&step=scope" />);
 
-    await waitFor(() => expect(api.getPublishedCatalog).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('Loading published source catalog…')).toBeInTheDocument();
-    resolveCatalog(offertodayPublished);
+    await waitFor(() => expect(api.getSourceClassifications).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Loading major categories…')).toBeInTheDocument();
+    resolveClassifications(offertodayClassifications);
 
-    expect(await screen.findByRole('button', { name: 'All source classifications' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Recommend: All IT categories (offertoday:118000 subtree)' })).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: 'Recommend: All IT categories (offertoday:118000 subtree)' }));
-    expect(screen.getByRole('button', { name: /Subtree · Information Technology/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'All major categories' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Selected major categories' }));
+    expect(screen.getByRole('checkbox', { name: 'Information Technology' })).toBeInTheDocument();
   });
 
-  it('keeps the scope step actionable when the catalog request fails', async () => {
-    api.getPublishedCatalog
-      .mockRejectedValueOnce(new Error('Catalog unavailable'))
-      .mockResolvedValueOnce(offertodayPublished);
+  it('keeps the scope step actionable when the category request fails', async () => {
+    api.getSourceClassifications
+      .mockRejectedValueOnce(new Error('Categories unavailable'))
+      .mockResolvedValueOnce(offertodayClassifications);
     storeDraft('offertoday-error-draft', draft({ flow: 'one_off', sourceSite: 'offertoday', step: 'scope' }));
     const user = userEvent.setup();
 
     render(<TaskControlWizard hash="#scheduler/one-off/new?source=offertoday&draft=offertoday-error-draft&step=scope" />);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Catalog unavailable');
-    await user.click(screen.getByRole('button', { name: 'Retry loading catalog' }));
-    expect(await screen.findByRole('button', { name: 'All source classifications' })).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Categories unavailable');
+    await user.click(screen.getByRole('button', { name: 'Retry loading categories' }));
+    expect(await screen.findByRole('button', { name: 'All major categories' })).toBeInTheDocument();
   });
 
   it('keeps the recoverable draft when the server rejects stale review authority', async () => {

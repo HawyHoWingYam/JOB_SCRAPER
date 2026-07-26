@@ -21,7 +21,7 @@ from app.job_intelligence.cutover.writer_probe import SystemWriterStateProvider
 from app.utils.time import utc_now
 
 
-CUTOVER_SCHEMA_REVISION = "20260720_210000"
+CUTOVER_SCHEMA_REVISION = "20260726_180000"
 SUPPORTED_SOURCES = ("ctgoodjobs", "jobsdb", "offertoday")
 RESET_CONFIRMATION = "RESET_CRAWL_CONTROL_DATA"
 
@@ -172,7 +172,7 @@ class CrawlControlCutoverReport:
     backup_id: str
     backup_acknowledged: bool
     writer_evidence: tuple[WriterStateEvidence, ...]
-    active_catalog_sources: tuple[str, ...]
+    active_classification_sources: tuple[str, ...]
     active_crawl_job_count: int
     reset_counts: Mapping[str, int]
     preserve_counts: Mapping[str, int]
@@ -199,7 +199,9 @@ class CrawlControlCutoverReport:
                 }
                 for item in self.writer_evidence
             ],
-            "active_catalog_sources": list(self.active_catalog_sources),
+            "active_classification_sources": list(
+                self.active_classification_sources
+            ),
             "active_crawl_job_count": self.active_crawl_job_count,
             "reset_counts": dict(sorted(self.reset_counts.items())),
             "preserve_counts": dict(sorted(self.preserve_counts.items())),
@@ -463,9 +465,7 @@ class CrawlControlCutover:
             "jobs",
             "enrichment_runs",
             "event_outbox",
-            "source_catalog_candidates",
-            "source_catalog_revisions",
-            "source_catalog_active_revisions",
+            "source_classifications",
         }
         missing_tables = sorted(required_tables - tables)
         if missing_tables:
@@ -492,11 +492,11 @@ class CrawlControlCutover:
         if non_stopped:
             issues.append(f"writers are not confirmed stopped: {', '.join(non_stopped)}")
 
-        active_sources = self._active_catalog_sources(connection, tables)
+        active_sources = self._active_classification_sources(connection, tables)
         if active_sources != SUPPORTED_SOURCES:
             missing_sources = sorted(set(SUPPORTED_SOURCES) - set(active_sources))
             issues.append(
-                "published active Source Catalog revisions are missing: "
+                "active ordinary Source classifications are missing: "
                 + ", ".join(missing_sources)
             )
         active_crawl_jobs = self._active_crawl_job_count(connection, tables)
@@ -549,7 +549,7 @@ class CrawlControlCutover:
             writer_evidence=tuple(
                 sorted(writer_evidence, key=lambda item: item.writer)
             ),
-            active_catalog_sources=active_sources,
+            active_classification_sources=active_sources,
             active_crawl_job_count=active_crawl_jobs,
             reset_counts=reset_counts,
             preserve_counts=preserve_counts,
@@ -684,28 +684,19 @@ class CrawlControlCutover:
         return revisions[0] if len(revisions) == 1 else ""
 
     @staticmethod
-    def _active_catalog_sources(
+    def _active_classification_sources(
         connection: Connection,
         tables: set[str],
     ) -> tuple[str, ...]:
-        required = {
-            "source_catalog_active_revisions",
-            "source_catalog_revisions",
-            "source_catalog_candidates",
-        }
-        if not required <= tables:
+        if "source_classifications" not in tables:
             return ()
         rows = connection.execute(
             text(
-                "SELECT active.source_site "
-                "FROM source_catalog_active_revisions AS active "
-                "JOIN source_catalog_revisions AS revision "
-                "ON revision.id = active.revision_id "
-                "AND revision.source_site = active.source_site "
-                "JOIN source_catalog_candidates AS candidate "
-                "ON candidate.id = revision.candidate_id "
-                "WHERE candidate.state = 'published' "
-                "ORDER BY active.source_site"
+                "SELECT DISTINCT source_site "
+                "FROM source_classifications "
+                "WHERE is_active IS TRUE "
+                "AND is_top_level IS TRUE "
+                "ORDER BY source_site"
             )
         )
         return tuple(str(row[0]) for row in rows)

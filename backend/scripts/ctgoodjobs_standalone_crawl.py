@@ -52,7 +52,7 @@ from app.services.crawl_cancellation_token import (  # noqa: E402
 )
 from app.services.detail_pacing import build_detail_pacing_controller  # noqa: E402
 from app.sources.contracts import build_ctgoodjobs_canonical_job  # noqa: E402
-from app.source_catalog.runtime import load_published_scope_query_plan  # noqa: E402
+from app.source_classifications.runtime import load_source_scope_query_plan  # noqa: E402
 from app.workers.run_ingest_worker import (  # noqa: E402
     IngestWorkerService,
     InvalidIngestPayloadError,
@@ -202,7 +202,7 @@ def _categories_by_id(
             )
         return runtime_categories
 
-    plan = load_published_scope_query_plan("ctgoodjobs", mode="all")
+    plan = load_source_scope_query_plan("ctgoodjobs", mode="all")
     categories: dict[str, _PublishedCTGoodJobsCategory] = {}
     for entry in plan.entries:
         classification_id = str(entry.node.classification_id or "").strip()

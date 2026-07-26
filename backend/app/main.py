@@ -3,6 +3,7 @@ JobsDB Scraper - FastAPI Backend Application
 Main entry point for the backend API service.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -13,7 +14,7 @@ from app.config import settings
 from app.api import router
 from app.api.category_routes import router as category_router
 from app.api.crawl_admin import router as crawl_admin_router
-from app.api.source_catalogs import router as source_catalog_router
+from app.api.source_classifications import router as source_classification_router
 from app.api.schedules import router as schedules_router
 from app.api.progress import router as progress_router
 from app.api.ai import router as ai_router
@@ -25,6 +26,10 @@ from app.request_monitoring import install_request_monitoring
 from app.server_runtime import run_api_app
 from app.services.startup_recovery_service import StartupRecoveryService
 from app.services.crawl_job_execution_launcher import CrawlJobExecutionLauncher
+from app.services.source_classification_registry import (
+    build_source_classification_adapters,
+    synchronize_source_classification_adapters,
+)
 
 configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
@@ -40,10 +45,23 @@ def run_api_startup_recovery() -> dict[str, int]:
             recover_schedule_executions=True,
         )
         startup_db.commit()
-        summary["crawl_cancellations_supervised"] = (
-            CrawlJobExecutionLauncher().recover_pending_cancellations()
-        )
+        summary[
+            "crawl_cancellations_supervised"
+        ] = CrawlJobExecutionLauncher().recover_pending_cancellations()
         return summary
+    finally:
+        startup_db.close()
+
+
+def synchronize_source_classifications_on_startup() -> dict[str, object]:
+    startup_db = SessionLocal()
+    try:
+        results = synchronize_source_classification_adapters(
+            startup_db,
+            build_source_classification_adapters().values(),
+        )
+        startup_db.commit()
+        return results
     finally:
         startup_db.close()
 
@@ -62,9 +80,18 @@ async def lifespan(app: FastAPI):
         logger.exception("Startup recovery sweep failed")
 
     try:
+        classification_summary = await asyncio.to_thread(
+            synchronize_source_classifications_on_startup
+        )
+        logger.info("Source classification sync summary: %s", classification_summary)
+    except Exception:
+        logger.exception("Source classification startup sync failed")
+
+    try:
         yield
     finally:
         logger.info("Shutting down JobsDB Scraper API")
+
 
 # Initialize FastAPI application
 app = FastAPI(
@@ -95,7 +122,7 @@ app.include_router(ai_router)
 app.include_router(stats_router)
 app.include_router(skills_router, prefix="/api/v1")
 app.include_router(crawl_admin_router, prefix="/api/v1")
-app.include_router(source_catalog_router, prefix="/api/v1")
+app.include_router(source_classification_router, prefix="/api/v1")
 
 
 @app.get("/")

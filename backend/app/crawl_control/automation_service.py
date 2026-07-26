@@ -29,7 +29,6 @@ from app.crawl_control.errors import (
 from app.crawl_control.scope_service import CrawlScopeService
 from app.crawl_modes import get_supported_crawl_modes
 from app.models.schedule import AutomationDeleteReview, ScrapeSchedule
-from app.services.source_catalog_service import SourceCatalogService
 from app.utils.time import utc_now
 
 
@@ -45,9 +44,7 @@ class AutomationService:
     ) -> None:
         self.db = db
         self.repository = repository or AutomationRepository()
-        self.scope_service = scope_service or CrawlScopeService(
-            SourceCatalogService(db)
-        )
+        self.scope_service = scope_service or CrawlScopeService(db)
 
     def create(
         self,

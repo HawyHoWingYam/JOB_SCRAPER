@@ -32,8 +32,6 @@ class ListingRuntimePlan:
     dispatch_plan_id: UUID
     dispatch_plan_fingerprint: str
     source_site: str
-    catalog_revision_id: UUID
-    catalog_revision_fingerprint: str
     crawl_mode: str
     page_depth: int
     run_page_cap: int
@@ -86,8 +84,6 @@ class ListingRuntimePlan:
         return {
             "dispatch_plan_id": str(self.dispatch_plan_id),
             "dispatch_plan_fingerprint": self.dispatch_plan_fingerprint,
-            "catalog_revision_id": str(self.catalog_revision_id),
-            "catalog_revision_fingerprint": self.catalog_revision_fingerprint,
             "query_target_count": self.query_target_count,
             "page_depth": self.page_depth,
             "estimated_max_pages": self.estimated_max_pages,
@@ -170,10 +166,6 @@ def build_listing_runtime_plan(
         dispatch_plan_id=snapshot.plan_id,
         dispatch_plan_fingerprint=snapshot.plan_fingerprint,
         source_site=content.source_site,
-        catalog_revision_id=content.catalog_revision_id,
-        catalog_revision_fingerprint=(
-            content.resolved_scope.catalog_revision_fingerprint
-        ),
         crawl_mode=content.listing_settings.crawl_mode,
         page_depth=content.listing_settings.page_depth,
         run_page_cap=content.listing_settings.run_page_cap,

@@ -36,8 +36,6 @@ class SourceRebuildInspection:
     unknown_employment_labels: int
     ambiguous_jobs: int
     conflicting_legacy_jobs: int
-    missing_catalog_revision_paths: int
-    provenance_limited_jobs: int
     malformed_jobs: int
     unrecoverable_jobs: int
     unrecoverable_cause_distribution: dict[str, int]
@@ -61,8 +59,6 @@ class SourceRebuildInspection:
             "unknown_employment_labels": self.unknown_employment_labels,
             "ambiguous_jobs": self.ambiguous_jobs,
             "conflicting_legacy_jobs": self.conflicting_legacy_jobs,
-            "missing_catalog_revision_paths": (self.missing_catalog_revision_paths),
-            "provenance_limited_jobs": self.provenance_limited_jobs,
             "malformed_jobs": self.malformed_jobs,
             "unrecoverable_jobs": self.unrecoverable_jobs,
             "unrecoverable_cause_distribution": dict(
@@ -113,8 +109,6 @@ class _SourceCounters:
     unknown_employment_labels: int = 0
     ambiguous_jobs: int = 0
     conflicting_legacy_jobs: int = 0
-    missing_catalog_revision_paths: int = 0
-    provenance_limited_jobs: int = 0
     malformed_jobs: int = 0
     unrecoverable_jobs: int = 0
     unrecoverable_cause_distribution: dict[str, int] = field(default_factory=dict)
@@ -168,7 +162,6 @@ class SourceJobAttributeRebuildInspector:
                 if malformed:
                     counters.malformed_jobs += 1
                 counters.unrecoverable_jobs += 1
-                counters.provenance_limited_jobs += 1
                 unrecoverable_cause = self._unrecoverable_cause(job, malformed)
                 self._increment_count(
                     counters.unrecoverable_cause_distribution,
@@ -222,14 +215,6 @@ class SourceJobAttributeRebuildInspector:
                 )
                 for label in evidence.employment_labels
             )
-            missing_revision_paths = sum(
-                path.source_catalog_revision is None
-                for path in evidence.classification_paths
-            )
-            counters.missing_catalog_revision_paths += missing_revision_paths
-            if missing_revision_paths:
-                counters.provenance_limited_jobs += 1
-
         sources = tuple(
             SourceRebuildInspection(
                 source_site=source_site,

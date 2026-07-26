@@ -2,7 +2,6 @@ import asyncio
 import ast
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import os
@@ -31,7 +30,6 @@ from app.job_intelligence.canonical_taxonomy import (
 from app.job_intelligence.canonical_taxonomy.breadcrumbs import canonical_breadcrumb
 from app.job_intelligence.source_attributes import (
     OfferTodaySourceEvidenceAdapter,
-    SourceCatalogRevisionRef,
     SourceClassificationNodeEvidence,
     SourceClassificationPathEvidence,
     SourceJobAttributeEvidence,
@@ -63,16 +61,11 @@ from app.models.job import Job
 from app.models.job_category import JobCategory
 from app.models.job_domain import JobDomain
 from app.models.job_subcategory import JobSubcategory
-from app.models.source_catalog import (
-    SourceCatalogActiveRevision,
-    SourceCatalogCandidate,
-    SourceCatalogRevision,
-)
+from app.models.source_classification import SourceClassification
 from app.models.source_job_attributes import SOURCE_JOB_ATTRIBUTE_TABLES
-from app.source_catalog.domain import (
-    CatalogNodeSnapshot,
-    CatalogScopeCapabilities,
-    DiscoveredCatalog,
+from app.services.source_classification_registry import (
+    ObservedSourceClassification,
+    SourceClassificationRegistry,
 )
 
 
@@ -104,9 +97,7 @@ def canonical_taxonomy_db():
         Job.__table__,
         CrawlJobListing.__table__,
         EventOutbox.__table__,
-        SourceCatalogCandidate.__table__,
-        SourceCatalogRevision.__table__,
-        SourceCatalogActiveRevision.__table__,
+        SourceClassification.__table__,
         *GOVERNANCE_FOUNDATION_TABLES,
         *CANONICAL_JOB_TAXONOMY_TABLES,
         *SOURCE_JOB_ATTRIBUTE_TABLES,
@@ -519,7 +510,7 @@ def test_explicit_subcategory_code_does_not_drift_when_reparented(
     )
 
 
-def test_mapping_materialization_pins_exact_catalog_coverage_and_stays_inactive(
+def test_mapping_materialization_records_current_classification_coverage_and_stays_inactive(
     canonical_taxonomy_db,
 ):
     seed = json.loads(SEED_PATH.read_text())
@@ -566,11 +557,7 @@ def test_mapping_materialization_pins_exact_catalog_coverage_and_stays_inactive(
     assert {
         coverage.source_site: coverage.identity_count for coverage in coverages
     } == {"ctgoodjobs": 28, "jobsdb": 25, "offertoday": 462}
-    assert all(
-        len(coverage.source_catalog_fingerprint) == 64
-        and len(coverage.identity_set_hash) == 64
-        for coverage in coverages
-    )
+    assert all(len(coverage.identity_set_hash) == 64 for coverage in coverages)
     assert (
         canonical_taxonomy_db.get(
             CanonicalJobTaxonomyActiveMappingRevision,
@@ -580,67 +567,7 @@ def test_mapping_materialization_pins_exact_catalog_coverage_and_stays_inactive(
     )
 
 
-def test_mapping_materialization_rejects_persisted_catalog_fingerprint_mismatch(
-    canonical_taxonomy_db,
-):
-    seed = json.loads(SEED_PATH.read_text())
-    mapping_seed = json.loads(MAPPING_PATH.read_text())
-    publisher = CanonicalTaxonomyPublisher(canonical_taxonomy_db)
-    taxonomy_revision = publisher.materialize(seed)
-    publisher.activate(taxonomy_revision, expected_lock_version=0)
-    _publish_fixture_catalogs(
-        canonical_taxonomy_db,
-        mapping_seed,
-        revision_fingerprint_overrides={"jobsdb": "0" * 64},
-    )
-
-    with pytest.raises(CanonicalMappingCoverageError) as exc_info:
-        publisher.materialize_mapping(seed, mapping_seed)
-
-    assert (exc_info.value.code, exc_info.value.source_site) == (
-        "CATALOG_FINGERPRINT_MISMATCH",
-        "jobsdb",
-    )
-    assert canonical_taxonomy_db.query(CanonicalJobTaxonomyMappingRevision).count() == 0
-
-
-def test_mapping_activation_fails_closed_when_a_pinned_catalog_is_unpublished(
-    canonical_taxonomy_db,
-):
-    seed = json.loads(SEED_PATH.read_text())
-    mapping_seed = json.loads(MAPPING_PATH.read_text())
-    publisher = CanonicalTaxonomyPublisher(canonical_taxonomy_db)
-    taxonomy_revision = publisher.materialize(seed)
-    publisher.activate(taxonomy_revision, expected_lock_version=0)
-    _publish_fixture_catalogs(canonical_taxonomy_db, mapping_seed)
-    mapping_revision = publisher.materialize_mapping(seed, mapping_seed)
-
-    active = publisher.activate_mapping(
-        mapping_revision,
-        expected_lock_version=0,
-    )
-    assert active.lock_version == 1
-
-    jobsdb_pointer = canonical_taxonomy_db.get(
-        SourceCatalogActiveRevision,
-        "jobsdb",
-    )
-    assert jobsdb_pointer is not None
-    canonical_taxonomy_db.delete(jobsdb_pointer)
-    canonical_taxonomy_db.commit()
-
-    with pytest.raises(CanonicalMappingCoverageError) as exc_info:
-        publisher.activate_mapping(
-            mapping_revision,
-            expected_lock_version=1,
-        )
-    assert (exc_info.value.code, exc_info.value.source_site) == (
-        "CATALOG_NOT_PUBLISHED",
-        "jobsdb",
-    )
-
-
-def test_mapping_materialization_rejects_missing_and_extra_catalog_identities(
+def test_mapping_materialization_allows_missing_and_rejects_unknown_classifications(
     canonical_taxonomy_db,
 ):
     seed = json.loads(SEED_PATH.read_text())
@@ -651,19 +578,16 @@ def test_mapping_materialization_rejects_missing_and_extra_catalog_identities(
     _publish_fixture_catalogs(canonical_taxonomy_db, mapping_seed)
 
     missing_seed = _without_mapping_entry(mapping_seed, "ctgoodjobs:001")
-    with pytest.raises(CanonicalMappingCoverageError) as missing_error:
-        publisher.materialize_mapping(seed, missing_seed)
-    assert {
-        "code": missing_error.value.code,
-        "source_site": missing_error.value.source_site,
-        "missing": missing_error.value.missing,
-        "extra": missing_error.value.extra,
-    } == {
-        "code": "CANONICAL_MAPPING_COVERAGE_MISMATCH",
-        "source_site": "ctgoodjobs",
-        "missing": ("ctgoodjobs:001",),
-        "extra": (),
-    }
+    missing_revision = publisher.materialize_mapping(seed, missing_seed)
+    missing_coverage = canonical_taxonomy_db.scalar(
+        select(CanonicalJobTaxonomyMappingCoverage).where(
+            CanonicalJobTaxonomyMappingCoverage.mapping_revision_id
+            == missing_revision.revision_id,
+            CanonicalJobTaxonomyMappingCoverage.source_site == "ctgoodjobs",
+        )
+    )
+    assert missing_coverage is not None
+    assert missing_coverage.identity_count == 27
 
     extra_seed = _with_extra_excluded_mapping(
         mapping_seed,
@@ -803,11 +727,6 @@ def test_evaluate_assigns_one_convergent_reviewed_mapping_without_legacy_write(
             "id": str(source_view.source_classification_paths[0].id),
             "source_site": "ctgoodjobs",
             "source_order": 1,
-            "source_catalog_revision_id": str(
-                source_view.source_classification_paths[
-                    0
-                ].source_catalog_revision.revision_id
-            ),
             "source_classification_ids": ["ctgoodjobs:001"],
         }
     ]
@@ -1270,28 +1189,11 @@ def test_offertoday_paths_flow_into_constrained_ai_assignment_with_provenance(
         },
         provenance=provenance,
     )
-    catalog_revision = (
-        canonical_taxonomy_db.query(SourceCatalogRevision)
-        .filter(SourceCatalogRevision.source_site == "offertoday")
-        .one()
-    )
-    catalog_ref = SourceCatalogRevisionRef(
-        source_site="offertoday",
-        revision_id=catalog_revision.id,
-        fingerprint=catalog_revision.fingerprint,
-    )
-    evidence = replace(
-        extracted,
-        classification_paths=tuple(
-            replace(path, source_catalog_revision=catalog_ref)
-            for path in extracted.classification_paths
-        ),
-    )
     source_view = (
         SourceJobAttributes(canonical_taxonomy_db)
         .project(
             job.id,
-            evidence,
+            extracted,
         )
         .view
     )
@@ -1932,7 +1834,7 @@ def test_evaluate_without_source_paths_creates_explicit_unassigned_review(
     }
 
 
-def test_evaluate_path_without_catalog_provenance_creates_review(
+def test_evaluate_path_without_catalog_provenance_reaches_classifier_boundary(
     canonical_taxonomy_db,
 ):
     seed = json.loads(SEED_PATH.read_text())
@@ -1985,7 +1887,6 @@ def test_evaluate_path_without_catalog_provenance_creates_review(
                         ),
                         source_declared_primary=False,
                         primary_basis=None,
-                        source_catalog_revision=None,
                         provenance=provenance,
                     ),
                 ),
@@ -2002,14 +1903,13 @@ def test_evaluate_path_without_catalog_provenance_creates_review(
 
     review = canonical_taxonomy_db.get(JobTaxonomyReviewItem, result.review_item_id)
     assert review is not None
-    assert result.reasons == ("source_catalog_provenance_missing",)
+    assert result.reasons == ("classifier_output_missing",)
     assert review.evidence_refs == [
         {
             "kind": "source-classification-path",
             "id": str(source_view.source_classification_paths[0].id),
             "source_site": "ctgoodjobs",
             "source_order": 1,
-            "source_catalog_revision_id": None,
             "source_classification_ids": ["ctgoodjobs:001"],
         }
     ]
@@ -2182,7 +2082,6 @@ def test_evaluate_unsupported_source_creates_review_without_registry_guess(
                         ),
                         source_declared_primary=False,
                         primary_basis=None,
-                        source_catalog_revision=None,
                         provenance=provenance,
                     ),
                 ),
@@ -3300,36 +3199,18 @@ def test_rebuild_inspector_is_deterministic_honest_and_performs_zero_writes(
             "identity_set_hash": payload["mapping_evidence"]["coverage_by_source"][
                 "ctgoodjobs"
             ]["identity_set_hash"],
-            "source_catalog_fingerprint": payload["mapping_evidence"][
-                "coverage_by_source"
-            ]["ctgoodjobs"]["source_catalog_fingerprint"],
-            "source_catalog_revision_id": payload["mapping_evidence"][
-                "coverage_by_source"
-            ]["ctgoodjobs"]["source_catalog_revision_id"],
         },
         "jobsdb": {
             "identity_count": 25,
             "identity_set_hash": payload["mapping_evidence"]["coverage_by_source"][
                 "jobsdb"
             ]["identity_set_hash"],
-            "source_catalog_fingerprint": payload["mapping_evidence"][
-                "coverage_by_source"
-            ]["jobsdb"]["source_catalog_fingerprint"],
-            "source_catalog_revision_id": payload["mapping_evidence"][
-                "coverage_by_source"
-            ]["jobsdb"]["source_catalog_revision_id"],
         },
         "offertoday": {
             "identity_count": 31,
             "identity_set_hash": payload["mapping_evidence"]["coverage_by_source"][
                 "offertoday"
             ]["identity_set_hash"],
-            "source_catalog_fingerprint": payload["mapping_evidence"][
-                "coverage_by_source"
-            ]["offertoday"]["source_catalog_fingerprint"],
-            "source_catalog_revision_id": payload["mapping_evidence"][
-                "coverage_by_source"
-            ]["offertoday"]["source_catalog_revision_id"],
         },
     }
     assert payload["mapping_evidence"]["job_policy"] == {
@@ -3337,8 +3218,6 @@ def test_rebuild_inspector_is_deterministic_honest_and_performs_zero_writes(
         "excluded_mapping_jobs": 0,
         "missing_mapping_jobs": 0,
         "projected_path_jobs": 2,
-        "source_catalog_provenance_mismatch_jobs": 0,
-        "source_catalog_provenance_missing_jobs": 0,
         "unmapped_mapping_jobs": 0,
     }
     assert payload["legacy_comparison"] == {
@@ -3669,11 +3548,6 @@ def _project_source_path(db, job, *, source_classification_id, label):
 
 
 def _project_source_paths(db, job, *, paths):
-    catalog_revision = (
-        db.query(SourceCatalogRevision)
-        .filter(SourceCatalogRevision.source_site == job.source_site)
-        .one()
-    )
     provenance = Provenance(
         method="canonical-taxonomy-test",
         source_site=job.source_site,
@@ -3696,11 +3570,6 @@ def _project_source_paths(db, job, *, paths):
                 ),
                 source_declared_primary=False,
                 primary_basis=None,
-                source_catalog_revision=SourceCatalogRevisionRef(
-                    source_site=job.source_site,
-                    revision_id=catalog_revision.id,
-                    fingerprint=catalog_revision.fingerprint,
-                ),
                 provenance=provenance,
             )
             for source_order, (source_classification_id, label) in enumerate(
@@ -3716,76 +3585,24 @@ def _project_source_paths(db, job, *, paths):
 def _publish_fixture_catalogs(
     db,
     mapping_seed,
-    *,
-    revision_fingerprint_overrides=None,
 ):
     entries_by_source: dict[str, list[dict]] = {}
     for entry in mapping_seed["entries"]:
         entries_by_source.setdefault(entry["source_site"], []).append(entry)
 
     for source_site, entries in sorted(entries_by_source.items()):
-        nodes = tuple(
-            CatalogNodeSnapshot(
-                node_key=entry["source_classification_id"],
-                source_site=source_site,
+        observations = tuple(
+            ObservedSourceClassification(
                 classification_id=entry["source_classification_id"],
                 native_id=entry["source_classification_id"].split(":", 1)[1],
-                native_label=entry["source_label"],
-                parent_node_key=None,
-                native_path=(entry["source_label"],),
+                label=entry["source_label"],
                 depth=0,
-                selectable=True,
-                supports_exact=False,
-                supports_subtree=False,
-                queryable=False,
-                alias_of_node_key=None,
-                query_semantics_hash=None,
             )
             for entry in entries
         )
-        catalog = DiscoveredCatalog(
-            source_site=source_site,
-            nodes=nodes,
-            capabilities=CatalogScopeCapabilities(
-                supports_all_scope=False,
-                all_scope_root_node_keys=(),
-            ),
-            source_payload={"fixture_source": source_site},
-            provenance={"fixture": True},
-        )
-        candidate = SourceCatalogCandidate(
-            source_site=source_site,
-            fingerprint=catalog.fingerprint,
-            normalized_payload=catalog.normalized_payload(),
-            source_payload=dict(catalog.source_payload),
-            provenance=dict(catalog.provenance),
-            diff={},
-            validation_summary={"valid": True},
-            state="published",
-        )
-        db.add(candidate)
-        db.flush()
-        revision = SourceCatalogRevision(
-            source_site=source_site,
-            sequence=1,
-            fingerprint=(revision_fingerprint_overrides or {}).get(
-                source_site,
-                catalog.fingerprint,
-            ),
-            normalized_payload=catalog.normalized_payload(),
-            source_payload=dict(catalog.source_payload),
-            provenance=dict(catalog.provenance),
-            candidate_id=candidate.id,
-            publication_metadata={"fixture": True},
-            published_by="fixture",
-        )
-        db.add(revision)
-        db.flush()
-        db.add(
-            SourceCatalogActiveRevision(
-                source_site=source_site,
-                revision_id=revision.id,
-                updated_by="fixture",
-            )
+        SourceClassificationRegistry(db).synchronize(
+            source_site,
+            observations,
+            complete=True,
         )
     db.commit()

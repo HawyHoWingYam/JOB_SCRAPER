@@ -127,7 +127,6 @@ def _source_attribute_load_options(*, include_labels: bool = False):
     options = [
         selectinload(Job.source_classification_paths).options(
             selectinload(JobSourceClassificationPath.nodes),
-            joinedload(JobSourceClassificationPath.source_catalog_revision),
         ),
         selectinload(Job.employment_type_assignments).joinedload(
             JobEmploymentType.employment_type
@@ -477,11 +476,7 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
             .distinct()
         )
 
-    if (
-        canonical_subcategory_ids
-        or canonical_category_ids
-        or canonical_domain_ids
-    ):
+    if canonical_subcategory_ids or canonical_category_ids or canonical_domain_ids:
         try:
             canonical_predicates = CanonicalJobTaxonomy(query.session).build_filters(
                 CanonicalTaxonomyFilterQuery(

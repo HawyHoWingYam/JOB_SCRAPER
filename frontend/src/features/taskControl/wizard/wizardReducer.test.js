@@ -19,39 +19,39 @@ describe('wizard reducer invariants', () => {
   });
 
   it('intent change clears phase-incompatible state', () => {
-    const base = createWizardState({ ...createWizardDraft(route), scope: { mode: 'all', rules: [] } });
+    const base = createWizardState({ ...createWizardDraft(route), scope: { mode: 'all', classification_ids: [] } });
     const changed = wizardReducer(base, { type: 'intentChanged', intent: 'detail' });
     expect(changed.draft.scope).toBeNull();
     expect(changed.draft.execution.backlog_kind).toBe('crawl_scope');
   });
 
-  it('preserves a same-source catalog during hydration and resets it for a source change', () => {
+  it('preserves same-source classifications during hydration and resets for a source change', () => {
     const base = createWizardState(createWizardDraft(route));
     const loaded = wizardReducer(base, {
-      type: 'catalogStarted',
+      type: 'classificationsStarted',
       version: 1,
     });
-    const catalog = { revision: { id: 'catalog-r7' }, catalog: { nodes: [] } };
-    const withCatalog = wizardReducer(loaded, {
-      type: 'catalogSucceeded',
+    const classifications = { sourceSite: 'jobsdb', classifications: [] };
+    const withClassifications = wizardReducer(loaded, {
+      type: 'classificationsSucceeded',
       version: 1,
-      value: catalog,
+      value: classifications,
     });
 
-    const rehydrated = wizardReducer(withCatalog, {
+    const rehydrated = wizardReducer(withClassifications, {
       type: 'hydrate',
       draft: { ...base.draft, step: 'scope' },
       notice: null,
     });
-    expect(rehydrated.catalog).toEqual(withCatalog.catalog);
+    expect(rehydrated.classifications).toEqual(withClassifications.classifications);
 
     const changed = wizardReducer(rehydrated, {
       type: 'hydrate',
       draft: { ...base.draft, source_site: 'offertoday', step: 'scope' },
       notice: null,
     });
-    expect(changed.catalog.value).toBeNull();
-    expect(changed.catalog.status).toBe('idle');
-    expect(changed.catalog.requestVersion).toBe(2);
+    expect(changed.classifications.value).toBeNull();
+    expect(changed.classifications.status).toBe('idle');
+    expect(changed.classifications.requestVersion).toBe(2);
   });
 });

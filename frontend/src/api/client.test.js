@@ -176,22 +176,22 @@ describe('api client', () => {
         status: 409,
         headers: new Headers({ 'X-Request-ID': 'req-server' }),
         json: async () => ({
-          code: 'CATALOG_IMPACT_STALE',
-          message: 'Impact changed',
-          details: { candidateId: 'candidate-1' },
+          code: 'SOURCE_CLASSIFICATION_UNKNOWN',
+          message: 'Classification does not exist',
+          details: { classificationId: 'jobsdb:missing' },
         }),
       }),
     );
 
-    const error = await apiFetchJson('/api/v1/source-catalogs/jobsdb').catch(
+    const error = await apiFetchJson('/api/v1/source-classifications/jobsdb').catch(
       (caught) => caught,
     );
 
     expect(error).toMatchObject({
       name: 'ApiRequestError',
-      message: 'Impact changed',
-      code: 'CATALOG_IMPACT_STALE',
-      details: { candidateId: 'candidate-1' },
+      message: 'Classification does not exist',
+      code: 'SOURCE_CLASSIFICATION_UNKNOWN',
+      details: { classificationId: 'jobsdb:missing' },
       requestId: 'req-server',
     });
     expect(logErrorSpy).toHaveBeenCalledWith(

@@ -8,11 +8,11 @@ function value(value) {
 
 function ScopeDetails({ authority }) {
   if (authority.authority_kind === 'legacy') {
-    return <p className="crawl-tasks-banner crawl-tasks-banner-warning">Legacy run — immutable Dispatch Plan and Catalog/Automation revisions were not recorded.</p>;
+    return <p className="crawl-tasks-banner crawl-tasks-banner-warning">Legacy run — immutable Dispatch Plan and Automation revision were not recorded.</p>;
   }
   const authored = authority.authored_scope;
   const resolved = authority.resolved_scope;
-  return <dl className="crawl-tasks-detail-grid"><div><dt>Dispatch Plan</dt><dd>{authority.dispatch_plan_id}</dd></div><div><dt>Plan state</dt><dd>{authority.plan_state}</dd></div><div><dt>Plan fingerprint</dt><dd><code>{authority.dispatch_plan_fingerprint}</code></dd></div><div><dt>Automation Revision</dt><dd>{authority.automation_id ? `${authority.automation_id} · r${authority.automation_revision}` : 'One-off run'}</dd></div><div><dt>Catalog Revision</dt><dd>{authority.catalog_revision_id}</dd></div><div><dt>Authored Scope</dt><dd>{authored?.mode === 'all' ? 'All source classifications' : `${authored?.rules?.length || 0} Exact/Subtree rule(s)`}</dd></div><div><dt>Resolved Scope</dt><dd>{resolved ? `${resolved.selected_classifications?.length || 0} classifications · ${resolved.query_target_count} Query Targets` : 'Not recorded'}</dd></div><div><dt>Readiness</dt><dd>{authority.readiness?.status || 'Not recorded'}</dd></div></dl>;
+  return <dl className="crawl-tasks-detail-grid"><div><dt>Dispatch Plan</dt><dd>{authority.dispatch_plan_id}</dd></div><div><dt>Plan state</dt><dd>{authority.plan_state}</dd></div><div><dt>Plan fingerprint</dt><dd><code>{authority.dispatch_plan_fingerprint}</code></dd></div><div><dt>Automation Revision</dt><dd>{authority.automation_id ? `${authority.automation_id} · r${authority.automation_revision}` : 'One-off run'}</dd></div><div><dt>Authored Scope</dt><dd>{authored?.mode === 'all' ? 'All major categories' : `${authored?.classification_ids?.length || 0} selected major categories`}</dd></div><div><dt>Resolved Scope</dt><dd>{resolved ? `${resolved.selected_classifications?.length || 0} classifications · ${resolved.query_target_count} Query Targets` : 'Not recorded'}</dd></div><div><dt>Readiness</dt><dd>{authority.readiness?.status || 'Not recorded'}</dd></div></dl>;
 }
 
 function Workload({ run }) {

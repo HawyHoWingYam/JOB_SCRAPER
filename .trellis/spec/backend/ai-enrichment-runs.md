@@ -41,6 +41,13 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
   `/api/v1/ai` exclusion projections group and display that persisted reason;
   they must not re-run canonical policy, consult static defaults, or derive a
   new reason from legacy scalar labels.
+- Governance handoffs must keep Source evidence blockers distinct: a missing
+  Source Classification Path requires recollection, while
+  `source_mapping_missing` requires a compatible Source-to-Canonical mapping.
+  Neither blocker may expose the ordinary per-Job Canonical assignment action.
+- Crawl authoring and preflight use ordinary current top-level Source
+  classifications. Child IDs preserved in Job evidence remain supplemental;
+  missing mappings fail closed only when evaluation actually requires them.
 - `/ai/runs` run projections include `execution_dispatched` and `execution_result`; `/ai/enrich` uses the same explicit `no_supported_items` result for an all-excluded selection.
 - Monitor returns active + latest terminal, or latest two terminal; never waiting.
 - Cooperative Stop permits running items to finish, blocks new conditional starts, cancels untouched pending items, and preserves completed/failed/cancelled counts.

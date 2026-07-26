@@ -169,7 +169,7 @@ The only valid phase order is:
   progress without resetting valid results or duplicating assignments, reviews,
   mentions, audit, or outbox events.
 - Reset is limited to `RESET_ALLOWLIST`; no cutover command deletes Jobs,
-  Companies, raw evidence, Source Catalog evidence, or unrelated enrichment.
+  Companies, raw Source classification evidence, or unrelated enrichment.
   Phase replay does not drain or delete valid rebuild outbox rows. Only the
   pre-execute quiescence gate requires the relevant outbox to be empty.
 
@@ -205,8 +205,7 @@ The only valid phase order is:
   `--confirm-execute`.
 - Writer control starts only persistent Compose services, probes the complete
   writer inventory, rejects missing/unknown evidence, and requires all expected
-  persistent writers to be running. Manual helpers and Source Catalog admin
-  remain transient.
+  persistent writers to be running. Manual helpers remain transient.
 - Current Compose application images are not operator images: `backend-api`
   lacks the embedding runtime and PostgreSQL clients, while ML images still lack
   PostgreSQL clients and Docker control. Run from a verified trusted host; do

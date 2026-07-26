@@ -34,7 +34,7 @@ from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.schedule_repository import ScheduleRepository
 from app.services.crawl_job_execution_launcher import CrawlJobExecutionLauncher
 from app.services.headed_crawl_runtime import ensure_headed_crawl_worker_available
-from app.services.source_catalog import resolve_default_max_pages
+from app.services.source_sites import resolve_default_max_pages
 from app.services.scraper_pacing_settings_service import ScraperPacingSettingsService
 from app.scraper.manual_action import (
     LEGACY_RESUME_STRATEGY_DEFAULT,
@@ -266,7 +266,6 @@ class CrawlJobDispatchService:
                 confirmation_token=confirmation_token,
                 expected_plan_fingerprint=expected_plan_fingerprint,
             )
-            plan_service.lock_current_catalog(prepared_snapshot)
             locked_automation, automation_snapshot = (
                 plan_service.lock_current_automation(
                     prepared_snapshot,
@@ -886,7 +885,6 @@ class CrawlJobDispatchService:
             "crawl_mode": settings_contract.crawl_mode,
             "dispatch_plan_id": str(snapshot.plan_id),
             "dispatch_plan_fingerprint": snapshot.plan_fingerprint,
-            "catalog_revision_id": str(content.catalog_revision_id),
             "category_ids": [
                 selected.classification_id
                 for selected in content.resolved_scope.selected_classifications

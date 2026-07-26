@@ -33,7 +33,6 @@ class RunAuthorityProjectionV1(FrozenContract):
         pattern=SHA256_PATTERN,
     )
     plan_state: DispatchPlanState | None = None
-    catalog_revision_id: UUID | None = None
     automation_id: UUID | None = None
     automation_revision: int | None = Field(default=None, ge=1)
     authored_scope: AuthoredCrawlScopeV1 | None = None
@@ -46,7 +45,6 @@ class RunAuthorityProjectionV1(FrozenContract):
             self.dispatch_plan_id,
             self.dispatch_plan_fingerprint,
             self.plan_state,
-            self.catalog_revision_id,
             self.authored_scope,
             self.resolved_scope,
             self.readiness,
@@ -246,7 +244,6 @@ class TaskControlBoardProjectionV1(FrozenContract):
 BoardActionKind = Literal[
     "view_task",
     "view_logs",
-    "open_catalog",
     "edit",
     "run_now",
     "pause",
@@ -266,16 +263,6 @@ class BoardActionV1(FrozenContract):
     action: BoardActionKind
     enabled: bool
     reason_code: str | None = Field(default=None, max_length=100)
-
-
-class CatalogHealthProjectionV1(FrozenContract):
-    version: Literal[1] = 1
-    source_site: SourceSite
-    state: Literal["healthy", "unpublished", "stale"]
-    revision_id: UUID | None = None
-    sequence: int | None = Field(default=None, ge=1)
-    fingerprint: str | None = Field(default=None, pattern=SHA256_PATTERN)
-    published_at: datetime | None = None
 
 
 class CrawlTaskIssueProjectionV1(FrozenContract):
@@ -323,7 +310,6 @@ class AutomationLatestOutcomeV1(FrozenContract):
 
 class ResolvedScopeSummaryV1(FrozenContract):
     version: Literal[1] = 1
-    catalog_revision_id: UUID
     selected_classification_count: int = Field(ge=0)
     query_target_count: int = Field(ge=0)
 
@@ -340,7 +326,6 @@ class AutomationRowProjectionV2(FrozenContract):
     authored_scope: AuthoredCrawlScopeV1
     schedule: AutomationScheduleProjectionV1
     latest_outcome: AutomationLatestOutcomeV1 | None = None
-    catalog_health: CatalogHealthProjectionV1
     resolved_scope_summary: ResolvedScopeSummaryV1 | None = None
     current_run: CrawlControlRunProjectionV1 | None = None
     scope_review_reason: CrawlScopeErrorPayloadV1 | None = None
@@ -357,8 +342,6 @@ class BoardAttentionItemV2(FrozenContract):
         "manual_action",
         "cancelling",
         "scope_review_required",
-        "catalog_unpublished",
-        "catalog_stale",
         "worker_unavailable",
         "failed_run",
         "overdue_automation",
@@ -368,7 +351,7 @@ class BoardAttentionItemV2(FrozenContract):
     code: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=255)
     summary: str = Field(min_length=1, max_length=1000)
-    entity_kind: Literal["run", "automation", "catalog"]
+    entity_kind: Literal["run", "automation"]
     entity_id: str = Field(min_length=1, max_length=255)
     failure_event_sequence: int | None = Field(default=None, ge=1)
     primary_action: BoardActionV1
@@ -403,7 +386,6 @@ class BoardSourceSummaryV2(FrozenContract):
     attention_count: int = Field(ge=0)
     active_run_count: int = Field(ge=0)
     upcoming_count: int = Field(ge=0)
-    catalog_health: CatalogHealthProjectionV1
 
 
 class TaskControlBoardProjectionV2(FrozenContract):

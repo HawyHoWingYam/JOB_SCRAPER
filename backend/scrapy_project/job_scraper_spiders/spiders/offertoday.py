@@ -21,7 +21,7 @@ from app.crawl_control.contracts import OfferTodayQueryTargetParametersV1
 from app.crawl_control.runtime_authority import (
     load_listing_runtime_plan_for_worker,
 )
-from app.source_catalog.runtime import load_published_query_plan
+from app.source_classifications.runtime import load_source_query_plan
 from app.sources.offertoday.constants import OFFERTODAY_BASE_URL, OFFERTODAY_COMMON_HEADERS, OFFERTODAY_LISTING_BROWSE_URL, build_offertoday_listing_payload
 from app.sources.offertoday.search_space import build_offertoday_listing_queries
 from job_scraper_spiders.items import CrawlProgressItem, JobDetailItem, ListingItem
@@ -147,7 +147,7 @@ class OfferTodaySpider(scrapy.Spider):
 
         category_ids = self._category_ids
         if category_ids and self._keywords.strip():
-            plan = load_published_query_plan("offertoday", category_ids)
+            plan = load_source_query_plan("offertoday", category_ids)
             validated_native_ids = [
                 int(entry.target.payload["category_code"]) for entry in plan.entries
             ]
@@ -158,7 +158,7 @@ class OfferTodaySpider(scrapy.Spider):
                 default_to_it=False,
             )
         if category_ids:
-            plan = load_published_query_plan("offertoday", category_ids)
+            plan = load_source_query_plan("offertoday", category_ids)
             return [
                 {
                     "search_family": "catalog_category",

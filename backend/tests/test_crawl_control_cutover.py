@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import timedelta
-import hashlib
 import os
 from uuid import uuid4
 
@@ -78,7 +77,6 @@ def _seed_cutover_fixture(engine) -> None:
     listing_id = uuid4()
     target_id = uuid4()
     plan_fingerprint = "d" * 64
-    catalog_revision_ids: dict[str, object] = {}
 
     with engine.begin() as connection:
         connection.execute(
@@ -107,54 +105,23 @@ def _seed_cutover_fixture(engine) -> None:
             )
         )
 
-        for sequence, source in enumerate(
-            ("ctgoodjobs", "jobsdb", "offertoday"), start=1
-        ):
-            candidate_id = uuid4()
-            revision_id = uuid4()
-            fingerprint = hashlib.sha256(source.encode()).hexdigest()
+        for source in ("ctgoodjobs", "jobsdb", "offertoday"):
+            classification_id = f"{source}:fixture"
             connection.execute(
-                tables["source_catalog_candidates"].insert().values(
-                    id=candidate_id,
+                tables["source_classifications"].insert().values(
+                    id=uuid4(),
                     source_site=source,
-                    fingerprint=fingerprint,
-                    normalized_payload={"source_site": source, "nodes": []},
-                    source_payload={"fixture": True},
-                    provenance={"kind": "test"},
-                    diff={},
-                    validation_summary={"status": "passed"},
-                    state="published",
-                    validated_at=now,
-                    published_at=now,
-                    created_at=now,
-                    updated_at=now,
+                    classification_id=classification_id,
+                    native_id="fixture",
+                    label="Fixture",
+                    depth=0,
+                    is_top_level=True,
+                    is_active=True,
+                    query_metadata={},
+                    first_observed_at=now,
+                    last_observed_at=now,
                 )
             )
-            connection.execute(
-                tables["source_catalog_revisions"].insert().values(
-                    id=revision_id,
-                    source_site=source,
-                    sequence=sequence,
-                    fingerprint=fingerprint,
-                    normalized_payload={"source_site": source, "nodes": []},
-                    source_payload={"fixture": True},
-                    provenance={"kind": "test"},
-                    candidate_id=candidate_id,
-                    publication_metadata={"validated": True},
-                    published_by="local-operator",
-                    published_at=now,
-                    created_at=now,
-                )
-            )
-            connection.execute(
-                tables["source_catalog_active_revisions"].insert().values(
-                    source_site=source,
-                    revision_id=revision_id,
-                    updated_by="local-operator",
-                    updated_at=now,
-                )
-            )
-            catalog_revision_ids[source] = revision_id
 
         connection.execute(
             tables["scrape_schedules"].insert().values(
@@ -194,7 +161,6 @@ def _seed_cutover_fixture(engine) -> None:
                 automation_id=automation_id,
                 automation_id_snapshot=automation_id,
                 expected_automation_revision=1,
-                catalog_revision_id=catalog_revision_ids["jobsdb"],
                 authored_scope={"version": 1},
                 resolved_scope={"version": 1},
                 detail_settings={"version": 1},
@@ -385,11 +351,11 @@ def test_report_hash_excludes_observation_time() -> None:
     )
     first = CrawlControlCutoverReport(
         observed_at=first_time,
-        schema_revision="20260720_210000",
+        schema_revision="20260726_180000",
         backup_id="backup-id",
         backup_acknowledged=True,
         writer_evidence=evidence,
-        active_catalog_sources=("ctgoodjobs", "jobsdb", "offertoday"),
+        active_classification_sources=("ctgoodjobs", "jobsdb", "offertoday"),
         active_crawl_job_count=0,
         reset_counts={},
         preserve_counts={},
@@ -404,7 +370,7 @@ def test_report_hash_excludes_observation_time() -> None:
         backup_id=first.backup_id,
         backup_acknowledged=first.backup_acknowledged,
         writer_evidence=first.writer_evidence,
-        active_catalog_sources=first.active_catalog_sources,
+        active_classification_sources=first.active_classification_sources,
         active_crawl_job_count=first.active_crawl_job_count,
         reset_counts=first.reset_counts,
         preserve_counts=first.preserve_counts,
@@ -445,7 +411,7 @@ def test_postgres_reset_is_fk_safe_and_preserves_non_control_data(
         assert connection.scalar(text("SELECT count(*) FROM companies")) == 1
         assert connection.scalar(text("SELECT count(*) FROM jobs")) == 1
         assert connection.scalar(
-            text("SELECT count(*) FROM source_catalog_revisions")
+            text("SELECT count(*) FROM source_classifications")
         ) == 3
         assert connection.scalar(text("SELECT count(*) FROM enrichment_runs")) == 1
         assert connection.scalar(
@@ -513,7 +479,7 @@ def test_postgres_fresh_and_existing_bootstrap_have_schema_parity(
             "crawl_job_listings",
             "crawl_jobs",
             "schedule_executions",
-            "source_catalog_revisions",
+            "source_classifications",
         }
         return {
             table_name: {
@@ -550,7 +516,7 @@ def test_postgres_fresh_and_existing_bootstrap_have_schema_parity(
     assert upgraded_existing_signature == fresh_metadata_signature
     with postgres_cutover_engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "20260720_210000"
+            "20260726_180000"
         )
         trigger_names = set(
             connection.scalars(
@@ -561,7 +527,6 @@ def test_postgres_fresh_and_existing_bootstrap_have_schema_parity(
             )
         )
     assert {
-        "trg_source_catalog_revisions_immutable",
         "trg_automation_revisions_immutable",
         "trg_crawl_dispatch_plans_immutable",
         "trg_crawl_jobs_dispatch_authority_immutable",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
@@ -73,33 +73,9 @@ def _provenance_from_payload(value: Any) -> Provenance:
 
 
 @dataclass(frozen=True)
-class SourceCatalogRevisionRef:
-    source_site: str
-    revision_id: UUID
-    fingerprint: str
-
-    def to_payload(self) -> dict[str, str]:
-        return {
-            "source_site": self.source_site,
-            "revision_id": str(self.revision_id),
-            "fingerprint": self.fingerprint,
-        }
-
-    @classmethod
-    def from_payload(cls, value: Any) -> SourceCatalogRevisionRef:
-        payload = _mapping(value, "source_catalog_revision")
-        return cls(
-            source_site=str(payload["source_site"]),
-            revision_id=UUID(str(payload["revision_id"])),
-            fingerprint=str(payload["fingerprint"]),
-        )
-
-
-@dataclass(frozen=True)
 class SourceClassificationContext:
     source_classification_id: str
     label: str
-    source_catalog_revision: SourceCatalogRevisionRef | None
     provenance: Provenance
 
 
@@ -138,7 +114,6 @@ class SourceClassificationPathEvidence:
     nodes: tuple[SourceClassificationNodeEvidence, ...]
     source_declared_primary: bool
     primary_basis: str | None
-    source_catalog_revision: SourceCatalogRevisionRef | None
     provenance: Provenance
 
     def to_payload(self) -> dict[str, Any]:
@@ -147,18 +122,12 @@ class SourceClassificationPathEvidence:
             "nodes": [node.to_payload() for node in self.nodes],
             "source_declared_primary": self.source_declared_primary,
             "primary_basis": self.primary_basis,
-            "source_catalog_revision": (
-                self.source_catalog_revision.to_payload()
-                if self.source_catalog_revision is not None
-                else None
-            ),
             "provenance": self.provenance.to_payload(),
         }
 
     @classmethod
     def from_payload(cls, value: Any) -> SourceClassificationPathEvidence:
         payload = _mapping(value, "classification_paths[]")
-        revision_payload = payload.get("source_catalog_revision")
         return cls(
             source_order=int(payload["source_order"]),
             nodes=tuple(
@@ -171,11 +140,6 @@ class SourceClassificationPathEvidence:
             primary_basis=(
                 str(payload["primary_basis"])
                 if payload.get("primary_basis") is not None
-                else None
-            ),
-            source_catalog_revision=(
-                SourceCatalogRevisionRef.from_payload(revision_payload)
-                if revision_payload is not None
                 else None
             ),
             provenance=_provenance_from_payload(payload.get("provenance")),
@@ -258,33 +222,6 @@ class SourceJobAttributeEvidence:
             "working_day_labels": list(self.working_day_labels),
         }
 
-    def with_catalog_revision(
-        self,
-        revision: SourceCatalogRevisionRef,
-    ) -> SourceJobAttributeEvidence:
-        """Bind missing classification paths to an already-authorized revision."""
-
-        if revision.source_site != self.source_site:
-            raise ValueError(
-                "Source Catalog revision does not belong to Source Job Attribute evidence"
-            )
-
-        paths: list[SourceClassificationPathEvidence] = []
-        for path in self.classification_paths:
-            existing = path.source_catalog_revision
-            if existing is not None and existing != revision:
-                raise ValueError(
-                    "Source Classification Path catalog revision does not match "
-                    "the authorized revision"
-                )
-            paths.append(
-                replace(
-                    path,
-                    source_catalog_revision=existing or revision,
-                )
-            )
-        return replace(self, classification_paths=tuple(paths))
-
     @classmethod
     def from_payload(cls, value: Any) -> SourceJobAttributeEvidence:
         payload = _mapping(value, "source_attribute_evidence")
@@ -337,8 +274,6 @@ class SourceClassificationPathView:
     nodes: tuple[SourceClassificationNodeView, ...]
     is_primary: bool
     primary_basis: str | None
-    source_catalog_revision: SourceCatalogRevisionRef | None
-    provenance_limited: bool
     provenance: Mapping[str, Any]
 
 

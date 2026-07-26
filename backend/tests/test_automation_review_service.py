@@ -21,7 +21,7 @@ from app.crawl_control.contracts import (
     SelectedClassificationSnapshotV1,
 )
 from app.crawl_control.detail_runtime import DetailBacklogPreview
-from app.source_catalog.domain import SourceQueryTarget, payload_fingerprint
+from app.source_classifications.domain import SourceQueryTarget, payload_fingerprint
 
 
 NOW = datetime(2026, 7, 21, 3, 0, tzinfo=UTC)
@@ -39,14 +39,10 @@ class NoWriteSession:
 
 
 def _scope_and_resolved():
-    revision_id = uuid4()
     scope = AuthoredCrawlScopeV1(
         source_site="jobsdb",
-        reviewed_catalog_revision_id=revision_id,
-        mode="rules",
-        rules=(
-            {"kind": "subtree", "classification_id": "jobsdb:6281"},
-        ),
+        mode="selected",
+        classification_ids=("jobsdb:6281",),
     )
     selected = SelectedClassificationSnapshotV1(
         node_key="jobsdb:6281",
@@ -73,8 +69,6 @@ def _scope_and_resolved():
     )
     resolved = ResolvedRunScopeV1(
         source_site="jobsdb",
-        catalog_revision_id=revision_id,
-        catalog_revision_fingerprint="b" * 64,
         authored_scope=scope,
         selected_classifications=(selected,),
         classification_expansion_hash=expansion_hash,
@@ -168,7 +162,7 @@ def test_listing_review_is_read_only_and_fingerprinted():
     second = service.review(request)
 
     assert first.input_fingerprint == second.input_fingerprint
-    assert first.catalog_revision_id == scope.reviewed_catalog_revision_id
+    assert first.authored_scope == scope
     assert first.listing_workload is not None
     assert first.listing_workload.estimated_max_pages == 2
     assert first.detail_preview is None

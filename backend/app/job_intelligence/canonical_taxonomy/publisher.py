@@ -29,11 +29,7 @@ from app.models.canonical_job_taxonomy import (
     SourceJobTaxonomyMapping,
     SourceJobTaxonomyMappingTarget,
 )
-from app.models.source_catalog import (
-    SourceCatalogActiveRevision,
-    SourceCatalogRevision,
-)
-from app.source_catalog.domain import DiscoveredCatalog, validate_catalog
+from app.services.source_classification_registry import SourceClassificationRegistry
 from app.utils.time import utc_now
 
 
@@ -259,7 +255,7 @@ class CanonicalTaxonomyPublisher:
         taxonomy_seed: Mapping[str, Any],
         mapping_seed: Mapping[str, Any],
     ) -> RevisionRef:
-        """Materialize one reviewed mapping release pinned to active catalogs."""
+        """Materialize one reviewed mapping release over current classifications."""
         if self.db is None:
             raise RuntimeError("Canonical mapping materialization requires a Session")
 
@@ -372,7 +368,7 @@ class CanonicalTaxonomyPublisher:
         *,
         expected_lock_version: int,
     ) -> CanonicalJobTaxonomyActiveMappingRevision:
-        """Activate a ready mapping only while every pinned catalog stays active."""
+        """Activate a ready mapping release."""
         if self.db is None:
             raise RuntimeError("Canonical mapping activation requires a Session")
         if revision.domain != _MAPPING_REVISION_DOMAIN:
@@ -406,33 +402,6 @@ class CanonicalTaxonomyPublisher:
             raise RuntimeError(
                 "Canonical mapping activation requires its taxonomy revision active"
             )
-
-        coverages = (
-            self.db.query(CanonicalJobTaxonomyMappingCoverage)
-            .filter(
-                CanonicalJobTaxonomyMappingCoverage.mapping_revision_id
-                == revision.revision_id
-            )
-            .order_by(CanonicalJobTaxonomyMappingCoverage.source_site)
-            .all()
-        )
-        for coverage in coverages:
-            source_pointer = self.db.get(
-                SourceCatalogActiveRevision,
-                coverage.source_site,
-            )
-            if source_pointer is None:
-                self.db.rollback()
-                raise CanonicalMappingCoverageError(
-                    code="CATALOG_NOT_PUBLISHED",
-                    source_site=coverage.source_site,
-                )
-            if source_pointer.revision_id != coverage.source_catalog_revision_id:
-                self.db.rollback()
-                raise CanonicalMappingCoverageError(
-                    code="CANONICAL_MAPPING_CATALOG_STALE",
-                    source_site=coverage.source_site,
-                )
 
         active = (
             self.db.query(CanonicalJobTaxonomyActiveMappingRevision)
@@ -496,54 +465,26 @@ class CanonicalTaxonomyPublisher:
             )
 
         coverages: list[dict[str, Any]] = []
+        registry = SourceClassificationRegistry(self.db)
         for source_site, declared_ids in sorted(declared_by_source.items()):
-            revision = (
-                self.db.query(SourceCatalogRevision)
-                .join(
-                    SourceCatalogActiveRevision,
-                    SourceCatalogActiveRevision.revision_id == SourceCatalogRevision.id,
-                )
-                .filter(SourceCatalogActiveRevision.source_site == source_site)
-                .one_or_none()
-            )
-            if revision is None:
-                raise CanonicalMappingCoverageError(
-                    code="CATALOG_NOT_PUBLISHED",
+            current_ids = {
+                row.classification_id
+                for row in registry.list_all(
                     source_site=source_site,
+                    active_only=True,
                 )
-
-            catalog = DiscoveredCatalog.from_payloads(
-                normalized_payload=revision.normalized_payload,
-                source_payload=revision.source_payload,
-                provenance=revision.provenance,
-            )
-            validate_catalog(catalog)
-            if catalog.fingerprint != revision.fingerprint:
-                raise CanonicalMappingCoverageError(
-                    code="CATALOG_FINGERPRINT_MISMATCH",
-                    source_site=source_site,
-                )
-            catalog_ids = {
-                node.classification_id
-                for node in catalog.nodes
-                if node.classification_id is not None
             }
-            missing = tuple(sorted(catalog_ids - declared_ids))
-            extra = tuple(sorted(declared_ids - catalog_ids))
-            if missing or extra:
+            extra = tuple(sorted(declared_ids - current_ids))
+            if extra:
                 raise CanonicalMappingCoverageError(
                     code="CANONICAL_MAPPING_COVERAGE_MISMATCH",
                     source_site=source_site,
-                    missing=missing,
                     extra=extra,
                 )
-            ordered_ids = sorted(catalog_ids)
+            ordered_ids = sorted(declared_ids)
             coverages.append(
                 {
                     "source_site": source_site,
-                    "source_catalog_revision_id": str(revision.id),
-                    "source_catalog_sequence": revision.sequence,
-                    "source_catalog_fingerprint": revision.fingerprint,
                     "identity_set_hash": normalized_content_hash(ordered_ids),
                     "identity_count": len(ordered_ids),
                 }
@@ -573,13 +514,6 @@ class CanonicalTaxonomyPublisher:
                 coverage_id,
                 mapping_revision_id=mapping_revision.revision_id,
                 source_site=source_site,
-                source_catalog_revision_id=uuid.UUID(
-                    coverage_payload["source_catalog_revision_id"]
-                ),
-                source_catalog_sequence=coverage_payload["source_catalog_sequence"],
-                source_catalog_fingerprint=coverage_payload[
-                    "source_catalog_fingerprint"
-                ],
                 identity_set_hash=coverage_payload["identity_set_hash"],
                 identity_count=coverage_payload["identity_count"],
             )

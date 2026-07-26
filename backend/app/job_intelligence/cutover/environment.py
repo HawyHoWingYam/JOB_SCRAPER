@@ -281,16 +281,6 @@ class PostgresCutoverEnvironment:
                         Job.created_at,
                     ).order_by(Job.id),
                 ),
-                "source-catalog-governance": self._combined_table_fingerprint(
-                    db,
-                    tuple(
-                        sorted(
-                            name
-                            for name in Base.metadata.tables
-                            if name.startswith("source_catalog_")
-                        )
-                    ),
-                ),
             }
             legacy = {
                 "legacy-company-industry": self._fingerprint_statement(
@@ -823,7 +813,6 @@ class PostgresCutoverEnvironment:
                     "employment_type_assignments": 0,
                     "jobs_inspected": 0,
                     "projected_jobs": 0,
-                    "provenance_limited_jobs": 0,
                     "unrecoverable_jobs": 0,
                 },
             }
@@ -878,12 +867,6 @@ class PostgresCutoverEnvironment:
                             for label in item.evidence.employment_labels
                             if label.mapped_type_code is not None
                         }
-                    )
-                    batch_counts["provenance_limited_jobs"] += int(
-                        any(
-                            path.source_catalog_revision is None
-                            for path in item.evidence.classification_paths
-                        )
                     )
                 batch_db.commit()
             except Exception:

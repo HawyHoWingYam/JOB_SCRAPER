@@ -53,31 +53,7 @@ Historical recovery uses:
 ```python
 SourceJobAttributeRebuildInspector(db).inspect(job_ids=None) -> SourceJobAttributeRebuildReport
 SourceJobAttributeRebuildInspector(db).recover(job_ids=None) -> tuple[RecoveredSourceJobAttribute, ...]
-
-SourceCatalogProvenanceRepair(db).inspect(
-    source_site, revision_id, job_ids=None, pending_only=True
-) -> ProvenanceRepairReport
-SourceCatalogProvenanceRepair(db).apply(
-    report, expected_revision_id, expected_fingerprint, batch_size=100
-) -> ProvenanceRepairApplyResult
-SourceJobAttributes(db).repair_catalog_provenance(
-    job_id, source_catalog_revision
-) -> ProjectionResult
 ```
-
-The trusted-local governance adapters for a bounded AI pending batch are:
-
-```text
-POST /api/v1/job-intelligence/governance/source-catalog-provenance/inspect
-POST /api/v1/job-intelligence/governance/source-catalog-provenance/apply
-```
-
-Both requests carry one `scope` source plus qualified classification paths and
-an explicit `limit`. Inspect resolves the current active revision and returns
-the pending-selection summary, revision fingerprint, repairable Job IDs, and
-stable blockers. Apply requires the inspected revision ID/fingerprint,
-repairable Job IDs, and `confirmed=true`; it re-resolves the same bounded
-selection before writing and returns a preflight-backed recheck selection.
 
 Persistence is owned by `job_source_attribute_projections`,
 `job_source_classification_paths`,
@@ -115,18 +91,6 @@ Persistence is owned by `job_source_attribute_projections`,
 - Exact normalized evidence replay is a no-op and emits no second
   `job.source_attributes_changed` outbox event. Changed evidence replaces the
   projection children and emits one event in the caller's transaction.
-- Historical Source Catalog provenance repair is report-first and fail-closed:
-  inspection reconstructs the selected immutable revision and validates its
-  fingerprint and every stored Source classification identity before any
-  write. Apply requires the reviewed revision ID/fingerprint, rechecks the
-  active pointer inside each batch, fills only NULL path revision FKs through
-  `SourceJobAttributes.repair_catalog_provenance`, and emits one projection
-  outbox event per changed Job. Exact replay changes no path and emits no
-  duplicate event.
-- The provenance HTTP adapter must not widen a repair scope from the AI
-  pending batch or accept a legacy scalar as authority. Revision, fingerprint,
-  active-pointer, coverage, pending-only, and explicit-confirmation fences are
-  enforced at the backend module boundary, not in the UI.
 - A PostgreSQL path-row lock query that uses `with_for_update()` must use
   `selectinload()` for nullable child/revision relationships. `joinedload()`
   creates an outer join that PostgreSQL rejects as a lock target.
@@ -135,10 +99,9 @@ Persistence is owned by `job_source_attribute_projections`,
   retired generic repository writers; `POST /api/v1/jobs` returns
   `410/COLLECTED_JOB_CREATE_RETIRED`. `POST /api/v1/jobs/manual` remains the
   explicit manual-only path.
-- A Job owns one Source. Node IDs use `<source>:<opaque-token>`. Known Source
-  Catalog revisions must belong to that Source and use `ON DELETE RESTRICT`;
-  historical unknown revisions stay nullable and visible as
-  `provenance_limited=true`. Deleting a Job cascades its projection.
+- A Job owns one Source. Node IDs use `<source>:<opaque-token>`. Classification
+  paths preserve the source-native evidence captured with the Job and do not
+  depend on a current classification row. Deleting a Job cascades its projection.
 
 #### Reads, filters, and compatibility
 
@@ -185,7 +148,6 @@ Persistence is owned by `job_source_attribute_projections`,
 | Condition | Required result |
 |---|---|
 | Adapter evidence Source differs from the Job | Reject before projection writes |
-| Known catalog revision belongs to another Source | `ValueError`; roll back Job/projection/outbox |
 | Primary has no non-empty basis or evidence has multiple Primaries | `ValueError`; no partial writes |
 | Collected payload contains any legacy Source Job Attribute key | `ValueError` before database access |
 | Authoritative ingest has no typed `source_attribute_evidence` | `InvalidIngestPayloadError(reason="missing_source_attribute_evidence")` |
@@ -194,11 +156,7 @@ Persistence is owned by `job_source_attribute_projections`,
 | Generic `POST /api/v1/jobs` is called | HTTP 410 with `COLLECTED_JOB_CREATE_RETIRED` |
 | Unknown Employment Type code or unrecognized legacy label filter | HTTP/Pydantic 422 validation failure |
 | Exact evidence replay | `changed=false`; no duplicate outbox row |
-| Provenance repair revision/source/fingerprint mismatch or active-pointer drift | Reject the inspection/apply; never rewrite an existing non-NULL path binding |
-| Provenance repair sees an uncovered or incompatible identity/path | Report the stable blocker and keep the affected Job excluded |
-| Provenance repair exact replay | `changed_jobs=0` for already-bound paths; no duplicate projection event |
 | Malformed bounded label marker | Retain evidence, map no type, count malformed but not unknown |
-| Historical evidence has no catalog revision | Keep the path queryable with `provenance_limited=true` |
 | Historical lookup exceeds 100 distinct Source keys | Issue multiple bounded read-only staging SELECTs and merge to the same deterministic report/recovery result |
 
 ### 5. Good / Base / Bad Cases
@@ -207,7 +165,7 @@ Persistence is owned by `job_source_attribute_projections`,
   `Permanent` persists both paths, both raw labels, two governed codes, and one
   outbox event in the Job transaction.
 - **Base:** CTgoodjobs has one crawl-context root path and no explicit Primary;
-  it remains a valid root-only path with nullable catalog history.
+  it remains a valid root-only path.
 - **Good:** rebuild finds a newer malformed detail payload and an older usable
   detail payload. It reports the Job recoverable and malformed, records
   `staging_detail_payload`, and performs no writes.
@@ -227,12 +185,10 @@ Persistence is owned by `job_source_attribute_projections`,
   CTGoodJobs parser/merge/canonical evidence transport with detail precedence
   plus listing fallback.
 - `test_source_job_attributes.py`: PostgreSQL replacement/replay/concurrency,
-  outbox rollback, Primary/source/catalog constraints, `RESTRICT`/`CASCADE`,
+  outbox rollback, Primary/source constraints, `CASCADE`,
   OR-within/AND-across filters, API views, deterministic rebuild counters, and
   a forced small-batch assertion that checks bounded parameter counts plus
-  cross-batch/cross-Source evidence merging. Provenance repair tests must also
-  assert complete/unknown identity coverage, revision drift fencing, bounded
-  batches, exact replay idempotence, and one outbox event per changed Job.
+  cross-batch/cross-Source evidence merging.
 - `test_source_job_attribute_ingest.py` and
   `test_source_job_attribute_architecture.py`: every collected writer is
   inventoried, projects before commit, cannot use human-governance Interfaces,
@@ -289,23 +245,6 @@ merged["source_attribute_evidence"] = _choose(
     "source_attribute_evidence",
 )
 ```
-
-#### Correct: locked provenance repair
-
-```python
-report = SourceCatalogProvenanceRepair(db).inspect(
-    source_site="offertoday",
-    revision_id=published_revision_id,
-)
-SourceCatalogProvenanceRepair(db).apply(
-    report,
-    expected_revision_id=published_revision_id,
-    expected_fingerprint=report.revision_fingerprint,
-)
-```
-
-The repair command is report-only by default. It must not infer the active
-revision or bypass canonical taxonomy preflight.
 
 #### Wrong: one whole-corpus staging lookup
 

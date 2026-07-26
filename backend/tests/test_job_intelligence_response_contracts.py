@@ -77,11 +77,6 @@ from app.models.skill_governance import (
     SkillTaxonomyActiveRevision,
     SkillTaxonomyRelease,
 )
-from app.models.source_catalog import (
-    SourceCatalogActiveRevision,
-    SourceCatalogCandidate,
-    SourceCatalogRevision,
-)
 from app.models.source_job_attributes import (
     SOURCE_JOB_ATTRIBUTE_TABLES,
     EmploymentType,
@@ -136,9 +131,6 @@ def product_contract_db():
         Company.__table__,
         Job.__table__,
         JobEmbedding.__table__,
-        SourceCatalogCandidate.__table__,
-        SourceCatalogRevision.__table__,
-        SourceCatalogActiveRevision.__table__,
         EventOutbox.__table__,
         *GOVERNANCE_FOUNDATION_TABLES,
         *SOURCE_JOB_ATTRIBUTE_TABLES,

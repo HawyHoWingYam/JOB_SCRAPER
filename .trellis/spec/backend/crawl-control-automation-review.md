@@ -7,15 +7,15 @@ listing workload projection, or scheduled detail eligibility previews.
 
 ## Contracts
 
-- `POST /api/v1/automations/reviews` is read-only. It may resolve the current
-  published Source Catalog, canonical scope, workload, detail eligible count,
+- `POST /api/v1/automations/reviews` is read-only. It may resolve current
+  active top-level Source classifications, scope, workload, detail eligible count,
   readiness, and schedule summary. It must not prepare/freeze a Dispatch Plan,
   create a revision, claim work, emit an event/outbox row, or call a Source.
 - Automation create/update requires `review_fingerprint`. Immediately before
-  mutation, the backend recomputes the review under current Catalog,
+  mutation, the backend recomputes the review under current classifications,
   Automation revision, readiness, and configuration state. A mismatch returns
   structured `AUTOMATION_REVIEW_STALE`; the caller must review again.
-- The fingerprint includes authored/resolved scope, Catalog revision,
+- The fingerprint includes authored/resolved scope,
   configuration, workload/detail projection, readiness, warnings, and current
   Automation identity/revision. It excludes clock-only display values such as
   `checked_at` and `next_run_at`.
@@ -30,7 +30,7 @@ listing workload projection, or scheduled detail eligibility previews.
 - Do not call Dispatch Plan preparation from Automation review.
 - Do not let React construct or hash a substitute review.
 - Do not accept a stale fingerprint because the submitted configuration still
-  parses or because only Catalog/readiness state changed.
+  parses or because only classification/readiness state changed.
 
 ## Verification
 

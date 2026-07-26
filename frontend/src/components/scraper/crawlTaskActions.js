@@ -6,7 +6,7 @@ const API_BASE = apiPath("");
 export const DEFAULT_MANUAL_ACTION_HELPER_URL = "http://127.0.0.1:47652";
 export const DEFAULT_MANUAL_ACTION_HELPER_START_WORKDIR = "backend";
 export const DEFAULT_MANUAL_ACTION_HELPER_START_COMMAND =
-  "python -m app.workers.run_manual_action_helper";
+  "python3 scripts/prepare_headed_crawl_worker_host.py && .host_worker_venv/bin/python -m app.workers.run_manual_action_helper";
 
 function buildManualActionHelperUnavailableMessage(actionLabel) {
   return `Manual-action helper is unavailable. Start the dedicated helper service and retry ${actionLabel}.`;

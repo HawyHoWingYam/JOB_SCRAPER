@@ -35,12 +35,12 @@ from app.models.schedule import (
     ScrapeSchedule,
 )
 from app.models.scraper_pacing_settings import ScraperPacingSettings
-from app.models.source_catalog import SOURCE_CATALOG_TABLES, SourceCatalogCandidate
-from app.repositories.source_catalog_repository import SourceCatalogRepository
+from app.models.source_classification import SourceClassification
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
 from app.services.crawl_job_execution_launcher import CrawlJobLaunchResult
-from app.source_catalog.adapters.jobsdb import JobsDBSourceCatalogAdapter
+from app.services.source_classification_registry import SourceClassificationRegistry
+from app.source_classifications.adapters.jobsdb import JobsDBSourceClassificationAdapter
 
 
 @compiles(PostgreSQLUUID, "sqlite")
@@ -120,10 +120,10 @@ def crawl_control_client(monkeypatch):
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    SourceCatalogCandidate.metadata.create_all(
+    SourceClassification.metadata.create_all(
         engine,
         tables=(
-            *SOURCE_CATALOG_TABLES,
+            SourceClassification.__table__,
             ScrapeSchedule.__table__,
             AutomationRevision.__table__,
             CrawlJob.__table__,
@@ -140,29 +140,8 @@ def crawl_control_client(monkeypatch):
     )
     session_factory = sessionmaker(bind=engine)
     db = session_factory()
-    repository = SourceCatalogRepository()
-    catalog = JobsDBSourceCatalogAdapter().discover()
-    candidate, _created = repository.create_or_get_candidate(
-        db,
-        source_site="jobsdb",
-        fingerprint=catalog.fingerprint,
-        normalized_payload=catalog.normalized_payload(),
-        source_payload=dict(catalog.source_payload),
-        provenance=dict(catalog.provenance),
-    )
-    repository.mark_candidate_validated(db, candidate=candidate)
-    revision = repository.create_revision(
-        db,
-        candidate=candidate,
-        published_by="local-operator",
-    )
-    repository.set_active_revision(
-        db,
-        source_site="jobsdb",
-        revision_id=revision.id,
-        expected_revision_id=None,
-        updated_by="local-operator",
-    )
+    catalog = JobsDBSourceClassificationAdapter().discover()
+    SourceClassificationRegistry(db).synchronize_catalog(catalog, complete=True)
     db.add(
         ScraperPacingSettings(
             source_site="jobsdb",
@@ -173,7 +152,7 @@ def crawl_control_client(monkeypatch):
         )
     )
     db.commit()
-    revision_id = revision.id
+    obsolete_revision_id = uuid4()
     db.close()
 
     app = FastAPI()
@@ -209,7 +188,7 @@ def crawl_control_client(monkeypatch):
 
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as client:
-        yield client, revision_id
+        yield client, obsolete_revision_id
     engine.dispose()
 
 
@@ -238,17 +217,15 @@ def _review_automation_configuration(
     return response.json()
 
 
-def test_scope_preview_returns_normalized_workload_and_stable_revision_error(
+def test_scope_preview_returns_normalized_workload_and_rejects_unknown_root(
     crawl_control_client,
 ):
     client, revision_id = crawl_control_client
     request = {
         "scope": {
-            "version": 1,
             "source_site": "jobsdb",
-            "reviewed_catalog_revision_id": str(revision_id),
             "mode": "all",
-            "rules": [],
+            "classification_ids": [],
         },
         "listing_settings": {
             "version": 1,
@@ -262,7 +239,6 @@ def test_scope_preview_returns_normalized_workload_and_stable_revision_error(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["resolved_scope"]["catalog_revision_id"] == str(revision_id)
     assert payload["resolved_scope"]["query_target_count"] == 25
     assert payload["listing_workload"] == {
         "version": 1,
@@ -275,26 +251,21 @@ def test_scope_preview_returns_normalized_workload_and_stable_revision_error(
         "within_system_cap": True,
     }
 
-    request["scope"]["reviewed_catalog_revision_id"] = str(uuid4())
-    stale = client.post("/api/v1/crawl-scopes/preview", json=request)
-
-    assert stale.status_code == 409
-    assert stale.json()["detail"] == {
-        "code": "SCOPE_REVIEW_REQUIRED",
-        "message": "The reviewed Source Catalog revision is no longer active",
-        "context": {
-            "reviewed_catalog_revision_id": request["scope"][
-                "reviewed_catalog_revision_id"
-            ],
-            "current_catalog_revision_id": str(revision_id),
-        },
+    request["scope"] = {
+        "source_site": "jobsdb",
+        "mode": "selected",
+        "classification_ids": ["jobsdb:unknown"],
     }
+    unknown = client.post("/api/v1/crawl-scopes/preview", json=request)
+
+    assert unknown.status_code == 422
+    assert unknown.json()["detail"]["code"] == "SCOPE_RULE_INVALID"
 
 
-def test_legacy_schedule_create_writes_a_versioned_automation(
+def test_legacy_schedule_create_writes_an_ordinary_scope_automation(
     crawl_control_client,
 ):
-    client, revision_id = crawl_control_client
+    client, _obsolete_revision_id = crawl_control_client
 
     response = client.post(
         "/api/v1/schedules",
@@ -318,13 +289,9 @@ def test_legacy_schedule_create_writes_a_versioned_automation(
     assert schedule["revision"] == 1
     assert schedule["lifecycle_state"] == "active"
     assert schedule["scope_contract"] == {
-        "version": 1,
         "source_site": "jobsdb",
-        "reviewed_catalog_revision_id": str(revision_id),
-        "mode": "rules",
-        "rules": [
-            {"kind": "exact", "classification_id": "jobsdb:6281"}
-        ],
+        "mode": "selected",
+        "classification_ids": ["jobsdb:6281"],
     }
     assert schedule["listing_page_depth"] == 2
     assert schedule["listing_run_page_cap"] == 2
@@ -443,13 +410,17 @@ def test_legacy_schedule_create_returns_stable_source_errors(
         "context": {"source_site": "unknown-source"},
     }
 
-    unpublished = client.post(
+    empty_registry = client.post(
         "/api/v1/schedules",
         json={**base_request, "source_site": "offertoday"},
     )
 
-    assert unpublished.status_code == 404
-    assert unpublished.json()["detail"]["code"] == "CATALOG_NOT_PUBLISHED"
+    assert empty_registry.status_code == 422
+    assert empty_registry.json()["detail"] == {
+        "code": "SCOPE_RULE_INVALID",
+        "message": "Crawl scope resolved to no query targets",
+        "context": {"source_site": "offertoday"},
+    }
 
 
 def test_pre_cutover_schedule_rows_keep_bounded_legacy_mutations(
@@ -513,11 +484,9 @@ def test_automation_lifecycle_and_reviewed_permanent_delete_are_revisioned(
         "cron_expression": "0 4 * * *",
         "timezone": "UTC",
         "scope": {
-            "version": 1,
             "source_site": "jobsdb",
-            "reviewed_catalog_revision_id": str(revision_id),
             "mode": "all",
-            "rules": [],
+            "classification_ids": [],
         },
         "listing_settings": {
             "version": 1,
@@ -608,11 +577,9 @@ def test_dispatch_plan_prepare_and_get_review_without_launching(
         "version": 1,
         "kind": "one_off",
         "scope": {
-            "version": 1,
             "source_site": "jobsdb",
-            "reviewed_catalog_revision_id": str(revision_id),
             "mode": "all",
-            "rules": [],
+            "classification_ids": [],
         },
         "listing_settings": {
             "version": 1,
@@ -631,9 +598,7 @@ def test_dispatch_plan_prepare_and_get_review_without_launching(
     assert preparation["confirmation_token"]
     assert preparation["plan"]["state"] == "prepared"
     assert preparation["plan"]["readiness"]["status"] == "ready"
-    assert preparation["plan"]["content"]["catalog_revision_id"] == str(
-        revision_id
-    )
+    assert "catalog_revision_id" not in preparation["plan"]["content"]
 
     reviewed = client.get(f"/api/v1/dispatch-plans/{plan_id}")
     assert reviewed.status_code == 200
@@ -650,11 +615,9 @@ def test_dispatch_plan_confirmation_returns_normalized_single_use_run(
         "version": 1,
         "kind": "one_off",
         "scope": {
-            "version": 1,
             "source_site": "jobsdb",
-            "reviewed_catalog_revision_id": str(revision_id),
             "mode": "all",
-            "rules": [],
+            "classification_ids": [],
         },
         "listing_settings": {
             "version": 1,
@@ -698,7 +661,6 @@ def test_dispatch_plan_confirmation_returns_normalized_single_use_run(
         "dispatch_plan_id": plan["plan_id"],
         "dispatch_plan_fingerprint": plan["plan_fingerprint"],
         "plan_state": "consumed",
-        "catalog_revision_id": str(revision_id),
         "automation_id": None,
         "automation_revision": None,
         "authored_scope": plan["content"]["authored_scope"],
@@ -738,11 +700,9 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
         "cron_expression": "0 4 * * *",
         "timezone": "UTC",
         "scope": {
-            "version": 1,
             "source_site": "jobsdb",
-            "reviewed_catalog_revision_id": str(revision_id),
             "mode": "all",
-            "rules": [],
+            "classification_ids": [],
         },
         "listing_settings": {
             "version": 1,
@@ -838,15 +798,14 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
         "ctgoodjobs",
         "offertoday",
     ]
-    assert v2["source_summaries"][0]["catalog_health"]["state"] == "healthy"
-    assert v2["source_summaries"][1]["catalog_health"]["state"] == "unpublished"
+    assert "catalog_health" not in v2["source_summaries"][0]
     assert v2["needs_attention"] == []
     assert len(v2["active_runs"]) == 1
     assert v2["active_runs"][0]["run"]["crawl_job_id"] == dispatched["run"]["crawl_job_id"]
     assert v2["active_runs"][0]["actions"][0]["action"] == "view_task"
     assert len(v2["upcoming"]) == 1
     assert v2["upcoming"][0]["schedule"]["timezone"] == "UTC"
-    assert v2["upcoming"][0]["catalog_health"]["state"] == "healthy"
+    assert "catalog_health" not in v2["upcoming"][0]
     assert v2["upcoming"][0]["actions"][0] == {
         "version": 1,
         "action": "edit",
@@ -1093,11 +1052,9 @@ def test_crawl_tasks_use_dispatch_plan_when_raw_payloads_are_absent(
         "version": 1,
         "kind": "one_off",
         "scope": {
-            "version": 1,
             "source_site": "jobsdb",
-            "reviewed_catalog_revision_id": str(revision_id),
             "mode": "all",
-            "rules": [],
+            "classification_ids": [],
         },
         "listing_settings": {
             "version": 1,
@@ -1144,7 +1101,7 @@ def test_crawl_tasks_use_dispatch_plan_when_raw_payloads_are_absent(
     assert task["crawl_job_id"] == crawl_job_id
     assert task["crawl_phase"] == "listing"
     assert task["dispatch_plan_id"] == preparation["plan"]["plan_id"]
-    assert task["authority"]["catalog_revision_id"] == str(revision_id)
+    assert "catalog_revision_id" not in task["authority"]
     assert task["listing_workload"] == {
         "version": 1,
         "query_target_count": 25,
@@ -1498,11 +1455,9 @@ def test_detail_run_projections_keep_frozen_plan_membership_and_live_counts(
         "version": 1,
         "kind": "one_off",
         "scope": {
-            "version": 1,
             "source_site": "jobsdb",
-            "reviewed_catalog_revision_id": str(revision_id),
             "mode": "all",
-            "rules": [],
+            "classification_ids": [],
         },
         "listing_settings": None,
         "detail_settings": {
@@ -1592,11 +1547,9 @@ def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
         "cron_expression": "0 4 * * *",
         "timezone": "Asia/Hong_Kong",
         "scope": {
-            "version": 1,
             "source_site": "jobsdb",
-            "reviewed_catalog_revision_id": str(revision_id),
             "mode": "all",
-            "rules": [],
+            "classification_ids": [],
         },
         "listing_settings": {
             "version": 1,

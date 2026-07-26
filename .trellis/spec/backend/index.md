@@ -27,7 +27,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [CTGoodJobs Transport Research](./ctgoodjobs-transport-research.md) | Bounded HTTP/headless/headed comparison, sanitized evidence, viability replay, and WAF hard stops | Active |
 | [OfferToday Production Crawl](./offertoday-production-crawl.md) | Cursor listing, partial caps, finite versioned detail scope, normalized progress, and hard-stop contracts | Active |
 | [OfferToday Research Artifacts](./offertoday-research-artifacts.md) | Historical artifact parent, verification, replay, and exit-code contracts | Preserved |
-| [Authoritative Source Catalog Runtime](./source-catalog-runtime.md) | Published revision authority, source-native Query Targets, validation, and guarded publication | Active |
+| [Ordinary Source Classifications](./ordinary-source-classifications.md) | Current top-level classifications, direct synchronization, and unversioned crawl scope | Active |
 | [Crawl Control Automation Review](./crawl-control-automation-review.md) | Read-only scheduled-run review, fingerprint fencing, and non-frozen detail preview | Active |
 | [Task Control Board Projections](./task-control-board-projections.md) | Versioned Board, per-Source authority, normalized Task Details, and safe action contracts | Active |
 | [Source Job Attributes](./source-job-attributes.md) | Source-owned classification paths, governed Employment Types, atomic projection, APIs, and rebuild evidence | Active |
