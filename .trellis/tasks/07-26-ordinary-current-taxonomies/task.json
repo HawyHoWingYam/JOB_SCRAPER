@@ -1,0 +1,29 @@
+{
+  "id": "ordinary-current-taxonomies",
+  "name": "ordinary-current-taxonomies",
+  "title": "Flatten Job Company and Skill taxonomies",
+  "description": "Migrate current active Job Taxonomy, Company Industry, Skills, optional mappings, assignments, and evidence to stable ordinary identities without releases or active pointers.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-26",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-26-excluded-jobs-governance-handoff",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 28,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/28"
+  }
+}

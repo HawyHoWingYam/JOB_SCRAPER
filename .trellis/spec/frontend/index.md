@@ -26,7 +26,8 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Task Control Board UI](./task-control-board-ui.md) | Source-scoped operations, normalized Task deep links, lifecycle actions, and acknowledged cancellation | Active |
 | [AI Enrichment Operations Console](./ai-enrichment-console.md) | Monitoring-first two-slot UI, filtered preview, persistence, retry, and cooperative Stop | Active |
 | [Source Job Attribute Contracts](../backend/source-job-attributes.md) | Cross-layer filter options, compatibility seam, and code-authoritative Source Job Attribute reads | Active |
-| [Job Intelligence Product Reads](../backend/job-intelligence-product-surfaces.md) | Governance queues, stable deep links, active governed read contracts, availability, accessibility, and fixture parity | Active |
+| [Ordinary Current Taxonomies](../backend/ordinary-current-taxonomies.md) | Current taxonomy routes, stable-code reads, optional mappings, and no Governance workspace | Active |
+| [Job Intelligence Product Reads](../backend/job-intelligence-product-surfaces.md) | Current Job/Company/Skill composition, bulk reads, and fixture parity | Active |
 
 ---
 

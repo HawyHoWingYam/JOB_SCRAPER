@@ -31,10 +31,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Crawl Control Automation Review](./crawl-control-automation-review.md) | Read-only scheduled-run review, fingerprint fencing, and non-frozen detail preview | Active |
 | [Task Control Board Projections](./task-control-board-projections.md) | Current Board, per-Source authority, normalized Task Details, and safe action contracts | Active |
 | [Source Job Attributes](./source-job-attributes.md) | Source-owned classification paths, governed Employment Types, atomic projection, APIs, and rebuild evidence | Active |
-| [Canonical Job Taxonomy Governance](./canonical-job-taxonomy.md) | Stable governed releases, reviewed Source mappings, assignments/reviews, canonical reads, and dry-run rebuild | Active |
-| [Company Industry Governance](./company-industry.md) | Immutable HSIC V2.0 releases, company-owned evidence, reviewed mappings, assignments/reviews, reads, and dry-run rebuild | Active |
-| [Skill Governance](./skill-governance.md) | Immutable Skill releases, deterministic Mentions/Candidates, human decisions, governed projections, and secondary evidence | Active |
-| [Job Intelligence Product Reads](./job-intelligence-product-surfaces.md) | Active-revision product composition, availability, bulk recommendations, fixture contracts, and read-only UI boundaries | Active |
+| [Ordinary Current Taxonomies](./ordinary-current-taxonomies.md) | Stable current Job, Company Industry, Skill, optional mapping, assignment, and evidence contracts without releases or review queues | Active |
+| [Job Intelligence Product Reads](./job-intelligence-product-surfaces.md) | Ordinary current composition, safe Job Detail serialization, bulk recommendations, and fixture contracts | Active |
 | [Job Intelligence Cutover](./job-intelligence-cutover.md) | Manifest-bound backup, destructive rebuild recovery, embedding freshness, runtime verification, and writer reopening | Active |
 
 ---

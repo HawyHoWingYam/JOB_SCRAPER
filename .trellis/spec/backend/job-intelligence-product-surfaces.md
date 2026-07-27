@@ -1,289 +1,101 @@
 # Job Intelligence Product Read Contracts
 
-## Scenario: Compose governed projections for product surfaces
+## Scenario: Compose product responses from ordinary current taxonomies
 
 ### 1. Scope / Trigger
 
-Use this contract when changing Job Intelligence Governance summary reads,
-Job/Company search or detail payloads, Dashboard coverage, Related Jobs,
-frontend governance queues, or backend-owned fixtures consumed by the frontend.
-
-Product surfaces compose the domain contracts owned by Source Job Attributes,
-Canonical Job Taxonomy, Company Industry, and Skill Governance. They do not
-reimplement mapping or transition rules and never promote legacy scalar fields
-to governed knowledge.
-
-This is the child-6 product-read boundary. Switching embedding/corpus authority,
-rebuilding live projections, backfilling, activating revisions, and destructive
-cutover remain child-7 operations and require their own rollout approval.
+Use this contract when changing Job Detail, manual-Job snapshots, Job or Company
+search responses, Dashboard taxonomy statistics, Related Jobs, CSV export, or
+backend-owned fixtures consumed by the frontend.
 
 ### 2. Signatures
 
-The backend composition seam is:
-
 ```python
-JobIntelligenceProductReadModel(db).get_governance_summary() \
-    -> JobIntelligenceGovernanceSummaryView
+compose_current_job_detail(db: Session, job: Job) -> JobDetailSchema
 JobIntelligenceProductReadModel(db).get_job_detail(
     job_id: UUID,
     company_id: UUID,
 ) -> JobIntelligenceJobDetailView
-JobIntelligenceProductReadModel(db).get_company_details(
-    company_ids: Sequence[UUID],
-) -> dict[UUID, dict[str, object]]
-JobIntelligenceProductReadModel(db).get_canonical_job_states(
-    job_ids: Sequence[UUID],
-) -> dict[UUID, dict[str, object]]
-JobIntelligenceProductReadModel(db).get_employment_type_states(
-    job_ids: Sequence[UUID],
-) -> dict[UUID, dict[str, object]]
-JobIntelligenceProductReadModel(db).get_governed_skill_name_states(
-    job_ids: Sequence[UUID],
-) -> dict[UUID, dict[str, object]]
+JobIntelligenceProductReadModel(db).get_company_details(company_ids) -> dict
+JobIntelligenceProductReadModel(db).get_canonical_job_states(job_ids) -> dict
+JobIntelligenceProductReadModel(db).get_governed_skill_name_states(job_ids) -> dict
 ```
 
-The route/adaptor seams include:
-
-```text
-GET /api/job-intelligence/governance/summary
-GET /api/jobs/search
-GET /api/jobs/{job_id}
-GET /api/companies
-GET /api/companies/{company_id}
-GET /api/jobs/{job_id}/recommendations
-GET /api/job-intelligence/governance/job-taxonomy/review-items
-POST /api/job-intelligence/governance/job-taxonomy/review-items/query
-```
-
-Frontend governance queue hashes are:
-
-```text
-#job-intelligence/<area>?item=<stable-id>&q=<domain-filter>&cursor=<opaque-cursor>
-#job-intelligence/job-taxonomy?source_site=<source>&source_classification_id=<qualified-id>&source_classification_label=<display-label>&job_id=<job-id>&reason=<reason>&pending_limit=<limit>&page=<page>
-```
-
-`governanceAreas.js` owns the domain filter mapping: Canonical Review uses
-`job_id`, Skill Candidates use `search`, and Company Industry Review uses
-`raw_value`. React queue mechanics only pass `query`, `cursor`, and `limit`.
-
-Operator-scoped Canonical Review adds page mode as an additive contract. The
-frontend keeps repeated `job_id` values in the hash for a readable deep link,
-then sends every frontend queue query to POST `/review-items/query` as JSON.
-`job_ids` remains an array and `job_id` remains the singular search field. The
-GET route remains as a compatibility endpoint for existing callers. GET and
-POST must call the same backend read implementation and return the same
-`CanonicalReviewPageSchema`. Page responses expose `page`, `limit`, `offset`,
-and `page_count`, with the operator UI requesting 10 items per page. Existing
-cursor mode remains valid for unscoped consumers.
-Canonical Review item responses also expose nullable `job_title` and
-`company_name` fields. The read model obtains those labels with one bulk
-Job/Company projection per queue page (and one lookup for item detail); it must
-not dereference a Job relationship once per queue row. The hash's
-`source_classification_label` is display-only metadata from the AI handoff and
-is never sent as a queue filter or repair authority.
+The product composes current state from the ordinary taxonomy routes and tables
+documented in `ordinary-current-taxonomies.md`.
 
 ### 3. Contracts
 
-- Every governed read is pinned to the domain's active revision. Assignments,
-  Review references, backlog counts, oldest timestamps, coverage, and reason
-  distributions from inactive revisions are excluded.
-- An unavailable active revision returns domain availability with
-  `available=false` and a stable `unavailable_code`. It never falls back to a
-  legacy column and contributes zero governed backlog/coverage.
-- Available-but-empty is distinct from unavailable. An existing Source Job
-  Attribute projection with no Employment Types is `available=true` plus `[]`;
-  no projection is `available=false`, `SOURCE_JOB_ATTRIBUTES_NOT_PROJECTED`,
-  plus `[]`.
-- Search cards, Company lists, and Related Jobs batch projection reads for the
-  whole result set. Per-result domain reader calls are forbidden.
-- Related Jobs expose `employment_types[]`, `canonical_taxonomy`, and
-  `job_intelligence_availability`. `jobs.employment_type`, legacy
-  `job_taxonomy`, provisional Skills, and other legacy evidence are excluded
-  from ranking and serialized governed fields.
-- Recommendation scoring reads active governed Skill names and stable
-  Canonical Taxonomy codes. Unexpected untyped payload values fail closed to
-  empty governed sets rather than becoming iterable legacy data.
-- Frontend route/response tests consume committed backend fixtures. Backend
-  Pydantic schemas validate each fixture and tests assert backend/frontend JSON
-  copies are equal.
-- Queue search is server-side and domain-owned, cursor pagination is opaque,
-  and `q`/`cursor` survive item deep links and narrow-detail back navigation.
-  Arrow/Home/End navigation moves queue focus; Back and successful decisions
-  return focus to a surviving queue item or the queue search field.
-- Governance decisions exist only in the trusted-local Governance workspace.
-  Job Detail, Companies, AI Enrichment, Dashboard, and Browser remain read-only
-  and deep-link into Governance.
-- A scoped AI Enrichment taxonomy link preserves source, qualified category /
-  subcategory IDs, display-only category label, dates, pending limit, exclusion
-  reason, and job IDs. The queue shows a scope banner and only that bounded
-  pending slice. Any row is an evidence entry point. On narrow screens, selecting an item hides the
-  queue and shows the detail panel first; the explicit Back action restores the
-  queue and its focus.
-- `source_classification_paths_missing` is a source-evidence reason, not a
-  Canonical Job Subcategory decision. Its detail panel explains that the Job
-  requires source-evidence recollection.
+- `compose_current_job_detail` serializes ordinary Job fields through
+  `JobSchema`, adds safe detail scalars, overlays the current product payload,
+  and validates one complete `JobDetailSchema`.
+- Never validate a raw `Job` ORM instance as `JobDetailSchema`: a retired ORM
+  property can trigger a query against a table absent from the current schema
+  before the current payload is overlaid.
+- Job Taxonomy state is `assigned` or `unassigned`. There are no reasons,
+  revision IDs, Review references, or Governance deep links.
+- Skill authority is `current_job_skill_assignments`. Active unresolved
+  evidence appears as `skill_state.candidate_mentions` and the equal top-level
+  `skill_candidate_mentions` convenience field. `provisional_skills` and
+  `unreviewed_skill_mentions` are absent.
+- Company Industry returns current stable-code assignments; product reads never
+  fall back to `Company.industry` as taxonomy authority.
+- Search cards, Company lists, Related Jobs, stats, and CSV load current
+  projections in bulk for the result set. Per-item taxonomy reader calls are
+  forbidden.
+- Related Jobs score current Skill names and stable Job Taxonomy codes. Model
+  provenance metadata may contain a third-party model version; this is not a
+  taxonomy version and is never used to select taxonomy state.
+- Backend and frontend fixture copies are exact JSON equals.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
 |---|---|
-| Domain has no active revision | `available=false`, stable domain code, no legacy fallback |
-| Active pointer exists but is inconsistent | Domain conflict code; no partial governed payload |
-| Source projection exists with zero mappings | `available=true`, empty Employment Types |
-| Source projection is absent | `SOURCE_JOB_ATTRIBUTES_NOT_PROJECTED`, empty data |
-| Inactive revision has pending Reviews/Candidates | Exclude from summary, coverage, reasons, and Company review refs |
-| Availability says unavailable while governed data is populated | Pydantic validation failure |
-| Queue filter/cursor changes | Abort stale request; URL and API receive the same domain filter/cursor |
-| Optional detail section fails | Keep evidence visible; name the partial failure and disable only dependent actions |
-| Decision returns stale version | Close stale confirmation, reload detail, explain conflict |
-| Review Job/Company display label is missing | Keep the typed review item readable with nullable fields and a non-empty UI fallback; preserve UUID in technical detail |
-| Scoped display label is missing or changed | Keep ID-based scope/filter/repair behavior unchanged; treat the label as informational only |
-| A deep link contains multiple selected jobs | Send them as `job_ids` to the API; never send repeated values through singular `job_id` |
-| Frontend Canonical Review query has any scope or filter combination | Use POST `/review-items/query` with the complete JSON filter body; do not serialize `job_ids` into the URL |
-| A bounded `job_ids` scope resolves to no active Review rows | Return an empty page with `total=0`; never broaden the query to the global Review queue |
-| Narrow selected-item view | Hide the queue only below the narrow breakpoint; Back must restore the scoped page and queue focus |
-| Container fixture test cannot see frontend copy | Mount frontend read-only; do not skip equality validation |
+| Raw ORM Job is passed directly to `JobDetailSchema` | Forbidden implementation; regression suite fails without legacy tables |
+| Current Job assignment is absent | `state=unassigned`, `assignment=null` |
+| Candidate Mentions are absent | Both Candidate Mention arrays are empty |
+| Current taxonomy code is unknown to the reader | Fail the composed response; do not use legacy text |
+| Required composed state is missing or availability contradicts data | Pydantic validation failure |
+| Frontend/backend fixture copies differ | Product contract test failure |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** one Related Jobs request bulk-loads projections for source plus all
-  candidates, scores governed Skills/stable codes, and returns explicit
-  availability for every recommendation.
-- **Good:** a new active taxonomy revision has one pending Review while an old
-  revision has ten. Summary reports one and its oldest timestamp; old reasons
-  do not affect Dashboard coverage.
-- **Base:** a Job has a Source projection but no Employment Type mappings. The
-  product displays an available empty state rather than `Unknown` or a legacy
-  scalar.
-- **Base:** a deep-linked Review is no longer on the current queue page. Its
-  typed detail still loads while the queue independently shows its empty page.
-- **Good:** a Review row shows `job_title` and `company_name`, while the exact
-  Job UUID stays under technical evidence and the scoped banner explains that
-  any row can start batch review.
-- **Bad:** count all `status='active'` Reviews without filtering the active
-  revision, or expose every historical Company Industry review reference.
-- **Bad:** loop through queue rows and load Job/Company labels one row at a
-  time, render UUID as the only operator-facing identity, or treat the
-  display-only category label as a scope filter.
-- **Good:** every frontend Canonical Review query uses the JSON query endpoint
-  and preserves every Job ID. If none of those IDs remain active Reviews, the
-  response is an explicit empty page rather than an unscoped queue.
+- **Good:** one bulk read composes Job, Company Industry, Skills, and Candidate
+  Mentions while no legacy Governance tables exist.
+- **Base:** an unenriched Job is Unassigned with empty Skills and Candidate
+  Mentions.
+- **Bad:** serialize the raw ORM object first and overwrite Skills afterward.
+- **Bad:** show a Governance link or use a legacy revision-bound projection when
+  the current assignment is empty.
 
 ### 6. Tests Required
 
-- `test_job_intelligence_response_contracts.py` validates the complete product
-  fixture, availability/data consistency, Job/Company/search/Dashboard reads,
-  governed Related Jobs, one-query-per-projection batching, empty-versus-missing
-  Source projections, inactive-revision backlog isolation, and inactive Company
-  Review reference isolation.
-- Domain fixture tests validate Canonical, Company Industry, Skill, and Source
-  response models; exact-copy tests compare all four frontend fixtures.
-- `JobIntelligenceGovernancePage.test.jsx` covers peer tabs, trusted-local
-  warning, server filters/cursors, deep links, queue keyboard focus, narrow Back,
-  partial errors, confirmation variants, stale conflict, post-decision focus,
-  title/company queue identity, technical UUID disclosure, and scoped batch
-  guidance.
-- `JobBrowser.test.jsx`, `FilterPanel.test.jsx`, `JobDetailModal.test.jsx`,
-  `CompanyIndustryDisplay.test.jsx`, `AIEnrichmentPage.test.jsx`, and
-  `Dashboard.test.jsx` prove canonical terminology, stable IDs, unavailable /
-  Unassigned / Unknown states, and read-only deep links.
-- `jobIntelligence.test.js` covers JSON POST serialization for unscoped,
-  scoped, paginated, and large bounded queries; backend Canonical API tests
-  exercise both routes through the shared read path and assert that an
-  all-invalid bounded scope returns zero items.
-- Run PostgreSQL files sequentially against an explicitly disposable database
-  whose name ends in `_test`. In the backend container, mount
-  `frontend:/frontend:ro` for fixture equality tests.
-- Manual browser QA covers desktop and narrow width, long English/CJK labels,
-  long hashes/IDs, tab and queue keyboard navigation, dialog focus/Escape, and
-  zero document-level horizontal overflow.
-- Scoped browser QA also verifies AI → taxonomy deep-link context, `10 of N`
-  page mode, direct numeric page jumps, source-provenance inspect/confirm
-  gating, human-readable title/company labels, display-only category context,
-  and a fresh page has no logged caller-cancelled request errors.
+- `test_job_intelligence_response_contracts.py` creates only ordinary current
+  taxonomy tables in a disposable `_test` PostgreSQL database and covers Job
+  Detail, manual snapshot, Company, filters, recommendations, stats, and CSV.
+- `test_current_taxonomies.py` validates current response shapes and the absence
+  of revision/review routes.
+- `JobDetailModal.test.jsx`, `JobBrowser.test.jsx`,
+  `CompanyIndustryDisplay.test.jsx`, and `Dashboard.test.jsx` consume committed
+  current fixtures and assert no legacy fallback or Governance workspace.
+- The backend test container mounts `/frontend` read-only for exact fixture
+  equality.
 
 ### 7. Wrong vs Correct
 
-#### Wrong: revision-agnostic product metrics and per-item reads
+#### Wrong
 
 ```python
-pending = db.query(ReviewItem).filter(ReviewItem.status == "active").count()
-for job in candidates:
-    skills = SkillGovernanceReader(db).get_job_state(job.id)
+payload = JobDetailSchema.model_validate(job).model_dump(mode="python")
+payload.update(current_product_payload)
 ```
 
-Old releases pollute current metrics and the candidate loop creates N+1 reads.
-
-#### Correct: active-revision predicates and bulk composition
+#### Correct
 
 ```python
-pending = db.query(ReviewItem).filter(
-    ReviewItem.status == "active",
-    ReviewItem.taxonomy_revision_id == active_revision.id,
-).count()
-
-states = JobIntelligenceProductReadModel(db).get_governed_skill_name_states(
-    [source_job.id, *(job.id for job in candidates)]
-)
+return compose_current_job_detail(db, job)
 ```
 
-One active governed authority drives metrics and one bulk read feeds every
-consumer result.
-
-#### Wrong: UUID-only queue identity and display metadata as authority
-
-```jsx
-queueLabel: (item) => `Job ${item.job_id}`
-fetchCanonicalReviewItems({ sourceClassificationLabel: label })
-```
-
-The first copy forces operators to choose by an internal identifier, and the
-second makes mutable presentation text part of the scope contract.
-
-#### Correct: human identity with technical traceability and ID authority
-
-```jsx
-queueLabel: (item) => item.job_title || 'Job details unavailable'
-queueMeta: (item) => `${item.company_name || 'Company unavailable'} · ${reason}`
-```
-
-The UI uses Job/Company labels for selection, keeps the UUID in technical
-detail, and sends only source-qualified IDs and the existing filter values to
-the backend.
-
-#### Wrong: put a Canonical Review scope in a GET URL
-
-```js
-fetch(`/review-items?job_ids=${jobIds.join('&job_ids=')}`)
-```
-
-Large batches can be rejected by the browser dev server or proxy with HTTP
-431 before the application handles the request, and even short requests do
-not need a cacheable URL for this dynamic queue.
-
-#### Correct: use JSON POST for the frontend query contract
-
-```js
-fetch('/review-items/query', {
-  method: 'POST',
-  body: JSON.stringify({ ...filters, job_ids: boundedJobIds }),
-})
-```
-
-The frontend always uses this JSON contract; the backend retains GET only for
-compatibility. Both routes use the same Canonical Review read implementation,
-and an empty bounded selection remains empty.
-
-### Historical Review recovery boundary
-
-The scoped Job Taxonomy queue must resolve active Review rows directly; it must
-not reuse the ordinary AI pending selector, because a Job can have
-`ai_enriched_at` set while its Canonical Review remains active. The batch
-recovery entry point is displayed at scope level and follows preview → explicit
-confirmation → asynchronous progress. Its authority is the source-qualified
-scope plus the server-pinned taxonomy revision, mapping revision, and scope
-fingerprint. The display-only category label never enters recovery filtering.
-
-Only `classifier_output_invalid` and `classifier_provenance_missing` may use
-this entry point. Missing Source paths retain recollection guidance. Unresolved
-classifier results remain Review; there is no batch insufficient-evidence action.
+The shared composer prevents API, snapshots, and exports from privately
+reintroducing retired ORM authority.

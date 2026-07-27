@@ -83,11 +83,12 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
 - Assert public batch/job-ID mode and `/ai/enrich-job/{job_id}` remain absent while `/jobs/manual` still auto-enriches.
 - Assert pending eligibility is based on `job_source_attribute_projections`,
   not legacy Source classification scalars.
-- Assert preview/create parity uses `CanonicalTaxonomyPreflight`, persists the
-  stable reason, and worker execution rechecks the same policy before item
-  start/LLM dispatch.
-- Assert `JobTaxonomyRegistry` and legacy default-path resolution are retired
-  fail-closed seams and have no production call sites.
+- Assert every Job with projected Source Attributes remains eligible for AI
+  Enrichment. Present current mappings constrain Job targets; missing mappings
+  expose the complete active assignable current taxonomy and do not create an
+  exclusion or Review item.
+- Assert `JobTaxonomyRegistry`, `JobCategoryNormalizer`, and legacy default-path
+  resolution modules are absent from production and tests.
 - Assert mixed and all-excluded pending selections expose grouped exclusion details, preserve item status/reason, and do not enqueue `enrichment.run.requested` for an empty supported workload.
 
 ## 7. Wrong vs Correct
