@@ -103,7 +103,7 @@ backend/tests/*
 !backend/tests/test_catalog_automation_impact.py
 !backend/tests/test_crawl_control_*.py
 !backend/tests/test_dispatch_plan_*.py
-!backend/tests/test_versioned_listing_runtime.py
+!backend/tests/test_listing_runtime.py
 !backend/tests/test_jobsdb_standalone_crawl.py
 !backend/tests/test_ctgoodjobs_standalone_crawl.py
 !backend/tests/test_offertoday_quality.py

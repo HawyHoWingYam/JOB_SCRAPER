@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 from types import SimpleNamespace
 import uuid
 
@@ -298,41 +296,3 @@ def test_global_company_run_keeps_missing_only_targeting_and_persists_mode():
     finally:
         db.close()
         engine.dispose()
-
-
-def test_company_web_search_migration_has_single_head_lineage_and_reverse_drop():
-    migration_path = (
-        Path(__file__).resolve().parents[1]
-        / "alembic/versions/20260723_120000_add_company_web_search_state.py"
-    )
-    spec = importlib.util.spec_from_file_location("company_web_search_migration", migration_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-
-    assert module.revision == "20260723_120000"
-    assert module.down_revision == "20260722_120000"
-    added_columns = []
-    dropped_columns = []
-    module.op = SimpleNamespace(
-        add_column=lambda table, column: added_columns.append((table, column)),
-        drop_column=lambda table, name: dropped_columns.append((table, name)),
-    )
-
-    module.upgrade()
-    module.downgrade()
-
-    added_by_name = {
-        (table, column.name): column for table, column in added_columns
-    }
-    run_flag = added_by_name[("company_enrichment_runs", "web_search_enabled")]
-    assert run_flag.nullable is False
-    assert run_flag.server_default is not None
-    assert (
-        "app_runtime_settings",
-        "companies_web_search_last_test_status",
-    ) in added_by_name
-    assert dropped_columns[-1] == (
-        "company_enrichment_runs",
-        "web_search_enabled",
-    )

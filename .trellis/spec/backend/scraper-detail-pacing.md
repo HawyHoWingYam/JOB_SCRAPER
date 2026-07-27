@@ -42,9 +42,8 @@ build_detail_pacing_controller(...) -> DetailPacingController | None
   `dispatching`, `running`, `manual_action_required`, or `cancelling`; listing
   payloads and scheduled tasks are excluded.
 - Defaults are 1-3 seconds, burst size 20, and burst pause 30 seconds.
-  Both Alembic upgrade and `scripts/bootstrap_db.py` seed missing rows.
-  Bootstrap uses `ON CONFLICT DO NOTHING` and must never overwrite an operator
-  edit.
+  `ScraperPacingSettingsService` creates a missing Source row from those
+  defaults and must never overwrite an existing operator edit.
 - Manual detail dispatch locks the selected source settings row, checks for an
   existing same-source active manual detail task, and stores the resolved value
   under `CrawlJob.request_payload.detail_pacing` in the same transaction.

@@ -7,8 +7,7 @@
 Use this contract when changing the committed HSIC seed, Company Industry
 publication or activation, company-owned Industry evidence, Source Industry
 mappings, Company assignments/reviews, governance decisions, Company Industry
-reads/filters, the compatibility projection, the rebuild inspector, or the
-Company Industry Alembic migration.
+reads/filters, the compatibility projection, or the rebuild inspector.
 
 Company Industry is downstream governed knowledge. Job Source Classification
 is crawl/job evidence and must never be copied into `Company.industry`, an
@@ -71,14 +70,14 @@ python backend/scripts/inspect_company_industries.py \
   [--format json|human] [--company-id <uuid>]...
 ```
 
-PostgreSQL migration/constraint tests require an explicit disposable database:
+PostgreSQL schema/constraint tests require an explicit disposable database:
 
 ```text
 JOB_INTELLIGENCE_TEST_DATABASE_URL=postgresql://.../<dedicated_test>
 ```
 
-The database name must end in `_test`. Never point this key, downgrade tests,
-seed materialization tests, or raw guard checks at the live corpus.
+The database name must end in `_test`. Never point this key, destructive schema
+tests, seed materialization tests, or raw guard checks at the live corpus.
 
 ### 3. Contracts
 

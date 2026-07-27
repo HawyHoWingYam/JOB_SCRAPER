@@ -5,9 +5,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 import ast
-import runpy
-import sys
-from types import ModuleType, SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -719,48 +716,6 @@ def test_concurrent_exact_decisions_commit_once_and_replay_once(foundation_db):
             AuditReader(foundation_db).list(AuditQuery(domain="skill-governance")).items
         )
         == 1
-    )
-
-
-def test_foundation_migration_is_schema_only_and_installs_immutability_guards(
-    monkeypatch,
-):
-    created_tables = []
-    dropped_tables = []
-    executed_sql = []
-    alembic_stub = ModuleType("alembic")
-    alembic_stub.op = SimpleNamespace(
-        create_table=lambda name, *_columns, **_kwargs: created_tables.append(name),
-        create_index=lambda *_args, **_kwargs: None,
-        drop_index=lambda *_args, **_kwargs: None,
-        drop_table=lambda name: dropped_tables.append(name),
-        execute=lambda statement: executed_sql.append(str(statement)),
-    )
-    monkeypatch.setitem(sys.modules, "alembic", alembic_stub)
-
-    migration = runpy.run_path(
-        Path(__file__).parents[1]
-        / "alembic"
-        / "versions"
-        / "20260718_210000_add_job_intelligence_foundation.py"
-    )
-    migration["upgrade"]()
-    migration["downgrade"]()
-
-    assert created_tables == [
-        "governance_revisions",
-        "governance_audit_events",
-        "governance_idempotency_records",
-    ]
-    assert dropped_tables == list(reversed(created_tables))
-    assert not any("INSERT" in statement.upper() for statement in executed_sql)
-    assert any(
-        "TRG_GOVERNANCE_REVISIONS_IMMUTABLE" in statement.upper()
-        for statement in executed_sql
-    )
-    assert any(
-        "TRG_GOVERNANCE_AUDIT_EVENTS_APPEND_ONLY" in statement.upper()
-        for statement in executed_sql
     )
 
 

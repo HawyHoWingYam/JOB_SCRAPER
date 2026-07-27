@@ -50,8 +50,8 @@ PostgreSQL integration tests require an explicit disposable URL:
 JOB_INTELLIGENCE_TEST_DATABASE_URL=postgresql://.../<dedicated-test-db>
 ```
 
-Never point that key, Alembic rollback tests, or downgrade commands at the live
-development corpus.
+Never point that key, schema bootstrap checks, or destructive test cleanup at
+the live development corpus.
 
 Every test suite that reads this key must parse the URL and require the database
 name to end in `_test` before its first `create_engine`, schema DDL, or fixture
@@ -90,77 +90,79 @@ Seed validation accumulates all domain-owned issues and sorts by JSON path,
 code, related ID, message, and severity. Foundation owns report determinism, not
 domain hierarchy or mapping rules.
 
-### Schema migration synchronization
+### Current empty-schema bootstrap
 
 #### 1. Scope / Trigger
 
-Use this contract whenever an ORM model gains a persisted column or table used
-by an API, worker, or serializer. A model change is incomplete until the
-Alembic revision is present in the repository and the bootstrap path reaches
-that revision.
+Use this contract whenever the current ORM schema changes. This sandbox does
+not migrate an existing database in place: application services are stopped,
+the sandbox database is cleared, the complete code set is deployed, and one
+empty database is bootstrapped to the current metadata.
 
 #### 2. Signatures
 
 ```text
 bootstrap_database(db_engine=engine) -> None
-alembic upgrade head
+python backend/scripts/bootstrap_db.py
 ```
 
-The local Compose `db-bootstrap` service runs `bootstrap_database`, which
-upgrades an existing stamped database and stamps/ upgrades a fresh one.
+`bootstrap_database` accepts an SQLAlchemy Engine and metadata. It creates the
+current schema only when inspection finds zero existing tables.
 
 #### 3. Contracts
 
-- Every new mapped column has one forward migration and a reversible downgrade.
-- The migration's `down_revision` is the current repository head and its
-  `revision` becomes the only head after the change.
-- Existing stamped databases converge to the repository head before API and
-  worker services query the changed model.
-- API serializers may expose nullable recovery metadata, but they must not
-  assume an older schema can select the new ORM columns.
+- Any existing table, including a stray migration/version table, makes
+  bootstrap fail without creating, dropping, or altering tables.
+- PostgreSQL bootstrap obtains the advisory transaction lock before inspection
+  and creates the `vector` extension before `metadata.create_all`.
+- After creation, the actual table-name set must exactly equal the current ORM
+  metadata table-name set. Missing or unexpected tables fail bootstrap.
+- There is no migration directory, migration runtime, schema stamp, downgrade,
+  compatibility column, or mixed-code deployment path.
+- Schema changes are deployed atomically as `stop -> clear sandbox database ->
+  deploy complete code set -> bootstrap -> start`.
+- PostgreSQL tests that may create or clear schema require a parsed database
+  name ending in `_test` before opening an engine.
 
 #### 4. Validation & Error Matrix
 
 | Condition | Required result |
 |---|---|
-| ORM column exists but migration is absent | Do not ship; migration-head check fails before deployment |
-| Database revision is behind the model | Run `db-bootstrap` / `alembic upgrade head` before starting API workers |
-| API queries a missing mapped column | PostgreSQL `UndefinedColumn` is an operational schema-drift failure, not an empty result |
-| Migration is applied | AI overview/runs queries select recovery metadata and return HTTP 200 |
+| Database has zero tables | Create the PostgreSQL extension when needed, create all current metadata tables, then verify exact table parity |
+| Database has any table | Raise `DatabaseBootstrapError`; preserve the database unchanged |
+| Created table set differs from metadata | Raise `DatabaseBootstrapError`; do not start application services |
+| PostgreSQL test database name does not end in `_test` | Fail before `create_engine`, DDL, or cleanup |
+| Old and new application processes would overlap | Unsupported deployment; stop all persistent services before clearing/bootstrap |
 
 #### 5. Good / Base / Bad Cases
 
-- **Good:** `EnrichmentRun.run_snapshot`, `EnrichmentRunItem.error_code`, and
-  `attempt_count` are added by revision `20260722_120000`, then the disposable
-  database reports that revision as `head`.
-- **Base:** An existing local volume is at the previous revision; rerun the
-  one-shot `db-bootstrap` service and verify `alembic_version` before opening
-  the AI Enrichment page.
-- **Bad:** Commit the ORM/API changes while leaving the migration untracked;
-  `/api/ai/overview` or `/api/ai/runs` then returns 500 from an
-  `UndefinedColumn` query.
+- **Good:** stop services, clear the sandbox volume, deploy one complete code
+  set, bootstrap the empty database, verify exact metadata parity, then start.
+- **Base:** an empty disposable SQLite database creates the current tables
+  without a PostgreSQL extension step.
+- **Bad:** point bootstrap at a database containing one application table and
+  expect it to repair or upgrade the schema.
 
 #### 6. Tests Required
 
-- A migration unit test asserts the revision lineage, exact added columns,
-  server default for non-null counters, and reverse drop order.
-- A disposable PostgreSQL check runs `alembic upgrade head`, then queries the
-  changed API endpoints and asserts HTTP 200.
-- CI or release checks assert exactly one Alembic head and that the database
-  revision equals the repository head before API smoke tests.
+- SQLite tests assert empty creation, exact table parity, and refusal of both an
+  ordinary table and a stray version-table name without mutation.
+- An optional disposable PostgreSQL `_test` integration asserts advisory-lock
+  bootstrap, `vector` extension availability, exact tables, and non-empty
+  refusal.
+- Deployment documentation and checks preserve the stop/clear/deploy/bootstrap/
+  start order; no test starts long-running services or mutates shared `jobsdb`.
 
 #### 7. Wrong vs Correct
 
 ```python
-# Wrong: model/API change without a checked-in migration.
-attempt_count = Column(Integer, nullable=False, default=0)
+# Wrong: try to make an old database look current in place.
+metadata.create_all(bind=connection)  # existing tables were never rejected
 
-# Correct: pair the model field with an Alembic upgrade and downgrade,
-# then converge existing databases before serving requests.
-op.add_column(
-    "enrichment_run_items",
-    sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0"),
-)
+# Correct: fail closed unless the target has no tables.
+if inspect(connection).get_table_names():
+    raise DatabaseBootstrapError("Refusing to bootstrap a non-empty database")
+metadata.create_all(bind=connection)
 ```
 
 ### 4. Validation & Error Matrix
@@ -209,8 +211,7 @@ op.add_column(
 - outbox event correlation with the audit ID;
 - stable audit pagination and response-schema serialization;
 - worker import/injection isolation;
-- schema-only Alembic migration plus real disposable-PostgreSQL
-  upgrade/trigger/downgrade rehearsal.
+- empty-schema bootstrap and real disposable-PostgreSQL `_test` safety checks.
 
 `backend/tests/test_job_intelligence_test_safety.py` inventories every
 PostgreSQL-bound Job Intelligence suite. For every engine-opening function, it

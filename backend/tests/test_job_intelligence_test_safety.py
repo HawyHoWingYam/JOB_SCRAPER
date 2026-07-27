@@ -9,13 +9,10 @@ POSTGRESQL_JOB_INTELLIGENCE_SUITES = (
     "integration/test_job_intelligence_rebuild.py",
     "test_canonical_job_taxonomy_api.py",
     "test_canonical_job_taxonomy_governance.py",
-    "test_canonical_job_taxonomy_migration.py",
     "test_company_industry_governance.py",
-    "test_company_industry_migration.py",
     "test_job_intelligence_foundation.py",
     "test_job_intelligence_response_contracts.py",
     "test_skill_governance.py",
-    "test_skill_governance_migration.py",
     "test_source_job_attribute_ingest.py",
     "test_source_job_attributes.py",
 )

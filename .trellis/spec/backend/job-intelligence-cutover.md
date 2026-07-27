@@ -25,8 +25,7 @@ python backend/scripts/job_intelligence_cutover.py inventory \
   --output <manifest> \
   --application-commit <commit> \
   --application-image <image> \
-  --configuration-hash <sha256> \
-  --target-schema-revision <revision>
+  --configuration-hash <sha256>
 
 python backend/scripts/job_intelligence_cutover.py dry-run \
   --manifest <manifest> --checkpoint-dir <dir>
@@ -108,9 +107,9 @@ from app.api.retrieval import router as retrieval_router  # isolated sidecar
 
 #### Manifest and verified artifacts
 
-- Inventory pins the application commit/image/configuration hash, current and
-  target schema, governed release identities, preserved and legacy dataset
-  fingerprints, writer inventory, rebuild versions, operator, and reset
+- Inventory pins the application commit/image/configuration hash, governed
+  release identities, preserved and legacy dataset fingerprints, writer
+  inventory, rebuild identities, operator, and reset
   allowlist. Raw descriptions, source payloads, cookies, sessions, and secrets
   are excluded.
 - A manifest is canonical JSON plus a SHA-256 over its exact payload. Every
@@ -157,7 +156,7 @@ The only valid phase order is:
 13 reopen_writers
 ```
 
-- Each checkpoint pins ordinal, phase, manifest hash, code version, previous
+- Each checkpoint pins ordinal, phase, manifest hash, application commit, previous
   output hash, status, output, and timezone-aware timing. `completed` requires an
   output hash; `failed` requires a bounded error and completion time; `running`
   cannot pretend to be completed.
@@ -181,9 +180,10 @@ The only valid phase order is:
   or an active review with a stable reason; legacy scalar values never become
   automatic governed authority.
 - Embeddings start only after active Canonical and Skill targets match the
-  manifest. The shared `EmbeddingIndexer` is current only when all four values
-  match: document hash, model name, version, and `384` dimensions.
-- Phase 11 progress pins manifest, embedding configuration, eligible count,
+  manifest. The shared `EmbeddingIndexer` is current only when the document
+  hash and `384` dimensions match. Model choice is runtime configuration, not
+  persisted vector identity or a freshness key.
+- Phase 11 progress pins manifest, the runtime model used for that rebuild, eligible count,
   stable Job cursor, ready count, and coverage. Resume rejects drift and the
   cross-layer gate requires one fresh embedding for every non-deleted eligible
   Job. Governed documents contain accepted Canonical taxonomy plus active
@@ -192,8 +192,8 @@ The only valid phase order is:
 
 #### Runtime verification and writer reopening
 
-- Runtime smoke evidence is created only after Phase 11 and must pin schema
-  version 1, the exact manifest hash/application identity, `status=passed`, a
+- Runtime smoke evidence is created only after Phase 11 and must pin the exact
+  manifest hash/application identity, `status=passed`, a
   timezone-bearing observation time, and exactly five true checks:
   `backend_api`, `embedding`, `frontend`, `governance`, and `search`.
 - The expected first execute has no post-rebuild smoke evidence and therefore
@@ -229,7 +229,7 @@ The only valid phase order is:
 | Pre-execute outbox or active run remains | `CUTOVER_OUTBOX_NOT_DRAINED` / `CUTOVER_ACTIVE_RUNS_PRESENT` |
 | Restored fingerprint or backup identity differs | `CUTOVER_BACKUP_RESTORE_MISMATCH` |
 | Checkpoint/progress manifest, code, phase, ordinal, input hash, or rebuild configuration drifts | Fail closed; require matching resume or a new artifact directory |
-| Job lacks Canonical assignment/review or current embedding tuple | Cross-layer verification fails; writers stay stopped |
+| Job lacks Canonical assignment/review or a current document-hash/dimensions embedding | Cross-layer verification fails; writers stay stopped |
 | Runtime evidence is absent, stale, false, incomplete, or belongs to another application/manifest | Phase 12 fails; no writer control |
 | Cross-layer record missing or writer control not explicitly injected | Phase 13 fails; no service restart |
 | Writer restart returns unknown/incomplete state or a persistent writer is not running | Reopen fails and records no successful Phase 13 checkpoint |
@@ -268,7 +268,7 @@ The only valid phase order is:
 - `integration/test_job_intelligence_rebuild.py` plus the anonymized legacy
   fixture: execute all domain rebuilds on an explicit PostgreSQL `*_test`
   database; assert preserved fingerprints, explicit Canonical review reasons,
-  company-owned evidence policy, governed Skill outcomes, embedding four-tuple,
+  company-owned evidence policy, governed Skill outcomes, embedding hash and dimensions,
   cross-layer verification, writer-control call, phase replay equality, and the
   exact non-duplicated outbox count.
 - Rehearse the real `pg_dump` / `pg_restore` adapter against a disposable

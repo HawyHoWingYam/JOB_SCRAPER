@@ -33,7 +33,7 @@ detail_snapshot_remaining_count
 detail_live_future_eligible_count
 ```
 
-Versioned Crawl Tasks and `GET /api/task-control-board` also expose:
+Current Crawl Tasks and `GET /api/task-control-board` also expose:
 
 ```python
 DetailSnapshotProjectionV1(

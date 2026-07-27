@@ -11,13 +11,14 @@ Use this composition for `#scheduler` operations and `#crawl-tasks?task=<id>` de
 - `#scheduler?source=<source>` renders `TaskControlBoardPage`.
 - Wizard subroutes under `#scheduler/...` render `TaskControlWizard`.
 - `#crawl-tasks?task=<encoded-id>` fetches `/api/crawl-jobs/tasks/{encoded-id}` directly.
-- `getTaskControlBoard(source, {signal})` always requests `version=2`.
+- `getTaskControlBoard(source, {signal})` requests the current Board directly.
 
 ### 3. Contracts
 
 - Decoders reject malformed required fields before state is committed.
 - Board reducers keep prior-good data on refresh failure and ignore stale request versions.
-- Board renders backend section membership/order and sends displayed Automation revision or fresh delete-review token with mutations.
+- Board renders backend section membership/order and sends only current
+  Automation commands or a fresh delete-review token with mutations.
 - Task Details renders normalized authority, listing/detail workload, immutable pacing, issue/guidance, recovery, actions, and an audit-events link.
 - Cancellation uses the shared focus-trapped confirmation dialog, calls the existing helper, and polls at one second while status is `cancelling`; only the backend can report `cancelled`.
 - Manual recovery keeps polling the declared Host Helper health endpoint while it
@@ -81,7 +82,7 @@ renderAuthority(detail.run.authority);
 
 ### 1. Scope / Trigger
 
-Use this contract only for Board V2 attention items whose backend kind is
+Use this contract only for current Board attention items whose backend kind is
 `failed_run` and whose backend actions include enabled `dismiss_failed_run`.
 
 ### 2. Signatures
@@ -90,7 +91,7 @@ Use this contract only for Board V2 attention items whose backend kind is
 dismissFailedRunAttention(taskId, expectedFailureEventSequence)
 ```
 
-The command posts `version: 1` and `expected_failure_event_sequence` to the
+The command posts `expected_failure_event_sequence` to the
 crawl-task dismissal endpoint. `decodeBoard` maps the nullable backend field to
 `failureEventSequence` and requires any non-null value to be a positive integer.
 
@@ -100,9 +101,9 @@ crawl-task dismissal endpoint. `decodeBoard` maps the nullable backend field to
   it from status, source, error text, or item ID.
 - Invoke the mutation immediately. Do not open confirmation, Undo, Restore, or
   add the action to Task Details.
-- Pass the exact decoded failure sequence and reload Board V2 after success so
+- Pass the exact decoded failure sequence and reload the Board after success so
   attention cards and Source counts reflect server projection.
-- Reuse the Board mutation busy/error surface. A rejected stale revision stays
+- Reuse the Board mutation busy/error surface. A rejected stale sequence stays
   visible and must not be hidden optimistically.
 
 ### 4. Validation & Error Matrix
@@ -133,7 +134,7 @@ crawl-task dismissal endpoint. `decodeBoard` maps the nullable backend field to
 ### 7. Wrong vs Correct
 
 ```javascript
-// Wrong: local-only hiding can conceal a rejected stale revision.
+// Wrong: local-only hiding can conceal a rejected stale sequence.
 setAttention(items => items.filter(item => item.entityId !== taskId));
 
 // Correct: fence the mutation and reload the server-owned projection.

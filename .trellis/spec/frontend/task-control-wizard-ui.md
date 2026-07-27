@@ -21,13 +21,13 @@ under `#scheduler/*`. The legacy `#scheduler` board remains reachable.
 ## Server authority
 
 - Automation create/update sends the exact current server
-  `review_fingerprint`; edit also sends expected revision. Refetch the saved
-  Automation before showing success.
+  `review_fingerprint`. Edit replaces the current Automation row without an
+  expected revision; refetch the saved Automation before showing success.
 - One-off and Run-now dispatch the exact prepared plan ID, one-time confirmation
   token, and expected plan fingerprint. Pending/result state prevents duplicate
   consumption.
 - Run saved configuration never edits the Automation. Run with changes creates
-  a distinct One-off draft with Automation ID/revision cleared.
+  a distinct One-off draft with the Automation ID cleared.
 - CTGoodJobs supports `headless` and `headed`; new drafts default to headless.
   Headed is explicitly labelled for debugging/operator recovery, and React does
   not rewrite a selected mode. OfferToday `offertoday:118000` is a visible

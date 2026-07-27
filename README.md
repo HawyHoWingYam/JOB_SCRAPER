@@ -167,36 +167,23 @@ docker compose run --rm backend-api python -m pytest --collect-only -q tests
 docker compose run --rm backend-api python -m pytest -q tests
 ```
 
-## Backend Migrations
+## Empty-schema bootstrap
+
+This sandbox has no migration or schema-version system. `docker compose up`
+runs the one-shot `db-bootstrap` service before the API. Bootstrap creates the
+`vector` extension and every current ORM table only when the database contains
+no tables.
+
+If any table already exists, bootstrap refuses to mutate the database. Stop the
+stack, clear the sandbox PostgreSQL schema/volume, deploy the complete current
+code set, and then start the stack again. Mixed-code deployment and in-place
+schema upgrades are unsupported.
 
 ```bash
-alembic -c backend/alembic.ini history
+docker compose down
+docker volume rm job_scraper_pg_data  # destructive sandbox reset
+docker compose up -d
 ```
-
-Alembic reads `DATABASE_URL` from the project `.env`. The local development default points at the PostgreSQL container on `localhost:5433`.
-
-This repository does not have a full Alembic baseline yet. The current first revision only tracks the enrichment-run tables added in Task 2.
-
-`docker compose up` now runs a one-shot `db-bootstrap` service that ensures the `vector` extension exists and creates the current ORM tables before the API and worker services start. If your `pg_data` volume predates this change and the stack is already unhealthy, run:
-
-```bash
-docker compose up db-bootstrap
-```
-
-For a fresh local database, use db-bootstrap via Docker:
-
-```bash
-docker compose run --rm db-bootstrap
-alembic -c backend/alembic.ini stamp 20260415_103800
-```
-
-For an existing database that was created before Alembic, use the existing schema bootstrap/convergence path first so the current tables exist, then register the current revision:
-
-```bash
-alembic -c backend/alembic.ini stamp 20260415_103800
-```
-
-Use `cd backend && alembic upgrade head` only for databases that already have the pre-Alembic base schema but do not yet have the new `enrichment_runs` tables.
 
 ## API Endpoints
 

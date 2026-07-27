@@ -8,15 +8,14 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 
 ### 2. Signatures
 
-- `GET /api/task-control-board` returns the compatibility V1 projection.
-- `GET /api/task-control-board?version=2&source_site=<source>&run_limit=<1..100>` returns Board V2.
-- `GET /api/crawl-jobs/tasks/{crawl_job_id}` returns `CrawlTaskDetailProjectionV1`.
-- `TaskControlBoardProjectionService.get_v2(selected_source, run_limit)` loads each supported Source independently, then batches events for the combined rows.
+- `GET /api/task-control-board?source_site=<source>&run_limit=<1..100>` returns the current Board projection.
+- `GET /api/crawl-jobs/tasks/{crawl_job_id}` returns the current normalized Task Detail projection.
+- `TaskControlBoardProjectionService.get_current(selected_source, run_limit)` loads each supported Source independently, then batches events for the combined rows.
 
 ### 3. Contracts
 
-- Board V2 always returns summaries for `jobsdb`, `ctgoodjobs`, and `offertoday`; only the selected Source contributes `needs_attention`, `active_runs`, `upcoming`, and `archived_automations`.
-- V1 remains the default. V2 must be explicitly requested; do not replace the V1 response model in place.
+- The Board always returns summaries for `jobsdb`, `ctgoodjobs`, and `offertoday`; only the selected Source contributes `needs_attention`, `active_runs`, `upcoming`, and `archived_automations`.
+- There is one current projection. Do not add a query selector, compatibility projection, or version field.
 - Task Detail reuses `build_crawl_task_snapshot` and `build_crawl_control_run_projection` so list, Board, and direct detail agree.
 - Manual guidance is bounded and may expose only normalized message/instructions/capabilities. A resumable normalized manual action always supports the baseline `fresh_profile` path; `reuse_open_browser` appears only when explicitly normalized as supported.
 - Browser-profile recovery fields are capability-gated: `reset_supported` is
@@ -36,7 +35,6 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 | Condition | Result |
 |---|---|
 | unsupported `source_site` | stable 422 control-source error |
-| `version` outside 1..2 | FastAPI 422 |
 | `run_limit` outside 1..100 | FastAPI 422 |
 | unknown Task UUID | 404 `CRAWL_TASK_NOT_FOUND` with the requested ID |
 | action is invalid for current status/lifecycle | action remains present with `enabled=false` and a reason code |
@@ -45,12 +43,12 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 ### 5. Good/Base/Bad Cases
 
 - Good: query each Source with its own `run_limit`, batch event reads, and preserve backend order.
-- Base: a legacy run returns `authority_kind=legacy` and null unavailable revisions without inventing them.
+- Base: a pre-cutover historical run may return `authority_kind=legacy` without inventing Dispatch Plan authority; sandbox cutover removes that history rather than preserving a compatibility protocol.
 - Bad: load one global page and partition it by Source; busy Sources can displace the selected Source.
 
 ### 6. Tests Required
 
-- Contract test that V1 stays default and V2 requires `version=2`.
+- Contract test that the endpoint accepts no projection selector and returns the current shape.
 - Assert all three Source queries occur and selected sections contain no cross-Source rows.
 - Assert direct Task Detail shares authority/workload values with the dispatched run.
 - Assert structured not-found behavior and absence of raw payload/manual-action fields.
@@ -78,12 +76,12 @@ for source in SUPPORTED_BOARD_SOURCES:
     rows.extend(source_rows)
 ```
 
-## Scenario: Dismiss one terminal failed-run attention revision
+## Scenario: Dismiss one terminal failed event occurrence
 
 ### 1. Scope / Trigger
 
 Use this contract when an operator no longer wants one exact terminal
-`crawl.failed` result shown in Board V2 `Needs attention`. This is a Board
+`crawl.failed` result shown in Board `Needs attention`. This is a Board
 acknowledgement only; it is not a crawl lifecycle transition or task deletion.
 
 ### 2. Signatures
@@ -93,12 +91,11 @@ POST /api/crawl-jobs/{crawl_job_id}/dismiss-failed-attention
 Content-Type: application/json
 
 {
-  "version": 1,
   "expected_failure_event_sequence": 3
 }
 ```
 
-A `failed_run` `BoardAttentionItemV2` exposes the same positive sequence as
+A `failed_run` attention item exposes the same positive sequence as
 `failure_event_sequence` and advertises `dismiss_failed_run` as a secondary
 action. Persistence appends `crawl.failed_attention_dismissed` with the target
 sequence and actor `local-operator`.
@@ -123,7 +120,7 @@ sequence and actor `local-operator`.
 |---|---|
 | Crawl Job does not exist | 404 `CRAWL_TASK_NOT_FOUND` |
 | Current status is not `failed` | 409 `FAILED_ATTENTION_STATE_INVALID` |
-| Expected sequence is not the latest failure | 409 `FAILED_ATTENTION_REVISION_CONFLICT` with current sequence |
+| Expected sequence is not the latest failure | 409 `FAILED_ATTENTION_SEQUENCE_CONFLICT` with current sequence |
 | Same failure was already dismissed | 200 with original dismissal sequence and `replayed=true` |
 | Later `crawl.failed` follows a dismissal | New failed attention with the later sequence |
 
@@ -140,7 +137,7 @@ sequence and actor `local-operator`.
 
 - Backend API/projection tests cover action/sequence serialization, successful
   suppression, one-event idempotency and actor payload, preserved Task Details,
-  stale revision, non-failed, not-found, and later-failure visibility.
+  stale sequence, non-failed, not-found, and later-failure visibility.
 - Snapshot tests prove a dismissal event cannot replace the latest lifecycle
   failure projection.
 - Frontend decoder tests require a positive sequence; interaction tests prove
@@ -152,7 +149,7 @@ sequence and actor `local-operator`.
 # Wrong: acknowledges whichever failure happens to be current at write time.
 dismiss_failed_attention(crawl_job_id)
 
-# Correct: fence the write to the revision rendered by the Board.
+# Correct: fence the write to the failure occurrence rendered by the Board.
 dismiss_failed_attention(
     crawl_job_id,
     expected_failure_event_sequence=item.failure_event_sequence,

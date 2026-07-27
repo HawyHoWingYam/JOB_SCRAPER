@@ -15,7 +15,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | Governance transactions, immutable history, migrations | Active |
+| [Database Guidelines](./database-guidelines.md) | Governance transactions, test safety, and empty-schema bootstrap | Active |
 | [Error Handling](./error-handling.md) | IP/manual-action recovery plus acknowledged manual crawl cancellation | Active |
 | [Trellis GitHub Issue Lifecycle](./github-issue-task-lifecycle.md) | Trellis task hooks, GitHub issue binding, and explicit manual QA closure | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
@@ -29,7 +29,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [OfferToday Research Artifacts](./offertoday-research-artifacts.md) | Historical artifact parent, verification, replay, and exit-code contracts | Preserved |
 | [Ordinary Source Classifications](./ordinary-source-classifications.md) | Current top-level classifications, direct synchronization, and unversioned crawl scope | Active |
 | [Crawl Control Automation Review](./crawl-control-automation-review.md) | Read-only scheduled-run review, fingerprint fencing, and non-frozen detail preview | Active |
-| [Task Control Board Projections](./task-control-board-projections.md) | Versioned Board, per-Source authority, normalized Task Details, and safe action contracts | Active |
+| [Task Control Board Projections](./task-control-board-projections.md) | Current Board, per-Source authority, normalized Task Details, and safe action contracts | Active |
 | [Source Job Attributes](./source-job-attributes.md) | Source-owned classification paths, governed Employment Types, atomic projection, APIs, and rebuild evidence | Active |
 | [Canonical Job Taxonomy Governance](./canonical-job-taxonomy.md) | Stable governed releases, reviewed Source mappings, assignments/reviews, canonical reads, and dry-run rebuild | Active |
 | [Company Industry Governance](./company-industry.md) | Immutable HSIC V2.0 releases, company-owned evidence, reviewed mappings, assignments/reviews, reads, and dry-run rebuild | Active |

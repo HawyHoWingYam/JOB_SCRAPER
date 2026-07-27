@@ -7,8 +7,8 @@
 Use this contract when changing the governed Skill seed/rules/backfill manifests,
 Skill publication or activation, deterministic extraction, Skill Mentions or
 Candidates, human Candidate decisions, Job-Skill projections, Skill reads and
-filters, recommendations, embeddings, rebuild inspection, Job Detail Skill
-payloads, or the Skill Governance Alembic migration.
+filters, recommendations, embeddings, rebuild inspection, or Job Detail Skill
+payloads.
 
 The governed Module owns Skill Category -> Technology -> Skill identity,
 reviewed aliases/rules, Candidate state, governed Mentions, and the projected
@@ -95,15 +95,15 @@ the implemented `governed_job_skill_mentions` and `governed_job_skills` tables.
 The `governed_` prefix is required because the unprefixed legacy Mention store
 already exists and must remain rollback evidence, not authority.
 
-PostgreSQL integration and migration tests require an explicit disposable URL
+PostgreSQL integration and schema tests require an explicit disposable URL
 whose database name ends in `_test`:
 
 ```text
 JOB_INTELLIGENCE_TEST_DATABASE_URL=postgresql://.../<dedicated_test>
 ```
 
-Never point this key, activation/concurrency tests, or Alembic downgrade
-rehearsals at the live development corpus.
+Never point this key, activation/concurrency tests, or destructive schema
+checks at the live development corpus.
 
 ### 3. Contracts
 
@@ -234,9 +234,9 @@ rehearsals at the live development corpus.
   affected/no-evidence Jobs, and differences from legacy evidence.
 - Inspection/legacy commands reject `--apply`, `--execute`, and `--activate`
   (or their equivalent mutation subcommand) before creating a Session.
-- The migration is additive and contains no seed publication or data mutation.
-  Downgrade drops all nine governed Skill tables and is destructive rollback;
-  preserving/rebuilding corpus data belongs to the cutover plan, not Alembic.
+- Current metadata creation contains no seed publication or corpus mutation.
+  Preserving or rebuilding corpus data belongs to the explicit cutover plan,
+  never empty-schema bootstrap.
 
 ### 4. Validation & Error Matrix
 

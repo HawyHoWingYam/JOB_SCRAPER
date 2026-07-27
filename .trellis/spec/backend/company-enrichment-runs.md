@@ -169,12 +169,12 @@ app_runtime_settings.companies_web_search_last_test_fingerprint VARCHAR(128) NUL
   while arbitrary provider failures remain summarized.
 - API/service tests assert default false, 409 when unavailable, active-run mode
   precedence, persisted execution intent, missing-description-only targeting,
-  no fallback/persistence on search failure, and migration upgrade/downgrade.
+  and no fallback/persistence on search failure.
 - Companies UI tests assert default-off, unavailable reason, explicit boolean
   POST, persisted active-run mode, and unchanged missing-description targeting
   text. Job surfaces must contain no Web Search control.
-- Alembic checks assert revision `20260723_120000` is the single head and the
-  development database is at that head before runtime smoke tests.
+- Empty-schema bootstrap tests assert the Company enrichment tables and current
+  columns are present in metadata; no in-place schema upgrade test exists.
 
 ## 7. Wrong vs Correct
 

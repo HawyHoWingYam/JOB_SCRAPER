@@ -1,0 +1,29 @@
+{
+  "id": "unversioned-runtime-protocols",
+  "name": "unversioned-runtime-protocols",
+  "title": "Remove application version protocols",
+  "description": "Remove application API/event/projection/automation/embedding/migration version systems and establish atomic deployment plus empty-schema bootstrap contracts.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-26",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-26-excluded-jobs-governance-handoff",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 29,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/29"
+  }
+}

@@ -77,15 +77,15 @@ The GET Review collection remains a compatibility route. Frontend queue
 queries use the JSON POST collection, and both routes delegate to the same
 `CanonicalJobTaxonomy.list_review_items()` read contract.
 
-PostgreSQL integration and migration tests require an explicitly disposable
+PostgreSQL integration and schema tests require an explicitly disposable
 database whose name ends in `_test`:
 
 ```text
 JOB_INTELLIGENCE_TEST_DATABASE_URL=postgresql://.../<dedicated_test>
 ```
 
-Never point this variable, Alembic downgrade/re-upgrade rehearsal, or raw
-constraint tests at the live development corpus.
+Never point this variable, destructive schema checks, or raw constraint tests
+at the live development corpus.
 
 ### 3. Contracts
 
@@ -224,8 +224,8 @@ constraint tests at the live development corpus.
   multi-path truth table with forward/reverse order, assignment/review replay
   and replacement, invalid classifier branches, outbox rollback, two-Session
   evaluation, operator audit/idempotency, AI preflight, and zero-write rebuild.
-- `test_canonical_job_taxonomy_migration.py`: static local-column/FK/unique
-  inspection plus real Alembic-applied PostgreSQL upgrade/downgrade/re-upgrade;
+- Schema tests: static local-column/FK/unique inspection plus disposable
+  PostgreSQL current-metadata creation;
   ready count guards, content INSERT/UPDATE/DELETE immutability, partial/orphan/
   duplicate active pointer rejection, same-revision FK rejection, one-current/
   one-active partial unique indexes, and all ten triggers.
