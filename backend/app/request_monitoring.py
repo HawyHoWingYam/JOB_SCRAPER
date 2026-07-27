@@ -11,8 +11,6 @@ SLOW_REQUEST_THRESHOLD_MS = 1000
 IMPORTANT_REQUEST_PATH_PREFIXES = (
     "/api/crawl-jobs",
     "/api/scrape/progress",
-    "/api/schedules",
-    "/api/source-catalogs",
 )
 EXCLUDED_REQUEST_SUMMARY_PATHS = {"/api/scrape/progress/stream"}
 

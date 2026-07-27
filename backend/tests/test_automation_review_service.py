@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
 
 from app.crawl_control.automation_contracts import AutomationConfigurationV1
 from app.crawl_control.automation_review_contracts import AutomationReviewRequestV1
@@ -197,10 +196,13 @@ def test_detail_review_counts_without_freezing_membership():
     assert builder.calls[0][1].detail_settings.backlog_snapshot is None
 
 
-def test_edit_binding_requires_id_and_revision_together():
+def test_edit_binding_uses_current_automation_id_without_revision():
     scope, _resolved = _scope_and_resolved()
-    with pytest.raises(ValidationError, match="supplied together"):
-        AutomationReviewRequestV1(
-            configuration=_listing_configuration(scope),
-            automation_id=uuid4(),
-        )
+    automation_id = uuid4()
+
+    request = AutomationReviewRequestV1(
+        configuration=_listing_configuration(scope),
+        automation_id=automation_id,
+    )
+
+    assert request.automation_id == automation_id

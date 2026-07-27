@@ -147,7 +147,9 @@ describe('TaskControlWizard', () => {
 
     render(<TaskControlWizard hash="#scheduler/automation/new?draft=automation-draft&source=jobsdb" />);
 
-    await user.click(await screen.findByRole('button', { name: 'Save reviewed Automation' }));
+    const save = await screen.findByRole('button', { name: 'Save reviewed Automation' });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
     await waitFor(() => expect(api.createAutomation).toHaveBeenCalledTimes(1));
     expect(api.getAutomation).toHaveBeenCalledWith('automation-1');
     expect(api.createAutomation.mock.calls[0][0]).toMatchObject({

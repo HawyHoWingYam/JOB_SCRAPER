@@ -472,7 +472,7 @@ class AutomationService:
     ) -> AutomationConfigurationV1:
         if automation.scope_contract is None:
             raise AutomationTransitionInvalidError(
-                current_state="legacy",
+                current_state="invalid",
                 operation="current_automation_required",
             )
         common = {
@@ -526,7 +526,7 @@ class AutomationService:
     def _require_current(automation: ScrapeSchedule) -> None:
         if automation.scope_contract is None:
             raise AutomationTransitionInvalidError(
-                current_state="legacy",
+                current_state="invalid",
                 operation="current_automation_required",
             )
 

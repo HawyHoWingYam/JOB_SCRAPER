@@ -15,12 +15,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import crawl_control as crawl_control_api
 from app.api import crawl_jobs as crawl_jobs_api
-from app.api import schedules as schedules_api
 from app.api import router as production_api_router
 from app.crawl_control import task_control_board_service as task_control_board_service_api
-from app.crawl_control.task_control_board_contracts import (
-    RunAuthorityProjectionV1,
-)
 from app.database import get_db
 from app.models.crawl_dispatch_plan import CRAWL_DISPATCH_PLAN_TABLES
 from app.models.crawl_job import CrawlJob, CrawlJobEvent
@@ -89,6 +85,7 @@ def test_crawl_control_contracts_are_registered_in_production_openapi():
     }
     for path, methods in expected_operations.items():
         assert methods <= set(paths[path])
+    assert "/api/crawl-jobs" not in paths
     board_schema = paths["/api/task-control-board"]["get"]["responses"]["200"][
         "content"
     ]["application/json"]["schema"]
@@ -98,14 +95,6 @@ def test_crawl_control_contracts_are_registered_in_production_openapi():
     ]["202"]["content"]["application/json"]["schema"]["$ref"].endswith(
         "/DispatchPlanDispatchResponseV1"
     )
-
-
-def test_legacy_run_authority_cannot_claim_automation_fields():
-    with pytest.raises(ValueError, match="Legacy authority"):
-        RunAuthorityProjectionV1(
-            authority_kind="legacy",
-            automation_id=uuid4(),
-        )
 
 
 @pytest.fixture
@@ -153,18 +142,8 @@ def crawl_control_client(monkeypatch):
     app.state.session_factory = session_factory
     app.include_router(crawl_control_api.router, prefix="/api")
     app.include_router(crawl_jobs_api.router, prefix="/api")
-    app.include_router(schedules_api.router, prefix="/api")
     monkeypatch.setattr(
         crawl_control_api,
-        "crawl_job_dispatch_service",
-        CrawlJobDispatchService(
-            execution_launcher=_NoopLauncher(),
-            outbox_publisher=_NoopOutboxPublisher(),
-        ),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        schedules_api,
         "crawl_job_dispatch_service",
         CrawlJobDispatchService(
             execution_launcher=_NoopLauncher(),
@@ -217,41 +196,24 @@ def _review_automation_configuration(
     return response.json()
 
 
-def test_direct_override_dispatches_with_current_execution_authority(
-    crawl_control_client,
-):
-    client, _obsolete_revision_id = crawl_control_client
-
-    response = client.post(
-        "/api/crawl-jobs",
-        json={
-            "source_site": "jobsdb",
-            "crawl_phase": "listing",
-            "crawl_mode": "headless",
-            "category_ids": [6281],
-            "max_pages": 2,
-            "requested_by": "test-operator",
-        },
-    )
-
-    assert response.status_code == 202, response.text
-    payload = response.json()
-    assert payload["request_payload"]["dispatch_plan_id"]
-    assert payload["request_payload"]["dispatch_plan_fingerprint"]
-    assert payload["request_payload"]["category_ids"] == ["jobsdb:6281"]
-
-    obsolete = client.post(
-        "/api/crawl-jobs",
-        json={
-            "source_site": "jobsdb",
-            "crawl_phase": "listing",
-            "crawl_mode": "headless",
-            "category_ids": [6281],
-            "max_pages": 2,
-            "skip_existing": True,
-        },
-    )
-    assert obsolete.status_code == 422
+def _dispatch_current_listing(client, *, requested_by: str) -> UUID:
+    db = client.app.state.session_factory()
+    try:
+        result = CrawlJobDispatchService(
+            execution_launcher=_NoopLauncher(),
+            outbox_publisher=_NoopOutboxPublisher(),
+        ).dispatch_manual_crawl_job(
+            db,
+            source_site="jobsdb",
+            crawl_phase="listing",
+            crawl_mode="headless",
+            category_ids=[6281],
+            max_pages=1,
+            requested_by=requested_by,
+        )
+        return result.crawl_job.id
+    finally:
+        db.close()
 
 
 def test_scope_preview_returns_normalized_workload_and_rejects_unknown_root(
@@ -295,210 +257,6 @@ def test_scope_preview_returns_normalized_workload_and_rejects_unknown_root(
 
     assert unknown.status_code == 422
     assert unknown.json()["detail"]["code"] == "SCOPE_RULE_INVALID"
-
-
-def test_legacy_schedule_create_writes_an_ordinary_scope_automation(
-    crawl_control_client,
-):
-    client, _obsolete_revision_id = crawl_control_client
-
-    response = client.post(
-        "/api/schedules",
-        json={
-            "name": "Legacy-compatible listing",
-            "description": "Created through the temporary route",
-            "cron_expression": "0 4 * * *",
-            "timezone": "Asia/Hong_Kong",
-            "source_site": "jobsdb",
-            "crawl_phase": "listing",
-            "crawl_mode": "headless",
-            "category_ids": [6281],
-            "max_pages": 2,
-            "is_active": True,
-        },
-    )
-
-    assert response.status_code == 200
-    schedule = response.json()
-    assert schedule["category_ids"] is None
-    assert schedule["lifecycle_state"] == "active"
-    assert schedule["scope_contract"] == {
-        "source_site": "jobsdb",
-        "mode": "selected",
-        "classification_ids": ["jobsdb:6281"],
-    }
-    assert schedule["listing_page_depth"] == 2
-    assert schedule["listing_run_page_cap"] == 2
-
-    automation = client.get(
-        f"/api/automations/{schedule['id']}"
-    ).json()
-    assert automation["snapshot"]["configuration"]["scope"] == (
-        schedule["scope_contract"]
-    )
-
-
-def test_legacy_schedule_mutations_delegate_for_versioned_rows(
-    crawl_control_client,
-):
-    client, _revision_id = crawl_control_client
-    created = client.post(
-        "/api/schedules",
-        json={
-            "name": "Temporary route delegation",
-            "cron_expression": "0 4 * * *",
-            "source_site": "jobsdb",
-            "crawl_phase": "listing",
-            "crawl_mode": "headless",
-            "category_ids": [6281],
-            "max_pages": 2,
-            "is_active": True,
-        },
-    ).json()
-    schedule_id = created["id"]
-
-    updated = client.put(
-        f"/api/schedules/{schedule_id}",
-        json={
-            "description": "Updated without primitive scope writes",
-            "max_pages": 3,
-        },
-    )
-
-    assert updated.status_code == 200
-    updated_schedule = updated.json()
-    assert updated_schedule["description"] == (
-        "Updated without primitive scope writes"
-    )
-    assert updated_schedule["category_ids"] is None
-    assert updated_schedule["listing_page_depth"] == 3
-    assert updated_schedule["listing_run_page_cap"] == 3
-
-    combined = client.put(
-        f"/api/schedules/{schedule_id}",
-        json={
-            "description": "Must not partially persist",
-            "is_active": False,
-        },
-    )
-
-    assert combined.status_code == 422
-    assert combined.json()["detail"]["code"] == (
-        "AUTOMATION_COMPATIBILITY_MUTATION_SPLIT_REQUIRED"
-    )
-    after_rejection = client.get(f"/api/schedules/{schedule_id}").json()
-    assert after_rejection["description"] == (
-        "Updated without primitive scope writes"
-    )
-    assert after_rejection["is_active"] is True
-
-    run_now = client.post(f"/api/schedules/{schedule_id}/run")
-
-    assert run_now.status_code == 409
-    assert run_now.json()["detail"]["code"] == (
-        "DISPATCH_PLAN_REVIEW_REQUIRED"
-    )
-
-    toggled = client.post(f"/api/schedules/{schedule_id}/toggle")
-
-    assert toggled.status_code == 200
-    assert toggled.json()["is_active"] is False
-    after_toggle = client.get(f"/api/schedules/{schedule_id}").json()
-    assert after_toggle["lifecycle_state"] == "paused"
-
-    deleted = client.delete(f"/api/schedules/{schedule_id}")
-
-    assert deleted.status_code == 200
-    assert deleted.json() == {"message": "Schedule deleted"}
-    archived = client.get(f"/api/schedules/{schedule_id}").json()
-    assert archived["lifecycle_state"] == "archived"
-    assert archived["is_active"] is False
-
-
-def test_legacy_schedule_create_returns_stable_source_errors(
-    crawl_control_client,
-):
-    client, _revision_id = crawl_control_client
-    base_request = {
-        "name": "Invalid source",
-        "cron_expression": "0 4 * * *",
-        "crawl_phase": "listing",
-        "crawl_mode": "headless",
-        "category_ids": None,
-        "max_pages": 1,
-    }
-
-    unsupported = client.post(
-        "/api/schedules",
-        json={**base_request, "source_site": "unknown-source"},
-    )
-
-    assert unsupported.status_code == 422
-    assert unsupported.json()["detail"] == {
-        "code": "SOURCE_SITE_UNSUPPORTED",
-        "message": "Unsupported Crawl Control source_site",
-        "context": {"source_site": "unknown-source"},
-    }
-
-    empty_registry = client.post(
-        "/api/schedules",
-        json={**base_request, "source_site": "offertoday"},
-    )
-
-    assert empty_registry.status_code == 422
-    assert empty_registry.json()["detail"] == {
-        "code": "SCOPE_RULE_INVALID",
-        "message": "Crawl scope resolved to no query targets",
-        "context": {"source_site": "offertoday"},
-    }
-
-
-def test_pre_cutover_schedule_rows_keep_bounded_legacy_mutations(
-    crawl_control_client,
-):
-    client, _revision_id = crawl_control_client
-    request_db = client.app.state.session_factory()
-    try:
-        legacy = ScrapeSchedule(
-            name="Pre-cutover row",
-            description=None,
-            cron_expression="0 3 * * *",
-            timezone="Asia/Hong_Kong",
-            source_site="jobsdb",
-            crawl_phase="listing",
-            crawl_mode="headless",
-            category_ids=[6281],
-            max_pages=2,
-            detail_limit=100,
-            lifecycle_state="active",
-            scope_contract=None,
-            is_active=True,
-        )
-        request_db.add(legacy)
-        request_db.commit()
-        schedule_id = str(legacy.id)
-    finally:
-        request_db.close()
-
-    updated = client.put(
-        f"/api/schedules/{schedule_id}",
-        json={"name": "Still bounded legacy", "max_pages": 3},
-    )
-
-    assert updated.status_code == 200
-    assert updated.json()["scope_contract"] is None
-    assert updated.json()["category_ids"] == [6281]
-    assert updated.json()["max_pages"] == 3
-
-    toggled = client.post(f"/api/schedules/{schedule_id}/toggle")
-
-    assert toggled.status_code == 200
-    assert toggled.json()["is_active"] is False
-
-    deleted = client.delete(f"/api/schedules/{schedule_id}")
-
-    assert deleted.status_code == 200
-    assert client.get(f"/api/schedules/{schedule_id}").status_code == 404
 
 
 def test_automation_lifecycle_and_reviewed_permanent_delete_use_current_row(
@@ -822,27 +580,17 @@ def test_control_board_rejects_an_unsupported_source_with_a_stable_error(
     }
 
 
-def test_failed_run_attention_dismissal_is_revision_safe_and_idempotent(
+def test_failed_run_attention_dismissal_is_sequence_safe_and_idempotent(
     crawl_control_client,
 ):
     client, _revision_id = crawl_control_client
     session_factory = client.app.state.session_factory
     repository = CrawlJobRepository()
+    created_id = _dispatch_current_listing(client, requested_by="test")
     db = session_factory()
     try:
-        crawl_job = repository.create_crawl_job(
-            db,
-            source_site="jobsdb",
-            trigger_type="manual",
-            request_payload={
-                "source_site": "jobsdb",
-                "crawl_phase": "listing",
-                "crawl_mode": "headless",
-                "max_pages": 1,
-                "category_ids": [],
-            },
-            requested_by="test",
-        )
+        crawl_job = db.get(CrawlJob, created_id)
+        assert crawl_job is not None
         repository.record_runtime_event(
             db,
             crawl_job_id=crawl_job.id,
@@ -1081,22 +829,16 @@ def test_run_projections_normalize_the_latest_recovery_attempt(
     crawl_control_client,
 ):
     client, _revision_id = crawl_control_client
+    created_id = _dispatch_current_listing(
+        client,
+        requested_by="operator-1",
+    )
     request_db = client.app.state.session_factory()
     repository = CrawlJobRepository()
     try:
-        crawl_job = repository.create_crawl_job(
-            request_db,
-            source_site="jobsdb",
-            trigger_type="manual",
-            status="manual_action_required",
-            request_payload={
-                "crawl_phase": "detail",
-                "crawl_mode": "headless",
-                "detail_limit": 10,
-            },
-            requested_by="operator-1",
-            auto_commit=False,
-        )
+        crawl_job = request_db.get(CrawlJob, created_id)
+        assert crawl_job is not None
+        crawl_job.status = "manual_action_required"
         crawl_job.metrics = {"detail_target_rows": 25}
         repository.append_event(
             request_db,
@@ -1188,9 +930,6 @@ def test_run_projections_normalize_the_latest_recovery_attempt(
     assert recovery_attempt["outcome_error"] == (
         "The resumed browser was blocked again"
     )
-    assert task["detail_snapshot"]["target_count"] == 25
-    assert task["detail_snapshot"]["detail_run_cap"] == 10
-
     board_response = client.get("/api/task-control-board")
 
     assert board_response.status_code == 200

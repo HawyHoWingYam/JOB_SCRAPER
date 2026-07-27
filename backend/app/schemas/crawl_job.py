@@ -3,15 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.crawl_phases import normalize_crawl_phase, resolve_crawl_phase
-from app.crawl_modes import normalize_crawl_mode, resolve_crawl_mode
-from app.services.crawl_request_validation import (
-    CategoryId,
-    normalize_source_site,
-    validate_crawl_request,
-)
+from app.crawl_phases import resolve_crawl_phase
+from app.crawl_modes import resolve_crawl_mode
 from app.schemas.scraper_pacing import DetailPacingConfig
 from app.crawl_control.task_control_board_contracts import (
     DetailSnapshotProjectionV1,
@@ -20,55 +15,6 @@ from app.crawl_control.task_control_board_contracts import (
     RecoveryAttemptProjectionV1,
     RunAuthorityProjectionV1,
 )
-
-
-class CrawlJobCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    schedule_id: UUID | None = None
-    source_site: str | None = Field(default=None, max_length=32)
-    crawl_phase: str | None = Field(default=None, max_length=32)
-    crawl_mode: str | None = Field(default=None, max_length=32)
-    category_ids: list[CategoryId] | None = None
-    max_pages: int | None = Field(default=None, ge=1, le=1000)
-    source_listing_crawl_job_id: UUID | None = None
-    detail_limit: int = Field(default=100, ge=1, le=5000)
-    requested_by: str | None = Field(default=None, max_length=255)
-
-    @field_validator("source_site", mode="before")
-    @classmethod
-    def normalize_source_site_field(cls, value):
-        if value is None:
-            return None
-        return normalize_source_site(value)
-
-    @field_validator("crawl_mode", mode="before")
-    @classmethod
-    def normalize_crawl_mode_field(cls, value):
-        return normalize_crawl_mode(value)
-
-    @field_validator("crawl_phase", mode="before")
-    @classmethod
-    def normalize_crawl_phase_field(cls, value):
-        return normalize_crawl_phase(value)
-
-    @model_validator(mode="after")
-    def validate_request_shape(self) -> "CrawlJobCreateRequest":
-        if self.schedule_id is not None:
-            return self
-
-        validated = validate_crawl_request(
-            source_site=self.source_site,
-            crawl_phase=self.crawl_phase,
-            crawl_mode=self.crawl_mode,
-            category_ids=self.category_ids,
-            source_listing_crawl_job_id=self.source_listing_crawl_job_id,
-        )
-        self.source_site = validated.source_site
-        self.crawl_phase = validated.crawl_phase
-        self.crawl_mode = validated.crawl_mode
-        self.category_ids = validated.category_ids
-        return self
 
 
 class CrawlJobSchema(BaseModel):

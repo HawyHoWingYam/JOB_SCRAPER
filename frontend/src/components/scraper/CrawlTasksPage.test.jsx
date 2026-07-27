@@ -57,7 +57,30 @@ function normalizedTaskDetail({
       started_at: "2026-07-15T12:01:00Z",
       completed_at: null,
       updated_at: "2026-07-15T12:02:00Z",
-      authority: { authority_kind: "legacy" },
+      authority: {
+        authority_kind: "dispatch_plan",
+        dispatch_plan_id: "10000000-0000-0000-0000-000000000001",
+        dispatch_plan_fingerprint: "a".repeat(64),
+        plan_state: "consumed",
+        automation_id: null,
+        authored_scope: {
+          source_site: sourceSite,
+          mode: "all",
+          classification_ids: [],
+        },
+        resolved_scope: {
+          source_site: sourceSite,
+          authored_scope: {
+            source_site: sourceSite,
+            mode: "all",
+            classification_ids: [],
+          },
+          selected_classifications: [],
+          query_targets: [],
+          query_target_count: 0,
+        },
+        readiness: { status: "ready", reasons: [] },
+      },
       listing_workload: phase === "listing" ? {
         query_target_count: 2,
         page_depth: 5,
@@ -301,8 +324,7 @@ describe("CrawlTasksPage list projections", () => {
         actions: [],
       });
       detail.listing_recovery = {
-        version: 1,
-        listing_partial: true,
+            listing_partial: true,
         query_target_count: 23,
         capped_query_target_count: 5,
         page_depth: 40,
@@ -525,8 +547,7 @@ describe("CrawlTasksPage normalized Task Details", () => {
       }
       const detail = normalizedTaskDetail({ id: "listing-task", status: "completed", sourceSite: "offertoday" });
       detail.listing_recovery = {
-        version: 1,
-        listing_partial: true,
+            listing_partial: true,
         query_target_count: 23,
         capped_query_target_count: 5,
         page_depth: 40,

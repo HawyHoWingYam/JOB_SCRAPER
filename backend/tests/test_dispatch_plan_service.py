@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 import os
 import threading
@@ -8,7 +7,6 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy import create_engine, event, update
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.engine import make_url
@@ -16,7 +14,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 
-from app.api import schedules as schedules_api
 from app.crawl_control.automation_contracts import AutomationConfigurationV1
 from app.crawl_control.automation_repository import AutomationRepository
 from app.crawl_control.automation_service import AutomationService
@@ -2285,45 +2282,6 @@ def test_scheduled_detail_automation_freezes_pacing_in_atomic_dispatch(dispatch_
         "burst_size": 20,
         "burst_pause_seconds": 30.0,
     }
-
-
-def test_schedule_run_now_returns_structured_review_required_conflict(
-    dispatch_db,
-):
-    _engine, _factory, db, revision = dispatch_db
-    created = AutomationService(
-        db,
-        scope_service=_FixtureScopeService(revision),
-    ).create(
-        _listing_automation_configuration(revision),
-        actor="operator@example.com",
-        initial_state="active",
-    )
-    baseline_plan_count = db.query(CrawlDispatchPlan).count()
-    baseline_job_count = db.query(CrawlJob).count()
-
-    with pytest.raises(HTTPException) as response:
-        asyncio.run(
-            schedules_api.run_schedule_now(
-                created.snapshot.automation_id,
-                SimpleNamespace(state=SimpleNamespace(request_id="test-request")),
-                db,
-            )
-        )
-
-    assert response.value.status_code == 409
-    assert response.value.detail == {
-        "code": "DISPATCH_PLAN_REVIEW_REQUIRED",
-        "message": (
-            "Automation runs require Dispatch Plan review and confirmation"
-        ),
-        "context": {
-            "automation_id": str(created.snapshot.automation_id),
-            "action": "prepare_saved_automation_run",
-        },
-    }
-    assert db.query(CrawlDispatchPlan).count() == baseline_plan_count
-    assert db.query(CrawlJob).count() == baseline_job_count
 
 
 def test_scheduled_dispatch_failure_rolls_back_plan_and_run_artifacts(

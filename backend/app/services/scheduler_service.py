@@ -21,9 +21,8 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models.schedule import ScrapeSchedule, SchedulerRuntimeHeartbeat
 from app.repositories.schedule_repository import ScheduleRepository
-from app.services.crawl_request_validation import normalize_source_site, validate_category_ids_for_source_site
+from app.services.crawl_request_validation import normalize_source_site
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
-from app.services.source_category_registry import get_source_category_registry
 from app.services.source_sites import is_supported_source_site
 from app.utils.time import utc_now
 
@@ -150,87 +149,16 @@ class SchedulerService:
         try:
             schedules = self.repository.get_active_schedules(db)
             for schedule in schedules:
-                if (
-                    schedule.scope_contract is None
-                    and normalize_source_site(
-                        getattr(schedule, "source_site", "jobsdb")
-                    )
-                    == "ctgoodjobs"
-                ):
-                    is_valid, validation_error, should_deactivate = self._validate_ctgoodjobs_schedule_shape(
-                        schedule
-                    )
-                    if not is_valid:
-                        logger.info(
-                            "Skipping scheduler registration for invalid CTgoodjobs schedule %s: %s",
-                            getattr(schedule, "id", None),
-                            validation_error,
-                        )
-                        if should_deactivate and getattr(schedule, "is_active", False):
-                            self._deactivate_invalid_legacy_schedule(schedule)
-                        continue
-
-                    self._add_job(schedule, db=db, ctgoodjobs_validated=True)
-                    continue
-
                 self._add_job(schedule, db=db)
             db.commit()
             logger.info("Loaded %s active schedules", len(schedules))
         finally:
             db.close()
 
-    def _validate_ctgoodjobs_schedule_shape(
-        self, schedule: ScrapeSchedule
-    ) -> tuple[bool, str | None, bool]:
-        """Validate persisted CTgoodjobs schedules without any network dependency."""
-        category_ids = getattr(schedule, "category_ids", None)
-
-        try:
-            validate_category_ids_for_source_site("ctgoodjobs", category_ids)
-        except ValueError as exc:
-            return False, str(exc), True
-
-        return True, None, False
-
-    def _validate_ctgoodjobs_schedule(self, schedule: ScrapeSchedule) -> tuple[bool, str | None, bool]:
-        """Validate persisted CTgoodjobs schedules for scheduler use.
-
-        Returns `(is_valid, error_message, should_deactivate)`.
-        """
-        is_valid, validation_error, should_deactivate = self._validate_ctgoodjobs_schedule_shape(schedule)
-        if not is_valid:
-            return is_valid, validation_error, should_deactivate
-
-        try:
-            categories = get_source_category_registry().list_categories(source_site="ctgoodjobs")
-        except Exception as exc:
-            logger.error(
-                "Skipping CTgoodjobs schedule %s because registry validation failed: %s",
-                getattr(schedule, "id", None),
-                exc,
-            )
-            return False, "CTgoodjobs category registry unavailable", False
-
-        supported_ids = {str(category["id"]) for category in categories}
-        category_ids = getattr(schedule, "category_ids", None)
-        unknown_ids = sorted(
-            {
-                str(category_id)
-                for category_id in (category_ids or [])
-                if str(category_id) not in supported_ids
-            }
-        )
-        if unknown_ids:
-            return False, f"Unknown CTgoodjobs category_ids: {', '.join(unknown_ids)}", True
-
-        return True, None, False
-
     def _add_job(
         self,
         schedule: ScrapeSchedule,
         db=None,
-        *,
-        ctgoodjobs_validated: bool = False,
     ) -> bool:
         """Add or replace a job in the scheduler."""
         if self.scheduler is None:
@@ -246,22 +174,6 @@ class SchedulerService:
                 getattr(schedule, "id", None),
             )
             return False
-
-        if (
-            schedule.scope_contract is None
-            and source_site == "ctgoodjobs"
-            and not ctgoodjobs_validated
-        ):
-            is_valid, validation_error, should_deactivate = self._validate_ctgoodjobs_schedule(schedule)
-            if not is_valid:
-                logger.info(
-                    "Skipping scheduler registration for invalid CTgoodjobs schedule %s: %s",
-                    getattr(schedule, "id", None),
-                    validation_error,
-                )
-                if should_deactivate and db is not None and getattr(schedule, "is_active", False):
-                    self._deactivate_invalid_legacy_schedule(schedule)
-                return False
 
         try:
             trigger = CronTrigger.from_crontab(
@@ -296,23 +208,7 @@ class SchedulerService:
             active_job_ids: set[str] = set()
 
             for schedule in active_schedules:
-                source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
-                if schedule.scope_contract is None and source_site == "ctgoodjobs":
-                    is_valid, validation_error, should_deactivate = self._validate_ctgoodjobs_schedule_shape(schedule)
-                    if not is_valid:
-                        logger.info(
-                            "Skipping scheduler registration for invalid CTgoodjobs schedule %s: %s",
-                            getattr(schedule, "id", None),
-                            validation_error,
-                        )
-                        if should_deactivate and getattr(schedule, "is_active", False):
-                            self._deactivate_invalid_legacy_schedule(schedule)
-                        schedule.next_run_at = None
-                        db.add(schedule)
-                        continue
-                    added = self._add_job(schedule, db=db, ctgoodjobs_validated=True)
-                else:
-                    added = self._add_job(schedule, db=db)
+                added = self._add_job(schedule, db=db)
 
                 if added:
                     active_job_ids.add(str(schedule.id))
@@ -345,12 +241,6 @@ class SchedulerService:
             raise
         finally:
             db.close()
-
-    @staticmethod
-    def _deactivate_invalid_legacy_schedule(schedule: ScrapeSchedule) -> None:
-        schedule.is_active = False
-        schedule.lifecycle_state = "paused"
-        schedule.next_run_at = None
 
     def _write_runtime_heartbeat(self, *, status: str, last_error: str | None = None) -> None:
         db = SessionLocal()

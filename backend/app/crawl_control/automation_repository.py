@@ -82,22 +82,6 @@ class AutomationRepository:
             query = query.populate_existing().with_for_update()
         return query.all()
 
-    def count_legacy_for_catalog_impact(
-        self,
-        db: Session,
-        *,
-        source_site: str,
-    ) -> int:
-        return int(
-            db.query(func.count(ScrapeSchedule.id))
-            .filter(
-                ScrapeSchedule.source_site == source_site,
-                ScrapeSchedule.scope_contract.is_(None),
-            )
-            .scalar()
-            or 0
-        )
-
     @staticmethod
     def lock_catalog_impact_set(db: Session) -> None:
         """Prevent Automation inserts/updates during classification changes."""

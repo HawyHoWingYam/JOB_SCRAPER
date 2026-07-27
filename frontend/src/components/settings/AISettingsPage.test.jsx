@@ -35,6 +35,12 @@ function getProviderPicker(profileLabel) {
   });
 }
 
+async function waitForSettingsLoaded() {
+  return screen.findByRole("group", {
+    name: /AI Enrichment provider/i,
+  });
+}
+
 function getProviderCard(profileLabel, providerLabel) {
   return within(getProviderPicker(profileLabel)).getByRole("button", {
     name: new RegExp(`^${providerLabel}\\b`, "i"),
@@ -358,8 +364,9 @@ describe("AISettingsPage", () => {
       expect(globalThis.fetch).toHaveBeenCalledWith("/api/settings/ai");
     });
 
+    await waitForSettingsLoaded();
     expect(
-      await screen.findByRole("heading", { level: 1, name: /ai runtime/i }),
+      screen.getByRole("heading", { level: 1, name: /ai runtime/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", {
@@ -404,7 +411,7 @@ describe("AISettingsPage", () => {
   it("navigates between AI Runtime and Scraper Pacing settings sections", async () => {
     const user = userEvent.setup();
     render(<AISettingsPage />);
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     await user.click(screen.getByRole("button", { name: "Scraper Pacing" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Scraper Pacing" })).toBeInTheDocument();
@@ -503,7 +510,7 @@ describe("AISettingsPage", () => {
       },
     };
     render(<AISettingsPage />);
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
     const providerPicker = getProviderPicker("AI Enrichment");
     expect(
       within(providerPicker).getByRole("button", {
@@ -729,7 +736,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     expect(getProviderCard("AI Enrichment", "Custom Live")).toHaveAttribute(
       "aria-pressed",
@@ -764,8 +771,9 @@ describe("AISettingsPage", () => {
       expect(globalThis.fetch).toHaveBeenCalledWith("/api/settings/ai");
     });
 
+    await waitForSettingsLoaded();
     expect(
-      await screen.findByRole("heading", { level: 1, name: /ai runtime/i }),
+      screen.getByRole("heading", { level: 1, name: /ai runtime/i }),
     ).toBeInTheDocument();
     expect(
       await screen.findByRole("heading", {
@@ -832,7 +840,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     await user.clear(screen.getByLabelText(/ai enrichment concurrency/i));
     await user.type(screen.getByLabelText(/ai enrichment concurrency/i), "12");
@@ -916,8 +924,11 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
+    await waitFor(() => {
+      expect(getProviderPicker("AI Enrichment")).toBeInTheDocument();
+    });
     await user.click(getProviderCard("AI Enrichment", "Anthropic"));
     expect(
       getProviderSettingsGroup("AI Enrichment", "Anthropic"),
@@ -1002,7 +1013,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     const enrichmentCard = screen.getByText("AI Enrichment").closest("article");
     const companiesCard = screen.getByText("Companies").closest("article");
@@ -1031,7 +1042,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     await user.click(getProviderCard("AI Enrichment", "Custom"));
     await user.clear(screen.getByLabelText(/ai enrichment model/i));
@@ -1085,7 +1096,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     await user.click(
       screen.getByRole("button", { name: /test ai enrichment configuration/i }),
@@ -1095,7 +1106,9 @@ describe("AISettingsPage", () => {
     );
 
     await user.click(
-      screen.getByRole("button", { name: /test companies configuration/i }),
+      await screen.findByRole("button", {
+        name: /test companies configuration/i,
+      }),
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /companies profile is missing required settings: api key/i,
@@ -1142,7 +1155,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     await user.click(
       screen.getByRole("button", { name: /test companies configuration/i }),
@@ -1199,7 +1212,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     await user.click(
       screen.getByRole("button", { name: /test companies configuration/i }),
@@ -1219,7 +1232,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     const apiKeyInput = getSecretInput("AI Enrichment", "Gemini");
     expect(apiKeyInput).toHaveAttribute("type", "password");
@@ -1239,7 +1252,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     await user.click(getProviderCard("AI Enrichment", "Custom"));
 
@@ -1296,7 +1309,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     expect(getSecretInput("AI Enrichment", "Gemini")).toHaveValue("");
     await user.clear(screen.getByLabelText(/ai enrichment model/i));
@@ -1342,7 +1355,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     await user.clear(screen.getByLabelText(/ai enrichment concurrency/i));
     await user.type(screen.getByLabelText(/ai enrichment concurrency/i), "0");
@@ -1383,7 +1396,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
     await user.click(screen.getByRole("button", { name: /save settings/i }));
 
     const alert = await screen.findByRole("alert");
@@ -1477,7 +1490,7 @@ describe("AISettingsPage", () => {
 
     render(<AISettingsPage />);
 
-    await screen.findByRole("heading", { level: 1, name: /ai runtime/i });
+    await waitForSettingsLoaded();
 
     await user.click(getProviderCard("AI Enrichment", "Custom"));
     await user.clear(screen.getByLabelText(/ai enrichment model/i));

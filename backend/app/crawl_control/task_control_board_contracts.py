@@ -24,38 +24,14 @@ from app.crawl_control.dispatch_plan_contracts import (
 
 
 class RunAuthorityProjectionV1(FrozenContract):
-    authority_kind: Literal["dispatch_plan", "legacy"]
-    dispatch_plan_id: UUID | None = None
-    dispatch_plan_fingerprint: str | None = Field(
-        default=None,
-        pattern=SHA256_PATTERN,
-    )
-    plan_state: DispatchPlanState | None = None
+    authority_kind: Literal["dispatch_plan"] = "dispatch_plan"
+    dispatch_plan_id: UUID
+    dispatch_plan_fingerprint: str = Field(pattern=SHA256_PATTERN)
+    plan_state: DispatchPlanState
     automation_id: UUID | None = None
-    authored_scope: AuthoredCrawlScopeV1 | None = None
-    resolved_scope: ResolvedRunScopeV1 | None = None
-    readiness: DispatchPlanReadinessV1 | None = None
-
-    @model_validator(mode="after")
-    def validate_authority_shape(self) -> RunAuthorityProjectionV1:
-        plan_fields = (
-            self.dispatch_plan_id,
-            self.dispatch_plan_fingerprint,
-            self.plan_state,
-            self.authored_scope,
-            self.resolved_scope,
-            self.readiness,
-        )
-        if self.authority_kind == "dispatch_plan":
-            if any(value is None for value in plan_fields):
-                raise ValueError(
-                    "Dispatch Plan authority requires its immutable plan fields"
-                )
-        elif any(value is not None for value in (*plan_fields, self.automation_id)):
-            raise ValueError(
-                "Legacy authority cannot claim Dispatch Plan or Automation fields"
-            )
-        return self
+    authored_scope: AuthoredCrawlScopeV1
+    resolved_scope: ResolvedRunScopeV1
+    readiness: DispatchPlanReadinessV1
 
 
 class ListingWorkloadProjectionV1(FrozenContract):
@@ -104,7 +80,7 @@ class ListingRecoveryProjectionV1(FrozenContract):
 
 class DetailSnapshotProjectionV1(FrozenContract):
     backlog_scope: dict[str, Any]
-    limit_kind: Literal["entire_snapshot", "stop_after", "legacy"]
+    limit_kind: Literal["entire_snapshot", "stop_after"]
     cutoff_at: datetime | None = None
     target_count: int = Field(ge=0)
     fetched_count: int = Field(ge=0)

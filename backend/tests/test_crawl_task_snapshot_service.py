@@ -9,12 +9,149 @@ import pytest
 from app.crawl_control.task_control_board_contracts import (
     ListingRecoveryProjectionV1,
 )
+from app.crawl_control.contracts import (
+    AuthoredCrawlScopeV1,
+    QueryTargetSnapshotV1,
+    ResolvedRunScopeV1,
+    SelectedClassificationSnapshotV1,
+)
+from app.source_classifications.domain import payload_fingerprint
 from app.services.crawl_task_snapshot_service import build_crawl_task_snapshot
 from app.crawl_control.task_control_board_service import build_crawl_task_detail_projection
 
 
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
 CRAWL_JOB_ID = UUID("00000000-0000-0000-0000-000000000001")
+DISPATCH_PLAN_ID = UUID("00000000-0000-0000-0000-000000000002")
+
+
+def _dispatch_plan(*, source_site, request_payload, metrics):
+    phase = request_payload.get("crawl_phase", "listing")
+    raw_ids = request_payload.get("category_ids") or [1]
+    classification_ids = tuple(
+        f"{source_site}:{raw_id}" for raw_id in raw_ids
+    )
+    authored_scope = AuthoredCrawlScopeV1(
+        source_site=source_site,
+        mode="selected" if request_payload.get("category_ids") else "all",
+        classification_ids=(
+            classification_ids if request_payload.get("category_ids") else ()
+        ),
+    )
+    selected = tuple(
+        SelectedClassificationSnapshotV1(
+            node_key=classification_id,
+            classification_id=classification_id,
+            native_label=classification_id,
+            native_path=(classification_id,),
+            query_semantics_hash="a" * 64,
+        )
+        for classification_id in classification_ids
+    )
+    targets = []
+    for index, classification_id in enumerate(classification_ids, start=1):
+        if source_site == "jobsdb":
+            adapter = "jobsdb.classification"
+            parameters = {"native_id": index}
+        elif source_site == "ctgoodjobs":
+            adapter = "ctgoodjobs.category"
+            parameters = {
+                "native_id": f"cat{index}",
+                "url_path": f"/jobs/jobs-in-cat{index}",
+                "crawl_mode": "headed",
+            }
+        else:
+            adapter = "offertoday.category"
+            parameters = {
+                "category_code": index,
+                "endpoint": "browse",
+                "keyword": "",
+                "rcd_type": 7,
+            }
+        targets.append(
+            QueryTargetSnapshotV1(
+                adapter=adapter,
+                classification_id=classification_id,
+                parameters=parameters,
+                query_target_fingerprint=payload_fingerprint(
+                    {
+                        "adapter": adapter,
+                        "classification_id": classification_id,
+                        **parameters,
+                    }
+                ),
+            )
+        )
+    expansion_hash = payload_fingerprint(
+        [
+            {
+                "node_key": item.node_key,
+                "classification_id": item.classification_id,
+                "query_semantics_hash": item.query_semantics_hash,
+            }
+            for item in selected
+        ]
+    )
+    resolved_scope = ResolvedRunScopeV1(
+        source_site=source_site,
+        authored_scope=authored_scope,
+        selected_classifications=selected,
+        classification_expansion_hash=expansion_hash,
+        query_targets=tuple(targets),
+        query_target_count=len(targets),
+    )
+    crawl_mode = request_payload.get("crawl_mode") or (
+        "headed" if source_site == "ctgoodjobs" else "headless"
+    )
+    listing_settings = None
+    detail_settings = None
+    detail_target_count = 0
+    if phase == "listing":
+        page_depth = int(request_payload.get("max_pages") or 1)
+        listing_settings = {
+            "crawl_mode": crawl_mode,
+            "page_depth": page_depth,
+            "run_page_cap": len(targets) * page_depth,
+        }
+    else:
+        detail_target_count = max(
+            int(metrics.get("detail_snapshot_target_count") or 0),
+            int(metrics.get("detail_target_rows") or 0),
+            int(metrics.get("segment_target_rows") or 0),
+        )
+        detail_run_cap = int(
+            request_payload.get("detail_limit")
+            or metrics.get("detail_run_cap")
+            or max(detail_target_count, 1)
+        )
+        detail_settings = {
+            "crawl_mode": crawl_mode,
+            "backlog_scope": {"kind": "source_backlog"},
+            "limit": {
+                "kind": "stop_after",
+                "detail_run_cap": detail_run_cap,
+            },
+        }
+    return SimpleNamespace(
+        id=DISPATCH_PLAN_ID,
+        source_site=source_site,
+        crawl_phase=phase,
+        trigger_kind="one_off",
+        automation_id_snapshot=None,
+        authored_scope=authored_scope,
+        resolved_scope=resolved_scope,
+        listing_settings=listing_settings,
+        detail_settings=detail_settings,
+        readiness={
+            "status": "ready",
+            "checked_at": NOW,
+            "blocking_errors": [],
+            "capabilities": {},
+        },
+        plan_fingerprint="b" * 64,
+        state="consumed",
+        detail_target_count=detail_target_count,
+    )
 
 
 def _crawl_job(
@@ -24,14 +161,24 @@ def _crawl_job(
     source_site="jobsdb",
     status="completed",
 ):
+    request_payload = request_payload or {}
+    metrics = metrics or {}
+    dispatch_plan = _dispatch_plan(
+        source_site=source_site,
+        request_payload=request_payload,
+        metrics=metrics,
+    )
     return SimpleNamespace(
         id=CRAWL_JOB_ID,
         status=status,
         source_site=source_site,
         trigger_type="manual",
         schedule_id=None,
-        request_payload=request_payload or {},
-        metrics=metrics or {},
+        request_payload=request_payload,
+        metrics=metrics,
+        dispatch_plan=dispatch_plan,
+        dispatch_plan_id=dispatch_plan.id,
+        dispatch_plan_fingerprint=dispatch_plan.plan_fingerprint,
         queued_at=NOW,
         started_at=NOW,
         completed_at=NOW,
@@ -187,7 +334,7 @@ def test_listing_recovery_contract_rejects_invalid_capped_shape() -> None:
         )
 
 
-def test_snapshot_omits_raw_ids_value_for_historical_task_without_field() -> None:
+def test_snapshot_omits_raw_ids_value_when_field_is_absent() -> None:
     event = _event({"phase": 1, "job_ids_collected": 2, "listings_staged": 2})
 
     snapshot = build_crawl_task_snapshot(
@@ -320,7 +467,7 @@ def test_completed_detail_run_with_frozen_remaining_work_is_backlog() -> None:
     assert snapshot["metric_scope"] == "backlog_pool"
 
 
-def test_versioned_snapshot_remaining_is_separate_from_live_future_backlog() -> None:
+def test_frozen_snapshot_remaining_is_separate_from_live_future_backlog() -> None:
     event = _event(
         {
             "phase": 2,
@@ -580,7 +727,7 @@ def test_snapshot_does_not_inject_jobsdb_browser_defaults_for_offertoday(
     assert manual_action["reuse_open_browser_supported"] is False
 
 
-def test_snapshot_projects_recorded_detail_pacing_and_historical_null() -> None:
+def test_snapshot_projects_recorded_detail_pacing_and_missing_value() -> None:
     pacing = {
         "interval_min_seconds": 1.0,
         "interval_max_seconds": 3.0,
@@ -593,7 +740,7 @@ def test_snapshot_projects_recorded_detail_pacing_and_historical_null() -> None:
         now=NOW,
         events=[],
     )
-    historical = build_crawl_task_snapshot(
+    without_pacing = build_crawl_task_snapshot(
         _crawl_job(request_payload={"crawl_phase": "detail"}),
         None,
         now=NOW,
@@ -601,7 +748,7 @@ def test_snapshot_projects_recorded_detail_pacing_and_historical_null() -> None:
     )
 
     assert recorded["detail_pacing"] == pacing
-    assert historical["detail_pacing"] is None
+    assert without_pacing["detail_pacing"] is None
     assert "detail_attempt_count" not in recorded
 
     malformed = build_crawl_task_snapshot(

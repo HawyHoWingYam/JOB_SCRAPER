@@ -47,9 +47,6 @@ from app.crawl_cancellation import (
     TERMINAL_CRAWL_JOB_STATUSES,
     can_request_cancellation,
 )
-from app.crawl_modes import resolve_crawl_mode
-from app.crawl_phases import resolve_crawl_phase
-from app.services.source_sites import resolve_default_max_pages
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.scraper.browser_profile_recovery import (
     PROFILE_SCOPE_FIXED,
@@ -171,87 +168,6 @@ def _detail_snapshot(
     )
 
 
-def _legacy_projection(
-    crawl_job,
-    normalized: Mapping[str, Any],
-) -> tuple[
-    str,
-    str,
-    RunAuthorityProjectionV1,
-    ListingWorkloadProjectionV1 | None,
-    DetailSnapshotProjectionV1 | None,
-]:
-    payload = (
-        crawl_job.request_payload
-        if isinstance(crawl_job.request_payload, dict)
-        else {}
-    )
-    crawl_phase = resolve_crawl_phase(
-        normalized.get("crawl_phase") or payload.get("crawl_phase")
-    )
-    crawl_mode = resolve_crawl_mode(
-        crawl_job.source_site,
-        normalized.get("crawl_mode") or payload.get("crawl_mode"),
-    )
-    authority = RunAuthorityProjectionV1(authority_kind="legacy")
-    if crawl_phase == "listing":
-        category_ids = payload.get("category_ids")
-        target_count = (
-            max(len(category_ids), 1)
-            if isinstance(category_ids, list)
-            else 1
-        )
-        page_depth = max(
-            _to_int(payload.get("max_pages")),
-            resolve_default_max_pages(crawl_job.source_site),
-        )
-        workload = ListingWorkloadProjectionV1(
-            query_target_count=target_count,
-            page_depth=page_depth,
-            estimated_max_pages=target_count * page_depth,
-            run_page_cap=target_count * page_depth,
-            pages_requested=_pages_requested(crawl_job, normalized),
-        )
-        return crawl_phase, crawl_mode, authority, workload, None
-
-    source_listing_id = payload.get("source_listing_crawl_job_id")
-    backlog_scope = (
-        {
-            "kind": "listing_batch",
-            "source_listing_crawl_job_id": str(source_listing_id),
-        }
-        if source_listing_id
-        else {"kind": "source_backlog"}
-    )
-    target_count = _to_int(normalized.get("detail_target_count"))
-    detail_run_cap = max(
-        _to_int(normalized.get("detail_run_cap")),
-        _to_int(payload.get("detail_limit")),
-        1,
-    )
-    detail = DetailSnapshotProjectionV1(
-        backlog_scope=backlog_scope,
-        limit_kind="legacy",
-        cutoff_at=None,
-        target_count=target_count,
-        fetched_count=_to_int(normalized.get("detail_fetched_count")),
-        saved_count=_to_int(normalized.get("detail_saved_count")),
-        failed_count=_to_int(normalized.get("detail_failed_count")),
-        unavailable_count=_to_int(
-            normalized.get("detail_unavailable_count")
-        ),
-        manual_action_count=_to_int(
-            normalized.get("detail_manual_action_count")
-        ),
-        remaining_count=_to_int(normalized.get("detail_remaining_count")),
-        future_eligible_count=_to_int(
-            normalized.get("detail_live_future_eligible_count")
-        ),
-        detail_run_cap=detail_run_cap,
-    )
-    return crawl_phase, crawl_mode, authority, None, detail
-
-
 def build_crawl_control_run_projection(
     crawl_job,
     *,
@@ -277,58 +193,51 @@ def build_crawl_control_run_projection(
     else:
         content = None
 
-    if content is not None:
-        if (
-            crawl_job.dispatch_plan_id != plan_id
-            or crawl_job.dispatch_plan_fingerprint != fingerprint
-        ):
-            raise DispatchPlanFingerprintMismatchError(
-                plan_id=plan_id,
-                crawl_job_id=crawl_job.id,
-            )
-        authority = RunAuthorityProjectionV1(
-            authority_kind="dispatch_plan",
-            dispatch_plan_id=plan_id,
-            dispatch_plan_fingerprint=fingerprint,
-            plan_state=plan_state,
-            automation_id=content.automation_id,
-            authored_scope=content.authored_scope,
-            resolved_scope=content.resolved_scope,
-            readiness=readiness,
+    if content is None:
+        raise ValueError(
+            f"Crawl Job {crawl_job.id} has no Dispatch Plan authority"
         )
-        crawl_phase = content.crawl_phase
-        settings = content.listing_settings or content.detail_settings
-        assert settings is not None
-        crawl_mode = settings.crawl_mode
-        listing_workload = (
-            _listing_workload(
-                crawl_job,
-                content.listing_settings,
-                content.resolved_scope,
-                values,
-            )
-            if content.listing_settings is not None
-            else None
+    if (
+        crawl_job.dispatch_plan_id != plan_id
+        or crawl_job.dispatch_plan_fingerprint != fingerprint
+    ):
+        raise DispatchPlanFingerprintMismatchError(
+            plan_id=plan_id,
+            crawl_job_id=crawl_job.id,
         )
-        detail_snapshot = (
-            _detail_snapshot(
-                settings=content.detail_settings,
-                plan_target_count=plan_target_count,
-                normalized=values,
-            )
-            if content.detail_settings is not None
-            else None
+    authority = RunAuthorityProjectionV1(
+        dispatch_plan_id=plan_id,
+        dispatch_plan_fingerprint=fingerprint,
+        plan_state=plan_state,
+        automation_id=content.automation_id,
+        authored_scope=content.authored_scope,
+        resolved_scope=content.resolved_scope,
+        readiness=readiness,
+    )
+    crawl_phase = content.crawl_phase
+    settings = content.listing_settings or content.detail_settings
+    assert settings is not None
+    crawl_mode = settings.crawl_mode
+    listing_workload = (
+        _listing_workload(
+            crawl_job,
+            content.listing_settings,
+            content.resolved_scope,
+            values,
         )
-        trigger_kind = content.trigger_kind
-    else:
-        (
-            crawl_phase,
-            crawl_mode,
-            authority,
-            listing_workload,
-            detail_snapshot,
-        ) = _legacy_projection(crawl_job, values)
-        trigger_kind = str(crawl_job.trigger_type or "legacy")
+        if content.listing_settings is not None
+        else None
+    )
+    detail_snapshot = (
+        _detail_snapshot(
+            settings=content.detail_settings,
+            plan_target_count=plan_target_count,
+            normalized=values,
+        )
+        if content.detail_settings is not None
+        else None
+    )
+    trigger_kind = content.trigger_kind
 
     return CrawlControlRunProjectionV1(
         crawl_job_id=crawl_job.id,

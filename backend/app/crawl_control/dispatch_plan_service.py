@@ -174,7 +174,7 @@ class DispatchPlanService:
                     raise ValueError("Automation object and request ID differ")
                 if automation.scope_contract is None:
                     raise AutomationTransitionInvalidError(
-                        current_state="legacy",
+                        current_state="invalid",
                         operation="current_dispatch",
                     )
                 allowed_states = (

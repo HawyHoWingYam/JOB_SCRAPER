@@ -15,7 +15,6 @@ from app.api import router
 from app.api.category_routes import router as category_router
 from app.api.crawl_admin import router as crawl_admin_router
 from app.api.source_classifications import router as source_classification_router
-from app.api.schedules import router as schedules_router
 from app.api.progress import router as progress_router
 from app.api.ai import router as ai_router
 from app.api.stats import router as stats_router
@@ -116,7 +115,6 @@ app.add_middleware(
 # Include API routes
 app.include_router(router)
 app.include_router(category_router, prefix="/api")
-app.include_router(schedules_router, prefix="/api")
 app.include_router(progress_router, prefix="/api")
 app.include_router(ai_router)
 app.include_router(stats_router)

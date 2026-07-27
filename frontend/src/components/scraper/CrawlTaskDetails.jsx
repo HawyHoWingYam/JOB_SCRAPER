@@ -7,9 +7,6 @@ function value(value) {
 }
 
 function ScopeDetails({ authority }) {
-  if (authority.authority_kind === 'legacy') {
-    return <p className="crawl-tasks-banner crawl-tasks-banner-warning">Legacy run — immutable Dispatch Plan and Automation revision were not recorded.</p>;
-  }
   const authored = authority.authored_scope;
   const resolved = authority.resolved_scope;
   return <dl className="crawl-tasks-detail-grid"><div><dt>Dispatch Plan</dt><dd>{authority.dispatch_plan_id}</dd></div><div><dt>Plan state</dt><dd>{authority.plan_state}</dd></div><div><dt>Plan fingerprint</dt><dd><code>{authority.dispatch_plan_fingerprint}</code></dd></div><div><dt>Automation</dt><dd>{authority.automation_id || 'One-off run'}</dd></div><div><dt>Authored Scope</dt><dd>{authored?.mode === 'all' ? 'All major categories' : `${authored?.classification_ids?.length || 0} selected major categories`}</dd></div><div><dt>Resolved Scope</dt><dd>{resolved ? `${resolved.selected_classifications?.length || 0} classifications · ${resolved.query_target_count} Query Targets` : 'Not recorded'}</dd></div><div><dt>Readiness</dt><dd>{authority.readiness?.status || 'Not recorded'}</dd></div></dl>;
@@ -21,7 +18,7 @@ function Workload({ run }) {
     return <section className="crawl-tasks-detail-block"><h3>Listing workload</h3><dl className="crawl-tasks-detail-grid"><div><dt>Query Targets</dt><dd>{listing.query_target_count}</dd></div><div><dt>Page Depth</dt><dd>{listing.page_depth}</dd></div><div><dt>Estimated maximum</dt><dd>{listing.estimated_max_pages} pages</dd></div><div><dt>Run Page Cap</dt><dd>{listing.run_page_cap}</dd></div><div><dt>Pages requested</dt><dd>{listing.pages_requested} / {listing.estimated_max_pages}</dd></div></dl></section>;
   }
   const detail = run.detailSnapshot;
-  return <section className="crawl-tasks-detail-block"><h3>Finite detail snapshot</h3><dl className="crawl-tasks-detail-grid"><div><dt>Backlog scope</dt><dd>{detail.backlog_scope?.kind}</dd></div><div><dt>Cutoff</dt><dd>{detail.cutoff_at ? formatControlDateTime(detail.cutoff_at) : 'Legacy / not recorded'}</dd></div><div><dt>Targets</dt><dd>{detail.target_count}</dd></div><div><dt>Fetched / saved</dt><dd>{detail.fetched_count} / {detail.saved_count}</dd></div><div><dt>Failed / unavailable</dt><dd>{detail.failed_count} / {detail.unavailable_count}</dd></div><div><dt>Manual action</dt><dd>{detail.manual_action_count}</dd></div><div><dt>Remaining in snapshot</dt><dd>{detail.remaining_count}</dd></div><div><dt>Eligible for later run</dt><dd>{detail.future_eligible_count}</dd></div><div><dt>Complete-run cap</dt><dd>{detail.detail_run_cap}</dd></div></dl></section>;
+  return <section className="crawl-tasks-detail-block"><h3>Finite detail snapshot</h3><dl className="crawl-tasks-detail-grid"><div><dt>Backlog scope</dt><dd>{detail.backlog_scope?.kind}</dd></div><div><dt>Cutoff</dt><dd>{detail.cutoff_at ? formatControlDateTime(detail.cutoff_at) : 'Not recorded'}</dd></div><div><dt>Targets</dt><dd>{detail.target_count}</dd></div><div><dt>Fetched / saved</dt><dd>{detail.fetched_count} / {detail.saved_count}</dd></div><div><dt>Failed / unavailable</dt><dd>{detail.failed_count} / {detail.unavailable_count}</dd></div><div><dt>Manual action</dt><dd>{detail.manual_action_count}</dd></div><div><dt>Remaining in snapshot</dt><dd>{detail.remaining_count}</dd></div><div><dt>Eligible for later run</dt><dd>{detail.future_eligible_count}</dd></div><div><dt>Complete-run cap</dt><dd>{detail.detail_run_cap}</dd></div></dl></section>;
 }
 
 function ListingRecovery({ recovery, run, onContinue }) {

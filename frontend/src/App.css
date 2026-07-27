@@ -203,7 +203,6 @@
 }
 
 .no-results,
-.schedule-list-empty,
 .companies-empty {
   display: flex;
   min-height: 220px;
@@ -220,8 +219,7 @@
   color: var(--color-text-muted);
 }
 
-.modal-overlay,
-.schedule-history-modal {
+.modal-overlay {
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -232,8 +230,7 @@
   background: rgba(0, 0, 0, 0.62);
 }
 
-.modal-content,
-.schedule-history-content {
+.modal-content {
   width: min(90vw, 820px);
   max-height: 90vh;
   overflow: auto;

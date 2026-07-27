@@ -4,7 +4,6 @@ from app.schemas.job import (
     JobCreateSchema,
     ManualJobCreateSchema,
     JobDetailSchema,
-    JobTaxonomySchema,
 )
 from app.schemas.recommendations import (
     JobRecommendationSchema,
@@ -18,16 +17,6 @@ from app.schemas.job_search import (
     JobSearchRequestSchema,
     JobSearchLayerSummarySchema,
     JobSearchErrorSchema,
-)
-from app.schemas.schedule import (
-    ScheduleSchema,
-    ScheduleCreateSchema,
-    ScheduleUpdateSchema,
-    ExecutionSchema,
-    ScheduleWithExecutionsSchema,
-    ScheduleListResponse,
-    ExecutionListResponse,
-    ScheduleToggleResponse,
 )
 from app.schemas.stats import (
     DashboardCategoryStatsSchema,
@@ -49,7 +38,6 @@ __all__ = [
     "JobCreateSchema",
     "ManualJobCreateSchema",
     "JobDetailSchema",
-    "JobTaxonomySchema",
     "JobRecommendationSchema",
     "JobRecommendationsResponse",
     "SearchClauseSchema",
@@ -59,14 +47,6 @@ __all__ = [
     "JobSearchRequestSchema",
     "JobSearchLayerSummarySchema",
     "JobSearchErrorSchema",
-    "ScheduleSchema",
-    "ScheduleCreateSchema",
-    "ScheduleUpdateSchema",
-    "ExecutionSchema",
-    "ScheduleWithExecutionsSchema",
-    "ScheduleListResponse",
-    "ExecutionListResponse",
-    "ScheduleToggleResponse",
     "DashboardCategoryStatsSchema",
     "DashboardCategoryItemSchema",
     "DashboardCategorySourceBreakdownSchema",

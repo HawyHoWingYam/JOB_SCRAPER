@@ -906,8 +906,7 @@ def build_crawl_task_snapshot(
     if normalized_source_site == "offertoday":
         listings_staged = max(listings_staged, _to_int(event_payload.get("listings")))
     else:
-        # Preserve the legacy projection for sources whose listing runtimes did
-        # not persist a distinct staged-row metric.
+        # Fall back for Sources that do not persist a distinct staged-row metric.
         listings_staged = max(listings_staged, job_ids_collected)
     listing_partial = any(
         bool(payload.get("listing_partial"))
