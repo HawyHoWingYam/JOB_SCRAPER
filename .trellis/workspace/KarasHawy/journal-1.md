@@ -1649,3 +1649,40 @@ Added one shared Job Taxonomy, Company Industry, and Skill classification batch 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 48: Unversioned sandbox cutover
+
+**Date**: 2026-07-27
+**Task**: Unversioned sandbox cutover
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Removed application version systems and legacy scheduling, rebuilt the shared sandbox while preserving business data, and verified the complete current stack.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `939bcff5` | (see git log) |
+| `77c6f823` | (see git log) |
+| `9888496e` | (see git log) |
+| `6b4e2a68` | (see git log) |
+| `91a73800` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
