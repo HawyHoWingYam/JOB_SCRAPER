@@ -2,6 +2,7 @@ FROM python:3.11-slim
 
 RUN pip install --no-cache-dir scrapyd
 
+COPY scrapyd.conf /etc/scrapyd/scrapyd.conf
 COPY run_scrapyd_quiet.py /app/run_scrapyd_quiet.py
 
 EXPOSE 6800
