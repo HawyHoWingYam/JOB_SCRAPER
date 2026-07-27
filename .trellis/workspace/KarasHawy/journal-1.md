@@ -149,7 +149,10 @@ Corrected OfferToday Crawl Tasks partial metrics, added resumable IP-block manua
 
 ### Main Changes
 
-- Detailed change bullets were not supplied; see the summary above.
+- Added exactly 36 OfferToday classification targets (`A-Z`, `0-9`) and removed empty-keyword planning for new runs.
+- Added OfferToday-only workload defaults and validation: page depth 100, run page cap 3600, and no generic 5000-page ceiling.
+- Kept historical browse targets executable, ignored explicit banner cards, and preserved fatal validation for malformed job-shaped records.
+- Made OfferToday classification selection single-choice and added live workload calculation to the existing Task Control wizard.
 
 ### Git Commits
 
@@ -197,7 +200,11 @@ Implemented stable crawl-task ordering, listing-bound OfferToday detail scope, r
 
 ### Testing
 
-- Validation was not recorded for this session.
+- Backend focused suite: 139 passed, 3 skipped.
+- Frontend suite: 192 passed; production build passed.
+- Ruff, ESLint, Python compilation, and `git diff --check` passed.
+- Live no-write smoke: all 36 keywords returned API code 0; sampled pages contained 10 jobs and 2 ignored banners.
+- Full backend suite had 3 pre-existing/unrelated failures (two missing `/frontend` fixtures in the backend container and one JobsDB crawl-mode dirty-worktree mismatch).
 
 ### Status
 
@@ -1707,6 +1714,39 @@ Added an owning-adapter pre-write executability gate, aggregate redacted CTgoodj
 | Hash | Message |
 |------|---------|
 | `7e63f851` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 50: OfferToday classification keyword sweeps
+
+**Date**: 2026-07-27
+**Task**: OfferToday classification keyword sweeps
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented OfferToday-only A-Z and 0-9 keyword listing targets for one classification, configurable workload budgets with 100-page defaults and no generic 5000 cap, legacy target compatibility, banner skipping, and Task Control wizard workload validation. Verified focused backend tests, full frontend tests/build, lint/compile checks, and a live no-write 36-keyword smoke test; archived task 07-27-offertoday-keyword-query-targets.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5a0f3089` | (see git log) |
 
 ### Testing
 
