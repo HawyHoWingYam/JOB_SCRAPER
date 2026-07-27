@@ -3,7 +3,6 @@ export const VALID_APP_VIEWS = new Set([
   'jobs',
   'add-job',
   'companies',
-  'job-intelligence',
   'ai',
   'settings',
   'scheduler',
@@ -20,8 +19,5 @@ export function resolveAppView(hash = window.location.hash) {
 }
 
 export function hashForView(view) {
-  if (view === 'job-intelligence') {
-    return '#job-intelligence/job-taxonomy';
-  }
   return `#${VALID_APP_VIEWS.has(view) ? view : 'dashboard'}`;
 }

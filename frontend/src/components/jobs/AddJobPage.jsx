@@ -530,7 +530,7 @@ function AddJobPage() {
                         disabled={isCreatingCompany}
                       />
                       <p className="add-job-field-note">
-                        Free text is recorded as evidence for Company Industry review; it does not create an assignment.
+                        Free text is stored as Company Industry evidence; automatic classification can use it later.
                       </p>
                     </div>
                     <div className="add-job-field">

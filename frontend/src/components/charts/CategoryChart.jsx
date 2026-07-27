@@ -72,7 +72,7 @@ export default function CategoryChart({ totalJobs = 0 }) {
         <div className="dashboard-chart-heading">
           <div>
             <h3>Jobs by Canonical Job Taxonomy</h3>
-            <p>Only current accepted assignments from the active governed revision are included.</p>
+            <p>Only current accepted assignments are included.</p>
           </div>
         </div>
         <div className="error-message">Failed to load categories: {error}</div>
@@ -94,7 +94,7 @@ export default function CategoryChart({ totalJobs = 0 }) {
       <div className="dashboard-chart-heading">
         <div>
           <h3>Jobs by Canonical Job Taxonomy</h3>
-          <p>Only current accepted assignments from the active governed revision are included.</p>
+          <p>Only current accepted assignments are included.</p>
         </div>
         <div className="dashboard-chart-badge">
           {categorizedTotal.toLocaleString()} accepted

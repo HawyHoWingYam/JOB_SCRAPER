@@ -134,36 +134,36 @@ describe('api client', () => {
     await expect(apiFetchJson('/api/capabilities')).rejects.toThrow('retrieval-api unavailable');
   });
 
-  it('preserves stable conflict metadata for governance reload handling', async () => {
+  it('preserves structured conflict metadata', async () => {
     globalThis.fetch = vi.fn(() =>
       Promise.resolve({
         ok: false,
         status: 409,
         json: async () => ({
           detail: {
-            code: 'GOVERNANCE_DECISION_STALE_VERSION',
-            message: 'The review item changed',
+            code: 'SOURCE_CLASSIFICATION_SYNC_CONFLICT',
+            message: 'The classification changed',
           },
         }),
       }),
     );
 
-    const error = await apiFetchJson('/api/job-intelligence/review').catch(
+    const error = await apiFetchJson('/api/source-classifications/jobsdb').catch(
       (caught) => caught,
     );
 
     expect(error).toMatchObject({
       name: 'ApiRequestError',
-      message: 'The review item changed',
+      message: 'The classification changed',
       status: 409,
-      code: 'GOVERNANCE_DECISION_STALE_VERSION',
+      code: 'SOURCE_CLASSIFICATION_SYNC_CONFLICT',
       details: {
-        code: 'GOVERNANCE_DECISION_STALE_VERSION',
-        message: 'The review item changed',
+        code: 'SOURCE_CLASSIFICATION_SYNC_CONFLICT',
+        message: 'The classification changed',
       },
       detail: {
-        code: 'GOVERNANCE_DECISION_STALE_VERSION',
-        message: 'The review item changed',
+        code: 'SOURCE_CLASSIFICATION_SYNC_CONFLICT',
+        message: 'The classification changed',
       },
       requestId: 'req-fixed',
     });

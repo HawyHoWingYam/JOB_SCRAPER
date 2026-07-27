@@ -11,12 +11,6 @@ const CompaniesPage = lazy(() => import('./components/companies/CompaniesPage'))
 const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage'));
 const CrawlTasksPage = lazy(() => import('./components/scraper/CrawlTasksPage'));
 const AddJobPage = lazy(() => import('./components/jobs/AddJobPage'));
-const JobIntelligenceGovernancePage = lazy(
-  () =>
-    import(
-      './components/jobIntelligence/JobIntelligenceGovernancePage'
-    ),
-);
 const TaskControlWizard = lazy(
   () => import('./features/taskControl/wizard/TaskControlWizard'),
 );
@@ -73,9 +67,6 @@ function App() {
             {activeView === 'jobs' && <JobBrowser />}
             {activeView === 'add-job' && <AddJobPage />}
             {activeView === 'companies' && <CompaniesPage />}
-            {activeView === 'job-intelligence' && (
-              <JobIntelligenceGovernancePage />
-            )}
             {activeView === 'ai' && <AIEnrichmentPage />}
             {activeView === 'settings' && (
               <AISettingsPage

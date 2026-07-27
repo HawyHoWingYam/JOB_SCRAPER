@@ -288,11 +288,7 @@ describe('AIEnrichmentPage', () => {
     expect(card.getAllByText('Excluded 2')).toHaveLength(2);
     expect(card.getByText(/Farming \(offertoday:113000\)/)).toBeInTheDocument();
     expect(card.getByText(/No defensible internal taxonomy domain/)).toBeInTheDocument();
-    expect(card.getByRole('link', { name: 'Review 2 excluded jobs' }))
-      .toHaveAttribute(
-        'href',
-        '#job-intelligence/job-taxonomy?source_site=offertoday&source_classification_id=offertoday%3A113000&source_classification_label=Farming',
-      );
+    expect(card.queryByRole('link')).not.toBeInTheDocument();
     expect(card.queryByRole('button', { name: /Retry failed/i })).not.toBeInTheDocument();
     expect(card.queryByRole('button', { name: /assign|accept|reject/i })).not.toBeInTheDocument();
   });
@@ -359,7 +355,7 @@ describe('AIEnrichmentPage', () => {
     await waitFor(() => expect(screen.getByText('12 match · 12 will run')).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: 'Run 12 filtered jobs' }));
     expect(window.confirm).toHaveBeenCalledOnce();
-    expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run:v2'))).not.toHaveProperty('all_pending_acknowledged');
+    expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run'))).not.toHaveProperty('all_pending_acknowledged');
   });
 
   it('persists ordinary filters and Reset clears them', async () => {
@@ -367,52 +363,14 @@ describe('AIEnrichmentPage', () => {
     const user = userEvent.setup();
     const { unmount } = render(<AIEnrichmentPage />);
     await user.click(await screen.findByLabelText('jobsdb'));
-    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run:v2')).filters.source_sites).toEqual(['jobsdb']));
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run')).filters.source_sites).toEqual(['jobsdb']));
     unmount();
 
     render(<AIEnrichmentPage />);
     expect(await screen.findByLabelText('jobsdb')).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Reset' }));
     expect(screen.getByLabelText('jobsdb')).not.toBeChecked();
-    expect(window.localStorage.getItem('ai-enrichment-filtered-run:v2')).toBeNull();
-    expect(window.localStorage.getItem('ai-enrichment-filtered-run:v1')).toBeNull();
-  });
-
-  it('migrates safe v1 fields and clears ambiguous name-based path filters', async () => {
-    window.localStorage.setItem('ai-enrichment-filtered-run:v1', JSON.stringify({
-      filters: {
-        source_sites: ['jobsdb', 'ctgoodjobs'],
-        source_classification_names: ['Information Technology'],
-        source_subclassification_names: ['Security'],
-        posted_date_from: '2026-07-01',
-      },
-      limit: 75,
-    }));
-    installFetch({
-      overviewPayload: { ...overview, active_runs: 0 },
-      runs: [completedRun],
-      filterOptions: sourceQualifiedFilterOptions,
-    });
-
-    render(<AIEnrichmentPage />);
-
-    expect(await screen.findByText(/saved name-based Source Classification filters were cleared/i))
-      .toBeInTheDocument();
-    await waitFor(() => {
-      const migrated = JSON.parse(
-        window.localStorage.getItem('ai-enrichment-filtered-run:v2'),
-      );
-      expect(migrated).toMatchObject({
-        filters: {
-          source_sites: ['jobsdb', 'ctgoodjobs'],
-          source_classification_ids: [],
-          source_subclassification_ids: [],
-          posted_date_from: '2026-07-01',
-        },
-        limit: 75,
-      });
-    });
-    expect(window.localStorage.getItem('ai-enrichment-filtered-run:v1')).toBeNull();
+    expect(window.localStorage.getItem('ai-enrichment-filtered-run')).toBeNull();
   });
 
   it('stops an active run from its card and renders stopping as active', async () => {

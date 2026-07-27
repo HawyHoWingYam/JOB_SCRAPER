@@ -26,8 +26,7 @@ function createJobPayload(overrides = {}) {
     salary_range: 'HK$40k - HK$60k',
     employment_type: 'Full-time',
     skills: ['Python', 'FastAPI'],
-    provisional_skills: [],
-    unreviewed_skill_mentions: [],
+    skill_candidate_mentions: [],
     ai_summary: 'Builds internal platform services and backend APIs.',
     job_taxonomy: {
       path: 'Information & Communication Technology / Software Development / Backend Development',
@@ -87,7 +86,7 @@ function createSkillState(overrides = {}) {
   return {
     ...productFixture.job_detail.skill_state,
     skills: [],
-    unreviewed_skill_mentions: [],
+    candidate_mentions: [],
     ...overrides,
   };
 }
@@ -98,7 +97,6 @@ function createUnassignedCanonicalState(overrides = {}) {
     state: 'unassigned',
     assignment: null,
     reasons: [],
-    review_item_refs: [],
     ...overrides,
   };
 }
@@ -186,7 +184,7 @@ describe('JobDetailModal', () => {
     await user.click(opener);
 
     const closeButton = screen.getByRole('button', { name: 'Close job details' });
-    const lastLink = await screen.findByRole('link', { name: 'Open Skill Candidates' });
+    const lastLink = await screen.findByRole('link', { name: /original job post/i });
     lastLink.focus();
     await user.tab();
     expect(closeButton).toHaveFocus();
@@ -256,21 +254,16 @@ describe('JobDetailModal', () => {
       'Technology / Software Development / Backend Development',
     );
     expect(canonical).toHaveTextContent('Assignment method: Constrained AI');
-    expect(within(canonical).getByRole('link', { name: 'Open Job Taxonomy Review' }))
-      .toHaveAttribute('href', '#job-intelligence/job-taxonomy');
+    expect(within(canonical).queryByRole('link')).not.toBeInTheDocument();
 
     const industries = screen.getByRole('region', { name: 'Company Industries' });
     expect(industries).toHaveTextContent('J · Information and communications');
     expect(industries).toHaveTextContent('Primary Company Industry');
-    expect(within(industries).getByRole('link', { name: 'Open Company Industries' }))
-      .toHaveAttribute('href', '#job-intelligence/company-industries');
+    expect(within(industries).queryByRole('link')).not.toBeInTheDocument();
 
     expect(screen.queryByText('Legacy evidence only')).not.toBeInTheDocument();
     expect(screen.queryByText('Legacy / AI / Category')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Review Rust' })).toHaveAttribute(
-      'href',
-      '#job-intelligence/skill-candidates?item=80000000-0000-0000-0000-000000000010',
-    );
+    expect(screen.getByText('Rust')).toBeInTheDocument();
   });
 
   it('summarizes an explicit Primary Company Industry as Primary + N', async () => {
@@ -301,7 +294,7 @@ describe('JobDetailModal', () => {
     expect(within(industries).getAllByText('Additional Company Industry')).toHaveLength(2);
   });
 
-  it('renders Unassigned and review states as read-only governance links', async () => {
+  it('renders Unassigned states without exposing retired review queues', async () => {
     renderModalWithPayload({
       ...productFixture.job_detail,
       canonical_taxonomy: {
@@ -309,29 +302,10 @@ describe('JobDetailModal', () => {
         state: 'unassigned',
         assignment: null,
         reasons: ['classifier_provenance_missing'],
-        review_item_refs: [
-          {
-            id: '91000000-0000-0000-0000-000000000099',
-            status: 'active',
-            version: 3,
-            decision_audit_id: null,
-            deep_link: '/api/job-intelligence/governance/job-taxonomy/review-items/91000000-0000-0000-0000-000000000099',
-          },
-        ],
       },
       company_industries: {
         company_id: productFixture.job_detail.company_id,
         assignments: [],
-        review_item_refs: [
-          {
-            id: '93000000-0000-0000-0000-000000000099',
-            status: 'active',
-            reason: 'unmapped_source_label',
-            version: 2,
-            decision_audit_id: null,
-            deep_link: '/api/job-intelligence/governance/company-industries/review-items/93000000-0000-0000-0000-000000000099',
-          },
-        ],
       },
     });
 
@@ -340,19 +314,13 @@ describe('JobDetailModal', () => {
     });
     expect(canonical).toHaveTextContent('Unassigned Canonical Taxonomy');
     expect(canonical).toHaveTextContent('Classifier Provenance Missing');
-    expect(within(canonical).getByRole('link', { name: 'Open review item' }))
-      .toHaveAttribute(
-        'href',
-        '#job-intelligence/job-taxonomy?item=91000000-0000-0000-0000-000000000099',
-      );
+    expect(within(canonical).queryByRole('link', { name: 'Open review item' }))
+      .not.toBeInTheDocument();
 
     const industries = screen.getByRole('region', { name: 'Company Industries' });
     expect(industries).toHaveTextContent('No governed Company Industry assignment');
-    expect(within(industries).getByRole('link', { name: 'Open Industry review item' }))
-      .toHaveAttribute(
-        'href',
-        '#job-intelligence/company-industries?item=93000000-0000-0000-0000-000000000099',
-      );
+    expect(within(industries).queryByRole('link', { name: 'Open Industry review item' }))
+      .not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /assign|reject|approve/i }))
       .not.toBeInTheDocument();
   });
@@ -393,7 +361,7 @@ describe('JobDetailModal', () => {
       createJobPayload({
         ai_enriched_at: null,
         skills: [],
-        unreviewed_skill_mentions: [],
+        skill_candidate_mentions: [],
         skill_state: createSkillState(),
         ai_summary: null,
         job_taxonomy: null,
@@ -412,7 +380,7 @@ describe('JobDetailModal', () => {
     renderModalWithPayload(
       createJobPayload({
         skills: [],
-        provisional_skills: [],
+        skill_candidate_mentions: [],
         skill_state: createSkillState(),
         ai_summary: null,
         job_taxonomy: null,
@@ -429,27 +397,21 @@ describe('JobDetailModal', () => {
     expect(screen.getByText('No explicit experience requirement found in the posting')).toBeInTheDocument();
   });
 
-  it('renders unreviewed skill mentions as secondary evidence and ignores legacy generic/rejected labels', async () => {
+  it('renders Skill Candidate evidence without exposing a manual review queue', async () => {
     renderModalWithPayload(
       createJobPayload({
         skills: [],
-        provisional_skills: ['Generic Tag', 'Rejected Evidence'],
-        unreviewed_skill_mentions: [],
+        skill_candidate_mentions: [],
         skill_state: createSkillState({
-          unreviewed_skill_mentions: [
+          candidate_mentions: [
             {
               id: '60000000-0000-0000-0000-000000000001',
-              label: 'Unreviewed Skill Mention',
               raw_name: 'Rust',
               normalized_key: 'rust',
               candidate_id: '70000000-0000-0000-0000-000000000001',
-              candidate_version: 1,
               source: 'ai-extraction',
               confidence: 0.82,
               provenance: { run_id: 'fixture-run' },
-              deep_link: '/api/job-intelligence/governance/skills/candidates/70000000-0000-0000-0000-000000000001',
-              created_at: '2026-07-19T08:00:00Z',
-              updated_at: '2026-07-19T08:00:00Z',
             },
           ],
         }),
@@ -457,27 +419,10 @@ describe('JobDetailModal', () => {
     );
 
     expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /unreviewed skill mentions/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /skill candidate evidence/i })).toBeInTheDocument();
     expect(screen.getByText('Rust')).toBeInTheDocument();
-    expect(screen.getByText(/secondary evidence awaiting human taxonomy review/i)).toBeInTheDocument();
-    expect(screen.queryByText('Generic Tag')).not.toBeInTheDocument();
-    expect(screen.queryByText('Rejected Evidence')).not.toBeInTheDocument();
+    expect(screen.getByText(/automatic Skill processing/i)).toBeInTheDocument();
     expect(screen.getByText('No governed skills matched yet')).toBeInTheDocument();
-  });
-
-  it('keeps the legacy provisional skills fallback for older detail responses', async () => {
-    renderModalWithPayload(
-      createJobPayload({
-        skills: [],
-        provisional_skills: ['Google Suite'],
-        unreviewed_skill_mentions: undefined,
-        skill_state: null,
-      }),
-    );
-
-    expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /unreviewed skill mentions/i })).toBeInTheDocument();
-    expect(screen.getByText('Google Suite')).toBeInTheDocument();
   });
 
   it('prefers a normalized numeric experience label over free-text summary text', async () => {
@@ -498,7 +443,6 @@ describe('JobDetailModal', () => {
         company_industries: {
           company_id: productFixture.job_detail.company_id,
           assignments: [],
-          review_item_refs: [],
         },
       }),
     );

@@ -1,92 +1,4 @@
 {
-  "summary": {
-    "generated_at": "2026-07-19T12:00:00Z",
-    "trusted_local": {
-      "actor": "local-operator",
-      "authentication": "none",
-      "warning": "Trusted local operation only. Governance decision routes are not authenticated and must not be exposed to an untrusted network."
-    },
-    "total_pending": 6,
-    "areas": [
-      {
-        "key": "job_taxonomy",
-        "label": "Job Taxonomy Review",
-        "available": true,
-        "pending_count": 2,
-        "oldest_pending_at": "2026-07-18T08:00:00Z",
-        "active_revision_id": "10000000-0000-0000-0000-000000000001",
-        "unavailable_code": null,
-        "deep_link": "/job-intelligence/job-taxonomy"
-      },
-      {
-        "key": "skill_candidates",
-        "label": "Skill Candidates",
-        "available": true,
-        "pending_count": 3,
-        "oldest_pending_at": "2026-07-18T09:00:00Z",
-        "active_revision_id": "20000000-0000-0000-0000-000000000001",
-        "unavailable_code": null,
-        "deep_link": "/job-intelligence/skill-candidates"
-      },
-      {
-        "key": "company_industries",
-        "label": "Company Industries",
-        "available": true,
-        "pending_count": 1,
-        "oldest_pending_at": "2026-07-18T10:00:00Z",
-        "active_revision_id": "30000000-0000-0000-0000-000000000001",
-        "unavailable_code": null,
-        "deep_link": "/job-intelligence/company-industries"
-      }
-    ],
-    "coverage": {
-      "total_jobs": 12,
-      "jobs_with_source_classification_paths": 10,
-      "jobs_with_employment_types": 9,
-      "jobs_with_canonical_assignment": 7,
-      "jobs_without_canonical_assignment": 5,
-      "jobs_with_unassigned_canonical_state": 2,
-      "jobs_with_unknown_canonical_state": 3,
-      "canonical_unassigned_reasons": {
-        "classifier_provenance_missing": 3,
-        "unmapped_source_classification": 2
-      },
-      "jobs_with_governed_skills": 8,
-      "jobs_with_unreviewed_skill_mentions": 4,
-      "total_companies": 6,
-      "companies_with_governed_industries": 4,
-      "companies_without_governed_industries": 2
-    }
-  },
-  "canonical_audit": {
-    "items": [
-      {
-        "id": "40000000-0000-0000-0000-000000000001",
-        "domain": "job-taxonomy",
-        "subject_type": "job-taxonomy-review-item",
-        "subject_id": "50000000-0000-0000-0000-000000000001",
-        "action": "assign_existing_subcategory",
-        "actor": "local-operator",
-        "command_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "idempotency_key": "product-surfaces-fixture",
-        "before_summary": {
-          "status": "active"
-        },
-        "after_summary": {
-          "status": "assigned"
-        },
-        "evidence_refs": [
-          {
-            "kind": "source-classification-path",
-            "id": "jobsdb:6281"
-          }
-        ],
-        "correlation_id": "product-surfaces-fixture",
-        "created_at": "2026-07-19T11:00:00Z"
-      }
-    ],
-    "next_cursor": null
-  },
   "job_filters": {
     "locations": [
       "Central"
@@ -171,10 +83,8 @@
           "job_id": "40000000-0000-0000-0000-000000000010",
           "state": "assigned",
           "assignment": {
-            "id": "90000000-0000-0000-0000-000000000010",
             "job_id": "40000000-0000-0000-0000-000000000010",
-            "taxonomy_revision_id": "10000000-0000-0000-0000-000000000001",
-            "subcategory_id": "10000000-0000-0000-0000-000000000013",
+            "taxonomy_code": "backend-development",
             "method": "constrained_ai",
             "breadcrumb": {
               "domain": {
@@ -193,27 +103,13 @@
                 "label": "Backend Development"
               }
             },
-            "version": 1,
-            "provenance": {
-              "evidence_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-              "source_evidence_refs": [
-                {
-                  "kind": "source-classification-path",
-                  "id": "jobsdb:6281"
-                }
-              ],
-              "mapping_revision_id": null,
-              "mapping_ids": [],
-              "model": {
-                "provider": "openai",
-                "name": "fixture-model",
-                "version": "2026-07-19"
-              },
-              "captured_at": "2026-07-19T09:00:00Z"
+            "model_provenance": {
+              "provider": "openai",
+              "name": "fixture-model",
+              "version": "2026-07-19"
             }
           },
-          "reasons": [],
-          "review_item_refs": []
+          "reasons": []
         },
         "canonical_taxonomy_availability": {
           "available": true,
@@ -248,15 +144,6 @@
           "assignment": null,
           "reasons": [
             "unmapped_source_classification"
-          ],
-          "review_item_refs": [
-            {
-              "id": "92000000-0000-0000-0000-000000000020",
-              "status": "active",
-              "version": 2,
-              "decision_audit_id": null,
-              "deep_link": "/job-intelligence/job-taxonomy?item_id=92000000-0000-0000-0000-000000000020"
-            }
           ]
         },
         "canonical_taxonomy_availability": {
@@ -316,55 +203,50 @@
         "company_id": "30000000-0000-0000-0000-000000000010",
         "assignments": [
           {
-            "id": "30000000-0000-0000-0000-000000000012",
-            "taxonomy_revision_id": "30000000-0000-0000-0000-000000000001",
-            "node_id": "30000000-0000-0000-0000-000000000011",
+            "id": 1,
+            "company_id": "30000000-0000-0000-0000-000000000010",
+            "taxonomy_code": "J",
             "method": "authoritative_code",
-            "breadcrumb": [
-              {
-                "id": "30000000-0000-0000-0000-000000000011",
+            "breadcrumb": {
+              "section": {
                 "code": "J",
-                "level": "section",
+                "label": "Information and communications",
                 "labels": {
                   "en": "Information and communications",
                   "zh_hant": "資訊及通訊",
                   "zh_hans": "资讯及通讯"
                 }
               }
-            ],
+            },
             "is_primary": true,
             "primary_basis": "authoritative_source",
-            "version": 1,
             "provenance": {
               "method": "source-hsic-code"
             }
           },
           {
-            "id": "30000000-0000-0000-0000-000000000013",
-            "taxonomy_revision_id": "30000000-0000-0000-0000-000000000001",
-            "node_id": "30000000-0000-0000-0000-000000000014",
+            "id": 2,
+            "company_id": "30000000-0000-0000-0000-000000000010",
+            "taxonomy_code": "K",
             "method": "operator",
-            "breadcrumb": [
-              {
-                "id": "30000000-0000-0000-0000-000000000014",
+            "breadcrumb": {
+              "section": {
                 "code": "K",
-                "level": "section",
+                "label": "Financial and insurance activities",
                 "labels": {
                   "en": "Financial and insurance activities",
                   "zh_hant": "金融及保險活動",
                   "zh_hans": "金融及保险活动"
                 }
               }
-            ],
+            },
             "is_primary": false,
             "primary_basis": null,
-            "version": 1,
             "provenance": {
               "method": "operator"
             }
           }
-        ],
-        "review_item_refs": []
+        ]
       },
       "company_industry_availability": {
         "available": true,
@@ -382,17 +264,7 @@
       "updated_at": "2026-07-19T08:00:00Z",
       "company_industries": {
         "company_id": "30000000-0000-0000-0000-000000000020",
-        "assignments": [],
-        "review_item_refs": [
-          {
-            "id": "33000000-0000-0000-0000-000000000020",
-            "status": "active",
-            "reason": "unmapped_source_label",
-            "version": 2,
-            "decision_audit_id": null,
-            "deep_link": "/api/job-intelligence/governance/company-industries/review-items/33000000-0000-0000-0000-000000000020"
-          }
-        ]
+        "assignments": []
       },
       "company_industry_availability": {
         "available": true,
@@ -491,25 +363,17 @@
     "skills": [
       "Python"
     ],
-    "provisional_skills": [
-      "Rust"
-    ],
-    "unreviewed_skill_mentions": [
+    "skill_candidate_mentions": [
       {
         "id": "70000000-0000-0000-0000-000000000010",
-        "label": "Unreviewed Skill Mention",
         "raw_name": "Rust",
         "normalized_key": "rust",
         "candidate_id": "80000000-0000-0000-0000-000000000010",
-        "candidate_version": 1,
         "source": "ai-extraction",
         "confidence": 0.8,
         "provenance": {
           "method": "ai-extraction"
-        },
-        "deep_link": "/job-intelligence/skill-candidates?candidate_id=80000000-0000-0000-0000-000000000010",
-        "created_at": "2026-07-19T10:00:00Z",
-        "updated_at": "2026-07-19T10:00:00Z"
+        }
       }
     ],
     "source_employment_labels": [
@@ -546,10 +410,8 @@
       "job_id": "40000000-0000-0000-0000-000000000010",
       "state": "assigned",
       "assignment": {
-        "id": "90000000-0000-0000-0000-000000000010",
         "job_id": "40000000-0000-0000-0000-000000000010",
-        "taxonomy_revision_id": "10000000-0000-0000-0000-000000000001",
-        "subcategory_id": "10000000-0000-0000-0000-000000000013",
+        "taxonomy_code": "backend-development",
         "method": "constrained_ai",
         "breadcrumb": {
           "domain": {
@@ -568,98 +430,66 @@
             "label": "Backend Development"
           }
         },
-        "version": 1,
-        "provenance": {
-          "evidence_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-          "source_evidence_refs": [
-            {
-              "kind": "source-classification-path",
-              "id": "jobsdb:6281"
-            }
-          ],
-          "mapping_revision_id": null,
-          "mapping_ids": [],
-          "model": {
-            "provider": "openai",
-            "name": "fixture-model",
-            "version": "2026-07-19"
-          },
-          "captured_at": "2026-07-19T09:00:00Z"
+        "model_provenance": {
+          "provider": "openai",
+          "name": "fixture-model",
+          "version": "2026-07-19"
         }
       },
-      "reasons": [],
-      "review_item_refs": []
+      "reasons": []
     },
     "company_industries": {
       "company_id": "30000000-0000-0000-0000-000000000010",
       "assignments": [
         {
-          "id": "30000000-0000-0000-0000-000000000012",
-          "taxonomy_revision_id": "30000000-0000-0000-0000-000000000001",
-          "node_id": "30000000-0000-0000-0000-000000000011",
+          "id": 1,
+          "company_id": "30000000-0000-0000-0000-000000000010",
+          "taxonomy_code": "J",
           "method": "authoritative_code",
-          "breadcrumb": [
-            {
-              "id": "30000000-0000-0000-0000-000000000011",
+          "breadcrumb": {
+            "section": {
               "code": "J",
-              "level": "section",
+              "label": "Information and communications",
               "labels": {
                 "en": "Information and communications",
                 "zh_hant": "資訊及通訊",
                 "zh_hans": "资讯及通讯"
               }
             }
-          ],
+          },
           "is_primary": true,
           "primary_basis": "authoritative_source",
-          "version": 1,
           "provenance": {
             "method": "source-hsic-code"
           }
         }
-      ],
-      "review_item_refs": []
+      ]
     },
     "skill_state": {
       "job_id": "40000000-0000-0000-0000-000000000010",
-      "taxonomy_revision_id": "20000000-0000-0000-0000-000000000001",
       "skills": [
         {
-          "id": "20000000-0000-0000-0000-000000000013",
-          "revision_id": "20000000-0000-0000-0000-000000000001",
-          "category": {
-            "id": "20000000-0000-0000-0000-000000000011",
-            "code": "programming",
-            "name": "Programming"
-          },
-          "technology": {
-            "id": "20000000-0000-0000-0000-000000000012",
-            "code": "python-ecosystem",
-            "name": "Python Ecosystem"
-          },
           "code": "python",
           "name": "Python",
-          "order": 1,
-          "origin": "seed",
-          "aliases": []
+          "source": "ai-extraction",
+          "confidence": 0.9,
+          "provenance": {
+            "method": "ai-extraction"
+          },
+          "mention_count": 1
         }
       ],
-      "unreviewed_skill_mentions": [
+      "candidate_mentions": [
         {
           "id": "70000000-0000-0000-0000-000000000010",
-          "label": "Unreviewed Skill Mention",
           "raw_name": "Rust",
           "normalized_key": "rust",
           "candidate_id": "80000000-0000-0000-0000-000000000010",
-          "candidate_version": 1,
           "source": "ai-extraction",
           "confidence": 0.8,
           "provenance": {
             "method": "ai-extraction"
-          },
-          "deep_link": "/job-intelligence/skill-candidates?candidate_id=80000000-0000-0000-0000-000000000010",
-          "created_at": "2026-07-19T10:00:00Z",
-          "updated_at": "2026-07-19T10:00:00Z"
+          }
         }
       ]
     },
@@ -708,10 +538,8 @@
           "job_id": "40000000-0000-0000-0000-000000000040",
           "state": "assigned",
           "assignment": {
-            "id": "90000000-0000-0000-0000-000000000040",
             "job_id": "40000000-0000-0000-0000-000000000040",
-            "taxonomy_revision_id": "10000000-0000-0000-0000-000000000001",
-            "subcategory_id": "10000000-0000-0000-0000-000000000013",
+            "taxonomy_code": "backend-development",
             "method": "constrained_ai",
             "breadcrumb": {
               "domain": {
@@ -730,27 +558,13 @@
                 "label": "Backend Development"
               }
             },
-            "version": 1,
-            "provenance": {
-              "evidence_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-              "source_evidence_refs": [
-                {
-                  "kind": "source-classification-path",
-                  "id": "jobsdb:6281"
-                }
-              ],
-              "mapping_revision_id": null,
-              "mapping_ids": [],
-              "model": {
-                "provider": "openai",
-                "name": "fixture-model",
-                "version": "2026-07-19"
-              },
-              "captured_at": "2026-07-19T08:00:00Z"
+            "model_provenance": {
+              "provider": "openai",
+              "name": "fixture-model",
+              "version": "2026-07-19"
             }
           },
-          "reasons": [],
-          "review_item_refs": []
+          "reasons": []
         },
         "job_intelligence_availability": {
           "source_attributes": {

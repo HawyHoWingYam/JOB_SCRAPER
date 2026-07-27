@@ -12,7 +12,6 @@ import {
   Square,
 } from 'lucide-react';
 import { apiPath } from '../../api/base';
-import { governanceHash } from '../jobIntelligence/governanceRoute';
 import '../Dashboard.css';
 import './AIEnrichmentPage.css';
 
@@ -21,8 +20,7 @@ const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', '
 const DEGRADED_PLACEHOLDER = 'Unavailable';
 const REFRESH_REQUEST_TIMEOUT_MS = 8000;
 const FILTER_PREVIEW_DEBOUNCE_MS = 350;
-const FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run:v2';
-const LEGACY_FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run:v1';
+const FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run';
 const DEFAULT_FILTER_STATE = {
   source_sites: [],
   source_classification_ids: [],
@@ -41,29 +39,6 @@ function isActiveRun(run) {
 
 function isTerminalRun(run) {
   return TERMINAL_RUN_STATUSES.has(normalizeRunStatus(run?.status));
-}
-
-function governanceScope(filters = {}, pendingLimit, detail = {}) {
-  const sourceId = detail.source_classification_id;
-  const sourceSite = sourceId?.includes(':') ? sourceId.split(':', 1)[0] : null;
-  const stableReason = /^[a-z0-9_]+$/.test(String(detail.reason || ''))
-    ? detail.reason
-    : null;
-  return {
-    ...filters,
-    ...(sourceId && !filters.source_classification_ids?.length
-      ? { source_classification_ids: [sourceId] }
-      : {}),
-    ...(detail.source_classification_name
-      ? { sourceClassificationLabel: detail.source_classification_name }
-      : {}),
-    ...(sourceSite && !filters.source_sites?.length
-      ? { source_sites: [sourceSite] }
-      : {}),
-    ...(stableReason ? { reason: stableReason } : {}),
-    ...(detail.job_ids?.length ? { jobIds: detail.job_ids } : {}),
-    ...(pendingLimit ? { pendingLimit } : {}),
-  };
 }
 
 function parseDateMs(value) {
@@ -188,8 +163,7 @@ function getRunStatusTone(status) {
 function loadPersistedFilters() {
   try {
     const current = window.localStorage.getItem(FILTER_STORAGE_KEY);
-    const legacy = current ? null : window.localStorage.getItem(LEGACY_FILTER_STORAGE_KEY);
-    const parsed = JSON.parse(current || legacy || 'null');
+    const parsed = JSON.parse(current || 'null');
     const filters = parsed?.filters;
     const limit = Number(parsed?.limit);
     if (!filters || !Number.isInteger(limit) || limit < 1 || limit > 5000) {
@@ -211,13 +185,6 @@ function loadPersistedFilters() {
       },
       limit: String(limit),
     };
-    if (legacy) {
-      // v1 stored unqualified display names. Keep only fields whose identity is
-      // still unambiguous and let the operator reselect source-qualified paths.
-      persistedFilters.filters.source_classification_ids = [];
-      persistedFilters.filters.source_subclassification_ids = [];
-      persistedFilters.migratedLegacyStorage = true;
-    }
     return persistedFilters;
   } catch {
     return { filters: DEFAULT_FILTER_STATE, limit: '50' };
@@ -474,13 +441,10 @@ export default function AIEnrichmentPage() {
         filters,
         limit: normalizedLimit,
       }));
-      if (persistedFilters.migratedLegacyStorage) {
-        window.localStorage.removeItem(LEGACY_FILTER_STORAGE_KEY);
-      }
     } catch {
       // Storage is a convenience; private mode or quota errors must not block operations.
     }
-  }, [filters, normalizedLimit, persistedFilters.migratedLegacyStorage]);
+  }, [filters, normalizedLimit]);
 
   useEffect(() => {
     let cancelled = false;
@@ -863,7 +827,6 @@ export default function AIEnrichmentPage() {
     setPreview(null);
     try {
       window.localStorage.removeItem(FILTER_STORAGE_KEY);
-      window.localStorage.removeItem(LEGACY_FILTER_STORAGE_KEY);
     } catch {
       // Ignore unavailable storage; in-memory controls are already reset.
     }
@@ -972,12 +935,6 @@ export default function AIEnrichmentPage() {
                 />
               </div>
 
-              {persistedFilters.migratedLegacyStorage && (
-                <div className="ai-status-banner ai-status-warning" role="status">
-                  Saved name-based Source Classification filters were cleared because
-                  duplicate labels cannot be migrated safely. Reselect source-qualified paths.
-                </div>
-              )}
               {filterOptionsError && <div className="ai-status-banner ai-status-error">{filterOptionsError}</div>}
 
               <div className="ai-date-limit-grid">
@@ -1034,15 +991,6 @@ export default function AIEnrichmentPage() {
                       </li>
                     ))}
                   </ul>
-                  {(preview.excluded_items || []).map((detail) => (
-                    <a
-                      key={`review-${detail.reason}-${detail.source_classification_id || 'unknown'}`}
-                      className="ai-governance-link"
-                      href={governanceHash('job-taxonomy', null, governanceScope(filters, normalizedLimit, detail))}
-                    >
-                      Review {Number(detail.count || 0).toLocaleString()} excluded jobs
-                    </a>
-                  ))}
                 </div>
               )}
 
@@ -1262,15 +1210,6 @@ export default function AIEnrichmentPage() {
                               </li>
                             ))}
                           </ul>
-                          {excludedDetails.map((detail) => (
-                            <a
-                              key={`run-review-${detail.reason || 'reason'}-${detail.source_classification_id || 'unknown'}`}
-                              className="ai-governance-link"
-                              href={governanceHash('job-taxonomy', null, governanceScope({}, run.pending_limit, detail))}
-                            >
-                              Review {Number(detail.count || 0).toLocaleString()} excluded jobs
-                            </a>
-                          ))}
                         </div>
                       )}
 

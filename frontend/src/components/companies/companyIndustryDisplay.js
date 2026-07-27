@@ -4,11 +4,16 @@ export function formatCompanyIndustryNode(node) {
 }
 
 export function formatCompanyIndustryBreadcrumb(breadcrumb) {
-  if (!Array.isArray(breadcrumb) || breadcrumb.length === 0) {
+  const nodes = Array.isArray(breadcrumb)
+    ? breadcrumb
+    : ['section', 'division', 'group', 'class', 'subclass']
+      .map((level) => breadcrumb?.[level])
+      .filter(Boolean);
+  if (nodes.length === 0) {
     return 'Unknown Company Industry';
   }
 
-  return breadcrumb.map(formatCompanyIndustryNode).join(' / ');
+  return nodes.map(formatCompanyIndustryNode).join(' / ');
 }
 
 export function getCompanyIndustryDisplay(company) {

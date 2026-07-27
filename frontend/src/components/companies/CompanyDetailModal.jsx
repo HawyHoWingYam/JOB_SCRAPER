@@ -1,6 +1,5 @@
 import React from 'react';
 import { X } from 'lucide-react';
-import { governanceHash } from '../jobIntelligence/governanceRoute';
 import {
     formatCompanyIndustryBreadcrumb,
     getCompanyIndustryDisplay,
@@ -24,9 +23,6 @@ function CompanyDetailModal({ company, statusLabel, statusClassName, description
     }
 
     const industryDisplay = getCompanyIndustryDisplay(company);
-    const reviewItems = Array.isArray(company.company_industries?.review_item_refs)
-        ? company.company_industries.review_item_refs
-        : [];
 
     return (
         <div className="modal-overlay" onClick={handleOverlayClick}>
@@ -66,19 +62,6 @@ function CompanyDetailModal({ company, statusLabel, statusClassName, description
                     ) : (
                         <p className="company-industry-empty">No governed Company Industry assignment</p>
                     )}
-                    <div className="company-industry-links">
-                        <a href={governanceHash('company-industries')}>
-                            Open Company Industries
-                        </a>
-                        {reviewItems.map((review) => (
-                            <a
-                                key={review.id}
-                                href={governanceHash('company-industries', review.id)}
-                            >
-                                Open Industry review item
-                            </a>
-                        ))}
-                    </div>
                 </section>
 
                 <div className="company-detail-meta">

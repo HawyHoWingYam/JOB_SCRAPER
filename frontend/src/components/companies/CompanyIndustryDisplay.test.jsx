@@ -31,7 +31,7 @@ function renderCompany(company) {
 }
 
 describe('Company Industry read-only display', () => {
-  it('renders an explicit Primary plus additional governed assignments with full breadcrumbs', () => {
+  it('renders an explicit Primary plus additional current assignments with full breadcrumbs', () => {
     const { card, dialog } = renderCompany(productFixture.companies[0]);
 
     expect(card).toHaveTextContent(
@@ -43,21 +43,16 @@ describe('Company Industry read-only display', () => {
     expect(dialog).toHaveTextContent('K · Financial and insurance activities');
     expect(dialog).toHaveTextContent('Primary Company Industry');
     expect(dialog).toHaveTextContent('Additional Company Industry');
-    expect(within(dialog).getByRole('link', { name: 'Open Company Industries' }))
-      .toHaveAttribute('href', '#job-intelligence/company-industries');
+    expect(within(dialog).queryByRole('link')).not.toBeInTheDocument();
     expect(screen.queryByText('Legacy evidence only')).not.toBeInTheDocument();
   });
 
-  it('renders Unassigned with a read-only review link and never promotes scalar evidence', () => {
+  it('renders Unassigned without a retired review queue or scalar fallback', () => {
     const { card, dialog } = renderCompany(productFixture.companies[1]);
 
     expect(card).toHaveTextContent('Company Industry: Unassigned');
     expect(dialog).toHaveTextContent('No governed Company Industry assignment');
-    expect(within(dialog).getByRole('link', { name: 'Open Industry review item' }))
-      .toHaveAttribute(
-        'href',
-        '#job-intelligence/company-industries?item=33000000-0000-0000-0000-000000000020',
-      );
+    expect(within(dialog).queryByRole('link')).not.toBeInTheDocument();
     expect(screen.queryByText('Legacy Retail evidence')).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: /assign|approve|reject/i }))
       .not.toBeInTheDocument();

@@ -2,8 +2,7 @@ import { StrictMode } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import canonicalFixture from '../fixtures/canonical_job_taxonomy_responses.json';
-import companyFixture from '../fixtures/company_industry_responses.json';
+import taxonomyFixture from '../fixtures/current_taxonomy_responses.json';
 import productFixture from '../fixtures/job_intelligence_product_surfaces.json';
 
 const api = vi.hoisted(() => ({
@@ -47,6 +46,55 @@ function searchPayloadWithTitle(title) {
   };
 }
 
+function currentJobTaxonomyTree() {
+  const nodes = [];
+  for (const domain of taxonomyFixture.job_tree.domains) {
+    nodes.push({
+      code: domain.code,
+      parent_code: null,
+      level: 'domain',
+      labels: { en: domain.label },
+      order: domain.order,
+      is_assignable: false,
+    });
+    for (const category of domain.categories) {
+      nodes.push({
+        code: category.code,
+        parent_code: domain.code,
+        level: 'category',
+        labels: { en: category.label },
+        order: category.order,
+        is_assignable: false,
+      });
+      for (const subcategory of category.subcategories) {
+        nodes.push({
+          code: subcategory.code,
+          parent_code: category.code,
+          level: 'subcategory',
+          labels: { en: subcategory.label },
+          order: subcategory.order,
+          is_assignable: true,
+        });
+      }
+    }
+  }
+  return { taxonomy: 'job', nodes };
+}
+
+function currentCompanyIndustryTree() {
+  return {
+    taxonomy: 'company_industry',
+    nodes: taxonomyFixture.company_tree.nodes.map((node) => ({
+      code: node.code,
+      parent_code: null,
+      level: node.level,
+      labels: node.labels,
+      order: node.order,
+      is_assignable: true,
+    })),
+  };
+}
+
 describe('JobBrowser governed filters', () => {
   beforeEach(() => {
     api.apiFetchJson.mockReset();
@@ -62,11 +110,11 @@ describe('JobBrowser governed filters', () => {
       if (path.includes('/jobs/filters')) {
         return Promise.resolve(productFixture.job_filters);
       }
-      if (path.includes('/canonical-job-taxonomy/tree')) {
-        return Promise.resolve(canonicalFixture.tree);
+      if (path.includes('/job-taxonomy/tree')) {
+        return Promise.resolve(currentJobTaxonomyTree());
       }
       if (path.includes('/company-industries/tree')) {
-        return Promise.resolve(companyFixture.tree);
+        return Promise.resolve(currentCompanyIndustryTree());
       }
       return Promise.reject(new Error(`Unexpected API read: ${path}`));
     });
@@ -103,7 +151,7 @@ describe('JobBrowser governed filters', () => {
 
     await waitFor(() => {
       expect(api.apiFetchJson).toHaveBeenCalledWith(
-        expect.stringContaining('/canonical-job-taxonomy/tree'),
+        expect.stringContaining('/job-taxonomy/tree'),
         expect.any(Object),
       );
       expect(api.apiFetchJson).toHaveBeenCalledWith(
@@ -172,10 +220,10 @@ describe('JobBrowser governed filters', () => {
 
   it('submits every governed multi-value filter through the Job Browser scope', async () => {
     const user = userEvent.setup();
-    const domain = canonicalFixture.tree.domains[0];
+    const domain = taxonomyFixture.job_tree.domains[0];
     const category = domain.categories[0];
     const subcategory = category.subcategories[0];
-    const industryNode = companyFixture.tree.nodes[0];
+    const industryNode = taxonomyFixture.company_tree.nodes[0];
 
     render(<JobBrowser />);
 
@@ -189,7 +237,7 @@ describe('JobBrowser governed filters', () => {
     );
     await user.selectOptions(
       screen.getByLabelText('Canonical Job Taxonomy'),
-      [domain.id, category.id, subcategory.id],
+      [domain.code, category.code, subcategory.code],
     );
     await user.click(screen.getByRole('checkbox', {
       name: 'J · Information and communications',
@@ -203,10 +251,10 @@ describe('JobBrowser governed filters', () => {
       expect.objectContaining({
         employment_type_codes: ['full_time', 'permanent'],
         source_classification_ids: ['jobsdb:6281', 'jobsdb:6287'],
-        canonical_domain_ids: [domain.id],
-        canonical_category_ids: [category.id],
-        canonical_subcategory_ids: [subcategory.id],
-        company_industry_node_ids: [industryNode.id],
+        canonical_domain_ids: [domain.code],
+        canonical_category_ids: [category.code],
+        canonical_subcategory_ids: [subcategory.code],
+        company_industry_node_ids: [industryNode.code],
         employment_type: '',
         industry: '',
         subcategory_ids: [],

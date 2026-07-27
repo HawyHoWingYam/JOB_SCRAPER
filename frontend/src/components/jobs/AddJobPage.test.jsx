@@ -73,7 +73,7 @@ describe('AddJobPage governed manual entry', () => {
     expect(screen.queryByText('Classification')).not.toBeInTheDocument();
   });
 
-  it('labels new Company Industry text as review evidence instead of an assignment', async () => {
+  it('stores new Company Industry text as evidence without creating an assignment', async () => {
     const createdCompanies = [];
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
@@ -106,7 +106,7 @@ describe('AddJobPage governed manual entry', () => {
     await user.type(screen.getByLabelText('Company *'), 'New Evidence Company');
     await user.click(await screen.findByRole('button', { name: /can't find/i }));
 
-    expect(screen.getByText(/free text is recorded as evidence/i)).toBeInTheDocument();
+    expect(screen.getByText(/free text is stored as Company Industry evidence/i)).toBeInTheDocument();
     await user.type(screen.getByLabelText('Company Industry evidence'), 'Software Consulting');
     await user.type(
       screen.getByLabelText('Location', { selector: '#new-company-location' }),

@@ -2,8 +2,7 @@ import { useState } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import canonicalFixture from "../fixtures/canonical_job_taxonomy_responses.json";
-import companyFixture from "../fixtures/company_industry_responses.json";
+import taxonomyFixture from "../fixtures/current_taxonomy_responses.json";
 
 import FilterPanel from "./FilterPanel";
 
@@ -143,7 +142,7 @@ describe("FilterPanel", () => {
   it("submits hierarchical Canonical Job Taxonomy IDs by governed level", async () => {
     const user = userEvent.setup();
     const onFilterChange = vi.fn();
-    const domain = canonicalFixture.tree.domains[0];
+    const domain = taxonomyFixture.job_tree.domains[0];
     const category = domain.categories[0];
     const subcategory = category.subcategories[0];
 
@@ -153,7 +152,7 @@ describe("FilterPanel", () => {
         filterOptions={{
           employment_types: [],
           source_classifications: [],
-          canonical_taxonomy: canonicalFixture.tree,
+          canonical_taxonomy: taxonomyFixture.job_tree,
           company_industry_tree: { nodes: [] },
           job_subcategories: [],
           industries: [],
@@ -190,10 +189,10 @@ describe("FilterPanel", () => {
   it("selects Company Industry ancestors and lazily browses descendants", async () => {
     const user = userEvent.setup();
     const onFilterChange = vi.fn();
-    const root = companyFixture.tree.nodes[0];
-    const child = companyFixture.child_tree.nodes[0];
+    const root = taxonomyFixture.company_tree.nodes[0];
+    const child = taxonomyFixture.company_child_tree.nodes[0];
     const loadCompanyIndustryChildren = vi.fn().mockResolvedValue(
-      companyFixture.child_tree,
+      taxonomyFixture.company_child_tree,
     );
 
     render(
@@ -204,7 +203,7 @@ describe("FilterPanel", () => {
           employment_types: [],
           source_classifications: [],
           canonical_taxonomy: { domains: [] },
-          company_industry_tree: companyFixture.tree,
+          company_industry_tree: taxonomyFixture.company_tree,
           job_subcategories: [],
           industries: [],
         }}

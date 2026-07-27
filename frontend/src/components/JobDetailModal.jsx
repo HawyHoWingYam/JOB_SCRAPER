@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { X } from 'lucide-react';
 import SkillTags from './SkillTags';
-import { governanceHash } from './jobIntelligence/governanceRoute';
 
 const RELATED_JOBS_UNAVAILABLE_MESSAGE = 'Related jobs are unavailable in the current runtime profile.';
 
@@ -217,11 +216,16 @@ function relatedCanonicalTaxonomyLabel(relatedJob) {
 }
 
 function companyIndustryBreadcrumbLabel(breadcrumb) {
-  if (!Array.isArray(breadcrumb) || breadcrumb.length === 0) {
+  const nodes = Array.isArray(breadcrumb)
+    ? breadcrumb
+    : ['section', 'division', 'group', 'class', 'subclass']
+      .map((level) => breadcrumb?.[level])
+      .filter(Boolean);
+  if (nodes.length === 0) {
     return 'Unknown Company Industry';
   }
 
-  return breadcrumb
+  return nodes
     .map((node) => {
       const label = node?.labels?.en || 'Unknown Company Industry';
       return node?.code ? `${node.code} · ${label}` : label;
@@ -418,15 +422,12 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   const governedSkillNames = Array.isArray(job?.skill_state?.skills)
     ? job.skill_state.skills.map((skill) => skill?.name).filter(Boolean)
     : (job?.skills || []);
-  const structuredUnreviewedMentions = Array.isArray(job?.skill_state?.unreviewed_skill_mentions)
-    ? job.skill_state.unreviewed_skill_mentions
-    : (Array.isArray(job?.unreviewed_skill_mentions)
-      ? job.unreviewed_skill_mentions
-      : null);
-  const unreviewedSkillMentions = structuredUnreviewedMentions === null
-    ? (job?.provisional_skills || []).map((rawName) => ({ raw_name: rawName }))
-    : structuredUnreviewedMentions;
-  const hasUnreviewedSkillMentions = unreviewedSkillMentions.length > 0;
+  const skillCandidateMentions = Array.isArray(job?.skill_state?.candidate_mentions)
+    ? job.skill_state.candidate_mentions
+    : (Array.isArray(job?.skill_candidate_mentions)
+      ? job.skill_candidate_mentions
+      : []);
+  const hasSkillCandidateMentions = skillCandidateMentions.length > 0;
 
   return (
     <div className="modal-overlay" onClick={handleOverlayClick}>
@@ -575,20 +576,6 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
               ) : (
                 <p className="modal-empty">Canonical Job Taxonomy state is Unknown</p>
               )}
-              <div className="modal-governance-links">
-                <a className="modal-link" href={governanceHash('job-taxonomy')}>
-                  Open Job Taxonomy Review
-                </a>
-                {canonicalState?.review_item_refs?.map((review) => (
-                  <a
-                    key={review.id}
-                    className="modal-link"
-                    href={governanceHash('job-taxonomy', review.id)}
-                  >
-                    Open review item
-                  </a>
-                ))}
-              </div>
             </section>
 
             <section
@@ -620,20 +607,6 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
               ) : (
                 <p className="modal-empty">No governed Company Industry assignment</p>
               )}
-              <div className="modal-governance-links">
-                <a className="modal-link" href={governanceHash('company-industries')}>
-                  Open Company Industries
-                </a>
-                {companyIndustryState?.review_item_refs?.map((review) => (
-                  <a
-                    key={review.id}
-                    className="modal-link"
-                    href={governanceHash('company-industries', review.id)}
-                  >
-                    Open Industry review item
-                  </a>
-                ))}
-              </div>
               <dl className="modal-kv modal-company-description">
                 <dt>Company AI description</dt>
                 <dd>{job.company_ai_description || 'No company AI description available'}</dd>
@@ -649,7 +622,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                 ) : (
                   <p className="modal-empty">
                     {job.ai_enriched_at
-                      ? (hasUnreviewedSkillMentions
+                      ? (hasSkillCandidateMentions
                         ? 'No governed skills matched yet'
                         : 'No technical skills extracted from this posting')
                       : getAwaitingAiCopy()}
@@ -657,38 +630,21 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                 )}
               </div>
 
-              {hasUnreviewedSkillMentions && (
+              {hasSkillCandidateMentions && (
                 <div className="modal-subsection">
-                  <h4>Unreviewed Skill Mentions</h4>
+                  <h4>Skill Candidate Evidence</h4>
                   <p className="modal-evidence-note">
-                    Secondary evidence awaiting human taxonomy review.
+                    Repeated evidence is handled by automatic Skill processing.
                   </p>
                   <div className="skill-tags-container">
-                    {unreviewedSkillMentions.map((mention, index) => (
-                      mention.candidate_id ? (
-                        <a
-                          key={mention.id || mention.candidate_id}
-                          className="skill-tag modal-skill-review-link"
-                          href={governanceHash('skill-candidates', mention.candidate_id)}
-                          aria-label={`Review ${mention.raw_name}`}
-                        >
-                          {mention.raw_name}
-                        </a>
-                      ) : (
-                        <span key={`${mention.raw_name}-${index}`} className="skill-tag">
-                          {mention.raw_name}
-                        </span>
-                      )
+                    {skillCandidateMentions.map((mention, index) => (
+                      <span key={mention.id || `${mention.raw_name}-${index}`} className="skill-tag">
+                        {mention.raw_name}
+                      </span>
                     ))}
                   </div>
                 </div>
               )}
-
-              <div className="modal-governance-links">
-                <a className="modal-link" href={governanceHash('skill-candidates')}>
-                  Open Skill Candidates
-                </a>
-              </div>
             </section>
 
             <section className="modal-section modal-section-ai">
