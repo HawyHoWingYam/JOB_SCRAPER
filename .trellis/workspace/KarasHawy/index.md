@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 46
+- **Total Sessions**: 47
 - **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1616 | Active |
+| `journal-1.md` | ~1651 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 47 | 2026-07-27 | Automated classification batches | `044bbd42`, `98532970`, `673c5af9` | `codex/offertoday-it-coverage-20260702` |
 | 46 | 2026-07-27 | Flatten ordinary current taxonomies | `e3b8bce9`, `e795d43a`, `22fe8611`, `2addadf1` | `codex/offertoday-it-coverage-20260702` |
 | 45 | 2026-07-27 | Remove runtime version protocols | `aa2aee87`, `bed330cd`, `e64b09f3`, `d1c5cc97` | `codex/offertoday-it-coverage-20260702` |
 | 44 | 2026-07-26 | Replace Source Catalog with ordinary classifications | `af7805f8` | `codex/offertoday-it-coverage-20260702` |

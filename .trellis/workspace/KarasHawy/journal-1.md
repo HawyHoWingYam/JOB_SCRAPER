@@ -1614,3 +1614,38 @@ Replaced revision-pinned Job, Company Industry, and Skill runtime contracts with
 ### Next Steps
 
 - None - task complete
+
+
+## Session 47: Automated classification batches
+
+**Date**: 2026-07-27
+**Task**: Automated classification batches
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Added one shared Job Taxonomy, Company Industry, and Skill classification batch lifecycle with preview, progress, stop, retry, failure diagnostics, a configurable distinct-Job Skill threshold, transactional automatic Skill creation, and a simple three-tab frontend console.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `044bbd42` | (see git log) |
+| `98532970` | (see git log) |
+| `673c5af9` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
