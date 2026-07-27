@@ -27,6 +27,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [AI Enrichment Operations Console](./ai-enrichment-console.md) | Monitoring-first two-slot UI, filtered preview, persistence, retry, and cooperative Stop | Active |
 | [Source Job Attribute Contracts](../backend/source-job-attributes.md) | Cross-layer filter options, compatibility seam, and code-authoritative Source Job Attribute reads | Active |
 | [Ordinary Current Taxonomies](../backend/ordinary-current-taxonomies.md) | Current taxonomy routes, stable-code reads, optional mappings, and no Governance workspace | Active |
+| [Automated Classification Batches](../backend/automated-classification-batches.md) | Three-domain preview/progress/stop/retry console and configurable repeated-Skill threshold | Active |
 | [Job Intelligence Product Reads](../backend/job-intelligence-product-surfaces.md) | Current Job/Company/Skill composition, bulk reads, and fixture parity | Active |
 
 ---
