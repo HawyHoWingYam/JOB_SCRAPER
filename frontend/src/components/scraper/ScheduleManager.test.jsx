@@ -24,7 +24,6 @@ describe('OfferToday immediate detail scope', () => {
       detail_scope: 'global',
       category_ids: [],
       detail_limit: 5000,
-      skip_existing: false,
     });
     expect(result.payload).not.toHaveProperty('source_listing_crawl_job_id');
   });

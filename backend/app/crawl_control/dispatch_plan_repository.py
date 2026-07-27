@@ -43,7 +43,6 @@ class DispatchPlanRepository:
             trigger_kind=content.trigger_kind,
             automation_id=content.automation_id,
             automation_id_snapshot=content.automation_id,
-            expected_automation_revision=content.expected_automation_revision,
             authored_scope=content.authored_scope.model_dump(mode="json"),
             resolved_scope=content.resolved_scope.model_dump(mode="json"),
             listing_settings=(

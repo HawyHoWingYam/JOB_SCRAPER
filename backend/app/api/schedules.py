@@ -292,7 +292,6 @@ def _crawl_control_http_error(
         "SCOPE_RULE_INVALID": status.HTTP_422_UNPROCESSABLE_CONTENT,
         "WORKLOAD_CAP_EXCEEDED": status.HTTP_422_UNPROCESSABLE_CONTENT,
         "BACKLOG_SAFETY_CAP_EXCEEDED": status.HTTP_422_UNPROCESSABLE_CONTENT,
-        "AUTOMATION_REVISION_CONFLICT": status.HTTP_409_CONFLICT,
         "AUTOMATION_TRANSITION_INVALID": status.HTTP_409_CONFLICT,
         "AUTOMATION_DELETE_REVIEW_STALE": status.HTTP_409_CONFLICT,
         "SCOPE_REVIEW_REQUIRED": status.HTTP_409_CONFLICT,
@@ -391,7 +390,6 @@ async def run_immediate_scrape(
             max_pages=request.max_pages,
             source_listing_crawl_job_id=request.source_listing_crawl_job_id,
             detail_limit=request.detail_limit,
-            skip_existing=request.skip_existing,
             requested_by="api",
         )
     except HeadedCrawlWorkerUnavailableError as exc:
@@ -504,7 +502,6 @@ async def update_schedule(
                 )
                 projection = service.update_configuration(
                     schedule_id,
-                    expected_revision=projection.snapshot.revision,
                     configuration=configuration,
                     actor=AUTOMATION_MUTATION_ACTOR,
                 )
@@ -514,7 +511,6 @@ async def update_schedule(
                 if desired_active and lifecycle_state != "active":
                     projection = service.resume(
                         schedule_id,
-                        expected_revision=projection.snapshot.revision,
                         actor=AUTOMATION_MUTATION_ACTOR,
                     )
                 elif not desired_active and lifecycle_state in {
@@ -523,7 +519,6 @@ async def update_schedule(
                 }:
                     projection = service.pause(
                         schedule_id,
-                        expected_revision=projection.snapshot.revision,
                         actor=AUTOMATION_MUTATION_ACTOR,
                     )
         except CrawlControlError as exc:
@@ -552,7 +547,6 @@ async def delete_schedule(
         try:
             AutomationService(db).archive(
                 schedule_id,
-                expected_revision=current_schedule.revision,
                 actor=AUTOMATION_MUTATION_ACTOR,
             )
         except CrawlControlError as exc:
@@ -581,13 +575,11 @@ async def toggle_schedule(
             if current_schedule.lifecycle_state == "active":
                 service.pause(
                     schedule_id,
-                    expected_revision=current_schedule.revision,
                     actor=AUTOMATION_MUTATION_ACTOR,
                 )
             else:
                 service.resume(
                     schedule_id,
-                    expected_revision=current_schedule.revision,
                     actor=AUTOMATION_MUTATION_ACTOR,
                 )
         except CrawlControlError as exc:

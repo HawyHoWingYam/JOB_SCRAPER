@@ -40,14 +40,12 @@ def _normalize_next_run_at(value: datetime | None) -> datetime | None:
 
 async def run_scheduled_crawl_job(
     schedule_id: str,
-    registered_revision: int | None = None,
     *,
     trigger_type: str = "schedule",
 ):
     """Serializable APScheduler entrypoint that dispatches a persisted schedule."""
     return await SchedulerService.get_instance()._dispatch_schedule(
         UUID(str(schedule_id)),
-        registered_revision=registered_revision,
         trigger_type=trigger_type,
     )
 
@@ -274,7 +272,7 @@ class SchedulerService:
                 run_scheduled_crawl_job,
                 trigger=trigger,
                 id=str(schedule.id),
-                args=[str(schedule.id), int(schedule.revision)],
+                args=[str(schedule.id)],
                 replace_existing=True,
             )
             if db is not None:
@@ -353,7 +351,6 @@ class SchedulerService:
         schedule.is_active = False
         schedule.lifecycle_state = "paused"
         schedule.next_run_at = None
-        schedule.revision = int(schedule.revision or 1) + 1
 
     def _write_runtime_heartbeat(self, *, status: str, last_error: str | None = None) -> None:
         db = SessionLocal()
@@ -400,7 +397,6 @@ class SchedulerService:
         self,
         schedule_id: UUID,
         *,
-        registered_revision: int | None = None,
         trigger_type: str = "schedule",
     ):
         """Dispatch a scheduled crawl request into the durable crawl job control plane."""
@@ -413,17 +409,10 @@ class SchedulerService:
                 request_reconcile = trigger_type == "schedule"
                 return None
 
-            if trigger_type == "schedule" and (
-                registered_revision is None
-                or int(schedule.revision) != int(registered_revision)
-                or schedule.lifecycle_state != "active"
-            ):
+            if trigger_type == "schedule" and schedule.lifecycle_state != "active":
                 logger.info(
-                    "Skipping stale scheduler callback schedule_id=%s "
-                    "registered_revision=%s current_revision=%s lifecycle=%s",
+                    "Skipping inactive scheduler callback schedule_id=%s lifecycle=%s",
                     schedule_id,
-                    registered_revision,
-                    schedule.revision,
                     schedule.lifecycle_state,
                 )
                 request_reconcile = True
@@ -480,7 +469,6 @@ class SchedulerService:
         """Backward-compatible alias for schedule dispatch during the worker cutover."""
         return await self._dispatch_schedule(
             schedule_id,
-            registered_revision=None,
             trigger_type="schedule",
         )
 
@@ -514,7 +502,6 @@ class SchedulerService:
         """Run a schedule immediately."""
         return await self._dispatch_schedule(
             schedule_id,
-            registered_revision=None,
             trigger_type="manual",
         )
 

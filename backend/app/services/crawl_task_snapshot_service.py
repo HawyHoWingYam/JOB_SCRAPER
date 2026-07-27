@@ -159,7 +159,6 @@ def _project_recovery_attempt(
             break
 
     projection = {
-        "version": 1,
         "request_event_sequence": int(resume_event.sequence_no),
         "requested_at": resume_event.created_at,
         "requested_by": (
@@ -1402,7 +1401,6 @@ def build_crawl_task_snapshot(
                 if authority.automation_id is not None
                 else None
             ),
-            "automation_revision": authority.automation_revision,
             "authored_scope": (
                 authority.authored_scope.model_dump(mode="json")
                 if authority.authored_scope is not None

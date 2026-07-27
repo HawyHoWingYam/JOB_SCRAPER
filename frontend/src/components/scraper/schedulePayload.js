@@ -70,8 +70,6 @@ export function buildImmediateScrapePayload(
                 ? maxPages
                 : resolveDefaultMaxPages(sourceSite, sourceSites),
             detail_limit: crawlPhase === 'detail' ? detailLimit : 100,
-            // Listing skips already-published jobs; detail retries persisted backlog rows.
-            skip_existing: crawlPhase !== 'detail',
             ...(crawlPhase === 'detail' && sourceSite === 'offertoday'
                 ? { detail_scope: sourceListingCrawlJobId ? 'listing_batch' : 'global' }
                 : {}),

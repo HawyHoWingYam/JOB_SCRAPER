@@ -161,7 +161,6 @@ class ScheduleSchema(BaseModel):
     location: Optional[str]
     max_pages: int
     detail_limit: int
-    revision: int
     lifecycle_state: str
     scope_contract: dict | None = None
     listing_page_depth: int | None = None
@@ -231,7 +230,6 @@ class ExecutionSchema(BaseModel):
     error_message: Optional[str]
     request_payload_snapshot: dict | None = None
     automation_id_snapshot: UUID | None = None
-    automation_revision: int | None = None
     automation_snapshot: dict | None = None
     created_at: datetime
 
@@ -269,6 +267,8 @@ class ScheduleToggleResponse(BaseModel):
 class ImmediateScrapeRequest(BaseModel):
     """Request for immediate scraping without schedule."""
 
+    model_config = ConfigDict(extra="forbid")
+
     source_site: str = Field(default="jobsdb", max_length=32)
     crawl_phase: Optional[str] = Field(default=None, max_length=32)
     crawl_mode: Optional[str] = Field(default=None, max_length=32)
@@ -276,7 +276,6 @@ class ImmediateScrapeRequest(BaseModel):
     max_pages: int = Field(default=3, ge=1, le=1000)
     source_listing_crawl_job_id: UUID | None = None
     detail_limit: int = Field(default=100, ge=1, le=5000)
-    skip_existing: bool = Field(default=False, description="If True, skip jobs that already exist. If False, update existing jobs.")
 
     @field_validator("source_site", mode="before")
     @classmethod

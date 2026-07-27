@@ -30,7 +30,6 @@ DispatchTriggerKind: TypeAlias = Literal[
 class OneOffRunV1(FrozenContract):
     """Operator-authored configuration reviewed into one immutable run."""
 
-    version: Literal[1] = 1
     kind: Literal["one_off"] = "one_off"
     scope: AuthoredCrawlScopeV1
     listing_settings: ListingSettingsV1 | None = None
@@ -61,19 +60,16 @@ class OneOffRunV1(FrozenContract):
 
 
 class SavedAutomationRunV1(FrozenContract):
-    """Request to review the exact current revision of a saved Automation."""
+    """Request to freeze the current configuration of a saved Automation."""
 
-    version: Literal[1] = 1
     kind: Literal["saved_automation"] = "saved_automation"
     automation_id: UUID
-    expected_revision: int = Field(ge=1)
 
 
 DispatchPlanRunRequestV1: TypeAlias = OneOffRunV1 | SavedAutomationRunV1
 
 
 class DispatchPlanReadinessV1(FrozenContract):
-    version: Literal[1] = 1
     status: Literal["ready", "blocked"]
     checked_at: datetime
     blocking_errors: tuple[CrawlScopeErrorPayloadV1, ...] = Field(
@@ -99,12 +95,10 @@ class DispatchPlanReadinessV1(FrozenContract):
 
 
 class DispatchPlanContentV1(FrozenContract):
-    version: Literal[1] = 1
     source_site: Literal["jobsdb", "ctgoodjobs", "offertoday"]
     crawl_phase: Literal["listing", "detail"]
     trigger_kind: DispatchTriggerKind
     automation_id: UUID | None = None
-    expected_automation_revision: int | None = Field(default=None, ge=1)
     authored_scope: AuthoredCrawlScopeV1
     resolved_scope: ResolvedRunScopeV1
     listing_settings: ListingSettingsV1 | None = None
@@ -113,12 +107,10 @@ class DispatchPlanContentV1(FrozenContract):
     @model_validator(mode="after")
     def validate_content_shape(self) -> DispatchPlanContentV1:
         if self.trigger_kind == "one_off":
-            if self.automation_id is not None or self.expected_automation_revision is not None:
+            if self.automation_id is not None:
                 raise ValueError("One-off Dispatch Plans cannot bind an Automation")
-        elif self.automation_id is None or self.expected_automation_revision is None:
-            raise ValueError(
-                "Automation Dispatch Plans require an Automation ID and revision"
-            )
+        elif self.automation_id is None:
+            raise ValueError("Automation Dispatch Plans require an Automation ID")
 
         if self.crawl_phase == "listing":
             if self.listing_settings is None or self.detail_settings is not None:
@@ -149,7 +141,6 @@ class DispatchPlanContentV1(FrozenContract):
 
 
 class DispatchPlanTargetRowV1(FrozenContract):
-    version: Literal[1] = 1
     crawl_job_listing_id: UUID
     row_order: int = Field(ge=0)
     eligibility_fingerprint: str = Field(pattern=SHA256_PATTERN)
@@ -158,7 +149,6 @@ class DispatchPlanTargetRowV1(FrozenContract):
 
 
 class DispatchPlanTargetV1(FrozenContract):
-    version: Literal[1] = 1
     source_site: Literal["jobsdb", "ctgoodjobs", "offertoday"]
     source_job_id: str = Field(min_length=1, max_length=255)
     selection_order: int = Field(ge=0)
@@ -191,7 +181,6 @@ def dispatch_plan_fingerprint(
 ) -> str:
     return payload_fingerprint(
         {
-            "version": 1,
             "plan_id": str(plan_id),
             "content": content.model_dump(mode="json"),
             "readiness": readiness.model_dump(mode="json"),
@@ -205,7 +194,6 @@ def dispatch_plan_fingerprint(
 
 
 class DispatchPlanSnapshotV1(FrozenContract):
-    version: Literal[1] = 1
     plan_id: UUID
     state: DispatchPlanState
     content: DispatchPlanContentV1
@@ -284,7 +272,6 @@ class DispatchPlanSnapshotV1(FrozenContract):
 
 
 class DispatchPlanPreparationV1(FrozenContract):
-    version: Literal[1] = 1
     plan: DispatchPlanSnapshotV1
     confirmation_token: str | None = Field(default=None, min_length=20)
 
@@ -300,7 +287,6 @@ class DispatchPlanPreparationV1(FrozenContract):
 
 
 class ExecutionAuthorityV1(FrozenContract):
-    version: Literal[1] = 1
     crawl_job_id: UUID
     dispatch_plan: DispatchPlanSnapshotV1
 
@@ -316,7 +302,6 @@ class ExecutionAuthorityV1(FrozenContract):
 class ExecutionResumeContextV1(FrozenContract):
     """Mutable retry controls that cannot redefine immutable plan authority."""
 
-    version: Literal[1] = 1
     is_resume: Literal[True] = True
     manual_action_event_sequence: int = Field(ge=1)
     requested_at: datetime
@@ -350,7 +335,6 @@ class ExecutionResumeContextV1(FrozenContract):
 
 
 class DispatchPlanCleanupResultV1(FrozenContract):
-    version: Literal[1] = 1
     expired_count: int = Field(ge=0)
     deleted_count: int = Field(ge=0)
     completed_at: datetime

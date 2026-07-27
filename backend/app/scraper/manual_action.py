@@ -12,8 +12,7 @@ SUPPORTED_RESUME_STRATEGIES: tuple[ResumeStrategy, ...] = (
     RESUME_STRATEGY_REUSE_OPEN_BROWSER,
 )
 
-# Resume requests without a body keep the pre-Task 2 behavior.
-LEGACY_RESUME_STRATEGY_DEFAULT: ResumeStrategy = RESUME_STRATEGY_FRESH_PROFILE
+DEFAULT_RESUME_STRATEGY: ResumeStrategy = RESUME_STRATEGY_FRESH_PROFILE
 
 # Manual-action payloads tell the UI/attach flow which path to suggest first.
 PREFERRED_MANUAL_ACTION_RESUME_STRATEGY: ResumeStrategy = RESUME_STRATEGY_REUSE_OPEN_BROWSER

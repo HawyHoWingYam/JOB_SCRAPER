@@ -55,11 +55,9 @@ class CrawlDispatchPlan(Base):
         ),
         CheckConstraint(
             "(trigger_kind = 'one_off' AND automation_id IS NULL "
-            "AND automation_id_snapshot IS NULL "
-            "AND expected_automation_revision IS NULL) OR "
+            "AND automation_id_snapshot IS NULL) OR "
             "(trigger_kind IN ('saved_automation', 'scheduled_automation') "
-            "AND automation_id_snapshot IS NOT NULL "
-            "AND expected_automation_revision > 0)",
+            "AND automation_id_snapshot IS NOT NULL)",
             name="ck_crawl_dispatch_plans_automation_shape",
         ),
         CheckConstraint(
@@ -96,11 +94,7 @@ class CrawlDispatchPlan(Base):
             "state",
             "expires_at",
         ),
-        Index(
-            "ix_crawl_dispatch_plans_automation_revision",
-            "automation_id",
-            "expected_automation_revision",
-        ),
+        Index("ix_crawl_dispatch_plans_automation", "automation_id"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -119,7 +113,6 @@ class CrawlDispatchPlan(Base):
         index=True,
     )
     automation_id_snapshot = Column(UUID(as_uuid=True), nullable=True, index=True)
-    expected_automation_revision = Column(Integer, nullable=True)
     authored_scope = Column(JSON, nullable=False)
     resolved_scope = Column(JSON, nullable=False)
     listing_settings = Column(JSON(none_as_null=True), nullable=True)
@@ -286,7 +279,6 @@ _PLAN_IMMUTABLE_FIELDS = (
     "trigger_kind",
     "automation_id",
     "automation_id_snapshot",
-    "expected_automation_revision",
     "authored_scope",
     "resolved_scope",
     "listing_settings",

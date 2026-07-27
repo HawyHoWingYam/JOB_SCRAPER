@@ -39,7 +39,6 @@ from app.crawl_control.dispatch_plan_repository import DispatchPlanRepository
 from app.crawl_control.dispatch_plan_service import DispatchPlanService
 from app.crawl_control.detail_runtime import DetailBacklogSnapshotBuilder
 from app.crawl_control.errors import (
-    AutomationRevisionConflictError,
     DetailRunConflictError,
     DispatchPlanAlreadyConsumedError,
     DispatchPlanExpiredError,
@@ -49,7 +48,6 @@ from app.crawl_control.errors import (
     WorkloadCapExceededError,
 )
 from app.crawl_control.runtime_authority import (
-    load_legacy_worker_startup_input,
     load_worker_startup_input,
 )
 from app.database import Base
@@ -63,7 +61,6 @@ from app.models.crawl_job_listing import CrawlJobListing
 from app.models.crawl_run import CrawlRun
 from app.models.event_outbox import EventOutbox
 from app.models.schedule import (
-    AutomationRevision,
     ScheduleExecution,
     ScrapeSchedule,
 )
@@ -92,7 +89,6 @@ def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
 def _dispatch_test_tables():
     return (
         ScrapeSchedule.__table__,
-        AutomationRevision.__table__,
         CrawlJob.__table__,
         CrawlJobEvent.__table__,
         CrawlJobExecution.__table__,
@@ -993,7 +989,7 @@ def test_detail_review_reclaims_rows_left_running_by_terminal_run(dispatch_db):
     ]
 
 
-def test_versioned_detail_runtime_uses_only_frozen_membership_and_tracks_future(
+def test_detail_runtime_uses_only_frozen_membership_and_tracks_future(
     dispatch_db,
 ):
     _engine, factory, db, revision = dispatch_db
@@ -1105,7 +1101,7 @@ def test_versioned_detail_runtime_uses_only_frozen_membership_and_tracks_future(
     )
 
 
-def test_versioned_cancellation_releases_only_frozen_running_membership(
+def test_plan_cancellation_releases_only_frozen_running_membership(
     dispatch_db,
 ):
     _engine, factory, db, revision = dispatch_db
@@ -1174,7 +1170,7 @@ def test_versioned_cancellation_releases_only_frozen_running_membership(
     assert crawl_job.status == "cancelled"
 
 
-def test_versioned_content_anomaly_resume_retries_failed_and_manual_membership(
+def test_content_anomaly_resume_retries_failed_and_manual_membership(
     dispatch_db,
 ):
     _engine, factory, db, revision = dispatch_db
@@ -1376,7 +1372,7 @@ def test_consumption_failure_rolls_back_plan_lifecycle(dispatch_db):
     assert _service(db, now).get(preparation.plan.plan_id).state == "prepared"
 
 
-def test_missing_fingerprint_and_legacy_jobs_are_distinguished(dispatch_db):
+def test_worker_rejects_jobs_without_complete_execution_authority(dispatch_db):
     _engine, _factory, db, revision = dispatch_db
     now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
     preparation = _service(db, now).prepare(
@@ -1405,19 +1401,21 @@ def test_missing_fingerprint_and_legacy_jobs_are_distinguished(dispatch_db):
         db.commit()
     db.rollback()
 
-    legacy = repository.create_crawl_job(
+    unplanned = repository.create_crawl_job(
         db,
         source_site="jobsdb",
         trigger_type="manual",
         request_payload={"crawl_phase": "listing"},
     )
-    assert _service(db, now).load_execution_authority(legacy.id) is None
-    startup = load_legacy_worker_startup_input(
-        db,
-        crawl_job_id=legacy.id,
-        default_source_site="jobsdb",
+    with pytest.raises(DispatchPlanStaleError) as missing_authority:
+        load_worker_startup_input(
+            db,
+            crawl_job_id=unplanned.id,
+            default_source_site="jobsdb",
+        )
+    assert missing_authority.value.context["reason"] == (
+        "execution_authority_missing"
     )
-    assert startup.request_payload == {"crawl_phase": "listing"}
 
 
 def test_resume_overlay_contract_cannot_carry_scope_or_limits():
@@ -1430,7 +1428,6 @@ def test_resume_overlay_contract_cannot_carry_scope_or_limits():
     )
 
     assert set(overlay.model_dump()) == {
-        "version",
         "is_resume",
         "manual_action_event_sequence",
         "requested_at",
@@ -1442,7 +1439,7 @@ def test_resume_overlay_contract_cannot_carry_scope_or_limits():
     }
 
 
-def test_launcher_rejects_unconsumed_versioned_plan_before_process_creation(
+def test_launcher_rejects_unconsumed_plan_before_process_creation(
     dispatch_db,
 ):
     _engine, factory, db, revision = dispatch_db
@@ -1503,12 +1500,6 @@ def test_consumed_listing_plan_launches_and_worker_ignores_compatibility_payload
 
     launch_result = launcher.launch(crawl_job)
     assert launch_result.launched is True
-    with pytest.raises(DispatchPlanStaleError):
-        load_legacy_worker_startup_input(
-            db,
-            crawl_job_id=crawl_job.id,
-            default_source_site="jobsdb",
-        )
     startup = load_worker_startup_input(
         db,
         crawl_job_id=crawl_job.id,
@@ -1530,7 +1521,7 @@ def test_consumed_listing_plan_launches_and_worker_ignores_compatibility_payload
         )
     assert wrong_worker.value.context["reason"] == "worker_source_mismatch"
     crawl_job.request_payload = {"crawl_phase": "listing"}
-    with pytest.raises(ValueError, match="compatibility request payload"):
+    with pytest.raises(ValueError, match="request snapshot"):
         db.commit()
     db.rollback()
     db.refresh(crawl_job)
@@ -1551,7 +1542,7 @@ def test_worker_startup_missing_job_fails_closed(dispatch_db):
     assert missing.value.context["reason"] == "crawl_job_missing"
 
 
-def test_versioned_worker_wraps_malformed_resume_context_as_stale(dispatch_db):
+def test_worker_wraps_malformed_resume_context_as_stale(dispatch_db):
     _engine, _factory, db, revision = dispatch_db
     now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
     service = _service(db, now)
@@ -1579,7 +1570,7 @@ def test_versioned_worker_wraps_malformed_resume_context_as_stale(dispatch_db):
     assert invalid_resume.value.context["reason"] == "resume_context_invalid"
 
 
-def test_versioned_launcher_popen_failure_settles_execution_and_job(dispatch_db):
+def test_launcher_popen_failure_settles_execution_and_job(dispatch_db):
     _engine, factory, db, revision = dispatch_db
     now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
     service = _service(db, now)
@@ -1613,7 +1604,7 @@ def test_versioned_launcher_popen_failure_settles_execution_and_job(dispatch_db)
     assert crawl_job.error_message == "Crawler process launch failed: OSError"
 
 
-def test_versioned_launcher_registration_failure_terminates_process(dispatch_db):
+def test_launcher_registration_failure_terminates_process(dispatch_db):
     _engine, factory, db, revision = dispatch_db
     now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
     service = _service(db, now)
@@ -1656,7 +1647,7 @@ def test_versioned_launcher_registration_failure_terminates_process(dispatch_db)
     assert crawl_job.status == "failed"
 
 
-def test_versioned_resume_cannot_rewrite_compatibility_payload(dispatch_db):
+def test_resume_cannot_rewrite_request_payload(dispatch_db):
     _engine, _factory, db, revision = dispatch_db
     now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
     plan_service = _service(db, now)
@@ -1789,11 +1780,6 @@ def test_one_off_detail_dispatch_commits_plan_job_event_outbox_and_claims_before
     assert launcher.launched_job_ids == [result.crawl_job.id]
     assert len(publisher.published_row_ids) == 1
     assert publisher.pending_batches == 1
-    event_row = db.query(CrawlJobEvent).filter_by(
-        crawl_job_id=result.crawl_job.id,
-        event_type="crawl.requested",
-    ).one()
-    assert event_row.payload["request_payload_authoritative"] is False
     db.refresh(row)
     assert row.detail_status == "running"
     assert row.last_detail_crawl_job_id == result.crawl_job.id
@@ -2065,7 +2051,7 @@ def test_prepared_dispatch_rechecks_runtime_readiness(dispatch_db):
     assert plan_service.get(preparation.plan.plan_id).state == "prepared"
 
 
-def test_saved_automation_plan_rechecks_revision_and_preserves_execution_snapshot(
+def test_saved_automation_plan_freezes_configuration_without_revision(
     dispatch_db,
 ):
     _engine, _factory, db, revision = dispatch_db
@@ -2082,13 +2068,11 @@ def test_saved_automation_plan_rechecks_revision_and_preserves_execution_snapsho
     stale_preparation = plan_service.prepare_run(
         SavedAutomationRunV1(
             automation_id=automation_id,
-            expected_revision=1,
         ),
         prepared_by="operator@example.com",
     )
     automation_service.update_configuration(
         automation_id,
-        expected_revision=1,
         configuration=_listing_automation_configuration(revision).model_copy(
             update={"name": "JobsDB listing v2"}
         ),
@@ -2102,35 +2086,20 @@ def test_saved_automation_plan_rechecks_revision_and_preserves_execution_snapsho
             revision,
         ),
     )
-    with pytest.raises(AutomationRevisionConflictError):
-        dispatch_service.dispatch_prepared_plan(
-            db,
-            plan_id=stale_preparation.plan.plan_id,
-            confirmation_token=stale_preparation.confirmation_token,
-            requested_by="operator@example.com",
-        )
-
-    current = db.get(ScrapeSchedule, automation_id)
-    preparation = plan_service.prepare_run(
-        SavedAutomationRunV1(
-            automation_id=automation_id,
-            expected_revision=current.revision,
-        ),
-        prepared_by="operator@example.com",
-    )
     result = dispatch_service.dispatch_prepared_plan(
         db,
-        plan_id=preparation.plan.plan_id,
-        confirmation_token=preparation.confirmation_token,
+        plan_id=stale_preparation.plan.plan_id,
+        confirmation_token=stale_preparation.confirmation_token,
         requested_by="operator@example.com",
     )
     assert result.schedule_execution is not None
     assert result.schedule_execution.automation_id_snapshot == automation_id
-    assert result.schedule_execution.automation_revision == current.revision
-    assert result.schedule_execution.dispatch_plan_id == preparation.plan.plan_id
-    assert result.schedule_execution.automation_snapshot["revision"] == (
-        current.revision
+    assert result.schedule_execution.dispatch_plan_id == stale_preparation.plan.plan_id
+    frozen = result.schedule_execution.automation_snapshot
+    assert frozen["configuration"]["listing_settings"] == (
+        stale_preparation.plan.content.listing_settings.model_dump(mode="json")
     )
+    assert "revision" not in frozen
 
 
 def test_saved_detail_automation_plan_freezes_pacing_before_confirmation(
@@ -2165,7 +2134,6 @@ def test_saved_detail_automation_plan_freezes_pacing_before_confirmation(
     preparation = plan_service.prepare_run(
         SavedAutomationRunV1(
             automation_id=created.snapshot.automation_id,
-            expected_revision=created.snapshot.revision,
         ),
         prepared_by="operator@example.com",
     )
@@ -2202,7 +2170,7 @@ def test_saved_detail_automation_plan_freezes_pacing_before_confirmation(
     }
 
 
-def test_scheduled_versioned_automation_prepares_and_consumes_in_one_transaction(
+def test_scheduled_automation_prepares_and_consumes_in_one_transaction(
     dispatch_db,
 ):
     _engine, _factory, db, revision = dispatch_db
@@ -2240,7 +2208,7 @@ def test_scheduled_versioned_automation_prepares_and_consumes_in_one_transaction
     assert schedule.last_run_at.replace(tzinfo=UTC) == now[0]
 
 
-def test_scheduled_versioned_dispatch_reloads_automation_for_update(dispatch_db):
+def test_scheduled_dispatch_reloads_automation_for_update(dispatch_db):
     _engine, _factory, db, revision = dispatch_db
     now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
     created = AutomationService(
@@ -2319,7 +2287,7 @@ def test_scheduled_detail_automation_freezes_pacing_in_atomic_dispatch(dispatch_
     }
 
 
-def test_versioned_schedule_run_now_returns_structured_review_required_conflict(
+def test_schedule_run_now_returns_structured_review_required_conflict(
     dispatch_db,
 ):
     _engine, _factory, db, revision = dispatch_db
@@ -2347,11 +2315,10 @@ def test_versioned_schedule_run_now_returns_structured_review_required_conflict(
     assert response.value.detail == {
         "code": "DISPATCH_PLAN_REVIEW_REQUIRED",
         "message": (
-            "Versioned Automation runs require Dispatch Plan review and confirmation"
+            "Automation runs require Dispatch Plan review and confirmation"
         ),
         "context": {
             "automation_id": str(created.snapshot.automation_id),
-            "expected_revision": 1,
             "action": "prepare_saved_automation_run",
         },
     }
@@ -2359,7 +2326,7 @@ def test_versioned_schedule_run_now_returns_structured_review_required_conflict(
     assert db.query(CrawlJob).count() == baseline_job_count
 
 
-def test_scheduled_versioned_dispatch_failure_rolls_back_plan_and_run_artifacts(
+def test_scheduled_dispatch_failure_rolls_back_plan_and_run_artifacts(
     dispatch_db,
 ):
     _engine, _factory, db, revision = dispatch_db
@@ -2449,7 +2416,7 @@ def test_postgres_scheduled_detail_failure_rolls_back_every_dispatch_artifact(
     assert db.get(ScrapeSchedule, created.snapshot.automation_id).last_run_at is None
 
 
-def test_postgres_concurrent_dispatch_consumes_one_versioned_plan_once(
+def test_postgres_concurrent_dispatch_consumes_one_plan_once(
     postgres_dispatch_db,
 ):
     _engine, factory, db, revision = postgres_dispatch_db

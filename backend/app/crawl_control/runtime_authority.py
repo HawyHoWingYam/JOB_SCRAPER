@@ -23,12 +23,6 @@ from app.repositories.crawl_job_repository import CrawlJobRepository
 
 
 @dataclass(frozen=True)
-class LegacyWorkerStartupInput:
-    request_payload: dict[str, Any]
-    source_site: str
-
-
-@dataclass(frozen=True)
 class WorkerStartupInput:
     request_payload: dict[str, Any]
     source_site: str
@@ -37,36 +31,8 @@ class WorkerStartupInput:
     detail_runtime_plan: DetailRuntimePlan | None = None
 
     @property
-    def is_versioned(self) -> bool:
+    def has_execution_authority(self) -> bool:
         return self.execution_authority is not None
-
-
-def load_legacy_worker_startup_input(
-    db: Session,
-    *,
-    crawl_job_id,
-    default_source_site: str,
-) -> LegacyWorkerStartupInput:
-    """Load legacy payloads while fail-closing versioned jobs at one boundary."""
-
-    crawl_job = CrawlJobRepository().get_crawl_job_by_id(db, crawl_job_id)
-    if crawl_job is None:
-        return LegacyWorkerStartupInput(
-            request_payload={},
-            source_site=default_source_site,
-        )
-    if (
-        crawl_job.dispatch_plan_id is not None
-        or crawl_job.dispatch_plan_fingerprint is not None
-    ):
-        plan_service = DispatchPlanService(db)
-        authority = plan_service.load_execution_authority(crawl_job.id)
-        plan_service.require_worker_runtime_supported(authority)
-        raise AssertionError("Versioned worker authority gate unexpectedly returned")
-    return LegacyWorkerStartupInput(
-        request_payload=dict(crawl_job.request_payload or {}),
-        source_site=str(crawl_job.source_site or default_source_site),
-    )
 
 
 def load_worker_startup_input(
@@ -76,7 +42,7 @@ def load_worker_startup_input(
     default_source_site: str,
     allow_missing: bool = False,
 ) -> WorkerStartupInput:
-    """Load legacy input or validated immutable authority at the worker boundary."""
+    """Load current Crawl Job input and validate any immutable execution authority."""
 
     crawl_job = CrawlJobRepository().get_crawl_job_by_id(db, crawl_job_id)
     if crawl_job is None:
@@ -93,9 +59,9 @@ def load_worker_startup_input(
         crawl_job.dispatch_plan_id is None
         and crawl_job.dispatch_plan_fingerprint is None
     ):
-        return WorkerStartupInput(
-            request_payload=dict(crawl_job.request_payload or {}),
-            source_site=str(crawl_job.source_site or default_source_site),
+        raise DispatchPlanStaleError(
+            "Crawl Job has no execution authority",
+            reason="execution_authority_missing",
         )
 
     plan_service = DispatchPlanService(db)
@@ -113,7 +79,7 @@ def load_worker_startup_input(
         )
     except (TypeError, ValueError) as exc:
         raise DispatchPlanStaleError(
-            "Versioned Crawl Job resume context is invalid",
+            "Crawl Job resume context is invalid",
             plan_id=authority.dispatch_plan.plan_id,
             reason="resume_context_invalid",
         ) from exc
@@ -136,7 +102,7 @@ def load_worker_startup_input(
             raise
         except (TypeError, ValueError) as exc:
             raise DispatchPlanStaleError(
-                "Versioned detail runtime authority is invalid",
+                "Detail runtime authority is invalid",
                 plan_id=authority.dispatch_plan.plan_id,
                 reason="detail_runtime_contract_invalid",
             ) from exc
@@ -168,7 +134,7 @@ def load_listing_runtime_plan_for_worker(
             crawl_job_id=crawl_job_id,
             default_source_site=expected_source_site,
         )
-        if startup.is_versioned and startup.listing_runtime_plan is None:
+        if startup.has_execution_authority and startup.listing_runtime_plan is None:
             assert startup.execution_authority is not None
             raise DispatchPlanStaleError(
                 "Dispatch Plan is not a listing execution authority",

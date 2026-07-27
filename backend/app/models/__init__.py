@@ -13,7 +13,6 @@ from app.models.job import Job
 from app.models.job_embedding import JobEmbedding
 from app.models.schedule import (
     AutomationDeleteReview,
-    AutomationRevision,
     ScrapeSchedule,
     ScheduleExecution,
     SchedulerRuntimeHeartbeat,
@@ -97,7 +96,6 @@ __all__ = [
     "Job",
     "JobEmbedding",
     "AutomationDeleteReview",
-    "AutomationRevision",
     "ScrapeSchedule",
     "ScheduleExecution",
     "SchedulerRuntimeHeartbeat",

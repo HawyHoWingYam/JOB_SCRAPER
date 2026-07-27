@@ -148,6 +148,4 @@ def _prevent_crawl_job_dispatch_plan_update(_mapper, _connection, crawl_job) -> 
         crawl_job.dispatch_plan_id is not None
         and state.attrs.request_payload.history.has_changes()
     ):
-        raise ValueError(
-            "Versioned Crawl Job compatibility request payload is immutable"
-        )
+        raise ValueError("Crawl Job request snapshot is immutable")

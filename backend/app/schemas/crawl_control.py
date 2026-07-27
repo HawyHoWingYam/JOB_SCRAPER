@@ -33,20 +33,15 @@ class AutomationCreateRequestV1(FrozenContract):
 
 
 class AutomationUpdateRequestV1(FrozenContract):
-    expected_revision: int = Field(ge=1)
     configuration: AutomationConfigurationV1
     review_fingerprint: str = Field(pattern=SHA256_PATTERN)
 
 
-class AutomationRevisionRequestV1(FrozenContract):
-    expected_revision: int = Field(ge=1)
-
-
-class AutomationRestoreRequestV1(AutomationRevisionRequestV1):
+class AutomationRestoreRequestV1(FrozenContract):
     activate: bool = False
 
 
-class AutomationPermanentDeleteRequestV1(AutomationRevisionRequestV1):
+class AutomationPermanentDeleteRequestV1(FrozenContract):
     review_token: str = Field(min_length=20)
 
 

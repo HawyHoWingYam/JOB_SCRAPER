@@ -265,7 +265,7 @@ async def test_jobsdb_first_page_probe_is_reused_within_page_budget() -> None:
     assert staged_pages == [2, 1]
 
 
-def test_versioned_scrapy_requests_use_frozen_order_and_do_not_chain_detail(
+def test_planned_scrapy_requests_use_frozen_order_and_do_not_chain_detail(
     monkeypatch,
 ) -> None:
     jobsdb_plan = _runtime_plan(
@@ -394,7 +394,7 @@ def test_versioned_scrapy_requests_use_frozen_order_and_do_not_chain_detail(
 
 
 @pytest.mark.asyncio
-async def test_versioned_standalone_targets_ignore_payload_and_stop_empty_target(
+async def test_planned_standalone_targets_ignore_payload_and_stop_empty_target(
     monkeypatch,
 ) -> None:
     jobsdb_plan = _runtime_plan(
@@ -441,7 +441,7 @@ async def test_versioned_standalone_targets_ignore_payload_and_stop_empty_target
         ),
     )
     jobsdb_args = SimpleNamespace(
-        crawl_job_id="jobsdb-versioned",
+        crawl_job_id="jobsdb-planned",
         crawl_mode="headless",
         category_ids=["tampered"],
         max_pages=999,
@@ -484,7 +484,7 @@ async def test_versioned_standalone_targets_ignore_payload_and_stop_empty_target
         ),
     )
     ctgoodjobs_args = SimpleNamespace(
-        crawl_job_id="ctgoodjobs-versioned",
+        crawl_job_id="ctgoodjobs-planned",
         crawl_mode="headed",
         category_ids=["tampered"],
         max_pages=999,
@@ -627,7 +627,7 @@ async def test_offertoday_standalone_uses_browse_plan_without_hidden_defaults(
         ),
     )
     args = SimpleNamespace(
-        crawl_job_id="offertoday-versioned",
+        crawl_job_id="offertoday-planned",
         crawl_phase="listing",
         headed=False,
         category_ids="tampered",
@@ -700,9 +700,6 @@ async def test_jobsdb_and_ctgoodjobs_detail_loops_receive_frozen_runtime_plan(
     jobsdb_runtime = Runtime()
     await jobsdb_crawl.run_detail_phase(jobsdb_args, jobsdb_runtime)
     assert jobsdb_runtime.calls[0]["detail_runtime_plan"] is jobsdb_plan
-    assert jobsdb_runtime.calls[0]["request_payload"][
-        "request_payload_authoritative"
-    ] is False
     assert "catalog_revision_id" not in jobsdb_runtime.calls[0]["request_payload"]
     assert "catalog_revision_fingerprint" not in jobsdb_runtime.calls[0][
         "request_payload"

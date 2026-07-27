@@ -10,8 +10,8 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session
 
 from app.crawl_cancellation import ACTIVE_MANUAL_DETAIL_STATUSES
-from app.crawl_control.automation_contracts import AutomationSnapshotV1
 from app.crawl_control.automation_repository import AutomationRepository
+from app.crawl_control.automation_service import AutomationService
 from app.crawl_control.contracts import CrawlScopeErrorPayloadV1, JsonScalar
 from app.crawl_control.dispatch_plan_contracts import (
     DispatchPlanCleanupResultV1,
@@ -36,7 +36,6 @@ from app.crawl_control.detail_runtime import (
 )
 from app.crawl_control.errors import (
     AutomationNotFoundError,
-    AutomationRevisionConflictError,
     AutomationTransitionInvalidError,
     DetailRunConflictError,
     DispatchPlanAlreadyConsumedError,
@@ -173,16 +172,10 @@ class DispatchPlanService:
                     raise AutomationNotFoundError(request.automation_id)
                 if automation.id != request.automation_id:
                     raise ValueError("Automation object and request ID differ")
-                if int(automation.revision) != request.expected_revision:
-                    raise AutomationRevisionConflictError(
-                        automation_id=automation.id,
-                        expected_revision=request.expected_revision,
-                        current_revision=int(automation.revision),
-                    )
                 if automation.scope_contract is None:
                     raise AutomationTransitionInvalidError(
                         current_state="legacy",
-                        operation="versioned_dispatch",
+                        operation="current_dispatch",
                     )
                 allowed_states = (
                     {"active"}
@@ -198,30 +191,9 @@ class DispatchPlanService:
                             else "run_saved_configuration"
                         ),
                     )
-                revision_row = self.automation_repository.get_revision(
-                    self.db,
-                    automation_id=automation.id,
-                    revision=request.expected_revision,
-                )
-                if revision_row is None:
-                    raise DispatchPlanStaleError(
-                        "Automation revision snapshot is missing",
-                        reason="automation_snapshot_missing",
-                    )
-                automation_snapshot = AutomationSnapshotV1.model_validate(
-                    revision_row.snapshot
-                )
-                if (
-                    automation_snapshot.automation_id != automation.id
-                    or automation_snapshot.revision != request.expected_revision
-                    or automation_snapshot.fingerprint
-                    != revision_row.snapshot_fingerprint
-                ):
-                    raise DispatchPlanStaleError(
-                        "Automation revision snapshot is invalid",
-                        reason="automation_snapshot_invalid",
-                    )
-                configuration = automation_snapshot.configuration
+                configuration = AutomationService(self.db).get(
+                    automation.id
+                ).snapshot.configuration
                 resolved_scope = self.scope_service.resolve_for_run(
                     configuration.scope,
                     listing_settings=configuration.listing_settings,
@@ -231,7 +203,6 @@ class DispatchPlanService:
                     crawl_phase=configuration.crawl_phase,
                     trigger_kind=effective_trigger,
                     automation_id=automation.id,
-                    expected_automation_revision=request.expected_revision,
                     authored_scope=resolved_scope.authored_scope,
                     resolved_scope=resolved_scope,
                     listing_settings=configuration.listing_settings,
@@ -472,14 +443,6 @@ class DispatchPlanService:
                 plan_id=snapshot.plan_id,
                 reason="automation_identity_changed",
             )
-        expected_revision = content.expected_automation_revision
-        assert expected_revision is not None
-        if int(automation.revision) != expected_revision:
-            raise AutomationRevisionConflictError(
-                automation_id=automation.id,
-                expected_revision=expected_revision,
-                current_revision=int(automation.revision),
-            )
         allowed_states = (
             {"active"}
             if content.trigger_kind == "scheduled_automation"
@@ -494,31 +457,28 @@ class DispatchPlanService:
                     else "run_saved_configuration"
                 ),
             )
-        revision_row = self.automation_repository.get_revision(
-            self.db,
-            automation_id=automation.id,
-            revision=expected_revision,
-        )
-        if revision_row is None:
-            raise DispatchPlanStaleError(
-                "Dispatch Plan Automation revision snapshot is missing",
-                plan_id=snapshot.plan_id,
-                reason="automation_snapshot_missing",
-            )
-        automation_snapshot = AutomationSnapshotV1.model_validate(
-            revision_row.snapshot
-        )
-        if (
-            automation_snapshot.automation_id != automation.id
-            or automation_snapshot.revision != expected_revision
-            or automation_snapshot.fingerprint != revision_row.snapshot_fingerprint
-        ):
-            raise DispatchPlanStaleError(
-                "Dispatch Plan Automation revision snapshot is invalid",
-                plan_id=snapshot.plan_id,
-                reason="automation_snapshot_invalid",
-            )
-        return automation, dict(revision_row.snapshot)
+        automation_snapshot = {
+            "automation_id": str(automation.id),
+            "lifecycle_state": automation.lifecycle_state,
+            "configuration": {
+                "name": automation.name,
+                "description": automation.description,
+                "cron_expression": automation.cron_expression,
+                "timezone": automation.timezone,
+                "scope": content.authored_scope.model_dump(mode="json"),
+                "listing_settings": (
+                    content.listing_settings.model_dump(mode="json")
+                    if content.listing_settings is not None
+                    else None
+                ),
+                "detail_settings": (
+                    content.detail_settings.model_dump(mode="json")
+                    if content.detail_settings is not None
+                    else None
+                ),
+            },
+        }
+        return automation, automation_snapshot
 
     def revalidate_runtime_readiness(
         self,
@@ -810,7 +770,7 @@ class DispatchPlanService:
         if authority.dispatch_plan.content.crawl_phase in supported_phases:
             return
         raise DispatchPlanStaleError(
-            "Versioned worker runtime adapter is not available for this phase",
+            "Worker runtime adapter is not available for this phase",
             plan_id=authority.dispatch_plan.plan_id,
             reason="runtime_authority_adapter_required",
         )
@@ -920,7 +880,6 @@ class DispatchPlanService:
             crawl_phase=plan.crawl_phase,
             trigger_kind=plan.trigger_kind,
             automation_id=plan.automation_id_snapshot,
-            expected_automation_revision=plan.expected_automation_revision,
             authored_scope=plan.authored_scope,
             resolved_scope=plan.resolved_scope,
             listing_settings=plan.listing_settings,

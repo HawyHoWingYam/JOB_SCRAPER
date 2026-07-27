@@ -132,7 +132,6 @@ class DetailRuntimePlan:
             "detail_snapshot_selected_target_count": self.selected_target_count,
             "detail_snapshot_selected_row_count": self.selected_row_count,
             "detail_run_cap": self.complete_run_cap,
-            "request_payload_authoritative": False,
         }
 
 
@@ -329,7 +328,6 @@ class DetailBacklogSnapshotBuilder:
             selection_order=selection_order,
             eligibility_fingerprint=payload_fingerprint(
                 {
-                    "version": 1,
                     "source_site": source_site,
                     "source_job_id": source_job_id,
                     "rows": [
@@ -460,7 +458,6 @@ def build_detail_runtime_plan(
 def detail_row_eligibility_fingerprint(row: CrawlJobListing) -> str:
     return payload_fingerprint(
         {
-            "version": 1,
             "crawl_job_listing_id": str(row.id),
             "source_listing_crawl_job_id": str(row.crawl_job_id),
             "source_site": str(row.source_site),
@@ -489,7 +486,6 @@ def detail_row_runtime_identity_fingerprint(row: CrawlJobListing) -> str:
 
     return payload_fingerprint(
         {
-            "version": 1,
             "crawl_job_listing_id": str(row.id),
             "source_listing_crawl_job_id": str(row.crawl_job_id),
             "source_site": str(row.source_site),

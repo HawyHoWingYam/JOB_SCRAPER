@@ -226,12 +226,9 @@ async def create_crawl_job(
             crawl_phase=resolve_crawl_phase(request.crawl_phase),
             crawl_mode=request.crawl_mode,
             category_ids=list(request.category_ids or []),
-            keywords=request.keywords,
             max_pages=request.max_pages,
             source_listing_crawl_job_id=request.source_listing_crawl_job_id,
             detail_limit=request.detail_limit,
-            detail_statuses=request.detail_statuses,
-            skip_existing=request.skip_existing,
             requested_by=request.requested_by or "api",
         )
     except HeadedCrawlWorkerUnavailableError as exc:

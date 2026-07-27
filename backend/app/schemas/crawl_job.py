@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.crawl_phases import normalize_crawl_phase, normalize_detail_statuses, resolve_crawl_phase
+from app.crawl_phases import normalize_crawl_phase, resolve_crawl_phase
 from app.crawl_modes import normalize_crawl_mode, resolve_crawl_mode
 from app.services.crawl_request_validation import (
     CategoryId,
@@ -23,17 +23,16 @@ from app.crawl_control.task_control_board_contracts import (
 
 
 class CrawlJobCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     schedule_id: UUID | None = None
     source_site: str | None = Field(default=None, max_length=32)
     crawl_phase: str | None = Field(default=None, max_length=32)
     crawl_mode: str | None = Field(default=None, max_length=32)
     category_ids: list[CategoryId] | None = None
-    keywords: str | None = Field(default=None, max_length=500)
     max_pages: int | None = Field(default=None, ge=1, le=1000)
     source_listing_crawl_job_id: UUID | None = None
     detail_limit: int = Field(default=100, ge=1, le=5000)
-    detail_statuses: list[str] | None = None
-    skip_existing: bool = Field(default=False)
     requested_by: str | None = Field(default=None, max_length=255)
 
     @field_validator("source_site", mode="before")
@@ -52,11 +51,6 @@ class CrawlJobCreateRequest(BaseModel):
     @classmethod
     def normalize_crawl_phase_field(cls, value):
         return normalize_crawl_phase(value)
-
-    @field_validator("detail_statuses", mode="before")
-    @classmethod
-    def normalize_detail_statuses_field(cls, value):
-        return normalize_detail_statuses(value)
 
     @model_validator(mode="after")
     def validate_request_shape(self) -> "CrawlJobCreateRequest":
@@ -134,7 +128,6 @@ class CrawlTaskListItemSchema(BaseModel):
     dispatch_plan_id: str | None = None
     dispatch_plan_fingerprint: str | None = None
     automation_id: str | None = None
-    automation_revision: int | None = None
     authored_scope: dict | None = None
     resolved_scope: dict | None = None
     readiness: dict | None = None

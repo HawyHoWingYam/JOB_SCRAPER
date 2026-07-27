@@ -88,7 +88,6 @@ class ListingRuntimePlan:
             "page_depth": self.page_depth,
             "estimated_max_pages": self.estimated_max_pages,
             "run_page_cap": self.run_page_cap,
-            "request_payload_authoritative": False,
         }
 
 

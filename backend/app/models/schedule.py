@@ -39,10 +39,6 @@ class ScrapeSchedule(Base):
     __tablename__ = "scrape_schedules"
     __table_args__ = (
         CheckConstraint(
-            "revision > 0",
-            name="ck_scrape_schedules_revision_positive",
-        ),
-        CheckConstraint(
             "lifecycle_state IN ('active', 'paused', 'archived', "
             "'scope_review_required')",
             name="ck_scrape_schedules_lifecycle_state",
@@ -94,9 +90,8 @@ class ScrapeSchedule(Base):
     location = Column(String(255), nullable=True)
     max_pages = Column(Integer, default=3)
 
-    # Versioned Automation authority. Legacy primitive columns above remain
-    # compatibility projections until the approved Crawl Control cutover.
-    revision = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    # Current Automation authority. Primitive columns above remain compatibility
+    # projections until the approved Crawl Control cutover.
     lifecycle_state = Column(
         String(32),
         nullable=False,
@@ -146,74 +141,16 @@ class ScrapeSchedule(Base):
         passive_deletes=True,
     )
     crawl_jobs = relationship("CrawlJob", back_populates="schedule")
-    automation_revisions = relationship(
-        "AutomationRevision",
-        back_populates="automation",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        order_by="AutomationRevision.revision",
-    )
 
     def __repr__(self):
         return f"<ScrapeSchedule(id={self.id}, name={self.name}, cron={self.cron_expression})>"
 
 
-class AutomationRevision(Base):
-    """Immutable audit snapshot for one Automation revision."""
-
-    __tablename__ = "automation_revisions"
-    __table_args__ = (
-        UniqueConstraint(
-            "automation_id",
-            "revision",
-            name="uq_automation_revisions_automation_revision",
-        ),
-        CheckConstraint(
-            "revision > 0",
-            name="ck_automation_revisions_revision_positive",
-        ),
-        CheckConstraint(
-            "length(snapshot_fingerprint) = 64",
-            name="ck_automation_revisions_snapshot_fingerprint",
-        ),
-        Index(
-            "ix_automation_revisions_automation_created",
-            "automation_id",
-            "created_at",
-        ),
-    )
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    automation_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("scrape_schedules.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    revision = Column(Integer, nullable=False)
-    snapshot = Column(JSON, nullable=False)
-    snapshot_fingerprint = Column(String(64), nullable=False)
-    operation = Column(String(64), nullable=False)
-    actor = Column(String(255), nullable=False)
-    created_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=utc_now,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-
-    automation = relationship("ScrapeSchedule", back_populates="automation_revisions")
-
-
 class AutomationDeleteReview(Base):
-    """Expiring actor/revision-bound review for permanent Automation deletion."""
+    """Expiring actor-bound review for permanent Automation deletion."""
 
     __tablename__ = "automation_delete_reviews"
     __table_args__ = (
-        CheckConstraint(
-            "expected_revision > 0",
-            name="ck_automation_delete_reviews_revision_positive",
-        ),
         CheckConstraint(
             "length(token_hash) = 64 AND length(impact_fingerprint) = 64",
             name="ck_automation_delete_reviews_hashes",
@@ -233,7 +170,6 @@ class AutomationDeleteReview(Base):
         index=True,
     )
     automation_id_snapshot = Column(UUID(as_uuid=True), nullable=False)
-    expected_revision = Column(Integer, nullable=False)
     actor = Column(String(255), nullable=False)
     token_hash = Column(String(64), nullable=False, unique=True)
     impact_fingerprint = Column(String(64), nullable=False)
@@ -308,7 +244,6 @@ class ScheduleExecution(Base):
     error_message = Column(Text, nullable=True)
     request_payload_snapshot = Column(JSON, nullable=True)
     automation_id_snapshot = Column(UUID(as_uuid=True), nullable=True, index=True)
-    automation_revision = Column(Integer, nullable=True)
     automation_snapshot = Column(JSON, nullable=True)
     dispatch_plan_id = Column(
         UUID(as_uuid=True),
@@ -384,11 +319,6 @@ class SchedulerRuntimeHeartbeat(Base):
         )
 
 
-@event.listens_for(AutomationRevision, "before_update")
-def _prevent_automation_revision_update(_mapper, _connection, _revision) -> None:
-    raise ValueError("Automation revisions are immutable")
-
-
 @event.listens_for(ScheduleExecution, "before_update")
 def _prevent_schedule_execution_dispatch_plan_update(
     _mapper,
@@ -405,7 +335,6 @@ def _prevent_schedule_execution_dispatch_plan_update(
 
 AUTOMATION_CONTROL_TABLES = (
     ScrapeSchedule.__table__,
-    AutomationRevision.__table__,
     AutomationDeleteReview.__table__,
     ScheduleExecution.__table__,
     SchedulerRuntimeHeartbeat.__table__,
