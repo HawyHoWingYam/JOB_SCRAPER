@@ -80,7 +80,7 @@ def project_current_company_industry(
     outbox_repository: EventOutboxRepository | None = None,
 ) -> CurrentCompanyIndustryProjectionResult | None:
     source_site = str(_field(canonical_job, "source_site") or "").strip().lower()
-    if source_site != "offertoday":
+    if not source_site:
         return None
     raw_data = _field(canonical_job, "raw_data")
     if not isinstance(raw_data, Mapping):

@@ -20,6 +20,9 @@ from app.services.ai_provider_catalog import CUSTOM_API_FORMAT_OPTIONS
 from app.utils.time import utc_now
 
 RUNTIME_SCOPES = ("jobs", "companies")
+SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT = 5
+SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MIN = 1
+SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX = 1000
 PROFILE_TEST_STATUSES = ("untested", "passed", "failed")
 CUSTOM_API_FORMAT_VALUES = {
     str(option["value"]) for option in CUSTOM_API_FORMAT_OPTIONS
@@ -53,6 +56,7 @@ PERSISTED_FIELD_NAMES = (
     "company_llm_provider",
     "ai_enrichment_run_concurrency",
     "company_ai_enrichment_run_concurrency",
+    "skill_auto_create_distinct_job_threshold",
     "anthropic_api_key",
     "anthropic_model",
     "anthropic_base_url",
@@ -456,6 +460,9 @@ class AIRuntimeSettingsService:
             "company_llm_provider": values["company_llm_provider"],
             "ai_enrichment_run_concurrency": values["ai_enrichment_run_concurrency"],
             "company_ai_enrichment_run_concurrency": values["company_ai_enrichment_run_concurrency"],
+            "skill_auto_create_distinct_job_threshold": values[
+                "skill_auto_create_distinct_job_threshold"
+            ],
             "anthropic": {
                 "model": values["anthropic_model"],
                 "base_url": values["anthropic_base_url"],
@@ -510,6 +517,9 @@ class AIRuntimeSettingsService:
             "company_llm_provider": company_effective.llm_provider,
             "ai_enrichment_run_concurrency": self.get_effective_concurrency("jobs"),
             "company_ai_enrichment_run_concurrency": self.get_effective_concurrency("companies"),
+            "skill_auto_create_distinct_job_threshold": (
+                self.get_skill_auto_create_distinct_job_threshold()
+            ),
             "anthropic": {
                 "model": job_effective.anthropic_model,
                 "base_url": job_effective.anthropic_base_url,
@@ -572,6 +582,22 @@ class AIRuntimeSettingsService:
         except (TypeError, ValueError):
             value = AI_ENRICHMENT_RUN_CONCURRENCY_MIN
         return max(AI_ENRICHMENT_RUN_CONCURRENCY_MIN, min(value, AI_ENRICHMENT_RUN_CONCURRENCY_MAX))
+
+    def get_skill_auto_create_distinct_job_threshold(self) -> int:
+        row = self.db.get(AppRuntimeSettings, 1)
+        if row is None:
+            return SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT
+        candidate = getattr(row, "skill_auto_create_distinct_job_threshold", None)
+        if candidate is None:
+            return SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT
+        try:
+            value = int(candidate)
+        except (TypeError, ValueError):
+            return SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT
+        return max(
+            SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MIN,
+            min(value, SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX),
+        )
 
     def build_config_fingerprint(self, scope: str, values: dict[str, Any]) -> Optional[str]:
         self._ensure_valid_scope(scope)
@@ -638,7 +664,11 @@ class AIRuntimeSettingsService:
                     candidate[field_name] = normalized_secret
                 continue
 
-            if field_name in {"ai_enrichment_run_concurrency", "company_ai_enrichment_run_concurrency"}:
+            if field_name in {
+                "ai_enrichment_run_concurrency",
+                "company_ai_enrichment_run_concurrency",
+                "skill_auto_create_distinct_job_threshold",
+            }:
                 candidate[field_name] = value
                 continue
 
@@ -686,6 +716,29 @@ class AIRuntimeSettingsService:
                             f"{AI_ENRICHMENT_RUN_CONCURRENCY_MIN} and {AI_ENRICHMENT_RUN_CONCURRENCY_MAX}"
                         ),
                         "type": "value_error.concurrency",
+                    }
+                )
+
+        raw_threshold = candidate.get("skill_auto_create_distinct_job_threshold")
+        if raw_threshold is not None:
+            try:
+                threshold = int(raw_threshold)
+            except (TypeError, ValueError):
+                threshold = None
+            if (
+                threshold is None
+                or threshold < SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MIN
+                or threshold > SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX
+            ):
+                errors.append(
+                    {
+                        "loc": ["skill_auto_create_distinct_job_threshold"],
+                        "msg": (
+                            "Skill threshold must be between "
+                            f"{SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MIN} and "
+                            f"{SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX}"
+                        ),
+                        "type": "value_error.skill_threshold",
                     }
                 )
 

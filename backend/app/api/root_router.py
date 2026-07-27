@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api import (
     capabilities,
+    classification_batches,
     companies,
     crawl_control,
     crawl_jobs,
@@ -18,6 +19,7 @@ router = APIRouter()
 
 router.include_router(health.router)
 router.include_router(current_taxonomies.router, prefix="/api")
+router.include_router(classification_batches.router, prefix="/api")
 router.include_router(skills.router, prefix="/api")
 router.include_router(jobs.router, prefix="/api")
 router.include_router(companies.router, prefix="/api")

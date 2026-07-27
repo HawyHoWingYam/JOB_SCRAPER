@@ -97,6 +97,7 @@ class AISettingsUpdateRequest(BaseModel):
     company_llm_provider: Optional[str] = None
     ai_enrichment_run_concurrency: Optional[int] = None
     company_ai_enrichment_run_concurrency: Optional[int] = None
+    skill_auto_create_distinct_job_threshold: Optional[int] = None
     anthropic_api_key: Optional[str] = None
     anthropic_model: Optional[str] = None
     anthropic_base_url: Optional[str] = None

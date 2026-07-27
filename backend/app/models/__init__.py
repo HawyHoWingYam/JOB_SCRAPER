@@ -31,6 +31,10 @@ from app.models.company_enrichment_run import (
     CompanyEnrichmentRun,
     CompanyEnrichmentRunItem,
 )
+from app.models.classification_batch import (
+    ClassificationBatchRun,
+    ClassificationBatchRunItem,
+)
 from app.models.app_runtime_settings import AppRuntimeSettings
 from app.models.scraper_pacing_settings import ScraperPacingSettings
 from app.models.source_classification import SourceClassification
@@ -122,6 +126,8 @@ __all__ = [
     "EnrichmentRunItem",
     "CompanyEnrichmentRun",
     "CompanyEnrichmentRunItem",
+    "ClassificationBatchRun",
+    "ClassificationBatchRunItem",
     "AppRuntimeSettings",
     "ScraperPacingSettings",
     "SourceClassification",
