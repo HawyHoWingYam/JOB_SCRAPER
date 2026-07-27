@@ -18,13 +18,16 @@ from app.source_classifications.domain import (
     CatalogValidationError,
     DiscoveredCatalog,
     SourceQueryTarget,
+    payload_fingerprint,
 )
 from app.sources.offertoday.constants import (
     OFFERTODAY_LISTING_BROWSE_URL,
     OFFERTODAY_LISTING_SEARCH_URL,
     build_offertoday_listing_payload,
 )
-from app.sources.offertoday.search_space import build_offertoday_listing_conditions
+from app.sources.offertoday.search_space import (
+    OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS,
+)
 
 
 def _root_key(code: int) -> str:
@@ -42,24 +45,44 @@ class OfferTodaySourceClassificationAdapter:
         self._browser_runtime_factory = browser_runtime_factory
 
     @staticmethod
-    def _target(classification_id: str, category_code: int) -> SourceQueryTarget:
+    def _target(
+        classification_id: str,
+        category_code: int,
+        keyword: str,
+    ) -> SourceQueryTarget:
         return SourceQueryTarget(
             adapter="offertoday.category",
             classification_id=classification_id,
             payload={
                 "category_code": category_code,
-                "endpoint": "browse",
-                "keyword": "",
-                "rcd_type": 7,
+                "search_family": "classification_keyword_sweep",
+                "endpoint": "search",
+                "keyword": keyword,
+                "rcd_type": None,
             },
         )
+
+    @classmethod
+    def _targets(
+        cls,
+        classification_id: str,
+        category_code: int,
+    ) -> tuple[SourceQueryTarget, ...]:
+        return tuple(
+            cls._target(classification_id, category_code, keyword)
+            for keyword in OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS
+        )
+
+    @staticmethod
+    def _semantics_hash(targets: tuple[SourceQueryTarget, ...]) -> str:
+        return payload_fingerprint([target.to_payload() for target in targets])
 
     def discover(self) -> DiscoveredCatalog:
         nodes: list[CatalogNodeSnapshot] = []
         for root in OFFERTODAY_CATEGORIES_L1:
             root_classification_id = f"offertoday:{root.code}"
             root_node_key = _root_key(root.code)
-            root_target = self._target(root_classification_id, root.code)
+            root_targets = self._targets(root_classification_id, root.code)
             nodes.append(
                 CatalogNodeSnapshot(
                     node_key=root_node_key,
@@ -75,7 +98,7 @@ class OfferTodaySourceClassificationAdapter:
                     supports_subtree=True,
                     queryable=True,
                     alias_of_node_key=None,
-                    query_semantics_hash=root_target.fingerprint,
+                    query_semantics_hash=self._semantics_hash(root_targets),
                     source_metadata={"level": root.level, "parent_code": root.parent_code},
                 )
             )
@@ -87,10 +110,10 @@ class OfferTodaySourceClassificationAdapter:
                     else f"offertoday:node:{root.code}:{child.code}"
                 )
                 classification_id = None if is_alias else f"offertoday:{child.code}"
-                target = (
+                targets = (
                     None
                     if classification_id is None
-                    else self._target(classification_id, child.code)
+                    else self._targets(classification_id, child.code)
                 )
                 nodes.append(
                     CatalogNodeSnapshot(
@@ -107,7 +130,9 @@ class OfferTodaySourceClassificationAdapter:
                         supports_subtree=False,
                         queryable=not is_alias,
                         alias_of_node_key=root_node_key if is_alias else None,
-                        query_semantics_hash=target.fingerprint if target else None,
+                        query_semantics_hash=(
+                            self._semantics_hash(targets) if targets else None
+                        ),
                         source_metadata={
                             "level": child.level,
                             "parent_code": child.parent_code,
@@ -158,25 +183,14 @@ class OfferTodaySourceClassificationAdapter:
                 "OfferToday category code must be an integer",
                 node_key=node.node_key,
             ) from exc
-        conditions = build_offertoday_listing_conditions(
-            [category_code],
-            keywords=None,
-            default_to_it=False,
-            category_endpoint="browse",
-            rcd_type=7,
-            expand_category_roots=False,
-        )
-        if (
-            len(conditions) != 1
-            or conditions[0].category_id != category_code
-            or conditions[0].keyword
-        ):
+        targets = self._targets(node.classification_id, category_code)
+        if len(targets) != len(OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS):
             raise CatalogValidationError(
                 "SOURCE_CLASSIFICATION_NOT_EXECUTABLE",
-                "OfferToday classification did not compile to one bounded category query",
+                "OfferToday classification did not compile to the bounded keyword sweep",
                 node_key=node.node_key,
             )
-        return (self._target(node.classification_id, category_code),)
+        return targets
 
     async def smoke(self, target: SourceQueryTarget) -> dict[str, Any]:
         try:
@@ -249,9 +263,9 @@ class OfferTodaySourceClassificationAdapter:
         )
         request_payload = build_offertoday_listing_payload(
             category_id=category_code,
-            keyword="",
+            keyword=str(target.payload["keyword"]),
             page=1,
-            rcd_type=int(target.payload["rcd_type"]),
+            rcd_type=target.payload["rcd_type"],
         )
         try:
             result = await runtime.fetch_listing_page(

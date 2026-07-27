@@ -1,3 +1,9 @@
+import {
+  OFFERTODAY_DEFAULT_PAGE_DEPTH,
+  OFFERTODAY_DEFAULT_RUN_PAGE_CAP,
+  offerTodayEstimatedMaxPages,
+} from './wizardPolicy';
+
 export const STEP_ORDER = ['intent', 'scope', 'execution', 'review'];
 
 export function createWizardState(draft, notice = null) {
@@ -64,7 +70,13 @@ export function wizardReducer(state, action) {
         intent: action.intent,
         scope: null,
         execution: action.intent === 'listing'
-          ? { page_depth: 1, run_page_cap: 100, crawl_mode: 'headless' }
+          ? state.draft.source_site === 'offertoday'
+            ? {
+              page_depth: OFFERTODAY_DEFAULT_PAGE_DEPTH,
+              run_page_cap: OFFERTODAY_DEFAULT_RUN_PAGE_CAP,
+              crawl_mode: 'headless',
+            }
+            : { page_depth: 1, run_page_cap: 100, crawl_mode: 'headless' }
           : { backlog_kind: 'crawl_scope', limit_kind: 'stop_after', detail_run_cap: 100, crawl_mode: 'headless' },
       });
     case 'scopeChanged':
@@ -117,10 +129,29 @@ export function wizardReducer(state, action) {
 
 export function isStepComplete(draft, step = draft.step) {
   if (step === 'intent') return Boolean(draft.intent);
-  if (step === 'scope') return draft.scope?.mode === 'all' || (draft.scope?.mode === 'selected' && draft.scope.classification_ids?.length > 0);
+  if (step === 'scope') {
+    if (draft.source_site === 'offertoday') {
+      return draft.scope?.mode === 'selected'
+        && draft.scope.classification_ids?.length === 1;
+    }
+    return draft.scope?.mode === 'all'
+      || (draft.scope?.mode === 'selected' && draft.scope.classification_ids?.length > 0);
+  }
   if (step === 'execution') {
     if (draft.intent === 'listing') {
-      return Number(draft.execution.page_depth) > 0 && Number(draft.execution.run_page_cap) > 0;
+      const pageDepth = Number(draft.execution.page_depth);
+      const runPageCap = Number(draft.execution.run_page_cap);
+      return Number.isSafeInteger(pageDepth)
+        && Number.isSafeInteger(runPageCap)
+        && pageDepth > 0
+        && runPageCap > 0
+        && (
+          draft.source_site !== 'offertoday'
+          || (
+            offerTodayEstimatedMaxPages(pageDepth) !== null
+            && runPageCap >= offerTodayEstimatedMaxPages(pageDepth)
+          )
+        );
     }
     if (!draft.execution.backlog_kind || !draft.execution.limit_kind) return false;
     if (draft.execution.backlog_kind === 'listing_batch' && !draft.execution.source_listing_crawl_job_id) return false;

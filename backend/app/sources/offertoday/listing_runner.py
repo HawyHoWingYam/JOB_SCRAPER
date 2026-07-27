@@ -210,6 +210,7 @@ class ListingPageObservation:
     supplemental_identity_conflicts: tuple[ListingIdentityConflict, ...] = ()
     cursor_evidence: OfferTodayListingPageEvidenceV2 | None = None
     response_url: str | None = None
+    non_job_cards_observed: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +239,7 @@ class ListingRunResult:
     supplemental_rows_observed: int = 0
     supplemental_job_ids: tuple[str, ...] = ()
     supplemental_identity_issue_count: int = 0
+    non_job_cards_observed: int = 0
 
     @property
     def is_partial_success(self) -> bool:
@@ -405,6 +407,23 @@ def _job_function_codes(job_functions: Any) -> tuple[str, ...]:
     return tuple(codes)
 
 
+def is_offertoday_non_job_listing_card(row: Any) -> bool:
+    """Recognize the source's explicit banner-card envelope, not missing IDs."""
+
+    if not isinstance(row, Mapping):
+        return False
+
+    def is_exact_int(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    return (
+        is_exact_int(row.get("cardType"))
+        and row.get("cardType") == 1
+        and is_exact_int(row.get("bannerType"))
+        and is_exact_int(row.get("bannerCode"))
+    )
+
+
 def _analyze_listing_row(
     parsed_row: dict[str, Any],
 ) -> _ListingRowIdentityAnalysis:
@@ -464,6 +483,7 @@ def listing_observation_to_payload(value: Any) -> Any:
             payload.pop("cursor_evidence", None)
         payload.pop("supplemental_identity_issues", None)
         payload.pop("supplemental_identity_conflicts", None)
+        payload.pop("non_job_cards_observed", None)
         # Historical research artifacts have a frozen key set. Production
         # events add this transport field explicitly at their own boundary.
         payload.pop("response_url", None)
@@ -1172,6 +1192,16 @@ class OfferTodayListingRunner:
                             and not isinstance(raw_total, bool)
                             else None
                         )
+                    non_job_cards_observed = sum(
+                        is_offertoday_non_job_listing_card(row) for row in raw_rows
+                    )
+                    parsed_rows = parse_offertoday_listing_rows(
+                        [
+                            row
+                            for row in raw_rows
+                            if not is_offertoday_non_job_listing_card(row)
+                        ]
+                    )
                     page_succeeded = True
                     pages_observed += 1
 
@@ -1644,6 +1674,7 @@ class OfferTodayListingRunner:
                         retry_reason=None,
                         stop_reason=attempt_stop_reason,
                         response_url=current_url,
+                        non_job_cards_observed=non_job_cards_observed,
                         supplemental_identity_issues=tuple(
                             supplemental_page_issues
                         ),
@@ -1840,6 +1871,9 @@ class OfferTodayListingRunner:
             supplemental_job_ids=tuple(supplemental_job_ids),
             supplemental_identity_issue_count=(
                 supplemental_identity_issue_count
+            ),
+            non_job_cards_observed=sum(
+                observation.non_job_cards_observed for observation in observations
             ),
         )
 

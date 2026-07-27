@@ -48,6 +48,42 @@ describe('wizard command builders', () => {
     expect(buildOneOffRun(ct, ctClassifications).listing_settings.crawl_mode).toBe('headless');
   });
 
+  it('accepts one OfferToday category only when the cap covers all 36 targets', () => {
+    const offerClassifications = {
+      sourceSite: 'offertoday',
+      classifications: [
+        { id: 'offertoday:118000', label: 'Information Technology', active: true },
+        { id: 'offertoday:119000', label: 'Sales', active: true },
+      ],
+    };
+    const offerDraft = {
+      ...listingDraft(),
+      flow: 'one_off',
+      source_site: 'offertoday',
+      scope: { mode: 'selected', classification_ids: ['offertoday:118000'] },
+      execution: { crawl_mode: 'headless', page_depth: 100, run_page_cap: 3600 },
+    };
+    expect(buildOneOffRun(offerDraft, offerClassifications).listing_settings).toMatchObject({
+      page_depth: 100,
+      run_page_cap: 3600,
+    });
+    expect(() => buildOneOffRun({
+      ...offerDraft,
+      scope: {
+        mode: 'selected',
+        classification_ids: ['offertoday:118000', 'offertoday:119000'],
+      },
+    }, offerClassifications)).toThrow(/exactly one/);
+    expect(() => buildOneOffRun({
+      ...offerDraft,
+      scope: { mode: 'all', classification_ids: [] },
+    }, offerClassifications)).toThrow(/exactly one/);
+    expect(() => buildOneOffRun({
+      ...offerDraft,
+      execution: { ...offerDraft.execution, run_page_cap: 3599 },
+    }, offerClassifications)).toThrow(/36 keywords/);
+  });
+
   it('paired detail draft copies no plan or runtime authority', () => {
     const draft = { ...listingDraft(), plan_id: 'plan-1', runtime: { status: 'running' } };
     const paired = pairedDetailDraft(draft);

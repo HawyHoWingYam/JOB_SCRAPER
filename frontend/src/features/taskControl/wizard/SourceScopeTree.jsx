@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { OFFERTODAY_QUERY_TARGET_COUNT } from './wizardPolicy';
 
 export default function SourceScopeTree({
   sourceSite,
@@ -8,6 +9,7 @@ export default function SourceScopeTree({
 }) {
   const [search, setSearch] = useState('');
   const selectedIds = new Set(scope?.classification_ids || []);
+  const singleSelect = sourceSite === 'offertoday';
   const rows = useMemo(() => {
     const query = search.trim().toLowerCase();
     return (classifications || []).filter((item) => (
@@ -18,6 +20,13 @@ export default function SourceScopeTree({
   }, [classifications, search, sourceSite]);
 
   const setSelected = (id, checked) => {
+    if (singleSelect) {
+      onChange({
+        mode: 'selected',
+        classification_ids: checked ? [id] : [],
+      });
+      return;
+    }
     const next = new Set(selectedIds);
     if (checked) next.add(id);
     else next.delete(id);
@@ -30,13 +39,13 @@ export default function SourceScopeTree({
   return (
     <div className="scope-tree">
       <div className="control-choice-row">
-        <button
+        {!singleSelect && <button
           type="button"
           aria-pressed={scope?.mode === 'all'}
           onClick={() => onChange({ mode: 'all', classification_ids: [] })}
         >
           All major categories
-        </button>
+        </button>}
         <button
           type="button"
           aria-pressed={scope?.mode === 'selected'}
@@ -45,11 +54,12 @@ export default function SourceScopeTree({
             classification_ids: [...selectedIds],
           })}
         >
-          Selected major categories
+          {singleSelect ? 'Choose one major category' : 'Selected major categories'}
         </button>
       </div>
       {scope?.mode === 'selected' && (
         <>
+          {singleSelect && <p>OfferToday runs one major category through all {OFFERTODAY_QUERY_TARGET_COUNT} keyword targets.</p>}
           <label className="control-field">
             Search categories
             <input value={search} onChange={(event) => setSearch(event.target.value)} />
@@ -58,7 +68,8 @@ export default function SourceScopeTree({
             {rows.map((item) => (
               <label key={item.id} className="scope-node">
                 <input
-                  type="checkbox"
+                  type={singleSelect ? 'radio' : 'checkbox'}
+                  name={singleSelect ? 'offertoday-classification' : undefined}
                   checked={selectedIds.has(item.id)}
                   onChange={(event) => setSelected(item.id, event.target.checked)}
                 />

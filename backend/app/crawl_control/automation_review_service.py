@@ -80,11 +80,38 @@ class AutomationReviewService:
         scope_preview = self.scope_service.preview(
             configuration.scope,
             listing_settings=configuration.listing_settings,
+            enforce_listing_workload=False,
         )
         now = self.clock()
         readiness = self._readiness(configuration, now=now)
         warnings: list[CrawlScopeErrorPayloadV1] = []
         detail_preview = None
+
+        if (
+            scope_preview.listing_workload is not None
+            and not scope_preview.listing_workload.dispatchable
+        ):
+            workload = scope_preview.listing_workload
+            readiness = DispatchPlanReadinessV1(
+                status="blocked",
+                checked_at=now,
+                blocking_errors=(
+                    *readiness.blocking_errors,
+                    CrawlScopeErrorPayloadV1(
+                        code="WORKLOAD_CAP_EXCEEDED",
+                        message=(
+                            "Listing workload exceeds its reviewed aggregate cap; "
+                            "update Page Depth or Run Page Cap before dispatch"
+                        ),
+                        context={
+                            "estimated_max_pages": workload.estimated_max_pages,
+                            "run_page_cap": workload.run_page_cap,
+                            "system_run_page_cap": workload.system_run_page_cap,
+                        },
+                    ),
+                ),
+                capabilities=readiness.capabilities,
+            )
 
         if configuration.detail_settings is not None:
             content = DispatchPlanContentV1(

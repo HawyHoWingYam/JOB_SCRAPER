@@ -1,0 +1,29 @@
+{
+  "id": "offertoday-keyword-query-targets",
+  "name": "offertoday-keyword-query-targets",
+  "title": "Expand OfferToday listing coverage with keyword query targets",
+  "description": "Replace new OfferToday empty-keyword listing plans with a reviewed 36-target classification keyword sweep without changing JobsDB or CTgoodjobs.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "OfferToday source compilation, listing runtime, workload review, automation readiness, and Task Control authoring",
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 35,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/35"
+  }
+}

@@ -40,6 +40,10 @@ import {
   wizardReducer,
 } from './wizardReducer';
 import SourceScopeTree from './SourceScopeTree';
+import {
+  OFFERTODAY_QUERY_TARGET_COUNT,
+  offerTodayEstimatedMaxPages,
+} from './wizardPolicy';
 import './TaskControlWizard.css';
 
 const SOURCE_LABELS = { jobsdb: 'JobsDB', ctgoodjobs: 'CTgoodjobs', offertoday: 'OfferToday' };
@@ -81,16 +85,29 @@ function ExecutionStep({ draft, dispatch }) {
   const setExecution = (value) => dispatch({ type: 'executionChanged', value });
   const setSchedule = (value) => dispatch({ type: 'scheduleChanged', value });
   const automationFlow = draft.flow === 'automation';
+  const isOfferTodayListing = draft.source_site === 'offertoday' && draft.intent === 'listing';
+  const pageDepth = Number(draft.execution.page_depth);
+  const runPageCap = Number(draft.execution.run_page_cap);
+  const offerTodayEstimate = offerTodayEstimatedMaxPages(pageDepth);
+  const offerTodayBudgetValid = offerTodayEstimate !== null
+    && Number.isSafeInteger(runPageCap)
+    && runPageCap >= offerTodayEstimate;
   return (
     <div className="execution-stack">
       {draft.intent === 'listing' ? (
         <section className="control-subpanel">
           <h3>Listing workload</h3>
           <div className="control-field-grid">
-            <label className="control-field">Page Depth per Query Target<input type="number" min="1" max="1000" value={draft.execution.page_depth || ''} onChange={(event) => setExecution({ page_depth: event.target.value })} /></label>
+            <label className="control-field">Page Depth per Query Target<input type="number" min="1" max={isOfferTodayListing ? undefined : '1000'} value={draft.execution.page_depth || ''} onChange={(event) => setExecution({ page_depth: event.target.value })} /></label>
             <label className="control-field">Run Page Cap<input type="number" min="1" value={draft.execution.run_page_cap || ''} onChange={(event) => setExecution({ run_page_cap: event.target.value })} /></label>
           </div>
-          <p>Server review resolves Query Target count and verifies <strong>targets × depth</strong> against the operator cap and system ceiling.</p>
+          {isOfferTodayListing ? (
+            <p className={offerTodayBudgetValid ? undefined : 'control-error'}>
+              {OFFERTODAY_QUERY_TARGET_COUNT} keywords × {Number.isSafeInteger(pageDepth) && pageDepth > 0 ? pageDepth : 'Page Depth'} = <strong>{offerTodayEstimate ?? '—'}</strong> estimated maximum pages. Run Page Cap {offerTodayBudgetValid ? 'covers' : 'must cover'} the full sweep.
+            </p>
+          ) : (
+            <p>Server review resolves Query Target count and verifies <strong>targets × depth</strong> against the operator cap and system ceiling.</p>
+          )}
         </section>
       ) : (
         <section className="control-subpanel">

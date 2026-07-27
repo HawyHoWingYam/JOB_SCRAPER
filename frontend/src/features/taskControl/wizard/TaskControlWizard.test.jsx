@@ -39,6 +39,11 @@ const offertodayClassifications = {
     label: 'Information Technology',
     nativeId: '118000',
     active: true,
+  }, {
+    id: 'offertoday:119000',
+    label: 'Sales',
+    nativeId: '119000',
+    active: true,
   }],
 };
 
@@ -213,9 +218,15 @@ describe('TaskControlWizard', () => {
     expect(screen.getByText('Loading major categories…')).toBeInTheDocument();
     resolveClassifications(offertodayClassifications);
 
-    expect(await screen.findByRole('button', { name: 'All major categories' })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Selected major categories' }));
-    expect(screen.getByRole('checkbox', { name: 'Information Technology' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'All major categories' })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Choose one major category' }));
+    const informationTechnology = screen.getByRole('radio', { name: 'Information Technology' });
+    const sales = screen.getByRole('radio', { name: 'Sales' });
+    await userEvent.click(informationTechnology);
+    expect(informationTechnology).toBeChecked();
+    await userEvent.click(sales);
+    expect(sales).toBeChecked();
+    expect(informationTechnology).not.toBeChecked();
   });
 
   it('keeps the scope step actionable when the category request fails', async () => {
@@ -229,7 +240,27 @@ describe('TaskControlWizard', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Categories unavailable');
     await user.click(screen.getByRole('button', { name: 'Retry loading categories' }));
-    expect(await screen.findByRole('button', { name: 'All major categories' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Choose one major category' })).toBeInTheDocument();
+  });
+
+  it('shows the editable OfferToday 36-target estimate and budget validity', async () => {
+    const offerDraft = {
+      ...draft({ flow: 'one_off', sourceSite: 'offertoday', step: 'execution' }),
+      scope: { mode: 'selected', classification_ids: ['offertoday:118000'] },
+      execution: { page_depth: 100, run_page_cap: 3600, crawl_mode: 'headless' },
+    };
+    storeDraft('offertoday-execution', offerDraft);
+    api.getSourceClassifications.mockResolvedValue(offertodayClassifications);
+
+    render(<TaskControlWizard hash="#scheduler/one-off/new?source=offertoday&draft=offertoday-execution&step=execution" />);
+
+    const depth = await screen.findByLabelText('Page Depth per Query Target');
+    expect(depth).toHaveValue(100);
+    expect(depth).not.toHaveAttribute('max');
+    expect(screen.getByText(/36 keywords × 100 =/)).toHaveTextContent('3600');
+    fireEvent.change(depth, { target: { value: '101' } });
+    expect(screen.getByText(/Run Page Cap must cover/)).toHaveTextContent('3636');
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
   });
 
   it('keeps the recoverable draft when the server rejects stale review authority', async () => {

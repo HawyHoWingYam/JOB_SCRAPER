@@ -1,6 +1,11 @@
+import {
+  LISTING_TECHNICAL_RUN_PAGE_CAP,
+  offerTodayEstimatedMaxPages,
+} from './wizardPolicy';
+
 function positiveInteger(value, label) {
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${label} must be a positive safe integer`);
   return parsed;
 }
 
@@ -19,9 +24,6 @@ export function buildAuthoredScope(draft, sourceClassifications) {
   if (sourceClassifications?.sourceSite !== draft.source_site) {
     throw new Error('Route, draft, classifications, and command Source must agree');
   }
-  if (draft.scope?.mode === 'all') {
-    return { source_site: draft.source_site, mode: 'all', classification_ids: [] };
-  }
   const activeIds = new Set(
     (sourceClassifications.classifications || [])
       .filter((item) => item.active)
@@ -29,16 +31,37 @@ export function buildAuthoredScope(draft, sourceClassifications) {
   );
   const selectedIds = [...new Set(draft.scope?.classification_ids || [])]
     .filter((id) => activeIds.has(id));
+  if (draft.source_site === 'offertoday') {
+    if (draft.scope?.mode !== 'selected' || selectedIds.length !== 1) {
+      throw new Error('OfferToday requires exactly one active major category');
+    }
+  } else if (draft.scope?.mode === 'all') {
+    return { source_site: draft.source_site, mode: 'all', classification_ids: [] };
+  }
   if (!selectedIds.length) throw new Error('Choose all categories or at least one active category');
   return { source_site: draft.source_site, mode: 'selected', classification_ids: selectedIds };
 }
 
 function listingSettings(draft) {
-  return {
+  const settings = {
     crawl_mode: draft.execution.crawl_mode || 'headless',
     page_depth: positiveInteger(draft.execution.page_depth, 'Page Depth'),
     run_page_cap: positiveInteger(draft.execution.run_page_cap, 'Run Page Cap'),
   };
+  if (settings.run_page_cap > LISTING_TECHNICAL_RUN_PAGE_CAP) {
+    throw new Error('Run Page Cap exceeds the technical storage limit');
+  }
+  const offerTodayEstimate = offerTodayEstimatedMaxPages(settings.page_depth);
+  if (
+    draft.source_site === 'offertoday'
+    && (
+      offerTodayEstimate === null
+      || settings.run_page_cap < offerTodayEstimate
+    )
+  ) {
+    throw new Error('OfferToday Run Page Cap must cover 36 keywords × Page Depth');
+  }
+  return settings;
 }
 
 function detailSettings(draft, scope) {

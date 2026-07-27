@@ -19,7 +19,7 @@ SOURCE_CATEGORY_ID_TYPES = {
 SOURCE_DEFAULT_MAX_PAGES = {
     "jobsdb": 3,
     "ctgoodjobs": 3,
-    "offertoday": 50,
+    "offertoday": 100,
 }
 
 SOURCE_HEADED_RUNTIME_MODES = {

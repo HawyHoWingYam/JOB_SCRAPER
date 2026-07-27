@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.crawl_control.contracts import (
     AuthoredCrawlScopeV1,
     CrawlScopePreviewV1,
+    LISTING_TECHNICAL_RUN_PAGE_CAP,
     ListingSettingsV1,
     ListingWorkloadPreviewV1,
     QueryTargetSnapshotV1,
@@ -45,15 +46,42 @@ def evaluate_listing_workload(
                 "supported_crawl_modes": ",".join(supported_modes),
             },
         )
+    if resolved_scope.source_site != "offertoday" and settings.page_depth > 1000:
+        raise ScopeRuleInvalidError(
+            "Page Depth cannot exceed 1000 for this source",
+            context={
+                "source_site": resolved_scope.source_site,
+                "page_depth": settings.page_depth,
+                "maximum_page_depth": 1000,
+            },
+        )
+    effective_system_run_page_cap = (
+        LISTING_TECHNICAL_RUN_PAGE_CAP
+        if resolved_scope.source_site == "offertoday"
+        else system_listing_run_page_cap
+    )
+    maximum_technical_page_depth = (
+        LISTING_TECHNICAL_RUN_PAGE_CAP // resolved_scope.query_target_count
+    )
+    if settings.page_depth > maximum_technical_page_depth:
+        raise ScopeRuleInvalidError(
+            "Page Depth exceeds the technical aggregate listing limit",
+            context={
+                "source_site": resolved_scope.source_site,
+                "page_depth": settings.page_depth,
+                "query_target_count": resolved_scope.query_target_count,
+                "maximum_technical_page_depth": maximum_technical_page_depth,
+            },
+        )
     estimated_max_pages = resolved_scope.query_target_count * settings.page_depth
     preview = ListingWorkloadPreviewV1(
         query_target_count=resolved_scope.query_target_count,
         page_depth=settings.page_depth,
         estimated_max_pages=estimated_max_pages,
         run_page_cap=settings.run_page_cap,
-        system_run_page_cap=system_listing_run_page_cap,
+        system_run_page_cap=effective_system_run_page_cap,
         within_operator_cap=estimated_max_pages <= settings.run_page_cap,
-        within_system_cap=estimated_max_pages <= system_listing_run_page_cap,
+        within_system_cap=estimated_max_pages <= effective_system_run_page_cap,
     )
     if enforce and not preview.dispatchable:
         raise WorkloadCapExceededError(
@@ -97,10 +125,29 @@ class CrawlScopeService:
         authored_scope: AuthoredCrawlScopeV1,
         *,
         listing_settings: ListingSettingsV1 | None = None,
+        enforce_listing_workload: bool = True,
     ) -> CrawlScopePreviewV1:
         resolved = self._resolve(authored_scope)
+        if (
+            listing_settings is not None
+            and authored_scope.source_site == "offertoday"
+            and len(resolved.selected_classifications) != 1
+        ):
+            raise ScopeRuleInvalidError(
+                "OfferToday listing scope requires exactly one top-level classification",
+                context={
+                    "source_site": authored_scope.source_site,
+                    "selected_classification_count": len(
+                        resolved.selected_classifications
+                    ),
+                },
+            )
         workload = (
-            self.assess_listing_workload(resolved, listing_settings)
+            self.assess_listing_workload(
+                resolved,
+                listing_settings,
+                enforce=enforce_listing_workload,
+            )
             if listing_settings is not None
             else None
         )

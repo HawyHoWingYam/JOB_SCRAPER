@@ -60,6 +60,7 @@ from app.services.offertoday_detail_pipeline import (  # noqa: E402
 )
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
 from app.crawl_control.contracts import (  # noqa: E402
+    OfferTodayKeywordQueryTargetParametersV1,
     OfferTodayQueryTargetParametersV1,
 )
 from app.crawl_control.detail_runtime import (  # noqa: E402
@@ -785,11 +786,21 @@ def _build_request_listing_conditions(
         conditions: list[OfferTodayListingCondition] = []
         for target in runtime_plan.targets:
             parameters = target.query_target.parameters
-            if not isinstance(parameters, OfferTodayQueryTargetParametersV1):
+            if not isinstance(
+                parameters,
+                (
+                    OfferTodayQueryTargetParametersV1,
+                    OfferTodayKeywordQueryTargetParametersV1,
+                ),
+            ):
                 raise RuntimeError("OfferToday Dispatch Plan contains another adapter")
             conditions.append(
                 OfferTodayListingCondition(
-                    search_family="catalog_category",
+                    search_family=getattr(
+                        parameters,
+                        "search_family",
+                        "catalog_category",
+                    ),
                     category_id=parameters.category_code,
                     keyword=parameters.keyword,
                     endpoint=parameters.endpoint,
@@ -824,11 +835,13 @@ def _build_request_listing_conditions(
     plan = load_source_query_plan("offertoday", category_ids)
     return [
         OfferTodayListingCondition(
-            search_family="catalog_category",
+            search_family=str(
+                entry.target.payload.get("search_family", "catalog_category")
+            ),
             category_id=int(entry.target.payload["category_code"]),
             keyword=str(entry.target.payload["keyword"]),
             endpoint=str(entry.target.payload["endpoint"]),
-            rcd_type=int(entry.target.payload["rcd_type"]),
+            rcd_type=entry.target.payload["rcd_type"],
         )
         for entry in plan.entries
     ]
@@ -846,6 +859,9 @@ _build_listing_staging_payload = build_offertoday_listing_staging_payload
 
 def _production_listing_observation_payload(observation) -> dict[str, Any]:
     payload = listing_observation_to_payload(observation)
+    payload["non_job_cards_observed"] = int(
+        getattr(observation, "non_job_cards_observed", 0) or 0
+    )
     response_url = str(getattr(observation, "response_url", "") or "").strip()
     if response_url:
         payload["response_url"] = response_url
@@ -1161,10 +1177,20 @@ def _capped_classification_ids(result, runtime_plan=None) -> tuple[str, ...]:
     classification_ids: list[str] = []
     for target in runtime_plan.targets:
         parameters = target.query_target.parameters
-        if not isinstance(parameters, OfferTodayQueryTargetParametersV1):
+        if not isinstance(
+            parameters,
+            (
+                OfferTodayQueryTargetParametersV1,
+                OfferTodayKeywordQueryTargetParametersV1,
+            ),
+        ):
             continue
         condition = OfferTodayListingCondition(
-            search_family="catalog_category",
+            search_family=getattr(
+                parameters,
+                "search_family",
+                "catalog_category",
+            ),
             category_id=parameters.category_code,
             keyword=parameters.keyword,
             endpoint=parameters.endpoint,
@@ -1197,6 +1223,9 @@ def _listing_metrics(result, staging_sink, runtime_plan=None) -> dict[str, Any]:
         ),
         "supplemental_rows_observed": int(
             getattr(result, "supplemental_rows_observed", 0) or 0
+        ),
+        "non_job_cards_observed": int(
+            getattr(result, "non_job_cards_observed", 0) or 0
         ),
         "distinct_supplemental_ids": len(supplemental_ids),
         "supplemental_result_overlap_count": len(accepted_ids & supplemental_ids),
@@ -1377,6 +1406,14 @@ async def _run_listing_phase(
         observation_sink=observation_sink,
     )
     evidence = _listing_result_evidence(result)
+    crawl_runtime.merge_metrics(
+        crawl_job_id=crawl_job_id,
+        metrics_patch={
+            "non_job_cards_observed": int(
+                getattr(result, "non_job_cards_observed", 0) or 0
+            )
+        },
+    )
     if not getattr(result, "can_proceed_to_detail", result.is_complete):
         stop_reason = str(result.stop_reason)
         manual_action_classifications = (
@@ -2541,7 +2578,10 @@ async def main() -> None:
             for target in runtime_plan.targets
             if isinstance(
                 target.query_target.parameters,
-                OfferTodayQueryTargetParametersV1,
+                (
+                    OfferTodayQueryTargetParametersV1,
+                    OfferTodayKeywordQueryTargetParametersV1,
+                ),
             )
         ]
         if runtime_plan is not None

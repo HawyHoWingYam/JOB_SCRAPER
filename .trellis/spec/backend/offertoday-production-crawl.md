@@ -845,3 +845,161 @@ for segment in partition(runtime_plan.targets, recovery_segment_size):
 
 The immutable plan defines complete-run membership; pacing only partitions it,
 and later eligible work belongs to a later reviewed plan.
+
+## Scenario: Classification keyword sweep listing plans
+
+### 1. Scope / Trigger
+
+Use this contract when compiling, reviewing, executing, or displaying a normal
+OfferToday listing scope. It replaces newly authored empty-keyword category
+browse plans with one explicit frozen keyword sweep. Historical browse targets
+remain a supported runtime input.
+
+### 2. Signatures
+
+```python
+OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS = tuple(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+)
+
+OfferTodaySourceClassificationAdapter.compile(
+    node: CatalogNodeSnapshot,
+) -> tuple[SourceQueryTarget, ...]
+
+evaluate_listing_workload(
+    resolved_scope: ResolvedRunScopeV1,
+    settings: ListingSettingsV1,
+    *,
+    system_listing_run_page_cap: int = 5000,
+    enforce: bool = True,
+) -> ListingWorkloadPreviewV1
+```
+
+New frozen parameters:
+
+```json
+{
+  "category_code": 118000,
+  "search_family": "classification_keyword_sweep",
+  "endpoint": "search",
+  "keyword": "A",
+  "rcd_type": null
+}
+```
+
+Historical frozen parameters:
+
+```json
+{
+  "category_code": 118000,
+  "endpoint": "browse",
+  "keyword": "",
+  "rcd_type": 7
+}
+```
+
+### 3. Contracts
+
+- One newly authored OfferToday listing selects exactly one active top-level
+  Source Classification and freezes exactly 36 targets in `A-Z`, then `0-9`
+  order. Every target retains the selected `category_code`; categoryless and
+  empty-keyword targets are forbidden in new plans.
+- The legacy and keyword target parameter models are distinct union variants.
+  Do not add keyword defaults to the legacy model: its exact serialized payload
+  participates in historical fingerprints.
+- Page Depth applies per target. OfferToday defaults to `100`; Run Page Cap
+  defaults to `3600`. A listing is valid only when
+  `run_page_cap >= query_target_count * page_depth`.
+- `LISTING_TECHNICAL_RUN_PAGE_CAP=1_000_000_000` is a wire/storage safety
+  boundary, not an OfferToday product maximum. Checked workload validation
+  rejects Page Depth before multiplication when the aggregate could exceed it.
+- OfferToday uses the technical boundary as its system ceiling and is therefore
+  exempt from the generic `5000` ceiling. JobsDB and CTgoodjobs retain Page
+  Depth `<=1000` and the generic system ceiling.
+- Automation review may project an under-budget saved configuration, but its
+  readiness is `blocked` with `WORKLOAD_CAP_EXCEEDED`. Saving a changed
+  Automation and every dispatch/runtime revalidation remain enforcing.
+- The runner consumes frozen targets in order; it never regenerates keywords.
+  Search targets omit `rcdType`, while a historical browse target still sends
+  `rcdType=7` to the browse endpoint.
+- A result row is ignorable only when it has the positive OfferToday banner
+  envelope: exact integer `cardType=1`, `bannerType`, and `bannerCode`. Raw page
+  row count includes these cards; identity analysis, staging, and detail scope
+  exclude them. Missing identity alone is never non-job evidence.
+- `non_job_cards_observed` is present in production page events and task
+  metrics. `listing_observation_to_payload()` removes it to preserve historical
+  research serialization.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| OfferToday listing selects zero, all, or multiple roots | `SCOPE_RULE_INVALID`; prepare no plan |
+| New target keyword is empty, lowercase, or more than one character | Frozen target contract rejection |
+| `run_page_cap < 36 * page_depth` | `WORKLOAD_CAP_EXCEEDED`; review blocked or enforcing path rejected |
+| OfferToday estimate is above 5000 but within operator/technical caps | Valid; generic ceiling does not apply |
+| JobsDB/CTgoodjobs estimate is above 5000 | Existing `WORKLOAD_CAP_EXCEEDED` behavior |
+| Aggregate could exceed the technical cap | `SCOPE_RULE_INVALID` before persistence/fingerprinting |
+| Historical browse snapshot fingerprint is valid | Decode and execute the original browse request unchanged |
+| Explicit banner card is mixed with valid jobs | Count and ignore banner; stage valid jobs |
+| Job-shaped row lacks identity | `identity_issue`; stop under the existing hard-stop contract |
+| Banner and invalid job share a page | Count/filter banner first, then fail for invalid job |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** One IT root with `page_depth=200` and `run_page_cap=7200`
+  freezes 36 hybrid targets, sends each through search/list, and advances after
+  natural exhaustion or an allowed per-target page cap.
+- **Base:** An existing Automation saved with `200/200` is readable and shown,
+  but readiness is blocked until the operator explicitly saves a sufficient
+  aggregate cap.
+- **Good:** A page has 10 job cards plus 2 explicit banner cards. Its raw row
+  count is 12, `non_job_cards_observed=2`, and only 10 rows enter identity and
+  staging.
+- **Bad:** Runtime appends a hidden keyword loop after plan confirmation. This
+  makes workload review and fingerprints untruthful.
+- **Bad:** Treating every missing `jobId` as an advertisement hides source
+  identity defects.
+
+### 6. Tests Required
+
+- `backend/tests/test_source_classification_adapters.py`: exact 36-keyword
+  order, category retention, search endpoint, nullable `rcd_type`, unique
+  fingerprints, and unchanged JobsDB/CTgoodjobs compiler counts.
+- `backend/tests/test_crawl_scope_service.py`: one-root cardinality, exact
+  workload math, operator cap, technical checked bound, OfferToday 5000
+  exemption, and unchanged other-source bounds.
+- `backend/tests/test_listing_runtime.py`: legacy snapshot decode/execution,
+  frozen keyword target order, search payloads without `rcdType`, banner/job
+  mixed pages, job-shaped identity failure, production metric projection, and
+  frozen historical serializer keys.
+- `backend/tests/test_automation_review_service.py`: under-budget saved
+  configuration remains visible with blocked readiness.
+- Run dispatch-plan/runtime/Crawl Control regression suites, Ruff, Python
+  compile, frontend wizard tests/build, and a bounded no-write 36-keyword live
+  smoke. Live totals are evidence, never deterministic assertions.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+for keyword in OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS:
+    fetch_hidden_target(keyword)  # not present in the reviewed plan
+```
+
+#### Correct
+
+```python
+for runtime_target in listing_runtime_plan.targets:
+    parameters = runtime_target.query_target.parameters
+    fetch_frozen_target(
+        category_code=parameters.category_code,
+        keyword=parameters.keyword,
+        endpoint=parameters.endpoint,
+        rcd_type=parameters.rcd_type,
+    )
+```
+
+The compiled target list is the reviewed workload and the only runtime request
+authority.

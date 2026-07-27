@@ -21,6 +21,10 @@ from app.scraper.offertoday.category_registry import (
 )
 from app.sources.offertoday.listing_runner import OfferTodayListingCondition
 
+OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS: tuple[str, ...] = tuple(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+)
+
 DEFAULT_OFFERTODAY_IT_KEYWORDS: tuple[str, ...] = (
     # --- 通用 ---
     "IT",

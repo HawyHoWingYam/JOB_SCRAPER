@@ -24,6 +24,9 @@ from app.source_classifications.domain import (
 )
 from app.sources.jobsdb import request as jobsdb_request_module
 from app.sources.offertoday.constants import build_offertoday_listing_payload
+from app.sources.offertoday.search_space import (
+    OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS,
+)
 
 
 SCRAPY_PROJECT = Path(__file__).resolve().parents[1] / "scrapy_project"
@@ -335,7 +338,7 @@ def test_offertoday_hierarchy_keeps_aliases_auditable_and_compiles_only_bounded_
             category_id=int(target.payload["category_code"]),
             keyword=str(target.payload["keyword"]),
             page=1,
-            rcd_type=int(target.payload["rcd_type"]),
+            rcd_type=target.payload["rcd_type"],
         )
         for target in targets
     ]
@@ -348,8 +351,14 @@ def test_offertoday_hierarchy_keeps_aliases_auditable_and_compiles_only_bounded_
     assert len({node.classification_id for node in it_subtree}) == len(it_subtree)
     assert len(all_scope) == report.queryable_count
     assert len({node.classification_id for node in all_scope}) == len(all_scope)
-    assert [target.payload["category_code"] for target in targets].count(118000) == 1
-    assert all(target.payload["keyword"] == "" for target in targets)
+    assert [target.payload["category_code"] for target in targets].count(118000) == 36
+    root_targets = adapter.compile(exact_root[0])
+    assert tuple(target.payload["keyword"] for target in root_targets) == (
+        OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS
+    )
+    assert all(target.payload["endpoint"] == "search" for target in targets)
+    assert all(target.payload["rcd_type"] is None for target in targets)
+    assert len({target.fingerprint for target in root_targets}) == 36
     assert all(payload["jobFunctionCodes"] for payload in outbound_payloads)
     assert not any("jobFunctionCodes" not in payload for payload in outbound_payloads)
 
@@ -369,7 +378,7 @@ def test_offertoday_catalog_smokes_isolate_temporary_browser_profiles(monkeypatc
             return None
 
         async def fetch_listing_page(self, _payload, *, listing_url):
-            assert listing_url.endswith("/wapi/geek/recommend/list")
+            assert listing_url.endswith("/wapi/geek/recommend/search/list")
             return SimpleNamespace(payload={"data": {}}, http_status=200)
 
     monkeypatch.setattr(
@@ -411,7 +420,7 @@ def test_offertoday_validation_smokes_reuse_one_isolated_browser_session(monkeyp
             runtime_exits += 1
 
         async def fetch_listing_page(self, _payload, *, listing_url):
-            assert listing_url.endswith("/wapi/geek/recommend/list")
+            assert listing_url.endswith("/wapi/geek/recommend/search/list")
             return SimpleNamespace(payload={"data": {}}, http_status=200)
 
     monkeypatch.setattr(
@@ -439,7 +448,7 @@ def test_offertoday_validation_smokes_reuse_one_isolated_browser_session(monkeyp
     assert not Path(captured_profiles[0]).exists()
 
 
-def test_offertoday_scrapy_requests_consume_registry_targets_without_keywords(
+def test_offertoday_scrapy_requests_consume_registry_keyword_targets(
     monkeypatch,
 ):
     adapter = OfferTodaySourceClassificationAdapter()
@@ -470,14 +479,15 @@ def test_offertoday_scrapy_requests_consume_registry_targets_without_keywords(
     payloads = [json.loads(request.body) for request in requests]
 
     assert [request.url for request in requests] == [
-        "https://www.offertoday.com/wapi/geek/recommend/list",
-        "https://www.offertoday.com/wapi/geek/recommend/list",
+        "https://www.offertoday.com/wapi/geek/recommend/search/list",
+        "https://www.offertoday.com/wapi/geek/recommend/search/list",
     ]
     assert [payload["jobFunctionCodes"] for payload in payloads] == [
         [118000],
         [int(leaf_target.payload["category_code"])],
     ]
-    assert all(payload["keyword"] == "" for payload in payloads)
+    assert all(payload["keyword"] == "A" for payload in payloads)
+    assert all("rcdType" not in payload for payload in payloads)
 
     monkeypatch.setattr(
         offertoday_crawl,
@@ -489,8 +499,8 @@ def test_offertoday_scrapy_requests_consume_registry_targets_without_keywords(
         keywords=[],
     )
     assert [(item.category_id, item.keyword, item.endpoint, item.rcd_type) for item in standalone_conditions] == [
-        (118000, "", "browse", 7),
-        (int(leaf_target.payload["category_code"]), "", "browse", 7),
+        (118000, "A", "search", None),
+        (int(leaf_target.payload["category_code"]), "A", "search", None),
     ]
     explicit_keyword_conditions = offertoday_crawl._build_request_listing_conditions(
         "offertoday:118000",
@@ -536,5 +546,5 @@ def test_every_queryable_node_compiles_with_matching_deterministic_semantics():
     assert [(report.source_site, report.target_count) for report in reports] == [
         ("jobsdb", 25),
         ("ctgoodjobs", 12),
-        ("offertoday", 462),
+        ("offertoday", 16632),
     ]

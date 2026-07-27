@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createWizardDraft } from './wizardDraft';
-import { createWizardState, wizardReducer } from './wizardReducer';
+import { createWizardState, isStepComplete, wizardReducer } from './wizardReducer';
 
 const route = { flow: 'automation', mode: 'create', automationId: null, sourceSite: 'jobsdb' };
 
@@ -23,6 +23,27 @@ describe('wizard reducer invariants', () => {
     const changed = wizardReducer(base, { type: 'intentChanged', intent: 'detail' });
     expect(changed.draft.scope).toBeNull();
     expect(changed.draft.execution.backlog_kind).toBe('crawl_scope');
+  });
+
+  it('uses OfferToday listing defaults and requires a full 36-target budget', () => {
+    const base = createWizardState({
+      ...createWizardDraft(route),
+      source_site: 'offertoday',
+    });
+    const changed = wizardReducer(base, { type: 'intentChanged', intent: 'listing' });
+    expect(changed.draft.execution).toMatchObject({
+      page_depth: 100,
+      run_page_cap: 3600,
+    });
+    expect(isStepComplete(changed.draft, 'execution')).toBe(true);
+    expect(isStepComplete({
+      ...changed.draft,
+      scope: { mode: 'all', classification_ids: [] },
+    }, 'scope')).toBe(false);
+    expect(isStepComplete({
+      ...changed.draft,
+      execution: { ...changed.draft.execution, page_depth: 101 },
+    }, 'execution')).toBe(false);
   });
 
   it('preserves same-source classifications during hydration and resets for a source change', () => {

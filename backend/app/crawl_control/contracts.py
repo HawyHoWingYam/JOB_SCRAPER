@@ -14,6 +14,7 @@ from app.source_classifications.domain import (
 
 
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
+LISTING_TECHNICAL_RUN_PAGE_CAP = 1_000_000_000
 SourceSite: TypeAlias = Literal["jobsdb", "ctgoodjobs", "offertoday"]
 JsonScalar: TypeAlias = str | int | float | bool | None
 ScopeImpactReasonCode: TypeAlias = Literal[
@@ -107,10 +108,24 @@ class OfferTodayQueryTargetParametersV1(FrozenContract):
     rcd_type: Literal[7] = 7
 
 
+class OfferTodayKeywordQueryTargetParametersV1(FrozenContract):
+    category_code: int = Field(ge=1, strict=True)
+    search_family: Literal["classification_keyword_sweep"]
+    endpoint: Literal["search"]
+    keyword: str = Field(
+        min_length=1,
+        max_length=1,
+        pattern=r"^[A-Z0-9]$",
+        strict=True,
+    )
+    rcd_type: None = None
+
+
 QueryTargetParametersV1: TypeAlias = (
     JobsDBQueryTargetParametersV1
     | CTgoodjobsQueryTargetParametersV1
     | OfferTodayQueryTargetParametersV1
+    | OfferTodayKeywordQueryTargetParametersV1
 )
 
 
@@ -125,7 +140,10 @@ class QueryTargetSnapshotV1(FrozenContract):
         expected_parameter_type = {
             "jobsdb.classification": JobsDBQueryTargetParametersV1,
             "ctgoodjobs.category": CTgoodjobsQueryTargetParametersV1,
-            "offertoday.category": OfferTodayQueryTargetParametersV1,
+            "offertoday.category": (
+                OfferTodayQueryTargetParametersV1,
+                OfferTodayKeywordQueryTargetParametersV1,
+            ),
         }.get(self.adapter)
         if expected_parameter_type is None or not isinstance(
             self.parameters, expected_parameter_type
@@ -216,8 +234,8 @@ class ResolvedRunScopeV1(FrozenContract):
 
 class ListingSettingsV1(FrozenContract):
     crawl_mode: Literal["headless", "headed"]
-    page_depth: int = Field(ge=1, le=1000)
-    run_page_cap: int = Field(ge=1, le=1_000_000_000)
+    page_depth: int = Field(ge=1)
+    run_page_cap: int = Field(ge=1, le=LISTING_TECHNICAL_RUN_PAGE_CAP)
 
 
 class ListingWorkloadPreviewV1(FrozenContract):

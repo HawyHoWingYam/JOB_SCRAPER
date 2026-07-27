@@ -4,8 +4,6 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
-
 from app.crawl_control.automation_contracts import AutomationConfigurationV1
 from app.crawl_control.automation_review_contracts import AutomationReviewRequestV1
 from app.crawl_control.automation_review_service import AutomationReviewService
@@ -81,17 +79,26 @@ class StubScopeService:
     def __init__(self, resolved):
         self.resolved = resolved
 
-    def preview(self, scope, *, listing_settings=None):
+    def preview(
+        self,
+        scope,
+        *,
+        listing_settings=None,
+        enforce_listing_workload=True,
+    ):
         workload = None
         if listing_settings is not None:
+            estimated_max_pages = listing_settings.page_depth
             workload = ListingWorkloadPreviewV1(
                 query_target_count=1,
                 page_depth=listing_settings.page_depth,
-                estimated_max_pages=listing_settings.page_depth,
+                estimated_max_pages=estimated_max_pages,
                 run_page_cap=listing_settings.run_page_cap,
                 system_run_page_cap=1000,
-                within_operator_cap=True,
-                within_system_cap=True,
+                within_operator_cap=(
+                    estimated_max_pages <= listing_settings.run_page_cap
+                ),
+                within_system_cap=estimated_max_pages <= 1000,
             )
         return CrawlScopePreviewV1(
             resolved_scope=self.resolved,
@@ -168,6 +175,33 @@ def test_listing_review_is_read_only_and_fingerprinted():
     assert first.readiness.status == "ready"
     assert first.schedule_summary.timezone == "Asia/Hong_Kong"
     assert first.schedule_summary.next_run_at.utcoffset() is not None
+
+
+def test_listing_review_retains_under_budget_configuration_as_blocked():
+    scope, resolved = _scope_and_resolved()
+    configuration = _listing_configuration(scope).model_copy(
+        update={
+            "listing_settings": ListingSettingsV1(
+                crawl_mode="headless",
+                page_depth=21,
+                run_page_cap=20,
+            )
+        }
+    )
+    review = AutomationReviewService(
+        NoWriteSession(),
+        scope_service=StubScopeService(resolved),
+        automation_service=SimpleNamespace(),
+        runtime_readiness_check=lambda **_kwargs: None,
+        clock=lambda: NOW,
+    ).review(AutomationReviewRequestV1(configuration=configuration))
+
+    assert review.listing_workload is not None
+    assert review.listing_workload.dispatchable is False
+    assert review.readiness.status == "blocked"
+    assert [error.code for error in review.readiness.blocking_errors] == [
+        "WORKLOAD_CAP_EXCEEDED"
+    ]
 
 
 def test_detail_review_counts_without_freezing_membership():

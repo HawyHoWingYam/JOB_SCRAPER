@@ -17,7 +17,10 @@ from typing import Any, Iterable
 import scrapy
 from scrapy.http import Response
 
-from app.crawl_control.contracts import OfferTodayQueryTargetParametersV1
+from app.crawl_control.contracts import (
+    OfferTodayKeywordQueryTargetParametersV1,
+    OfferTodayQueryTargetParametersV1,
+)
 from app.crawl_control.runtime_authority import (
     load_listing_runtime_plan_for_worker,
 )
@@ -128,14 +131,21 @@ class OfferTodaySpider(scrapy.Spider):
                 parameters = target.query_target.parameters
                 if not isinstance(
                     parameters,
-                    OfferTodayQueryTargetParametersV1,
+                    (
+                        OfferTodayQueryTargetParametersV1,
+                        OfferTodayKeywordQueryTargetParametersV1,
+                    ),
                 ):
                     raise RuntimeError(
                         "OfferToday Dispatch Plan contains another adapter"
                     )
                 tasks.append(
                     {
-                        "search_family": "catalog_category",
+                        "search_family": getattr(
+                            parameters,
+                            "search_family",
+                            "catalog_category",
+                        ),
                         "category_id": parameters.category_code,
                         "keyword": parameters.keyword,
                         "endpoint": parameters.endpoint,
@@ -161,11 +171,16 @@ class OfferTodaySpider(scrapy.Spider):
             plan = load_source_query_plan("offertoday", category_ids)
             return [
                 {
-                    "search_family": "catalog_category",
+                    "search_family": str(
+                        entry.target.payload.get(
+                            "search_family",
+                            "catalog_category",
+                        )
+                    ),
                     "category_id": int(entry.target.payload["category_code"]),
                     "keyword": str(entry.target.payload["keyword"]),
                     "endpoint": str(entry.target.payload["endpoint"]),
-                    "rcd_type": int(entry.target.payload["rcd_type"]),
+                    "rcd_type": entry.target.payload["rcd_type"],
                     "page": page,
                 }
                 for entry in plan.entries

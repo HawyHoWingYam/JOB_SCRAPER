@@ -193,7 +193,9 @@ class CrawlJobDispatchService:
                 listing_settings=ListingSettingsV1(
                     crawl_mode=crawl_mode,
                     page_depth=page_depth,
-                    run_page_cap=1_000_000_000,
+                    run_page_cap=(
+                        3600 if source_site == "offertoday" else 1_000_000_000
+                    ),
                 ),
             )
 

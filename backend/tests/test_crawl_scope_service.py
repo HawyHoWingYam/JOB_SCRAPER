@@ -31,6 +31,27 @@ class JobsDBAdapter:
         )
 
 
+class OfferTodayAdapter:
+    source_site = "offertoday"
+
+    @staticmethod
+    def compile(node):
+        return tuple(
+            SourceQueryTarget(
+                adapter="offertoday.category",
+                classification_id=node.classification_id,
+                payload={
+                    "category_code": int(node.native_id),
+                    "search_family": "classification_keyword_sweep",
+                    "endpoint": "search",
+                    "keyword": keyword,
+                    "rcd_type": None,
+                },
+            )
+            for keyword in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        )
+
+
 @compiles(UUID, "sqlite")
 def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
     return "CHAR(32)"
@@ -74,6 +95,30 @@ def _seed(db):
                 label="Developers",
                 depth=1,
                 parent_classification_id="jobsdb:6281",
+                query_metadata={"queryable": True, "supports_exact": True},
+            ),
+        ),
+        complete=True,
+    )
+    db.commit()
+
+
+def _seed_offertoday(db):
+    SourceClassificationRegistry(db).synchronize(
+        "offertoday",
+        (
+            ObservedSourceClassification(
+                classification_id="offertoday:118000",
+                native_id="118000",
+                label="Information Technology",
+                depth=0,
+                query_metadata={"queryable": True, "supports_exact": True},
+            ),
+            ObservedSourceClassification(
+                classification_id="offertoday:119000",
+                native_id="119000",
+                label="Sales",
+                depth=0,
                 query_metadata={"queryable": True, "supports_exact": True},
             ),
         ),
@@ -174,3 +219,79 @@ def test_listing_workload_cap_still_uses_compiled_query_target_count(scope_db):
                 run_page_cap=3,
             ),
         )
+    with pytest.raises(ScopeRuleInvalidError, match="cannot exceed 1000"):
+        service.preview(
+            AuthoredCrawlScopeV1(
+                source_site="jobsdb",
+                mode="selected",
+                classification_ids=("jobsdb:6281",),
+            ),
+            listing_settings=ListingSettingsV1(
+                crawl_mode="headless",
+                page_depth=1001,
+                run_page_cap=1001,
+            ),
+        )
+
+
+def test_offertoday_requires_one_root_and_uses_operator_cap_above_generic_ceiling(
+    scope_db,
+):
+    _seed_offertoday(scope_db)
+    service = CrawlScopeService(
+        scope_db,
+        adapters={"offertoday": OfferTodayAdapter()},
+    )
+    selected_scope = AuthoredCrawlScopeV1(
+        source_site="offertoday",
+        mode="selected",
+        classification_ids=("offertoday:118000",),
+    )
+
+    preview = service.preview(
+        selected_scope,
+        listing_settings=ListingSettingsV1(
+            crawl_mode="headless",
+            page_depth=200,
+            run_page_cap=7200,
+        ),
+    )
+
+    assert preview.resolved_scope.query_target_count == 36
+    assert preview.listing_workload is not None
+    assert preview.listing_workload.estimated_max_pages == 7200
+    assert preview.listing_workload.system_run_page_cap == 1_000_000_000
+    assert preview.listing_workload.dispatchable is True
+
+    with pytest.raises(WorkloadCapExceededError):
+        service.preview(
+            selected_scope,
+            listing_settings=ListingSettingsV1(
+                crawl_mode="headless",
+                page_depth=200,
+                run_page_cap=7199,
+            ),
+        )
+    with pytest.raises(ScopeRuleInvalidError, match="technical aggregate"):
+        service.preview(
+            selected_scope,
+            listing_settings=ListingSettingsV1(
+                crawl_mode="headless",
+                page_depth=(1_000_000_000 // 36) + 1,
+                run_page_cap=1_000_000_000,
+            ),
+        )
+    with pytest.raises(ScopeRuleInvalidError, match="exactly one"):
+        service.preview(
+            AuthoredCrawlScopeV1(source_site="offertoday", mode="all"),
+            listing_settings=ListingSettingsV1(
+                crawl_mode="headless",
+                page_depth=1,
+                run_page_cap=72,
+            ),
+        )
+    assert len(
+        service.resolve_for_run(
+            AuthoredCrawlScopeV1(source_site="offertoday", mode="all")
+        ).selected_classifications
+    ) == 2

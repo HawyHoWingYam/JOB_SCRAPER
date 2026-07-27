@@ -64,3 +64,89 @@ under `#scheduler/*`. The current `#scheduler` board remains reachable.
 
 Run focused `src/features/taskControl` tests, scoped ESLint, and a production
 frontend build. Leave complete-suite integration to the parent UI gate.
+
+## Scenario: OfferToday listing sweep authoring
+
+### 1. Scope / Trigger
+
+Use this scenario only for OfferToday listing One-off and Automation drafts.
+JobsDB and CTgoodjobs retain their existing scope and execution controls.
+
+### 2. Signatures
+
+```javascript
+OFFERTODAY_QUERY_TARGET_COUNT = 36
+OFFERTODAY_DEFAULT_PAGE_DEPTH = 100
+OFFERTODAY_DEFAULT_RUN_PAGE_CAP = 3600
+
+offerTodayEstimatedMaxPages(pageDepthValue) -> number | null
+buildAuthoredScope(draft, sourceClassifications) -> AuthoredCrawlScopeV1
+```
+
+### 3. Contracts
+
+- OfferToday displays no All-scope option. Its active top-level classifications
+  are one radio group; selecting a second root replaces the first.
+- A listing intent starts at `Page Depth=100` and `Run Page Cap=3600`. Both
+  fields stay editable, and OfferToday Page Depth has no HTML product `max`.
+- The execution step immediately displays `36 keywords × depth = estimate`.
+  React owns only the fixed cardinality preview; it never creates keyword
+  strings or Query Targets. Server review remains authoritative.
+- Continue/command building requires positive safe integers, exactly one
+  OfferToday root, a representable estimate, and cap greater than or equal to
+  the estimate. The backend repeats every rule.
+- Hydrating an old `mode=all` or under-budget OfferToday Automation never
+  rewrites it. Scope is incomplete or review is blocked until the operator
+  selects one category and saves valid limits.
+
+### 4. Validation & Error Matrix
+
+| Draft state | UI/command result |
+|---|---|
+| OfferToday mode is `all` | Scope incomplete; command rejects exactly-one rule |
+| Zero or two selected roots | Continue disabled; command rejects |
+| Depth `100`, cap `3600` | Estimate `3600`; execution complete |
+| Depth changes to `101`, cap remains `3600` | Estimate `3636`; invalid copy and Continue disabled |
+| Estimate exceeds technical safe bound | Display unavailable estimate; command rejects |
+| JobsDB/CTgoodjobs selected scope | Existing checkbox/multi-select behavior |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** The operator selects IT, changes depth to 200, sees 7200
+  immediately, changes cap to 7200, then receives matching server authority.
+- **Base:** An old Automation opens with insufficient limits. Its values remain
+  visible and Save stays unavailable until reviewed changes are valid.
+- **Bad:** JSX contains the `A-Z/0-9` keyword list and constructs targets. This
+  duplicates backend authority and can drift from fingerprints.
+- **Bad:** `mode=all` returns early from command building before the
+  OfferToday-specific cardinality check.
+
+### 6. Tests Required
+
+- `wizardReducer.test.js`: OfferToday defaults, all-scope rejection, full-budget
+  completion, and under-budget invalidation.
+- `wizardCommands.test.js`: exactly one active category, legacy all rejection,
+  safe integer/technical bound, and `36 * depth` cap validation.
+- `TaskControlWizard.test.jsx`: no All button, radio replacement behavior,
+  editable/no-max Page Depth, live estimate, invalid copy, and disabled
+  Continue.
+- Keep existing JobsDB/CTgoodjobs wizard tests green; run scoped ESLint, all
+  Vitest, and production build.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```javascript
+if (draft.scope.mode === 'all') return allScope;
+if (draft.source_site === 'offertoday') validateOneSelection();
+```
+
+#### Correct
+
+```javascript
+if (draft.source_site === 'offertoday') validateOneSelection();
+else if (draft.scope.mode === 'all') return allScope;
+```
+
+Source-specific validation must run before a generic early return.
