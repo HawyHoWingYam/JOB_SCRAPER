@@ -1578,3 +1578,39 @@ Removed the versioned API and Automation protocols, required current Dispatch Pl
 ### Next Steps
 
 - None - task complete
+
+
+## Session 46: Flatten ordinary current taxonomies
+
+**Date**: 2026-07-27
+**Task**: Flatten ordinary current taxonomies
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Replaced revision-pinned Job, Company Industry, and Skill runtime contracts with ordinary current tables and stable codes; switched AI enrichment, product reads, filters, stats, search, ingest, embeddings, and frontend consumers; removed Governance routes/pages/review tools; preserved retained assignments and evidence through an explicit cutover-only bridge; updated executable specs and verified backend, frontend, and disposable PostgreSQL suites.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e3b8bce9` | (see git log) |
+| `e795d43a` | (see git log) |
+| `22fe8611` | (see git log) |
+| `2addadf1` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
