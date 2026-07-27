@@ -9,7 +9,7 @@ from app.schemas.job import (
     EmploymentTypeSchema,
     JobIntelligenceDomainAvailabilitySchema,
 )
-from app.schemas.job_intelligence import CanonicalJobStateSchema
+from app.schemas.current_taxonomy import CurrentJobTaxonomyStateSchema
 
 
 class JobRecommendationIntelligenceAvailabilitySchema(BaseModel):
@@ -28,7 +28,7 @@ class JobRecommendationSchema(BaseModel):
     location: Optional[str] = None
     employment_types: list[EmploymentTypeSchema]
     posted_date: Optional[str] = None
-    canonical_taxonomy: Optional[CanonicalJobStateSchema]
+    canonical_taxonomy: Optional[CurrentJobTaxonomyStateSchema]
     job_intelligence_availability: JobRecommendationIntelligenceAvailabilitySchema
     semantic_score: float
     skill_overlap_score: float

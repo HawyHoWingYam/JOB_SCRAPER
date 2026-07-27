@@ -14,7 +14,9 @@ from app.scraper.ctgoodjobs.category_registry import CTGOODJOBS_BASE_URL
 from app.utils.time import utc_now
 
 
-_TITLE_PATTERN = re.compile(r"<title>\s*(?P<title>.*?)\s*</title>", re.IGNORECASE | re.DOTALL)
+_TITLE_PATTERN = re.compile(
+    r"<title>\s*(?P<title>.*?)\s*</title>", re.IGNORECASE | re.DOTALL
+)
 _META_TAG_PATTERN = re.compile(r"<meta\b(?P<attrs>[^>]*)>", re.IGNORECASE)
 _SCRIPT_JSON_LD_PATTERN = re.compile(
     r"<script\b(?P<attrs>[^>]*)>\s*(?P<json>.*?)\s*</script>",
@@ -35,7 +37,7 @@ def _parse_tag_attributes(attrs: str) -> dict[str, str]:
     for match in _ATTR_PATTERN.finditer(attrs):
         key = match.group("key").strip().lower()
         raw_value = match.group("value").strip()
-        if raw_value.startswith(("\"", "'")) and raw_value.endswith(("\"", "'")):
+        if raw_value.startswith(('"', "'")) and raw_value.endswith(('"', "'")):
             raw_value = raw_value[1:-1]
         parsed[key] = raw_value
     return parsed
@@ -132,7 +134,11 @@ def _extract_job_urls_from_json_ld(item_list_json: dict[str, Any]) -> list[str]:
 def _extract_job_urls_from_html(page_html: str) -> list[str]:
     urls: list[str] = []
     seen: set[str] = set()
-    for match in re.finditer(r"href\s*=\s*(?P<q>[\"'])(?P<href>.*?)(?P=q)", page_html, re.IGNORECASE | re.DOTALL):
+    for match in re.finditer(
+        r"href\s*=\s*(?P<q>[\"'])(?P<href>.*?)(?P=q)",
+        page_html,
+        re.IGNORECASE | re.DOTALL,
+    ):
         href = match.group("href").strip()
         if not href:
             continue
@@ -141,14 +147,20 @@ def _extract_job_urls_from_html(page_html: str) -> list[str]:
             normalized = f"{CTGOODJOBS_BASE_URL}{href}"
         elif href.startswith(f"{CTGOODJOBS_BASE_URL}/job/"):
             normalized = href
-        if normalized is None or _job_id_from_url(normalized) is None or normalized in seen:
+        if (
+            normalized is None
+            or _job_id_from_url(normalized) is None
+            or normalized in seen
+        ):
             continue
         seen.add(normalized)
         urls.append(normalized)
     return urls
 
 
-def _extract_job_urls(page_html: str, item_list_json: dict[str, Any] | None) -> list[str]:
+def _extract_job_urls(
+    page_html: str, item_list_json: dict[str, Any] | None
+) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
     if item_list_json is not None:
@@ -201,7 +213,9 @@ def _find_detail_payload_container(payload: Any) -> dict[str, Any] | None:
     return None
 
 
-def _extract_json_object_after_marker(payload_text: str, marker: str) -> dict[str, Any] | None:
+def _extract_json_object_after_marker(
+    payload_text: str, marker: str
+) -> dict[str, Any] | None:
     start = payload_text.find(marker)
     if start < 0:
         return None
@@ -368,7 +382,9 @@ def _job_posting_employment_type(job_posting: dict[str, Any] | None) -> str | No
         "INTERN": "Internship",
         "OTHER": "Other",
     }
-    labels = [normalized.get(value, value.replace("_", " ").title()) for value in values]
+    labels = [
+        normalized.get(value, value.replace("_", " ").title()) for value in values
+    ]
     return ", ".join(labels) if labels else None
 
 
@@ -399,7 +415,11 @@ def _job_posting_description(job_posting: dict[str, Any] | None) -> str | None:
     if not isinstance(job_posting, dict):
         return None
     description = job_posting.get("description")
-    return description.strip() if isinstance(description, str) and description.strip() else None
+    return (
+        description.strip()
+        if isinstance(description, str) and description.strip()
+        else None
+    )
 
 
 def _job_posting_location(job_posting: dict[str, Any] | None) -> str | None:
@@ -464,14 +484,20 @@ def parse_category_page(
             errors.append("missing_number_of_items")
 
     json_ld_title = item_list.get("name") if isinstance(item_list, dict) else None
-    title = json_ld_title if isinstance(json_ld_title, str) and json_ld_title.strip() else None
+    title = (
+        json_ld_title
+        if isinstance(json_ld_title, str) and json_ld_title.strip()
+        else None
+    )
     if title is None:
         title = _extract_title(page_html)
     if title is None:
         errors.append("missing_title")
         title = ""
 
-    json_ld_description = item_list.get("description") if isinstance(item_list, dict) else None
+    json_ld_description = (
+        item_list.get("description") if isinstance(item_list, dict) else None
+    )
     description = (
         json_ld_description
         if isinstance(json_ld_description, str) and json_ld_description.strip()
@@ -520,7 +546,8 @@ def parse_detail_page(
     detail_payload = _extract_detail_payload(page_html)
     job_content = (
         detail_payload.get("jobContent")
-        if isinstance(detail_payload, dict) and isinstance(detail_payload.get("jobContent"), dict)
+        if isinstance(detail_payload, dict)
+        and isinstance(detail_payload.get("jobContent"), dict)
         else None
     )
     job_posting = _extract_job_posting_json(page_html)
@@ -536,20 +563,34 @@ def parse_detail_page(
         if isinstance(candidate_basic_info, dict):
             basic_info = candidate_basic_info
 
-    job_id = job_content.get("jobId") if isinstance(job_content.get("jobId"), str) else None
+    job_id = (
+        job_content.get("jobId") if isinstance(job_content.get("jobId"), str) else None
+    )
     if job_id is None:
         job_id = _job_id_from_url(url)
 
-    title = job_content.get("jobTitle") if isinstance(job_content.get("jobTitle"), str) else None
+    title = (
+        job_content.get("jobTitle")
+        if isinstance(job_content.get("jobTitle"), str)
+        else None
+    )
     if title is None:
         title = _extract_title(page_html)
 
-    company_id = job_content.get("companyId") if isinstance(job_content.get("companyId"), str) else None
+    company_id = (
+        job_content.get("companyId")
+        if isinstance(job_content.get("companyId"), str)
+        else None
+    )
     company_name = (
-        job_content.get("companyName") if isinstance(job_content.get("companyName"), str) else None
+        job_content.get("companyName")
+        if isinstance(job_content.get("companyName"), str)
+        else None
     )
     company_url = (
-        job_content.get("companyUrl") if isinstance(job_content.get("companyUrl"), str) else None
+        job_content.get("companyUrl")
+        if isinstance(job_content.get("companyUrl"), str)
+        else None
     )
     posted_date = (
         job_content.get("startPostDate")
@@ -557,7 +598,9 @@ def parse_detail_page(
         else None
     )
     expiry_date = (
-        job_content.get("endPostDate") if isinstance(job_content.get("endPostDate"), str) else None
+        job_content.get("endPostDate")
+        if isinstance(job_content.get("endPostDate"), str)
+        else None
     )
     employment_type = (
         _join_names(job_content.get("workTypes"))
@@ -569,9 +612,17 @@ def parse_detail_page(
         or _first_salary_value(basic_info.get("salaries"))
         or _job_posting_salary_value(job_posting)
     )
-    experience = job_content.get("experience") if isinstance(job_content.get("experience"), dict) else {}
-    experience_min_years = experience.get("from") if isinstance(experience.get("from"), int) else None
-    experience_max_years = experience.get("to") if isinstance(experience.get("to"), int) else None
+    experience = (
+        job_content.get("experience")
+        if isinstance(job_content.get("experience"), dict)
+        else {}
+    )
+    experience_min_years = (
+        experience.get("from") if isinstance(experience.get("from"), int) else None
+    )
+    experience_max_years = (
+        experience.get("to") if isinstance(experience.get("to"), int) else None
+    )
     if experience_min_years is None and experience_max_years is None:
         basic_experience = basic_info.get("experiences")
         if isinstance(basic_experience, dict):
@@ -584,13 +635,17 @@ def parse_detail_page(
         )
 
     description_html = (
-        job_content.get("jobDescription") if isinstance(job_content.get("jobDescription"), str) else None
+        job_content.get("jobDescription")
+        if isinstance(job_content.get("jobDescription"), str)
+        else None
     )
     if description_html is None:
         description_html = _job_posting_description(job_posting)
 
     description_text = _extract_meta_content(page_html, "description")
-    location = _join_names(job_content.get("jobLocations")) or _join_names(job_content.get("locations"))
+    location = _join_names(job_content.get("jobLocations")) or _join_names(
+        job_content.get("locations")
+    )
     if location is None:
         location = _job_posting_location(job_posting)
     if location is None and isinstance(description_text, str):
@@ -641,7 +696,6 @@ def parse_detail_page(
         classification_context=SourceClassificationContext(
             source_classification_id=source_classification_id,
             label=source_classification_name,
-            source_catalog_revision=None,
             provenance=Provenance(
                 method="crawl-context",
                 source_site="ctgoodjobs",

@@ -12,7 +12,7 @@ from app.schemas.job import (
     JobTaxonomySchema,
     SourceClassificationPathSchema,
 )
-from app.schemas.job_intelligence import CanonicalJobStateSchema
+from app.schemas.current_taxonomy import CurrentJobTaxonomyStateSchema
 
 SourceSiteFilter = Literal["jobsdb", "ctgoodjobs", "offertoday"]
 _EMPLOYMENT_TYPE_CODE_BY_LABEL = {
@@ -207,7 +207,7 @@ class JobWithCompanySchema(BaseModel):
         default_factory=list
     )
     employment_types: List[EmploymentTypeSchema] = Field(default_factory=list)
-    canonical_taxonomy: Optional[CanonicalJobStateSchema]
+    canonical_taxonomy: Optional[CurrentJobTaxonomyStateSchema]
     canonical_taxonomy_availability: JobIntelligenceDomainAvailabilitySchema
 
 

@@ -14,7 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import deferred, relationship
 from datetime import datetime, UTC
 import json
-from typing import Any, List, Optional
+from typing import Any, Optional
 from app.database import Base
 from app.utils.source_identity import derive_source_job_id, normalize_source_site
 import uuid
@@ -163,71 +163,6 @@ class Job(Base):
                 key=lambda item: item.employment_type.sort_order,
             )
         ]
-
-    @property
-    def skills_list(self) -> List[str]:
-        """Return governed Skill names from the revision-bound projection."""
-        names: list[str] = []
-        seen: set[str] = set()
-
-        projections = sorted(
-            self.governed_job_skills,
-            key=lambda projection: (
-                projection.created_at or datetime.min,
-                projection.skill.name if projection.skill is not None else "",
-                str(projection.id),
-            ),
-        )
-        for projection in projections:
-            if projection.skill is None or not projection.skill.is_active:
-                continue
-            if projection.skill.name in seen:
-                continue
-            seen.add(projection.skill.name)
-            names.append(projection.skill.name)
-
-        return names
-
-    @property
-    def skills(self) -> List[str]:
-        """Expose relational skills through the API without a legacy column."""
-        return self.skills_list
-
-    @property
-    def provisional_skills_list(self) -> List[str]:
-        """Return deduped unresolved technical terms for secondary display."""
-        names: list[str] = []
-        seen: set[str] = set()
-
-        mentions = sorted(
-            self.governed_skill_mentions,
-            key=lambda mention: (
-                mention.created_at or datetime.min,
-                mention.raw_name or "",
-                str(mention.id),
-            ),
-        )
-        for mention in mentions:
-            if (
-                mention.status != "active"
-                or mention.resolution != "review_candidate"
-                or mention.candidate is None
-                or mention.candidate.status != "pending"
-            ):
-                continue
-
-            display_name = str(mention.raw_name or mention.normalized_key or "").strip()
-            key = str(mention.normalized_key or display_name).strip().lower()
-            if not display_name or not key or key in seen:
-                continue
-            seen.add(key)
-            names.append(display_name)
-
-        return names
-
-    @property
-    def provisional_skills(self) -> List[str]:
-        return self.provisional_skills_list
 
     @property
     def company_name(self) -> Optional[str]:

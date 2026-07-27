@@ -1,16 +1,8 @@
 """Governed Company Industry taxonomy and assignment interfaces."""
 
-from app.job_intelligence.company_industry.adapters import (
-    CompanyIndustryEvidenceAdapter,
-    project_company_industry,
-)
 from app.job_intelligence.company_industry.contracts import (
     CompanyIndustryEvidence,
     CompanyIndustryOutcome,
-)
-from app.job_intelligence.company_industry.compatibility import (
-    CompanyIndustryCompatibilityAdapter,
-    CompanyIndustryCompatibilityProjection,
 )
 from app.job_intelligence.company_industry.decisions import (
     CompanyIndustryDecisionAdapter,
@@ -45,12 +37,9 @@ __all__ = [
     "CompanyIndustryActivationRef",
     "CompanyIndustryAssignmentView",
     "CompanyIndustryCompanyStateView",
-    "CompanyIndustryCompatibilityAdapter",
-    "CompanyIndustryCompatibilityProjection",
     "CompanyIndustryDecisionAdapter",
     "CompanyIndustryDecisionError",
     "CompanyIndustryEvidence",
-    "CompanyIndustryEvidenceAdapter",
     "CompanyIndustryNodeView",
     "CompanyIndustryOutcome",
     "CompanyIndustryPublisher",
@@ -65,5 +54,4 @@ __all__ = [
     "CompanyIndustryTreeView",
     "RecoveredCompanyIndustry",
     "SourceIndustryMappingView",
-    "project_company_industry",
 ]

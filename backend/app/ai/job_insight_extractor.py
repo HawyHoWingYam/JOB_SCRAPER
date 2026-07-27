@@ -23,11 +23,11 @@ INSIGHT_PROMPT = """You are a careful job-posting analyst.
 
 You MUST return JSON only, matching the schema at the end of this prompt.
 
-**1) Governed Canonical Job Taxonomy Guidance**
+**1) Current Job Taxonomy Guidance**
 Preserved Source Classification Paths (evidence only):
 __SOURCE_CLASSIFICATION_PATHS__
 
-Allowed governed stable-code targets:
+Available current stable-code targets:
 __TAXONOMY_CONTEXT__
 
 Rules:
@@ -119,7 +119,7 @@ Respond with JSON only (no markdown, no extra keys):
     "confidence": 0.0,
     "reasoning": "",
     "decision": "select_existing|fallback_default|create_new|invalid",
-    "target_code": "governed.stable.code or null"
+    "target_code": "current.stable.code or null"
   }},
   "summary": "",
   "skills": [
@@ -154,7 +154,7 @@ TAXONOMY_ONLY_PROMPT = """You are a careful job-posting taxonomy analyst.
 Preserved Source Classification Paths (evidence only):
 __SOURCE_CLASSIFICATION_PATHS__
 
-Allowed governed stable-code targets:
+Available current stable-code targets:
 __TAXONOMY_CONTEXT__
 
 Job Title: __TITLE__
@@ -167,7 +167,7 @@ Return JSON only with this exact shape:
     "confidence": 0.0,
     "reasoning": "",
     "decision": "select_existing|fallback_default|create_new|invalid",
-    "target_code": "governed.stable.code or null"
+    "target_code": "current.stable.code or null"
   }
 }
 
@@ -360,7 +360,7 @@ class JobInsightExtractor:
         description: str,
         taxonomy_candidates: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Classify only the governed Job Taxonomy.
+        """Classify only the current Job Taxonomy.
 
         Historical recovery deliberately uses a smaller prompt and does not
         request or persist Skills, Summary, or Experience fields.
@@ -391,7 +391,10 @@ class JobInsightExtractor:
         return self.llm
 
     def _format_taxonomy_context(self, taxonomy_candidates: Dict[str, Any]) -> str:
-        if taxonomy_candidates.get("authority") == "canonical-job-taxonomy":
+        if taxonomy_candidates.get("authority") in {
+            "canonical-job-taxonomy",
+            "current-job-taxonomy",
+        }:
             targets = taxonomy_candidates.get("canonical_targets")
             if not isinstance(targets, list) or not targets:
                 return "- None\nNo fallback or default target exists."
@@ -458,7 +461,10 @@ class JobInsightExtractor:
         classification: Any,
         taxonomy_candidates: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        if (taxonomy_candidates or {}).get("authority") == "canonical-job-taxonomy":
+        if (taxonomy_candidates or {}).get("authority") in {
+            "canonical-job-taxonomy",
+            "current-job-taxonomy",
+        }:
             if not isinstance(classification, dict):
                 return self._default_classification(taxonomy_candidates)
             raw_decision = classification.get("decision")

@@ -12,18 +12,13 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel, Field, model_validator
 from app.database import SessionLocal, get_db
-from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
-from app.models.job_category import JobCategory
 from app.models.job import Job
-from app.models.job_subcategory import JobSubcategory
 from app.models.source_job_attributes import (
     JobSourceClassificationPath,
     JobSourceClassificationPathNode,
 )
-from app.models.skill_governance import GovernedJobSkill, GovernedJobSkillMention
-from app.schemas import JobDetailSchema
 from app.schemas.job_intelligence import PendingSelectionScopeSchema
 from app.services.enrichment_run_service import (
     ActiveEnrichmentRunError,
@@ -34,6 +29,7 @@ from app.services.ai_runtime_settings_service import (
     ensure_profile_runtime_ready,
     ProfileRuntimeNotReadyError,
 )
+from app.services.job_detail_read_service import compose_current_job_detail
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -306,12 +302,6 @@ def _serialize_run(
         ),
         "pending_gate_crawl_job_status": (pending_gate or {}).get("crawl_job_status"),
         "error_message": run.error_message,
-        "recovery": (
-            dict(run.run_snapshot)
-            if run.source_type == "canonical_taxonomy_recovery"
-            and isinstance(run.run_snapshot, dict)
-            else None
-        ),
     }
     if include_job_ids:
         payload["job_ids"] = list(run.job_ids or [])
@@ -424,26 +414,13 @@ def _load_job_snapshot(job_id: UUID) -> dict:
             snapshot_db.query(Job)
             .options(
                 joinedload(Job.company),
-                joinedload(Job.governed_job_skills).joinedload(GovernedJobSkill.skill),
-                joinedload(Job.governed_skill_mentions).joinedload(
-                    GovernedJobSkillMention.candidate
-                ),
-                joinedload(Job.subcategory)
-                .joinedload(JobSubcategory.category)
-                .joinedload(JobCategory.domain),
             )
             .filter(Job.id == job_id, Job.is_deleted.is_(False))
             .first()
         )
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        detail = JobDetailSchema.model_validate(job).model_dump(mode="python")
-        detail.update(
-            JobIntelligenceProductReadModel(snapshot_db)
-            .get_job_detail(job_id=job.id, company_id=job.company_id)
-            .to_payload()
-        )
-        return JobDetailSchema.model_validate(detail).model_dump(mode="json")
+        return compose_current_job_detail(snapshot_db, job).model_dump(mode="json")
     finally:
         snapshot_db.close()
 

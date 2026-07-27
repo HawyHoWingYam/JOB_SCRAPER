@@ -171,11 +171,9 @@ class DiscoveredCatalog:
     capabilities: CatalogScopeCapabilities
     source_payload: Mapping[str, Any]
     provenance: Mapping[str, Any]
-    version: int = 1
 
     def normalized_payload(self) -> dict[str, Any]:
         return {
-            "version": self.version,
             "source_site": self.source_site,
             "nodes": [node.to_payload() for node in self.nodes],
             "capabilities": self.capabilities.to_payload(),
@@ -200,7 +198,6 @@ class DiscoveredCatalog:
             ),
             source_payload=dict(source_payload),
             provenance=dict(provenance or {}),
-            version=int(normalized_payload.get("version", 1)),
         )
 
     @property
@@ -213,11 +210,9 @@ class SourceQueryTarget:
     adapter: str
     classification_id: str
     payload: Mapping[str, Any]
-    version: int = 1
 
     def to_payload(self) -> dict[str, Any]:
         return {
-            "version": self.version,
             "adapter": self.adapter,
             "classification_id": self.classification_id,
             **_json_safe(self.payload),
@@ -437,8 +432,6 @@ def diff_catalogs(
 
 
 def validate_catalog(catalog: DiscoveredCatalog) -> CatalogValidationReport:
-    if catalog.version != 1:
-        raise CatalogValidationError("CATALOG_SCHEMA_UNSUPPORTED", "Catalog version must be 1")
     if catalog.source_site not in SUPPORTED_SOURCE_SITES:
         raise CatalogValidationError(
             "CATALOG_SOURCE_UNSUPPORTED", f"Unsupported source {catalog.source_site!r}"

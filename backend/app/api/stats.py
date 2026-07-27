@@ -1,63 +1,35 @@
-"""
-Statistics API Endpoints
+"""Statistics endpoints backed by ordinary current taxonomy assignments."""
 
-Provides aggregated data for dashboard charts.
-"""
-
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func, literal
 from typing import Any, Dict, List
 
+from fastapi import APIRouter, Depends
+from sqlalchemy import and_, desc, func
+from sqlalchemy.orm import Session, aliased
+
 from app.database import get_db
+from app.models.current_taxonomy import (
+    CurrentJobSkillAssignment,
+    CurrentJobTaxonomyAssignment,
+    CurrentTaxonomyNodeRecord,
+)
 from app.models.job import Job
-from app.models.job_category import JobCategory
-from app.models.job_domain import JobDomain
-from app.models.job_subcategory import JobSubcategory
-from app.models.canonical_job_taxonomy import (
-    CanonicalJobCategory,
-    CanonicalJobDomain,
-    CanonicalJobSubcategory,
-    CanonicalJobTaxonomyActiveRevision,
-    JobTaxonomyAssignment,
-)
-from app.models.skill_governance import (
-    GovernedJobSkill,
-    GovernedSkill,
-    GovernedSkillCategory,
-    GovernedSkillTechnology,
-    SkillTaxonomyActiveRevision,
-)
-from app.services.enrichment_run_service import EnrichmentRunService
 from app.schemas.stats import (
-    DashboardCategoryStatsSchema,
     DashboardCategoryItemSchema,
+    DashboardCategoryStatsSchema,
     DashboardOtherSpecificCategoriesSchema,
 )
+from app.services.enrichment_run_service import EnrichmentRunService
+
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 
 def get_skill_dashboard_bucket(skill_name: str, category_name: str) -> str | None:
-    """Map a skill + its category to a stable dashboard presentation bucket.
-
-    Fully dynamic approach — only two hard rules:
-
-    1. ``Other`` category (unclassified skills) → ``None`` (suppressed from dashboard).
-    2. ``DevOps`` skills are sub-bucketed by keyword match to avoid lumping cloud
-       infra, networking, and security into one chart.
-
-    Every other category is returned verbatim, so taxonomy changes propagate
-    to the dashboard automatically without any mapping table.
-    """
+    """Map current Skills into stable Dashboard presentation buckets."""
     category = str(category_name or "")
     name = str(skill_name or "").lower()
-
-    # Unclassified — never show on dashboard
     if category == "Other":
         return None
-
-    # DevOps: sub-bucket by keyword match
     if category == "DevOps":
         if any(
             token in name
@@ -89,25 +61,73 @@ def get_skill_dashboard_bucket(skill_name: str, category_name: str) -> str | Non
             return "Systems & Network"
         if any(
             token in name
-            for token in (
-                "firewall",
-                "cybersecurity",
-                "security",
-                "identity",
-            )
+            for token in ("firewall", "cybersecurity", "security", "identity")
         ):
             return "Security & Identity"
         return "Infrastructure"
-
-    # Everything else: pass through dynamically
     return category
+
+
+def _english_label(node):
+    return node.labels["en"].as_string()
+
+
+def _current_job_category_rows(db: Session):
+    subcategory = aliased(CurrentTaxonomyNodeRecord)
+    category = aliased(CurrentTaxonomyNodeRecord)
+    domain = aliased(CurrentTaxonomyNodeRecord)
+    return (
+        db.query(
+            _english_label(domain).label("domain_label"),
+            _english_label(category).label("category_label"),
+            _english_label(subcategory).label("subcategory_label"),
+            func.count(Job.id).label("count"),
+        )
+        .join(CurrentJobTaxonomyAssignment, CurrentJobTaxonomyAssignment.job_id == Job.id)
+        .join(
+            subcategory,
+            and_(
+                subcategory.taxonomy == "job",
+                subcategory.code == CurrentJobTaxonomyAssignment.taxonomy_code,
+                subcategory.is_active.is_(True),
+                subcategory.is_assignable.is_(True),
+            ),
+        )
+        .join(
+            category,
+            and_(
+                category.taxonomy == "job",
+                category.code == subcategory.parent_code,
+                category.is_active.is_(True),
+            ),
+        )
+        .join(
+            domain,
+            and_(
+                domain.taxonomy == "job",
+                domain.code == category.parent_code,
+                domain.is_active.is_(True),
+            ),
+        )
+        .filter(Job.is_deleted.is_(False))
+        .group_by(
+            _english_label(domain),
+            _english_label(category),
+            _english_label(subcategory),
+        )
+        .order_by(
+            desc("count"),
+            _english_label(domain).asc(),
+            _english_label(category).asc(),
+            _english_label(subcategory).asc(),
+        )
+        .all()
+    )
 
 
 @router.get("/overview")
 async def get_overview(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """Get dashboard overview statistics."""
     queue_counts = EnrichmentRunService(db).get_job_queue_counts()
-
     return {
         "total_jobs": queue_counts["total_jobs"],
         "enriched_jobs": queue_counts["enriched_jobs"],
@@ -124,168 +144,78 @@ async def get_skill_stats(
     category: str | None = None,
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Get top skills by frequency using governed canonical skill mentions."""
+    skill = aliased(CurrentTaxonomyNodeRecord)
+    technology = aliased(CurrentTaxonomyNodeRecord)
+    skill_category = aliased(CurrentTaxonomyNodeRecord)
     query = (
         db.query(
-            GovernedSkill.name,
-            GovernedSkillCategory.name.label("category"),
-            func.count(func.distinct(GovernedJobSkill.job_id)).label("count"),
+            _english_label(skill).label("name"),
+            _english_label(skill_category).label("category"),
+            func.count(func.distinct(CurrentJobSkillAssignment.job_id)).label("count"),
+        )
+        .select_from(skill)
+        .join(
+            CurrentJobSkillAssignment,
+            CurrentJobSkillAssignment.skill_code == skill.code,
         )
         .join(
-            GovernedSkillTechnology,
-            (GovernedSkill.technology_id == GovernedSkillTechnology.id)
-            & (GovernedSkill.revision_id == GovernedSkillTechnology.revision_id),
-        )
-        .join(
-            GovernedSkillCategory,
-            (GovernedSkillTechnology.category_id == GovernedSkillCategory.id)
-            & (
-                GovernedSkillTechnology.revision_id == GovernedSkillCategory.revision_id
+            technology,
+            and_(
+                technology.taxonomy == "skill",
+                technology.code == skill.parent_code,
             ),
         )
         .join(
-            GovernedJobSkill,
-            (GovernedJobSkill.skill_id == GovernedSkill.id)
-            & (GovernedJobSkill.taxonomy_revision_id == GovernedSkill.revision_id),
-        )
-        .join(
-            SkillTaxonomyActiveRevision,
-            (SkillTaxonomyActiveRevision.singleton_key == "skill-taxonomy")
-            & (
-                SkillTaxonomyActiveRevision.revision_id
-                == GovernedJobSkill.taxonomy_revision_id
+            skill_category,
+            and_(
+                skill_category.taxonomy == "skill",
+                skill_category.code == technology.parent_code,
             ),
         )
         .filter(
-            GovernedSkill.is_active.is_(True),
-            GovernedSkillTechnology.is_active.is_(True),
-            GovernedSkillCategory.is_active.is_(True),
+            skill.taxonomy == "skill",
+            skill.is_active.is_(True),
+            skill.is_assignable.is_(True),
+            technology.is_active.is_(True),
+            skill_category.is_active.is_(True),
         )
-        .group_by(GovernedSkill.id, GovernedSkill.name, GovernedSkillCategory.name)
+        .group_by(_english_label(skill), _english_label(skill_category))
     )
-
     if category:
-        query = query.filter(GovernedSkillCategory.name == category)
-
+        query = query.filter(_english_label(skill_category) == category)
     results = query.order_by(desc("count")).limit(limit).all()
-
     return {
         "skills": [
             {
-                "name": r.name,
-                "category": r.category,
-                "count": r.count,
-                "dashboard_bucket": get_skill_dashboard_bucket(r.name, r.category),
+                "name": row.name,
+                "category": row.category,
+                "count": row.count,
+                "dashboard_bucket": get_skill_dashboard_bucket(
+                    row.name,
+                    row.category,
+                ),
             }
-            for r in results
+            for row in results
         ]
     }
 
 
 @router.get("/categories")
 async def get_category_stats(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
-    """Get job distribution by canonical job taxonomy path."""
-    category_label = (
-        JobDomain.name
-        + literal(" / ")
-        + JobCategory.name
-        + literal(" / ")
-        + JobSubcategory.name
-    ).label("category")
-
-    results = (
-        db.query(category_label, func.count(Job.id).label("count"))
-        .outerjoin(
-            JobSubcategory,
-            Job.subcategory_id == JobSubcategory.id,
-        )
-        .outerjoin(
-            JobCategory,
-            JobSubcategory.category_id == JobCategory.id,
-        )
-        .outerjoin(
-            JobDomain,
-            JobCategory.domain_id == JobDomain.id,
-        )
-        .filter(
-            Job.is_deleted.is_(False),
-            Job.subcategory_id.isnot(None),
-            category_label.isnot(None),
-            category_label != "",
-        )
-        .group_by(category_label)
-        .order_by(desc("count"))
-        .all()
-    )
-
-    return [{"category": cat, "count": count} for cat, count in results]
+    return [
+        {
+            "category": " / ".join(
+                (row.domain_label, row.category_label, row.subcategory_label)
+            ),
+            "count": row.count,
+        }
+        for row in _current_job_category_rows(db)
+    ]
 
 
 @router.get("/categories/dashboard", response_model=DashboardCategoryStatsSchema)
 async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """Return current accepted Canonical Job Taxonomy assignment counts."""
-    active_revision_id = (
-        db.query(CanonicalJobTaxonomyActiveRevision.revision_id)
-        .filter(
-            CanonicalJobTaxonomyActiveRevision.singleton_key
-            == "canonical-job-taxonomy"
-        )
-        .scalar()
-    )
-    results = []
-    if active_revision_id is not None:
-        results = (
-            db.query(
-                CanonicalJobDomain.label.label("domain_label"),
-                CanonicalJobCategory.label.label("category_label"),
-                CanonicalJobSubcategory.label.label("subcategory_label"),
-                func.count(Job.id).label("count"),
-            )
-            .join(JobTaxonomyAssignment, JobTaxonomyAssignment.job_id == Job.id)
-            .join(
-                CanonicalJobSubcategory,
-                and_(
-                    CanonicalJobSubcategory.id
-                    == JobTaxonomyAssignment.subcategory_id,
-                    CanonicalJobSubcategory.revision_id
-                    == JobTaxonomyAssignment.taxonomy_revision_id,
-                ),
-            )
-            .join(
-                CanonicalJobCategory,
-                and_(
-                    CanonicalJobCategory.id == CanonicalJobSubcategory.category_id,
-                    CanonicalJobCategory.revision_id
-                    == CanonicalJobSubcategory.revision_id,
-                ),
-            )
-            .join(
-                CanonicalJobDomain,
-                and_(
-                    CanonicalJobDomain.id == CanonicalJobCategory.domain_id,
-                    CanonicalJobDomain.revision_id
-                    == CanonicalJobCategory.revision_id,
-                ),
-            )
-            .filter(
-                Job.is_deleted.is_(False),
-                JobTaxonomyAssignment.is_current.is_(True),
-                JobTaxonomyAssignment.taxonomy_revision_id == active_revision_id,
-            )
-            .group_by(
-                CanonicalJobDomain.label,
-                CanonicalJobCategory.label,
-                CanonicalJobSubcategory.label,
-            )
-            .order_by(
-                desc("count"),
-                CanonicalJobDomain.label.asc(),
-                CanonicalJobCategory.label.asc(),
-                CanonicalJobSubcategory.label.asc(),
-            )
-            .all()
-        )
-
+    results = _current_job_category_rows(db)
     specific_items = [
         {
             "path": " / ".join(
@@ -296,31 +226,25 @@ async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[st
         }
         for row in results
     ]
-
     specific_total = sum(item["count"] for item in specific_items)
-    fallback_total = 0
-    categorized_total = specific_total
     visible_specific_items = specific_items[:6]
     other_specific_count = sum(item["count"] for item in specific_items[6:])
     other_specific_bucket_count = max(len(specific_items) - 6, 0)
-
-    top_specific_categories = [
-        DashboardCategoryItemSchema(
-            path=item["path"],
-            label=item["label"],
-            count=item["count"],
-            share_of_specific=round((item["count"] / specific_total) * 100)
-            if specific_total
-            else 0,
-        ).model_dump(mode="json")
-        for item in visible_specific_items
-    ]
-
     return {
-        "categorized_total": categorized_total,
+        "categorized_total": specific_total,
         "specific_total": specific_total,
-        "fallback_total": fallback_total,
-        "top_specific_categories": top_specific_categories,
+        "fallback_total": 0,
+        "top_specific_categories": [
+            DashboardCategoryItemSchema(
+                path=item["path"],
+                label=item["label"],
+                count=item["count"],
+                share_of_specific=round((item["count"] / specific_total) * 100)
+                if specific_total
+                else 0,
+            ).model_dump(mode="json")
+            for item in visible_specific_items
+        ],
         "other_specific_categories": DashboardOtherSpecificCategoriesSchema(
             count=other_specific_count,
             bucket_count=other_specific_bucket_count,
@@ -328,7 +252,5 @@ async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[st
             if specific_total
             else 0,
         ).model_dump(mode="json"),
-        # Compatibility fields remain additive and empty. Default/fallback evidence
-        # belongs in Unassigned governance metrics, never accepted assignment charts.
         "fallback_buckets": [],
     }

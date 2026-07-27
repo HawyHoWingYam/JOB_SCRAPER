@@ -10,17 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy.orm import Session, joinedload, object_session, selectinload
-from sqlalchemy import and_, false, func, not_, or_
+from sqlalchemy import and_, false, func, not_, or_, select
 from typing import Literal, Optional, List
 from app.database import get_db
-from app.job_intelligence.canonical_taxonomy import (
-    CanonicalJobTaxonomy,
-    CanonicalReadError,
-    CanonicalTaxonomyFilterQuery,
-)
-from app.job_intelligence.company_industry import (
-    CompanyIndustry,
-    CompanyIndustryReadError,
+from app.job_intelligence.current_taxonomies import (
+    CurrentTaxonomyReadError,
+    CurrentTaxonomyReader,
 )
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.job_intelligence.source_attributes import SourceJobAttributes
@@ -29,15 +24,7 @@ from app.api.job_search_query import apply_parsed_clauses
 from app.api.ai import _publish_run_request, _wait_for_terminal_run, _load_job_snapshot
 from app.config import settings
 from app.models import Job, Company
-from app.models import JobSubcategory, JobCategory
-from app.models.skill_governance import (
-    GovernedJobSkill,
-    GovernedJobSkillMention,
-    GovernedSkill,
-    GovernedSkillCategory,
-    GovernedSkillTechnology,
-    SkillTaxonomyActiveRevision,
-)
+from app.models.current_taxonomy import CurrentTaxonomyNodeRecord
 from app.models.source_job_attributes import (
     EmploymentType,
     JobEmploymentType,
@@ -53,6 +40,7 @@ from app.services.enrichment_run_service import (
     ActiveEnrichmentRunError,
     EnrichmentRunService,
 )
+from app.services.job_detail_read_service import compose_current_job_detail
 from app.services.ai_runtime_settings_service import (
     ensure_profile_runtime_ready,
     ProfileRuntimeNotReadyError,
@@ -322,63 +310,15 @@ def _experience_windows_overlap_clause(query_window, job_window, job_level_colum
     return and_(*clauses)
 
 
-def _coerce_uuid_list(values: Optional[List[str]]) -> List[UUID]:
-    coerced: List[UUID] = []
+def _normalize_code_list(values: Optional[List[str]]) -> tuple[str, ...]:
+    normalized: list[str] = []
     for raw_value in values or []:
-        if raw_value is None:
+        value = str(raw_value or "").strip()
+        if not value:
             continue
-        try:
-            coerced.append(UUID(str(raw_value)))
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid taxonomy identifier: {raw_value}",
-            ) from exc
-    return coerced
-
-
-def _join_active_skill_projection(query):
-    return (
-        query.join(
-            GovernedJobSkill,
-            GovernedJobSkill.job_id == Job.id,
-        )
-        .join(
-            SkillTaxonomyActiveRevision,
-            and_(
-                SkillTaxonomyActiveRevision.singleton_key == "skill-taxonomy",
-                SkillTaxonomyActiveRevision.revision_id
-                == GovernedJobSkill.taxonomy_revision_id,
-            ),
-        )
-        .join(
-            GovernedSkill,
-            and_(
-                GovernedSkill.id == GovernedJobSkill.skill_id,
-                GovernedSkill.revision_id == GovernedJobSkill.taxonomy_revision_id,
-            ),
-        )
-        .join(
-            GovernedSkillTechnology,
-            and_(
-                GovernedSkillTechnology.id == GovernedSkill.technology_id,
-                GovernedSkillTechnology.revision_id == GovernedSkill.revision_id,
-            ),
-        )
-        .join(
-            GovernedSkillCategory,
-            and_(
-                GovernedSkillCategory.id == GovernedSkillTechnology.category_id,
-                GovernedSkillCategory.revision_id
-                == GovernedSkillTechnology.revision_id,
-            ),
-        )
-        .filter(
-            GovernedSkill.is_active.is_(True),
-            GovernedSkillTechnology.is_active.is_(True),
-            GovernedSkillCategory.is_active.is_(True),
-        )
-    )
+        if value not in normalized:
+            normalized.append(value)
+    return tuple(normalized)
 
 
 def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
@@ -420,12 +360,12 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
             )
         )
 
-    skill_ids = _coerce_uuid_list(filters.skill_ids)
-    technology_ids = _coerce_uuid_list(filters.technology_ids)
-    skill_category_ids = _coerce_uuid_list(filters.skill_category_ids)
+    skill_codes = _normalize_code_list(filters.skill_ids)
+    technology_codes = _normalize_code_list(filters.technology_ids)
+    skill_category_codes = _normalize_code_list(filters.skill_category_ids)
     canonical_subcategory_ids = tuple(
         dict.fromkeys(
-            _coerce_uuid_list(
+            _normalize_code_list(
                 list(filters.canonical_subcategory_ids or [])
                 + list(filters.subcategory_ids or [])
             )
@@ -433,7 +373,7 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     )
     canonical_category_ids = tuple(
         dict.fromkeys(
-            _coerce_uuid_list(
+            _normalize_code_list(
                 list(filters.canonical_category_ids or [])
                 + list(filters.job_category_ids or [])
             )
@@ -441,74 +381,62 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     )
     canonical_domain_ids = tuple(
         dict.fromkeys(
-            _coerce_uuid_list(
+            _normalize_code_list(
                 list(filters.canonical_domain_ids or [])
                 + list(filters.domain_ids or [])
             )
         )
     )
     company_industry_node_ids = tuple(
-        dict.fromkeys(_coerce_uuid_list(filters.company_industry_node_ids))
+        dict.fromkeys(_normalize_code_list(filters.company_industry_node_ids))
     )
 
-    if skill_ids:
-        query = (
-            _join_active_skill_projection(query)
-            .filter(GovernedSkill.id.in_(skill_ids))
-            .distinct()
+    current_reader = CurrentTaxonomyReader(query.session)
+    selected_skill_codes = (
+        skill_codes or technology_codes or skill_category_codes
+    )
+    if not selected_skill_codes and filters.skills:
+        selected_skill_codes = tuple(
+            query.session.scalars(
+                select(CurrentTaxonomyNodeRecord.code).where(
+                    CurrentTaxonomyNodeRecord.taxonomy == "skill",
+                    CurrentTaxonomyNodeRecord.level == "skill",
+                    CurrentTaxonomyNodeRecord.is_active.is_(True),
+                    CurrentTaxonomyNodeRecord.labels["en"]
+                    .as_string()
+                    .in_(filters.skills),
+                )
+            )
         )
-    elif technology_ids:
-        query = (
-            _join_active_skill_projection(query)
-            .filter(GovernedSkill.technology_id.in_(technology_ids))
-            .distinct()
-        )
-    elif skill_category_ids:
-        query = (
-            _join_active_skill_projection(query)
-            .filter(GovernedSkillTechnology.category_id.in_(skill_category_ids))
-            .distinct()
-        )
-    elif filters.skills:
-        query = (
-            _join_active_skill_projection(query)
-            .filter(GovernedSkill.name.in_(filters.skills))
-            .distinct()
-        )
+    if selected_skill_codes:
+        try:
+            query = query.filter(current_reader.job_skill_filter(selected_skill_codes))
+        except CurrentTaxonomyReadError as exc:
+            raise HTTPException(status_code=422, detail=exc.context) from exc
 
     if canonical_subcategory_ids or canonical_category_ids or canonical_domain_ids:
         try:
-            canonical_predicates = CanonicalJobTaxonomy(query.session).build_filters(
-                CanonicalTaxonomyFilterQuery(
-                    domain_ids=canonical_domain_ids,
-                    category_ids=canonical_category_ids,
-                    subcategory_ids=canonical_subcategory_ids,
+            query = query.filter(
+                current_reader.job_taxonomy_filter(
+                    tuple(
+                        dict.fromkeys(
+                            canonical_domain_ids
+                            + canonical_category_ids
+                            + canonical_subcategory_ids
+                        )
+                    )
                 )
             )
-        except CanonicalReadError as exc:
-            raise HTTPException(status_code=409, detail=exc.to_detail()) from exc
-        query = query.filter(*canonical_predicates)
+        except CurrentTaxonomyReadError as exc:
+            raise HTTPException(status_code=422, detail=exc.context) from exc
 
     if company_industry_node_ids:
         try:
-            company_industry_predicate = CompanyIndustry(
-                query.session
-            ).build_company_filter(company_industry_node_ids)
-        except CompanyIndustryReadError as exc:
-            status_code = (
-                409
-                if exc.code
-                in {
-                    "COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE",
-                    "COMPANY_INDUSTRY_ACTIVE_REVISION_INVALID",
-                }
-                else 422
+            query = query.filter(
+                current_reader.company_industry_filter(company_industry_node_ids)
             )
-            raise HTTPException(
-                status_code=status_code,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-        query = query.filter(company_industry_predicate)
+        except CurrentTaxonomyReadError as exc:
+            raise HTTPException(status_code=422, detail=exc.context) from exc
 
     if filters.district:
         query = query.filter(_location_matches_district(Job.location, filters.district))
@@ -554,11 +482,7 @@ def _build_query_from_scope(db: Session, scope: JobSearchScopeSchema):
         .join(Company, Job.company_id == Company.id)
         .filter(Job.is_deleted.is_(False))
         .options(
-            selectinload(Job.governed_job_skills).joinedload(GovernedJobSkill.skill),
             joinedload(Job.company),
-            joinedload(Job.subcategory)
-            .joinedload(JobSubcategory.category)
-            .joinedload(JobCategory.domain),
             *_source_attribute_load_options(),
         )
     )
@@ -760,10 +684,13 @@ def _strip_html_text(value: Optional[str]) -> str:
 
 def _build_export_rows(query):
     results = query.order_by(Job.posted_date.desc().nullslast()).all()
-    return _build_export_rows_from_results(results)
+    skill_states = JobIntelligenceProductReadModel(
+        query.session
+    ).get_governed_skill_name_states([job.id for job, _company in results])
+    return _build_export_rows_from_results(results, skill_states=skill_states)
 
 
-def _build_export_rows_from_results(results):
+def _build_export_rows_from_results(results, *, skill_states):
     rows = []
     for job, company in results:
         rows.append(
@@ -797,7 +724,9 @@ def _build_export_rows_from_results(results):
                 if job.experience_max_years is None
                 else str(job.experience_max_years),
                 "experience_summary": job.experience_summary or "",
-                "skills": " | ".join(job.skills),
+                "skills": " | ".join(
+                    skill_states[job.id]["governed_skill_names"]
+                ),
                 "company_ai_description": company.ai_description if company else "",
                 "description_text": _strip_html_text(job.description),
             }
@@ -1124,13 +1053,6 @@ async def get_job(job_id: UUID, db: Session = Depends(get_db)):
         db.query(Job)
         .options(
             joinedload(Job.company),
-            selectinload(Job.governed_job_skills).joinedload(GovernedJobSkill.skill),
-            selectinload(Job.governed_skill_mentions).joinedload(
-                GovernedJobSkillMention.candidate
-            ),
-            joinedload(Job.subcategory)
-            .joinedload(JobSubcategory.category)
-            .joinedload(JobCategory.domain),
             *_source_attribute_load_options(include_labels=True),
         )
         .filter(Job.id == job_id, Job.is_deleted.is_(False))
@@ -1138,13 +1060,7 @@ async def get_job(job_id: UUID, db: Session = Depends(get_db)):
     )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    detail = JobDetailSchema.model_validate(job).model_dump(mode="python")
-    detail.update(
-        JobIntelligenceProductReadModel(db)
-        .get_job_detail(job_id=job.id, company_id=job.company_id)
-        .to_payload()
-    )
-    return JobDetailSchema.model_validate(detail)
+    return compose_current_job_detail(db, job)
 
 
 @router.post("", response_model=JobSchema, deprecated=True)

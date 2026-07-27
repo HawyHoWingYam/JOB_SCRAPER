@@ -13,14 +13,13 @@ from app.api.ai import (
     PendingSelectionRequest,
     _derive_excluded_details,
     get_pending_filter_options as get_pending_filter_options_endpoint,
-    _run_execution_result,
     _serialize_runs,
     _serialize_single_run,
     router,
 )
-from app.job_intelligence.canonical_taxonomy import CanonicalTaxonomyPreflightResult
 from app.models.company import Company
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
+from app.models.event_outbox import EventOutbox
 from app.models.job import Job
 from app.models.source_job_attributes import (
     JobSourceAttributeProjection,
@@ -32,34 +31,6 @@ from app.services.enrichment_run_service import (
     EnrichmentRunService,
     PendingJobFilters,
 )
-from app.services import enrichment_run_service as enrichment_run_module
-
-
-class _CanonicalTaxonomyPreflight:
-    def __init__(self, _db):
-        pass
-
-    def inspect(self, job):
-        if job.source_classification_id in {
-            "offertoday:113000",
-            "offertoday:129000",
-        }:
-            return CanonicalTaxonomyPreflightResult(
-                status="excluded",
-                reasons=("source_mapping_excluded",),
-            )
-        return CanonicalTaxonomyPreflightResult(status="supported", reasons=())
-
-
-@pytest.fixture(autouse=True)
-def canonical_taxonomy_preflight(monkeypatch):
-    monkeypatch.setattr(
-        enrichment_run_module,
-        "CanonicalTaxonomyPreflight",
-        _CanonicalTaxonomyPreflight,
-    )
-
-
 @compiles(UUID, "sqlite")
 def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
     return "CHAR(32)"
@@ -75,6 +46,7 @@ def db():
     JobSourceClassificationPathNode.__table__.create(engine)
     EnrichmentRun.__table__.create(engine)
     EnrichmentRunItem.__table__.create(engine)
+    EventOutbox.__table__.create(engine)
     session = sessionmaker(bind=engine)()
     try:
         yield session
@@ -249,8 +221,8 @@ def test_pending_request_normalizes_values_and_enforces_safe_scope():
         )
 
 
-def test_pending_preview_and_create_separate_unsupported_taxonomy_items(db, company):
-    supported = make_job(
+def test_pending_preview_and_create_do_not_gate_jobs_on_taxonomy_mapping(db, company):
+    first = make_job(
         db,
         company,
         job_id="00000000-0000-0000-0000-000000000101",
@@ -258,7 +230,7 @@ def test_pending_preview_and_create_separate_unsupported_taxonomy_items(db, comp
         source_classification_id="offertoday:103000",
         classification="Advertising & Media",
     )
-    excluded = make_job(
+    second = make_job(
         db,
         company,
         job_id="00000000-0000-0000-0000-000000000102",
@@ -271,44 +243,27 @@ def test_pending_preview_and_create_separate_unsupported_taxonomy_items(db, comp
     preview = service.preview_pending_jobs(filters=PendingJobFilters(), limit=50)
 
     assert preview["matching_pending_count"] == 2
-    assert preview["effective_item_count"] == 1
-    assert preview["excluded_item_count"] == 1
-    assert preview["excluded_items"] == [
-        {
-            "source_classification_id": "offertoday:113000",
-            "source_classification_name": "Farming",
-            "count": 1,
-            "reason": "source_mapping_excluded",
-            "job_ids": [str(excluded.id)],
-        }
-    ]
+    assert preview["effective_item_count"] == 2
+    assert preview["excluded_item_count"] == 0
+    assert preview["excluded_items"] == []
 
     run = service.create_manual_pending_run(limit=50)
     items = service.list_run_items(run.id)
     item_by_job_id = {item.job_id: item for item in items}
 
     assert run.total_items == 2
-    assert run.pending_items == 1
-    assert run.excluded_items == 1
-    assert item_by_job_id[supported.id].status == "pending"
-    assert item_by_job_id[excluded.id].status == "excluded"
-    assert item_by_job_id[excluded.id].error_message
+    assert run.pending_items == 2
+    assert run.excluded_items == 0
+    assert item_by_job_id[first.id].status == "pending"
+    assert item_by_job_id[second.id].status == "pending"
 
     serialized = _serialize_single_run(run, db)
-    assert serialized["excluded_items"] == 1
-    assert serialized["excluded_details"] == [
-        {
-            "source_classification_id": "offertoday:113000",
-            "source_classification_name": "Farming",
-            "count": 1,
-            "reason": "source_mapping_excluded",
-            "job_ids": [str(excluded.id)],
-        }
-    ]
+    assert serialized["excluded_items"] == 0
+    assert serialized["excluded_details"] == []
 
 
-def test_exclusion_preview_prefers_authoritative_path_identity(db, company):
-    make_job(
+def test_pending_preview_keeps_unmapped_authoritative_path_eligible(db, company):
+    job = make_job(
         db,
         company,
         job_id="00000000-0000-0000-0000-000000000106",
@@ -317,34 +272,14 @@ def test_exclusion_preview_prefers_authoritative_path_identity(db, company):
         classification="Legacy scalar label",
     )
 
-    class PathAwarePreflight:
-        def inspect(self, _job):
-            return CanonicalTaxonomyPreflightResult(
-                status="excluded",
-                reasons=("source_mapping_excluded",),
-                context=SimpleNamespace(
-                    source_classification_paths=(
-                        {
-                            "nodes": [
-                                {
-                                    "source_classification_id": "offertoday:118000",
-                                    "label": "資訊科技",
-                                }
-                            ]
-                        },
-                    )
-                ),
-            )
-
-    preview = EnrichmentRunService(
-        db,
-        taxonomy_preflight=PathAwarePreflight(),
-    ).preview_pending_jobs(filters=PendingJobFilters(), limit=50)
-
-    assert preview["excluded_items"][0]["source_classification_id"] == (
-        "offertoday:118000"
+    add_source_path(db, job, ("offertoday:118000", "資訊科技"))
+    preview = EnrichmentRunService(db).preview_pending_jobs(
+        filters=PendingJobFilters(),
+        limit=50,
     )
-    assert preview["excluded_items"][0]["source_classification_name"] == "資訊科技"
+
+    assert preview["effective_item_count"] == 1
+    assert preview["excluded_items"] == []
 
 
 def test_persisted_exclusion_details_prefer_authoritative_path_identity(db, company):
@@ -382,7 +317,7 @@ def test_persisted_exclusion_details_prefer_authoritative_path_identity(db, comp
     ]
 
 
-def test_all_unsupported_pending_items_do_not_start_a_worker_run(db, company):
+def test_unmapped_pending_items_start_a_normal_worker_run(db, company):
     job = make_job(
         db,
         company,
@@ -394,16 +329,15 @@ def test_all_unsupported_pending_items_do_not_start_a_worker_run(db, company):
 
     run = EnrichmentRunService(db).create_manual_pending_run(limit=50)
 
-    assert run.status == "completed_with_exclusions"
+    assert run.status == "pending"
     assert run.total_items == 1
-    assert run.pending_items == 0
-    assert run.excluded_items == 1
+    assert run.pending_items == 1
+    assert run.excluded_items == 0
     assert run.items[0].job_id == job.id
-    assert run.items[0].status == "excluded"
-    assert _run_execution_result(run, requested=False) == "no_supported_items"
+    assert run.items[0].status == "pending"
 
 
-def test_execute_run_rechecks_canonical_preflight_before_worker_dispatch(db, company):
+def test_execute_run_does_not_block_unmapped_job_before_worker_dispatch(db, company):
     job = make_job(
         db,
         company,
@@ -417,40 +351,29 @@ def test_execute_run_rechecks_canonical_preflight_before_worker_dispatch(db, com
         job_ids=[str(job.id)],
     )
 
-    class _BlockingPreflight:
-        def inspect(self, _job):
-            return CanonicalTaxonomyPreflightResult(
-                status="excluded",
-                reasons=("source_mapping_unmapped",),
-            )
-
     calls = 0
 
-    class _ForbiddenEnrichmentService:
+    class _SuccessfulEnrichmentService:
         async def enrich_job_id(self, _job_id):
             nonlocal calls
             calls += 1
-            raise AssertionError("blocked item crossed the worker LLM boundary")
+            return {"status": "success", "job_id": str(_job_id)}
 
-    service = EnrichmentRunService(
-        db,
-        taxonomy_preflight=_BlockingPreflight(),
-    )
+    service = EnrichmentRunService(db)
     service._resolve_run_concurrency = lambda: 1
 
     result = asyncio.run(
         service.execute_run(
             run.id,
-            enrichment_service=_ForbiddenEnrichmentService(),
+            enrichment_service=_SuccessfulEnrichmentService(),
             claim=False,
         )
     )
 
-    assert calls == 0
-    assert result.status == "completed_with_exclusions"
-    assert result.excluded_items == 1
-    assert result.items[0].status == "excluded"
-    assert result.items[0].error_message == "source_mapping_unmapped"
+    assert calls == 1
+    assert result.status == "completed"
+    assert result.excluded_items == 0
+    assert result.items[0].status == "completed"
 
 
 def test_public_routes_expose_filtered_controls_and_remove_single_job_endpoint():

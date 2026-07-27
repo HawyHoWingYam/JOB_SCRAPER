@@ -15,8 +15,8 @@ from app.job_intelligence.source_attributes import (
     SourceJobAttributeEvidence,
     SourceJobAttributes,
 )
-from app.job_intelligence.company_industry import (
-    project_company_industry as project_company_industry_evidence,
+from app.job_intelligence.current_taxonomies.company_projection import (
+    project_current_company_industry,
 )
 from app.messaging.event_envelope import build_event_envelope
 from app.messaging.outbox_publisher import OutboxPublisher
@@ -317,7 +317,7 @@ class IngestWorkerService:
 
     def project_company_industry(self, db, company, canonical_job: dict[str, Any]):
         try:
-            return project_company_industry_evidence(
+            return project_current_company_industry(
                 db,
                 company.id,
                 canonical_job,

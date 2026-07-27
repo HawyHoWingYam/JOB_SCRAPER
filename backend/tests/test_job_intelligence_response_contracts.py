@@ -16,14 +16,11 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from app.api import jobs as jobs_api
-from app.api.job_intelligence import (
-    list_job_taxonomy_audit_events,
-    read_job_intelligence_governance_summary,
-)
 from app.api import ai as ai_api
 from app.api.companies import get_company, list_companies
 from app.api.jobs import (
     _apply_structured_filters,
+    _build_export_rows,
     _build_search_response_from_results,
     get_job,
 )
@@ -36,29 +33,15 @@ from app.job_intelligence.source_attributes import (
     JobsDBSourceEvidenceAdapter,
     SourceJobAttributes,
 )
-from app.models.canonical_job_taxonomy import (
-    CANONICAL_JOB_TAXONOMY_TABLES,
-    CanonicalJobCategory,
-    CanonicalJobDomain,
-    CanonicalJobSubcategory,
-    CanonicalJobTaxonomyActiveRevision,
-    CanonicalJobTaxonomyRelease,
-    JobTaxonomyAssignment,
-    JobTaxonomyReviewItem,
-)
 from app.models.company import Company
-from app.models.company_industry import (
-    COMPANY_INDUSTRY_TABLES,
-    CompanyIndustryActiveRevision,
-    CompanyIndustryAssignment,
-    CompanyIndustryReviewItem,
-    CompanyIndustryTaxonomyNode,
-    CompanyIndustryTaxonomyRelease,
-)
-from app.models.governance import (
-    GOVERNANCE_FOUNDATION_TABLES,
-    GovernanceAuditEvent,
-    GovernanceRevision,
+from app.models.current_taxonomy import (
+    CURRENT_TAXONOMY_TABLES,
+    CurrentCompanyIndustryAssignment,
+    CurrentJobSkillAssignment,
+    CurrentJobSkillMention,
+    CurrentJobTaxonomyAssignment,
+    CurrentSkillCandidate,
+    CurrentTaxonomyNodeRecord,
 )
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
@@ -66,17 +49,6 @@ from app.models.job_embedding import EMBEDDING_DIMENSIONS, JobEmbedding
 from app.models.job_category import JobCategory
 from app.models.job_domain import JobDomain
 from app.models.job_subcategory import JobSubcategory
-from app.models.skill_governance import (
-    SKILL_GOVERNANCE_TABLES,
-    GovernedJobSkill,
-    GovernedJobSkillMention,
-    GovernedSkill,
-    GovernedSkillCategory,
-    GovernedSkillTechnology,
-    SkillCandidate,
-    SkillTaxonomyActiveRevision,
-    SkillTaxonomyRelease,
-)
 from app.models.source_job_attributes import (
     SOURCE_JOB_ATTRIBUTE_TABLES,
     EmploymentType,
@@ -106,9 +78,7 @@ FRONTEND_DOMAIN_FIXTURE_PAIRS = tuple(
         Path(__file__).parents[2] / "frontend" / "src" / "fixtures" / filename,
     )
     for filename in (
-        "canonical_job_taxonomy_responses.json",
-        "skill_governance_responses.json",
-        "company_industry_responses.json",
+        "current_taxonomy_responses.json",
     )
 )
 
@@ -132,11 +102,8 @@ def product_contract_db():
         Job.__table__,
         JobEmbedding.__table__,
         EventOutbox.__table__,
-        *GOVERNANCE_FOUNDATION_TABLES,
         *SOURCE_JOB_ATTRIBUTE_TABLES,
-        *CANONICAL_JOB_TAXONOMY_TABLES,
-        *COMPANY_INDUSTRY_TABLES,
-        *SKILL_GOVERNANCE_TABLES,
+        *CURRENT_TAXONOMY_TABLES,
     )
     Base.metadata.drop_all(engine, tables=list(reversed(tables)), checkfirst=True)
     Base.metadata.create_all(engine, tables=list(tables))
@@ -160,100 +127,6 @@ def product_contract_db():
 
 def _seed_summary_state(db) -> dict[str, object]:
     now = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
-    canonical_revision_id = uuid4()
-    skill_revision_id = uuid4()
-    industry_revision_id = uuid4()
-    revisions = (
-        (canonical_revision_id, "canonical-job-taxonomy", "canonical-v1", "a"),
-        (skill_revision_id, "skill-taxonomy", "skills-v1", "b"),
-        (industry_revision_id, "company-industry", "hsic-v2", "c"),
-    )
-    for revision_id, domain, release_key, hash_character in revisions:
-        db.add(
-            GovernanceRevision(
-                id=revision_id,
-                domain=domain,
-                release_key=release_key,
-                content_hash=hash_character * 64,
-                source_metadata={},
-                created_at=now,
-                published_at=now,
-            )
-        )
-    db.flush()
-
-    db.add_all(
-        [
-            CanonicalJobTaxonomyRelease(
-                revision_id=canonical_revision_id,
-                content_hash="a" * 64,
-                expected_domain_count=0,
-                expected_category_count=0,
-                expected_subcategory_count=0,
-                materialized_domain_count=0,
-                materialized_category_count=0,
-                materialized_subcategory_count=0,
-                status="ready",
-                ready_at=now,
-            ),
-            SkillTaxonomyRelease(
-                revision_id=skill_revision_id,
-                content_hash="b" * 64,
-                taxonomy_hash="d" * 64,
-                rules_hash="e" * 64,
-                backfill_hash="f" * 64,
-                rules_document={},
-                backfill_document={},
-                expected_category_count=0,
-                expected_technology_count=0,
-                expected_skill_count=0,
-                expected_alias_count=0,
-                materialized_category_count=0,
-                materialized_technology_count=0,
-                materialized_skill_count=0,
-                materialized_alias_count=0,
-                status="ready",
-                ready_at=now,
-            ),
-            CompanyIndustryTaxonomyRelease(
-                revision_id=industry_revision_id,
-                standard="HSIC",
-                release="V2.0",
-                content_hash="c" * 64,
-                source_metadata={},
-                expected_counts={},
-                materialized_counts={},
-                expected_total=0,
-                materialized_total=0,
-                status="ready",
-                ready_at=now,
-            ),
-        ]
-    )
-    db.flush()
-    db.add_all(
-        [
-            CanonicalJobTaxonomyActiveRevision(
-                revision_id=canonical_revision_id,
-                content_hash="a" * 64,
-                lock_version=1,
-                activated_at=now,
-            ),
-            SkillTaxonomyActiveRevision(
-                revision_id=skill_revision_id,
-                content_hash="b" * 64,
-                lock_version=1,
-                activated_at=now,
-            ),
-            CompanyIndustryActiveRevision(
-                revision_id=industry_revision_id,
-                content_hash="c" * 64,
-                lock_version=1,
-                activated_at=now,
-            ),
-        ]
-    )
-
     company_one = Company(
         company_id="product-company-1",
         source_site="jobsdb",
@@ -282,78 +155,23 @@ def _seed_summary_state(db) -> dict[str, object]:
     )
     db.add_all([job_one, job_two])
     db.flush()
-
-    canonical_review = JobTaxonomyReviewItem(
-        job_id=job_one.id,
-        taxonomy_revision_id=canonical_revision_id,
-        status="active",
-        reasons=["classifier_provenance_missing"],
-        evidence_hash="1" * 64,
-        evidence_refs=[],
-        recommendations=[],
-        lock_version=1,
-        created_at=now,
-        updated_at=now,
-    )
-    skill_candidate = SkillCandidate(
-        taxonomy_revision_id=skill_revision_id,
+    skill_candidate = CurrentSkillCandidate(
+        taxonomy="skill",
         normalized_key="rust",
         canonical_raw_name="Rust",
         raw_variants=["Rust"],
-        status="pending",
         occurrence_count=1,
         distinct_job_count=1,
         evidence_summary={},
-        recommendations=[],
-        lock_version=1,
         first_seen_at=now,
         last_seen_at=now,
         created_at=now,
         updated_at=now,
     )
-    db.add_all(
-        [
-            canonical_review,
-            skill_candidate,
-            CompanyIndustryReviewItem(
-                company_id=company_two.id,
-                taxonomy_revision_id=industry_revision_id,
-                source_site="offertoday",
-                key_kind="label",
-                raw_value="Technology",
-                normalized_key="technology",
-                reason="unmapped_source_evidence",
-                status="active",
-                evidence_hash="2" * 64,
-                provenance={},
-                recommendations=[],
-                lock_version=1,
-                created_at=now,
-                updated_at=now,
-            ),
-            GovernanceAuditEvent(
-                domain="job-taxonomy",
-                subject_type="job-taxonomy-review-item",
-                subject_id="product-review-item",
-                action="mark_insufficient_evidence",
-                actor="local-operator",
-                command_hash="3" * 64,
-                idempotency_key="product-summary-audit",
-                before_summary={"status": "active"},
-                after_summary={"status": "insufficient_evidence"},
-                evidence_refs=[{"kind": "job", "id": str(job_one.id)}],
-                correlation_id="product-summary-audit",
-                created_at=now,
-            ),
-        ]
-    )
+    db.add(skill_candidate)
     db.commit()
     return {
-        "canonical_revision_id": canonical_revision_id,
-        "skill_revision_id": skill_revision_id,
-        "industry_revision_id": industry_revision_id,
         "job_one_id": job_one.id,
-        "canonical_review_id": canonical_review.id,
         "skill_candidate_id": skill_candidate.id,
         "now": now,
     }
@@ -416,212 +234,229 @@ def _seed_rich_job_detail_state(db) -> dict[str, object]:
     )
     SourceJobAttributes(db).project(job.id, source_evidence)
 
-    canonical_domain = CanonicalJobDomain(
-        revision_id=state["canonical_revision_id"],
-        code="technology",
-        label="Technology",
-        source_order=1,
+    current_job_domain_code = "technology"
+    current_job_category_code = "technology.software-development"
+    current_job_subcategory_code = (
+        "technology.software-development.backend-development"
     )
-    db.add(canonical_domain)
-    db.flush()
-    canonical_category = CanonicalJobCategory(
-        revision_id=state["canonical_revision_id"],
-        domain_id=canonical_domain.id,
-        code="software-development",
-        label="Software Development",
-        source_order=1,
+    current_industry_section_code = "J"
+    current_industry_node_code = "58"
+    current_skill_category_code = "programming"
+    current_skill_technology_code = "programming.python-ecosystem"
+    current_skill_code = "python"
+    db.add_all(
+        [
+            CurrentTaxonomyNodeRecord(
+                taxonomy="job",
+                code=current_job_domain_code,
+                parent_code=None,
+                level="domain",
+                labels={"en": "Technology"},
+                sort_order=1,
+                is_assignable=False,
+                is_active=True,
+            ),
+            CurrentTaxonomyNodeRecord(
+                taxonomy="company_industry",
+                code=current_industry_section_code,
+                parent_code=None,
+                level="section",
+                labels={
+                    "en": "Information and communications",
+                    "zh_hant": "資訊及通訊",
+                    "zh_hans": "资讯及通讯",
+                },
+                sort_order=1,
+                is_assignable=False,
+                is_active=True,
+            ),
+            CurrentTaxonomyNodeRecord(
+                taxonomy="skill",
+                code=current_skill_category_code,
+                parent_code=None,
+                level="category",
+                labels={"en": "Programming"},
+                sort_order=1,
+                is_assignable=False,
+                is_active=True,
+            ),
+        ]
     )
-    db.add(canonical_category)
     db.flush()
-    canonical_subcategory = CanonicalJobSubcategory(
-        revision_id=state["canonical_revision_id"],
-        category_id=canonical_category.id,
-        code="backend-development",
-        label="Backend Development",
-        source_order=1,
-        is_assignable=True,
+    db.add_all(
+        [
+            CurrentTaxonomyNodeRecord(
+                taxonomy="job",
+                code=current_job_category_code,
+                parent_code=current_job_domain_code,
+                level="category",
+                labels={"en": "Software Development"},
+                sort_order=1,
+                is_assignable=False,
+                is_active=True,
+            ),
+            CurrentTaxonomyNodeRecord(
+                taxonomy="company_industry",
+                code=current_industry_node_code,
+                parent_code=current_industry_section_code,
+                level="division",
+                labels={
+                    "en": "Publishing activities",
+                    "zh_hant": "出版活動",
+                    "zh_hans": "出版活动",
+                },
+                sort_order=2,
+                is_assignable=True,
+                is_active=True,
+            ),
+            CurrentTaxonomyNodeRecord(
+                taxonomy="skill",
+                code=current_skill_technology_code,
+                parent_code=current_skill_category_code,
+                level="technology",
+                labels={"en": "Python Ecosystem"},
+                sort_order=1,
+                is_assignable=False,
+                is_active=True,
+            ),
+        ]
     )
-    db.add(canonical_subcategory)
     db.flush()
-    canonical_assignment = JobTaxonomyAssignment(
+    db.add_all(
+        [
+            CurrentTaxonomyNodeRecord(
+                taxonomy="job",
+                code=current_job_subcategory_code,
+                parent_code=current_job_category_code,
+                level="subcategory",
+                labels={"en": "Backend Development"},
+                sort_order=1,
+                is_assignable=True,
+                is_active=True,
+            ),
+            CurrentTaxonomyNodeRecord(
+                taxonomy="skill",
+                code=current_skill_code,
+                parent_code=current_skill_technology_code,
+                level="skill",
+                labels={"en": "Python"},
+                sort_order=1,
+                is_assignable=True,
+                is_active=True,
+            ),
+        ]
+    )
+    db.flush()
+
+    current_job_assignment = CurrentJobTaxonomyAssignment(
         job_id=job.id,
-        taxonomy_revision_id=state["canonical_revision_id"],
-        subcategory_id=canonical_subcategory.id,
+        taxonomy="job",
+        taxonomy_code=current_job_subcategory_code,
         method="constrained_ai",
         evidence_hash="4" * 64,
         source_evidence_refs=[
             {"kind": "source-classification-path", "id": "jobsdb:6281"}
         ],
         mapping_ids=[],
-        model_provider="openai",
-        model_name="fixture-model",
-        model_version="2026-07-19",
+        model_provenance={
+            "provider": "openai",
+            "model": "fixture-model",
+            "version": "2026-07-19",
+        },
         breadcrumb={
             "domain": {
-                "id": str(canonical_domain.id),
-                "code": canonical_domain.code,
-                "label": canonical_domain.label,
+                "code": current_job_domain_code,
+                "label": "Technology",
             },
             "category": {
-                "id": str(canonical_category.id),
-                "code": canonical_category.code,
-                "label": canonical_category.label,
+                "code": current_job_category_code,
+                "label": "Software Development",
             },
             "subcategory": {
-                "id": str(canonical_subcategory.id),
-                "code": canonical_subcategory.code,
-                "label": canonical_subcategory.label,
+                "code": current_job_subcategory_code,
+                "label": "Backend Development",
             },
         },
-        lock_version=1,
-        is_current=True,
         captured_at=now,
     )
-
-    industry_section = CompanyIndustryTaxonomyNode(
-        revision_id=state["industry_revision_id"],
-        code="J",
-        parent_id=None,
-        level="section",
-        label_en="Information and communications",
-        label_zh_hant="資訊及通訊",
-        label_zh_hans="资讯及通讯",
-        source_order=1,
-        is_assignable=True,
-        source_metadata={},
-    )
-    db.add(industry_section)
-    db.flush()
-    industry_node = CompanyIndustryTaxonomyNode(
-        revision_id=state["industry_revision_id"],
-        code="58",
-        parent_id=industry_section.id,
-        level="division",
-        label_en="Publishing activities",
-        label_zh_hant="出版活動",
-        label_zh_hans="出版活动",
-        source_order=2,
-        is_assignable=True,
-        source_metadata={},
-    )
-    db.add(industry_node)
-    db.flush()
-    industry_assignment = CompanyIndustryAssignment(
+    current_industry_assignment = CurrentCompanyIndustryAssignment(
         company_id=company.id,
-        taxonomy_revision_id=state["industry_revision_id"],
-        node_id=industry_node.id,
+        taxonomy="company_industry",
+        taxonomy_code=current_industry_node_code,
         method="authoritative_code",
         provenance={"method": "source-hsic-code"},
         evidence_hash="5" * 64,
-        breadcrumb=[
-            {
-                "id": str(industry_section.id),
-                "code": industry_section.code,
-                "level": industry_section.level,
+        breadcrumb={
+            "section": {
+                "code": current_industry_section_code,
+                "level": "section",
                 "labels": {
-                    "en": industry_section.label_en,
-                    "zh_hant": industry_section.label_zh_hant,
-                    "zh_hans": industry_section.label_zh_hans,
+                    "en": "Information and communications",
+                    "zh_hant": "資訊及通訊",
+                    "zh_hans": "资讯及通讯",
                 },
             },
-            {
-                "id": str(industry_node.id),
-                "code": industry_node.code,
-                "level": industry_node.level,
+            "division": {
+                "code": current_industry_node_code,
+                "level": "division",
                 "labels": {
-                    "en": industry_node.label_en,
-                    "zh_hant": industry_node.label_zh_hant,
-                    "zh_hans": industry_node.label_zh_hans,
+                    "en": "Publishing activities",
+                    "zh_hant": "出版活動",
+                    "zh_hans": "出版活动",
                 },
             },
-        ],
+        },
         is_primary=True,
         primary_basis="authoritative_source",
-        status="active",
-        lock_version=1,
         captured_at=now,
     )
-
-    skill_category = GovernedSkillCategory(
-        revision_id=state["skill_revision_id"],
-        code="programming",
-        name="Programming",
-        source_order=1,
-        is_active=True,
-    )
-    db.add(skill_category)
-    db.flush()
-    skill_technology = GovernedSkillTechnology(
-        revision_id=state["skill_revision_id"],
-        category_id=skill_category.id,
-        code="python-ecosystem",
-        name="Python Ecosystem",
-        source_order=1,
-        is_active=True,
-    )
-    db.add(skill_technology)
-    db.flush()
-    governed_skill = GovernedSkill(
-        revision_id=state["skill_revision_id"],
-        technology_id=skill_technology.id,
-        code="python",
-        name="Python",
-        source_order=1,
-        origin="seed",
-        is_active=True,
-    )
-    db.add(governed_skill)
-    db.flush()
-    matching_mention = GovernedJobSkillMention(
+    current_matching_mention = CurrentJobSkillMention(
         job_id=job.id,
-        taxonomy_revision_id=state["skill_revision_id"],
+        taxonomy="skill",
         raw_name="Python",
         normalized_key="python",
         resolution="match_existing",
         status="active",
-        skill_id=governed_skill.id,
+        skill_code=current_skill_code,
         source="ai-extraction",
         confidence=0.95,
         provenance={"method": "ai-extraction"},
         evidence_hash="6" * 64,
-        lock_version=1,
         created_at=now,
         updated_at=now,
     )
-    unreviewed_mention = GovernedJobSkillMention(
+    current_candidate_mention = CurrentJobSkillMention(
         job_id=job.id,
-        taxonomy_revision_id=state["skill_revision_id"],
+        taxonomy="skill",
         raw_name="Rust",
         normalized_key="rust",
-        resolution="review_candidate",
+        resolution="candidate",
         status="active",
         candidate_id=state["skill_candidate_id"],
         source="ai-extraction",
         confidence=0.8,
         provenance={"method": "ai-extraction"},
         evidence_hash="7" * 64,
-        lock_version=1,
         created_at=now,
         updated_at=now,
     )
-    skill_projection = GovernedJobSkill(
+    current_skill_projection = CurrentJobSkillAssignment(
         job_id=job.id,
-        taxonomy_revision_id=state["skill_revision_id"],
-        skill_id=governed_skill.id,
+        skill_code=current_skill_code,
+        taxonomy="skill",
         source="ai-extraction",
         confidence=0.95,
         provenance={"method": "ai-extraction"},
         mention_count=1,
-        created_at=now,
         updated_at=now,
     )
     db.add_all(
         [
-            canonical_assignment,
-            industry_assignment,
-            matching_mention,
-            unreviewed_mention,
-            skill_projection,
+            current_job_assignment,
+            current_industry_assignment,
+            current_matching_mention,
+            current_candidate_mention,
+            current_skill_projection,
         ]
     )
     db.commit()
@@ -629,10 +464,12 @@ def _seed_rich_job_detail_state(db) -> dict[str, object]:
         **state,
         "job_id": job.id,
         "company_id": company.id,
-        "canonical_subcategory_id": canonical_subcategory.id,
-        "industry_section_id": industry_section.id,
-        "industry_node_id": industry_node.id,
-        "governed_skill_id": governed_skill.id,
+        "current_job_domain_code": current_job_domain_code,
+        "current_job_category_code": current_job_category_code,
+        "current_job_subcategory_code": current_job_subcategory_code,
+        "current_industry_section_code": current_industry_section_code,
+        "current_industry_node_code": current_industry_node_code,
+        "current_skill_code": current_skill_code,
     }
 
 
@@ -641,11 +478,8 @@ def _seed_related_job_recommendation_state(db) -> dict[str, object]:
     now = state["now"]
     source_job = db.get(Job, state["job_id"])
     source_assignment = (
-        db.query(JobTaxonomyAssignment)
-        .filter(
-            JobTaxonomyAssignment.job_id == source_job.id,
-            JobTaxonomyAssignment.is_current.is_(True),
-        )
+        db.query(CurrentJobTaxonomyAssignment)
+        .filter(CurrentJobTaxonomyAssignment.job_id == source_job.id)
         .one()
     )
     vector_tail = [0.0] * (EMBEDDING_DIMENSIONS - 2)
@@ -704,33 +538,32 @@ def _seed_related_job_recommendation_state(db) -> dict[str, object]:
         )
         db.add_all(
             [
-                JobTaxonomyAssignment(
+                CurrentJobTaxonomyAssignment(
                     job_id=candidate.id,
-                    taxonomy_revision_id=state["canonical_revision_id"],
-                    subcategory_id=state["canonical_subcategory_id"],
+                    taxonomy="job",
+                    taxonomy_code=state["current_job_subcategory_code"],
                     method="constrained_ai",
                     evidence_hash=str(index) * 64,
                     source_evidence_refs=[
                         {"kind": "source-classification-path", "id": "jobsdb:6281"}
                     ],
                     mapping_ids=[],
-                    model_provider="openai",
-                    model_name="fixture-model",
-                    model_version="2026-07-19",
+                    model_provenance={
+                        "provider": "openai",
+                        "model": "fixture-model",
+                        "version": "2026-07-19",
+                    },
                     breadcrumb=dict(source_assignment.breadcrumb),
-                    lock_version=1,
-                    is_current=True,
                     captured_at=now,
                 ),
-                GovernedJobSkill(
+                CurrentJobSkillAssignment(
                     job_id=candidate.id,
-                    taxonomy_revision_id=state["skill_revision_id"],
-                    skill_id=state["governed_skill_id"],
+                    skill_code=state["current_skill_code"],
+                    taxonomy="skill",
                     source="ai-extraction",
                     confidence=0.9,
                     provenance={"method": "ai-extraction"},
                     mention_count=1,
-                    created_at=now,
                     updated_at=now,
                 ),
                 JobEmbedding(
@@ -757,21 +590,6 @@ def test_product_surface_fixture_uses_current_backend_response_models() -> None:
         backend_payload
     )
 
-    assert fixture.summary.total_pending == 6
-    assert [area.key for area in fixture.summary.areas] == [
-        "job_taxonomy",
-        "skill_candidates",
-        "company_industries",
-    ]
-    assert fixture.summary.trusted_local.actor == "local-operator"
-    assert fixture.summary.trusted_local.authentication == "none"
-    assert fixture.summary.coverage.canonical_unassigned_reasons == {
-        "classifier_provenance_missing": 3,
-        "unmapped_source_classification": 2,
-    }
-    assert fixture.summary.coverage.jobs_with_unassigned_canonical_state == 2
-    assert fixture.summary.coverage.jobs_with_unknown_canonical_state == 3
-    assert fixture.canonical_audit.items[0].actor == "local-operator"
     assert [item.label for item in fixture.job_search.jobs[0].employment_types] == [
         "Full-time",
         "Permanent",
@@ -791,10 +609,7 @@ def test_product_surface_fixture_uses_current_backend_response_models() -> None:
         for assignment in fixture.companies[0].company_industries.assignments
     ] == [True, False]
     assert fixture.companies[1].company_industries is not None
-    assert (
-        fixture.companies[1].company_industries.review_item_refs[0].reason
-        == "unmapped_source_label"
-    )
+    assert fixture.companies[1].company_industries.assignments == []
     assert fixture.companies[2].company_industries is None
     assert (
         fixture.companies[2].company_industry_availability.unavailable_code
@@ -807,9 +622,15 @@ def test_product_surface_fixture_uses_current_backend_response_models() -> None:
     assert fixture.job_detail.skill_state is not None
     assert [skill.code for skill in fixture.job_detail.skill_state.skills] == ["python"]
     assert [
-        mention.raw_name
-        for mention in fixture.job_detail.skill_state.unreviewed_skill_mentions
+        mention.raw_name for mention in fixture.job_detail.skill_state.candidate_mentions
     ] == ["Rust"]
+    assert [
+        mention["raw_name"] for mention in fixture.job_detail.skill_candidate_mentions
+    ] == ["Rust"]
+    serialized = json.dumps(fixture.model_dump(mode="json"), sort_keys=True)
+    assert "taxonomy_revision" not in serialized
+    assert "review_item" not in serialized
+    assert "governance" not in serialized.lower()
     assert [
         item.label
         for item in fixture.job_recommendations.recommendations[0].employment_types
@@ -846,8 +667,6 @@ def test_related_job_contract_exposes_only_governed_job_intelligence() -> None:
             "job_id": recommendation_id,
             "state": "unassigned",
             "assignment": None,
-            "reasons": ["classifier_provenance_missing"],
-            "review_item_refs": [],
         },
         "job_intelligence_availability": {
             "source_attributes": {"available": True, "unavailable_code": None},
@@ -902,7 +721,7 @@ def test_related_job_contract_rejects_availability_data_conflicts() -> None:
             **recommendation["job_intelligence_availability"],
             "canonical_taxonomy": {
                 "available": False,
-                "unavailable_code": "CANONICAL_TAXONOMY_NOT_ACTIVE",
+                "unavailable_code": "CURRENT_JOB_TAXONOMY_UNAVAILABLE",
             },
         },
     }
@@ -952,9 +771,8 @@ def test_related_job_service_batches_governed_projection_reads(
     for projection_table in (
         "job_employment_types",
         "job_source_attribute_projections",
-        "job_taxonomy_assignments",
-        "job_taxonomy_review_items",
-        "governed_job_skills",
+        "current_job_taxonomy_assignments",
+        "current_job_skill_assignments",
     ):
         assert sum(projection_table in statement for statement in statements) == 1
 
@@ -1038,260 +856,6 @@ def test_job_detail_contract_rejects_missing_composed_governed_states() -> None:
             JobDetailSchema.model_validate(incomplete)
 
 
-def test_governance_summary_composes_domain_backlogs_and_coverage(
-    product_contract_db,
-) -> None:
-    state = _seed_summary_state(product_contract_db)
-
-    summary = JobIntelligenceProductReadModel(
-        product_contract_db
-    ).get_governance_summary(generated_at=state["now"])
-
-    assert summary.to_payload() == {
-        "generated_at": state["now"],
-        "trusted_local": {
-            "actor": "local-operator",
-            "authentication": "none",
-            "warning": (
-                "Trusted local operation only. Governance decision routes are not "
-                "authenticated and must not be exposed to an untrusted network."
-            ),
-        },
-        "total_pending": 3,
-        "areas": [
-            {
-                "key": "job_taxonomy",
-                "label": "Job Taxonomy Review",
-                "available": True,
-                "pending_count": 1,
-                "oldest_pending_at": state["now"],
-                "active_revision_id": str(state["canonical_revision_id"]),
-                "unavailable_code": None,
-                "deep_link": "/job-intelligence/job-taxonomy",
-            },
-            {
-                "key": "skill_candidates",
-                "label": "Skill Candidates",
-                "available": True,
-                "pending_count": 1,
-                "oldest_pending_at": state["now"],
-                "active_revision_id": str(state["skill_revision_id"]),
-                "unavailable_code": None,
-                "deep_link": "/job-intelligence/skill-candidates",
-            },
-            {
-                "key": "company_industries",
-                "label": "Company Industries",
-                "available": True,
-                "pending_count": 1,
-                "oldest_pending_at": state["now"],
-                "active_revision_id": str(state["industry_revision_id"]),
-                "unavailable_code": None,
-                "deep_link": "/job-intelligence/company-industries",
-            },
-        ],
-        "coverage": {
-            "total_jobs": 2,
-            "jobs_with_source_classification_paths": 0,
-            "jobs_with_employment_types": 0,
-            "jobs_with_canonical_assignment": 0,
-            "jobs_without_canonical_assignment": 2,
-            "jobs_with_unassigned_canonical_state": 1,
-            "jobs_with_unknown_canonical_state": 1,
-            "canonical_unassigned_reasons": {
-                "classifier_provenance_missing": 1,
-            },
-            "jobs_with_governed_skills": 0,
-            "jobs_with_unreviewed_skill_mentions": 0,
-            "total_companies": 2,
-            "companies_with_governed_industries": 0,
-            "companies_without_governed_industries": 2,
-        },
-    }
-
-
-def test_governance_summary_ignores_backlogs_from_inactive_revisions(
-    product_contract_db,
-) -> None:
-    state = _seed_summary_state(product_contract_db)
-    inactive_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-    inactive_canonical_revision_id = uuid4()
-    inactive_skill_revision_id = uuid4()
-    inactive_industry_revision_id = uuid4()
-    for revision_id, domain, release_key, hash_character in (
-        (
-            inactive_canonical_revision_id,
-            "canonical-job-taxonomy",
-            "canonical-inactive",
-            "d",
-        ),
-        (inactive_skill_revision_id, "skill-taxonomy", "skills-inactive", "e"),
-        (
-            inactive_industry_revision_id,
-            "company-industry",
-            "industry-inactive",
-            "f",
-        ),
-    ):
-        product_contract_db.add(
-            GovernanceRevision(
-                id=revision_id,
-                domain=domain,
-                release_key=release_key,
-                content_hash=hash_character * 64,
-                source_metadata={},
-                created_at=inactive_at,
-                published_at=inactive_at,
-            )
-        )
-    product_contract_db.flush()
-    product_contract_db.add_all(
-        [
-            CanonicalJobTaxonomyRelease(
-                revision_id=inactive_canonical_revision_id,
-                content_hash="d" * 64,
-                expected_domain_count=0,
-                expected_category_count=0,
-                expected_subcategory_count=0,
-                materialized_domain_count=0,
-                materialized_category_count=0,
-                materialized_subcategory_count=0,
-                status="ready",
-                ready_at=inactive_at,
-            ),
-            SkillTaxonomyRelease(
-                revision_id=inactive_skill_revision_id,
-                content_hash="e" * 64,
-                taxonomy_hash="1" * 64,
-                rules_hash="2" * 64,
-                backfill_hash="3" * 64,
-                rules_document={},
-                backfill_document={},
-                expected_category_count=0,
-                expected_technology_count=0,
-                expected_skill_count=0,
-                expected_alias_count=0,
-                materialized_category_count=0,
-                materialized_technology_count=0,
-                materialized_skill_count=0,
-                materialized_alias_count=0,
-                status="ready",
-                ready_at=inactive_at,
-            ),
-            CompanyIndustryTaxonomyRelease(
-                revision_id=inactive_industry_revision_id,
-                standard="HSIC",
-                release="inactive",
-                content_hash="f" * 64,
-                source_metadata={},
-                expected_counts={},
-                materialized_counts={},
-                expected_total=0,
-                materialized_total=0,
-                status="ready",
-                ready_at=inactive_at,
-            ),
-        ]
-    )
-    product_contract_db.flush()
-    job_two = product_contract_db.query(Job).filter(Job.job_id == "product-job-2").one()
-    company_one = (
-        product_contract_db.query(Company)
-        .filter(Company.company_id == "product-company-1")
-        .one()
-    )
-    product_contract_db.add_all(
-        [
-            JobTaxonomyReviewItem(
-                job_id=job_two.id,
-                taxonomy_revision_id=inactive_canonical_revision_id,
-                status="active",
-                reasons=["inactive_revision_only"],
-                evidence_hash="4" * 64,
-                evidence_refs=[],
-                recommendations=[],
-                lock_version=1,
-                created_at=inactive_at,
-                updated_at=inactive_at,
-            ),
-            SkillCandidate(
-                taxonomy_revision_id=inactive_skill_revision_id,
-                normalized_key="inactive-skill",
-                canonical_raw_name="Inactive Skill",
-                raw_variants=["Inactive Skill"],
-                status="pending",
-                occurrence_count=1,
-                distinct_job_count=1,
-                evidence_summary={},
-                recommendations=[],
-                lock_version=1,
-                first_seen_at=inactive_at,
-                last_seen_at=inactive_at,
-                created_at=inactive_at,
-                updated_at=inactive_at,
-            ),
-            CompanyIndustryReviewItem(
-                company_id=company_one.id,
-                taxonomy_revision_id=inactive_industry_revision_id,
-                source_site="jobsdb",
-                key_kind="label",
-                raw_value="Inactive Industry",
-                normalized_key="inactive industry",
-                reason="unmapped_source_evidence",
-                status="active",
-                evidence_hash="5" * 64,
-                provenance={},
-                recommendations=[],
-                lock_version=1,
-                created_at=inactive_at,
-                updated_at=inactive_at,
-            ),
-        ]
-    )
-    product_contract_db.commit()
-
-    summary = JobIntelligenceProductReadModel(
-        product_contract_db
-    ).get_governance_summary(generated_at=state["now"])
-
-    assert [area.pending_count for area in summary.areas] == [1, 1, 1]
-    assert [area.oldest_pending_at for area in summary.areas] == [
-        state["now"],
-        state["now"],
-        state["now"],
-    ]
-    assert summary.coverage.jobs_with_unassigned_canonical_state == 1
-    assert summary.coverage.jobs_with_unknown_canonical_state == 1
-    assert summary.coverage.canonical_unassigned_reasons == {
-        "classifier_provenance_missing": 1,
-    }
-
-
-def test_product_http_contract_exposes_summary_and_canonical_audit(
-    product_contract_db,
-) -> None:
-    _seed_summary_state(product_contract_db)
-
-    summary = read_job_intelligence_governance_summary(db=product_contract_db)
-    audit = list_job_taxonomy_audit_events(
-        subject_id=None,
-        cursor=None,
-        limit=50,
-        db=product_contract_db,
-    )
-
-    assert summary.total_pending == 3
-    assert summary.trusted_local.actor == "local-operator"
-    assert [area.deep_link for area in summary.areas] == [
-        "/job-intelligence/job-taxonomy",
-        "/job-intelligence/skill-candidates",
-        "/job-intelligence/company-industries",
-    ]
-    assert len(audit.items) == 1
-    assert audit.items[0].domain == "job-taxonomy"
-    assert audit.items[0].subject_type == "job-taxonomy-review-item"
-
-
 def test_dashboard_category_stats_use_only_governed_current_assignments(
     product_contract_db,
 ) -> None:
@@ -1362,32 +926,17 @@ def test_job_detail_composes_independent_governed_states_without_fabrication(
         "job_id": str(state["job_one_id"]),
         "state": "unassigned",
         "assignment": None,
-        "reasons": ["classifier_provenance_missing"],
-        "review_item_refs": [
-            {
-                "id": str(state["canonical_review_id"]),
-                "status": "active",
-                "version": 1,
-                "decision_audit_id": None,
-                "deep_link": (
-                    "/api/job-intelligence/governance/job-taxonomy/"
-                    "review-items/"
-                    f'{state["canonical_review_id"]}'
-                ),
-            }
-        ],
     }
     assert payload["company_industries"] == {
         "company_id": payload["company_id"],
         "assignments": [],
-        "review_item_refs": [],
     }
     assert payload["skill_state"] == {
         "job_id": str(state["job_one_id"]),
-        "taxonomy_revision_id": str(state["skill_revision_id"]),
         "skills": [],
-        "unreviewed_skill_mentions": [],
+        "candidate_mentions": [],
     }
+    assert payload["skill_candidate_mentions"] == []
     assert payload["source_classification_paths"] == []
     assert payload["employment_types"] == []
     assert payload["source_employment_labels"] == []
@@ -1478,34 +1027,38 @@ def test_job_detail_uses_structured_governed_knowledge_over_legacy_evidence(
         )
     }
     assert payload["canonical_taxonomy"]["state"] == "assigned"
-    assert payload["canonical_taxonomy"]["assignment"]["subcategory_id"] == str(
-        state["canonical_subcategory_id"]
-    )
+    assert payload["canonical_taxonomy"]["assignment"]["taxonomy_code"] == state[
+        "current_job_subcategory_code"
+    ]
     assert (
         payload["canonical_taxonomy"]["assignment"]["breadcrumb"]["subcategory"]["code"]
-        == "backend-development"
+        == state["current_job_subcategory_code"]
     )
     assert payload["company_industry"] == "Legacy evidence only"
     assert [
-        (assignment["node_id"], assignment["is_primary"])
+        (assignment["taxonomy_code"], assignment["is_primary"])
         for assignment in payload["company_industries"]["assignments"]
-    ] == [(str(state["industry_node_id"]), True)]
+    ] == [(state["current_industry_node_code"], True)]
     assert (
-        payload["company_industries"]["assignments"][0]["breadcrumb"][0]["code"] == "J"
+        payload["company_industries"]["assignments"][0]["breadcrumb"]["section"][
+            "code"
+        ]
+        == "J"
     )
     assert payload["skills"] == ["Python"]
-    assert payload["provisional_skills"] == ["Rust"]
-    assert [skill["id"] for skill in payload["skill_state"]["skills"]] == [
-        str(state["governed_skill_id"])
+    assert [skill["code"] for skill in payload["skill_state"]["skills"]] == [
+        state["current_skill_code"]
     ]
     assert [
         mention["raw_name"]
-        for mention in payload["skill_state"]["unreviewed_skill_mentions"]
+        for mention in payload["skill_state"]["candidate_mentions"]
     ] == ["Rust"]
     assert (
-        payload["unreviewed_skill_mentions"]
-        == payload["skill_state"]["unreviewed_skill_mentions"]
+        payload["skill_candidate_mentions"]
+        == payload["skill_state"]["candidate_mentions"]
     )
+    assert "provisional_skills" not in payload
+    assert "unreviewed_skill_mentions" not in payload
 
 
 def test_manual_job_snapshot_uses_the_same_composed_read_model(
@@ -1534,7 +1087,9 @@ def test_manual_job_snapshot_uses_the_same_composed_read_model(
     assert payload["canonical_taxonomy"]["state"] == "assigned"
     assert payload["company_industries"]["assignments"][0]["is_primary"] is True
     assert payload["skills"] == ["Python"]
-    assert payload["provisional_skills"] == ["Rust"]
+    assert [mention["raw_name"] for mention in payload["skill_candidate_mentions"]] == [
+        "Rust"
+    ]
 
 
 def test_company_detail_exposes_governed_industries_without_promoting_legacy_text(
@@ -1552,83 +1107,9 @@ def test_company_detail_exposes_governed_industries_without_promoting_legacy_tex
     }
     assert payload["company_industries"]["company_id"] == str(state["company_id"])
     assert [
-        (assignment["node_id"], assignment["is_primary"])
+        (assignment["taxonomy_code"], assignment["is_primary"])
         for assignment in payload["company_industries"]["assignments"]
-    ] == [(str(state["industry_node_id"]), True)]
-
-
-def test_company_detail_ignores_review_refs_from_inactive_revision(
-    product_contract_db,
-) -> None:
-    _seed_summary_state(product_contract_db)
-    inactive_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-    inactive_revision_id = uuid4()
-    product_contract_db.add(
-        GovernanceRevision(
-            id=inactive_revision_id,
-            domain="company-industry",
-            release_key="company-industry-inactive-detail",
-            content_hash="9" * 64,
-            source_metadata={},
-            created_at=inactive_at,
-            published_at=inactive_at,
-        )
-    )
-    product_contract_db.flush()
-    product_contract_db.add(
-        CompanyIndustryTaxonomyRelease(
-            revision_id=inactive_revision_id,
-            standard="HSIC",
-            release="inactive-detail",
-            content_hash="9" * 64,
-            source_metadata={},
-            expected_counts={},
-            materialized_counts={},
-            expected_total=0,
-            materialized_total=0,
-            status="ready",
-            ready_at=inactive_at,
-        )
-    )
-    product_contract_db.flush()
-    company = (
-        product_contract_db.query(Company)
-        .filter(Company.company_id == "product-company-1")
-        .one()
-    )
-    product_contract_db.add(
-        CompanyIndustryReviewItem(
-            company_id=company.id,
-            taxonomy_revision_id=inactive_revision_id,
-            source_site="jobsdb",
-            key_kind="label",
-            raw_value="Inactive Industry",
-            normalized_key="inactive industry",
-            reason="unmapped_source_evidence",
-            status="active",
-            evidence_hash="8" * 64,
-            provenance={},
-            recommendations=[],
-            lock_version=1,
-            created_at=inactive_at,
-            updated_at=inactive_at,
-        )
-    )
-    product_contract_db.commit()
-
-    payload = JobIntelligenceProductReadModel(product_contract_db).get_company_detail(
-        company.id
-    )
-
-    assert payload["company_industry_availability"] == {
-        "available": True,
-        "unavailable_code": None,
-    }
-    assert payload["company_industries"] == {
-        "company_id": str(company.id),
-        "assignments": [],
-        "review_item_refs": [],
-    }
+    ] == [(state["current_industry_node_code"], True)]
 
 
 def test_company_list_batches_the_same_governed_industry_contract(
@@ -1651,9 +1132,9 @@ def test_company_list_batches_the_same_governed_industry_contract(
     payload = rich_company.model_dump(mode="json")
 
     assert payload["company_industry_availability"]["available"] is True
-    assert payload["company_industries"]["assignments"][0]["node_id"] == str(
-        state["industry_node_id"]
-    )
+    assert payload["company_industries"]["assignments"][0]["taxonomy_code"] == state[
+        "current_industry_node_code"
+    ]
 
 
 def test_job_browser_filters_use_governed_ids_and_industry_descendants(
@@ -1661,8 +1142,8 @@ def test_job_browser_filters_use_governed_ids_and_industry_descendants(
 ) -> None:
     state = _seed_rich_job_detail_state(product_contract_db)
     filters = JobSearchFiltersSchema(
-        canonical_subcategory_ids=[str(state["canonical_subcategory_id"])],
-        company_industry_node_ids=[str(state["industry_section_id"])],
+        canonical_subcategory_ids=[state["current_job_subcategory_code"]],
+        company_industry_node_ids=[state["current_industry_section_code"]],
     )
 
     query = product_contract_db.query(Job).join(
@@ -1672,8 +1153,8 @@ def test_job_browser_filters_use_governed_ids_and_industry_descendants(
     matches = _apply_structured_filters(query, filters).all()
 
     assert [job.id for job in matches] == [state["job_id"]]
-    assert filters.canonical_subcategory_ids == [str(state["canonical_subcategory_id"])]
-    assert filters.company_industry_node_ids == [str(state["industry_section_id"])]
+    assert filters.canonical_subcategory_ids == [state["current_job_subcategory_code"]]
+    assert filters.company_industry_node_ids == [state["current_industry_section_code"]]
 
 
 def test_job_browser_rejects_legacy_company_industry_filter_authority() -> None:
@@ -1702,7 +1183,7 @@ def test_get_job_browser_filters_by_company_industry_node_ids(
     response = _job_search_client(product_contract_db).get(
         "/api/jobs/search",
         params={
-            "company_industry_node_ids": str(state["industry_section_id"]),
+            "company_industry_node_ids": state["current_industry_section_code"],
         },
     )
 
@@ -1738,5 +1219,21 @@ def test_job_browser_cards_expose_batched_canonical_state(
     assert card["canonical_taxonomy"]["state"] == "assigned"
     assert (
         card["canonical_taxonomy"]["assignment"]["breadcrumb"]["subcategory"]["code"]
-        == "backend-development"
+        == state["current_job_subcategory_code"]
     )
+
+
+def test_job_browser_export_reads_current_skills_without_legacy_relationships(
+    product_contract_db,
+) -> None:
+    state = _seed_rich_job_detail_state(product_contract_db)
+    query = (
+        product_contract_db.query(Job, Company)
+        .join(Company, Company.id == Job.company_id)
+        .filter(Job.id == state["job_id"])
+    )
+
+    rows = _build_export_rows(query)
+
+    assert len(rows) == 1
+    assert rows[0]["skills"] == "Python"

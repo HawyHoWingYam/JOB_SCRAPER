@@ -14,18 +14,10 @@ from sqlalchemy.orm import Session
 
 from app.ai.job_insight_extractor import get_job_insight_extractor
 from app.ai.llm_client import LLMResponseFormatError, LLMUpstreamError, get_llm_status
-from app.job_intelligence.canonical_taxonomy import (
-    CanonicalClassifierContext,
-    CanonicalClassifierOutput,
-    CanonicalJobTaxonomy,
-    EvaluationResult,
+from app.job_intelligence.current_taxonomies.enrichment import (
+    CurrentTaxonomyEnrichment,
 )
-from app.job_intelligence.foundation import Provenance, normalized_content_hash
-from app.job_intelligence.skill_governance import (
-    SkillExtractionContext,
-    SkillGovernance,
-    SkillGovernanceReader,
-)
+from app.job_intelligence.foundation import normalized_content_hash
 from app.job_intelligence.source_attributes import SourceJobAttributes
 from app.models.job import Job
 from app.database import SessionLocal
@@ -53,27 +45,10 @@ class AIEnrichmentService:
                 source_classification_name=job.source_classification_name or "",
             )
             source_attributes = SourceJobAttributes(db).get(job.id)
-            canonical_taxonomy = CanonicalJobTaxonomy(db)
-            classifier_context = canonical_taxonomy.build_classifier_context(
-                source_attributes
-            )
-            if classifier_context.blocking_reasons:
-                evaluation = canonical_taxonomy.evaluate(
-                    job.id,
-                    source_attributes,
-                    classifier_output=None,
-                )
-                results["status"] = "excluded"
-                results["error"] = ",".join(classifier_context.blocking_reasons)
-                results["canonical_taxonomy"] = self._evaluation_payload(evaluation)
-                db.commit()
-                return results
-
-            category_candidates = classifier_context.to_prompt_payload()
-            skill_candidates = SkillGovernanceReader(db).get_prompt_candidate_slice(
-                job.title,
-                description=job.description or "",
-                source_subclassification_name=job.source_subclassification_name,
+            current_taxonomies = CurrentTaxonomyEnrichment(db)
+            classifier_context = current_taxonomies.build_job_context(source_attributes)
+            category_candidates = classifier_context.prompt_payload
+            skill_candidates = current_taxonomies.build_skill_prompt(
                 role_mode=role_mode,
             )
             insight = await self.insight_extractor.extract(
@@ -92,17 +67,16 @@ class AIEnrichmentService:
                 "confidence": insight.get("confidence"),
             }
 
-            classifier_output = self._canonical_classifier_output(
-                classification,
-                context=classifier_context,
-                llm_status=llm_status,
+            model_provenance = self._model_provenance(llm_status)
+            results["canonical_taxonomy"] = (
+                current_taxonomies.assign_job_from_classification(
+                    job_id=job.id,
+                    evidence=source_attributes,
+                    classification=classification,
+                    context=classifier_context,
+                    model_provenance=model_provenance,
+                )
             )
-            evaluation = canonical_taxonomy.evaluate(
-                job.id,
-                source_attributes,
-                classifier_output,
-            )
-            results["canonical_taxonomy"] = self._evaluation_payload(evaluation)
             job.ai_enriched_at = utc_now()
 
             job.ai_summary = insight.get("summary")
@@ -116,42 +90,22 @@ class AIEnrichmentService:
             job.experience_summary = experience.get("summary")
             job.experience_evidence = experience.get("evidence")
 
-            skill_projection = SkillGovernance(db).extract(
-                job.id,
-                extracted_skills,
-                SkillExtractionContext(
-                    source="ai-extraction",
-                    confidence=insight.get("confidence"),
-                    provenance={
-                        "method": "constrained-ai-extraction",
-                        "model_provider": llm_status.get("active_provider"),
-                        "model_name": llm_status.get("active_model"),
-                        "model_version": llm_status.get("model_version"),
-                        "content_hash": normalized_content_hash(extracted_skills),
-                    },
-                ),
+            raw_confidence = insight.get("confidence")
+            confidence = (
+                float(raw_confidence)
+                if isinstance(raw_confidence, (int, float))
+                else None
             )
-            results["skill_projection"] = {
-                "taxonomy_revision_id": str(skill_projection.taxonomy_revision_id),
-                "changed": skill_projection.changed,
-                "mentions": [
-                    {
-                        "id": str(mention.id),
-                        "resolution": mention.resolution,
-                        "skill_id": (
-                            str(mention.skill_id)
-                            if mention.skill_id is not None
-                            else None
-                        ),
-                        "candidate_id": (
-                            str(mention.candidate_id)
-                            if mention.candidate_id is not None
-                            else None
-                        ),
-                    }
-                    for mention in skill_projection.mentions
-                ],
-            }
+            results["skill_projection"] = current_taxonomies.replace_job_skills(
+                job_id=job.id,
+                extracted_skills=extracted_skills,
+                confidence=confidence,
+                provenance={
+                    "method": "constrained-ai-extraction",
+                    **model_provenance,
+                    "content_hash": normalized_content_hash(extracted_skills),
+                },
+            )
             db.commit()
 
         except LLMUpstreamError as e:
@@ -185,131 +139,18 @@ class AIEnrichmentService:
 
         return results
 
-    async def classify_job_taxonomy(
-        self,
-        job: Job,
-        db: Session,
-    ) -> Dict[str, Any]:
-        """Re-evaluate only Canonical Job Taxonomy for one historical Job.
-
-        This is intentionally separate from ``enrich_job``.  The recovery
-        workflow must not update the Job's Summary, Skills, Experience, or
-        ``ai_enriched_at`` fields.
-        """
-        source_attributes = SourceJobAttributes(db).get(job.id)
-        canonical_taxonomy = CanonicalJobTaxonomy(db)
-        classifier_context = canonical_taxonomy.build_classifier_context(
-            source_attributes
-        )
-        if classifier_context.blocking_reasons:
-            evaluation = canonical_taxonomy.evaluate(
-                job.id,
-                source_attributes,
-                classifier_output=None,
-            )
-            return {
-                "status": "success",
-                "classifier_output": None,
-                "evaluation": evaluation,
-                "unresolved_reasons": list(classifier_context.blocking_reasons),
-            }
-
-        try:
-            insight = await self.insight_extractor.extract_taxonomy(
-                title=job.title,
-                description=job.description or "",
-                taxonomy_candidates=classifier_context.to_prompt_payload(),
-            )
-            classification = insight.get("classification") or {}
-        except LLMResponseFormatError:
-            # A malformed provider payload is classifier output failure, not a
-            # network failure.  Evaluate it through the same fail-closed path.
-            classification = {"decision": "invalid", "target_code": None}
-
-        classifier_output = self._canonical_classifier_output(
-            classification,
-            context=classifier_context,
-            llm_status=get_llm_status("jobs"),
-        )
-        evaluation = canonical_taxonomy.evaluate(
-            job.id,
-            source_attributes,
-            classifier_output,
-        )
-        return {
-            "status": "success",
-            "classifier_output": classifier_output,
-            "evaluation": evaluation,
-            "unresolved_reasons": list(evaluation.reasons),
-        }
-
     @staticmethod
-    def _evaluation_payload(evaluation: EvaluationResult) -> dict[str, object]:
-        return {
-            "state": evaluation.state,
-            "version": evaluation.version,
-            "assignment_id": (
-                str(evaluation.assignment_id)
-                if evaluation.assignment_id is not None
-                else None
-            ),
-            "review_item_id": (
-                str(evaluation.review_item_id)
-                if evaluation.review_item_id is not None
-                else None
-            ),
-            "reasons": list(evaluation.reasons),
+    def _model_provenance(llm_status: Dict[str, Any]) -> dict[str, object]:
+        values = {
+            "provider": llm_status.get("active_provider"),
+            "name": llm_status.get("active_model"),
+            "version": llm_status.get("model_version"),
         }
-
-    @staticmethod
-    def _canonical_classifier_output(
-        classification: object,
-        *,
-        context: CanonicalClassifierContext,
-        llm_status: Dict[str, Any],
-    ) -> CanonicalClassifierOutput:
-        payload = classification if isinstance(classification, dict) else {}
-        raw_decision = payload.get("decision")
-        decision = (
-            raw_decision
-            if raw_decision
-            in {"select_existing", "fallback_default", "create_new", "invalid"}
-            else "invalid"
-        )
-        raw_target_code = payload.get("target_code")
-        target_code = (
-            raw_target_code.strip()
-            if isinstance(raw_target_code, str) and raw_target_code.strip()
-            else None
-        )
-
-        def optional_text(value: object) -> str | None:
-            if not isinstance(value, str):
-                return None
-            normalized = value.strip()
-            return normalized or None
-
-        provenance = Provenance(
-            method="constrained-ai-classifier",
-            evidence_refs=(
-                {
-                    "kind": "ai-classifier-output",
-                    "content_hash": normalized_content_hash(payload),
-                    "taxonomy_revision_id": str(context.taxonomy_revision_id),
-                    "mapping_revision_id": str(context.mapping_revision_id),
-                },
-            ),
-            captured_at=utc_now(),
-            source_site=None,
-            model_provider=optional_text(llm_status.get("active_provider")),
-            model_name=optional_text(llm_status.get("active_model")),
-            model_version=optional_text(llm_status.get("model_version")),
-        )
-        return CanonicalClassifierOutput(
-            decision=decision,
-            target_code=target_code,
-            provenance=provenance,
-        )
+        return {
+            key: value.strip()
+            for key, value in values.items()
+            if isinstance(value, str) and value.strip()
+        }
 
     async def enrich_batch(
         self,

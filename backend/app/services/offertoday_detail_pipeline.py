@@ -10,11 +10,12 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from app.job_intelligence.source_attributes import (
-    SourceCatalogRevisionRef,
     SourceJobAttributeEvidence,
     SourceJobAttributes,
 )
-from app.job_intelligence.company_industry import project_company_industry
+from app.job_intelligence.current_taxonomies.company_projection import (
+    project_current_company_industry,
+)
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.scraper.log_events import build_scrape_log_event
 from app.sources.contracts import (
@@ -52,7 +53,8 @@ class DetailFetcher(Protocol):
         *,
         job_id: str,
         encrypted_job_id: str,
-    ) -> dict[str, Any] | None: ...
+    ) -> dict[str, Any] | None:
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +151,6 @@ class OfferTodayDetailPipeline:
         detail_crawl_job_id,
         fetch_detail: DetailFetcher,
         crawl_mode: str | None = None,
-        source_catalog_revision: SourceCatalogRevisionRef | None = None,
     ) -> OfferTodayDetailProcessResult:
         prepared_payload: dict[str, Any] | None = None
         persisted_detail_payload: dict[str, Any] | None = None
@@ -366,14 +367,15 @@ class OfferTodayDetailPipeline:
             or persisted_detail_payload is None
             or canonical_job is None
         ):
-            raise RuntimeError("Successful OfferToday detail classification has no canonical payload")
+            raise RuntimeError(
+                "Successful OfferToday detail classification has no canonical payload"
+            )
         return self._persist_success(
             target=target,
             detail_crawl_job_id=detail_crawl_job_id,
             detail_payload=persisted_detail_payload,
             failure_detail_payload=classification.raw_payload,
             canonical_job=canonical_job,
-            source_catalog_revision=source_catalog_revision,
         )
 
     def _transition_running(self, *, listing_ids, detail_crawl_job_id) -> None:
@@ -436,9 +438,7 @@ class OfferTodayDetailPipeline:
                 "detail_crawl_job_id": str(detail_crawl_job_id),
                 "source_job_id": target.identity.job_id,
                 "encrypted_job_id": target.identity.encrypted_job_id,
-                "encrypted_job_id_source": (
-                    target.identity.encrypted_job_id_source
-                ),
+                "encrypted_job_id_source": (target.identity.encrypted_job_id_source),
                 "attempt": int(attempt),
                 "classification": classification.kind.value,
                 "api_code": classification.code,
@@ -507,7 +507,6 @@ class OfferTodayDetailPipeline:
         detail_payload: dict[str, Any],
         failure_detail_payload: dict[str, Any] | None,
         canonical_job,
-        source_catalog_revision: SourceCatalogRevisionRef | None,
     ) -> OfferTodayDetailProcessResult:
         db = self.session_factory()
         try:
@@ -517,7 +516,7 @@ class OfferTodayDetailPipeline:
                 company_data,
                 auto_commit=False,
             )
-            project_company_industry(
+            project_current_company_industry(
                 db,
                 company.id,
                 canonical_job,
@@ -545,7 +544,6 @@ class OfferTodayDetailPipeline:
                 SourceJobAttributeEvidence.from_payload(
                     canonical_job.source_attribute_evidence
                 ),
-                source_catalog_revision=source_catalog_revision,
             )
             self.crawl_runtime.transition_detail_completed(
                 db,

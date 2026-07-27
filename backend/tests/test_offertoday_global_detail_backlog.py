@@ -393,7 +393,8 @@ def test_manual_action_helper_capability_requires_live_health_check() -> None:
     assert capability["health_url"].endswith("/health")
     assert capability["manual_start_workdir"] == "backend"
     assert capability["manual_start_command"] == (
-        "python -m app.workers.run_manual_action_helper"
+        "python3 scripts/prepare_headed_crawl_worker_host.py && "
+        ".host_worker_venv/bin/python -m app.workers.run_manual_action_helper"
     )
 
 

@@ -5,11 +5,10 @@ from typing import Any, Literal, Optional
 from datetime import datetime
 from uuid import UUID
 
-from app.schemas.company_industry import CompanyIndustryCompanyStateSchema
-from app.schemas.job_intelligence import CanonicalJobStateSchema
-from app.schemas.skill_governance import (
-    JobSkillStateSchema,
-    SkillUnreviewedMentionSchema,
+from app.schemas.current_taxonomy import (
+    CurrentCompanyIndustryStateSchema,
+    CurrentJobSkillStateSchema,
+    CurrentJobTaxonomyStateSchema,
 )
 
 
@@ -181,16 +180,13 @@ class JobDetailSchema(JobSchema):
     expiry_date: Optional[str] = None
     is_expired: Optional[bool] = None
     skills: list[str] = Field(default_factory=list)
-    provisional_skills: list[str] = Field(default_factory=list)
-    unreviewed_skill_mentions: list[SkillUnreviewedMentionSchema] = Field(
-        default_factory=list
-    )
+    skill_candidate_mentions: list[dict[str, Any]] = Field(default_factory=list)
     source_employment_labels: list[SourceEmploymentLabelSchema] = Field(
         default_factory=list
     )
-    canonical_taxonomy: Optional[CanonicalJobStateSchema] = None
-    company_industries: Optional[CompanyIndustryCompanyStateSchema] = None
-    skill_state: Optional[JobSkillStateSchema] = None
+    canonical_taxonomy: Optional[CurrentJobTaxonomyStateSchema] = None
+    company_industries: Optional[CurrentCompanyIndustryStateSchema] = None
+    skill_state: Optional[CurrentJobSkillStateSchema] = None
     job_intelligence_availability: JobIntelligenceAvailabilitySchema = Field(
         default_factory=JobIntelligenceAvailabilitySchema
     )

@@ -6,17 +6,11 @@ from uuid import UUID
 import uuid
 from app.ai.llm_client import safe_llm_error_message
 from app.database import SessionLocal, get_db
-from app.job_intelligence.company_industry import (
-    CompanyIndustry,
-    CompanyIndustryEvidence,
-)
-from app.job_intelligence.foundation import Provenance
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.models import Company
 from app.models.company_enrichment_run import CompanyEnrichmentRunItem
 from app.schemas import CompanyCreateSchema, CompanyProductSchema, CompanySchema
 from app.services.company_enrichment_service import CompanyEnrichmentService
-from app.utils.time import utc_now
 from app.services.company_enrichment_run_service import CompanyEnrichmentRunService
 from app.services.ai_runtime_settings_service import (
     AIRuntimeSettingsService,
@@ -337,25 +331,6 @@ async def create_company(company: CompanyCreateSchema, db: Session = Depends(get
         )
         db.add(db_company)
         db.flush()
-        raw_industry = str(company.industry or "").strip()
-        if raw_industry:
-            CompanyIndustry(db).ingest_evidence(
-                db_company.id,
-                CompanyIndustryEvidence(
-                    evidence_kind="manual",
-                    raw_label=raw_industry,
-                    provenance=Provenance(
-                        method="manual-company-create",
-                        evidence_refs=(
-                            {
-                                "kind": "manual-company-industry",
-                                "company_id": str(db_company.id),
-                            },
-                        ),
-                        captured_at=utc_now(),
-                    ),
-                ),
-            )
         db.commit()
         db.refresh(db_company)
         return db_company

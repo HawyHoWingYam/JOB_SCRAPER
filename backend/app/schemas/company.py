@@ -3,7 +3,7 @@ from typing import Optional
 from datetime import datetime
 from uuid import UUID
 
-from app.schemas.company_industry import CompanyIndustryCompanyStateSchema
+from app.schemas.current_taxonomy import CurrentCompanyIndustryStateSchema
 from app.schemas.job import JobIntelligenceDomainAvailabilitySchema
 
 
@@ -35,5 +35,5 @@ class CompanySchema(CompanyCreateSchema):
 class CompanyProductSchema(CompanySchema):
     """Company response with scoped governed Industry state."""
 
-    company_industries: Optional[CompanyIndustryCompanyStateSchema]
+    company_industries: Optional[CurrentCompanyIndustryStateSchema]
     company_industry_availability: JobIntelligenceDomainAvailabilitySchema
