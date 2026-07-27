@@ -1475,3 +1475,106 @@ Preserved CTGoodJobs source attribute evidence through merge, made crawl task op
 ### Next Steps
 
 - None - task complete
+
+
+## Session 43: Repair CTGoodJobs expired detail recovery
+
+**Date**: 2026-07-25
+**Task**: Repair CTGoodJobs expired detail recovery
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Diagnosed crawl 3a271e44 as an HTTP 200 expired CTGoodJobs page, added jd--expired terminal classification with regression coverage, validated the live page and backend suite, documented the contract, and created a separate cross-source expired-detail audit task.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2c09f1e2` | (see git log) |
+| `3362b5af` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 44: Replace Source Catalog with ordinary classifications
+
+**Date**: 2026-07-26
+**Task**: Replace Source Catalog with ordinary classifications
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Removed Source Catalog revision governance across database, backend, crawl runtimes, and frontend; synchronized ordinary top-level classifications for JobsDB, CTgoodjobs, and OfferToday while preserving collected data.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af7805f8` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 45: Remove runtime version protocols
+
+**Date**: 2026-07-27
+**Task**: Remove runtime version protocols
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Removed the versioned API and Automation protocols, required current Dispatch Plan authority, removed persisted embedding provenance, and replaced Alembic with an empty-database-only bootstrap. Preserved unrelated taxonomy and JobsDB worktree changes.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `aa2aee87` | (see git log) |
+| `bed330cd` | (see git log) |
+| `e64b09f3` | (see git log) |
+| `d1c5cc97` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

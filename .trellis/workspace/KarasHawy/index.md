@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 42
-- **Last Active**: 2026-07-25
+- **Total Sessions**: 45
+- **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1477 | Active |
+| `journal-1.md` | ~1580 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,9 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 45 | 2026-07-27 | Remove runtime version protocols | `aa2aee87`, `bed330cd`, `e64b09f3`, `d1c5cc97` | `codex/offertoday-it-coverage-20260702` |
+| 44 | 2026-07-26 | Replace Source Catalog with ordinary classifications | `af7805f8` | `codex/offertoday-it-coverage-20260702` |
+| 43 | 2026-07-25 | Repair CTGoodJobs expired detail recovery | `2c09f1e2`, `3362b5af` | `codex/offertoday-it-coverage-20260702` |
 | 42 | 2026-07-25 | Fix CTGoodJobs detail evidence semantics | `cb36b56f`, `c9cf4c85`, `3e316b11` | `codex/offertoday-it-coverage-20260702` |
 | 41 | 2026-07-24 | Dismiss failed Board attention | `66bdb723`, `19d21314` | `codex/offertoday-it-coverage-20260702` |
 | 40 | 2026-07-24 | CTGoodJobs headless profile recovery | `c8db77dc`, `f4c039d3`, `6da2f0f2` | `codex/offertoday-it-coverage-20260702` |
