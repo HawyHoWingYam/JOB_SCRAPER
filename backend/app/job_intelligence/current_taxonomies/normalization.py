@@ -26,3 +26,10 @@ def normalize_skill_lookup_key(value: object) -> str:
     text = normalize_skill_text(value).casefold()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+__all__ = [
+    "normalize_exact_skill_key",
+    "normalize_skill_lookup_key",
+    "normalize_skill_text",
+]

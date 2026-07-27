@@ -1,5 +1,4 @@
 {
-  "schema_version": 1,
   "source_commit": "ed03f114fb8bc73eeb11139d82325a7944802701",
   "source_git_blob": "80960e8dad9a0f84ca928218ed81bd0133fc18c5",
   "source_endpoint": "/wapi/geek/recommend/filter/content/all",

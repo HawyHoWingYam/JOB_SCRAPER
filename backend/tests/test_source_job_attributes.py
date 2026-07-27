@@ -30,15 +30,11 @@ from app.job_intelligence.source_attributes import (
     SourceJobAttributeRebuildInspector,
     SourceJobAttributes,
 )
-from app.models.canonical_job_taxonomy import CANONICAL_JOB_TAXONOMY_TABLES
 from app.models.company import Company
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.event_outbox import EventOutbox
 from app.models.governance import GOVERNANCE_FOUNDATION_TABLES
 from app.models.job import Job
-from app.models.job_category import JobCategory
-from app.models.job_domain import JobDomain
-from app.models.job_subcategory import JobSubcategory
 from app.models.source_job_attributes import (
     SOURCE_JOB_ATTRIBUTE_TABLES,
     EmploymentType,
@@ -61,15 +57,11 @@ def source_attribute_db():
     engine = create_engine(database_url)
     tables = (
         Company.__table__,
-        JobDomain.__table__,
-        JobCategory.__table__,
-        JobSubcategory.__table__,
         Job.__table__,
         CrawlJobListing.__table__,
         EventOutbox.__table__,
         *GOVERNANCE_FOUNDATION_TABLES,
         *SOURCE_JOB_ATTRIBUTE_TABLES,
-        *CANONICAL_JOB_TAXONOMY_TABLES,
     )
     Base.metadata.create_all(engine, tables=tables)
     db = sessionmaker(bind=engine)()
@@ -140,8 +132,8 @@ def test_project_is_idempotent_through_the_source_job_attributes_interface(
     view = module.get(job.id)
 
     assert {
-        "first": (first.changed, first.version),
-        "replay": (replay.changed, replay.version),
+        "first_changed": first.changed,
+        "replay_changed": replay.changed,
         "paths": [
             [node.source_classification_id for node in path.nodes]
             for path in view.source_classification_paths
@@ -153,8 +145,8 @@ def test_project_is_idempotent_through_the_source_job_attributes_interface(
             for label in view.source_employment_labels
         ],
     } == {
-        "first": (True, 1),
-        "replay": (False, 1),
+        "first_changed": True,
+        "replay_changed": False,
         "paths": [
             ["jobsdb:6281", "jobsdb:6287"],
             ["jobsdb:6092"],
@@ -168,7 +160,7 @@ def test_project_is_idempotent_through_the_source_job_attributes_interface(
     }
 
 
-def test_changed_evidence_replaces_projection_and_advances_one_version(
+def test_changed_evidence_replaces_projection_without_version_identity(
     source_attribute_db,
 ):
     company = Company(
@@ -235,9 +227,9 @@ def test_changed_evidence_replaces_projection_and_advances_one_version(
 
     assert {
         "results": [
-            (first.changed, first.version),
-            (replacement.changed, replacement.version),
-            (replay.changed, replay.version),
+            first.changed,
+            replacement.changed,
+            replay.changed,
         ],
         "paths": [
             [node.source_classification_id for node in path.nodes]
@@ -245,22 +237,17 @@ def test_changed_evidence_replaces_projection_and_advances_one_version(
         ],
         "labels": [label.raw_label for label in view.source_employment_labels],
         "types": [item.code for item in view.employment_types],
-        "event_versions": [
-            event.payload["version"]
-            for event in source_attribute_db.query(EventOutbox)
-            .order_by(EventOutbox.created_at, EventOutbox.id)
-            .all()
-        ],
+        "event_count": source_attribute_db.query(EventOutbox).count(),
     } == {
-        "results": [(True, 1), (True, 2), (False, 2)],
+        "results": [True, True, False],
         "paths": [["jobsdb:6163"]],
         "labels": ["Part-time"],
         "types": ["part_time"],
-        "event_versions": [1, 2],
+        "event_count": 2,
     }
 
 
-def test_concurrent_exact_projection_serializes_to_one_version_and_event(
+def test_concurrent_exact_projection_serializes_to_one_current_row_and_event(
     source_attribute_db,
 ):
     company = Company(
@@ -304,7 +291,7 @@ def test_concurrent_exact_projection_serializes_to_one_version_and_event(
         try:
             result = SourceJobAttributes(db).project(job.id, evidence)
             db.commit()
-            return result.changed, result.version
+            return result.changed
         except Exception:
             db.rollback()
             raise
@@ -319,15 +306,12 @@ def test_concurrent_exact_projection_serializes_to_one_version_and_event(
     view = SourceJobAttributes(source_attribute_db).get(job.id)
     assert {
         "results": sorted(results),
-        "version": view.version,
-        "event_versions": [
-            event.payload["version"]
-            for event in source_attribute_db.query(EventOutbox).all()
-        ],
+        "has_version": hasattr(view, "version"),
+        "event_count": source_attribute_db.query(EventOutbox).count(),
     } == {
-        "results": [(False, 1), (True, 1)],
-        "version": 1,
-        "event_versions": [1],
+        "results": [False, True],
+        "has_version": False,
+        "event_count": 1,
     }
 
 
@@ -392,7 +376,6 @@ def test_changed_projection_enqueues_one_bounded_outbox_event(source_attribute_d
             "payload": {
                 "job_id": str(job.id),
                 "source_site": "jobsdb",
-                "version": 1,
                 "evidence_hash": first.view.evidence_hash,
             },
         }
@@ -473,22 +456,19 @@ def test_outbox_failure_rolls_back_job_and_projection_replacement(
     view = SourceJobAttributes(source_attribute_db).get(job.id)
     assert {
         "title": reloaded_job.title,
-        "version": view.version,
+        "has_version": hasattr(view, "version"),
         "paths": [
             path.nodes[0].source_classification_id
             for path in view.source_classification_paths
         ],
         "types": [item.code for item in view.employment_types],
-        "event_versions": [
-            event.payload["version"]
-            for event in source_attribute_db.query(EventOutbox).all()
-        ],
+        "event_count": source_attribute_db.query(EventOutbox).count(),
     } == {
         "title": "Original title",
-        "version": 1,
+        "has_version": False,
         "paths": ["jobsdb:6281"],
         "types": ["full_time"],
-        "event_versions": [1],
+        "event_count": 1,
     }
 
 

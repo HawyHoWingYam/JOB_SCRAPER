@@ -144,7 +144,6 @@ class AIEnrichmentService:
         values = {
             "provider": llm_status.get("active_provider"),
             "name": llm_status.get("active_model"),
-            "version": llm_status.get("model_version"),
         }
         return {
             key: value.strip()

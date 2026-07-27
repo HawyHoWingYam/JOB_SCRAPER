@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -61,22 +61,6 @@ class CurrentTaxonomySnapshot:
             "taxonomy": self.taxonomy,
             "nodes": [node.to_payload() for node in self.nodes],
             "aliases": [alias.to_payload() for alias in self.aliases],
-        }
-
-
-@dataclass(frozen=True)
-class TaxonomyPreservationManifest:
-    taxonomy: TaxonomyKind
-    node_count: int
-    legacy_identity_to_code: dict[str, str] = field(default_factory=dict)
-
-    def to_payload(self) -> dict[str, Any]:
-        return {
-            "taxonomy": self.taxonomy,
-            "node_count": self.node_count,
-            "legacy_identity_to_code": dict(
-                sorted(self.legacy_identity_to_code.items())
-            ),
         }
 
 

@@ -181,7 +181,7 @@ class CompanyEnrichmentService:
             description = (job.description or "").strip()
             if len(description) > 280:
                 description = f"{description[:280]}..."
-            taxonomy_path = job.job_taxonomy_path or job.source_classification_name or "Unknown"
+            taxonomy_path = job.source_classification_name or "Unknown"
             job_lines.append(
                 f"- {job.title} | taxonomy: {taxonomy_path} | {description or 'No description'}"
             )

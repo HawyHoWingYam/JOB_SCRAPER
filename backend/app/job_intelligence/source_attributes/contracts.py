@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 from datetime import datetime
 
-from app.job_intelligence.foundation import Provenance, RevisionRef
+from app.job_intelligence.foundation import Provenance
 
 
 def _mapping(value: Any, field_name: str) -> Mapping[str, Any]:
@@ -23,16 +23,6 @@ def _sequence(value: Any, field_name: str) -> list[Any]:
 
 def _provenance_from_payload(value: Any) -> Provenance:
     payload = _mapping(value, "provenance")
-    source_revision_payload = payload.get("source_revision")
-    source_revision = None
-    if source_revision_payload is not None:
-        revision = _mapping(source_revision_payload, "provenance.source_revision")
-        source_revision = RevisionRef(
-            domain=str(revision["domain"]),
-            revision_id=UUID(str(revision["revision_id"])),
-            release_key=str(revision["release_key"]),
-            content_hash=str(revision["content_hash"]),
-        )
     captured_at = datetime.fromisoformat(str(payload["captured_at"]))
     return Provenance(
         method=str(payload["method"]),
@@ -41,7 +31,6 @@ def _provenance_from_payload(value: Any) -> Provenance:
             if payload.get("source_site") is not None
             else None
         ),
-        source_revision=source_revision,
         mapping_id=(
             str(payload["mapping_id"])
             if payload.get("mapping_id") is not None
@@ -61,11 +50,6 @@ def _provenance_from_payload(value: Any) -> Provenance:
         model_name=(
             str(payload["model_name"])
             if payload.get("model_name") is not None
-            else None
-        ),
-        model_version=(
-            str(payload["model_version"])
-            if payload.get("model_version") is not None
             else None
         ),
         captured_at=captured_at,
@@ -300,7 +284,6 @@ class EmploymentTypeView:
 class SourceJobAttributesView:
     job_id: UUID
     source_site: str
-    version: int
     evidence_hash: str
     source_classification_paths: tuple[SourceClassificationPathView, ...]
     employment_types: tuple[EmploymentTypeView, ...]
@@ -310,5 +293,4 @@ class SourceJobAttributesView:
 @dataclass(frozen=True)
 class ProjectionResult:
     changed: bool
-    version: int
     view: SourceJobAttributesView

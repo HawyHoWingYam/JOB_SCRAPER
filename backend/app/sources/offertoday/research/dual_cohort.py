@@ -20,8 +20,7 @@ from uuid import UUID
 
 from app.scraper.offertoday.category_registry import (
     OFFERTODAY_CATEGORIES_L1,
-    OFFERTODAY_CATEGORY_CATALOG_VERSION,
-    offertoday_category_catalog_hash,
+    offertoday_category_registry_hash,
 )
 from app.sources.offertoday.listing_contract import offertoday_endpoint_contract
 from app.sources.offertoday.listing_runner import (
@@ -1447,8 +1446,7 @@ class ResultOnlyDiscoveryScopeV3:
             "endpoint_contract_hash": contract.contract_hash,
             "endpoint": contract.endpoint,
             "rcd_type": None,
-            "category_catalog_version": OFFERTODAY_CATEGORY_CATALOG_VERSION,
-            "category_catalog_hash": offertoday_category_catalog_hash(),
+            "category_registry_hash": offertoday_category_registry_hash(),
             "partition_catalog_hash": offertoday_partition_catalog_hash(),
             "phase_d_partition_ids": list(self.phase_d_partition_ids),
             "fixed_repeat_category_ids": list(
@@ -1573,8 +1571,7 @@ class DualCohortDiscoveryPolicyCandidateV3:
             "endpoint_contract_hash": contract.contract_hash,
             "endpoint": contract.endpoint,
             "rcd_type": None,
-            "category_catalog_version": OFFERTODAY_CATEGORY_CATALOG_VERSION,
-            "category_catalog_hash": offertoday_category_catalog_hash(),
+            "category_registry_hash": offertoday_category_registry_hash(),
             "partition_catalog_hash": offertoday_partition_catalog_hash(),
             "phase_d_partition_ids": list(self.phase_d_partition_ids),
             "fixed_repeat_category_ids": list(

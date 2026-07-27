@@ -30,7 +30,6 @@ class JobCreateSchema(BaseModel):
     company_id: UUID
     title: str
     description: Optional[str] = None
-    subcategory_id: Optional[UUID] = None
     source_classification_id: Optional[str] = None
     source_classification_name: Optional[str] = None
     source_subclassification_id: Optional[str] = None
@@ -71,18 +70,6 @@ class ManualJobCreateSchema(BaseModel):
                 "employment_type and employment_type_codes cannot be submitted together"
             )
         return self
-
-
-class JobTaxonomySchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    domain_id: UUID
-    domain_name: str
-    category_id: UUID
-    category_name: str
-    subcategory_id: UUID
-    subcategory_name: str
-    path: str
 
 
 class SourceClassificationNodeSchema(BaseModel):
@@ -157,7 +144,6 @@ class JobSchema(JobCreateSchema):
     id: UUID
     created_at: datetime
     updated_at: datetime
-    job_taxonomy: Optional[JobTaxonomySchema] = None
     source_classification_paths: list[SourceClassificationPathSchema] = Field(
         default_factory=list
     )

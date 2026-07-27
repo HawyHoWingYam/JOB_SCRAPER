@@ -8,8 +8,8 @@ from typing import Any
 from app.scraper.manual_action import ManualActionRequiredError
 from app.scraper.offertoday.category_registry import (
     OFFERTODAY_CATEGORIES_L1,
-    offertoday_category_catalog_hash,
-    offertoday_category_catalog_payload,
+    offertoday_category_registry_hash,
+    offertoday_category_registry_payload,
 )
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime
 from app.source_classifications.domain import (
@@ -130,11 +130,11 @@ class OfferTodaySourceClassificationAdapter:
                     "classification_ids": ["offertoday:118000"],
                 },
             ),
-            source_payload=offertoday_category_catalog_payload(),
+            source_payload=offertoday_category_registry_payload(),
             provenance={
                 "adapter": "offertoday",
                 "discovery": "bundled_registry",
-                "source_classification_hash": offertoday_category_catalog_hash(),
+                "source_classification_hash": offertoday_category_registry_hash(),
             },
         )
 

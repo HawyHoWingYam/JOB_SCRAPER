@@ -19,41 +19,6 @@ from app.database import Base
 from app.utils.time import utc_now
 
 
-class GovernanceRevision(Base):
-    """Immutable published identity shared by governed domain revisions."""
-
-    __tablename__ = "governance_revisions"
-    __table_args__ = (
-        UniqueConstraint(
-            "domain",
-            "release_key",
-            name="uq_governance_revision_release_key",
-        ),
-        UniqueConstraint(
-            "domain",
-            "content_hash",
-            name="uq_governance_revision_content_hash",
-        ),
-        CheckConstraint(
-            "status = 'published'",
-            name="ck_governance_revision_published",
-        ),
-        CheckConstraint(
-            "content_hash ~ '^[0-9a-f]{64}$'",
-            name="ck_governance_revision_content_hash",
-        ),
-    )
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    domain = Column(String(100), nullable=False, index=True)
-    release_key = Column(String(255), nullable=False)
-    content_hash = Column(String(64), nullable=False)
-    source_metadata = Column(JSON, nullable=False, default=dict)
-    status = Column(String(32), nullable=False, default="published")
-    created_at = Column(DateTime(timezone=True), nullable=False)
-    published_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
-
-
 class GovernanceAuditEvent(Base):
     """Append-only record of one trusted-local governance decision."""
 
@@ -125,16 +90,6 @@ class GovernanceIdempotencyRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
-@event.listens_for(GovernanceRevision, "before_update")
-def _prevent_governance_revision_update(_mapper, _connection, _revision) -> None:
-    raise ValueError("Governance revisions are immutable")
-
-
-@event.listens_for(GovernanceRevision, "before_delete")
-def _prevent_governance_revision_delete(_mapper, _connection, _revision) -> None:
-    raise ValueError("Governance revisions are immutable")
-
-
 @event.listens_for(GovernanceAuditEvent, "before_update")
 def _prevent_governance_audit_update(_mapper, _connection, _event) -> None:
     raise ValueError("Governance audit events are append-only")
@@ -156,7 +111,6 @@ def _prevent_governance_idempotency_delete(_mapper, _connection, _record) -> Non
 
 
 GOVERNANCE_FOUNDATION_TABLES = (
-    GovernanceRevision.__table__,
     GovernanceAuditEvent.__table__,
     GovernanceIdempotencyRecord.__table__,
 )

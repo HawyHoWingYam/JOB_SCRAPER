@@ -10,15 +10,10 @@ from app.job_intelligence.current_taxonomies.contracts import (
     ReplaceCurrentJobSkillsCommand,
     TaxonomyKind,
 )
-from app.job_intelligence.current_taxonomies.preservation import (
-    PersistedTaxonomyPreservationSnapshot,
-)
 from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
     CurrentJobSkillAssignment,
-    CurrentJobSkillMention,
     CurrentJobTaxonomyAssignment,
-    CurrentSkillCandidate,
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
     CurrentSourceTaxonomyMapping,
@@ -144,125 +139,6 @@ class CurrentTaxonomyStore:
                 .order_by(CurrentTaxonomyNodeRecord.code)
             )
         )
-
-    def replace_preserved_rows(
-        self,
-        snapshot: PersistedTaxonomyPreservationSnapshot,
-    ) -> None:
-        """Replace cutover targets exactly; the outer migration owns commit."""
-        for model in (
-            CurrentJobSkillMention,
-            CurrentJobSkillAssignment,
-            CurrentSkillCandidate,
-            CurrentCompanyIndustryAssignment,
-            CurrentJobTaxonomyAssignment,
-            CurrentSourceTaxonomyMapping,
-        ):
-            self.db.execute(delete(model))
-
-        self.db.add_all(
-            CurrentJobTaxonomyAssignment(
-                job_id=row.job_id,
-                taxonomy="job",
-                taxonomy_code=row.taxonomy_code,
-                method=row.method,
-                evidence_hash=row.evidence_hash,
-                source_evidence_refs=list(row.source_evidence_refs),
-                mapping_ids=list(row.mapping_ids),
-                model_provenance=(
-                    dict(row.model_provenance)
-                    if row.model_provenance is not None
-                    else None
-                ),
-                breadcrumb=dict(row.breadcrumb),
-                captured_at=row.captured_at,
-            )
-            for row in snapshot.job_assignments
-        )
-        self.db.add_all(
-            CurrentCompanyIndustryAssignment(
-                company_id=row.company_id,
-                taxonomy="company_industry",
-                taxonomy_code=row.taxonomy_code,
-                method=row.method,
-                provenance=dict(row.provenance),
-                evidence_hash=row.evidence_hash,
-                breadcrumb=dict(row.breadcrumb),
-                is_primary=row.is_primary,
-                primary_basis=row.primary_basis,
-                captured_at=row.captured_at,
-            )
-            for row in snapshot.company_assignments
-        )
-        self.db.add_all(
-            CurrentJobSkillAssignment(
-                job_id=row.job_id,
-                skill_code=row.skill_code,
-                taxonomy="skill",
-                source=row.source,
-                confidence=row.confidence,
-                provenance=dict(row.provenance),
-                mention_count=row.mention_count,
-                updated_at=row.updated_at,
-            )
-            for row in snapshot.skill_assignments
-        )
-        self.db.add_all(
-            CurrentSkillCandidate(
-                id=row.id,
-                taxonomy="skill",
-                normalized_key=row.normalized_key,
-                canonical_raw_name=row.canonical_raw_name,
-                raw_variants=list(row.raw_variants),
-                occurrence_count=row.occurrence_count,
-                distinct_job_count=row.distinct_job_count,
-                evidence_summary=dict(row.evidence_summary),
-                resolved_skill_code=row.resolved_skill_code,
-                first_seen_at=row.first_seen_at,
-                last_seen_at=row.last_seen_at,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-            )
-            for row in snapshot.skill_candidates
-        )
-        self.db.add_all(
-            CurrentSourceTaxonomyMapping(
-                taxonomy=row.taxonomy,
-                source_site=row.source_site,
-                source_key=row.source_key,
-                target_code=row.target_code,
-                source_label=row.source_label,
-                role=row.role,
-                evidence=dict(row.evidence),
-            )
-            for row in snapshot.source_mappings
-        )
-        self.db.flush()
-        self.db.add_all(
-            CurrentJobSkillMention(
-                id=row.id,
-                job_id=row.job_id,
-                taxonomy="skill",
-                raw_name=row.raw_name,
-                normalized_key=row.normalized_key,
-                resolution=row.resolution,
-                status=row.status,
-                skill_code=row.skill_code,
-                candidate_id=row.candidate_id,
-                origin_candidate_id=row.origin_candidate_id,
-                generic_tag=row.generic_tag,
-                rejection_reason=row.rejection_reason,
-                source=row.source,
-                confidence=row.confidence,
-                provenance=dict(row.provenance),
-                evidence_hash=row.evidence_hash,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                superseded_at=row.superseded_at,
-            )
-            for row in snapshot.skill_mentions
-        )
-        self.db.flush()
 
     def assign_job(self, command: AssignCurrentJobTaxonomyCommand) -> None:
         self._require_assignable_codes("job", (command.taxonomy_code,))

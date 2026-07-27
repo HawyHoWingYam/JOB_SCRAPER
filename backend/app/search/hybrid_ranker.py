@@ -62,11 +62,9 @@ def _lexical_score(query_tokens: set[str], job, company) -> float:
 
 
 def _taxonomy_score(query_tokens: set[str], job) -> float:
-    taxonomy = getattr(job, "job_taxonomy_path", None)
     return _overlap_score(
         query_tokens,
         [
-            taxonomy,
             getattr(job, "source_classification_name", None),
             getattr(job, "source_subclassification_name", None),
         ],

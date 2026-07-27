@@ -46,9 +46,6 @@ from app.models.current_taxonomy import (
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
 from app.models.job_embedding import EMBEDDING_DIMENSIONS, JobEmbedding
-from app.models.job_category import JobCategory
-from app.models.job_domain import JobDomain
-from app.models.job_subcategory import JobSubcategory
 from app.models.source_job_attributes import (
     SOURCE_JOB_ATTRIBUTE_TABLES,
     EmploymentType,
@@ -95,9 +92,6 @@ def product_contract_db():
     with engine.begin() as connection:
         connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     tables = (
-        JobDomain.__table__,
-        JobCategory.__table__,
-        JobSubcategory.__table__,
         Company.__table__,
         Job.__table__,
         JobEmbedding.__table__,
@@ -856,21 +850,10 @@ def test_job_detail_contract_rejects_missing_composed_governed_states() -> None:
             JobDetailSchema.model_validate(incomplete)
 
 
-def test_dashboard_category_stats_use_only_governed_current_assignments(
+def test_dashboard_category_stats_use_only_current_assignments(
     product_contract_db,
 ) -> None:
-    state = _seed_rich_job_detail_state(product_contract_db)
-    legacy_domain = JobDomain(name="Legacy Taxonomy")
-    legacy_category = JobCategory(name="General", domain=legacy_domain)
-    legacy_subcategory = JobSubcategory(
-        name="General",
-        category=legacy_category,
-    )
-    product_contract_db.add(legacy_subcategory)
-    product_contract_db.flush()
-    product_contract_db.get(
-        Job, state["job_one_id"]
-    ).subcategory_id = legacy_subcategory.id
+    _seed_rich_job_detail_state(product_contract_db)
     product_contract_db.commit()
 
     payload = asyncio.run(get_dashboard_category_stats(db=product_contract_db))

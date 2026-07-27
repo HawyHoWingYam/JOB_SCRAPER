@@ -7,9 +7,8 @@ from app.job_intelligence.current_taxonomies.contracts import (
     CurrentTaxonomyAlias,
     CurrentTaxonomyNode,
     CurrentTaxonomySnapshot,
-    TaxonomyPreservationManifest,
 )
-from app.job_intelligence.skill_governance.normalization import (
+from app.job_intelligence.current_taxonomies.normalization import (
     normalize_skill_lookup_key,
 )
 
@@ -178,27 +177,6 @@ def transform_skill_taxonomy(seed: Mapping[str, Any]) -> CurrentTaxonomySnapshot
         aliases=tuple(aliases),
     )
     return _validated_snapshot(snapshot)
-
-
-def build_preservation_manifest(
-    snapshot: CurrentTaxonomySnapshot,
-    legacy_identity_to_code: Mapping[object, object],
-) -> TaxonomyPreservationManifest:
-    current_codes = {node.code for node in snapshot.nodes}
-    normalized: dict[str, str] = {}
-    for legacy_identity, code in legacy_identity_to_code.items():
-        legacy_key = _required_text(legacy_identity, field="legacy_identity")
-        stable_code = _required_text(code, field="stable_code")
-        if stable_code not in current_codes:
-            raise ValueError(f"Unknown current {snapshot.taxonomy} taxonomy code {stable_code!r}")
-        if legacy_key in normalized:
-            raise ValueError(f"Duplicate legacy taxonomy identity {legacy_key!r}")
-        normalized[legacy_key] = stable_code
-    return TaxonomyPreservationManifest(
-        taxonomy=snapshot.taxonomy,
-        node_count=len(snapshot.nodes),
-        legacy_identity_to_code=normalized,
-    )
 
 
 def _validated_snapshot(snapshot: CurrentTaxonomySnapshot) -> CurrentTaxonomySnapshot:

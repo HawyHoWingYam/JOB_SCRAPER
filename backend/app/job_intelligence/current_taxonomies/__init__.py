@@ -7,10 +7,8 @@ from app.job_intelligence.current_taxonomies.contracts import (
     CurrentTaxonomySnapshot,
     ReplaceCurrentCompanyIndustriesCommand,
     ReplaceCurrentJobSkillsCommand,
-    TaxonomyPreservationManifest,
 )
 from app.job_intelligence.current_taxonomies.transforms import (
-    build_preservation_manifest,
     transform_company_industry_taxonomy,
     transform_job_taxonomy,
     transform_skill_taxonomy,
@@ -29,11 +27,6 @@ from app.job_intelligence.current_taxonomies.read_model import (
     CurrentTaxonomyReadError,
     CurrentTaxonomyReader,
 )
-from app.job_intelligence.current_taxonomies.preservation import (
-    CurrentTaxonomyPreservationLoader,
-    PersistedTaxonomyPreservationSnapshot,
-    TaxonomyPreservationError,
-)
 
 __all__ = [
     "AssignCurrentJobTaxonomyCommand",
@@ -44,18 +37,13 @@ __all__ = [
     "CurrentTaxonomyAlias",
     "CurrentTaxonomyEnrichment",
     "CurrentTaxonomyNode",
-    "CurrentTaxonomyPreservationLoader",
     "CurrentTaxonomyReadError",
     "CurrentTaxonomyReader",
     "CurrentTaxonomySnapshot",
     "CurrentTaxonomyStore",
     "CurrentJobTaxonomyEmbeddingDocument",
-    "PersistedTaxonomyPreservationSnapshot",
     "ReplaceCurrentCompanyIndustriesCommand",
     "ReplaceCurrentJobSkillsCommand",
-    "TaxonomyPreservationManifest",
-    "TaxonomyPreservationError",
-    "build_preservation_manifest",
     "transform_company_industry_taxonomy",
     "transform_job_taxonomy",
     "transform_skill_taxonomy",

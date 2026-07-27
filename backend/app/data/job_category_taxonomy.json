@@ -1,11 +1,4 @@
 {
-  "schema_version": 1,
-  "release_key": "canonical-job-taxonomy-v1",
-  "expected_counts": {
-    "domains": 25,
-    "categories": 63,
-    "subcategories": 198
-  },
   "domains": [
     {
       "code": "accounting",

@@ -99,7 +99,7 @@ JOB_SEARCH_EXPORT_FIELDNAMES = [
     "salary_currency",
     "source_classification_name",
     "source_subclassification_name",
-    "job_taxonomy_path",
+    "canonical_taxonomy_code",
     "ai_summary",
     "experience_level",
     "experience_min_years",
@@ -615,8 +615,6 @@ def _build_search_response_from_results(
                 location=job.location,
                 salary_range=job.salary_range,
                 employment_type=job.employment_type,
-                subcategory_id=job.subcategory_id,
-                job_taxonomy=job.job_taxonomy,
                 company_name=company.name if company else None,
                 posted_date=job.posted_date.isoformat() if job.posted_date else None,
                 source_classification_paths=job.source_classification_paths,
@@ -684,15 +682,31 @@ def _strip_html_text(value: Optional[str]) -> str:
 
 def _build_export_rows(query):
     results = query.order_by(Job.posted_date.desc().nullslast()).all()
-    skill_states = JobIntelligenceProductReadModel(
-        query.session
-    ).get_governed_skill_name_states([job.id for job, _company in results])
-    return _build_export_rows_from_results(results, skill_states=skill_states)
+    return _build_export_rows_from_results(results, db=query.session)
 
 
-def _build_export_rows_from_results(results, *, skill_states):
+def _build_export_rows_from_results(results, *, db: Session | None = None):
+    results = list(results)
+    if results and db is None:
+        db = object_session(results[0][0])
+    if results and db is None:
+        raise RuntimeError("Job export rows are detached from their Session")
+    job_ids = [job.id for job, _company in results]
+    product_reader = JobIntelligenceProductReadModel(db) if db is not None else None
+    skill_states = (
+        product_reader.get_governed_skill_name_states(job_ids)
+        if product_reader is not None
+        else {}
+    )
+    taxonomy_states = (
+        product_reader.get_canonical_job_states(job_ids)
+        if product_reader is not None
+        else {}
+    )
     rows = []
     for job, company in results:
+        taxonomy = taxonomy_states[job.id]["canonical_taxonomy"]
+        assignment = taxonomy.get("assignment") if taxonomy else None
         rows.append(
             {
                 "job_id": job.job_id,
@@ -714,7 +728,9 @@ def _build_export_rows_from_results(results, *, skill_states):
                 "source_classification_name": job.source_classification_name or "",
                 "source_subclassification_name": job.source_subclassification_name
                 or "",
-                "job_taxonomy_path": job.job_taxonomy_path or "",
+                "canonical_taxonomy_code": (
+                    assignment.get("taxonomy_code") if assignment else ""
+                ),
                 "ai_summary": job.ai_summary or "",
                 "experience_level": job.experience_level or "",
                 "experience_min_years": ""

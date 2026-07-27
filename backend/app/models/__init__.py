@@ -17,15 +17,6 @@ from app.models.schedule import (
     ScheduleExecution,
     SchedulerRuntimeHeartbeat,
 )
-from app.models.skill_category import SkillCategory
-from app.models.skill_technology import SkillTechnology
-from app.models.skill import Skill
-from app.models.job_domain import JobDomain
-from app.models.job_category import JobCategory
-from app.models.job_subcategory import JobSubcategory
-from app.models.job_skill import JobSkill
-from app.models.job_skill_mention import JobSkillMention
-from app.models.skill_review_candidate import SkillReviewCandidate
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.company_enrichment_run import (
     CompanyEnrichmentRun,
@@ -51,7 +42,6 @@ from app.models.current_taxonomy import (
 from app.models.governance import (
     GovernanceAuditEvent,
     GovernanceIdempotencyRecord,
-    GovernanceRevision,
 )
 from app.models.source_job_attributes import (
     EmploymentType,
@@ -60,40 +50,6 @@ from app.models.source_job_attributes import (
     JobSourceClassificationPath,
     JobSourceClassificationPathNode,
     JobSourceEmploymentLabel,
-)
-from app.models.canonical_job_taxonomy import (
-    CanonicalJobCategory,
-    CanonicalJobDomain,
-    CanonicalJobSubcategory,
-    CanonicalJobTaxonomyActiveMappingRevision,
-    CanonicalJobTaxonomyActiveRevision,
-    CanonicalJobTaxonomyMappingCoverage,
-    CanonicalJobTaxonomyMappingRevision,
-    CanonicalJobTaxonomyRelease,
-    JobTaxonomyAssignment,
-    JobTaxonomyReviewItem,
-    SourceJobTaxonomyMapping,
-    SourceJobTaxonomyMappingTarget,
-)
-from app.models.company_industry import (
-    CompanyIndustryActiveRevision,
-    CompanyIndustryAssignment,
-    CompanyIndustryCrosswalkEdge,
-    CompanyIndustryReviewItem,
-    CompanyIndustryTaxonomyNode,
-    CompanyIndustryTaxonomyRelease,
-    SourceIndustryMapping,
-)
-from app.models.skill_governance import (
-    GovernedJobSkill,
-    GovernedJobSkillMention,
-    GovernedSkill,
-    GovernedSkillAlias,
-    GovernedSkillCategory,
-    GovernedSkillTechnology,
-    SkillCandidate,
-    SkillTaxonomyActiveRevision,
-    SkillTaxonomyRelease,
 )
 
 __all__ = [
@@ -113,15 +69,6 @@ __all__ = [
     "ScrapeSchedule",
     "ScheduleExecution",
     "SchedulerRuntimeHeartbeat",
-    "SkillCategory",
-    "SkillTechnology",
-    "Skill",
-    "JobDomain",
-    "JobCategory",
-    "JobSubcategory",
-    "JobSkill",
-    "JobSkillMention",
-    "SkillReviewCandidate",
     "EnrichmentRun",
     "EnrichmentRunItem",
     "CompanyEnrichmentRun",
@@ -141,39 +88,10 @@ __all__ = [
     "CurrentSourceTaxonomyMapping",
     "GovernanceAuditEvent",
     "GovernanceIdempotencyRecord",
-    "GovernanceRevision",
     "EmploymentType",
     "JobEmploymentType",
     "JobSourceAttributeProjection",
     "JobSourceClassificationPath",
     "JobSourceClassificationPathNode",
     "JobSourceEmploymentLabel",
-    "CanonicalJobCategory",
-    "CanonicalJobDomain",
-    "CanonicalJobSubcategory",
-    "CanonicalJobTaxonomyActiveMappingRevision",
-    "CanonicalJobTaxonomyActiveRevision",
-    "CanonicalJobTaxonomyMappingCoverage",
-    "CanonicalJobTaxonomyMappingRevision",
-    "CanonicalJobTaxonomyRelease",
-    "JobTaxonomyAssignment",
-    "JobTaxonomyReviewItem",
-    "SourceJobTaxonomyMapping",
-    "SourceJobTaxonomyMappingTarget",
-    "CompanyIndustryActiveRevision",
-    "CompanyIndustryAssignment",
-    "CompanyIndustryCrosswalkEdge",
-    "CompanyIndustryReviewItem",
-    "CompanyIndustryTaxonomyNode",
-    "CompanyIndustryTaxonomyRelease",
-    "SourceIndustryMapping",
-    "GovernedJobSkill",
-    "GovernedJobSkillMention",
-    "GovernedSkill",
-    "GovernedSkillAlias",
-    "GovernedSkillCategory",
-    "GovernedSkillTechnology",
-    "SkillCandidate",
-    "SkillTaxonomyActiveRevision",
-    "SkillTaxonomyRelease",
 ]

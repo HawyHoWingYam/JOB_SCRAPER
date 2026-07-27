@@ -1,8 +1,6 @@
 {
-  "schema_version": 1,
   "standard": "HSIC",
-  "release": "V2.0",
-  "release_key": "hsic-v2.0-2008",
+  "standard_edition": "V2.0",
   "source": {
     "publisher": "Hong Kong Census and Statistics Department",
     "rights_owner": "Government of the Hong Kong Special Administrative Region",
@@ -16,13 +14,6 @@
       "Parent codes and global source order derived",
       "Fields normalized into the project seed schema"
     ]
-  },
-  "expected_counts": {
-    "section": 21,
-    "division": 88,
-    "group": 221,
-    "class": 483,
-    "subclass": 1001
   },
   "nodes": [
     {

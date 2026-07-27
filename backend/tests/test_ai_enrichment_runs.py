@@ -111,7 +111,6 @@ def make_job(
                 job_id=row.id,
                 source_site=source_site,
                 evidence_hash="0" * 64,
-                version=1,
             )
         )
         db.flush()

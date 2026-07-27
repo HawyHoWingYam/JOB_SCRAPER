@@ -497,7 +497,6 @@ class JobTaxonomyClassificationAdapter:
             for key, value in {
                 "provider": llm_status.get("active_provider"),
                 "name": llm_status.get("active_model"),
-                "version": llm_status.get("model_version"),
             }.items()
             if isinstance(value, str) and value.strip()
         }

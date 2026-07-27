@@ -22,7 +22,7 @@ OUTPUT_PATH = (
     / "app"
     / "scraper"
     / "offertoday"
-    / "category_catalog_v1.json"
+    / "category_registry.json"
 )
 
 
@@ -78,7 +78,6 @@ def main() -> int:
     if (len(categories), child_count, alias_count) != (31, 462, 31):
         raise ValueError("official category snapshot counts do not match v1")
     output = {
-        "schema_version": 1,
         "source_commit": SOURCE_COMMIT,
         "source_git_blob": SOURCE_GIT_BLOB,
         "source_endpoint": SOURCE_ENDPOINT,

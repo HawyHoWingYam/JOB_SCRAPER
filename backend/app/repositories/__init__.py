@@ -10,7 +10,6 @@ from .event_outbox_repository import EventOutboxRepository
 from .job_embedding_repository import JobEmbeddingRepository
 from .job_repository import JobRepository
 from .skill_repository import SkillRepository
-from .job_skill_repository import JobSkillRepository
 
 __all__ = [
     "CompanyRepository",
@@ -19,5 +18,4 @@ __all__ = [
     "JobEmbeddingRepository",
     "JobRepository",
     "SkillRepository",
-    "JobSkillRepository",
 ]

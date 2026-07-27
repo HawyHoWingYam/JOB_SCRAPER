@@ -9,7 +9,6 @@ from app.schemas.job import (
     EmploymentTypeCode,
     EmploymentTypeSchema,
     JobIntelligenceDomainAvailabilitySchema,
-    JobTaxonomySchema,
     SourceClassificationPathSchema,
 )
 from app.schemas.current_taxonomy import CurrentJobTaxonomyStateSchema
@@ -199,8 +198,6 @@ class JobWithCompanySchema(BaseModel):
     location: Optional[str] = None
     salary_range: Optional[str] = None
     employment_type: Optional[str] = None
-    subcategory_id: Optional[UUID] = None
-    job_taxonomy: Optional[JobTaxonomySchema] = None
     company_name: Optional[str] = None
     posted_date: Optional[str] = None
     source_classification_paths: List[SourceClassificationPathSchema] = Field(

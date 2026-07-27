@@ -19,9 +19,6 @@ from app.messaging.topics import STREAM_JOB_INGEST
 from app.models.company import Company
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
-from app.models.job_category import JobCategory
-from app.models.job_domain import JobDomain
-from app.models.job_subcategory import JobSubcategory
 from app.models.source_classification import SourceClassification
 from app.models.source_job_attributes import (
     SOURCE_JOB_ATTRIBUTE_TABLES,
@@ -146,9 +143,6 @@ def source_attribute_engine():
     engine = create_engine(database_url)
     tables = (
         Company.__table__,
-        JobDomain.__table__,
-        JobCategory.__table__,
-        JobSubcategory.__table__,
         Job.__table__,
         EventOutbox.__table__,
         SourceClassification.__table__,

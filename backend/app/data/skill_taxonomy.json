@@ -1,19 +1,11 @@
 {
-  "schema_version": 1,
-  "release_key": "skills-2026-07-19-v1",
-  "expected_counts": {
-    "categories": 8,
-    "technologies": 33,
-    "skills": 91
-  },
   "source": {
     "kind": "project-curated",
-    "title": "JOB_SCRAPER governed Skill taxonomy",
+    "title": "JOB_SCRAPER Skill taxonomy",
     "effective_date": "2026-07-19",
     "documents": [
       "skill_taxonomy.json",
-      "skill_curation_rules.json",
-      "skill_backfill_curations.json"
+      "skill_curation_rules.json"
     ]
   },
   "categories": [

@@ -34,10 +34,6 @@ class JobSourceAttributeProjection(Base):
             "length(evidence_hash) = 64",
             name="ck_job_source_attribute_projection_hash",
         ),
-        CheckConstraint(
-            "version > 0",
-            name="ck_job_source_attribute_projection_version",
-        ),
     )
 
     job_id = Column(
@@ -47,7 +43,6 @@ class JobSourceAttributeProjection(Base):
     )
     source_site = Column(String(32), nullable=False, index=True)
     evidence_hash = Column(String(64), nullable=False)
-    version = Column(Integer, nullable=False, default=1)
     captured_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     job = relationship("Job", back_populates="source_attribute_projection")

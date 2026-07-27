@@ -70,7 +70,6 @@ class SourceJobAttributes:
             view = self.get(job_id)
             return ProjectionResult(
                 changed=False,
-                version=projection.version,
                 view=view,
             )
 
@@ -79,12 +78,10 @@ class SourceJobAttributes:
                 job_id=job_id,
                 source_site=evidence.source_site,
                 evidence_hash=evidence_hash,
-                version=1,
             )
             self.db.add(projection)
         else:
             projection.evidence_hash = evidence_hash
-            projection.version += 1
             self._delete_current_projection(job_id)
 
         for path_evidence in evidence.classification_paths:
@@ -159,7 +156,6 @@ class SourceJobAttributes:
             payload={
                 "job_id": str(job_id),
                 "source_site": evidence.source_site,
-                "version": projection.version,
                 "evidence_hash": evidence_hash,
             },
             auto_commit=False,
@@ -168,7 +164,6 @@ class SourceJobAttributes:
         view = self.get(job_id)
         return ProjectionResult(
             changed=True,
-            version=projection.version,
             view=view,
         )
 
@@ -203,7 +198,6 @@ class SourceJobAttributes:
         return SourceJobAttributesView(
             job_id=job_id,
             source_site=projection.source_site,
-            version=projection.version,
             evidence_hash=projection.evidence_hash,
             source_classification_paths=tuple(self._path_view(path) for path in paths),
             employment_types=tuple(

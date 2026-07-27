@@ -69,12 +69,6 @@ class Job(Base):
     )
     title = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
-    subcategory_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("job_subcategories.id"),
-        nullable=True,
-        index=True,
-    )
     source_classification_id = Column(String(50), nullable=True, index=True)
     source_classification_name = Column(String(255), nullable=True, index=True)
     source_subclassification_id = Column(String(50), nullable=True, index=True)
@@ -105,27 +99,6 @@ class Job(Base):
 
     # Relationships
     company = relationship("Company", back_populates="jobs")
-    subcategory = relationship("JobSubcategory", back_populates="jobs")
-    job_skills = relationship(
-        "JobSkill", back_populates="job", cascade="all, delete-orphan"
-    )
-    job_skill_mentions = relationship(
-        "JobSkillMention",
-        back_populates="job",
-        cascade="all, delete-orphan",
-    )
-    governed_job_skills = relationship(
-        "GovernedJobSkill",
-        back_populates="job",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
-    governed_skill_mentions = relationship(
-        "GovernedJobSkillMention",
-        back_populates="job",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
     source_attribute_projection = relationship(
         "JobSourceAttributeProjection",
         back_populates="job",
@@ -176,36 +149,6 @@ class Job(Base):
     @property
     def company_ai_description(self) -> Optional[str]:
         return self.company.ai_description if self.company else None
-
-    @property
-    def job_taxonomy(self) -> Optional[dict[str, Any]]:
-        subcategory = self.subcategory
-        if (
-            subcategory is None
-            or subcategory.category is None
-            or subcategory.category.domain is None
-        ):
-            return None
-
-        category = subcategory.category
-        domain = category.domain
-        return {
-            "domain_id": domain.id,
-            "domain_name": domain.name,
-            "category_id": category.id,
-            "category_name": category.name,
-            "subcategory_id": subcategory.id,
-            "subcategory_name": subcategory.name,
-            "path": f"{domain.name} / {category.name} / {subcategory.name}",
-        }
-
-    @property
-    def job_taxonomy_path(self) -> Optional[str]:
-        taxonomy = self.job_taxonomy
-        if taxonomy is None:
-            return None
-        path = taxonomy.get("path")
-        return str(path) if path else None
 
     def _raw_data_mapping(self) -> Optional[dict[str, Any]]:
         value: Any = self.raw_data

@@ -14,10 +14,9 @@ from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from app.scraper.offertoday.category_registry import (
     OFFERTODAY_CATEGORIES_L1,
-    OFFERTODAY_CATEGORY_CATALOG_VERSION,
     OfferTodayCategory,
     iter_offertoday_leaf_categories,
-    offertoday_category_catalog_hash,
+    offertoday_category_registry_hash,
 )
 from app.sources.offertoday.listing_contract import (
     OFFERTODAY_ENDPOINT_CONTRACTS,
@@ -223,8 +222,7 @@ _PARTITION_ORDER = {
 def offertoday_partition_catalog_payload() -> dict[str, Any]:
     return {
         "schema_version": PARTITION_SCHEMA_VERSION,
-        "category_catalog_version": OFFERTODAY_CATEGORY_CATALOG_VERSION,
-        "category_catalog_hash": offertoday_category_catalog_hash(),
+        "category_registry_hash": offertoday_category_registry_hash(),
         "partitions": [
             partition.to_payload() for partition in OFFERTODAY_PARTITION_CATALOG
         ],

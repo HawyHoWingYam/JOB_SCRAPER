@@ -10,8 +10,7 @@ from typing import Any
 
 from app.scraper.offertoday.category_registry import (
     OFFERTODAY_CATEGORIES_L1,
-    OFFERTODAY_CATEGORY_CATALOG_VERSION,
-    offertoday_category_catalog_hash,
+    offertoday_category_registry_hash,
 )
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailIdentity,
@@ -229,8 +228,7 @@ class DiscoveryPolicyCandidateV2:
     endpoint_contract_hash: str
     endpoint: str
     rcd_type: int | None
-    category_catalog_version: int
-    category_catalog_hash: str
+    category_registry_hash: str
     partition_catalog_hash: str
     phase_d_partitions: tuple[OfferTodayPartitionDefinition, ...]
     retained_partition_ids: tuple[str, ...]
@@ -266,10 +264,8 @@ class DiscoveryPolicyCandidateV2:
         if self.rcd_type not in contract.allowed_rcd_types:
             raise ValueError("rcd_type is not allowed by the endpoint contract")
 
-        if self.category_catalog_version != OFFERTODAY_CATEGORY_CATALOG_VERSION:
-            raise ValueError("category_catalog_version does not match the registry")
-        if self.category_catalog_hash != offertoday_category_catalog_hash():
-            raise ValueError("category_catalog_hash does not match the registry")
+        if self.category_registry_hash != offertoday_category_registry_hash():
+            raise ValueError("category_registry_hash does not match the registry")
         if self.partition_catalog_hash != offertoday_partition_catalog_hash():
             raise ValueError("partition_catalog_hash does not match the registry")
 
@@ -376,8 +372,7 @@ class DiscoveryPolicyCandidateV2:
             "endpoint_contract_hash": self.endpoint_contract_hash,
             "endpoint": self.endpoint,
             "rcd_type": self.rcd_type,
-            "category_catalog_version": self.category_catalog_version,
-            "category_catalog_hash": self.category_catalog_hash,
+            "category_registry_hash": self.category_registry_hash,
             "partition_catalog_hash": self.partition_catalog_hash,
             "phase_d_partitions": [
                 partition.to_payload() for partition in self.phase_d_partitions
@@ -427,8 +422,7 @@ class DiscoveryPolicyCandidateV2:
             "endpoint_contract_hash",
             "endpoint",
             "rcd_type",
-            "category_catalog_version",
-            "category_catalog_hash",
+            "category_registry_hash",
             "partition_catalog_hash",
             "phase_d_partitions",
             "retained_partition_ids",
@@ -472,8 +466,7 @@ class DiscoveryPolicyCandidateV2:
             endpoint_contract_hash=payload["endpoint_contract_hash"],
             endpoint=payload["endpoint"],
             rcd_type=payload["rcd_type"],
-            category_catalog_version=payload["category_catalog_version"],
-            category_catalog_hash=payload["category_catalog_hash"],
+            category_registry_hash=payload["category_registry_hash"],
             partition_catalog_hash=payload["partition_catalog_hash"],
             phase_d_partitions=tuple(
                 OfferTodayPartitionDefinition.from_payload(item)

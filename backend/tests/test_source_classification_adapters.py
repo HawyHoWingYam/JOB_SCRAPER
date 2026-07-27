@@ -122,7 +122,6 @@ def test_ctgoodjobs_catalog_compiles_known_native_paths_without_slug_guessing():
     accounting = adapter.compile(nodes["ctgoodjobs:001"])[0]
 
     assert information_technology.to_payload() == {
-        "version": 1,
         "adapter": "ctgoodjobs.category",
         "classification_id": "ctgoodjobs:021",
         "native_id": "021",

@@ -1,10 +1,4 @@
-"""Frozen OfferToday POSITION taxonomy and compatibility helpers.
-
-The v1 catalog is normalized from the official filter response captured at
-``/wapi/geek/recommend/filter/content/all``. Production callers continue to see
-the same ordered 31 top-level categories; research callers can additionally use
-the complete official child hierarchy and its canonical hash.
-"""
+"""Current OfferToday POSITION classification registry."""
 
 from __future__ import annotations
 
@@ -15,16 +9,14 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 
-OFFERTODAY_CATEGORY_CATALOG_VERSION = 1
 OFFERTODAY_CATEGORY_SOURCE_COMMIT = (
     "ed03f114fb8bc73eeb11139d82325a7944802701"
 )
 OFFERTODAY_CATEGORY_SOURCE_GIT_BLOB = "80960e8dad9a0f84ca928218ed81bd0133fc18c5"
 OFFERTODAY_CATEGORY_SOURCE_ENDPOINT = "/wapi/geek/recommend/filter/content/all"
-_CATALOG_PATH = Path(__file__).with_name("category_catalog_v1.json")
+_REGISTRY_PATH = Path(__file__).with_name("category_registry.json")
 _NODE_FIELDS = {"code", "name", "parent_code", "level", "children"}
-_CATALOG_FIELDS = {
-    "schema_version",
+_REGISTRY_FIELDS = {
     "source_commit",
     "source_git_blob",
     "source_endpoint",
@@ -34,7 +26,7 @@ _CATALOG_FIELDS = {
 
 
 def _exact_int(value: Any, field_name: str) -> int:
-    if type(value) is not int:
+    if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{field_name} must be an exact integer")
     return value
 
@@ -51,7 +43,7 @@ def _nonblank_string(value: Any, field_name: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class OfferTodayCategory:
-    """One immutable node from the official POSITION taxonomy."""
+    """One current node from the official POSITION taxonomy."""
 
     code: int
     name: str
@@ -63,7 +55,11 @@ class OfferTodayCategory:
         _exact_int(self.code, "code")
         _nonblank_string(self.name, "name")
         _exact_int(self.parent_code, "parent_code")
-        if type(self.level) is not int or self.level not in (1, 2):
+        if (
+            not isinstance(self.level, int)
+            or isinstance(self.level, bool)
+            or self.level not in (1, 2)
+        ):
             raise ValueError("level must be the exact integer 1 or 2")
         if not isinstance(self.children, tuple) or any(
             not isinstance(child, OfferTodayCategory) for child in self.children
@@ -73,7 +69,7 @@ class OfferTodayCategory:
             raise ValueError("level-2 category nodes cannot own children")
 
     def to_dict(self) -> dict[str, Any]:
-        """Return the historical flat shape used by SourceCategoryRegistry."""
+        """Return the flat shape used by SourceCategoryRegistry."""
 
         return {
             "code": self.code,
@@ -82,16 +78,16 @@ class OfferTodayCategory:
             "level": self.level,
         }
 
-    def to_catalog_dict(self) -> dict[str, Any]:
+    def to_registry_dict(self) -> dict[str, Any]:
         return {
             **self.to_dict(),
-            "children": [child.to_catalog_dict() for child in self.children],
+            "children": [child.to_registry_dict() for child in self.children],
         }
 
 
 def _parse_node(value: Any) -> OfferTodayCategory:
     if not isinstance(value, Mapping) or set(value) != _NODE_FIELDS:
-        raise ValueError("category node fields do not match v1")
+        raise ValueError("category node fields are invalid")
     children = value["children"]
     if not isinstance(children, list):
         raise ValueError("category children must be a list")
@@ -104,25 +100,24 @@ def _parse_node(value: Any) -> OfferTodayCategory:
     )
 
 
-def _load_catalog() -> tuple[OfferTodayCategory, ...]:
-    payload = json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or set(payload) != _CATALOG_FIELDS:
-        raise ValueError("OfferToday category catalog fields do not match v1")
+def _load_registry() -> tuple[OfferTodayCategory, ...]:
+    payload = json.loads(_REGISTRY_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or set(payload) != _REGISTRY_FIELDS:
+        raise ValueError("OfferToday classification registry fields are invalid")
     expected_metadata = {
-        "schema_version": OFFERTODAY_CATEGORY_CATALOG_VERSION,
         "source_commit": OFFERTODAY_CATEGORY_SOURCE_COMMIT,
         "source_git_blob": OFFERTODAY_CATEGORY_SOURCE_GIT_BLOB,
         "source_endpoint": OFFERTODAY_CATEGORY_SOURCE_ENDPOINT,
         "language": "en",
     }
     if any(payload.get(key) != value for key, value in expected_metadata.items()):
-        raise ValueError("OfferToday category catalog provenance does not match v1")
+        raise ValueError("OfferToday classification registry provenance is invalid")
     raw_categories = payload["categories"]
     if not isinstance(raw_categories, list):
-        raise ValueError("OfferToday category catalog categories must be a list")
+        raise ValueError("OfferToday classification registry categories must be a list")
     categories = tuple(_parse_node(item) for item in raw_categories)
     if len(categories) != 31 or len({item.code for item in categories}) != 31:
-        raise ValueError("OfferToday category catalog must contain 31 unique roots")
+        raise ValueError("OfferToday classification registry must contain 31 unique roots")
 
     child_count = 0
     alias_count = 0
@@ -145,11 +140,11 @@ def _load_catalog() -> tuple[OfferTodayCategory, ...]:
         if aliases != 1:
             raise ValueError("each OfferToday root must own one same-code alias")
     if (child_count, alias_count, len(query_leaf_codes)) != (462, 31, 431):
-        raise ValueError("OfferToday category catalog v1 counts do not match")
+        raise ValueError("OfferToday classification registry counts do not match")
     return categories
 
 
-OFFERTODAY_CATEGORIES_L1: tuple[OfferTodayCategory, ...] = _load_catalog()
+OFFERTODAY_CATEGORIES_L1: tuple[OfferTodayCategory, ...] = _load_registry()
 
 
 def iter_offertoday_category_nodes() -> Iterator[OfferTodayCategory]:
@@ -168,22 +163,21 @@ def iter_offertoday_leaf_categories(
                 yield child
 
 
-def offertoday_category_catalog_payload() -> dict[str, Any]:
+def offertoday_category_registry_payload() -> dict[str, Any]:
     return {
-        "schema_version": OFFERTODAY_CATEGORY_CATALOG_VERSION,
         "source_commit": OFFERTODAY_CATEGORY_SOURCE_COMMIT,
         "source_git_blob": OFFERTODAY_CATEGORY_SOURCE_GIT_BLOB,
         "source_endpoint": OFFERTODAY_CATEGORY_SOURCE_ENDPOINT,
         "language": "en",
         "categories": [
-            category.to_catalog_dict() for category in OFFERTODAY_CATEGORIES_L1
+            category.to_registry_dict() for category in OFFERTODAY_CATEGORIES_L1
         ],
     }
 
 
-def offertoday_category_catalog_hash() -> str:
+def offertoday_category_registry_hash() -> str:
     canonical = json.dumps(
-        offertoday_category_catalog_payload(),
+        offertoday_category_registry_payload(),
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
@@ -192,7 +186,7 @@ def offertoday_category_catalog_hash() -> str:
 
 
 def get_offertoday_category(code: int) -> OfferTodayCategory | None:
-    """Look up a top-level category by code (historical behavior)."""
+    """Look up a current top-level category by code."""
 
     for category in OFFERTODAY_CATEGORIES_L1:
         if category.code == code:
@@ -201,7 +195,7 @@ def get_offertoday_category(code: int) -> OfferTodayCategory | None:
 
 
 def get_all_offertoday_categories() -> list[dict[str, Any]]:
-    """Return all L1 categories as the legacy SourceCategoryRegistry shape."""
+    """Return all current L1 categories for SourceCategoryRegistry."""
 
     return [
         {

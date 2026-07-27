@@ -6,11 +6,13 @@ from sqlalchemy.engine import make_url
 
 
 POSTGRESQL_JOB_INTELLIGENCE_SUITES = (
-    "integration/test_job_intelligence_rebuild.py",
-    "test_job_intelligence_foundation.py",
-    "test_job_intelligence_response_contracts.py",
-    "test_source_job_attribute_ingest.py",
-    "test_source_job_attributes.py",
+    (
+        "integration/test_sandbox_cutover_rehearsal.py",
+        "SANDBOX_CUTOVER_TEST_DATABASE_URL",
+    ),
+    ("test_job_intelligence_response_contracts.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
+    ("test_source_job_attribute_ingest.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
+    ("test_source_job_attributes.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
 )
 
 
@@ -189,17 +191,27 @@ def _test_database_guards(
                 guard_line=node.lineno,
             )
         ]
-        failures = [
+        failure_calls = [
             child
             for statement in node.body
             for child in ast.walk(statement)
             if isinstance(child, ast.Call) and _call_name(child) == "fail"
         ]
-        if suffix_checks and failures:
+        raises = [
+            child
+            for statement in node.body
+            for child in ast.walk(statement)
+            if isinstance(child, ast.Raise)
+        ]
+        failure_lines = [
+            child.lineno
+            for child in (*failure_calls, *raises)
+        ]
+        if suffix_checks and failure_lines:
             guards.append(
                 (
                     min(check.lineno for check in suffix_checks),
-                    min(failure.lineno for failure in failures),
+                    min(failure_lines),
                 )
             )
     return tuple(sorted(guards))
@@ -212,9 +224,13 @@ def test_raw_url_tail_cannot_masquerade_as_a_test_database_name() -> None:
     assert not (make_url(unsafe_url).database or "").endswith("_test")
 
 
-@pytest.mark.parametrize("relative_path", POSTGRESQL_JOB_INTELLIGENCE_SUITES)
+@pytest.mark.parametrize(
+    ("relative_path", "environment_variable"),
+    POSTGRESQL_JOB_INTELLIGENCE_SUITES,
+)
 def test_postgresql_suites_guard_test_database_before_opening_engine(
     relative_path: str,
+    environment_variable: str,
 ) -> None:
     source = (Path(__file__).parent / relative_path).read_text(encoding="utf-8")
     module = ast.parse(source)
@@ -253,7 +269,7 @@ def test_postgresql_suites_guard_test_database_before_opening_engine(
         environment_lookup = _line_of_call(
             nodes,
             name="getenv",
-            argument="JOB_INTELLIGENCE_TEST_DATABASE_URL",
+            argument=environment_variable,
         )
         parsed_database_name = _line_of_parsed_database_name(nodes)
         guards = _test_database_guards(nodes)
