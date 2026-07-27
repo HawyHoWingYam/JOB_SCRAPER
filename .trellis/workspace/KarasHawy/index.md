@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 48
+- **Total Sessions**: 49
 - **Last Active**: 2026-07-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1688 | Active |
+| `journal-1.md` | ~1721 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 49 | 2026-07-27 | Prevent non-executable Source classification synchronization | `7e63f851` | `codex/offertoday-it-coverage-20260702` |
 | 48 | 2026-07-27 | Unversioned sandbox cutover | `939bcff5`, `77c6f823`, `9888496e`, `6b4e2a68`, `91a73800` | `codex/offertoday-it-coverage-20260702` |
 | 47 | 2026-07-27 | Automated classification batches | `044bbd42`, `98532970`, `673c5af9` | `codex/offertoday-it-coverage-20260702` |
 | 46 | 2026-07-27 | Flatten ordinary current taxonomies | `e3b8bce9`, `e795d43a`, `22fe8611`, `2addadf1` | `codex/offertoday-it-coverage-20260702` |

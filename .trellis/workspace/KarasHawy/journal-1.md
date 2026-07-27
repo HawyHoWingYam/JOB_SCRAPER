@@ -1686,3 +1686,36 @@ Removed application version systems and legacy scheduling, rebuilt the shared sa
 ### Next Steps
 
 - None - task complete
+
+
+## Session 49: Prevent non-executable Source classification synchronization
+
+**Date**: 2026-07-27
+**Task**: Prevent non-executable Source classification synchronization
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Added an owning-adapter pre-write executability gate, aggregate redacted CTgoodjobs diagnostics, atomic registry preservation, source-isolation regressions, and the ordinary Source Classification spec contract; archived the Trellis task with GitHub issue #33 awaiting manual QA.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7e63f851` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
