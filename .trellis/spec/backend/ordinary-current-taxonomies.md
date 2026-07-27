@@ -75,14 +75,11 @@ Persistence is owned by `current_taxonomy_nodes`,
   from Mention evidence. Candidate evidence is not a manual review queue.
 - Product, filter, stats, search, AI Enrichment, OfferToday projection, ingest,
   and embedding workers read or write only the current tables.
-- The preservation loader is a temporary, read-only bridge for the one-time
-  sandbox cutover. It may read legacy active rows to produce revision-free
-  retained records, but no API or runtime consumer may import a legacy publisher,
-  reader, decision adapter, or review queue. The final cutover deletes the bridge
-  and legacy tables after import verification.
-- Governance audit rows may be retained as evidence, but known legacy node IDs
-  are rewritten to stable codes and revision/lock-version keys are removed from
-  preserved summaries.
+- Sandbox retention exports only current rows. No API, worker, script, or
+  preservation path may import a legacy publisher, active-state reader,
+  decision adapter, or review queue.
+- Retained audit rows are evidence only; application revision/release/version
+  keys are recursively removed from their JSON summaries.
 
 ### 4. Validation & Error Matrix
 
@@ -124,8 +121,8 @@ Persistence is owned by `current_taxonomy_nodes`,
   ownership.
 - Frontend current taxonomy/API, Job Browser, Job Detail, Company Industry, and
   Dashboard tests assert stable-code payloads and absence of Governance UI.
-- Architecture searches allow legacy taxonomy imports only in the explicit
-  preservation/cutover bridge until the final cutover task deletes it.
+- Architecture searches reject every legacy taxonomy publisher, reader,
+  preservation bridge, and review-queue import.
 
 ### 7. Wrong vs Correct
 

@@ -131,7 +131,7 @@ Persistence is owned by `job_source_attribute_projections`,
   `StatementTooComplex` before any evidence is inspected.
 - Each per-Source report includes recoverable Job/path/label totals, mapped and
   unknown labels, explicit Primary paths, evidence-source and path-count
-  distributions, ambiguity, legacy conflicts, missing revisions,
+  distributions, ambiguity, legacy conflicts, missing evidence,
   provenance-limited Jobs, malformed Jobs, and an unrecoverable-cause
   distribution.
 - Unrecoverable causes are `malformed_source_attribute_evidence`,
@@ -195,15 +195,15 @@ Persistence is owned by `job_source_attribute_projections`,
   and cannot use retired generic/legacy writes.
 - `test_source_job_attribute_api.py` plus the exported detail fixture: stable
   filter/request/response contracts and the retired generic POST error.
-- `test_source_job_attribute_migration.py` plus a disposable-PostgreSQL
-  upgrade/downgrade/re-upgrade rehearsal: tables, constraints, indexes, and
-  idempotent seven-code seeds. Never run this rehearsal against the live
-  corpus.
+- Empty-schema bootstrap and `integration/test_sandbox_cutover_rehearsal.py`
+  verify tables, constraints, indexes, and the seven-code registry in a
+  disposable PostgreSQL database ending in `_test`. There is no migration or
+  downgrade rehearsal.
 - `FilterPanel.test.jsx` and `JobDetailModal.test.jsx`: structured option
   compatibility and backend fixture consumption.
-- `integration/test_job_intelligence_rebuild.py`: preserve the documented
-  17,596-Job PostgreSQL dry-run scale test; do not shrink or mock away the
-  database statement-shape regression.
+- Source-attribute integration coverage preserves the documented 17,596-Job
+  PostgreSQL dry-run scale; do not shrink or mock away the database
+  statement-shape regression.
 
 ### 7. Wrong vs Correct
 

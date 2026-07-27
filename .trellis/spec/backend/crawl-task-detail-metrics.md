@@ -1,6 +1,6 @@
 # Crawl Task Detail Metrics Contract
 
-## Scenario: Versioned cross-source detail snapshots
+## Scenario: Frozen cross-source detail snapshots
 
 ### 1. Scope / Trigger
 
@@ -38,7 +38,7 @@ Current Crawl Tasks and `GET /api/task-control-board` also expose:
 ```python
 DetailSnapshotProjectionV1(
     backlog_scope=...,
-    limit_kind="entire_snapshot|stop_after|legacy",
+    limit_kind="entire_snapshot|stop_after",
     cutoff_at=...,
     target_count=...,
     fetched_count=...,
@@ -54,7 +54,7 @@ DetailSnapshotProjectionV1(
 
 ### 3. Contracts
 
-#### Versioned finite denominator
+#### Frozen finite denominator
 
 When `detail_snapshot_cutoff_at`/Dispatch Plan authority exists:
 
@@ -81,7 +81,7 @@ When a finite detail run reaches a terminal Crawl Job state while
 `completed_with_downstream_backlog` (or `stale_downstream_backlog` for a
 failed/cancelled run) and the metric scope is `backlog_pool`. The raw
 `detail_pending`/`detail_running` counters are not sufficient for this
-decision: versioned snapshot counters are authoritative and may be the only
+decision: frozen snapshot counters are authoritative and may be the only
 remaining-work signal after a worker exits between target transitions.
 
 This backlog state belongs only to the independent run whose requested

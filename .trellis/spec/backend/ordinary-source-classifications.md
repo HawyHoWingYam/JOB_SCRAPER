@@ -36,9 +36,8 @@ GET /api/source-classifications/{source_site}?active_only=true
 GET /api/categories?source_site={source_site}
 ```
 
-The database authority is `source_classifications`. The six former
-`source_catalog_*` governance tables were intentionally dropped by the
-sandbox-only `20260726_180000` cutover.
+The database authority is `source_classifications`. No catalog publication or
+schema-history table participates in runtime reads.
 
 ### 3. Contracts
 
@@ -56,8 +55,8 @@ sandbox-only `20260726_180000` cutover.
 - Startup may refresh ordinary classifications independently per source. A
   failure for one source must not inactivate or block the other sources.
 - Existing Jobs, Companies, source-attribute projections, enrichment results,
-  and classification paths survive classification synchronization and the
-  destructive governance-table cutover.
+  and classification paths survive classification synchronization and sandbox
+  rebuilds.
 
 ### 4. Validation & Error Matrix
 
@@ -93,8 +92,8 @@ sandbox-only `20260726_180000` cutover.
 - `test_crawl_scope_service.py` and `test_crawl_control_api.py`: all/selected
   scope, unknown/inactive/child rejection, and absence of catalog revision
   fields.
-- `test_source_catalog_migration.py`: the destructive sandbox migration drops
-  only former governance tables/columns and preserves collected-data tables.
+- `test_sandbox_cutover.py` and its disposable PostgreSQL rehearsal assert that
+  collected data survives while retired catalog tables remain absent.
 - Standalone and Scrapy runtime tests assert both paths consume the ordinary
   query plan and emit the same source-native constraint.
 

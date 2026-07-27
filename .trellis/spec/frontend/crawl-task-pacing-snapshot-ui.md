@@ -4,7 +4,7 @@
 
 ### 1. Scope / Trigger
 
-Use this contract in Crawl Tasks and Task Details when rendering versioned
+Use this contract in Crawl Tasks and Task Details when rendering frozen
 detail history or changing Cancel/Resume behavior. The UI consumes normalized
 backend projections; it never reconstructs detail authority, progress, or
 pacing from raw request/event payloads.
@@ -17,9 +17,8 @@ CrawlTaskListItem.detail_snapshot: DetailSnapshotProjectionV1 | null
 CrawlTaskListItem.status: ... | cancelling | cancelled
 
 DetailSnapshotProjectionV1 {
-  version: 1
   backlog_scope
-  limit_kind: "entire_snapshot" | "stop_after" | "legacy"
+  limit_kind: "entire_snapshot" | "stop_after"
   cutoff_at
   target_count
   fetched_count
@@ -68,21 +67,21 @@ DetailSnapshotProjectionV1 {
 |---|---|
 | detail + valid pacing | show three formatted values |
 | detail + null pacing | show `Not recorded` |
-| versioned finite snapshot | show normalized target/outcome/remaining values and reviewed run cap |
+| frozen finite snapshot | show normalized target/outcome/remaining values and reviewed run cap |
 | remaining and future are both nonzero | label them as current-snapshot and later-run work; do not total them |
 | Recovery Segment or burst metadata is present | render as pacing only; never as run cap or denominator |
 | raw request/events disagree with normalized fields | ignore raw data and render the normalized projection |
 | listing + any pacing value | no pacing card |
 | cancelling | pending-stop banner, disabled Cancel, no Resume, 1-second poll |
 | cancelled/completed/failed | no Cancel |
-| malformed backend pacing | backend projects null; UI shows historical wording |
+| malformed backend pacing | backend projects null; UI shows `Not recorded` |
 
 ### 5. Good / Base / Bad Cases
 
 - **Good:** A detail task displays `1-3 seconds`, `20 attempts`, and `30
   seconds`, matching its immutable startup snapshot. It separately displays
   `4 remaining in snapshot` and `27 eligible for a later run`.
-- **Base:** A historical detail task displays `Not recorded` and no guessed
+- **Base:** A detail task without recorded pacing displays `Not recorded` and no guessed
   values.
 - **Bad:** The component reads `request_payload.detail_pacing` directly and
   accidentally shows a listing task's malformed pacing object.

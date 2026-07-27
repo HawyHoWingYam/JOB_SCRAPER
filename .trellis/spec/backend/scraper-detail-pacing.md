@@ -104,7 +104,8 @@ contain several `manual_action_required` rows for one source.
 - `test_scraper_pacing_settings.py`: exact sources/defaults, independent
   update/reset, all safety boundaries, unknown fields, and detail-only active
   task counting.
-- `test_scraper_pacing_migration.py`: exact three-row seed and downgrade.
+- `test_crawl_control_bootstrap.py`: exact current source defaults are created
+  by empty-schema bootstrap without a migration or downgrade path.
 - `test_scraper_pacing_dispatch.py`: snapshot immutability, conflict statuses,
   and listing exclusion.
 - `test_scraper_pacing_dispatch_postgres.py`: two concurrent same-source

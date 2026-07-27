@@ -17,6 +17,9 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 - The Board always returns summaries for `jobsdb`, `ctgoodjobs`, and `offertoday`; only the selected Source contributes `needs_attention`, `active_runs`, `upcoming`, and `archived_automations`.
 - There is one current projection. Do not add a query selector, compatibility projection, or version field.
 - Task Detail reuses `build_crawl_task_snapshot` and `build_crawl_control_run_projection` so list, Board, and direct detail agree.
+- Every Crawl Job is created from one Dispatch Plan and therefore has complete
+  immutable plan authority. Missing authority is invalid state; do not project
+  a compatibility or historical fallback.
 - Manual guidance is bounded and may expose only normalized message/instructions/capabilities. A resumable normalized manual action always supports the baseline `fresh_profile` path; `reuse_open_browser` appears only when explicitly normalized as supported.
 - Browser-profile recovery fields are capability-gated: `reset_supported` is
   true only for a JobsDB or CTGoodJobs profile-lock action whose canonical path
@@ -43,7 +46,8 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 ### 5. Good/Base/Bad Cases
 
 - Good: query each Source with its own `run_limit`, batch event reads, and preserve backend order.
-- Base: a pre-cutover historical run may return `authority_kind=legacy` without inventing Dispatch Plan authority; sandbox cutover removes that history rather than preserving a compatibility protocol.
+- Base: the sandbox cutover removes every pre-cutover run, so current Task
+  Details always render Dispatch Plan authority.
 - Bad: load one global page and partition it by Source; busy Sources can displace the selected Source.
 
 ### 6. Tests Required

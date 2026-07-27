@@ -20,7 +20,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [State Management](./state-management.md) | Local state, global state, server state | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
-| [Scraper Pacing Settings UI](./scraper-pacing-settings-ui.md) | Settings cards, future-plan-only pacing, Direct Override summary, and active-task warning | Active |
+| [Scraper Pacing Settings UI](./scraper-pacing-settings-ui.md) | Settings cards, future-plan-only pacing, and active-task warning | Active |
 | [Crawl Task Pacing Snapshot UI](./crawl-task-pacing-snapshot-ui.md) | Finite detail snapshot/pacing rendering and cancellation lifecycle controls | Active |
 | [Task Control Wizard UI](./task-control-wizard-ui.md) | History-visible authoring, recoverable drafts, server review/plan authority, cancellation, and focus | Active |
 | [Task Control Board UI](./task-control-board-ui.md) | Source-scoped operations, normalized Task deep links, lifecycle actions, and acknowledged cancellation | Active |

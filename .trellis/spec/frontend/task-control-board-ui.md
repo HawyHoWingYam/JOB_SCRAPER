@@ -54,14 +54,15 @@ Use this composition for `#scheduler` operations and `#crawl-tasks?task=<id>` de
 ### 5. Good/Base/Bad Cases
 
 - Good: deep-link a Task that is absent from the current list page and load it directly.
-- Base: render an honest legacy authority warning when immutable plan metadata is absent.
+- Base: reject a malformed Task payload when immutable Dispatch Plan authority
+  is absent; do not render a historical fallback.
 - Bad: select the first list row to satisfy a deep link, or reconstruct guidance from raw events.
 
 ### 6. Tests Required
 
 - Route encode/decode plus hash back/forward and Source changes.
 - Board loading, all-clear, stale prior-good, table/disclosure, lifecycle/CAS, delete review, and dialog focus.
-- Direct Task success/not-found, listing/detail/legacy rendering, safe guidance, and raw-payload absence.
+- Direct Task success/not-found, listing/detail authority rendering, safe guidance, and raw-payload absence.
 - Terminal detail backlog rendering asserts that no `Start detail recovery run`
   action is present, while manual-action tests retain Fresh/Open/Reuse behavior.
 - Cancellation confirmation, API failure, one-second polling, terminal behavior, and unmount cleanup.

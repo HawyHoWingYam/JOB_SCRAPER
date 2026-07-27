@@ -19,11 +19,6 @@ POST /api/settings/scraper-pacing/{source_site}/reset
 
 ```jsx
 <ScraperPacingSettings onOpenCrawlTasks={() => void} />
-<ScraperPacingSummary
-  sourceSite="jobsdb|ctgoodjobs|offertoday"
-  settings={savedSettings}
-  onOpenSettings={() => void}
-/>
 ```
 
 ### 3. Contracts
@@ -42,9 +37,6 @@ POST /api/settings/scraper-pacing/{source_site}/reset
   membership, or change its reviewed `detail_run_cap`.
 - `burst_size` is an execution pacing partition. It is never a detail target
   limit, Recovery Segment continuation authority, or complete-run cap.
-- Direct Override fetches the same saved settings and renders the selected
-  source only. It contains no pacing inputs and does not add pacing fields to
-  the crawl-dispatch payload.
 
 ### 4. Validation & Error Matrix
 
@@ -59,7 +51,6 @@ POST /api/settings/scraper-pacing/{source_site}/reset
 | burst size differs from a plan run cap | show each in its own context; never treat burst size as the cap |
 | backend 422 | render formatted backend detail in that card's alert |
 | GET failure | render page-level alert; do not invent defaults |
-| Direct Override GET failure | render unavailable summary plus Settings link |
 
 ### 5. Good / Base / Bad Cases
 
@@ -69,8 +60,6 @@ POST /api/settings/scraper-pacing/{source_site}/reset
   shown, but every valid card can still be saved.
 - **Base:** Changing burst size from 20 to 50 affects a subsequently prepared
   plan only; an active 500-target plan keeps its frozen pacing and run cap.
-- **Bad:** Direct Override duplicates the four inputs and lets its local values
-  drift from the server-owned Settings page.
 - **Bad:** A Save updates an active task or uses `burst_size` to enlarge its
   frozen target membership.
 
@@ -82,8 +71,6 @@ POST /api/settings/scraper-pacing/{source_site}/reset
   Crawl Tasks navigation.
 - Backend/frontend integration assertions keep prepared/active plan pacing,
   frozen membership, and `detail_run_cap` unchanged after settings mutation.
-- Direct Override summary tests assert exact selected-source values, no
-  spinbuttons, and the Settings navigation action.
 - Run the full frontend test suite and production build.
 
 ### 7. Wrong vs Correct

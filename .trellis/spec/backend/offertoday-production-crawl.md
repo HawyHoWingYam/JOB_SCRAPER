@@ -612,18 +612,18 @@ except Exception as exc:
 The response policy, not the raw Playwright error string, decides whether the
 settled URL is an IP block, a generic WAF challenge, or transient transport.
 
-## Scenario: Versioned finite detail scope and truthful crawl-task history
+## Scenario: Finite detail scope and truthful crawl-task history
 
 ### 1. Scope / Trigger
 
-Use this contract when changing durable Crawl Tasks ordering, versioned detail
+Use this contract when changing durable Crawl Tasks ordering, finite detail
 scope/limits, Dispatch Plan target selection, recovery/cancellation, or the
 normalized detail projections consumed by the Task Control Board.
 
-The versioned contract replaces the old OfferToday-only behavior where
+The current contract replaces the old OfferToday-only behavior where
 `detail_limit` capped one recovery segment and the same task repeatedly queried
-a changing backlog. New code freezes one finite complete-run membership before
-dispatch. Legacy fields/events remain readable compatibility evidence only.
+a changing backlog. Each run freezes one finite complete-run membership before
+dispatch.
 
 ### 2. Signatures
 
@@ -632,12 +632,10 @@ POST /api/dispatch-plans
 Content-Type: application/json
 
 {
-  "version": 1,
   "kind": "one_off",
-  "scope": {"version": 1, "source_site": "offertoday", "mode": "all", "rules": []},
+  "scope": {"source_site": "offertoday", "mode": "all", "classification_ids": []},
   "listing_settings": null,
   "detail_settings": {
-    "version": 1,
     "crawl_mode": "headless",
     "backlog_scope": {"kind": "source_backlog"},
     "limit": {"kind": "stop_after", "detail_run_cap": 5000},
@@ -694,7 +692,7 @@ listing_batch(source_listing_crawl_job_id=UUID)
   native representations at the repository boundary; they must never fall
   back to an unscoped query when the qualified filter has no direct match.
 - No mode auto-selects the newest listing batch. Primitive `category_ids` and
-  empty-array defaults cannot narrow or replace a versioned backlog scope.
+  empty-array defaults cannot narrow or replace an explicit backlog scope.
 - Preparation records a timezone-aware cutoff, groups eligible staging rows by
   canonical `source_job_id`, and persists one ordered target plus every
   contributing sibling row. Rows after the cutoff are not members.
@@ -709,8 +707,8 @@ listing_batch(source_listing_crawl_job_id=UUID)
 #### Runtime, recovery, and cancellation
 
 - A worker loads the consumed plan by Crawl Job ID and processes only its
-  persisted targets/rows. Compatibility `request_payload`, later Catalog
-  publication, and later-eligible staging rows cannot extend the run.
+  persisted targets/rows. Free-form `request_payload`, later classification
+  synchronization, and later-eligible staging rows cannot extend the run.
 - Recovery Segment size is internal pacing. It may partition the frozen target
   order but never increase `detail_run_cap` or query another cohort into the
   same run. A successful final segment completes when plan membership is
@@ -722,12 +720,9 @@ listing_batch(source_listing_crawl_job_id=UUID)
   only still-running plan membership to retryable state and preserves committed
   outcomes. A new mutually exclusive run cannot rely on the cancel request
   alone.
-- The old per-segment continuation fields remain normalized for historical
-  tasks. No new versioned path authors or executes that behavior.
-
 #### Normalized detail projection
 
-For a versioned run, immutable plan content supplies scope, cutoff, target
+For a current run, immutable plan content supplies scope, cutoff, target
 count, limit kind, and complete-run cap. Mutable runtime metrics may supply
 outcomes only; they cannot redefine authority.
 
@@ -763,12 +758,11 @@ detail_snapshot.detail_run_cap
 `remaining_count` means unresolved work inside the frozen plan.
 `future_eligible_count` means live eligible work outside that plan. They may
 both be non-zero and must never be added or substituted. Raw
-`detail_run_completed` remains a staging-row compatibility metric, not a
+`detail_run_completed` remains a staging-row metric, not a
 canonical target count.
 
-`ScrapeProgressPanel` remains the intentionally compact live-status shell; it
-links to normalized Crawl Tasks/Task Details rather than parsing raw request or
-event payloads.
+The normalized Crawl Tasks/Task Details surfaces own live status and never
+parse raw request or event payloads.
 
 ### 4. Validation & Error Matrix
 
@@ -811,7 +805,7 @@ event payloads.
   duplicate sibling membership, deterministic order/fingerprint, complete-run
   cap, empty/over-cap/stale selection, future rows, resume, cancellation, and
   transaction/concurrency rollback.
-- `backend/tests/test_versioned_listing_runtime.py`: all Source runtimes consume
+- `backend/tests/test_listing_runtime.py`: all Source runtimes consume
   only plan membership, segment without expansion, and publish future backlog
   separately.
 - `backend/tests/test_crawl_task_snapshot_service.py`: snapshot authority wins
@@ -820,8 +814,6 @@ event payloads.
 - `backend/tests/test_crawl_control_api.py`: reviewed fingerprint dispatch plus
   identical normalized detail/recovery projections in Crawl Tasks and Task
   Control Board, with no raw request/event payload dependency.
-- Retain `test_offertoday_global_detail_backlog.py` only for legacy readability
-  and source selection regression; it does not define new versioned limits.
 - Run focused scope/plan/runtime/snapshot/cancellation tests and one complete
   backend suite. PostgreSQL tests cover atomic claims, rollback, and row-lock
   races.

@@ -15,7 +15,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | Governance transactions, test safety, and empty-schema bootstrap | Active |
+| [Database Guidelines](./database-guidelines.md) | Empty-schema bootstrap, destructive sandbox safety, and PostgreSQL test isolation | Active |
 | [Error Handling](./error-handling.md) | IP/manual-action recovery plus acknowledged manual crawl cancellation | Active |
 | [Trellis GitHub Issue Lifecycle](./github-issue-task-lifecycle.md) | Trellis task hooks, GitHub issue binding, and explicit manual QA closure | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
@@ -25,7 +25,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [AI Enrichment Run Operations](./ai-enrichment-runs.md) | Filter candidates, single-active scheduling, waiting promotion, monitor, retry, and cooperative Stop | Active |
 | [Company Enrichment Runs](./company-enrichment-runs.md) | Krill Chat/Responses routing, explicit Company-only Web Search, capability probes, persistence, and safe diagnostics | Active |
 | [CTGoodJobs Transport Research](./ctgoodjobs-transport-research.md) | Bounded HTTP/headless/headed comparison, sanitized evidence, viability replay, and WAF hard stops | Active |
-| [OfferToday Production Crawl](./offertoday-production-crawl.md) | Cursor listing, partial caps, finite versioned detail scope, normalized progress, and hard-stop contracts | Active |
+| [OfferToday Production Crawl](./offertoday-production-crawl.md) | Cursor listing, partial caps, finite detail scope, normalized progress, and hard-stop contracts | Active |
 | [OfferToday Research Artifacts](./offertoday-research-artifacts.md) | Historical artifact parent, verification, replay, and exit-code contracts | Preserved |
 | [Ordinary Source Classifications](./ordinary-source-classifications.md) | Current top-level classifications, direct synchronization, and unversioned crawl scope | Active |
 | [Crawl Control Automation Review](./crawl-control-automation-review.md) | Read-only scheduled-run review, fingerprint fencing, and non-frozen detail preview | Active |
@@ -34,7 +34,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Ordinary Current Taxonomies](./ordinary-current-taxonomies.md) | Stable current Job, Company Industry, Skill, optional mapping, assignment, and evidence contracts without releases or review queues | Active |
 | [Automated Classification Batches](./automated-classification-batches.md) | Shared Job Taxonomy, Company Industry, and Skill preview/run/stop/retry lifecycle plus repeated-Skill auto-creation | Active |
 | [Job Intelligence Product Reads](./job-intelligence-product-surfaces.md) | Ordinary current composition, safe Job Detail serialization, bulk recommendations, and fixture contracts | Active |
-| [Job Intelligence Cutover](./job-intelligence-cutover.md) | Manifest-bound backup, destructive rebuild recovery, embedding freshness, runtime verification, and writer reopening | Active |
+| [Unversioned Sandbox Cutover](./job-intelligence-cutover.md) | Transient retention export, destructive rebuild, exact verification, and history removal | Active |
 
 ---
 

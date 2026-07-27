@@ -3,7 +3,7 @@
 ## Scope
 
 Use this contract for Task Control Automation, One-off, and Run-now authoring
-under `#scheduler/*`. The legacy `#scheduler` board remains reachable.
+under `#scheduler/*`. The current `#scheduler` board remains reachable.
 
 ## Routes and drafts
 
