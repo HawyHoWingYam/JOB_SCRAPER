@@ -1,0 +1,63 @@
+{
+  "job_tree": {
+    "domains": [
+      {
+        "id": "accounting",
+        "code": "accounting",
+        "label": "Accounting",
+        "order": 1,
+        "categories": [
+          {
+            "id": "accounting.financial_accounting",
+            "code": "accounting.financial_accounting",
+            "label": "Financial Accounting",
+            "order": 1,
+            "subcategories": [
+              {
+                "id": "accounting.financial_accounting.accounts_payable",
+                "code": "accounting.financial_accounting.accounts_payable",
+                "label": "Accounts Payable",
+                "order": 1,
+                "is_assignable": true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "company_tree": {
+    "nodes": [
+      {
+        "id": "J",
+        "code": "J",
+        "parent_code": null,
+        "level": "section",
+        "labels": {
+          "en": "Information and communications",
+          "zh_hant": "資訊及通訊",
+          "zh_hans": "资讯及通讯"
+        },
+        "order": 10,
+        "is_assignable": false
+      }
+    ]
+  },
+  "company_child_tree": {
+    "nodes": [
+      {
+        "id": "62",
+        "code": "62",
+        "parent_code": "J",
+        "level": "division",
+        "labels": {
+          "en": "Information technology service activities",
+          "zh_hant": "資訊科技服務活動",
+          "zh_hans": "信息技术服务活动"
+        },
+        "order": 1,
+        "is_assignable": false
+      }
+    ]
+  }
+}
