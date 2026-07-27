@@ -251,6 +251,11 @@ function createFormState(payload) {
         payload?.effective_config?.ai_enrichment_run_concurrency ??
         "",
     ),
+    skill_auto_create_distinct_job_threshold: String(
+      payload?.persisted_config?.skill_auto_create_distinct_job_threshold ??
+        payload?.effective_config?.skill_auto_create_distinct_job_threshold ??
+        5,
+    ),
   };
 }
 
@@ -291,6 +296,9 @@ function buildRequestBody(formState, settingsPayload) {
     ),
     company_ai_enrichment_run_concurrency: Number(
       formState.company_ai_enrichment_run_concurrency,
+    ),
+    skill_auto_create_distinct_job_threshold: Number(
+      formState.skill_auto_create_distinct_job_threshold,
     ),
   };
 
@@ -1132,6 +1140,23 @@ function AIRuntimeSettings() {
               />
             </label>
             <label className="ai-settings-field">
+              <span>新 Skill 自动创建门槛（不同 Job 数）</span>
+              <input
+                aria-label="Skill automatic creation threshold"
+                type="number"
+                min="1"
+                max="1000"
+                value={formState.skill_auto_create_distinct_job_threshold}
+                onChange={(event) =>
+                  updateTopLevelField(
+                    "skill_auto_create_distinct_job_threshold",
+                    event.target.value,
+                  )
+                }
+                disabled={saving}
+              />
+            </label>
+            <label className="ai-settings-field">
               <span>Companies concurrency</span>
               <input
                 aria-label="Companies concurrency"
@@ -1173,6 +1198,13 @@ function AIRuntimeSettings() {
             <p>
               AI Enrichment state: {getRuntimeStateLabel(jobRuntimeStatus)}.
               Companies state: {getRuntimeStateLabel(companyRuntimeStatus)}.
+            </p>
+            <p>
+              新 Skill 会在至少{' '}
+              {String(
+                effectiveConfig.skill_auto_create_distinct_job_threshold ?? 5,
+              )}{' '}
+              个不同 Job 出现后，才自动尝试创建。
             </p>
             {isAnyDegraded ? (
               <p className="ai-settings-warning-copy">

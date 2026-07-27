@@ -9,6 +9,7 @@ const Sidebar = ({ activeView, setActiveView }) => {
         { id: 'add-job', label: 'Add Job', icon: PlusCircle },
         { id: 'companies', label: 'Companies', icon: Building2 },
         { id: 'ai', label: 'AI Enrichment', icon: BrainCircuit },
+        { id: 'classification', label: 'Classification', icon: ListTree },
         { id: 'scheduler', label: 'Scheduler', icon: CalendarClock },
         { id: 'crawl-tasks', label: 'Crawl Tasks', icon: ListTree },
     ];

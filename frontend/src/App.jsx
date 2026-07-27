@@ -7,6 +7,9 @@ import './App.css';
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const JobBrowser = lazy(() => import('./components/JobBrowser'));
 const AIEnrichmentPage = lazy(() => import('./components/ai/AIEnrichmentPage'));
+const ClassificationBatchesPage = lazy(
+  () => import('./components/classification/ClassificationBatchesPage'),
+);
 const CompaniesPage = lazy(() => import('./components/companies/CompaniesPage'));
 const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage'));
 const CrawlTasksPage = lazy(() => import('./components/scraper/CrawlTasksPage'));
@@ -68,6 +71,7 @@ function App() {
             {activeView === 'add-job' && <AddJobPage />}
             {activeView === 'companies' && <CompaniesPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
+            {activeView === 'classification' && <ClassificationBatchesPage />}
             {activeView === 'settings' && (
               <AISettingsPage
                 initialSection={settingsSection}

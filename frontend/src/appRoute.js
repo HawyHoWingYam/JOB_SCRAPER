@@ -4,6 +4,7 @@ export const VALID_APP_VIEWS = new Set([
   'add-job',
   'companies',
   'ai',
+  'classification',
   'settings',
   'scheduler',
   'crawl-tasks',
