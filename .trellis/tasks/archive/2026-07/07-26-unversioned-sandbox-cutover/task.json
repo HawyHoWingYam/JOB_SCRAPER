@@ -1,0 +1,29 @@
+{
+  "id": "unversioned-sandbox-cutover",
+  "name": "unversioned-sandbox-cutover",
+  "title": "Cut over retained data and clear task history",
+  "description": "Export retained business data, rebuild the unversioned sandbox schema, clear all task and queue history, import retained state, and verify the atomic target stack.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-26",
+  "completedAt": "2026-07-27",
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-26-excluded-jobs-governance-handoff",
+  "relatedFiles": [],
+  "notes": "Implementation and shared sandbox cutover completed on 2026-07-27. Exact retained hashes verified; transient artifact deleted; full stack healthy. Left in_progress because this session intentionally did not commit or archive the dirty multi-task worktree.",
+  "meta": {
+    "github_issue": 31,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/31"
+  }
+}
