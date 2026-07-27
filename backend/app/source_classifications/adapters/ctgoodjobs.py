@@ -189,18 +189,32 @@ class CTgoodjobsSourceClassificationAdapter:
         is_exact_category_path = bool(
             re.fullmatch(r"/jobs/jobs-in-[a-z0-9]+(?:-[a-z0-9]+)*", parsed_path.path)
         )
-        if (
-            not native_id
-            or parsed_path.scheme
-            or parsed_path.netloc
-            or parsed_path.query
-            or parsed_path.fragment
-            or not is_exact_category_path
-        ):
+        invalid_field: str | None = None
+        invalid_value: str | None = None
+        if not native_id:
+            invalid_field = "native_id"
+            invalid_value = ""
+        elif parsed_path.scheme or parsed_path.netloc:
+            invalid_field = "url_path"
+            invalid_value = (
+                f"{parsed_path.scheme}://{parsed_path.netloc}{parsed_path.path}"
+            )[:160]
+        elif parsed_path.query:
+            invalid_field = "url_path"
+            invalid_value = f"{parsed_path.path}?<redacted>"[:160]
+        elif parsed_path.fragment:
+            invalid_field = "url_path"
+            invalid_value = f"{parsed_path.path}#<redacted>"[:160]
+        elif not is_exact_category_path:
+            invalid_field = "url_path"
+            invalid_value = parsed_path.path[:160]
+        if invalid_field is not None:
             raise CatalogValidationError(
                 "SOURCE_CLASSIFICATION_NOT_EXECUTABLE",
                 "CTgoodjobs published node has no validated native URL path",
                 node_key=node.node_key,
+                field=invalid_field,
+                value=invalid_value,
             )
         return (
             SourceQueryTarget(

@@ -123,8 +123,13 @@ def crawl_control_client(monkeypatch):
     )
     session_factory = sessionmaker(bind=engine)
     db = session_factory()
-    catalog = JobsDBSourceClassificationAdapter().discover()
-    SourceClassificationRegistry(db).synchronize_catalog(catalog, complete=True)
+    classification_adapter = JobsDBSourceClassificationAdapter()
+    catalog = classification_adapter.discover()
+    SourceClassificationRegistry(db).synchronize_catalog(
+        catalog,
+        complete=True,
+        compiler=classification_adapter,
+    )
     db.add(
         ScraperPacingSettings(
             source_site="jobsdb",

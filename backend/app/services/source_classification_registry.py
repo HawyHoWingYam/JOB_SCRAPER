@@ -12,11 +12,13 @@ from app.source_classifications.adapters import (
     CTgoodjobsSourceClassificationAdapter,
     JobsDBSourceClassificationAdapter,
     OfferTodaySourceClassificationAdapter,
+    SourceClassificationAdapter,
 )
 from app.source_classifications.domain import (
     DiscoveredCatalog,
     SUPPORTED_SOURCE_SITES,
     is_source_qualified_classification_id,
+    validate_executable_catalog,
 )
 from app.utils.time import utc_now
 
@@ -53,7 +55,9 @@ class SourceClassificationRegistry:
         catalog: DiscoveredCatalog,
         *,
         complete: bool,
+        compiler: SourceClassificationAdapter,
     ) -> SourceClassificationSyncResult:
+        validate_executable_catalog(catalog, compiler)
         node_identity = {
             node.node_key: node.classification_id
             for node in catalog.nodes
@@ -253,7 +257,7 @@ class SourceClassificationRegistry:
                 raise ValueError("Child Source classification parent is missing")
 
 
-def build_source_classification_adapters() -> dict[str, object]:
+def build_source_classification_adapters() -> dict[str, SourceClassificationAdapter]:
     """Build the three discovery/query adapters used by the ordinary registry."""
 
     adapters = (
@@ -266,7 +270,7 @@ def build_source_classification_adapters() -> dict[str, object]:
 
 def synchronize_source_classification_adapters(
     db: Session,
-    adapters: Iterable[object],
+    adapters: Iterable[SourceClassificationAdapter],
 ) -> dict[str, SourceClassificationSyncResult | str]:
     """Refresh every Source independently; one failed Source cannot stale the rest."""
 
@@ -280,6 +284,7 @@ def synchronize_source_classification_adapters(
                 results[source_site] = registry.synchronize_catalog(
                     catalog,
                     complete=True,
+                    compiler=adapter,
                 )
         except Exception as exc:
             results[source_site] = type(exc).__name__

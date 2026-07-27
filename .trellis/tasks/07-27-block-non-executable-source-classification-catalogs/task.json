@@ -1,0 +1,35 @@
+{
+  "id": "block-non-executable-source-classification-catalogs",
+  "name": "block-non-executable-source-classification-catalogs",
+  "title": "Block publication of non-executable source classification catalogs",
+  "description": "Validate every executable Source classification before direct synchronization mutates the ordinary current registry.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "backend",
+  "package": "backend",
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "backend/app/services/source_classification_registry.py",
+    "backend/app/source_classifications/domain.py",
+    "backend/app/source_classifications/adapters/ctgoodjobs.py",
+    "backend/tests/test_source_classification_registry.py",
+    "backend/tests/test_source_classification_adapters.py"
+  ],
+  "notes": "",
+  "meta": {
+    "github_issue": 33,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/33"
+  }
+}

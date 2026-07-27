@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
+import pytest
 
 from app.models.source_classification import SOURCE_CLASSIFICATION_TABLES
 from app.crawl_control.ordinary_scope import (
@@ -16,14 +17,21 @@ from app.scraper.ctgoodjobs.category_registry import get_static_ctgoodjobs_categ
 from app.services.source_classification_registry import (
     ObservedSourceClassification,
     SourceClassificationRegistry,
+    SourceClassificationSyncResult,
+    synchronize_source_classification_adapters,
 )
 from app.source_classifications.runtime import (
     load_source_query_plan,
     load_source_scope_query_plan,
 )
-from app.source_classifications.adapters.ctgoodjobs import CTgoodjobsSourceClassificationAdapter
+from app.source_classifications.adapters.ctgoodjobs import (
+    CTgoodjobsSourceClassificationAdapter,
+)
 from app.source_classifications.adapters.jobsdb import JobsDBSourceClassificationAdapter
-from app.source_classifications.adapters.offertoday import OfferTodaySourceClassificationAdapter
+from app.source_classifications.adapters.offertoday import (
+    OfferTodaySourceClassificationAdapter,
+)
+from app.source_classifications.domain import CatalogValidationError
 
 
 @compiles(UUID, "sqlite")
@@ -40,13 +48,13 @@ def _session():
     return engine, sessionmaker(bind=engine)()
 
 
-def _catalogs():
+def _adapters():
     return (
-        JobsDBSourceClassificationAdapter().discover(),
-        OfferTodaySourceClassificationAdapter().discover(),
+        JobsDBSourceClassificationAdapter(),
+        OfferTodaySourceClassificationAdapter(),
         CTgoodjobsSourceClassificationAdapter(
             category_provider=get_static_ctgoodjobs_categories,
-        ).discover(),
+        ),
     )
 
 
@@ -54,8 +62,12 @@ def test_all_sources_synchronize_into_one_ordinary_registry():
     engine, db = _session()
     try:
         registry = SourceClassificationRegistry(db)
-        for catalog in _catalogs():
-            result = registry.synchronize_catalog(catalog, complete=True)
+        for adapter in _adapters():
+            result = registry.synchronize_catalog(
+                adapter.discover(),
+                complete=True,
+                compiler=adapter,
+            )
             assert result.observed_count > 0
 
         assert {row.source_site for row in registry.list_all()} == {
@@ -70,6 +82,142 @@ def test_all_sources_synchronize_into_one_ordinary_registry():
             row.depth == 1 and row.parent_id is not None
             for row in registry.list_all(source_site="offertoday")
         )
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_invalid_ctgoodjobs_catalog_is_rejected_before_current_registry_changes():
+    engine, db = _session()
+    try:
+        adapter = CTgoodjobsSourceClassificationAdapter(
+            category_provider=get_static_ctgoodjobs_categories,
+        )
+        catalog = adapter.discover()
+        registry = SourceClassificationRegistry(db)
+        registry.synchronize_catalog(catalog, complete=True, compiler=adapter)
+        db.commit()
+
+        def current_rows():
+            return tuple(
+                (
+                    row.classification_id,
+                    row.native_id,
+                    row.label,
+                    row.depth,
+                    row.is_top_level,
+                    row.is_active,
+                    dict(row.query_metadata),
+                    row.first_observed_at,
+                    row.last_observed_at,
+                )
+                for row in registry.list_all(source_site="ctgoodjobs")
+            )
+
+        before = current_rows()
+        broken_nodes = list(catalog.nodes)
+        broken_nodes[0] = replace(
+            broken_nodes[0],
+            native_label="Must not replace the current label",
+            native_path=("Must not replace the current label",),
+            source_metadata={
+                **broken_nodes[0].source_metadata,
+                "url_path": "",
+            },
+        )
+        broken_nodes[1] = replace(
+            broken_nodes[1],
+            source_metadata={
+                **broken_nodes[1].source_metadata,
+                "url_path": f"{broken_nodes[1].source_metadata['url_path']}?token=secret",
+            },
+        )
+        broken_catalog = replace(catalog, nodes=tuple(broken_nodes))
+
+        with pytest.raises(CatalogValidationError) as exc_info:
+            registry.synchronize_catalog(
+                broken_catalog,
+                complete=True,
+                compiler=adapter,
+            )
+
+        assert exc_info.value.code == "CATALOG_NOT_EXECUTABLE"
+        assert [issue.to_payload() for issue in exc_info.value.issues] == [
+            {
+                "source_site": "ctgoodjobs",
+                "classification_id": broken_nodes[0].classification_id,
+                "native_id": str(broken_nodes[0].native_id),
+                "label": "Must not replace the current label",
+                "node_key": broken_nodes[0].node_key,
+                "field": "url_path",
+                "value": "",
+                "code": "SOURCE_CLASSIFICATION_NOT_EXECUTABLE",
+                "reason": "CTgoodjobs published node has no validated native URL path",
+            },
+            {
+                "source_site": "ctgoodjobs",
+                "classification_id": broken_nodes[1].classification_id,
+                "native_id": str(broken_nodes[1].native_id),
+                "label": broken_nodes[1].native_label,
+                "node_key": broken_nodes[1].node_key,
+                "field": "url_path",
+                "value": f"{broken_nodes[1].source_metadata['url_path'].split('?', 1)[0]}?<redacted>",
+                "code": "SOURCE_CLASSIFICATION_NOT_EXECUTABLE",
+                "reason": "CTgoodjobs published node has no validated native URL path",
+            },
+        ]
+        assert current_rows() == before
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_startup_sync_isolates_invalid_ctgoodjobs_from_other_sources():
+    engine, db = _session()
+    try:
+        ctgoodjobs = CTgoodjobsSourceClassificationAdapter(
+            category_provider=get_static_ctgoodjobs_categories,
+        )
+        catalog = ctgoodjobs.discover()
+        broken_nodes = list(catalog.nodes)
+        broken_nodes[0] = replace(
+            broken_nodes[0],
+            source_metadata={
+                **broken_nodes[0].source_metadata,
+                "url_path": "",
+            },
+        )
+
+        class InvalidCTgoodjobsAdapter:
+            source_site = "ctgoodjobs"
+
+            def discover(self):
+                return replace(catalog, nodes=tuple(broken_nodes))
+
+            def compile(self, node):
+                return ctgoodjobs.compile(node)
+
+            async def smoke(self, target):
+                return await ctgoodjobs.smoke(target)
+
+        results = synchronize_source_classification_adapters(
+            db,
+            (
+                JobsDBSourceClassificationAdapter(),
+                InvalidCTgoodjobsAdapter(),
+                OfferTodaySourceClassificationAdapter(),
+            ),
+        )
+
+        assert isinstance(results["jobsdb"], SourceClassificationSyncResult)
+        assert results["ctgoodjobs"] == "CatalogValidationError"
+        assert isinstance(results["offertoday"], SourceClassificationSyncResult)
+        assert {
+            row.source_site for row in SourceClassificationRegistry(db).list_all()
+        } == {
+            "jobsdb",
+            "offertoday",
+        }
     finally:
         db.close()
         engine.dispose()
@@ -178,7 +326,11 @@ def test_all_sources_resolve_only_active_top_level_crawl_choices():
         }
         registry = SourceClassificationRegistry(db)
         for adapter in adapters.values():
-            registry.synchronize_catalog(adapter.discover(), complete=True)
+            registry.synchronize_catalog(
+                adapter.discover(),
+                complete=True,
+                compiler=adapter,
+            )
         resolver = OrdinaryCrawlScopeResolver(db, adapters=adapters)
 
         for source_site in adapters:
@@ -218,8 +370,12 @@ def test_ordinary_runtime_accepts_native_compatibility_ids_and_all_scope():
     session_factory = sessionmaker(bind=engine)
     try:
         registry = SourceClassificationRegistry(db)
-        for catalog in _catalogs():
-            registry.synchronize_catalog(catalog, complete=True)
+        for adapter in _adapters():
+            registry.synchronize_catalog(
+                adapter.discover(),
+                complete=True,
+                compiler=adapter,
+            )
         db.commit()
 
         jobsdb = load_source_query_plan(

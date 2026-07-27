@@ -13,13 +13,53 @@ SUPPORTED_SOURCE_SITES = ("jobsdb", "ctgoodjobs", "offertoday")
 _SOURCE_CLASSIFICATION_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
+@dataclass(frozen=True)
+class CatalogValidationIssue:
+    """One bounded, source-owned catalog executability failure."""
+
+    source_site: str
+    classification_id: str | None
+    native_id: str
+    label: str
+    node_key: str
+    field: str
+    value: str
+    code: str
+    reason: str
+
+    def to_payload(self) -> dict[str, str | None]:
+        return {
+            "source_site": self.source_site,
+            "classification_id": self.classification_id,
+            "native_id": self.native_id,
+            "label": self.label,
+            "node_key": self.node_key,
+            "field": self.field,
+            "value": self.value,
+            "code": self.code,
+            "reason": self.reason,
+        }
+
+
 class CatalogValidationError(ValueError):
     """Stable domain validation failure for a catalog or scope."""
 
-    def __init__(self, code: str, message: str, *, node_key: str | None = None):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        node_key: str | None = None,
+        field: str | None = None,
+        value: str | None = None,
+        issues: Sequence[CatalogValidationIssue] = (),
+    ):
         super().__init__(message)
         self.code = code
         self.node_key = node_key
+        self.field = field
+        self.value = value
+        self.issues = tuple(issues)
 
 
 def is_source_qualified_classification_id(value: str, source_site: str) -> bool:
@@ -610,44 +650,121 @@ def validate_compiled_catalog(
     for node in catalog.nodes:
         if not node.queryable:
             continue
-        targets = compiler.compile(node)
-        if not targets:
-            raise CatalogValidationError(
-                "CATALOG_QUERY_TARGET_MISSING",
-                "Queryable node compiled to no Query Target",
-                node_key=node.node_key,
-            )
-        for target in targets:
-            if target.classification_id != node.classification_id:
-                raise CatalogValidationError(
-                    "CATALOG_QUERY_TARGET_CLASSIFICATION_MISMATCH",
-                    "Query Target identity differs from its Source Classification",
-                    node_key=node.node_key,
-                )
-            if target.fingerprint in seen_targets:
-                raise CatalogValidationError(
-                    "CATALOG_QUERY_TARGET_DUPLICATE",
-                    "Two catalog nodes compiled to the same Query Target",
-                    node_key=node.node_key,
-                )
-            seen_targets.add(target.fingerprint)
-            target_fingerprints.append(target.fingerprint)
-        semantics_hash = (
-            targets[0].fingerprint
-            if len(targets) == 1
-            else payload_fingerprint([target.to_payload() for target in targets])
+        target_fingerprints.extend(
+            _validate_compiled_node(node, compiler, seen_targets)
         )
-        if node.query_semantics_hash != semantics_hash:
-            raise CatalogValidationError(
-                "CATALOG_QUERY_SEMANTICS_MISMATCH",
-                "Node query-semantics hash does not match compiled Query Targets",
-                node_key=node.node_key,
-            )
     return CompiledCatalogValidationReport(
         source_site=catalog.source_site,
         node_count=len(catalog.nodes),
         target_count=len(target_fingerprints),
         target_fingerprints=tuple(target_fingerprints),
+    )
+
+
+def validate_executable_catalog(
+    catalog: DiscoveredCatalog,
+    compiler: CatalogCompiler,
+) -> CompiledCatalogValidationReport:
+    """Compile a complete catalog and aggregate every node-level failure."""
+
+    validate_catalog(catalog)
+    if compiler.source_site != catalog.source_site:
+        raise CatalogValidationError(
+            "CATALOG_ADAPTER_SOURCE_MISMATCH",
+            "Source classification adapter does not own these classifications",
+        )
+    target_fingerprints: list[str] = []
+    seen_targets: set[str] = set()
+    issues: list[CatalogValidationIssue] = []
+    queryable_nodes = sorted(
+        (node for node in catalog.nodes if node.queryable),
+        key=lambda node: (node.classification_id or "", node.node_key),
+    )
+    for node in queryable_nodes:
+        try:
+            target_fingerprints.extend(
+                _validate_compiled_node(node, compiler, seen_targets)
+            )
+        except CatalogValidationError as exc:
+            issues.append(_catalog_validation_issue(catalog, node, exc))
+    if issues:
+        raise CatalogValidationError(
+            "CATALOG_NOT_EXECUTABLE",
+            f"{catalog.source_site} catalog has {len(issues)} non-executable Source Classification(s)",
+            issues=issues,
+        )
+    return CompiledCatalogValidationReport(
+        source_site=catalog.source_site,
+        node_count=len(catalog.nodes),
+        target_count=len(target_fingerprints),
+        target_fingerprints=tuple(target_fingerprints),
+    )
+
+
+def _validate_compiled_node(
+    node: CatalogNodeSnapshot,
+    compiler: CatalogCompiler,
+    seen_targets: set[str],
+) -> tuple[str, ...]:
+    targets = compiler.compile(node)
+    if not targets:
+        raise CatalogValidationError(
+            "CATALOG_QUERY_TARGET_MISSING",
+            "Queryable node compiled to no Query Target",
+            node_key=node.node_key,
+        )
+    fingerprints: list[str] = []
+    for target in targets:
+        if target.classification_id != node.classification_id:
+            raise CatalogValidationError(
+                "CATALOG_QUERY_TARGET_CLASSIFICATION_MISMATCH",
+                "Query Target identity differs from its Source Classification",
+                node_key=node.node_key,
+            )
+        if target.fingerprint in seen_targets or target.fingerprint in fingerprints:
+            raise CatalogValidationError(
+                "CATALOG_QUERY_TARGET_DUPLICATE",
+                "Two catalog nodes compiled to the same Query Target",
+                node_key=node.node_key,
+            )
+        fingerprints.append(target.fingerprint)
+    semantics_hash = (
+        targets[0].fingerprint
+        if len(targets) == 1
+        else payload_fingerprint([target.to_payload() for target in targets])
+    )
+    if node.query_semantics_hash != semantics_hash:
+        raise CatalogValidationError(
+            "CATALOG_QUERY_SEMANTICS_MISMATCH",
+            "Node query-semantics hash does not match compiled Query Targets",
+            node_key=node.node_key,
+        )
+    seen_targets.update(fingerprints)
+    return tuple(fingerprints)
+
+
+def _catalog_validation_issue(
+    catalog: DiscoveredCatalog,
+    node: CatalogNodeSnapshot,
+    error: CatalogValidationError,
+) -> CatalogValidationIssue:
+    def bounded(value: object, *, limit: int = 160) -> str:
+        return str(value).replace("\r", " ").replace("\n", " ")[:limit]
+
+    return CatalogValidationIssue(
+        source_site=bounded(catalog.source_site),
+        classification_id=(
+            bounded(node.classification_id)
+            if node.classification_id is not None
+            else None
+        ),
+        native_id=bounded(node.native_id),
+        label=bounded(node.native_label),
+        node_key=bounded(node.node_key),
+        field=bounded(error.field or "node"),
+        value=bounded(error.value if error.value is not None else node.node_key),
+        code=bounded(error.code),
+        reason=bounded(error),
     )
 
 
