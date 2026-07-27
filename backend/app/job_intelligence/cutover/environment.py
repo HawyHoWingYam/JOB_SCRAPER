@@ -39,7 +39,6 @@ from app.job_intelligence.cutover.contracts import (
     ReleaseIdentity,
     RevisionIdentity,
     RuntimeSmokeEvidence,
-    SchemaIdentity,
     WriterStateEvidence,
 )
 from app.job_intelligence.cutover.writer_probe import SystemWriterStateProvider
@@ -172,7 +171,6 @@ class PostgresCutoverEnvironment:
         session_factory: Callable[[], Session],
         database_url: str,
         application: ApplicationIdentity,
-        target_schema_revision: str,
         rebuild: RebuildIdentity,
         writers: tuple[str, ...] = KNOWN_WRITERS,
         writer_state_provider: WriterStateProvider | None = None,
@@ -187,7 +185,6 @@ class PostgresCutoverEnvironment:
         self.session_factory = session_factory
         self.database_url = database_url
         self.application = application
-        self.target_schema_revision = target_schema_revision
         self.rebuild = rebuild
         self.writers = writers
         self.writer_state_provider = (
@@ -207,10 +204,6 @@ class PostgresCutoverEnvironment:
         try:
             db.execute(text("SET TRANSACTION READ ONLY"))
             database = self._database_identity(db)
-            schema = SchemaIdentity(
-                current_revision=self._current_alembic_revision(db),
-                target_revision=self.target_schema_revision,
-            )
             governed_revisions = self._governed_revisions(db)
             target_revisions = self._target_revisions()
             preserved = {
@@ -312,7 +305,6 @@ class PostgresCutoverEnvironment:
             return CutoverInventory(
                 application=self.application,
                 database=database,
-                schema=schema,
                 governed_revisions=governed_revisions,
                 target_revisions=target_revisions,
                 preserved_datasets=preserved,
@@ -518,7 +510,6 @@ class PostgresCutoverEnvironment:
                 session_factory=restore_session_factory,
                 database_url=restore_database_url,
                 application=self.application,
-                target_schema_revision=self.target_schema_revision,
                 rebuild=self.rebuild,
                 writers=self.writers,
                 writer_state_provider=self.writer_state_provider,
@@ -1429,7 +1420,6 @@ class PostgresCutoverEnvironment:
                     "eligible_jobs": len(eligible_job_ids),
                     "embedding_dimensions": EMBEDDING_DIMENSIONS,
                     "embedding_model": manifest.rebuild.embedding_model,
-                    "embedding_version": manifest.rebuild.embedding_version,
                     "ready_jobs": 0,
                 },
             }
@@ -1468,8 +1458,6 @@ class PostgresCutoverEnvironment:
         )
         indexer = EmbeddingIndexer(
             embedding_model=self.embedding_model,
-            embedding_model_name=manifest.rebuild.embedding_model,
-            embedding_version=manifest.rebuild.embedding_version,
         )
 
         batch_size = 100
@@ -1519,7 +1507,6 @@ class PostgresCutoverEnvironment:
                 "eligible_jobs": len(eligible_job_ids),
                 "embedding_dimensions": EMBEDDING_DIMENSIONS,
                 "embedding_model": manifest.rebuild.embedding_model,
-                "embedding_version": manifest.rebuild.embedding_version,
                 "ready_jobs": ready_jobs,
             }
             progress = {
@@ -1537,7 +1524,6 @@ class PostgresCutoverEnvironment:
             "eligible_jobs": len(eligible_job_ids),
             "embedding_dimensions": EMBEDDING_DIMENSIONS,
             "embedding_model": manifest.rebuild.embedding_model,
-            "embedding_version": manifest.rebuild.embedding_version,
             "ready_jobs": ready_jobs,
         }
         completed = {
@@ -1658,8 +1644,6 @@ class PostgresCutoverEnvironment:
             )
             freshness = EmbeddingIndexer(
                 embedding_model=object(),
-                embedding_model_name=manifest.rebuild.embedding_model,
-                embedding_version=manifest.rebuild.embedding_version,
             )
             fresh_embeddings = 0
             for job in eligible_jobs:
@@ -1947,9 +1931,7 @@ class PostgresCutoverEnvironment:
             embeddings = db.execute(
                 select(
                     JobEmbedding.job_id,
-                    JobEmbedding.embedding_model,
                     JobEmbedding.embedding_dimensions,
-                    JobEmbedding.embedding_version,
                     JobEmbedding.document_hash,
                     JobEmbedding.updated_at,
                 ).order_by(JobEmbedding.job_id)
@@ -1959,9 +1941,7 @@ class PostgresCutoverEnvironment:
                     {
                         "kind": "job_embedding",
                         "job_id": str(row.job_id),
-                        "embedding_model": row.embedding_model,
                         "embedding_dimensions": row.embedding_dimensions,
-                        "embedding_version": row.embedding_version,
                         "document_hash": row.document_hash,
                         "updated_at": row.updated_at,
                     }
@@ -2147,23 +2127,6 @@ class PostgresCutoverEnvironment:
             database=url.database or "",
             server_version=server_version,
         )
-
-    @staticmethod
-    def _current_alembic_revision(db: Session) -> str:
-        exists = db.execute(
-            text("SELECT to_regclass('public.alembic_version')")
-        ).scalar_one()
-        if exists is None:
-            return "unversioned"
-        revisions = tuple(
-            sorted(
-                str(row[0])
-                for row in db.execute(
-                    text("SELECT version_num FROM alembic_version")
-                ).all()
-            )
-        )
-        return ",".join(revisions) if revisions else "unversioned"
 
     @staticmethod
     def _governed_revisions(

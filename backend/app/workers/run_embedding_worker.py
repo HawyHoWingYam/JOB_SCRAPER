@@ -22,9 +22,9 @@ from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.job_embedding_repository import JobEmbeddingRepository
 from app.services.embedding_document_builder import EmbeddingDocumentBuilder
 from app.services.embedding_indexer import EmbeddingIndexer
-from app.services.governed_embedding_document_builder import (
-    GovernedEmbeddingDocumentBuilder,
-    SUPPORTED_GOVERNED_EMBEDDING_EVENTS,
+from app.services.current_embedding_document_builder import (
+    CurrentEmbeddingDocumentBuilder,
+    SUPPORTED_CURRENT_EMBEDDING_EVENTS,
 )
 
 try:
@@ -37,7 +37,6 @@ configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-EMBEDDING_VERSION = 1
 
 
 def _build_default_embedding_model():
@@ -59,8 +58,6 @@ class EmbeddingWorkerService:
         document_builder: EmbeddingDocumentBuilder | None = None,
         event_outbox_repository: EventOutboxRepository | None = None,
         job_embedding_repository: JobEmbeddingRepository | None = None,
-        embedding_model_name: str = EMBEDDING_MODEL_NAME,
-        embedding_version: int = EMBEDDING_VERSION,
     ):
         self.bus = bus or RedisStreamBus()
         self.outbox_publisher = outbox_publisher or OutboxPublisher(stream_bus=self.bus)
@@ -75,15 +72,11 @@ class EmbeddingWorkerService:
         self.job_embedding_repository = (
             job_embedding_repository or JobEmbeddingRepository()
         )
-        self.embedding_model_name = embedding_model_name
-        self.embedding_version = embedding_version
-        self.governed_document_builder = GovernedEmbeddingDocumentBuilder(
+        self.current_document_builder = CurrentEmbeddingDocumentBuilder(
             document_builder=self.document_builder,
         )
         self.embedding_indexer = EmbeddingIndexer(
             embedding_model=self.embedding_model,
-            embedding_model_name=self.embedding_model_name,
-            embedding_version=self.embedding_version,
             event_outbox_repository=self.event_outbox_repository,
             job_embedding_repository=self.job_embedding_repository,
         )
@@ -118,7 +111,7 @@ class EmbeddingWorkerService:
         topic: str = STREAM_JOB_LIFECYCLE,
     ) -> None:
         event = message.event
-        if event.event_type not in SUPPORTED_GOVERNED_EMBEDDING_EVENTS:
+        if event.event_type not in SUPPORTED_CURRENT_EMBEDDING_EVENTS:
             self.bus.ack(topic, self.group_name, message.message_id)
             return
 
@@ -137,7 +130,7 @@ class EmbeddingWorkerService:
             if job is None:
                 raise ValueError(f"Job not found for embedding: {job_id}")
 
-            document = self.governed_document_builder.build_for_job(
+            document = self.current_document_builder.build_for_job(
                 db,
                 job,
             )

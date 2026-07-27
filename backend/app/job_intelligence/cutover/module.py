@@ -501,7 +501,6 @@ class JobIntelligenceCutover:
             generated_at=self.clock(),
             application=envelope.manifest.application,
             database=envelope.manifest.database,
-            schema=envelope.manifest.schema_identity,
             backup=backup.model_dump(mode="json"),
             steps=(
                 "stop_all_services",
@@ -622,7 +621,6 @@ class JobIntelligenceCutover:
             created_at=created_at,
             application=inventory.application,
             database=inventory.database,
-            schema=inventory.schema_identity,
             governed_revisions=dict(sorted(inventory.governed_revisions.items())),
             target_revisions=dict(sorted(inventory.target_revisions.items())),
             preserved_datasets=dict(sorted(inventory.preserved_datasets.items())),

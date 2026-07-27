@@ -27,9 +27,7 @@ class JobEmbedding(Base):
         ForeignKey("jobs.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    embedding_model = Column(String(255), nullable=False)
     embedding_dimensions = Column(Integer, nullable=False, default=EMBEDDING_DIMENSIONS)
-    embedding_version = Column(Integer, nullable=False, default=1)
     document_text = Column(Text, nullable=False)
     document_hash = Column(String(64), nullable=False, index=True)
     embedding = Column(Vector(EMBEDDING_DIMENSIONS), nullable=False)

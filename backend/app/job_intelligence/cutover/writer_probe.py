@@ -119,7 +119,6 @@ class SystemWriterStateProvider:
             "enrichment-worker",
             "ingest-worker",
             "scheduler-worker",
-            "source-catalog-admin",
         )
         dependency_states = tuple(observed[name][0] for name in outbox_dependencies)
         outbox_state: WriterState

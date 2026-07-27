@@ -181,7 +181,6 @@ def test_postgres_inventory_separates_preserved_core_from_legacy_projection(
                 / "job_intelligence_cutover_legacy.json"
             ).read_text(encoding="utf-8")
         )
-        assert fixture["schema_version"] == 1
         assert fixture["anonymized"] is True
         company = Company(**fixture["company"])
         db.add(company)
@@ -208,14 +207,12 @@ def test_postgres_inventory_separates_preserved_core_from_legacy_projection(
                 image="job-scraper@sha256:test-image",
                 configuration_hash=SHA_A,
             ),
-            target_schema_revision="20260719_160000",
             rebuild=RebuildIdentity(
                 source_attributes="v1",
                 canonical_taxonomy="canonical-job-taxonomy-v1",
                 company_industry="hsic-v2.0-2026-07-19",
                 skills="skills-2026-07-19-v1",
                 embedding_model="all-MiniLM-L6-v2",
-                embedding_version=1,
             ),
             writer_state_provider=AllStoppedWriterStateProvider(),
             embedding_model=embedding_model,
@@ -228,7 +225,6 @@ def test_postgres_inventory_separates_preserved_core_from_legacy_projection(
 
         first = environment.collect_inventory()
         assert first.database.database.endswith("_test")
-        assert first.schema_identity.current_revision == "unversioned"
         assert first.preserved_datasets["jobs-core"].count == 2
         assert first.preserved_datasets["companies-core"].count == 1
         assert first.governed_revisions == {
@@ -489,13 +485,10 @@ def test_postgres_inventory_separates_preserved_core_from_legacy_projection(
             "eligible_jobs": 2,
             "embedding_dimensions": EMBEDDING_DIMENSIONS,
             "embedding_model": "all-MiniLM-L6-v2",
-            "embedding_version": 1,
             "ready_jobs": 2,
         }
         embedding = db.get(JobEmbedding, job.id)
         assert embedding is not None
-        assert embedding.embedding_model == "all-MiniLM-L6-v2"
-        assert embedding.embedding_version == 1
         assert embedding.embedding_dimensions == EMBEDDING_DIMENSIONS
         assert "Skills: Python" in embedding.document_text
         assert "Novel Stack" not in embedding.document_text
@@ -543,7 +536,6 @@ def test_postgres_inventory_separates_preserved_core_from_legacy_projection(
         environment.artifact_store.write(
             tmp_path / "runtime-smoke-evidence.json",
             {
-                "schema_version": 1,
                 "manifest_hash": SHA_A,
                 "application": manifest.application.model_dump(mode="json"),
                 "status": "passed",
@@ -694,14 +686,12 @@ def test_cutover_dry_run_preserves_the_documented_17596_job_scale(
                 image="job-scraper@sha256:scale-fixture",
                 configuration_hash=SHA_A,
             ),
-            target_schema_revision="20260719_160000",
             rebuild=RebuildIdentity(
                 source_attributes="v1",
                 canonical_taxonomy="canonical-job-taxonomy-v1",
                 company_industry="hsic-v2.0-2026-07-19",
                 skills="skills-2026-07-19-v1",
                 embedding_model="all-MiniLM-L6-v2",
-                embedding_version=1,
             ),
         )
         cutover = JobIntelligenceCutover(

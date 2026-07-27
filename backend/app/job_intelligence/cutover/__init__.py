@@ -19,7 +19,6 @@ from app.job_intelligence.cutover.contracts import (
     ReleaseIdentity,
     RevisionIdentity,
     RuntimeSmokeEvidence,
-    SchemaIdentity,
     WriterStateEvidence,
 )
 from app.job_intelligence.cutover.module import (
@@ -67,7 +66,6 @@ __all__ = [
     "QuiescenceReport",
     "RevisionIdentity",
     "RuntimeSmokeEvidence",
-    "SchemaIdentity",
     "WriterStateEvidence",
     "WriterStateProvider",
 ]

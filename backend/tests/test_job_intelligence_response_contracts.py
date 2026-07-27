@@ -652,9 +652,7 @@ def _seed_related_job_recommendation_state(db) -> dict[str, object]:
     db.add(
         JobEmbedding(
             job_id=source_job.id,
-            embedding_model="fixture-model",
             embedding_dimensions=EMBEDDING_DIMENSIONS,
-            embedding_version=1,
             document_text="Platform Engineer Python",
             document_hash="8" * 64,
             embedding=[1.0, 0.0, *vector_tail],
@@ -737,9 +735,7 @@ def _seed_related_job_recommendation_state(db) -> dict[str, object]:
                 ),
                 JobEmbedding(
                     job_id=candidate.id,
-                    embedding_model="fixture-model",
                     embedding_dimensions=EMBEDDING_DIMENSIONS,
-                    embedding_version=1,
                     document_text=title,
                     document_hash=("9" if index == 1 else "a") * 64,
                     embedding=[*embedding_prefix, *vector_tail],
@@ -753,7 +749,7 @@ def _seed_related_job_recommendation_state(db) -> dict[str, object]:
     return {**state, "source_job_id": source_job.id, "candidates": candidates}
 
 
-def test_product_surface_fixture_uses_versioned_backend_response_models() -> None:
+def test_product_surface_fixture_uses_current_backend_response_models() -> None:
     backend_payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     fixture = JobIntelligenceProductFixtureSchema.model_validate(backend_payload)
 

@@ -26,7 +26,6 @@ from app.job_intelligence.cutover import (
     PostgresCutoverEnvironment,
     RebuildIdentity,
     RevisionIdentity,
-    SchemaIdentity,
     QuiescenceReport,
     WriterStateEvidence,
     ReleaseIdentity,
@@ -45,11 +44,9 @@ SHA_B = "b" * 64
 SHA_C = "c" * 64
 
 
-def test_embedding_freshness_pins_document_model_version_and_dimensions() -> None:
+def test_embedding_freshness_pins_document_and_dimensions() -> None:
     indexer = EmbeddingIndexer(
         embedding_model=object(),
-        embedding_model_name="all-MiniLM-L6-v2",
-        embedding_version=2,
     )
     document = EmbeddingDocument(
         document_text="Title: Platform Engineer",
@@ -57,16 +54,12 @@ def test_embedding_freshness_pins_document_model_version_and_dimensions() -> Non
     )
     identity = {
         "document_hash": SHA_A,
-        "embedding_model": "all-MiniLM-L6-v2",
-        "embedding_version": 2,
         "embedding_dimensions": EMBEDDING_DIMENSIONS,
     }
 
     assert indexer.is_current(SimpleNamespace(**identity), document)
     for field, stale_value in (
         ("document_hash", SHA_B),
-        ("embedding_model", "replacement-model"),
-        ("embedding_version", 1),
         ("embedding_dimensions", EMBEDDING_DIMENSIONS - 1),
     ):
         stale = {**identity, field: stale_value}
@@ -185,7 +178,6 @@ def test_system_writer_probe_combines_container_and_process_evidence() -> None:
         "outbox-publisher": "running",
         "scheduler-worker": "stopped",
         "scrapyd": "stopped",
-        "source-catalog-admin": "stopped",
     }
 
 
@@ -261,10 +253,6 @@ class FixedInventoryEnvironment:
                 database="jobsdb",
                 server_version="15.8",
             ),
-            schema=SchemaIdentity(
-                current_revision="20260719_160000",
-                target_revision="20260719_160000",
-            ),
             governed_revisions={
                 "canonical-job-taxonomy": RevisionIdentity(
                     revision_id="11111111-1111-1111-1111-111111111111",
@@ -323,7 +311,6 @@ class FixedInventoryEnvironment:
                 company_industry="hsic-v2.0-2026-07-19",
                 skills="skills-2026-07-19-v1",
                 embedding_model="all-MiniLM-L6-v2",
-                embedding_version=1,
             ),
         )
 
@@ -442,7 +429,6 @@ def test_runtime_smoke_evidence_requires_post_embedding_timestamp(
         session_factory=lambda: SimpleNamespace(),
         database_url="postgresql://operator:secret@postgres-db:5432/jobsdb_test",
         application=manifest.application,
-        target_schema_revision=manifest.schema_identity.target_revision,
         rebuild=manifest.rebuild,
     )
 
@@ -450,7 +436,6 @@ def test_runtime_smoke_evidence_requires_post_embedding_timestamp(
         environment.artifact_store.write(
             tmp_path / "runtime-smoke-evidence.json",
             {
-                "schema_version": 1,
                 "manifest_hash": manifest_hash,
                 "application": manifest.application.model_dump(mode="json"),
                 "status": "passed",

@@ -15,9 +15,7 @@ class JobEmbeddingRepository:
         db: Session,
         *,
         job_id,
-        embedding_model: str,
         embedding_dimensions: int,
-        embedding_version: int,
         document_text: str,
         document_hash: str,
         embedding: Sequence[float],
@@ -39,18 +37,14 @@ class JobEmbeddingRepository:
         if row is None:
             row = JobEmbedding(
                 job_id=job_id,
-                embedding_model=embedding_model,
                 embedding_dimensions=EMBEDDING_DIMENSIONS,
-                embedding_version=embedding_version,
                 document_text=document_text,
                 document_hash=document_hash,
                 embedding=embedding_values,
             )
             db.add(row)
         else:
-            row.embedding_model = embedding_model
             row.embedding_dimensions = EMBEDDING_DIMENSIONS
-            row.embedding_version = embedding_version
             row.document_text = document_text
             row.document_hash = document_hash
             row.embedding = embedding_values

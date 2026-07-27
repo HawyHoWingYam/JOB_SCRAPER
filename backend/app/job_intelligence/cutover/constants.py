@@ -41,5 +41,4 @@ KNOWN_WRITERS = (
     "outbox-publisher",
     "scheduler-worker",
     "scrapyd",
-    "source-catalog-admin",
 )

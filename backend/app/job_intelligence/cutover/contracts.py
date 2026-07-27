@@ -27,11 +27,6 @@ class DatabaseIdentity(_FrozenContract):
     server_version: str = Field(min_length=1)
 
 
-class SchemaIdentity(_FrozenContract):
-    current_revision: str = Field(min_length=1)
-    target_revision: str = Field(min_length=1)
-
-
 class RevisionIdentity(_FrozenContract):
     revision_id: UUID
     release_key: str = Field(min_length=1)
@@ -54,13 +49,11 @@ class RebuildIdentity(_FrozenContract):
     company_industry: str = Field(min_length=1)
     skills: str = Field(min_length=1)
     embedding_model: str = Field(min_length=1)
-    embedding_version: int = Field(ge=1)
 
 
 class CutoverInventory(_FrozenContract):
     application: ApplicationIdentity
     database: DatabaseIdentity
-    schema_identity: SchemaIdentity = Field(alias="schema")
     governed_revisions: dict[str, RevisionIdentity | None]
     target_revisions: dict[str, ReleaseIdentity]
     preserved_datasets: dict[str, DatasetFingerprint]
@@ -80,12 +73,10 @@ class CutoverInventory(_FrozenContract):
 
 
 class CutoverManifest(_FrozenContract):
-    schema_version: Literal[1] = 1
     created_at: datetime
     operator: Literal["local-operator"] = "local-operator"
     application: ApplicationIdentity
     database: DatabaseIdentity
-    schema_identity: SchemaIdentity = Field(alias="schema")
     governed_revisions: dict[str, RevisionIdentity | None]
     target_revisions: dict[str, ReleaseIdentity]
     preserved_datasets: dict[str, DatasetFingerprint]
@@ -108,7 +99,6 @@ class CutoverManifestEnvelope(_FrozenContract):
 
 
 class DryRunReport(_FrozenContract):
-    schema_version: Literal[1] = 1
     mode: Literal["dry-run"] = "dry-run"
     manifest_hash: str = Field(pattern=SHA256_PATTERN)
     started_at: datetime
@@ -190,7 +180,6 @@ class RuntimeSmokeChecks(_FrozenContract):
 
 
 class RuntimeSmokeEvidence(_FrozenContract):
-    schema_version: Literal[1] = 1
     manifest_hash: str = Field(pattern=SHA256_PATTERN)
     application: ApplicationIdentity
     status: Literal["passed"] = "passed"
@@ -224,7 +213,6 @@ class BackupVerification(_FrozenContract):
 
 
 class CutoverPhaseCheckpoint(_FrozenContract):
-    schema_version: Literal[1] = 1
     ordinal: int = Field(ge=1, le=13)
     phase: str = Field(min_length=1)
     status: Literal["running", "completed", "failed"]
@@ -264,7 +252,6 @@ class CutoverPhaseCheckpoint(_FrozenContract):
 
 
 class CutoverExecutionResult(_FrozenContract):
-    schema_version: Literal[1] = 1
     status: Literal["completed"] = "completed"
     manifest_hash: str = Field(pattern=SHA256_PATTERN)
     backup_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
@@ -281,7 +268,6 @@ class CutoverExecutionResult(_FrozenContract):
 
 
 class CutoverVerificationResult(_FrozenContract):
-    schema_version: Literal[1] = 1
     status: Literal["verified"] = "verified"
     manifest_hash: str = Field(pattern=SHA256_PATTERN)
     verified_at: datetime
@@ -296,13 +282,11 @@ class CutoverVerificationResult(_FrozenContract):
 
 
 class CutoverRollbackPlan(_FrozenContract):
-    schema_version: Literal[1] = 1
     mode: Literal["rollback-plan"] = "rollback-plan"
     manifest_hash: str = Field(pattern=SHA256_PATTERN)
     generated_at: datetime
     application: ApplicationIdentity
     database: DatabaseIdentity
-    schema_identity: SchemaIdentity = Field(alias="schema")
     backup: dict[str, object]
     steps: tuple[str, ...]
 

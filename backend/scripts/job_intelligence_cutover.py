@@ -48,7 +48,6 @@ def _parser() -> argparse.ArgumentParser:
     inventory.add_argument("--application-commit", required=True)
     inventory.add_argument("--application-image", required=True)
     inventory.add_argument("--configuration-hash", required=True)
-    inventory.add_argument("--target-schema-revision", required=True)
     _add_rebuild_arguments(inventory)
 
     dry_run = subparsers.add_parser("dry-run")
@@ -91,7 +90,6 @@ def _add_rebuild_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--skill-version", default="skills-2026-07-19-v1")
     parser.add_argument("--embedding-model", default="all-MiniLM-L6-v2")
-    parser.add_argument("--embedding-version", type=int, default=1)
 
 
 def _environment_for_inventory(args) -> PostgresCutoverEnvironment:
@@ -103,14 +101,12 @@ def _environment_for_inventory(args) -> PostgresCutoverEnvironment:
             image=args.application_image,
             configuration_hash=args.configuration_hash,
         ),
-        target_schema_revision=args.target_schema_revision,
         rebuild=RebuildIdentity(
             source_attributes=args.source_attributes_version,
             canonical_taxonomy=args.canonical_taxonomy_version,
             company_industry=args.company_industry_version,
             skills=args.skill_version,
             embedding_model=args.embedding_model,
-            embedding_version=args.embedding_version,
         ),
     )
 
@@ -134,7 +130,6 @@ def _environment_from_manifest(
         session_factory=SessionLocal,
         database_url=settings.database_url,
         application=manifest.application,
-        target_schema_revision=manifest.schema_identity.target_revision,
         rebuild=manifest.rebuild,
         embedding_model=embedding_model,
         writer_control=writer_control,

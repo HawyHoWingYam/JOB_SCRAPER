@@ -18,8 +18,6 @@ class EmbeddingIndexResult:
     job_id: UUID
     changed: bool
     document_hash: str
-    embedding_model: str
-    embedding_version: int
 
 
 class EmbeddingIndexer:
@@ -29,14 +27,10 @@ class EmbeddingIndexer:
         self,
         *,
         embedding_model: Any,
-        embedding_model_name: str,
-        embedding_version: int,
         event_outbox_repository: EventOutboxRepository | None = None,
         job_embedding_repository: JobEmbeddingRepository | None = None,
     ) -> None:
         self.embedding_model = embedding_model
-        self.embedding_model_name = embedding_model_name
-        self.embedding_version = embedding_version
         self.event_outbox_repository = (
             event_outbox_repository or EventOutboxRepository()
         )
@@ -52,8 +46,6 @@ class EmbeddingIndexer:
         return bool(
             existing is not None
             and existing.document_hash == document.document_hash
-            and existing.embedding_model == self.embedding_model_name
-            and existing.embedding_version == self.embedding_version
             and existing.embedding_dimensions == EMBEDDING_DIMENSIONS
         )
 
@@ -73,8 +65,6 @@ class EmbeddingIndexer:
                 job_id=job_id,
                 changed=False,
                 document_hash=document.document_hash,
-                embedding_model=self.embedding_model_name,
-                embedding_version=self.embedding_version,
             )
 
         embedding = list(
@@ -86,9 +76,7 @@ class EmbeddingIndexer:
         self.job_embedding_repository.upsert_embedding(
             db,
             job_id=job_id,
-            embedding_model=self.embedding_model_name,
             embedding_dimensions=len(embedding),
-            embedding_version=self.embedding_version,
             document_text=document.document_text,
             document_hash=document.document_hash,
             embedding=embedding,
@@ -105,8 +93,6 @@ class EmbeddingIndexer:
                 "crawl_job_id": crawl_job_id,
                 "trigger_event_type": trigger_event_type,
                 "document_hash": document.document_hash,
-                "embedding_model": self.embedding_model_name,
-                "embedding_version": self.embedding_version,
             },
             source_service=source_service,
             auto_commit=False,
@@ -115,8 +101,6 @@ class EmbeddingIndexer:
             job_id=job_id,
             changed=True,
             document_hash=document.document_hash,
-            embedding_model=self.embedding_model_name,
-            embedding_version=self.embedding_version,
         )
 
 
