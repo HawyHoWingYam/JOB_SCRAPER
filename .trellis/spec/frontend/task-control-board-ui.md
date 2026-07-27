@@ -10,7 +10,7 @@ Use this composition for `#scheduler` operations and `#crawl-tasks?task=<id>` de
 
 - `#scheduler?source=<source>` renders `TaskControlBoardPage`.
 - Wizard subroutes under `#scheduler/...` render `TaskControlWizard`.
-- `#crawl-tasks?task=<encoded-id>` fetches `/api/v1/crawl-jobs/tasks/{encoded-id}` directly.
+- `#crawl-tasks?task=<encoded-id>` fetches `/api/crawl-jobs/tasks/{encoded-id}` directly.
 - `getTaskControlBoard(source, {signal})` always requests `version=2`.
 
 ### 3. Contracts

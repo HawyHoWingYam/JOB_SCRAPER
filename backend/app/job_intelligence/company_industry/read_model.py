@@ -138,7 +138,7 @@ class CompanyIndustryReviewRefView:
                 else None
             ),
             "deep_link": (
-                "/api/v1/job-intelligence/governance/company-industries/"
+                "/api/job-intelligence/governance/company-industries/"
                 f"review-items/{self.id}"
             ),
         }
@@ -209,7 +209,7 @@ class CompanyIndustryReviewItemView:
             ),
             "mapping_id": str(self.mapping_id) if self.mapping_id is not None else None,
             "deep_link": (
-                "/api/v1/job-intelligence/governance/company-industries/"
+                "/api/job-intelligence/governance/company-industries/"
                 f"review-items/{self.id}"
             ),
             "created_at": self.created_at,

@@ -32,8 +32,8 @@ load_source_scope_query_plan(
 ```
 
 ```text
-GET /api/v1/source-classifications/{source_site}?active_only=true
-GET /api/v1/categories?source_site={source_site}
+GET /api/source-classifications/{source_site}?active_only=true
+GET /api/categories?source_site={source_site}
 ```
 
 The database authority is `source_classifications`. The six former

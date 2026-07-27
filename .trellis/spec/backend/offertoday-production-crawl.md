@@ -338,7 +338,7 @@ OfferTodayBrowserRuntime._fetch_json_response(
 ```
 
 ```http
-POST /api/v1/crawl-jobs/{crawl_job_id}/resume
+POST /api/crawl-jobs/{crawl_job_id}/resume
 Content-Type: application/json
 
 {"strategy": "reuse_open_browser"}
@@ -628,7 +628,7 @@ dispatch. Legacy fields/events remain readable compatibility evidence only.
 ### 2. Signatures
 
 ```http
-POST /api/v1/dispatch-plans
+POST /api/dispatch-plans
 Content-Type: application/json
 
 {
@@ -647,11 +647,11 @@ Content-Type: application/json
 ```
 
 ```http
-POST /api/v1/dispatch-plans/{plan_id}/dispatch
+POST /api/dispatch-plans/{plan_id}/dispatch
 {"confirmation_token":"...","expected_plan_fingerprint":"<sha256>"}
 
-GET /api/v1/crawl-jobs/tasks?page=<n>&page_size=<n>&time_range=all
-GET /api/v1/task-control-board?source_site=offertoday
+GET /api/crawl-jobs/tasks?page=<n>&page_size=<n>&time_range=all
+GET /api/task-control-board?source_site=offertoday
 ```
 
 ```python

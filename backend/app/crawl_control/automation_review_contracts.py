@@ -25,15 +25,6 @@ from app.crawl_control.dispatch_plan_contracts import DispatchPlanReadinessV1
 class AutomationReviewRequestV1(FrozenContract):
     configuration: AutomationConfigurationV1
     automation_id: UUID | None = None
-    expected_revision: int | None = Field(default=None, ge=1)
-
-    @model_validator(mode="after")
-    def validate_edit_binding(self) -> AutomationReviewRequestV1:
-        if (self.automation_id is None) != (self.expected_revision is None):
-            raise ValueError(
-                "Automation review edit ID and expected revision must be supplied together"
-            )
-        return self
 
 
 class AutomationDetailPreviewV1(FrozenContract):
@@ -67,10 +58,8 @@ class AutomationScheduleSummaryV1(FrozenContract):
 
 
 class AutomationReviewV1(FrozenContract):
-    version: Literal[1] = 1
     input_fingerprint: str = Field(pattern=SHA256_PATTERN)
     automation_id: UUID | None = None
-    expected_revision: int | None = Field(default=None, ge=1)
     authored_scope: AuthoredCrawlScopeV1
     resolved_scope: ResolvedRunScopeV1
     listing_workload: ListingWorkloadPreviewV1 | None = None

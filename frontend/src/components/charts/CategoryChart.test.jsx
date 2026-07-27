@@ -27,7 +27,7 @@ describe('CategoryChart', () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
 
-      if (url.includes('/api/v1/stats/categories/dashboard')) {
+      if (url.includes('/api/stats/categories/dashboard')) {
         return mockJsonResponse({
           categorized_total: 7308,
           specific_total: 5043,
@@ -87,7 +87,7 @@ describe('CategoryChart', () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
 
-      if (url.includes('/api/v1/stats/categories/dashboard')) {
+      if (url.includes('/api/stats/categories/dashboard')) {
         return mockJsonResponse({
           categorized_total: 7308,
           specific_total: 5043,

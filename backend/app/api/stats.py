@@ -35,7 +35,7 @@ from app.schemas.stats import (
     DashboardOtherSpecificCategoriesSchema,
 )
 
-router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
+router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 
 def get_skill_dashboard_bucket(skill_name: str, category_name: str) -> str | None:

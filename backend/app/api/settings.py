@@ -32,7 +32,7 @@ from app.services.scraper_pacing_settings_service import (
     serialize_scraper_pacing_row,
 )
 
-router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
+router = APIRouter(prefix="/api/settings", tags=["settings"])
 MAX_AI_TEST_ERROR_MESSAGE_LENGTH = 512
 
 

@@ -9,7 +9,6 @@ const action = {
 
 function boardPayload(attention) {
   return {
-    version: 2,
     selected_source: 'jobsdb',
     source_summaries: [],
     needs_attention: [attention],
@@ -39,7 +38,7 @@ function attentionItem(overrides = {}) {
   };
 }
 
-describe('decodeBoard failed-run attention revision', () => {
+describe('decodeBoard failed-run event sequence', () => {
   it('decodes a positive failure event sequence', () => {
     const board = decodeBoard(boardPayload(attentionItem()));
 

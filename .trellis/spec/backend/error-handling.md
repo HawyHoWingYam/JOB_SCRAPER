@@ -56,7 +56,7 @@ _resolve_host_browser_profile_path(browser_profile_path: str) -> Path
 The only product continuation endpoint is explicit:
 
 ```http
-POST /api/v1/crawl-jobs/{crawl_job_id}/resume
+POST /api/crawl-jobs/{crawl_job_id}/resume
 ```
 
 ### 3. Contracts
@@ -508,7 +508,7 @@ detail `CrawlJob` executions. Scheduled crawls remain outside this flow.
 ### 2. Signatures
 
 ```http
-POST /api/v1/crawl-jobs/{crawl_job_id}/cancel
+POST /api/crawl-jobs/{crawl_job_id}/cancel
 ```
 
 ```text

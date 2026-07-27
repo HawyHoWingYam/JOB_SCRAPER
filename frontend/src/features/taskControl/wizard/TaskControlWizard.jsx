@@ -49,12 +49,12 @@ function stepTitle(step) {
   return { intent: 'Choose intent', scope: 'Choose Source scope', execution: 'Configure execution', review: 'Review and confirm' }[step];
 }
 
-function IntentStep({ draft, dispatch, route, automation, onRunWithChanges }) {
+function IntentStep({ draft, dispatch, route, onRunWithChanges }) {
   if (route.flow === 'run_now') {
     return (
       <div className="intent-grid">
         <button type="button" className="intent-card" aria-pressed={draft.run_choice === 'saved'} onClick={() => dispatch({ type: 'runChoiceChanged', value: 'saved' })}>
-          <strong>Run saved configuration</strong><span>Prepare a plan from Automation r{automation?.revision || '…'} without edits.</span>
+          <strong>Run saved configuration</strong><span>Prepare a plan from the Automation's current settings without edits.</span>
         </button>
         <button type="button" className="intent-card" onClick={onRunWithChanges}>
           <strong>Run with changes</strong><span>Open a separate One-off draft. The Automation is not edited.</span>
@@ -140,7 +140,7 @@ function ReviewProjection({ state, route }) {
     const detail = review.detailPreview;
     return (
       <div className="review-stack">
-        {review.before && <section className="control-subpanel"><h3>Edit before / after</h3><p>Before: {review.before.configuration.name} · r{review.before.revision}</p><p>After: {state.draft.schedule.name} · expected r{state.draft.expected_revision}</p></section>}
+        {review.before && <section className="control-subpanel"><h3>Edit before / after</h3><p>Before: {review.before.configuration.name}</p><p>After: {state.draft.schedule.name}</p></section>}
         <section className="control-subpanel"><h3>Server-owned scope</h3><dl className="review-facts"><div><dt>Authored mode</dt><dd>{review.authoredScope.mode}</dd></div><div><dt>Resolved Query Targets</dt><dd>{review.resolvedScope.query_target_count}</dd></div><div><dt>Review fingerprint</dt><dd><code>{review.inputFingerprint.slice(0, 16)}</code></dd></div></dl></section>
         {workload && <section className="control-subpanel"><h3>Listing workload</h3><p>{workload.query_target_count} targets × {workload.page_depth} depth = <strong>{workload.estimated_max_pages}</strong> estimated maximum pages.</p><p>Run Page Cap {workload.run_page_cap}; system ceiling {workload.system_run_page_cap}.</p></section>}
         {detail && <section className="control-subpanel"><h3>Detail preview (not frozen)</h3><p>{detail.eligible_now_count} eligible now; {detail.selected_now_count} would be selected by the current cap.</p><p>Future scheduled membership is frozen only when the Automation becomes due. Absolute safety cap: {detail.absolute_safety_cap}.</p></section>}
@@ -181,6 +181,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
   const [state, dispatch] = useReducer(wizardReducer, initialBundle, (bundle) => createWizardState(bundle.draft, bundle.notice));
   const headingRef = useRef(null);
   const dialogTriggerRef = useRef(null);
+  const automationHydratedRef = useRef(null);
   const classificationRequestVersionRef = useRef(0);
   const [classificationRetry, setClassificationRetry] = useState(0);
 
@@ -226,14 +227,15 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
     dispatch({ type: 'automationStarted' });
     getAutomation(route.automationId, { signal: controller.signal })
       .then((automation) => {
-        const shouldHydrate = state.draft.expected_revision == null || route.flow === 'run_now';
+        const shouldHydrate = automationHydratedRef.current !== route.automationId || route.flow === 'run_now';
+        automationHydratedRef.current = route.automationId;
         dispatch({ type: 'automationSucceeded', value: automation, draft: shouldHydrate ? draftFromAutomation(route, automation) : null });
       })
       .catch((error) => {
         if (!controller.signal.aborted) dispatch({ type: 'automationFailed', error: controlError(error) });
       });
     return () => controller.abort();
-  }, [route, state.draft.expected_revision]);
+  }, [route]);
 
   const requestAuthority = useCallback(async () => {
     if (!state.classifications.value) return;
@@ -245,7 +247,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
       if (route.flow === 'automation') {
         value = await reviewAutomation(buildAutomationReviewRequest(state.draft, state.classifications.value));
       } else if (route.flow === 'run_now') {
-        value = await prepareDispatchPlan({ version: 1, kind: 'saved_automation', automation_id: state.automation.value.id, expected_revision: state.automation.value.revision });
+        value = await prepareDispatchPlan({ kind: 'saved_automation', automation_id: state.automation.value.id });
       } else {
         value = await prepareDispatchPlan(buildOneOffRun(state.draft, state.classifications.value));
       }
@@ -338,7 +340,7 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
     const id = newDraftId();
     const targetRoute = { flow: 'one_off', mode: 'create', automationId: null, sourceSite: state.automation.value.sourceSite, draftId: id };
     const base = draftFromAutomation(targetRoute, state.automation.value);
-    const draft = { ...base, flow: 'one_off', mode: 'create', automation_id: null, expected_revision: null, step: 'intent' };
+    const draft = { ...base, flow: 'one_off', mode: 'create', automation_id: null, step: 'intent' };
     writeDraft(globalThis.sessionStorage, id, draft);
     window.location.hash = buildControlRoute(targetRoute);
   };
@@ -374,12 +376,12 @@ export default function TaskControlWizard({ hash = window.location.hash }) {
       <div className="wizard-layout">
         <main className="wizard-main">
           <h2 ref={headingRef} tabIndex="-1">{stepTitle(state.draft.step)}</h2>
-          {state.draft.step === 'intent' && <IntentStep draft={state.draft} dispatch={dispatch} route={route} automation={state.automation.value} onRunWithChanges={runWithChanges} />}
+          {state.draft.step === 'intent' && <IntentStep draft={state.draft} dispatch={dispatch} route={route} onRunWithChanges={runWithChanges} />}
           {state.draft.step === 'scope' && state.classifications.status === 'loading' && <p role="status" className="control-empty">Loading major categories…</p>}
           {state.draft.step === 'scope' && state.classifications.status === 'error' && !state.classifications.value && <div className="control-error" role="status"><p>Major categories could not be loaded.</p><button type="button" onClick={() => setClassificationRetry((current) => current + 1)}>Retry loading categories</button></div>}
           {state.draft.step === 'scope' && state.classifications.value && <SourceScopeTree sourceSite={state.draft.source_site} classifications={state.classifications.value.classifications} scope={state.draft.scope} onChange={(scope) => dispatch({ type: 'scopeChanged', scope })} />}
           {state.draft.step === 'execution' && <ExecutionStep draft={state.draft} dispatch={dispatch} />}
-          {state.draft.step === 'review' && route.flow === 'run_now' && <IntentStep draft={state.draft} dispatch={dispatch} route={route} automation={state.automation.value} onRunWithChanges={runWithChanges} />}
+          {state.draft.step === 'review' && route.flow === 'run_now' && <IntentStep draft={state.draft} dispatch={dispatch} route={route} onRunWithChanges={runWithChanges} />}
           {state.draft.step === 'review' && <ReviewProjection state={state} route={route} />}
           {(state.review.error || state.plan.error) && <div className="control-error" role="alert"><p>{(state.review.error || state.plan.error).message}</p></div>}
           {state.conflict && <div className="control-conflict" role="status"><h3>Active manual detail run conflict</h3><p>Run <a href={`#crawl-tasks?task=${encodeURIComponent(state.conflict.crawlJobId)}`}>{state.conflict.crawlJobId}</a> is {state.conflict.status}. A fresh plan is built only after cancelled acknowledgement.</p><button type="button" disabled={state.conflict.status !== 'active' || busy} onClick={(event) => { dialogTriggerRef.current = event.currentTarget; dispatch({ type: 'dialogOpened', dialog: { kind: 'cancel-conflict' } }); }}>{state.conflict.status === 'cancelling' ? 'Cancelling…' : 'Cancel conflicting run'}</button>{state.conflict.error && <p className="control-error">{state.conflict.error.message}</p>}</div>}

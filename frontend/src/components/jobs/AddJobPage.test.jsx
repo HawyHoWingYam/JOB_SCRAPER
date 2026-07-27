@@ -22,10 +22,10 @@ describe('AddJobPage governed manual entry', () => {
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/jobs/filters') {
+      if (url.pathname === '/api/jobs/filters') {
         return jsonResponse(productFixture.job_filters);
       }
-      if (url.pathname === '/api/v1/companies') {
+      if (url.pathname === '/api/companies') {
         return jsonResponse({
           items: [productFixture.companies[0]],
           total: 1,
@@ -34,7 +34,7 @@ describe('AddJobPage governed manual entry', () => {
           total_pages: 1,
         });
       }
-      if (url.pathname === '/api/v1/jobs/manual' && init.method === 'POST') {
+      if (url.pathname === '/api/jobs/manual' && init.method === 'POST') {
         submittedJobs.push(JSON.parse(init.body));
         return jsonResponse(productFixture.job_detail);
       }
@@ -78,17 +78,17 @@ describe('AddJobPage governed manual entry', () => {
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/jobs/filters') {
+      if (url.pathname === '/api/jobs/filters') {
         return jsonResponse(productFixture.job_filters);
       }
-      if (url.pathname === '/api/v1/companies' && init.method === 'POST') {
+      if (url.pathname === '/api/companies' && init.method === 'POST') {
         createdCompanies.push(JSON.parse(init.body));
         return jsonResponse({
           ...productFixture.companies[1],
           name: 'New Evidence Company',
         });
       }
-      if (url.pathname === '/api/v1/companies') {
+      if (url.pathname === '/api/companies') {
         return jsonResponse({
           items: [],
           total: 0,

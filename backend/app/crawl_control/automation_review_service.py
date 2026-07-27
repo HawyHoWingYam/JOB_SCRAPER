@@ -20,7 +20,6 @@ from app.crawl_control.dispatch_plan_contracts import (
     DispatchPlanContentV1,
     DispatchPlanReadinessV1,
 )
-from app.crawl_control.errors import AutomationRevisionConflictError
 from app.crawl_control.scope_service import CrawlScopeService
 from app.source_classifications.domain import payload_fingerprint
 from app.utils.time import utc_now
@@ -73,13 +72,6 @@ class AutomationReviewService:
         before = None
         if request.automation_id is not None:
             before = self.automation_service.get(request.automation_id)
-            assert request.expected_revision is not None
-            if before.snapshot.revision != request.expected_revision:
-                raise AutomationRevisionConflictError(
-                    automation_id=request.automation_id,
-                    expected_revision=request.expected_revision,
-                    current_revision=before.snapshot.revision,
-                )
 
         trigger = CronTrigger.from_crontab(
             configuration.cron_expression,
@@ -157,13 +149,11 @@ class AutomationReviewService:
             detail_preview=detail_preview,
             readiness=readiness,
             warnings=tuple(warnings),
-            before=before,
             schedule=schedule,
         )
         return AutomationReviewV1(
             input_fingerprint=fingerprint,
             automation_id=request.automation_id,
-            expected_revision=request.expected_revision,
             authored_scope=configuration.scope,
             resolved_scope=scope_preview.resolved_scope,
             listing_workload=scope_preview.listing_workload,
@@ -236,7 +226,6 @@ class AutomationReviewService:
         detail_preview,
         readiness,
         warnings,
-        before,
         schedule,
     ) -> str:
         readiness_payload = readiness.model_dump(mode="json")
@@ -247,7 +236,6 @@ class AutomationReviewService:
                 "automation_id": (
                     str(request.automation_id) if request.automation_id else None
                 ),
-                "expected_revision": request.expected_revision,
                 "resolved_scope_fingerprint": resolved_scope.fingerprint,
                 "listing_workload": (
                     listing_workload.model_dump(mode="json")
@@ -261,9 +249,6 @@ class AutomationReviewService:
                 ),
                 "readiness": readiness_payload,
                 "warnings": [item.model_dump(mode="json") for item in warnings],
-                "before_fingerprint": (
-                    before.snapshot.fingerprint if before is not None else None
-                ),
                 "schedule": {
                     "cron_expression": schedule.cron_expression,
                     "timezone": schedule.timezone,

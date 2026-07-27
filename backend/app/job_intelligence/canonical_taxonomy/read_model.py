@@ -34,7 +34,7 @@ _REVIEW_STATUSES = {
     "insufficient_evidence",
     "superseded",
 }
-_DEEP_LINK_PREFIX = "/api/v1/job-intelligence/governance/job-taxonomy/review-items"
+_DEEP_LINK_PREFIX = "/api/job-intelligence/governance/job-taxonomy/review-items"
 
 
 class CanonicalReadError(ValueError):

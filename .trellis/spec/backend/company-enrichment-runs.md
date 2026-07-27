@@ -32,7 +32,7 @@ LLMClient.probe_web_search(prompt) -> {ok, output_types}
 Company run API and service:
 
 ```http
-POST /api/v1/companies/enrichment-runs
+POST /api/companies/enrichment-runs
 Content-Type: application/json
 
 {"web_search_enabled": false}

@@ -26,7 +26,6 @@ AutomationLifecycleState: TypeAlias = Literal[
 
 
 class AutomationConfigurationV1(FrozenContract):
-    version: Literal[1] = 1
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=5000)
     cron_expression: str = Field(min_length=9, max_length=100)
@@ -88,9 +87,7 @@ class AutomationConfigurationV1(FrozenContract):
 
 
 class AutomationSnapshotV1(FrozenContract):
-    version: Literal[1] = 1
     automation_id: UUID
-    revision: int = Field(ge=1)
     lifecycle_state: AutomationLifecycleState
     configuration: AutomationConfigurationV1
     scope_review_reason: CrawlScopeErrorPayloadV1 | None = None
@@ -120,7 +117,6 @@ class AutomationSnapshotV1(FrozenContract):
 
 
 class AutomationProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     snapshot: AutomationSnapshotV1
     created_at: datetime
     updated_at: datetime
@@ -136,13 +132,10 @@ class AutomationProjectionV1(FrozenContract):
 
 
 class AutomationDeleteImpactV1(FrozenContract):
-    version: Literal[1] = 1
     automation_id: UUID
-    expected_revision: int = Field(ge=1)
-    automation_revision_count: int = Field(ge=1)
     schedule_execution_count: int = Field(ge=0)
     crawl_job_count: int = Field(ge=0)
-    removed_records: tuple[Literal["automation", "automation_revisions"], ...]
+    removed_records: tuple[Literal["automation"], ...]
     preserved_records: tuple[
         Literal["schedule_executions", "crawl_jobs", "run_history"], ...
     ]
@@ -153,7 +146,6 @@ class AutomationDeleteImpactV1(FrozenContract):
 
 
 class AutomationDeleteReviewGrantV1(FrozenContract):
-    version: Literal[1] = 1
     review_token: str = Field(min_length=20)
     expires_at: datetime
     impact: AutomationDeleteImpactV1

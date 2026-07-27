@@ -137,7 +137,7 @@ upgrades an existing stamped database and stamps/ upgrades a fresh one.
   one-shot `db-bootstrap` service and verify `alembic_version` before opening
   the AI Enrichment page.
 - **Bad:** Commit the ORM/API changes while leaving the migration untracked;
-  `/api/v1/ai/overview` or `/api/v1/ai/runs` then returns 500 from an
+  `/api/ai/overview` or `/api/ai/runs` then returns 500 from an
   `UndefinedColumn` query.
 
 #### 6. Tests Required

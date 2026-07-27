@@ -419,7 +419,7 @@ describe('AIEnrichmentPage', () => {
     const user = userEvent.setup();
     render(<AIEnrichmentPage />);
     await user.click(await screen.findByRole('button', { name: 'Stop' }));
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/ai/runs/run-active-4/stop', { method: 'POST' });
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/ai/runs/run-active-4/stop', { method: 'POST' });
 
     installFetch({ runs: [{ ...activeRun, status: 'stopping' }, failedRun] });
     render(<AIEnrichmentPage />);
@@ -432,7 +432,7 @@ describe('AIEnrichmentPage', () => {
     const user = userEvent.setup();
     render(<AIEnrichmentPage />);
     await user.click(await screen.findByRole('button', { name: /Retry failed/i }));
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/v1/ai/runs/run-failed-3/retry-failed', { method: 'POST' });
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/ai/runs/run-failed-3/retry-failed', { method: 'POST' });
   });
 
   it('copies the visible run UUID for debugging', async () => {

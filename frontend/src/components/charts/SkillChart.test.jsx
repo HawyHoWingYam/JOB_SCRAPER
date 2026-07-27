@@ -30,7 +30,7 @@ describe('SkillChart', () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
 
-      if (url.includes('/api/v1/stats/skills')) {
+      if (url.includes('/api/stats/skills')) {
         return mockJsonResponse({
           skills: [
             { name: 'Python', category: 'Backend', count: 1015, dashboard_bucket: 'Backend' },
@@ -80,7 +80,7 @@ describe('SkillChart', () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
 
-      if (url.includes('/api/v1/stats/skills')) {
+      if (url.includes('/api/stats/skills')) {
         return mockJsonResponse({
           skills: [
             { name: 'Python', category: 'Backend', count: 1015, dashboard_bucket: 'Backend' },
@@ -108,7 +108,7 @@ describe('SkillChart', () => {
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
 
-      if (url.includes('/api/v1/stats/skills')) {
+      if (url.includes('/api/stats/skills')) {
         return mockJsonResponse({
           skills: [
             { name: 'Python', category: 'Backend', count: 1015, dashboard_bucket: 'Backend' },

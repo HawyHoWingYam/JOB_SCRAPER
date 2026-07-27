@@ -9,12 +9,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 REQUEST_ID_HEADER = "X-Request-ID"
 SLOW_REQUEST_THRESHOLD_MS = 1000
 IMPORTANT_REQUEST_PATH_PREFIXES = (
-    "/api/v1/crawl-jobs",
-    "/api/v1/scrape/progress",
-    "/api/v1/schedules",
-    "/api/v1/source-catalogs",
+    "/api/crawl-jobs",
+    "/api/scrape/progress",
+    "/api/schedules",
+    "/api/source-catalogs",
 )
-EXCLUDED_REQUEST_SUMMARY_PATHS = {"/api/v1/scrape/progress/stream"}
+EXCLUDED_REQUEST_SUMMARY_PATHS = {"/api/scrape/progress/stream"}
 
 logger = logging.getLogger("app.request_monitoring")
 

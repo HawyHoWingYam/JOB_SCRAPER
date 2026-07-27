@@ -16,7 +16,6 @@ from app.crawl_control.contracts import (
 )
 from app.crawl_control.automation_contracts import (
     AutomationLifecycleState,
-    AutomationProjectionV1,
 )
 from app.crawl_control.dispatch_plan_contracts import (
     DispatchPlanReadinessV1,
@@ -25,7 +24,6 @@ from app.crawl_control.dispatch_plan_contracts import (
 
 
 class RunAuthorityProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     authority_kind: Literal["dispatch_plan", "legacy"]
     dispatch_plan_id: UUID | None = None
     dispatch_plan_fingerprint: str | None = Field(
@@ -34,7 +32,6 @@ class RunAuthorityProjectionV1(FrozenContract):
     )
     plan_state: DispatchPlanState | None = None
     automation_id: UUID | None = None
-    automation_revision: int | None = Field(default=None, ge=1)
     authored_scope: AuthoredCrawlScopeV1 | None = None
     resolved_scope: ResolvedRunScopeV1 | None = None
     readiness: DispatchPlanReadinessV1 | None = None
@@ -49,20 +46,12 @@ class RunAuthorityProjectionV1(FrozenContract):
             self.resolved_scope,
             self.readiness,
         )
-        automation_fields = (
-            self.automation_id,
-            self.automation_revision,
-        )
         if self.authority_kind == "dispatch_plan":
             if any(value is None for value in plan_fields):
                 raise ValueError(
                     "Dispatch Plan authority requires its immutable plan fields"
                 )
-            if (self.automation_id is None) != (self.automation_revision is None):
-                raise ValueError(
-                    "Dispatch Plan Automation authority requires both ID and revision"
-                )
-        elif any(value is not None for value in (*plan_fields, *automation_fields)):
+        elif any(value is not None for value in (*plan_fields, self.automation_id)):
             raise ValueError(
                 "Legacy authority cannot claim Dispatch Plan or Automation fields"
             )
@@ -70,7 +59,6 @@ class RunAuthorityProjectionV1(FrozenContract):
 
 
 class ListingWorkloadProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     query_target_count: int = Field(ge=1)
     page_depth: int = Field(ge=1)
     estimated_max_pages: int = Field(ge=1)
@@ -87,7 +75,6 @@ class ListingWorkloadProjectionV1(FrozenContract):
 class ListingRecoveryProjectionV1(FrozenContract):
     """Normalized continuation facts for a page-depth-capped listing run."""
 
-    version: Literal[1] = 1
     listing_partial: bool
     query_target_count: int = Field(ge=0)
     capped_query_target_count: int = Field(ge=0)
@@ -116,7 +103,6 @@ class ListingRecoveryProjectionV1(FrozenContract):
 
 
 class DetailSnapshotProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     backlog_scope: dict[str, Any]
     limit_kind: Literal["entire_snapshot", "stop_after", "legacy"]
     cutoff_at: datetime | None = None
@@ -132,7 +118,6 @@ class DetailSnapshotProjectionV1(FrozenContract):
 
 
 class RecoveryAttemptProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     request_event_sequence: int = Field(ge=1)
     requested_at: datetime
     requested_by: str | None = None
@@ -165,7 +150,6 @@ class RecoveryAttemptProjectionV1(FrozenContract):
 
 
 class CrawlControlRunProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     crawl_job_id: UUID
     source_site: SourceSite
     crawl_phase: Literal["listing", "detail"]
@@ -191,56 +175,6 @@ class CrawlControlRunProjectionV1(FrozenContract):
         return self
 
 
-class AutomationRowProjectionV1(FrozenContract):
-    version: Literal[1] = 1
-    automation_id: UUID
-    revision: int = Field(ge=1)
-    lifecycle_state: AutomationLifecycleState
-    name: str = Field(min_length=1, max_length=255)
-    source_site: SourceSite
-    crawl_phase: Literal["listing", "detail"]
-    crawl_mode: Literal["headless", "headed"]
-    authored_scope: AuthoredCrawlScopeV1
-    scope_review_reason: CrawlScopeErrorPayloadV1 | None = None
-    created_at: datetime
-    updated_at: datetime
-    last_run_at: datetime | None = None
-    next_run_at: datetime | None = None
-
-    @classmethod
-    def from_projection(
-        cls,
-        projection: AutomationProjectionV1,
-    ) -> AutomationRowProjectionV1:
-        snapshot = projection.snapshot
-        configuration = snapshot.configuration
-        return cls(
-            automation_id=snapshot.automation_id,
-            revision=snapshot.revision,
-            lifecycle_state=snapshot.lifecycle_state,
-            name=configuration.name,
-            source_site=configuration.scope.source_site,
-            crawl_phase=configuration.crawl_phase,
-            crawl_mode=configuration.crawl_mode,
-            authored_scope=configuration.scope,
-            scope_review_reason=snapshot.scope_review_reason,
-            created_at=projection.created_at,
-            updated_at=projection.updated_at,
-            last_run_at=projection.last_run_at,
-            next_run_at=projection.next_run_at,
-        )
-
-
-class TaskControlBoardProjectionV1(FrozenContract):
-    version: Literal[1] = 1
-    source_site: SourceSite | None = None
-    automations: tuple[AutomationRowProjectionV1, ...]
-    automation_total: int = Field(ge=0)
-    runs: tuple[CrawlControlRunProjectionV1, ...]
-    run_total: int = Field(ge=0)
-    refreshed_at: datetime
-
-
 BoardActionKind = Literal[
     "view_task",
     "view_logs",
@@ -259,14 +193,12 @@ BoardActionKind = Literal[
 
 
 class BoardActionV1(FrozenContract):
-    version: Literal[1] = 1
     action: BoardActionKind
     enabled: bool
     reason_code: str | None = Field(default=None, max_length=100)
 
 
 class CrawlTaskIssueProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     issue_class: str = Field(min_length=1, max_length=100)
     code: str | None = Field(default=None, max_length=100)
     stage: str | None = Field(default=None, max_length=100)
@@ -274,7 +206,6 @@ class CrawlTaskIssueProjectionV1(FrozenContract):
 
 
 class ManualActionGuidanceProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     source_site: SourceSite
     action_type: str | None = Field(default=None, max_length=100)
     classification: str | None = Field(default=None, max_length=100)
@@ -293,7 +224,6 @@ class ManualActionGuidanceProjectionV1(FrozenContract):
 
 
 class AutomationScheduleProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     cron_expression: str = Field(min_length=9, max_length=100)
     timezone: str = Field(min_length=1, max_length=100)
     human_summary: str = Field(min_length=1, max_length=500)
@@ -301,7 +231,6 @@ class AutomationScheduleProjectionV1(FrozenContract):
 
 
 class AutomationLatestOutcomeV1(FrozenContract):
-    version: Literal[1] = 1
     crawl_job_id: UUID
     status: str = Field(min_length=1, max_length=64)
     completed_at: datetime | None = None
@@ -309,15 +238,12 @@ class AutomationLatestOutcomeV1(FrozenContract):
 
 
 class ResolvedScopeSummaryV1(FrozenContract):
-    version: Literal[1] = 1
     selected_classification_count: int = Field(ge=0)
     query_target_count: int = Field(ge=0)
 
 
 class AutomationRowProjectionV2(FrozenContract):
-    version: Literal[2] = 2
     automation_id: UUID
-    revision: int = Field(ge=1)
     lifecycle_state: AutomationLifecycleState
     name: str = Field(min_length=1, max_length=255)
     source_site: SourceSite
@@ -336,7 +262,6 @@ class AutomationRowProjectionV2(FrozenContract):
 
 
 class BoardAttentionItemV2(FrozenContract):
-    version: Literal[2] = 2
     item_id: str = Field(min_length=1, max_length=255)
     kind: Literal[
         "manual_action",
@@ -359,12 +284,10 @@ class BoardAttentionItemV2(FrozenContract):
 
 
 class DismissFailedAttentionRequestV1(FrozenContract):
-    version: Literal[1] = 1
     expected_failure_event_sequence: int = Field(ge=1)
 
 
 class DismissFailedAttentionResponseV1(FrozenContract):
-    version: Literal[1] = 1
     crawl_job_id: UUID
     failure_event_sequence: int = Field(ge=1)
     dismissal_event_sequence: int = Field(ge=1)
@@ -372,7 +295,6 @@ class DismissFailedAttentionResponseV1(FrozenContract):
 
 
 class BoardActiveRunV2(FrozenContract):
-    version: Literal[2] = 2
     run: CrawlControlRunProjectionV1
     issue: CrawlTaskIssueProjectionV1 | None = None
     manual_action_guidance: ManualActionGuidanceProjectionV1 | None = None
@@ -380,7 +302,6 @@ class BoardActiveRunV2(FrozenContract):
 
 
 class BoardSourceSummaryV2(FrozenContract):
-    version: Literal[2] = 2
     source_site: SourceSite
     state: Literal["attention", "running", "all_clear"]
     attention_count: int = Field(ge=0)
@@ -389,7 +310,6 @@ class BoardSourceSummaryV2(FrozenContract):
 
 
 class TaskControlBoardProjectionV2(FrozenContract):
-    version: Literal[2] = 2
     selected_source: SourceSite
     source_summaries: tuple[BoardSourceSummaryV2, ...]
     needs_attention: tuple[BoardAttentionItemV2, ...]
@@ -401,7 +321,6 @@ class TaskControlBoardProjectionV2(FrozenContract):
 
 
 class CrawlTaskDetailProjectionV1(FrozenContract):
-    version: Literal[1] = 1
     run: CrawlControlRunProjectionV1
     persisted_status: str = Field(min_length=1, max_length=64)
     operator_state: str | None = Field(default=None, max_length=100)

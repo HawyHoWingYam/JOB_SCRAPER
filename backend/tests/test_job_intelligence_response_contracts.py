@@ -361,7 +361,7 @@ def _seed_summary_state(db) -> dict[str, object]:
 
 def _job_search_client(db) -> TestClient:
     app = FastAPI()
-    app.include_router(jobs_api.router, prefix="/api/v1")
+    app.include_router(jobs_api.router, prefix="/api")
     app.dependency_overrides[get_db] = lambda: db
     return TestClient(app)
 
@@ -1374,7 +1374,7 @@ def test_job_detail_composes_independent_governed_states_without_fabrication(
                 "version": 1,
                 "decision_audit_id": None,
                 "deep_link": (
-                    "/api/v1/job-intelligence/governance/job-taxonomy/"
+                    "/api/job-intelligence/governance/job-taxonomy/"
                     "review-items/"
                     f'{state["canonical_review_id"]}'
                 ),
@@ -1690,7 +1690,7 @@ def test_job_browser_rejects_legacy_company_industry_filter_authority() -> None:
 
 def test_get_job_browser_rejects_legacy_company_industry_filter_with_http_422() -> None:
     response = _job_search_client(None).get(
-        "/api/v1/jobs/search",
+        "/api/jobs/search",
         params={"industry": "Legacy evidence only"},
     )
 
@@ -1704,7 +1704,7 @@ def test_get_job_browser_filters_by_company_industry_node_ids(
     state = _seed_rich_job_detail_state(product_contract_db)
 
     response = _job_search_client(product_contract_db).get(
-        "/api/v1/jobs/search",
+        "/api/jobs/search",
         params={
             "company_industry_node_ids": str(state["industry_section_id"]),
         },

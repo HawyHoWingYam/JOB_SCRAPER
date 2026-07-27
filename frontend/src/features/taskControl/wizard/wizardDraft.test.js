@@ -22,8 +22,8 @@ const route = {
   sourceSite: 'jobsdb', draftId: 'draft-1',
 };
 
-describe('versioned wizard drafts', () => {
-  it('round-trips a valid draft and clears only its versioned key', () => {
+describe('wizard drafts', () => {
+  it('round-trips a valid draft and clears only its key', () => {
     const storage = memoryStorage();
     const draft = { ...createWizardDraft(route), intent: 'listing' };
     expect(writeDraft(storage, route.draftId, draft).ok).toBe(true);
@@ -34,7 +34,7 @@ describe('versioned wizard drafts', () => {
 
   it('recovers safely from malformed, old, cross-source, and throwing storage', () => {
     const storage = memoryStorage();
-    storage.values.set(`${DRAFT_PREFIX}${route.draftId}`, JSON.stringify({ version: 0 }));
+    storage.values.set(`${DRAFT_PREFIX}${route.draftId}`, JSON.stringify({ flow: 'obsolete' }));
     expect(readDraft(storage, route.draftId, route).notice).toMatch(/malformed|outdated/);
     const throwing = { getItem: () => { throw new DOMException('blocked', 'SecurityError'); } };
     expect(readDraft(throwing, route.draftId, route).notice).toMatch(/unavailable/);

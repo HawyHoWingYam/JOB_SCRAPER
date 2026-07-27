@@ -8,9 +8,9 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 
 ### 2. Signatures
 
-- `GET /api/v1/task-control-board` returns the compatibility V1 projection.
-- `GET /api/v1/task-control-board?version=2&source_site=<source>&run_limit=<1..100>` returns Board V2.
-- `GET /api/v1/crawl-jobs/tasks/{crawl_job_id}` returns `CrawlTaskDetailProjectionV1`.
+- `GET /api/task-control-board` returns the compatibility V1 projection.
+- `GET /api/task-control-board?version=2&source_site=<source>&run_limit=<1..100>` returns Board V2.
+- `GET /api/crawl-jobs/tasks/{crawl_job_id}` returns `CrawlTaskDetailProjectionV1`.
 - `TaskControlBoardProjectionService.get_v2(selected_source, run_limit)` loads each supported Source independently, then batches events for the combined rows.
 
 ### 3. Contracts
@@ -89,7 +89,7 @@ acknowledgement only; it is not a crawl lifecycle transition or task deletion.
 ### 2. Signatures
 
 ```http
-POST /api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention
+POST /api/crawl-jobs/{crawl_job_id}/dismiss-failed-attention
 Content-Type: application/json
 
 {

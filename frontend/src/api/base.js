@@ -11,13 +11,13 @@ function normalizeApiBase(url) {
 
 export const API_BASE_URL = shouldUseDevProxy ? '' : normalizeApiBase(explicitApiUrl);
 
-/** Current API version prefix — change here when the backend version bumps. */
-export const API_PREFIX = '/api/v1';
+/** Single current API prefix. */
+export const API_PREFIX = '/api';
 
 /**
  * Build a full API path relative to the backend root.
- * Usage: apiPath('/jobs/search') → "/api/v1/jobs/search"
- *        apiPath('') → "/api/v1"
+ * Usage: apiPath('/jobs/search') → "/api/jobs/search"
+ *        apiPath('') → "/api"
  */
 export function apiPath(path) {
   if (!path) {

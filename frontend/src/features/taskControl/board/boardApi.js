@@ -10,7 +10,7 @@ const json = (body, method = 'POST') => ({
 });
 
 export async function getTaskControlBoard(sourceSite, { signal } = {}) {
-  const query = new URLSearchParams({ version: '2', source_site: sourceSite });
+  const query = new URLSearchParams({ source_site: sourceSite });
   return decodeBoard(await apiFetchJson(apiPath(`/task-control-board?${query}`), { signal }));
 }
 
@@ -21,10 +21,10 @@ export async function getCrawlTaskDetail(taskId, { signal } = {}) {
   ));
 }
 
-export async function transitionAutomation(automationId, action, expectedRevision) {
+export async function transitionAutomation(automationId, action) {
   return apiFetchJson(
     apiPath(`/automations/${encodeURIComponent(automationId)}/${action}`),
-    json({ expected_revision: expectedRevision, ...(action === 'restore' ? { activate: false } : {}) }),
+    json(action === 'restore' ? { activate: false } : {}),
   );
 }
 
@@ -35,10 +35,10 @@ export async function reviewAutomationDelete(automationId) {
   ));
 }
 
-export async function permanentlyDeleteAutomation(automationId, expectedRevision, reviewToken) {
+export async function permanentlyDeleteAutomation(automationId, reviewToken) {
   return apiFetchJson(
     apiPath(`/automations/${encodeURIComponent(automationId)}`),
-    json({ expected_revision: expectedRevision, review_token: reviewToken }, 'DELETE'),
+    json({ review_token: reviewToken }, 'DELETE'),
   );
 }
 
@@ -60,7 +60,6 @@ export async function dismissFailedRunAttention(taskId, expectedFailureEventSequ
   return apiFetchJson(
     apiPath(`/crawl-jobs/${encodeURIComponent(taskId)}/dismiss-failed-attention`),
     json({
-      version: 1,
       expected_failure_event_sequence: expectedFailureEventSequence,
     }),
   );

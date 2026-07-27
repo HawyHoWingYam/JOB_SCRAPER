@@ -25,7 +25,7 @@ describe('api client', () => {
       }),
     );
 
-    await apiFetchJson('/api/v1/capabilities');
+    await apiFetchJson('/api/capabilities');
 
     const headers = globalThis.fetch.mock.calls[0][1].headers;
     expect(headers.get('X-Request-ID')).toBe('req-fixed');
@@ -40,7 +40,7 @@ describe('api client', () => {
       }),
     );
 
-    await expect(apiFetchJson('/api/v1/capabilities')).rejects.toThrow('retrieval-api unavailable');
+    await expect(apiFetchJson('/api/capabilities')).rejects.toThrow('retrieval-api unavailable');
 
     expect(logErrorSpy).toHaveBeenCalledWith(
       'api.request_failed',
@@ -48,7 +48,7 @@ describe('api client', () => {
         requestId: 'req-fixed',
         method: 'GET',
         status: 503,
-        url: '/api/v1/capabilities',
+        url: '/api/capabilities',
       }),
     );
   });
@@ -69,7 +69,7 @@ describe('api client', () => {
     });
 
     try {
-      const request = apiFetchJson('/api/v1/capabilities', { retryTransient: true });
+      const request = apiFetchJson('/api/capabilities', { retryTransient: true });
       await vi.advanceTimersByTimeAsync(250);
       await vi.advanceTimersByTimeAsync(500);
       await expect(request).resolves.toEqual({ ok: true });
@@ -88,7 +88,7 @@ describe('api client', () => {
     }));
 
     await expect(
-      apiFetchJson('/api/v1/job-intelligence/governance/job-taxonomy/review-items', {
+      apiFetchJson('/api/job-intelligence/job-taxonomy/tree', {
         retryTransient: true,
       }),
     ).rejects.toMatchObject({ status: 431 });
@@ -105,7 +105,7 @@ describe('api client', () => {
     );
 
     await expect(
-      apiFetchJson('/api/v1/capabilities', {
+      apiFetchJson('/api/capabilities', {
         headers: {
           'X-Request-ID': 'req-caller',
         },
@@ -131,7 +131,7 @@ describe('api client', () => {
       }),
     );
 
-    await expect(apiFetchJson('/api/v1/capabilities')).rejects.toThrow('retrieval-api unavailable');
+    await expect(apiFetchJson('/api/capabilities')).rejects.toThrow('retrieval-api unavailable');
   });
 
   it('preserves stable conflict metadata for governance reload handling', async () => {
@@ -148,7 +148,7 @@ describe('api client', () => {
       }),
     );
 
-    const error = await apiFetchJson('/api/v1/job-intelligence/review').catch(
+    const error = await apiFetchJson('/api/job-intelligence/review').catch(
       (caught) => caught,
     );
 
@@ -183,7 +183,7 @@ describe('api client', () => {
       }),
     );
 
-    const error = await apiFetchJson('/api/v1/source-classifications/jobsdb').catch(
+    const error = await apiFetchJson('/api/source-classifications/jobsdb').catch(
       (caught) => caught,
     );
 
@@ -223,7 +223,7 @@ describe('api client', () => {
         });
       });
 
-      request = apiFetchJson('/api/v1/capabilities', {
+      request = apiFetchJson('/api/capabilities', {
         signal: callerController.signal,
         timeoutMs: 25,
       });
@@ -247,7 +247,7 @@ describe('api client', () => {
     });
 
     await expect(
-      apiFetchJson('/api/v1/capabilities', { signal: callerController.signal }),
+      apiFetchJson('/api/capabilities', { signal: callerController.signal }),
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(logErrorSpy).not.toHaveBeenCalled();
   });

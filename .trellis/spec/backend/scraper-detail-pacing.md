@@ -11,9 +11,9 @@ dispatches do not receive this pacing snapshot.
 ### 2. Signatures
 
 ```http
-GET  /api/v1/settings/scraper-pacing
-PUT  /api/v1/settings/scraper-pacing/{source_site}
-POST /api/v1/settings/scraper-pacing/{source_site}/reset
+GET  /api/settings/scraper-pacing
+PUT  /api/settings/scraper-pacing/{source_site}
+POST /api/settings/scraper-pacing/{source_site}/reset
 ```
 
 ```text

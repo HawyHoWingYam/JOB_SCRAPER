@@ -78,7 +78,7 @@ async function launchCrawlFromScheduler(page, scenario, phase, { listingBatchId 
   const [response] = await Promise.all([
     page.waitForResponse(
       (response) =>
-        response.url().endsWith('/api/v1/crawl-jobs') &&
+        response.url().endsWith('/api/crawl-jobs') &&
         response.request().method() === 'POST'
     ),
     startButton.click(),

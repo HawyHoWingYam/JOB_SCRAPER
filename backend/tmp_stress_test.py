@@ -2,7 +2,7 @@
 import asyncio, json, sys, time
 import httpx
 
-API_BASE = "http://backend-api:8000/api/v1"
+API_BASE = "http://backend-api:8000/api"
 
 ALL_CATEGORIES = [
     101000, 102000, 103000, 104000, 105000, 106000, 107000, 108000, 109000,

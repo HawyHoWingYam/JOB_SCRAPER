@@ -138,7 +138,7 @@ describe('CompaniesPage', () => {
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/companies' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies' && (!init.method || init.method === 'GET')) {
         const key = [
           `status=${url.searchParams.get('status') || ''}`,
           `q=${url.searchParams.get('q') || ''}`,
@@ -153,14 +153,14 @@ describe('CompaniesPage', () => {
         return mockJsonResponse(payload);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
         const payload = currentRunResponses.length > 1
           ? currentRunResponses.shift()
           : currentRunResponses[0];
         return mockJsonResponse(payload);
       }
 
-      if (url.pathname === '/api/v1/capabilities' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/capabilities' && (!init.method || init.method === 'GET')) {
         return mockJsonResponse({
           ai: {
             companies: {
@@ -170,13 +170,13 @@ describe('CompaniesPage', () => {
         });
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs' && init.method === 'POST') {
+      if (url.pathname === '/api/companies/enrichment-runs' && init.method === 'POST') {
         createdRunCalls += 1;
         createdRunBodies.push(JSON.parse(init.body));
         return mockJsonResponse(createdRunResponse);
       }
 
-      if (url.pathname.startsWith('/api/v1/companies/enrichment-runs/') && (!init.method || init.method === 'GET')) {
+      if (url.pathname.startsWith('/api/companies/enrichment-runs/') && (!init.method || init.method === 'GET')) {
         if (url.pathname.endsWith('/items')) {
           const runId = url.pathname.split('/')[5];
           return mockJsonResponse({
@@ -411,7 +411,7 @@ describe('CompaniesPage', () => {
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/companies' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies' && (!init.method || init.method === 'GET')) {
         companiesRequestCount += 1;
         if (companiesRequestCount === 1) {
           return Promise.resolve({
@@ -423,16 +423,16 @@ describe('CompaniesPage', () => {
         return mockJsonResponse(companyPages['status=pending&q=&page=1&page_size=25']);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
         return mockJsonResponse(null);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs' && init.method === 'POST') {
+      if (url.pathname === '/api/companies/enrichment-runs' && init.method === 'POST') {
         createdRunCalls += 1;
         return mockJsonResponse(createdRunResponse);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/run-1' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/run-1' && (!init.method || init.method === 'GET')) {
         return mockJsonResponse({
           id: 'run-1',
           status: 'running',
@@ -599,11 +599,11 @@ describe('CompaniesPage', () => {
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/run-current' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/run-current' && (!init.method || init.method === 'GET')) {
         runPollCalls += 1;
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/run-current/items' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/run-current/items' && (!init.method || init.method === 'GET')) {
         runItemsCalls += 1;
         return mockJsonResponse(
           runItemsCalls === 1
@@ -885,7 +885,7 @@ describe('CompaniesPage', () => {
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/companies' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies' && (!init.method || init.method === 'GET')) {
         const key = [
           `status=${url.searchParams.get('status') || ''}`,
           `q=${url.searchParams.get('q') || ''}`,
@@ -896,16 +896,16 @@ describe('CompaniesPage', () => {
         return mockJsonResponse(companyPages[key]);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
         return mockJsonResponse(null);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs' && init.method === 'POST') {
+      if (url.pathname === '/api/companies/enrichment-runs' && init.method === 'POST') {
         createdRunCalls += 1;
         return mockJsonResponse(createdRunResponse);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/run-1' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/run-1' && (!init.method || init.method === 'GET')) {
         runPollCalls += 1;
 
         if (runPollCalls === 1) {
@@ -986,7 +986,7 @@ describe('CompaniesPage', () => {
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/companies' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies' && (!init.method || init.method === 'GET')) {
         const key = [
           `status=${url.searchParams.get('status') || ''}`,
           `q=${url.searchParams.get('q') || ''}`,
@@ -997,11 +997,11 @@ describe('CompaniesPage', () => {
         return mockJsonResponse(companyPages[key]);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
         return mockJsonResponse(currentRunResponses[0]);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/run-current' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/run-current' && (!init.method || init.method === 'GET')) {
         runPollCalls += 1;
         const title = runPollCalls === 1 ? 'Beta Logistics' : 'Cyan Retail';
         return mockJsonResponse({
@@ -1098,7 +1098,7 @@ describe('CompaniesPage', () => {
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/companies' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies' && (!init.method || init.method === 'GET')) {
         const key = [
           `status=${url.searchParams.get('status') || ''}`,
           `q=${url.searchParams.get('q') || ''}`,
@@ -1108,11 +1108,11 @@ describe('CompaniesPage', () => {
         return mockJsonResponse(companyPages[key]);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/current' && (!init.method || init.method === 'GET')) {
         return mockJsonResponse(currentRunResponses[0]);
       }
 
-      if (url.pathname === '/api/v1/companies/enrichment-runs/run-current' && (!init.method || init.method === 'GET')) {
+      if (url.pathname === '/api/companies/enrichment-runs/run-current' && (!init.method || init.method === 'GET')) {
         runPollCalls += 1;
         return mockDelayedJsonResponse({
           id: 'run-current',

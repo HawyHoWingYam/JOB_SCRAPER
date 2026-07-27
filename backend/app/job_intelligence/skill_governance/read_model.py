@@ -171,7 +171,7 @@ class UnreviewedSkillMentionView:
     @property
     def deep_link(self) -> str:
         return (
-            f"/api/v1/job-intelligence/governance/skills/candidates/{self.candidate_id}"
+            f"/api/job-intelligence/governance/skills/candidates/{self.candidate_id}"
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -264,7 +264,7 @@ class SkillCandidateView:
 
     @property
     def deep_link(self) -> str:
-        return f"/api/v1/job-intelligence/governance/skills/candidates/{self.id}"
+        return f"/api/job-intelligence/governance/skills/candidates/{self.id}"
 
     def to_payload(self) -> dict[str, Any]:
         return {

@@ -34,7 +34,6 @@ from app.crawl_control.task_control_board_service import (
     build_crawl_control_run_projection,
 )
 from app.crawl_control.task_control_board_contracts import (
-    TaskControlBoardProjectionV1,
     TaskControlBoardProjectionV2,
 )
 from app.database import get_db
@@ -43,7 +42,6 @@ from app.schemas.crawl_control import (
     AutomationListResponseV1,
     AutomationPermanentDeleteRequestV1,
     AutomationRestoreRequestV1,
-    AutomationRevisionRequestV1,
     AutomationUpdateRequestV1,
     CrawlScopePreviewRequestV1,
     DispatchPlanDispatchRequestV1,
@@ -67,7 +65,6 @@ _CRAWL_CONTROL_ERROR_STATUS = {
     "SCOPE_RULE_INVALID": status.HTTP_422_UNPROCESSABLE_CONTENT,
     "WORKLOAD_CAP_EXCEEDED": status.HTTP_422_UNPROCESSABLE_CONTENT,
     "BACKLOG_SAFETY_CAP_EXCEEDED": status.HTTP_422_UNPROCESSABLE_CONTENT,
-    "AUTOMATION_REVISION_CONFLICT": status.HTTP_409_CONFLICT,
     "AUTOMATION_REVIEW_STALE": status.HTTP_409_CONFLICT,
     "AUTOMATION_TRANSITION_INVALID": status.HTTP_409_CONFLICT,
     "AUTOMATION_DELETE_REVIEW_STALE": status.HTTP_409_CONFLICT,
@@ -109,15 +106,6 @@ def _normalize_control_source_site(
             },
         )
     return cast(SourceSite, normalized)
-
-
-def _set_automation_revision_headers(
-    response: Response,
-    projection: AutomationProjectionV1,
-) -> None:
-    revision = projection.snapshot.revision
-    response.headers["ETag"] = f'"{revision}"'
-    response.headers["X-Automation-Revision"] = str(revision)
 
 
 @router.post(
@@ -190,7 +178,6 @@ def _require_current_automation_review(
         raise AutomationReviewStaleError(
             current_fingerprint=current.input_fingerprint,
             automation_id=request.automation_id,
-            current_revision=request.expected_revision,
         )
     return current
 
@@ -201,14 +188,12 @@ def _require_current_automation_review(
 )
 def get_automation(
     automation_id: UUID,
-    response: Response,
     db: Session = Depends(get_db),
 ) -> AutomationProjectionV1:
     try:
         projection = AutomationService(db).get(automation_id)
     except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
-    _set_automation_revision_headers(response, projection)
     return projection
 
 
@@ -219,7 +204,6 @@ def get_automation(
 )
 def create_automation(
     request: AutomationCreateRequestV1,
-    response: Response,
     db: Session = Depends(get_db),
 ) -> AutomationProjectionV1:
     try:
@@ -237,7 +221,6 @@ def create_automation(
         )
     except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
-    _set_automation_revision_headers(response, projection)
     return projection
 
 
@@ -248,7 +231,6 @@ def create_automation(
 def update_automation(
     automation_id: UUID,
     request: AutomationUpdateRequestV1,
-    response: Response,
     db: Session = Depends(get_db),
 ) -> AutomationProjectionV1:
     try:
@@ -257,28 +239,23 @@ def update_automation(
             request=AutomationReviewRequestV1(
                 configuration=request.configuration,
                 automation_id=automation_id,
-                expected_revision=request.expected_revision,
             ),
             supplied_fingerprint=request.review_fingerprint,
         )
         projection = AutomationService(db).update_configuration(
             automation_id,
-            expected_revision=request.expected_revision,
             configuration=request.configuration,
             actor=AUTOMATION_API_ACTOR,
         )
     except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
-    _set_automation_revision_headers(response, projection)
     return projection
 
 
 def _transition_automation(
     *,
     automation_id: UUID,
-    expected_revision: int,
     operation: str,
-    response: Response,
     db: Session,
     activate: bool = False,
 ) -> AutomationProjectionV1:
@@ -287,25 +264,21 @@ def _transition_automation(
         if operation == "pause":
             projection = service.pause(
                 automation_id,
-                expected_revision=expected_revision,
                 actor=AUTOMATION_API_ACTOR,
             )
         elif operation == "resume":
             projection = service.resume(
                 automation_id,
-                expected_revision=expected_revision,
                 actor=AUTOMATION_API_ACTOR,
             )
         elif operation == "archive":
             projection = service.archive(
                 automation_id,
-                expected_revision=expected_revision,
                 actor=AUTOMATION_API_ACTOR,
             )
         elif operation == "restore":
             projection = service.restore(
                 automation_id,
-                expected_revision=expected_revision,
                 actor=AUTOMATION_API_ACTOR,
                 activate=activate,
             )
@@ -313,7 +286,6 @@ def _transition_automation(
             raise ValueError(f"Unsupported Automation operation: {operation}")
     except CrawlControlError as exc:
         raise crawl_control_http_error(exc) from exc
-    _set_automation_revision_headers(response, projection)
     return projection
 
 
@@ -323,15 +295,11 @@ def _transition_automation(
 )
 def pause_automation(
     automation_id: UUID,
-    request: AutomationRevisionRequestV1,
-    response: Response,
     db: Session = Depends(get_db),
 ) -> AutomationProjectionV1:
     return _transition_automation(
         automation_id=automation_id,
-        expected_revision=request.expected_revision,
         operation="pause",
-        response=response,
         db=db,
     )
 
@@ -342,15 +310,11 @@ def pause_automation(
 )
 def resume_automation(
     automation_id: UUID,
-    request: AutomationRevisionRequestV1,
-    response: Response,
     db: Session = Depends(get_db),
 ) -> AutomationProjectionV1:
     return _transition_automation(
         automation_id=automation_id,
-        expected_revision=request.expected_revision,
         operation="resume",
-        response=response,
         db=db,
     )
 
@@ -361,15 +325,11 @@ def resume_automation(
 )
 def archive_automation(
     automation_id: UUID,
-    request: AutomationRevisionRequestV1,
-    response: Response,
     db: Session = Depends(get_db),
 ) -> AutomationProjectionV1:
     return _transition_automation(
         automation_id=automation_id,
-        expected_revision=request.expected_revision,
         operation="archive",
-        response=response,
         db=db,
     )
 
@@ -381,14 +341,11 @@ def archive_automation(
 def restore_automation(
     automation_id: UUID,
     request: AutomationRestoreRequestV1,
-    response: Response,
     db: Session = Depends(get_db),
 ) -> AutomationProjectionV1:
     return _transition_automation(
         automation_id=automation_id,
-        expected_revision=request.expected_revision,
         operation="restore",
-        response=response,
         db=db,
         activate=request.activate,
     )
@@ -423,7 +380,6 @@ def permanently_delete_automation(
     try:
         return AutomationService(db).permanently_delete(
             automation_id,
-            expected_revision=request.expected_revision,
             actor=AUTOMATION_API_ACTOR,
             review_token=request.review_token,
         )
@@ -497,21 +453,15 @@ def dispatch_plan(
 
 @router.get(
     "/task-control-board",
-    response_model=TaskControlBoardProjectionV1 | TaskControlBoardProjectionV2,
+    response_model=TaskControlBoardProjectionV2,
 )
 def get_task_control_board(
     source_site: str | None = None,
     run_limit: int = Query(default=100, ge=1, le=100),
-    version: int = Query(default=1, ge=1, le=2),
     db: Session = Depends(get_db),
-) -> TaskControlBoardProjectionV1 | TaskControlBoardProjectionV2:
+) -> TaskControlBoardProjectionV2:
     normalized_source_site = _normalize_control_source_site(source_site)
-    if version == 2:
-        return TaskControlBoardProjectionService(db).get_v2(
-            selected_source=normalized_source_site or "jobsdb",
-            run_limit=run_limit,
-        )
-    return TaskControlBoardProjectionService(db).get(
-        source_site=normalized_source_site,
+    return TaskControlBoardProjectionService(db).get_current(
+        selected_source=normalized_source_site or "jobsdb",
         run_limit=run_limit,
     )

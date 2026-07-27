@@ -116,13 +116,13 @@ app.add_middleware(
 # Include API routes
 app.include_router(router)
 app.include_router(category_router, prefix="/api")
-app.include_router(schedules_router, prefix="/api/v1")
-app.include_router(progress_router, prefix="/api/v1")
+app.include_router(schedules_router, prefix="/api")
+app.include_router(progress_router, prefix="/api")
 app.include_router(ai_router)
 app.include_router(stats_router)
-app.include_router(skills_router, prefix="/api/v1")
-app.include_router(crawl_admin_router, prefix="/api/v1")
-app.include_router(source_classification_router, prefix="/api/v1")
+app.include_router(skills_router, prefix="/api")
+app.include_router(crawl_admin_router, prefix="/api")
+app.include_router(source_classification_router, prefix="/api")
 
 
 @app.get("/")
@@ -130,7 +130,6 @@ async def root():
     """Root endpoint."""
     return {
         "message": "JobsDB Scraper API",
-        "version": "0.1.0",
         "docs": "/docs",
     }
 

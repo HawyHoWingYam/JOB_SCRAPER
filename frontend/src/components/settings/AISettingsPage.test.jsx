@@ -300,7 +300,7 @@ describe("AISettingsPage", () => {
       const url = String(input);
       const method = init.method || "GET";
 
-      if (url.includes("/api/v1/stats/overview")) {
+      if (url.includes("/api/stats/overview")) {
         return mockJsonResponse({
           total_jobs: 400,
           enriched_jobs: 4,
@@ -308,7 +308,7 @@ describe("AISettingsPage", () => {
         });
       }
 
-      if (url.includes("/api/v1/ai/overview")) {
+      if (url.includes("/api/ai/overview")) {
         return mockJsonResponse({
           failed_items: 7,
           last_completed_run: null,
@@ -316,8 +316,8 @@ describe("AISettingsPage", () => {
         });
       }
 
-      if (url.includes("/api/v1/settings/ai")) {
-        if (url.includes("/api/v1/settings/ai/test")) {
+      if (url.includes("/api/settings/ai")) {
+        if (url.includes("/api/settings/ai/test")) {
           return testProfileResponse(url, init);
         }
 
@@ -328,7 +328,7 @@ describe("AISettingsPage", () => {
         return mockJsonResponse(currentSettingsPayload);
       }
 
-      if (url.includes("/api/v1/settings/scraper-pacing")) {
+      if (url.includes("/api/settings/scraper-pacing")) {
         return mockJsonResponse({
           items: ["jobsdb", "ctgoodjobs", "offertoday"].map((source_site) => ({
             source_site,
@@ -353,7 +353,7 @@ describe("AISettingsPage", () => {
     render(<AISettingsPage />);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/v1/settings/ai");
+      expect(globalThis.fetch).toHaveBeenCalledWith("/api/settings/ai");
     });
 
     expect(
@@ -758,7 +758,7 @@ describe("AISettingsPage", () => {
     );
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith("/api/v1/settings/ai");
+      expect(globalThis.fetch).toHaveBeenCalledWith("/api/settings/ai");
     });
 
     expect(
@@ -1048,7 +1048,7 @@ describe("AISettingsPage", () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/v1/settings/ai/test",
+        "/api/settings/ai/test",
         expect.objectContaining({
           method: "POST",
         }),

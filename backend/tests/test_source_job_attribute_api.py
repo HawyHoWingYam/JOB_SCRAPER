@@ -84,6 +84,6 @@ def test_legacy_collected_job_create_route_is_retired_before_database_access():
         "code": "COLLECTED_JOB_CREATE_RETIRED",
         "message": (
             "Collected Jobs must be written through a source ingestion path; "
-            "use POST /api/v1/jobs/manual for manually entered Jobs."
+            "use POST /api/jobs/manual for manually entered Jobs."
         ),
     }

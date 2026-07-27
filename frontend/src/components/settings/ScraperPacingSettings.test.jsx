@@ -87,7 +87,7 @@ describe("ScraperPacingSettings", () => {
     expect(within(card).getByLabelText("OfferToday Burst pause")).toHaveValue(30);
     expect(screen.getByLabelText("JobsDB Burst pause")).toHaveValue(30);
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "/api/v1/settings/scraper-pacing/offertoday/reset",
+      "/api/settings/scraper-pacing/offertoday/reset",
       expect.objectContaining({ method: "POST" }),
     );
   });

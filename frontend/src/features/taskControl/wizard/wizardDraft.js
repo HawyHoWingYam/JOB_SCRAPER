@@ -2,16 +2,14 @@ const SOURCES = new Set(['jobsdb', 'ctgoodjobs', 'offertoday']);
 const STEPS = new Set(['intent', 'scope', 'execution', 'review']);
 const INTENTS = new Set(['listing', 'detail']);
 
-export const DRAFT_PREFIX = 'taskControl.draft.v1.';
+export const DRAFT_PREFIX = 'taskControl.draft.';
 
 export function createWizardDraft(route, sourceSite = route.sourceSite || 'jobsdb') {
   return {
-    version: 1,
     updated_at: new Date().toISOString(),
     flow: route.flow,
     mode: route.mode,
     automation_id: route.automationId || null,
-    expected_revision: null,
     source_site: SOURCES.has(sourceSite) ? sourceSite : 'jobsdb',
     step: route.flow === 'run_now' ? 'review' : 'intent',
     run_choice: route.flow === 'run_now' ? 'saved' : null,
@@ -30,7 +28,7 @@ export function createWizardDraft(route, sourceSite = route.sourceSite || 'jobsd
 
 function validDraft(value, route) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  if (value.version !== 1 || value.flow !== route.flow || value.mode !== route.mode) return false;
+  if (value.flow !== route.flow || value.mode !== route.mode) return false;
   if (!SOURCES.has(value.source_site) || !STEPS.has(value.step)) return false;
   if (value.intent !== null && !INTENTS.has(value.intent)) return false;
   if (value.automation_id !== (route.automationId || null)) return false;
@@ -60,7 +58,7 @@ export function readDraft(storage, draftId, route) {
 export function writeDraft(storage, draftId, draft) {
   if (!draftId) return { ok: false, notice: 'Draft ID is unavailable; work continues in memory.' };
   try {
-    const value = { ...draft, version: 1, updated_at: new Date().toISOString() };
+    const value = { ...draft, updated_at: new Date().toISOString() };
     storage?.setItem(`${DRAFT_PREFIX}${draftId}`, JSON.stringify(value));
     return { ok: true, notice: null, draft: value };
   } catch (error) {

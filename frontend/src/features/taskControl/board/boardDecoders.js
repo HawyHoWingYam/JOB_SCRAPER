@@ -50,7 +50,6 @@ function decodeIssue(value, path) {
 function decodeListingRecovery(value, path) {
   if (value == null) return null;
   const row = object(value, path);
-  if (row.version !== 1) throw new BoardPayloadError(`${path}.version`, 'expected 1');
   return {
     listingPartial: Boolean(row.listing_partial),
     queryTargetCount: integer(row.query_target_count, `${path}.query_target_count`),
@@ -87,7 +86,6 @@ function decodeAutomation(value, path) {
   const schedule = object(row.schedule, `${path}.schedule`);
   return {
     id: string(row.automation_id, `${path}.automation_id`),
-    revision: integer(row.revision, `${path}.revision`),
     lifecycleState: string(row.lifecycle_state, `${path}.lifecycle_state`),
     name: string(row.name, `${path}.name`),
     sourceSite: string(row.source_site, `${path}.source_site`),
@@ -113,7 +111,6 @@ function decodeAutomation(value, path) {
 
 export function decodeBoard(value) {
   const row = object(value, '$');
-  if (row.version !== 2) throw new BoardPayloadError('$.version', 'expected 2');
   return {
     selectedSource: string(row.selected_source, '$.selected_source'),
     sourceSummaries: array(row.source_summaries, '$.source_summaries').map((item, index) => {

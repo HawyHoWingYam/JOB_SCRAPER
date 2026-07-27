@@ -87,7 +87,6 @@ export function controlError(error) {
       requestId: error.requestId,
       stale: [
         'AUTOMATION_REVIEW_STALE',
-        'AUTOMATION_REVISION_CONFLICT',
         'DISPATCH_PLAN_EXPIRED',
         'DISPATCH_PLAN_STALE',
         'DISPATCH_PLAN_ALREADY_CONSUMED',

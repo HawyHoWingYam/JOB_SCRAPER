@@ -54,14 +54,14 @@ CompanyIndustryCompatibilityAdapter(db).project(company_id) -> projection
 Versioned HTTP routes are:
 
 ```text
-GET  /api/v1/job-intelligence/company-industries/revision
-GET  /api/v1/job-intelligence/company-industries/tree?parent_id=...
-GET  /api/v1/job-intelligence/companies/{company_id}/industries
-GET  /api/v1/job-intelligence/governance/company-industries/review-items
-GET  /api/v1/job-intelligence/governance/company-industries/review-items/{id}
-POST /api/v1/job-intelligence/governance/company-industries/review-items/{id}/decision
-GET  /api/v1/job-intelligence/governance/company-industries/mappings
-GET  /api/v1/job-intelligence/governance/company-industries/audit-events
+GET  /api/job-intelligence/company-industries/revision
+GET  /api/job-intelligence/company-industries/tree?parent_id=...
+GET  /api/job-intelligence/companies/{company_id}/industries
+GET  /api/job-intelligence/governance/company-industries/review-items
+GET  /api/job-intelligence/governance/company-industries/review-items/{id}
+POST /api/job-intelligence/governance/company-industries/review-items/{id}/decision
+GET  /api/job-intelligence/governance/company-industries/mappings
+GET  /api/job-intelligence/governance/company-industries/audit-events
 ```
 
 The read-only operator command is:

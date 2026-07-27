@@ -31,7 +31,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.include_router(recommendations_router, prefix="/api/v1")
+app.include_router(recommendations_router, prefix="/api")
 
 
 @app.get("/health")

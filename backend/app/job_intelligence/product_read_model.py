@@ -483,7 +483,7 @@ class JobIntelligenceProductReadModel:
                         else None
                     ),
                     "deep_link": (
-                        "/api/v1/job-intelligence/governance/"
+                        "/api/job-intelligence/governance/"
                         "company-industries/review-items/"
                         f"{review.id}"
                     ),
@@ -779,7 +779,7 @@ class JobIntelligenceProductReadModel:
                 else None
             ),
             "deep_link": (
-                "/api/v1/job-intelligence/governance/job-taxonomy/"
+                "/api/job-intelligence/governance/job-taxonomy/"
                 f"review-items/{review.id}"
             ),
         }

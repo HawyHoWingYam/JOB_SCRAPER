@@ -12,7 +12,6 @@ export function wizardDraftFingerprint(draft) {
     execution: draft.execution,
     schedule: draft.schedule,
     automation_id: draft.automation_id,
-    expected_revision: draft.expected_revision,
   });
 }
 
@@ -36,7 +35,6 @@ export function buildAuthoredScope(draft, sourceClassifications) {
 
 function listingSettings(draft) {
   return {
-    version: 1,
     crawl_mode: draft.execution.crawl_mode || 'headless',
     page_depth: positiveInteger(draft.execution.page_depth, 'Page Depth'),
     run_page_cap: positiveInteger(draft.execution.run_page_cap, 'Run Page Cap'),
@@ -57,7 +55,6 @@ function detailSettings(draft, scope) {
     ? { kind: 'entire_snapshot' }
     : { kind: 'stop_after', detail_run_cap: positiveInteger(draft.execution.detail_run_cap, 'Detail Run Cap') };
   return {
-    version: 1,
     crawl_mode: draft.execution.crawl_mode || 'headless',
     backlog_scope: backlogScope,
     limit,
@@ -71,7 +68,6 @@ export function buildAutomationConfiguration(draft, sourceClassifications) {
   const name = String(draft.schedule.name || '').trim();
   if (!name) throw new Error('Automation name is required');
   return {
-    version: 1,
     name,
     description: String(draft.schedule.description || '').trim() || null,
     cron_expression: String(draft.schedule.cron_expression || '').trim(),
@@ -85,21 +81,20 @@ export function buildAutomationConfiguration(draft, sourceClassifications) {
 export function buildAutomationReviewRequest(draft, sourceClassifications) {
   return {
     configuration: buildAutomationConfiguration(draft, sourceClassifications),
-    ...(draft.mode === 'edit' ? { automation_id: draft.automation_id, expected_revision: draft.expected_revision } : {}),
+    ...(draft.mode === 'edit' ? { automation_id: draft.automation_id } : {}),
   };
 }
 
 export function buildAutomationMutation(draft, sourceClassifications, review) {
   const configuration = buildAutomationConfiguration(draft, sourceClassifications);
   return draft.mode === 'edit'
-    ? { expected_revision: draft.expected_revision, configuration, review_fingerprint: review.inputFingerprint }
+    ? { configuration, review_fingerprint: review.inputFingerprint }
     : { configuration, review_fingerprint: review.inputFingerprint, initial_state: draft.schedule.initial_state || 'paused' };
 }
 
 export function buildOneOffRun(draft, sourceClassifications) {
   const scope = buildAuthoredScope(draft, sourceClassifications);
   return {
-    version: 1,
     kind: 'one_off',
     scope,
     listing_settings: draft.intent === 'listing' ? listingSettings(draft) : null,
@@ -113,12 +108,10 @@ export function draftFromAutomation(route, automation) {
   const detail = config.detail_settings;
   const scope = config.scope;
   return {
-    version: 1,
     updated_at: new Date().toISOString(),
     flow: route.flow,
     mode: route.mode,
     automation_id: automation.id,
-    expected_revision: automation.revision,
     source_site: automation.sourceSite,
     step: route.flow === 'run_now' ? 'review' : 'intent',
     run_choice: route.flow === 'run_now' ? 'saved' : null,
@@ -150,7 +143,6 @@ export function pairedDetailDraft(draft) {
     ...draft,
     mode: 'create',
     automation_id: null,
-    expected_revision: null,
     step: 'intent',
     intent: 'detail',
     execution: {

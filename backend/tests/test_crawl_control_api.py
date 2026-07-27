@@ -30,7 +30,6 @@ from app.models.crawl_run import CrawlRun
 from app.models.event_outbox import EventOutbox
 from app.models.schedule import (
     AutomationDeleteReview,
-    AutomationRevision,
     ScheduleExecution,
     ScrapeSchedule,
 )
@@ -72,44 +71,40 @@ def test_crawl_control_contracts_are_registered_in_production_openapi():
     paths = app.openapi()["paths"]
 
     expected_operations = {
-        "/api/v1/crawl-scopes/preview": {"post"},
-        "/api/v1/automations": {"get", "post"},
-        "/api/v1/automations/reviews": {"post"},
-        "/api/v1/automations/{automation_id}": {"get", "put", "delete"},
-        "/api/v1/automations/{automation_id}/pause": {"post"},
-        "/api/v1/automations/{automation_id}/resume": {"post"},
-        "/api/v1/automations/{automation_id}/archive": {"post"},
-        "/api/v1/automations/{automation_id}/restore": {"post"},
-        "/api/v1/automations/{automation_id}/delete-reviews": {"post"},
-        "/api/v1/dispatch-plans": {"post"},
-        "/api/v1/dispatch-plans/{plan_id}": {"get"},
-        "/api/v1/dispatch-plans/{plan_id}/dispatch": {"post"},
-        "/api/v1/task-control-board": {"get"},
-        "/api/v1/crawl-jobs/tasks": {"get"},
-        "/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention": {"post"},
+        "/api/crawl-scopes/preview": {"post"},
+        "/api/automations": {"get", "post"},
+        "/api/automations/reviews": {"post"},
+        "/api/automations/{automation_id}": {"get", "put", "delete"},
+        "/api/automations/{automation_id}/pause": {"post"},
+        "/api/automations/{automation_id}/resume": {"post"},
+        "/api/automations/{automation_id}/archive": {"post"},
+        "/api/automations/{automation_id}/restore": {"post"},
+        "/api/automations/{automation_id}/delete-reviews": {"post"},
+        "/api/dispatch-plans": {"post"},
+        "/api/dispatch-plans/{plan_id}": {"get"},
+        "/api/dispatch-plans/{plan_id}/dispatch": {"post"},
+        "/api/task-control-board": {"get"},
+        "/api/crawl-jobs/tasks": {"get"},
+        "/api/crawl-jobs/{crawl_job_id}/dismiss-failed-attention": {"post"},
     }
     for path, methods in expected_operations.items():
         assert methods <= set(paths[path])
-    board_schema = paths["/api/v1/task-control-board"]["get"]["responses"]["200"][
+    board_schema = paths["/api/task-control-board"]["get"]["responses"]["200"][
         "content"
     ]["application/json"]["schema"]
-    assert {variant["$ref"] for variant in board_schema["anyOf"]} == {
-        "#/components/schemas/TaskControlBoardProjectionV1",
-        "#/components/schemas/TaskControlBoardProjectionV2",
-    }
-    assert paths["/api/v1/dispatch-plans/{plan_id}/dispatch"]["post"][
+    assert board_schema["$ref"].endswith("/TaskControlBoardProjectionV2")
+    assert paths["/api/dispatch-plans/{plan_id}/dispatch"]["post"][
         "responses"
     ]["202"]["content"]["application/json"]["schema"]["$ref"].endswith(
         "/DispatchPlanDispatchResponseV1"
     )
 
 
-def test_legacy_run_authority_cannot_claim_versioned_automation_fields():
+def test_legacy_run_authority_cannot_claim_automation_fields():
     with pytest.raises(ValueError, match="Legacy authority"):
         RunAuthorityProjectionV1(
             authority_kind="legacy",
             automation_id=uuid4(),
-            automation_revision=1,
         )
 
 
@@ -125,7 +120,6 @@ def crawl_control_client(monkeypatch):
         tables=(
             SourceClassification.__table__,
             ScrapeSchedule.__table__,
-            AutomationRevision.__table__,
             CrawlJob.__table__,
             CrawlJobEvent.__table__,
             CrawlJobExecution.__table__,
@@ -157,9 +151,9 @@ def crawl_control_client(monkeypatch):
 
     app = FastAPI()
     app.state.session_factory = session_factory
-    app.include_router(crawl_control_api.router, prefix="/api/v1")
-    app.include_router(crawl_jobs_api.router, prefix="/api/v1")
-    app.include_router(schedules_api.router, prefix="/api/v1")
+    app.include_router(crawl_control_api.router, prefix="/api")
+    app.include_router(crawl_jobs_api.router, prefix="/api")
+    app.include_router(schedules_api.router, prefix="/api")
     monkeypatch.setattr(
         crawl_control_api,
         "crawl_job_dispatch_service",
@@ -177,6 +171,14 @@ def crawl_control_client(monkeypatch):
             outbox_publisher=_NoopOutboxPublisher(),
         ),
         raising=False,
+    )
+    monkeypatch.setattr(
+        crawl_jobs_api,
+        "dispatch_service",
+        CrawlJobDispatchService(
+            execution_launcher=_NoopLauncher(),
+            outbox_publisher=_NoopOutboxPublisher(),
+        ),
     )
 
     def override_get_db():
@@ -197,16 +199,14 @@ def _review_automation_configuration(
     configuration: dict,
     *,
     automation_id: str | None = None,
-    expected_revision: int | None = None,
 ) -> dict:
     response = client.post(
-        "/api/v1/automations/reviews",
+        "/api/automations/reviews",
         json={
             "configuration": configuration,
             **(
                 {
                     "automation_id": automation_id,
-                    "expected_revision": expected_revision,
                 }
                 if automation_id is not None
                 else {}
@@ -215,6 +215,43 @@ def _review_automation_configuration(
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def test_direct_override_dispatches_with_current_execution_authority(
+    crawl_control_client,
+):
+    client, _obsolete_revision_id = crawl_control_client
+
+    response = client.post(
+        "/api/crawl-jobs",
+        json={
+            "source_site": "jobsdb",
+            "crawl_phase": "listing",
+            "crawl_mode": "headless",
+            "category_ids": [6281],
+            "max_pages": 2,
+            "requested_by": "test-operator",
+        },
+    )
+
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload["request_payload"]["dispatch_plan_id"]
+    assert payload["request_payload"]["dispatch_plan_fingerprint"]
+    assert payload["request_payload"]["category_ids"] == ["jobsdb:6281"]
+
+    obsolete = client.post(
+        "/api/crawl-jobs",
+        json={
+            "source_site": "jobsdb",
+            "crawl_phase": "listing",
+            "crawl_mode": "headless",
+            "category_ids": [6281],
+            "max_pages": 2,
+            "skip_existing": True,
+        },
+    )
+    assert obsolete.status_code == 422
 
 
 def test_scope_preview_returns_normalized_workload_and_rejects_unknown_root(
@@ -228,20 +265,18 @@ def test_scope_preview_returns_normalized_workload_and_rejects_unknown_root(
             "classification_ids": [],
         },
         "listing_settings": {
-            "version": 1,
             "crawl_mode": "headless",
             "page_depth": 2,
             "run_page_cap": 100,
         },
     }
 
-    response = client.post("/api/v1/crawl-scopes/preview", json=request)
+    response = client.post("/api/crawl-scopes/preview", json=request)
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["resolved_scope"]["query_target_count"] == 25
     assert payload["listing_workload"] == {
-        "version": 1,
         "query_target_count": 25,
         "page_depth": 2,
         "estimated_max_pages": 50,
@@ -256,7 +291,7 @@ def test_scope_preview_returns_normalized_workload_and_rejects_unknown_root(
         "mode": "selected",
         "classification_ids": ["jobsdb:unknown"],
     }
-    unknown = client.post("/api/v1/crawl-scopes/preview", json=request)
+    unknown = client.post("/api/crawl-scopes/preview", json=request)
 
     assert unknown.status_code == 422
     assert unknown.json()["detail"]["code"] == "SCOPE_RULE_INVALID"
@@ -268,7 +303,7 @@ def test_legacy_schedule_create_writes_an_ordinary_scope_automation(
     client, _obsolete_revision_id = crawl_control_client
 
     response = client.post(
-        "/api/v1/schedules",
+        "/api/schedules",
         json={
             "name": "Legacy-compatible listing",
             "description": "Created through the temporary route",
@@ -286,7 +321,6 @@ def test_legacy_schedule_create_writes_an_ordinary_scope_automation(
     assert response.status_code == 200
     schedule = response.json()
     assert schedule["category_ids"] is None
-    assert schedule["revision"] == 1
     assert schedule["lifecycle_state"] == "active"
     assert schedule["scope_contract"] == {
         "source_site": "jobsdb",
@@ -297,7 +331,7 @@ def test_legacy_schedule_create_writes_an_ordinary_scope_automation(
     assert schedule["listing_run_page_cap"] == 2
 
     automation = client.get(
-        f"/api/v1/automations/{schedule['id']}"
+        f"/api/automations/{schedule['id']}"
     ).json()
     assert automation["snapshot"]["configuration"]["scope"] == (
         schedule["scope_contract"]
@@ -309,7 +343,7 @@ def test_legacy_schedule_mutations_delegate_for_versioned_rows(
 ):
     client, _revision_id = crawl_control_client
     created = client.post(
-        "/api/v1/schedules",
+        "/api/schedules",
         json={
             "name": "Temporary route delegation",
             "cron_expression": "0 4 * * *",
@@ -324,7 +358,7 @@ def test_legacy_schedule_mutations_delegate_for_versioned_rows(
     schedule_id = created["id"]
 
     updated = client.put(
-        f"/api/v1/schedules/{schedule_id}",
+        f"/api/schedules/{schedule_id}",
         json={
             "description": "Updated without primitive scope writes",
             "max_pages": 3,
@@ -333,7 +367,6 @@ def test_legacy_schedule_mutations_delegate_for_versioned_rows(
 
     assert updated.status_code == 200
     updated_schedule = updated.json()
-    assert updated_schedule["revision"] == 2
     assert updated_schedule["description"] == (
         "Updated without primitive scope writes"
     )
@@ -342,7 +375,7 @@ def test_legacy_schedule_mutations_delegate_for_versioned_rows(
     assert updated_schedule["listing_run_page_cap"] == 3
 
     combined = client.put(
-        f"/api/v1/schedules/{schedule_id}",
+        f"/api/schedules/{schedule_id}",
         json={
             "description": "Must not partially persist",
             "is_active": False,
@@ -353,34 +386,31 @@ def test_legacy_schedule_mutations_delegate_for_versioned_rows(
     assert combined.json()["detail"]["code"] == (
         "AUTOMATION_COMPATIBILITY_MUTATION_SPLIT_REQUIRED"
     )
-    after_rejection = client.get(f"/api/v1/schedules/{schedule_id}").json()
-    assert after_rejection["revision"] == 2
+    after_rejection = client.get(f"/api/schedules/{schedule_id}").json()
     assert after_rejection["description"] == (
         "Updated without primitive scope writes"
     )
     assert after_rejection["is_active"] is True
 
-    run_now = client.post(f"/api/v1/schedules/{schedule_id}/run")
+    run_now = client.post(f"/api/schedules/{schedule_id}/run")
 
     assert run_now.status_code == 409
     assert run_now.json()["detail"]["code"] == (
         "DISPATCH_PLAN_REVIEW_REQUIRED"
     )
 
-    toggled = client.post(f"/api/v1/schedules/{schedule_id}/toggle")
+    toggled = client.post(f"/api/schedules/{schedule_id}/toggle")
 
     assert toggled.status_code == 200
     assert toggled.json()["is_active"] is False
-    after_toggle = client.get(f"/api/v1/schedules/{schedule_id}").json()
-    assert after_toggle["revision"] == 3
+    after_toggle = client.get(f"/api/schedules/{schedule_id}").json()
     assert after_toggle["lifecycle_state"] == "paused"
 
-    deleted = client.delete(f"/api/v1/schedules/{schedule_id}")
+    deleted = client.delete(f"/api/schedules/{schedule_id}")
 
     assert deleted.status_code == 200
     assert deleted.json() == {"message": "Schedule deleted"}
-    archived = client.get(f"/api/v1/schedules/{schedule_id}").json()
-    assert archived["revision"] == 4
+    archived = client.get(f"/api/schedules/{schedule_id}").json()
     assert archived["lifecycle_state"] == "archived"
     assert archived["is_active"] is False
 
@@ -399,7 +429,7 @@ def test_legacy_schedule_create_returns_stable_source_errors(
     }
 
     unsupported = client.post(
-        "/api/v1/schedules",
+        "/api/schedules",
         json={**base_request, "source_site": "unknown-source"},
     )
 
@@ -411,7 +441,7 @@ def test_legacy_schedule_create_returns_stable_source_errors(
     }
 
     empty_registry = client.post(
-        "/api/v1/schedules",
+        "/api/schedules",
         json={**base_request, "source_site": "offertoday"},
     )
 
@@ -440,7 +470,6 @@ def test_pre_cutover_schedule_rows_keep_bounded_legacy_mutations(
             category_ids=[6281],
             max_pages=2,
             detail_limit=100,
-            revision=1,
             lifecycle_state="active",
             scope_contract=None,
             is_active=True,
@@ -452,7 +481,7 @@ def test_pre_cutover_schedule_rows_keep_bounded_legacy_mutations(
         request_db.close()
 
     updated = client.put(
-        f"/api/v1/schedules/{schedule_id}",
+        f"/api/schedules/{schedule_id}",
         json={"name": "Still bounded legacy", "max_pages": 3},
     )
 
@@ -460,25 +489,23 @@ def test_pre_cutover_schedule_rows_keep_bounded_legacy_mutations(
     assert updated.json()["scope_contract"] is None
     assert updated.json()["category_ids"] == [6281]
     assert updated.json()["max_pages"] == 3
-    assert updated.json()["revision"] == 2
 
-    toggled = client.post(f"/api/v1/schedules/{schedule_id}/toggle")
+    toggled = client.post(f"/api/schedules/{schedule_id}/toggle")
 
     assert toggled.status_code == 200
     assert toggled.json()["is_active"] is False
 
-    deleted = client.delete(f"/api/v1/schedules/{schedule_id}")
+    deleted = client.delete(f"/api/schedules/{schedule_id}")
 
     assert deleted.status_code == 200
-    assert client.get(f"/api/v1/schedules/{schedule_id}").status_code == 404
+    assert client.get(f"/api/schedules/{schedule_id}").status_code == 404
 
 
-def test_automation_lifecycle_and_reviewed_permanent_delete_are_revisioned(
+def test_automation_lifecycle_and_reviewed_permanent_delete_use_current_row(
     crawl_control_client,
 ):
     client, revision_id = crawl_control_client
     configuration = {
-        "version": 1,
         "name": "Lifecycle fixture",
         "description": None,
         "cron_expression": "0 4 * * *",
@@ -489,7 +516,6 @@ def test_automation_lifecycle_and_reviewed_permanent_delete_are_revisioned(
             "classification_ids": [],
         },
         "listing_settings": {
-            "version": 1,
             "crawl_mode": "headless",
             "page_depth": 1,
             "run_page_cap": 25,
@@ -498,7 +524,7 @@ def test_automation_lifecycle_and_reviewed_permanent_delete_are_revisioned(
     }
     automation_review = _review_automation_configuration(client, configuration)
     created_response = client.post(
-        "/api/v1/automations",
+        "/api/automations",
         json={
             "configuration": configuration,
             "review_fingerprint": automation_review["input_fingerprint"],
@@ -510,45 +536,34 @@ def test_automation_lifecycle_and_reviewed_permanent_delete_are_revisioned(
     automation_id = created["snapshot"]["automation_id"]
 
     paused = client.post(
-        f"/api/v1/automations/{automation_id}/pause",
-        json={"expected_revision": 1},
+        f"/api/automations/{automation_id}/pause",
+        json={},
     )
     assert paused.status_code == 200
-    assert paused.headers["etag"] == '"2"'
+    assert "etag" not in paused.headers
     assert paused.json()["snapshot"]["lifecycle_state"] == "paused"
 
-    stale_resume = client.post(
-        f"/api/v1/automations/{automation_id}/resume",
-        json={"expected_revision": 1},
-    )
-    assert stale_resume.status_code == 409
-    assert stale_resume.json()["detail"]["context"]["current_revision"] == 2
-
     resumed = client.post(
-        f"/api/v1/automations/{automation_id}/resume",
-        json={"expected_revision": 2},
+        f"/api/automations/{automation_id}/resume",
+        json={},
     )
     assert resumed.status_code == 200
-    assert resumed.json()["snapshot"]["revision"] == 3
     assert resumed.json()["snapshot"]["lifecycle_state"] == "active"
 
     archived = client.post(
-        f"/api/v1/automations/{automation_id}/archive",
-        json={"expected_revision": 3},
+        f"/api/automations/{automation_id}/archive",
+        json={},
     )
     assert archived.status_code == 200
-    assert archived.json()["snapshot"]["revision"] == 4
     assert archived.json()["snapshot"]["lifecycle_state"] == "archived"
 
     review = client.post(
-        f"/api/v1/automations/{automation_id}/delete-reviews"
+        f"/api/automations/{automation_id}/delete-reviews"
     )
     assert review.status_code == 200
     review_payload = review.json()
-    assert review_payload["impact"]["expected_revision"] == 4
     assert review_payload["impact"]["removed_records"] == [
         "automation",
-        "automation_revisions",
     ]
     assert review_payload["impact"]["preserved_records"] == [
         "schedule_executions",
@@ -558,15 +573,14 @@ def test_automation_lifecycle_and_reviewed_permanent_delete_are_revisioned(
 
     deleted = client.request(
         "DELETE",
-        f"/api/v1/automations/{automation_id}",
+        f"/api/automations/{automation_id}",
         json={
-            "expected_revision": 4,
             "review_token": review_payload["review_token"],
         },
     )
     assert deleted.status_code == 200
     assert deleted.json()["automation_id"] == automation_id
-    assert client.get(f"/api/v1/automations/{automation_id}").status_code == 404
+    assert client.get(f"/api/automations/{automation_id}").status_code == 404
 
 
 def test_dispatch_plan_prepare_and_get_review_without_launching(
@@ -574,7 +588,6 @@ def test_dispatch_plan_prepare_and_get_review_without_launching(
 ):
     client, revision_id = crawl_control_client
     request = {
-        "version": 1,
         "kind": "one_off",
         "scope": {
             "source_site": "jobsdb",
@@ -582,7 +595,6 @@ def test_dispatch_plan_prepare_and_get_review_without_launching(
             "classification_ids": [],
         },
         "listing_settings": {
-            "version": 1,
             "crawl_mode": "headless",
             "page_depth": 1,
             "run_page_cap": 25,
@@ -590,7 +602,7 @@ def test_dispatch_plan_prepare_and_get_review_without_launching(
         "detail_settings": None,
     }
 
-    prepared = client.post("/api/v1/dispatch-plans", json=request)
+    prepared = client.post("/api/dispatch-plans", json=request)
 
     assert prepared.status_code == 201
     preparation = prepared.json()
@@ -600,7 +612,7 @@ def test_dispatch_plan_prepare_and_get_review_without_launching(
     assert preparation["plan"]["readiness"]["status"] == "ready"
     assert "catalog_revision_id" not in preparation["plan"]["content"]
 
-    reviewed = client.get(f"/api/v1/dispatch-plans/{plan_id}")
+    reviewed = client.get(f"/api/dispatch-plans/{plan_id}")
     assert reviewed.status_code == 200
     assert reviewed.json()["plan_id"] == plan_id
     assert reviewed.json()["state"] == "prepared"
@@ -612,7 +624,6 @@ def test_dispatch_plan_confirmation_returns_normalized_single_use_run(
 ):
     client, revision_id = crawl_control_client
     request = {
-        "version": 1,
         "kind": "one_off",
         "scope": {
             "source_site": "jobsdb",
@@ -620,14 +631,13 @@ def test_dispatch_plan_confirmation_returns_normalized_single_use_run(
             "classification_ids": [],
         },
         "listing_settings": {
-            "version": 1,
             "crawl_mode": "headless",
             "page_depth": 1,
             "run_page_cap": 25,
         },
         "detail_settings": None,
     }
-    preparation = client.post("/api/v1/dispatch-plans", json=request).json()
+    preparation = client.post("/api/dispatch-plans", json=request).json()
     plan = preparation["plan"]
     dispatch_request = {
         "confirmation_token": preparation["confirmation_token"],
@@ -635,17 +645,17 @@ def test_dispatch_plan_confirmation_returns_normalized_single_use_run(
     }
 
     missing_fingerprint = client.post(
-        f"/api/v1/dispatch-plans/{plan['plan_id']}/dispatch",
+        f"/api/dispatch-plans/{plan['plan_id']}/dispatch",
         json={"confirmation_token": preparation["confirmation_token"]},
     )
 
     assert missing_fingerprint.status_code == 422
     assert client.get(
-        f"/api/v1/dispatch-plans/{plan['plan_id']}"
+        f"/api/dispatch-plans/{plan['plan_id']}"
     ).json()["state"] == "prepared"
 
     dispatched = client.post(
-        f"/api/v1/dispatch-plans/{plan['plan_id']}/dispatch",
+        f"/api/dispatch-plans/{plan['plan_id']}/dispatch",
         json=dispatch_request,
     )
 
@@ -656,19 +666,16 @@ def test_dispatch_plan_confirmation_returns_normalized_single_use_run(
     assert payload["run"]["source_site"] == "jobsdb"
     assert payload["run"]["crawl_phase"] == "listing"
     assert payload["run"]["authority"] == {
-        "version": 1,
         "authority_kind": "dispatch_plan",
         "dispatch_plan_id": plan["plan_id"],
         "dispatch_plan_fingerprint": plan["plan_fingerprint"],
         "plan_state": "consumed",
         "automation_id": None,
-        "automation_revision": None,
         "authored_scope": plan["content"]["authored_scope"],
         "resolved_scope": plan["content"]["resolved_scope"],
         "readiness": plan["readiness"],
     }
     assert payload["run"]["listing_workload"] == {
-        "version": 1,
         "query_target_count": 25,
         "page_depth": 1,
         "estimated_max_pages": 25,
@@ -679,7 +686,7 @@ def test_dispatch_plan_confirmation_returns_normalized_single_use_run(
     assert "request_payload" not in payload["run"]
 
     repeated = client.post(
-        f"/api/v1/dispatch-plans/{plan['plan_id']}/dispatch",
+        f"/api/dispatch-plans/{plan['plan_id']}/dispatch",
         json=dispatch_request,
     )
     assert repeated.status_code == 409
@@ -694,7 +701,6 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
 ):
     client, revision_id = crawl_control_client
     configuration = {
-        "version": 1,
         "name": "Board Automation",
         "description": None,
         "cron_expression": "0 4 * * *",
@@ -705,7 +711,6 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
             "classification_ids": [],
         },
         "listing_settings": {
-            "version": 1,
             "crawl_mode": "headless",
             "page_depth": 1,
             "run_page_cap": 25,
@@ -713,8 +718,8 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
         "detail_settings": None,
     }
     automation_review = _review_automation_configuration(client, configuration)
-    created = client.post(
-        "/api/v1/automations",
+    client.post(
+        "/api/automations",
         json={
             "configuration": configuration,
             "review_fingerprint": automation_review["input_fingerprint"],
@@ -722,15 +727,14 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
         },
     ).json()
     one_off = {
-        "version": 1,
         "kind": "one_off",
         "scope": configuration["scope"],
         "listing_settings": configuration["listing_settings"],
         "detail_settings": None,
     }
-    preparation = client.post("/api/v1/dispatch-plans", json=one_off).json()
+    preparation = client.post("/api/dispatch-plans", json=one_off).json()
     dispatched = client.post(
-        f"/api/v1/dispatch-plans/{preparation['plan']['plan_id']}/dispatch",
+        f"/api/dispatch-plans/{preparation['plan']['plan_id']}/dispatch",
         json={
             "confirmation_token": preparation["confirmation_token"],
             "expected_plan_fingerprint": preparation["plan"][
@@ -738,39 +742,6 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
             ],
         },
     ).json()
-
-    response = client.get("/api/v1/task-control-board?source_site=jobsdb")
-
-    assert response.status_code == 200
-    board = response.json()
-    assert board["source_site"] == "jobsdb"
-    assert board["automation_total"] == 1
-    assert board["run_total"] == 1
-    assert board["automations"] == [
-        {
-            "version": 1,
-            "automation_id": created["snapshot"]["automation_id"],
-            "revision": 1,
-            "lifecycle_state": "paused",
-            "name": "Board Automation",
-            "source_site": "jobsdb",
-            "crawl_phase": "listing",
-            "crawl_mode": "headless",
-            "authored_scope": configuration["scope"],
-            "scope_review_reason": None,
-            "created_at": created["created_at"],
-            "updated_at": created["updated_at"],
-            "last_run_at": None,
-            "next_run_at": None,
-        }
-    ]
-    assert board["runs"][0]["crawl_job_id"] == dispatched["run"]["crawl_job_id"]
-    assert board["runs"][0]["authority"]["authority_kind"] == (
-        "dispatch_plan"
-    )
-    assert board["runs"][0]["listing_workload"]["query_target_count"] == 25
-    assert "request_payload" not in board["runs"][0]
-    assert "events" not in board["runs"][0]
 
     board_sources = []
     original_list_page = CrawlJobRepository.list_crawl_task_page
@@ -784,38 +755,36 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
         "list_crawl_task_page",
         record_board_source,
     )
-    v2_response = client.get(
-        "/api/v1/task-control-board",
-        params={"version": 2, "source_site": "jobsdb"},
+    board_response = client.get(
+        "/api/task-control-board",
+        params={"source_site": "jobsdb"},
     )
-    assert v2_response.status_code == 200
-    v2 = v2_response.json()
-    assert v2["version"] == 2
-    assert v2["selected_source"] == "jobsdb"
+    assert board_response.status_code == 200
+    board = board_response.json()
+    assert board["selected_source"] == "jobsdb"
     assert board_sources == ["jobsdb", "ctgoodjobs", "offertoday"]
-    assert [item["source_site"] for item in v2["source_summaries"]] == [
+    assert [item["source_site"] for item in board["source_summaries"]] == [
         "jobsdb",
         "ctgoodjobs",
         "offertoday",
     ]
-    assert "catalog_health" not in v2["source_summaries"][0]
-    assert v2["needs_attention"] == []
-    assert len(v2["active_runs"]) == 1
-    assert v2["active_runs"][0]["run"]["crawl_job_id"] == dispatched["run"]["crawl_job_id"]
-    assert v2["active_runs"][0]["actions"][0]["action"] == "view_task"
-    assert len(v2["upcoming"]) == 1
-    assert v2["upcoming"][0]["schedule"]["timezone"] == "UTC"
-    assert "catalog_health" not in v2["upcoming"][0]
-    assert v2["upcoming"][0]["actions"][0] == {
-        "version": 1,
+    assert "catalog_health" not in board["source_summaries"][0]
+    assert board["needs_attention"] == []
+    assert len(board["active_runs"]) == 1
+    assert board["active_runs"][0]["run"]["crawl_job_id"] == dispatched["run"]["crawl_job_id"]
+    assert board["active_runs"][0]["actions"][0]["action"] == "view_task"
+    assert len(board["upcoming"]) == 1
+    assert board["upcoming"][0]["schedule"]["timezone"] == "UTC"
+    assert "catalog_health" not in board["upcoming"][0]
+    assert board["upcoming"][0]["actions"][0] == {
         "action": "edit",
         "enabled": True,
         "reason_code": None,
     }
-    assert v2["all_clear"] is False
+    assert board["all_clear"] is False
 
     task_response = client.get(
-        f"/api/v1/crawl-jobs/tasks/{dispatched['run']['crawl_job_id']}"
+        f"/api/crawl-jobs/tasks/{dispatched['run']['crawl_job_id']}"
     )
     assert task_response.status_code == 200
     task = task_response.json()
@@ -826,7 +795,7 @@ def test_task_control_board_returns_normalized_automation_and_run_rows(
     assert "manual_action" not in task
 
     missing_id = uuid4()
-    missing_response = client.get(f"/api/v1/crawl-jobs/tasks/{missing_id}")
+    missing_response = client.get(f"/api/crawl-jobs/tasks/{missing_id}")
     assert missing_response.status_code == 404
     assert missing_response.json()["detail"] == {
         "code": "CRAWL_TASK_NOT_FOUND",
@@ -841,7 +810,7 @@ def test_control_board_rejects_an_unsupported_source_with_a_stable_error(
     client, _revision_id = crawl_control_client
 
     response = client.get(
-        "/api/v1/task-control-board",
+        "/api/task-control-board",
         params={"source_site": "unknown-source"},
     )
 
@@ -895,8 +864,8 @@ def test_failed_run_attention_dismissal_is_revision_safe_and_idempotent(
         db.close()
 
     board_before = client.get(
-        "/api/v1/task-control-board",
-        params={"version": 2, "source_site": "jobsdb"},
+        "/api/task-control-board",
+        params={"source_site": "jobsdb"},
     )
     assert board_before.status_code == 200
     failed_item = next(
@@ -909,12 +878,11 @@ def test_failed_run_attention_dismissal_is_revision_safe_and_idempotent(
     assert failed_item["secondary_actions"][-1]["action"] == "dismiss_failed_run"
 
     first = client.post(
-        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        f"/api/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
         json={"expected_failure_event_sequence": failure_sequence},
     )
     assert first.status_code == 200
     assert first.json() == {
-        "version": 1,
         "crawl_job_id": crawl_job_id,
         "failure_event_sequence": failure_sequence,
         "dismissal_event_sequence": failure_sequence + 1,
@@ -922,7 +890,7 @@ def test_failed_run_attention_dismissal_is_revision_safe_and_idempotent(
     }
 
     repeated = client.post(
-        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        f"/api/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
         json={"expected_failure_event_sequence": failure_sequence},
     )
     assert repeated.status_code == 200
@@ -946,15 +914,15 @@ def test_failed_run_attention_dismissal_is_revision_safe_and_idempotent(
         db.close()
 
     board_after = client.get(
-        "/api/v1/task-control-board",
-        params={"version": 2, "source_site": "jobsdb"},
+        "/api/task-control-board",
+        params={"source_site": "jobsdb"},
     )
     assert board_after.status_code == 200
     assert all(
         item["entity_id"] != crawl_job_id
         for item in board_after.json()["needs_attention"]
     )
-    task_after = client.get(f"/api/v1/crawl-jobs/tasks/{crawl_job_id}")
+    task_after = client.get(f"/api/crawl-jobs/tasks/{crawl_job_id}")
     assert task_after.status_code == 200
     assert task_after.json()["persisted_status"] == "failed"
     assert task_after.json()["issue"]["summary"] == "synthetic terminal failure"
@@ -973,8 +941,8 @@ def test_failed_run_attention_dismissal_is_revision_safe_and_idempotent(
         db.close()
 
     board_with_new_failure = client.get(
-        "/api/v1/task-control-board",
-        params={"version": 2, "source_site": "jobsdb"},
+        "/api/task-control-board",
+        params={"source_site": "jobsdb"},
     ).json()
     next_item = next(
         item
@@ -984,11 +952,11 @@ def test_failed_run_attention_dismissal_is_revision_safe_and_idempotent(
     assert next_item["failure_event_sequence"] == next_failure_sequence
 
     stale = client.post(
-        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        f"/api/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
         json={"expected_failure_event_sequence": failure_sequence},
     )
     assert stale.status_code == 409
-    assert stale.json()["detail"]["code"] == "FAILED_ATTENTION_REVISION_CONFLICT"
+    assert stale.json()["detail"]["code"] == "FAILED_ATTENTION_SEQUENCE_CONFLICT"
 
 
 def test_failed_run_attention_dismissal_rejects_a_non_failed_task(
@@ -1010,7 +978,7 @@ def test_failed_run_attention_dismissal_rejects_a_non_failed_task(
         db.close()
 
     response = client.post(
-        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        f"/api/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
         json={"expected_failure_event_sequence": 1},
     )
 
@@ -1032,7 +1000,7 @@ def test_failed_run_attention_dismissal_rejects_an_unknown_task(
     crawl_job_id = uuid4()
 
     response = client.post(
-        f"/api/v1/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
+        f"/api/crawl-jobs/{crawl_job_id}/dismiss-failed-attention",
         json={"expected_failure_event_sequence": 1},
     )
 
@@ -1049,7 +1017,6 @@ def test_crawl_tasks_use_dispatch_plan_when_raw_payloads_are_absent(
 ):
     client, revision_id = crawl_control_client
     one_off = {
-        "version": 1,
         "kind": "one_off",
         "scope": {
             "source_site": "jobsdb",
@@ -1057,16 +1024,15 @@ def test_crawl_tasks_use_dispatch_plan_when_raw_payloads_are_absent(
             "classification_ids": [],
         },
         "listing_settings": {
-            "version": 1,
             "crawl_mode": "headless",
             "page_depth": 2,
             "run_page_cap": 50,
         },
         "detail_settings": None,
     }
-    preparation = client.post("/api/v1/dispatch-plans", json=one_off).json()
+    preparation = client.post("/api/dispatch-plans", json=one_off).json()
     dispatched = client.post(
-        f"/api/v1/dispatch-plans/{preparation['plan']['plan_id']}/dispatch",
+        f"/api/dispatch-plans/{preparation['plan']['plan_id']}/dispatch",
         json={
             "confirmation_token": preparation["confirmation_token"],
             "expected_plan_fingerprint": preparation["plan"][
@@ -1094,7 +1060,7 @@ def test_crawl_tasks_use_dispatch_plan_when_raw_payloads_are_absent(
     finally:
         request_db.close()
 
-    response = client.get("/api/v1/crawl-jobs/tasks")
+    response = client.get("/api/crawl-jobs/tasks")
 
     assert response.status_code == 200
     task = response.json()["items"][0]
@@ -1103,7 +1069,6 @@ def test_crawl_tasks_use_dispatch_plan_when_raw_payloads_are_absent(
     assert task["dispatch_plan_id"] == preparation["plan"]["plan_id"]
     assert "catalog_revision_id" not in task["authority"]
     assert task["listing_workload"] == {
-        "version": 1,
         "query_target_count": 25,
         "page_depth": 2,
         "estimated_max_pages": 50,
@@ -1205,13 +1170,12 @@ def test_run_projections_normalize_the_latest_recovery_attempt(
     finally:
         request_db.close()
 
-    tasks_response = client.get("/api/v1/crawl-jobs/tasks")
+    tasks_response = client.get("/api/crawl-jobs/tasks")
 
     assert tasks_response.status_code == 200
     task = tasks_response.json()["items"][0]
     assert task["crawl_job_id"] == crawl_job_id
     recovery_attempt = task["recovery_attempt"]
-    assert recovery_attempt["version"] == 1
     assert recovery_attempt["request_event_sequence"] == resume_sequence
     assert recovery_attempt["requested_at"]
     assert recovery_attempt["requested_by"] == "operator-2"
@@ -1227,10 +1191,10 @@ def test_run_projections_normalize_the_latest_recovery_attempt(
     assert task["detail_snapshot"]["target_count"] == 25
     assert task["detail_snapshot"]["detail_run_cap"] == 10
 
-    board_response = client.get("/api/v1/task-control-board")
+    board_response = client.get("/api/task-control-board")
 
     assert board_response.status_code == 200
-    board_run = board_response.json()["runs"][0]
+    board_run = board_response.json()["active_runs"][0]["run"]
     assert board_run["recovery_attempt"] == recovery_attempt
     assert "request_payload" not in board_run
     assert "events" not in board_run
@@ -1300,7 +1264,7 @@ def test_reset_browser_profile_records_safe_reset_without_changing_task_scope(
     monkeypatch.setattr(crawl_jobs_api, "reset_profile", fake_reset)
 
     response = client.post(
-        f"/api/v1/crawl-jobs/{crawl_job_id}/reset-browser-profile"
+        f"/api/crawl-jobs/{crawl_job_id}/reset-browser-profile"
     )
 
     assert response.status_code == 200
@@ -1452,7 +1416,6 @@ def test_detail_run_projections_keep_frozen_plan_membership_and_live_counts(
         request_db.close()
 
     one_off = {
-        "version": 1,
         "kind": "one_off",
         "scope": {
             "source_site": "jobsdb",
@@ -1461,19 +1424,18 @@ def test_detail_run_projections_keep_frozen_plan_membership_and_live_counts(
         },
         "listing_settings": None,
         "detail_settings": {
-            "version": 1,
             "crawl_mode": "headless",
             "backlog_scope": {"kind": "source_backlog"},
             "limit": {"kind": "stop_after", "detail_run_cap": 8},
             "backlog_snapshot": None,
         },
     }
-    preparation = client.post("/api/v1/dispatch-plans", json=one_off).json()
+    preparation = client.post("/api/dispatch-plans", json=one_off).json()
     plan = preparation["plan"]
     frozen = plan["content"]["detail_settings"]["backlog_snapshot"]
     assert frozen["selected_target_count"] == 8
     dispatched = client.post(
-        f"/api/v1/dispatch-plans/{plan['plan_id']}/dispatch",
+        f"/api/dispatch-plans/{plan['plan_id']}/dispatch",
         json={
             "confirmation_token": preparation["confirmation_token"],
             "expected_plan_fingerprint": plan["plan_fingerprint"],
@@ -1506,12 +1468,11 @@ def test_detail_run_projections_keep_frozen_plan_membership_and_live_counts(
     finally:
         request_db.close()
 
-    tasks_response = client.get("/api/v1/crawl-jobs/tasks")
+    tasks_response = client.get("/api/crawl-jobs/tasks")
 
     assert tasks_response.status_code == 200
     task = tasks_response.json()["items"][0]
     expected_detail_snapshot = {
-        "version": 1,
         "backlog_scope": {"kind": "source_backlog"},
         "limit_kind": "stop_after",
         "cutoff_at": frozen["cutoff_at"],
@@ -1528,20 +1489,19 @@ def test_detail_run_projections_keep_frozen_plan_membership_and_live_counts(
     assert task["crawl_job_id"] == crawl_job_id
     assert task["detail_snapshot"] == expected_detail_snapshot
 
-    board_response = client.get("/api/v1/task-control-board")
+    board_response = client.get("/api/task-control-board")
 
     assert board_response.status_code == 200
-    board_run = board_response.json()["runs"][0]
+    board_run = board_response.json()["active_runs"][0]["run"]
     assert board_run["crawl_job_id"] == crawl_job_id
     assert board_run["detail_snapshot"] == expected_detail_snapshot
 
 
-def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
+def test_automation_api_lists_current_rows_and_later_update_wins(
     crawl_control_client,
 ):
     client, revision_id = crawl_control_client
     configuration = {
-        "version": 1,
         "name": "JobsDB listing",
         "description": "Reviewed recurring crawl",
         "cron_expression": "0 4 * * *",
@@ -1552,7 +1512,6 @@ def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
             "classification_ids": [],
         },
         "listing_settings": {
-            "version": 1,
             "crawl_mode": "headless",
             "page_depth": 2,
             "run_page_cap": 100,
@@ -1562,7 +1521,7 @@ def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
 
     create_review = _review_automation_configuration(client, configuration)
     stale_create = client.post(
-        "/api/v1/automations",
+        "/api/automations",
         json={
             "configuration": configuration,
             "review_fingerprint": "0" * 64,
@@ -1573,7 +1532,7 @@ def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
     assert stale_create.json()["detail"]["code"] == "AUTOMATION_REVIEW_STALE"
 
     created = client.post(
-        "/api/v1/automations",
+        "/api/automations",
         json={
             "configuration": configuration,
             "review_fingerprint": create_review["input_fingerprint"],
@@ -1582,13 +1541,12 @@ def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
     )
 
     assert created.status_code == 201
-    assert created.headers["etag"] == '"1"'
+    assert "etag" not in created.headers
     created_payload = created.json()
     automation_id = created_payload["snapshot"]["automation_id"]
-    assert created_payload["snapshot"]["revision"] == 1
     assert created_payload["snapshot"]["lifecycle_state"] == "paused"
 
-    listed = client.get("/api/v1/automations?source_site=jobsdb")
+    listed = client.get("/api/automations?source_site=jobsdb")
     assert listed.status_code == 200
     assert listed.json()["total"] == 1
     assert [
@@ -1600,37 +1558,30 @@ def test_automation_api_lists_versioned_rows_and_rejects_stale_updates(
         client,
         renamed_configuration,
         automation_id=automation_id,
-        expected_revision=1,
+    )
+    later_review = _review_automation_configuration(
+        client,
+        configuration,
+        automation_id=automation_id,
     )
     updated = client.put(
-        f"/api/v1/automations/{automation_id}",
+        f"/api/automations/{automation_id}",
         json={
-            "expected_revision": 1,
             "configuration": renamed_configuration,
             "review_fingerprint": update_review["input_fingerprint"],
         },
     )
     assert updated.status_code == 200
-    assert updated.headers["etag"] == '"2"'
     assert updated.json()["snapshot"]["configuration"]["name"] == (
         "Renamed listing"
     )
 
-    stale = client.put(
-        f"/api/v1/automations/{automation_id}",
+    later = client.put(
+        f"/api/automations/{automation_id}",
         json={
-            "expected_revision": 1,
             "configuration": configuration,
-            "review_fingerprint": update_review["input_fingerprint"],
+            "review_fingerprint": later_review["input_fingerprint"],
         },
     )
-    assert stale.status_code == 409
-    assert stale.json()["detail"] == {
-        "code": "AUTOMATION_REVISION_CONFLICT",
-        "message": "Automation revision changed before this mutation",
-        "context": {
-            "automation_id": automation_id,
-            "expected_revision": 1,
-            "current_revision": 2,
-        },
-    }
+    assert later.status_code == 200
+    assert later.json()["snapshot"]["configuration"]["name"] == "JobsDB listing"

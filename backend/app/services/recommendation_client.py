@@ -45,7 +45,7 @@ class RecommendationClient:
                 transport=self.transport,
             ) as client:
                 response = await client.get(
-                    "/api/v1/internal/recommendations/jobs",
+                    "/api/internal/recommendations/jobs",
                     params={"job_id": str(job_id), "limit": limit},
                 )
         except httpx.RequestError as exc:

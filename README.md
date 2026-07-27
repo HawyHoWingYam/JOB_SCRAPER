@@ -59,9 +59,9 @@ The default `backend-api` image only supports the lexical search baseline. Seman
   - `JobsDB` defaults to `headed`
   - `CTGoodJobs` defaults to `headless`
 - `CTGoodJobs` headless runs can be paired with the explicit `CTGOODJOBS_PROXY_*` settings in `.env` for per-request proxy rotation; global `HTTP_PROXY` / `HTTPS_PROXY` variables are not part of that runtime path.
-- `POST /api/v1/jobs/search` supports `lexical`, `semantic`, and `hybrid`, but the non-lexical modes require `retrieval-api`.
-- `POST /api/v1/jobs/search/export` mirrors the active retrieval mode. `semantic` and `hybrid` export require `retrieval-api`.
-- `GET /api/v1/jobs/{job_id}/similar` and `GET /api/v1/recommendations/jobs` proxy to `recommendation-api`.
+- `POST /api/jobs/search` supports `lexical`, `semantic`, and `hybrid`, but the non-lexical modes require `retrieval-api`.
+- `POST /api/jobs/search/export` mirrors the active retrieval mode. `semantic` and `hybrid` export require `retrieval-api`.
+- `GET /api/jobs/{job_id}/similar` and `GET /api/recommendations/jobs` proxy to `recommendation-api`.
 - Scrape progress is sourced from durable `crawl_jobs` and `crawl_job_events`; the legacy in-process category scrape endpoints are no longer part of the runtime path.
 
 ## Crawl Tasks
@@ -137,7 +137,7 @@ Recommended manual checks:
 - search in `semantic` mode and confirm results return successfully
 - search in `hybrid` mode and export the same scope
 - open a job detail modal and confirm related jobs load
-- trigger a direct override crawl and confirm `/api/v1/scrape/progress` reports the queued/running job
+- trigger a direct override crawl and confirm `/api/scrape/progress` reports the queued/running job
 
 ## Backend QA
 
@@ -202,12 +202,12 @@ Use `cd backend && alembic upgrade head` only for databases that already have th
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/v1/jobs/search` | Search jobs |
-| `POST /api/v1/jobs/search/export` | Export search results |
-| `GET /api/v1/jobs/{job_id}/similar` | Related job recommendations |
-| `POST /api/v1/ai/enrich` | AI enrichment |
-| `GET /api/v1/stats/skills` | Skill statistics |
-| `GET /api/v1/stats/categories` | Category distribution |
+| `GET /api/jobs/search` | Search jobs |
+| `POST /api/jobs/search/export` | Export search results |
+| `GET /api/jobs/{job_id}/similar` | Related job recommendations |
+| `POST /api/ai/enrich` | AI enrichment |
+| `GET /api/stats/skills` | Skill statistics |
+| `GET /api/stats/categories` | Category distribution |
 
 ## License
 

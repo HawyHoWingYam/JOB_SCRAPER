@@ -2,21 +2,20 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.crawl_control.automation_contracts import AutomationDeleteImpactV1
 from app.models.crawl_job import CrawlJob
 from app.models.schedule import (
     AutomationDeleteReview,
-    AutomationRevision,
     ScheduleExecution,
     ScrapeSchedule,
 )
 
 
 class AutomationRepository:
-    """Locking persistence seam for versioned Automation state."""
+    """Locking persistence seam for current Automation state."""
 
     def get(
         self,
@@ -32,23 +31,7 @@ class AutomationRepository:
             query = query.populate_existing().with_for_update()
         return query.one_or_none()
 
-    def get_revision(
-        self,
-        db: Session,
-        *,
-        automation_id: UUID,
-        revision: int,
-    ) -> AutomationRevision | None:
-        return (
-            db.query(AutomationRevision)
-            .filter(
-                AutomationRevision.automation_id == automation_id,
-                AutomationRevision.revision == revision,
-            )
-            .one_or_none()
-        )
-
-    def list_with_current_revision(
+    def list_current(
         self,
         db: Session,
         *,
@@ -56,17 +39,9 @@ class AutomationRepository:
         lifecycle_state: str | None = None,
         offset: int = 0,
         limit: int = 100,
-    ) -> tuple[list[tuple[ScrapeSchedule, AutomationRevision]], int]:
-        query = (
-            db.query(ScrapeSchedule, AutomationRevision)
-            .join(
-                AutomationRevision,
-                and_(
-                    AutomationRevision.automation_id == ScrapeSchedule.id,
-                    AutomationRevision.revision == ScrapeSchedule.revision,
-                ),
-            )
-            .filter(ScrapeSchedule.scope_contract.is_not(None))
+    ) -> tuple[list[ScrapeSchedule], int]:
+        query = db.query(ScrapeSchedule).filter(
+            ScrapeSchedule.scope_contract.is_not(None)
         )
         if source_site is not None:
             query = query.filter(ScrapeSchedule.source_site == source_site)
@@ -94,16 +69,9 @@ class AutomationRepository:
         *,
         source_site: str,
         for_update: bool = False,
-    ) -> list[tuple[ScrapeSchedule, AutomationRevision]]:
+    ) -> list[ScrapeSchedule]:
         query = (
-            db.query(ScrapeSchedule, AutomationRevision)
-            .join(
-                AutomationRevision,
-                and_(
-                    AutomationRevision.automation_id == ScrapeSchedule.id,
-                    AutomationRevision.revision == ScrapeSchedule.revision,
-                ),
-            )
+            db.query(ScrapeSchedule)
             .filter(
                 ScrapeSchedule.scope_contract.is_not(None),
                 ScrapeSchedule.source_site == source_site,
@@ -122,19 +90,9 @@ class AutomationRepository:
     ) -> int:
         return int(
             db.query(func.count(ScrapeSchedule.id))
-            .outerjoin(
-                AutomationRevision,
-                and_(
-                    AutomationRevision.automation_id == ScrapeSchedule.id,
-                    AutomationRevision.revision == ScrapeSchedule.revision,
-                ),
-            )
             .filter(
                 ScrapeSchedule.source_site == source_site,
-                or_(
-                    ScrapeSchedule.scope_contract.is_(None),
-                    AutomationRevision.id.is_(None),
-                ),
+                ScrapeSchedule.scope_contract.is_(None),
             )
             .scalar()
             or 0
@@ -142,7 +100,7 @@ class AutomationRepository:
 
     @staticmethod
     def lock_catalog_impact_set(db: Session) -> None:
-        """Prevent versioned Automation inserts/updates during pointer change."""
+        """Prevent Automation inserts/updates during classification changes."""
 
         if db.get_bind().dialect.name == "postgresql":
             db.execute(
@@ -152,29 +110,6 @@ class AutomationRepository:
                 )
             )
 
-    def append_revision(
-        self,
-        db: Session,
-        *,
-        automation_id: UUID,
-        revision: int,
-        snapshot: dict,
-        snapshot_fingerprint: str,
-        operation: str,
-        actor: str,
-    ) -> AutomationRevision:
-        row = AutomationRevision(
-            automation_id=automation_id,
-            revision=revision,
-            snapshot=dict(snapshot),
-            snapshot_fingerprint=snapshot_fingerprint,
-            operation=operation,
-            actor=actor,
-        )
-        db.add(row)
-        db.flush()
-        return row
-
     def delete_impact(
         self,
         db: Session,
@@ -182,12 +117,6 @@ class AutomationRepository:
     ) -> AutomationDeleteImpactV1:
         return AutomationDeleteImpactV1(
             automation_id=automation.id,
-            expected_revision=automation.revision,
-            automation_revision_count=(
-                db.query(AutomationRevision)
-                .filter(AutomationRevision.automation_id == automation.id)
-                .count()
-            ),
             schedule_execution_count=(
                 db.query(ScheduleExecution)
                 .filter(ScheduleExecution.schedule_id == automation.id)
@@ -198,7 +127,7 @@ class AutomationRepository:
                 .filter(CrawlJob.schedule_id == automation.id)
                 .count()
             ),
-            removed_records=("automation", "automation_revisions"),
+            removed_records=("automation",),
             preserved_records=(
                 "schedule_executions",
                 "crawl_jobs",

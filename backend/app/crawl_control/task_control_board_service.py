@@ -23,7 +23,6 @@ from app.crawl_control.failed_run_attention import (
 )
 from app.crawl_control.task_control_board_contracts import (
     AutomationLatestOutcomeV1,
-    AutomationRowProjectionV1,
     AutomationRowProjectionV2,
     AutomationScheduleProjectionV1,
     BoardActionV1,
@@ -40,7 +39,6 @@ from app.crawl_control.task_control_board_contracts import (
     RecoveryAttemptProjectionV1,
     ResolvedScopeSummaryV1,
     RunAuthorityProjectionV1,
-    TaskControlBoardProjectionV1,
     TaskControlBoardProjectionV2,
 )
 from app.crawl_control.automation_service import AutomationService
@@ -98,7 +96,6 @@ def _plan_content_from_record(plan) -> DispatchPlanContentV1:
         crawl_phase=plan.crawl_phase,
         trigger_kind=plan.trigger_kind,
         automation_id=plan.automation_id_snapshot,
-        expected_automation_revision=plan.expected_automation_revision,
         authored_scope=plan.authored_scope,
         resolved_scope=plan.resolved_scope,
         listing_settings=plan.listing_settings,
@@ -295,7 +292,6 @@ def build_crawl_control_run_projection(
             dispatch_plan_fingerprint=fingerprint,
             plan_state=plan_state,
             automation_id=content.automation_id,
-            automation_revision=content.expected_automation_revision,
             authored_scope=content.authored_scope,
             resolved_scope=content.resolved_scope,
             readiness=readiness,
@@ -632,70 +628,7 @@ class TaskControlBoardProjectionService:
             crawl_job_repository or CrawlJobRepository()
         )
 
-    def get(
-        self,
-        *,
-        source_site: SourceSite | None = None,
-        run_limit: int = 100,
-    ) -> TaskControlBoardProjectionV1:
-        automation_projections, automation_total = AutomationService(
-            self.db
-        ).list(
-            source_site=source_site,
-            limit=100,
-        )
-        rows, run_total = self.crawl_job_repository.list_crawl_task_page(
-            self.db,
-            page=1,
-            page_size=run_limit,
-            status=None,
-            source_site=source_site,
-            crawl_mode=None,
-            updated_since=None,
-        )
-        crawl_job_ids = [row.id for row in rows]
-        latest_events = self.crawl_job_repository.list_latest_events_for_jobs(
-            self.db,
-            crawl_job_ids=crawl_job_ids,
-        )
-        from app.services.crawl_task_snapshot_service import (
-            PROGRESS_CONTEXT_EVENT_TYPES,
-            build_crawl_task_snapshot,
-        )
-
-        events = self.crawl_job_repository.list_events_by_job_ids(
-            self.db,
-            crawl_job_ids=crawl_job_ids,
-            event_types=PROGRESS_CONTEXT_EVENT_TYPES,
-        )
-        now = utc_now()
-        category_lookup_cache: dict[str, dict[str, str]] = {}
-        runs = tuple(
-            build_crawl_control_run_projection(
-                row,
-                normalized=build_crawl_task_snapshot(
-                    row,
-                    latest_event=latest_events.get(row.id),
-                    now=now,
-                    events=events.get(row.id, []),
-                    category_lookup_cache=category_lookup_cache,
-                ),
-            )
-            for row in rows
-        )
-        return TaskControlBoardProjectionV1(
-            source_site=source_site,
-            automations=tuple(
-                AutomationRowProjectionV1.from_projection(projection)
-                for projection in automation_projections
-            ),
-            automation_total=automation_total,
-            runs=runs,
-            run_total=run_total,
-            refreshed_at=now,
-        )
-
-    def get_v2(
+    def get_current(
         self,
         *,
         selected_source: SourceSite,
@@ -800,7 +733,6 @@ class TaskControlBoardProjectionService:
             automation_rows.append(
                 AutomationRowProjectionV2(
                     automation_id=snapshot.automation_id,
-                    revision=snapshot.revision,
                     lifecycle_state=snapshot.lifecycle_state,
                     name=configuration.name,
                     source_site=configuration.scope.source_site,

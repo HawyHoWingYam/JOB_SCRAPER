@@ -44,7 +44,7 @@ class RetrievalClient:
                 timeout=self.timeout_s,
                 transport=self.transport,
             ) as client:
-                response = await client.post("/api/v1/internal/jobs/search", json=payload)
+                response = await client.post("/api/internal/jobs/search", json=payload)
         except httpx.RequestError as exc:
             raise RetrievalClientUnavailableError(
                 f"retrieval-api request failed: {exc.__class__.__name__}"
@@ -73,7 +73,7 @@ class RetrievalClient:
                 timeout=self.timeout_s,
                 transport=self.transport,
             ) as client:
-                response = await client.post("/api/v1/internal/jobs/search/export", json=payload)
+                response = await client.post("/api/internal/jobs/search/export", json=payload)
         except httpx.RequestError as exc:
             raise RetrievalClientUnavailableError(
                 f"retrieval-api request failed: {exc.__class__.__name__}"

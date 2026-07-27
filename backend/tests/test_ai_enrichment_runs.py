@@ -461,10 +461,10 @@ def test_public_routes_expose_filtered_controls_and_remove_single_job_endpoint()
     route_paths = {
         (route.path, method) for route in router.routes for method in route.methods
     }
-    assert ("/api/v1/ai/pending/filter-options", "GET") in route_paths
-    assert ("/api/v1/ai/pending/preview", "POST") in route_paths
-    assert ("/api/v1/ai/runs/{run_id}/stop", "POST") in route_paths
-    assert not any(path == "/api/v1/ai/enrich-job/{job_id}" for path, _ in route_paths)
+    assert ("/api/ai/pending/filter-options", "GET") in route_paths
+    assert ("/api/ai/pending/preview", "POST") in route_paths
+    assert ("/api/ai/runs/{run_id}/stop", "POST") in route_paths
+    assert not any(path == "/api/ai/enrich-job/{job_id}" for path, _ in route_paths)
 
 
 def test_pending_eligibility_uses_source_attribute_projection_not_legacy_scalar(

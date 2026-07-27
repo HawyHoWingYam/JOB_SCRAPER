@@ -15,7 +15,7 @@ const classifications = {
 function listingDraft() {
   return {
     flow: 'automation', mode: 'create', automation_id: null,
-    expected_revision: null, source_site: 'jobsdb', intent: 'listing',
+    source_site: 'jobsdb', intent: 'listing',
     scope: { mode: 'all', classification_ids: [] },
     execution: { crawl_mode: 'headless', page_depth: 2, run_page_cap: 50 },
     schedule: {

@@ -44,12 +44,10 @@ const offertodayClassifications = {
 
 function draft({ flow = 'automation', sourceSite = 'jobsdb', step = 'review' } = {}) {
   return {
-    version: 1,
     updated_at: '2026-07-21T00:00:00Z',
     flow,
     mode: 'create',
     automation_id: null,
-    expected_revision: null,
     source_site: sourceSite,
     step,
     intent: 'listing',
@@ -69,7 +67,6 @@ function review(inputFingerprint = 'review-fingerprint') {
   return {
     inputFingerprint,
     automationId: null,
-    expectedRevision: null,
     authoredScope: { mode: 'all' },
     resolvedScope: { query_target_count: 3 },
     listingWorkload: {
@@ -112,11 +109,9 @@ function plan() {
 function automation() {
   return {
     id: 'automation-1',
-    revision: 4,
     lifecycleState: 'paused',
     sourceSite: 'jobsdb',
     configuration: {
-      version: 1,
       name: 'Saved Automation',
       description: null,
       cron_expression: '0 4 * * *',
@@ -126,7 +121,7 @@ function automation() {
         mode: 'all',
         classification_ids: [],
       },
-      listing_settings: { version: 1, crawl_mode: 'headless', page_depth: 2, run_page_cap: 20 },
+      listing_settings: { crawl_mode: 'headless', page_depth: 2, run_page_cap: 20 },
       detail_settings: null,
     },
   };
@@ -283,7 +278,6 @@ describe('TaskControlWizard', () => {
       flow: 'one_off',
       mode: 'create',
       automation_id: null,
-      expected_revision: null,
       source_site: 'jobsdb',
       intent: 'listing',
     });

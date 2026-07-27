@@ -7,7 +7,7 @@ listing workload projection, or scheduled detail eligibility previews.
 
 ## Contracts
 
-- `POST /api/v1/automations/reviews` is read-only. It may resolve current
+- `POST /api/automations/reviews` is read-only. It may resolve current
   active top-level Source classifications, scope, workload, detail eligible count,
   readiness, and schedule summary. It must not prepare/freeze a Dispatch Plan,
   create a revision, claim work, emit an event/outbox row, or call a Source.

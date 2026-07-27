@@ -390,7 +390,7 @@
             "reason": "unmapped_source_label",
             "version": 2,
             "decision_audit_id": null,
-            "deep_link": "/api/v1/job-intelligence/governance/company-industries/review-items/33000000-0000-0000-0000-000000000020"
+            "deep_link": "/api/job-intelligence/governance/company-industries/review-items/33000000-0000-0000-0000-000000000020"
           }
         ]
       },

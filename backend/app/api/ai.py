@@ -36,7 +36,7 @@ from app.services.ai_runtime_settings_service import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
+router = APIRouter(prefix="/api/ai", tags=["ai"])
 ACTIVE_AI_RUN_STATUSES = {"pending", "running", "stopping"}
 MAX_PENDING_RUN_LIMIT = 5000
 

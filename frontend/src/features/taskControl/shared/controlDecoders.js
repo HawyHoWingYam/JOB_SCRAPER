@@ -77,7 +77,6 @@ export function decodeAutomation(value, path = '$') {
   const scope = object(configuration.scope, `${path}.snapshot.configuration.scope`);
   return {
     id: string(snapshot.automation_id, `${path}.snapshot.automation_id`),
-    revision: integer(snapshot.revision, `${path}.snapshot.revision`, { minimum: 1 }),
     lifecycleState: string(snapshot.lifecycle_state, `${path}.snapshot.lifecycle_state`),
     configuration,
     sourceSite: string(scope.source_site, `${path}.snapshot.configuration.scope.source_site`),
@@ -92,7 +91,6 @@ export function decodeAutomationReview(value) {
   return {
     inputFingerprint: string(row.input_fingerprint, '$.input_fingerprint'),
     automationId: row.automation_id == null ? null : string(row.automation_id, '$.automation_id'),
-    expectedRevision: row.expected_revision == null ? null : integer(row.expected_revision, '$.expected_revision', { minimum: 1 }),
     authoredScope: object(row.authored_scope, '$.authored_scope'),
     resolvedScope: object(row.resolved_scope, '$.resolved_scope'),
     listingWorkload: row.listing_workload == null ? null : object(row.listing_workload, '$.listing_workload'),

@@ -45,14 +45,14 @@ JobIntelligenceProductReadModel(db).get_governed_skill_name_states(
 The route/adaptor seams include:
 
 ```text
-GET /api/v1/job-intelligence/governance/summary
-GET /api/v1/jobs/search
-GET /api/v1/jobs/{job_id}
-GET /api/v1/companies
-GET /api/v1/companies/{company_id}
-GET /api/v1/jobs/{job_id}/recommendations
-GET /api/v1/job-intelligence/governance/job-taxonomy/review-items
-POST /api/v1/job-intelligence/governance/job-taxonomy/review-items/query
+GET /api/job-intelligence/governance/summary
+GET /api/jobs/search
+GET /api/jobs/{job_id}
+GET /api/companies
+GET /api/companies/{company_id}
+GET /api/jobs/{job_id}/recommendations
+GET /api/job-intelligence/governance/job-taxonomy/review-items
+POST /api/job-intelligence/governance/job-taxonomy/review-items/query
 ```
 
 Frontend governance queue hashes are:

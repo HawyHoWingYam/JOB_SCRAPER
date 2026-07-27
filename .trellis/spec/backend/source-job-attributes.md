@@ -42,9 +42,9 @@ db.commit()
 Public reads and filters are:
 
 ```text
-GET  /api/v1/jobs/filters
-GET  /api/v1/jobs/search?source_classification_ids=...&employment_type_codes=...
-POST /api/v1/jobs/search
+GET  /api/jobs/filters
+GET  /api/jobs/search?source_classification_ids=...&employment_type_codes=...
+POST /api/jobs/search
 python backend/scripts/inspect_source_job_attributes.py --format json|human
 ```
 
@@ -96,8 +96,8 @@ Persistence is owned by `job_source_attribute_projections`,
   creates an outer join that PostgreSQL rejects as a lock target.
 - Collected payloads must omit legacy `employment_type` and scalar Source
   classification/subclassification keys. `create_job` and `upsert_job` are
-  retired generic repository writers; `POST /api/v1/jobs` returns
-  `410/COLLECTED_JOB_CREATE_RETIRED`. `POST /api/v1/jobs/manual` remains the
+  retired generic repository writers; `POST /api/jobs` returns
+  `410/COLLECTED_JOB_CREATE_RETIRED`. `POST /api/jobs/manual` remains the
   explicit manual-only path.
 - A Job owns one Source. Node IDs use `<source>:<opaque-token>`. Classification
   paths preserve the source-native evidence captured with the Job and do not
@@ -153,7 +153,7 @@ Persistence is owned by `job_source_attribute_projections`,
 | Authoritative ingest has no typed `source_attribute_evidence` | `InvalidIngestPayloadError(reason="missing_source_attribute_evidence")` |
 | CTGoodJobs detail evidence is present before merge | Preserve the exact detail payload through canonical construction; do not fall back to listing evidence |
 | CTGoodJobs detail evidence is absent but listing evidence exists | Preserve the listing evidence; ingest remains responsible for typed validation |
-| Generic `POST /api/v1/jobs` is called | HTTP 410 with `COLLECTED_JOB_CREATE_RETIRED` |
+| Generic `POST /api/jobs` is called | HTTP 410 with `COLLECTED_JOB_CREATE_RETIRED` |
 | Unknown Employment Type code or unrecognized legacy label filter | HTTP/Pydantic 422 validation failure |
 | Exact evidence replay | `changed=false`; no duplicate outbox row |
 | Malformed bounded label marker | Retain evidence, map no type, count malformed but not unknown |

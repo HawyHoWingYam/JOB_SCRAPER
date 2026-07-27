@@ -16,7 +16,6 @@ class EventEnvelope:
     aggregate_id: str
     source_service: str
     occurred_at: str
-    schema_version: int
     payload: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
@@ -32,7 +31,6 @@ def build_event_envelope(
     source_service: str = "outbox-publisher",
     event_id: str | None = None,
     occurred_at: str | datetime | None = None,
-    schema_version: int = 1,
 ) -> EventEnvelope:
     if isinstance(occurred_at, datetime):
         occurred_at_value = occurred_at.isoformat()
@@ -46,6 +44,5 @@ def build_event_envelope(
         aggregate_id=aggregate_id,
         source_service=source_service,
         occurred_at=occurred_at_value,
-        schema_version=schema_version,
         payload=payload,
     )

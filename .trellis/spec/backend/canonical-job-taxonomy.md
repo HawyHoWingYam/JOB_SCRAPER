@@ -6,7 +6,7 @@
 
 Use this contract when changing the Canonical Job Taxonomy seed or mapping
 manifest, canonical publication/evaluation/decision Modules, AI classifier
-preflight, `/api/v1/job-intelligence` taxonomy routes, canonical filters or
+preflight, `/api/job-intelligence` taxonomy routes, canonical filters or
 embedding documents, the rebuild inspector, or migration constraints.
 
 The replacement Module owns governed Domain → Category → Subcategory identity,
@@ -64,13 +64,13 @@ CanonicalTaxonomyRebuildInspector(db).inspect(job_ids=None) -> report
 Versioned HTTP routes are:
 
 ```text
-GET  /api/v1/job-intelligence/canonical-job-taxonomy/revision
-GET  /api/v1/job-intelligence/canonical-job-taxonomy/tree
-GET  /api/v1/job-intelligence/jobs/{job_id}/canonical-taxonomy
-GET  /api/v1/job-intelligence/governance/job-taxonomy/review-items
-POST /api/v1/job-intelligence/governance/job-taxonomy/review-items/query
-GET  /api/v1/job-intelligence/governance/job-taxonomy/review-items/{id}
-POST /api/v1/job-intelligence/governance/job-taxonomy/review-items/{id}/decision
+GET  /api/job-intelligence/canonical-job-taxonomy/revision
+GET  /api/job-intelligence/canonical-job-taxonomy/tree
+GET  /api/job-intelligence/jobs/{job_id}/canonical-taxonomy
+GET  /api/job-intelligence/governance/job-taxonomy/review-items
+POST /api/job-intelligence/governance/job-taxonomy/review-items/query
+GET  /api/job-intelligence/governance/job-taxonomy/review-items/{id}
+POST /api/job-intelligence/governance/job-taxonomy/review-items/{id}/decision
 ```
 
 The GET Review collection remains a compatibility route. Frontend queue
@@ -286,10 +286,10 @@ classifier reasons are `classifier_output_invalid` or
 ### 2. Signatures
 
 ```text
-POST /api/v1/job-intelligence/governance/job-taxonomy/recovery/preview
-POST /api/v1/job-intelligence/governance/job-taxonomy/recovery/runs
-GET  /api/v1/job-intelligence/governance/job-taxonomy/recovery/runs/{run_id}
-POST /api/v1/job-intelligence/governance/job-taxonomy/recovery/runs/{run_id}/retry-failed
+POST /api/job-intelligence/governance/job-taxonomy/recovery/preview
+POST /api/job-intelligence/governance/job-taxonomy/recovery/runs
+GET  /api/job-intelligence/governance/job-taxonomy/recovery/runs/{run_id}
+POST /api/job-intelligence/governance/job-taxonomy/recovery/runs/{run_id}/retry-failed
 ```
 
 The persisted run uses `EnrichmentRun.source_type =

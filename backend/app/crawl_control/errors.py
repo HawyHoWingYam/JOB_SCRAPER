@@ -6,7 +6,7 @@ from app.crawl_control.contracts import CrawlScopeErrorPayloadV1, JsonScalar
 
 
 class CrawlControlError(RuntimeError):
-    """Stable versioned Crawl Control failure for APIs and run projections."""
+    """Structured Crawl Control failure for APIs and run projections."""
 
     def __init__(
         self,
@@ -161,8 +161,8 @@ class FailedAttentionRevisionConflictError(CrawlControlError):
         current_failure_event_sequence: int | None,
     ) -> None:
         super().__init__(
-            "FAILED_ATTENTION_REVISION_CONFLICT",
-            "The failed-run attention revision changed before dismissal",
+            "FAILED_ATTENTION_SEQUENCE_CONFLICT",
+            "The failed-run attention sequence changed before dismissal",
             context={
                 "crawl_job_id": str(crawl_job_id),
                 "expected_failure_event_sequence": expected_failure_event_sequence,
@@ -180,32 +180,12 @@ class AutomationNotFoundError(CrawlControlError):
         )
 
 
-class AutomationRevisionConflictError(CrawlControlError):
-    def __init__(
-        self,
-        *,
-        automation_id: Any,
-        expected_revision: int,
-        current_revision: int,
-    ) -> None:
-        super().__init__(
-            "AUTOMATION_REVISION_CONFLICT",
-            "Automation revision changed before this mutation",
-            context={
-                "automation_id": str(automation_id),
-                "expected_revision": expected_revision,
-                "current_revision": current_revision,
-            },
-        )
-
-
 class AutomationReviewStaleError(CrawlControlError):
     def __init__(
         self,
         *,
         current_fingerprint: str,
         automation_id: Any | None = None,
-        current_revision: int | None = None,
     ) -> None:
         super().__init__(
             "AUTOMATION_REVIEW_STALE",
@@ -215,11 +195,6 @@ class AutomationReviewStaleError(CrawlControlError):
                 **(
                     {"automation_id": str(automation_id)}
                     if automation_id is not None
-                    else {}
-                ),
-                **(
-                    {"current_revision": current_revision}
-                    if current_revision is not None
                     else {}
                 ),
             },
@@ -258,13 +233,12 @@ class DispatchPlanNotFoundError(CrawlControlError):
 
 
 class DispatchPlanReviewRequiredError(CrawlControlError):
-    def __init__(self, *, automation_id: Any, expected_revision: int) -> None:
+    def __init__(self, *, automation_id: Any) -> None:
         super().__init__(
             "DISPATCH_PLAN_REVIEW_REQUIRED",
-            "Versioned Automation runs require Dispatch Plan review and confirmation",
+            "Automation runs require Dispatch Plan review and confirmation",
             context={
                 "automation_id": str(automation_id),
-                "expected_revision": expected_revision,
                 "action": "prepare_saved_automation_run",
             },
         )

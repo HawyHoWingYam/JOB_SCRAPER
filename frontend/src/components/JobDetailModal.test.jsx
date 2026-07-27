@@ -119,11 +119,11 @@ function renderModalWithDetailAndRecommendations(payload, recommendations) {
   globalThis.fetch = vi.fn((input) => {
     const url = new URL(String(input), 'http://localhost');
 
-    if (url.pathname === '/api/v1/jobs/job-1') {
+    if (url.pathname === '/api/jobs/job-1') {
       return mockJsonResponse(payload);
     }
 
-    if (url.pathname === '/api/v1/jobs/job-1/similar') {
+    if (url.pathname === '/api/jobs/job-1/similar') {
       return mockJsonResponse({
         source_job_id: payload.id,
         recommendations,
@@ -315,7 +315,7 @@ describe('JobDetailModal', () => {
             status: 'active',
             version: 3,
             decision_audit_id: null,
-            deep_link: '/api/v1/job-intelligence/governance/job-taxonomy/review-items/91000000-0000-0000-0000-000000000099',
+            deep_link: '/api/job-intelligence/governance/job-taxonomy/review-items/91000000-0000-0000-0000-000000000099',
           },
         ],
       },
@@ -329,7 +329,7 @@ describe('JobDetailModal', () => {
             reason: 'unmapped_source_label',
             version: 2,
             decision_audit_id: null,
-            deep_link: '/api/v1/job-intelligence/governance/company-industries/review-items/93000000-0000-0000-0000-000000000099',
+            deep_link: '/api/job-intelligence/governance/company-industries/review-items/93000000-0000-0000-0000-000000000099',
           },
         ],
       },
@@ -447,7 +447,7 @@ describe('JobDetailModal', () => {
               source: 'ai-extraction',
               confidence: 0.82,
               provenance: { run_id: 'fixture-run' },
-              deep_link: '/api/v1/job-intelligence/governance/skills/candidates/70000000-0000-0000-0000-000000000001',
+              deep_link: '/api/job-intelligence/governance/skills/candidates/70000000-0000-0000-0000-000000000001',
               created_at: '2026-07-19T08:00:00Z',
               updated_at: '2026-07-19T08:00:00Z',
             },
@@ -593,11 +593,11 @@ describe('JobDetailModal', () => {
     globalThis.fetch = vi.fn((input) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/jobs/job-1') {
+      if (url.pathname === '/api/jobs/job-1') {
         return mockJsonResponse(createJobPayload());
       }
 
-      if (url.pathname === '/api/v1/jobs/job-1/similar') {
+      if (url.pathname === '/api/jobs/job-1/similar') {
         return mockJsonResponse({ source_job_id: 'job-1', recommendations: [] });
       }
 
@@ -618,7 +618,7 @@ describe('JobDetailModal', () => {
       screen.getByText('Related jobs are unavailable in the current runtime profile.'),
     ).toBeInTheDocument();
     expect(
-      globalThis.fetch.mock.calls.some(([input]) => String(input).includes('/api/v1/jobs/job-1/similar')),
+      globalThis.fetch.mock.calls.some(([input]) => String(input).includes('/api/jobs/job-1/similar')),
     ).toBe(false);
   });
 
@@ -626,11 +626,11 @@ describe('JobDetailModal', () => {
     globalThis.fetch = vi.fn((input) => {
       const url = new URL(String(input), 'http://localhost');
 
-      if (url.pathname === '/api/v1/jobs/job-1') {
+      if (url.pathname === '/api/jobs/job-1') {
         return mockJsonResponse(createJobPayload());
       }
 
-      if (url.pathname === '/api/v1/jobs/job-1/similar') {
+      if (url.pathname === '/api/jobs/job-1/similar') {
         return mockJsonResponse({ source_job_id: 'job-1', recommendations: [] });
       }
 
@@ -664,7 +664,7 @@ describe('JobDetailModal', () => {
       await screen.findByText('Related jobs are unavailable in the current runtime profile.'),
     ).toBeInTheDocument();
     expect(
-      globalThis.fetch.mock.calls.some(([input]) => String(input).includes('/api/v1/jobs/job-1/similar')),
+      globalThis.fetch.mock.calls.some(([input]) => String(input).includes('/api/jobs/job-1/similar')),
     ).toBe(false);
   });
 });

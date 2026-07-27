@@ -296,7 +296,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
     setLoading(true);
     setError(null);
 
-    fetch(`${apiUrl}/api/v1/jobs/${jobId}`)
+    fetch(`${apiUrl}/api/jobs/${jobId}`)
       .then((res) => {
         if (!res.ok) throw new Error('Job not found');
         return res.json();
@@ -348,7 +348,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
     const TIMEOUT_MS = 10000;
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-    fetch(`${apiUrl}/api/v1/jobs/${jobId}/similar`, { signal: controller.signal })
+    fetch(`${apiUrl}/api/jobs/${jobId}/similar`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) {
           throw new Error('Related jobs are unavailable right now');

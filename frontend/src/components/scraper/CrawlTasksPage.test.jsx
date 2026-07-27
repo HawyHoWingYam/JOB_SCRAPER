@@ -396,7 +396,7 @@ describe("CrawlTasksPage normalized Task Details", () => {
     expect(await screen.findByText("deep/link task")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Task Details" })).toBeInTheDocument();
     expect(apiFetchJson).toHaveBeenCalledWith(
-      "/api/v1/crawl-jobs/tasks/deep%2Flink%20task",
+      "/api/crawl-jobs/tasks/deep%2Flink%20task",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });

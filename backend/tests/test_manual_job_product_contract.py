@@ -85,7 +85,7 @@ def _client(monkeypatch, db):
     monkeypatch.setattr(jobs_api, "_load_job_snapshot", lambda _job_id: fixture)
 
     app = FastAPI()
-    app.include_router(jobs_api.router, prefix="/api/v1")
+    app.include_router(jobs_api.router, prefix="/api")
     app.dependency_overrides[get_db] = lambda: db
     return TestClient(app)
 
@@ -97,7 +97,7 @@ def test_manual_job_http_contract_persists_governed_employment_type_codes(
     client = _client(monkeypatch, db)
 
     response = client.post(
-        "/api/v1/jobs/manual",
+        "/api/jobs/manual",
         json={
             "company_id": "30000000-0000-0000-0000-000000000010",
             "title": "Platform Engineer",
@@ -141,11 +141,11 @@ def test_manual_job_http_contract_rejects_unknown_or_conflicting_employment_inpu
     }
 
     unknown = client.post(
-        "/api/v1/jobs/manual",
+        "/api/jobs/manual",
         json={**base, "employment_type_codes": ["other"]},
     )
     conflicting = client.post(
-        "/api/v1/jobs/manual",
+        "/api/jobs/manual",
         json={
             **base,
             "employment_type": "Full-time",

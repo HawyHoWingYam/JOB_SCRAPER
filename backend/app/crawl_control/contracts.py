@@ -57,7 +57,6 @@ class AuthoredCrawlScopeV1(FrozenContract):
 
 
 class SelectedClassificationSnapshotV1(FrozenContract):
-    version: Literal[1] = 1
     node_key: str = Field(min_length=1, max_length=255)
     classification_id: str = Field(min_length=3, max_length=255)
     native_label: str = Field(min_length=1, max_length=500)
@@ -116,7 +115,6 @@ QueryTargetParametersV1: TypeAlias = (
 
 
 class QueryTargetSnapshotV1(FrozenContract):
-    version: Literal[1] = 1
     adapter: str = Field(min_length=1, max_length=255)
     classification_id: str = Field(min_length=3, max_length=255)
     parameters: QueryTargetParametersV1
@@ -138,7 +136,6 @@ class QueryTargetSnapshotV1(FrozenContract):
         parameters = self.parameters.model_dump(mode="json")
         expected = payload_fingerprint(
             {
-                "version": self.version,
                 "adapter": self.adapter,
                 "classification_id": self.classification_id,
                 **parameters,
@@ -150,8 +147,6 @@ class QueryTargetSnapshotV1(FrozenContract):
 
     @classmethod
     def from_source_target(cls, target: SourceQueryTarget) -> QueryTargetSnapshotV1:
-        if target.version != 1:
-            raise ValueError(f"Unsupported Query Target version: {target.version}")
         return cls(
             adapter=target.adapter,
             classification_id=target.classification_id,
@@ -171,7 +166,6 @@ class CrawlScopeWarningV1(FrozenContract):
 
 
 class ResolvedRunScopeV1(FrozenContract):
-    version: Literal[1] = 1
     source_site: SourceSite
     authored_scope: AuthoredCrawlScopeV1
     selected_classifications: tuple[SelectedClassificationSnapshotV1, ...]
@@ -221,14 +215,12 @@ class ResolvedRunScopeV1(FrozenContract):
 
 
 class ListingSettingsV1(FrozenContract):
-    version: Literal[1] = 1
     crawl_mode: Literal["headless", "headed"]
     page_depth: int = Field(ge=1, le=1000)
     run_page_cap: int = Field(ge=1, le=1_000_000_000)
 
 
 class ListingWorkloadPreviewV1(FrozenContract):
-    version: Literal[1] = 1
     query_target_count: int = Field(ge=1)
     page_depth: int = Field(ge=1)
     estimated_max_pages: int = Field(ge=1)
@@ -296,7 +288,6 @@ DetailRunLimitV1: TypeAlias = Annotated[
 class DetailBacklogSnapshotV1(FrozenContract):
     """Finite eligible detail membership reviewed into one Dispatch Plan."""
 
-    version: Literal[1] = 1
     cutoff_at: datetime
     eligible_target_count: int = Field(ge=0)
     selected_target_count: int = Field(ge=0)
@@ -327,7 +318,6 @@ class DetailBacklogSnapshotV1(FrozenContract):
 
 
 class DetailSettingsV1(FrozenContract):
-    version: Literal[1] = 1
     crawl_mode: Literal["headless", "headed"]
     backlog_scope: DetailBacklogScopeV1
     limit: DetailRunLimitV1
@@ -351,7 +341,6 @@ class DetailSettingsV1(FrozenContract):
 
 
 class CrawlScopePreviewV1(FrozenContract):
-    version: Literal[1] = 1
     resolved_scope: ResolvedRunScopeV1
     listing_workload: ListingWorkloadPreviewV1 | None = None
 
@@ -363,7 +352,6 @@ class CrawlScopeErrorPayloadV1(FrozenContract):
 
 
 class CrawlScopeImpactV1(FrozenContract):
-    version: Literal[1] = 1
     status: Literal["compatible", "scope_review_required"]
     authored_scope: AuthoredCrawlScopeV1
     before: ResolvedRunScopeV1 | None

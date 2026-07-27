@@ -66,15 +66,15 @@ SkillGovernanceRebuildInspector(db).inspect(job_ids=None) \
 Versioned HTTP routes are:
 
 ```text
-GET  /api/v1/job-intelligence/skills/revision
-GET  /api/v1/job-intelligence/skills/tree
-GET  /api/v1/job-intelligence/skills/search
-GET  /api/v1/job-intelligence/jobs/{job_id}/skills
-GET  /api/v1/job-intelligence/governance/skills/candidates
-GET  /api/v1/job-intelligence/governance/skills/candidates/{candidate_id}
-GET  /api/v1/job-intelligence/governance/skills/candidates/{candidate_id}/recommendations
-POST /api/v1/job-intelligence/governance/skills/candidates/{candidate_id}/decision
-GET  /api/v1/job-intelligence/governance/skills/audit-events
+GET  /api/job-intelligence/skills/revision
+GET  /api/job-intelligence/skills/tree
+GET  /api/job-intelligence/skills/search
+GET  /api/job-intelligence/jobs/{job_id}/skills
+GET  /api/job-intelligence/governance/skills/candidates
+GET  /api/job-intelligence/governance/skills/candidates/{candidate_id}
+GET  /api/job-intelligence/governance/skills/candidates/{candidate_id}/recommendations
+POST /api/job-intelligence/governance/skills/candidates/{candidate_id}/decision
+GET  /api/job-intelligence/governance/skills/audit-events
 ```
 
 The read-only rebuild command is:

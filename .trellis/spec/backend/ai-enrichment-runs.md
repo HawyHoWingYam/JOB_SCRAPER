@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-Use this contract when changing job-enrichment candidate selection, run scheduling, monitoring, retry, stop, startup recovery, or `/api/v1/ai` endpoints. Company enrichment is separate.
+Use this contract when changing job-enrichment candidate selection, run scheduling, monitoring, retry, stop, startup recovery, or `/api/ai` endpoints. Company enrichment is separate.
 
 ## 2. Signatures
 
@@ -38,7 +38,7 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
   active review/outbox with the rest of the enrichment transaction, then
   commits once.
 - The item `error_message` stores `CanonicalTaxonomyPreflightResult.reason`.
-  `/api/v1/ai` exclusion projections group and display that persisted reason;
+  `/api/ai` exclusion projections group and display that persisted reason;
   they must not re-run canonical policy, consult static defaults, or derive a
   new reason from legacy scalar labels.
 - Governance handoffs must keep Source evidence blockers distinct: a missing

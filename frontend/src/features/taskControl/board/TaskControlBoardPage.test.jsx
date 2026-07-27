@@ -19,7 +19,7 @@ import TaskControlBoardPage from './TaskControlBoardPage';
 
 const action = (name, enabled = true) => ({ action: name, enabled, reasonCode: enabled ? null : 'BLOCKED' });
 const automation = {
-  id: 'automation-1', revision: 7, lifecycleState: 'active', name: 'Morning listings',
+  id: 'automation-1', lifecycleState: 'active', name: 'Morning listings',
   sourceSite: 'jobsdb', phase: 'listing', mode: 'headless',
   authoredScope: { mode: 'all', classification_ids: [] },
   schedule: { cronExpression: '0 4 * * *', timezone: 'Asia/Hong_Kong', humanSummary: 'Daily at 04:00 · Asia/Hong_Kong', nextRunAt: '2099-07-21T00:00:00Z' },
@@ -60,11 +60,11 @@ describe('TaskControlBoardPage', () => {
     expect(api.getTaskControlBoard).toHaveBeenCalledWith('jobsdb', expect.any(Object));
   });
 
-  it('carries the displayed revision through lifecycle actions and refetches', async () => {
+  it('applies lifecycle actions to the current row and refetches', async () => {
     const user = userEvent.setup();
     render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
     await user.click(await screen.findByRole('button', { name: 'Pause' }));
-    await waitFor(() => expect(api.transitionAutomation).toHaveBeenCalledWith('automation-1', 'pause', 7));
+    await waitFor(() => expect(api.transitionAutomation).toHaveBeenCalledWith('automation-1', 'pause'));
     await waitFor(() => expect(api.getTaskControlBoard.mock.calls.length).toBeGreaterThan(1));
   });
 
@@ -105,7 +105,7 @@ describe('TaskControlBoardPage', () => {
     await waitFor(() => expect(api.getTaskControlBoard.mock.calls.length).toBeGreaterThan(1));
   });
 
-  it('dismisses only a failed-run attention revision immediately and refetches', async () => {
+  it('dismisses only the displayed failed event immediately and refetches', async () => {
     const user = userEvent.setup();
     api.getTaskControlBoard.mockResolvedValue({
       ...board,

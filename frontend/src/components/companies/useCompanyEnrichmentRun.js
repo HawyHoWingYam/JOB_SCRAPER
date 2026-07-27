@@ -193,7 +193,7 @@ export default function useCompanyEnrichmentRun({
   }, []);
 
   const loadRunItems = useCallback(async (runId) => {
-    const response = await fetch(`${apiUrl}/api/v1/companies/enrichment-runs/${runId}/items`);
+    const response = await fetch(`${apiUrl}/api/companies/enrichment-runs/${runId}/items`);
     if (!response.ok) {
       throw new Error('Failed to load company enrichment run items');
     }
@@ -203,7 +203,7 @@ export default function useCompanyEnrichmentRun({
   }, [apiUrl]);
 
   const fetchRunById = useCallback(async (runId) => {
-    const response = await fetch(`${apiUrl}/api/v1/companies/enrichment-runs/${runId}`);
+    const response = await fetch(`${apiUrl}/api/companies/enrichment-runs/${runId}`);
     if (!response.ok) {
       throw new Error('Failed to refresh company enrichment run');
     }
@@ -320,7 +320,7 @@ export default function useCompanyEnrichmentRun({
   useEffect(() => {
     const loadCurrentRun = async () => {
       try {
-        const response = await fetch(`${apiUrl}/api/v1/companies/enrichment-runs/current`);
+        const response = await fetch(`${apiUrl}/api/companies/enrichment-runs/current`);
         if (!response.ok) {
           throw new Error('Failed to load company enrichment run');
         }
@@ -347,7 +347,7 @@ export default function useCompanyEnrichmentRun({
 
     const loadWebSearchCapability = async () => {
       try {
-        const response = await fetch(`${apiUrl}/api/v1/capabilities`);
+        const response = await fetch(`${apiUrl}/api/capabilities`);
         if (!response.ok) {
           throw new Error('Failed to load Company Web Search capability');
         }
@@ -460,7 +460,7 @@ export default function useCompanyEnrichmentRun({
     setActionMessage(null);
 
     try {
-      const response = await fetch(`${apiUrl}/api/v1/companies/enrichment-runs`, {
+      const response = await fetch(`${apiUrl}/api/companies/enrichment-runs`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

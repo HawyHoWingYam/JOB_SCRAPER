@@ -10,7 +10,7 @@ import asyncio
 import httpx
 import sys
 
-API_BASE = "http://localhost:8000/api/v1"
+API_BASE = "http://localhost:8000/api"
 SOURCE = "offertoday"
 MAX_DEPTH = 30
 

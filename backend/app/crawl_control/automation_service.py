@@ -22,7 +22,6 @@ from app.crawl_control.contracts import CrawlScopeErrorPayloadV1
 from app.crawl_control.errors import (
     AutomationDeleteReviewStaleError,
     AutomationNotFoundError,
-    AutomationRevisionConflictError,
     AutomationTransitionInvalidError,
     ScopeRuleInvalidError,
 )
@@ -33,7 +32,7 @@ from app.utils.time import utc_now
 
 
 class AutomationService:
-    """Own Automation revisions, lifecycle, optimistic concurrency, and deletion."""
+    """Own current Automation state, lifecycle, and deletion."""
 
     def __init__(
         self,
@@ -57,7 +56,6 @@ class AutomationService:
         self._validate_configuration(configuration)
         now = utc_now()
         automation = ScrapeSchedule(
-            revision=1,
             lifecycle_state=initial_state,
             is_active=initial_state == "active",
             archived_at=None,
@@ -70,12 +68,6 @@ class AutomationService:
             self.db.add(automation)
             self.db.flush()
             snapshot = self._snapshot(automation, configuration)
-            self._append_revision(
-                automation,
-                snapshot=snapshot,
-                operation="create",
-                actor=actor,
-            )
             self.db.commit()
             self.db.refresh(automation)
         except Exception:
@@ -86,14 +78,10 @@ class AutomationService:
 
     def get(self, automation_id: UUID) -> AutomationProjectionV1:
         automation = self._require_automation(automation_id)
-        revision = self.repository.get_revision(
-            self.db,
-            automation_id=automation.id,
-            revision=automation.revision,
+        snapshot = self._snapshot(
+            automation,
+            self._current_configuration(automation),
         )
-        if revision is None:
-            raise RuntimeError("Automation current revision snapshot is missing")
-        snapshot = AutomationSnapshotV1.model_validate(revision.snapshot)
         return self._projection(automation, snapshot)
 
     def list(
@@ -104,7 +92,7 @@ class AutomationService:
         offset: int = 0,
         limit: int = 100,
     ) -> tuple[tuple[AutomationProjectionV1, ...], int]:
-        rows, total = self.repository.list_with_current_revision(
+        rows, total = self.repository.list_current(
             self.db,
             source_site=source_site,
             lifecycle_state=lifecycle_state,
@@ -115,9 +103,12 @@ class AutomationService:
             tuple(
                 self._projection(
                     automation,
-                    AutomationSnapshotV1.model_validate(revision.snapshot),
+                    self._snapshot(
+                        automation,
+                        self._current_configuration(automation),
+                    ),
                 )
-                for automation, revision in rows
+                for automation in rows
             ),
             total,
         )
@@ -126,7 +117,6 @@ class AutomationService:
         self,
         automation_id: UUID,
         *,
-        expected_revision: int,
         configuration: AutomationConfigurationV1,
         actor: str,
     ) -> AutomationProjectionV1:
@@ -136,34 +126,28 @@ class AutomationService:
             automation_id,
             for_update=True,
         )
-        self._require_revision(automation, expected_revision)
-        self._require_versioned(automation)
+        self._require_current(automation)
 
         if automation.lifecycle_state == "scope_review_required":
             automation.lifecycle_state = "paused"
         automation.scope_review_reason = None
-        automation.revision += 1
         automation.updated_at = utc_now()
         automation.next_run_at = None
         self._apply_configuration(automation, configuration)
         snapshot = self._snapshot(automation, configuration)
-        return self._commit_revision(
+        return self._commit_current(
             automation,
             snapshot=snapshot,
-            operation="update",
-            actor=actor,
         )
 
     def pause(
         self,
         automation_id: UUID,
         *,
-        expected_revision: int,
         actor: str,
     ) -> AutomationProjectionV1:
         return self._transition(
             automation_id,
-            expected_revision=expected_revision,
             actor=actor,
             operation="pause",
         )
@@ -172,12 +156,10 @@ class AutomationService:
         self,
         automation_id: UUID,
         *,
-        expected_revision: int,
         actor: str,
     ) -> AutomationProjectionV1:
         return self._transition(
             automation_id,
-            expected_revision=expected_revision,
             actor=actor,
             operation="resume",
         )
@@ -186,12 +168,10 @@ class AutomationService:
         self,
         automation_id: UUID,
         *,
-        expected_revision: int,
         actor: str,
     ) -> AutomationProjectionV1:
         return self._transition(
             automation_id,
-            expected_revision=expected_revision,
             actor=actor,
             operation="archive",
         )
@@ -200,13 +180,11 @@ class AutomationService:
         self,
         automation_id: UUID,
         *,
-        expected_revision: int,
         actor: str,
         activate: bool = False,
     ) -> AutomationProjectionV1:
         return self._transition(
             automation_id,
-            expected_revision=expected_revision,
             actor=actor,
             operation="restore_active" if activate else "restore",
         )
@@ -215,14 +193,12 @@ class AutomationService:
         self,
         automation_id: UUID,
         *,
-        expected_revision: int,
         reason: CrawlScopeErrorPayloadV1,
         actor: str,
     ) -> AutomationProjectionV1:
         self._validate_actor(actor)
         automation = self._require_automation(automation_id, for_update=True)
-        self._require_revision(automation, expected_revision)
-        self._require_versioned(automation)
+        self._require_current(automation)
         if automation.lifecycle_state == "archived":
             raise AutomationTransitionInvalidError(
                 current_state=automation.lifecycle_state,
@@ -233,14 +209,11 @@ class AutomationService:
         automation.is_active = False
         automation.next_run_at = None
         automation.scope_review_reason = reason.model_dump(mode="json")
-        automation.revision += 1
         automation.updated_at = utc_now()
         snapshot = self._snapshot(automation, configuration)
-        return self._commit_revision(
+        return self._commit_current(
             automation,
             snapshot=snapshot,
-            operation="scope_review_required",
-            actor=actor,
         )
 
     def review_permanent_delete(
@@ -252,7 +225,7 @@ class AutomationService:
     ) -> AutomationDeleteReviewGrantV1:
         self._validate_actor(actor)
         automation = self._require_automation(automation_id, for_update=True)
-        self._require_versioned(automation)
+        self._require_current(automation)
         if automation.lifecycle_state != "archived":
             raise AutomationTransitionInvalidError(
                 current_state=automation.lifecycle_state,
@@ -264,7 +237,6 @@ class AutomationService:
         review = AutomationDeleteReview(
             automation_id=automation.id,
             automation_id_snapshot=automation.id,
-            expected_revision=automation.revision,
             actor=actor,
             token_hash=self._token_hash(review_token),
             impact_fingerprint=impact.fingerprint,
@@ -287,14 +259,12 @@ class AutomationService:
         self,
         automation_id: UUID,
         *,
-        expected_revision: int,
         actor: str,
         review_token: str,
     ) -> AutomationDeleteImpactV1:
         self._validate_actor(actor)
         automation = self._require_automation(automation_id, for_update=True)
-        self._require_revision(automation, expected_revision)
-        self._require_versioned(automation)
+        self._require_current(automation)
         if automation.lifecycle_state != "archived":
             raise AutomationTransitionInvalidError(
                 current_state=automation.lifecycle_state,
@@ -311,7 +281,6 @@ class AutomationService:
         expires_at = self._aware_utc(review.expires_at)
         if (
             review.automation_id_snapshot != automation.id
-            or review.expected_revision != automation.revision
             or review.actor != actor
             or review.consumed_at is not None
             or expires_at <= utc_now()
@@ -339,7 +308,6 @@ class AutomationService:
         self,
         automation_id: UUID,
         *,
-        expected_revision: int,
         actor: str,
         operation: Literal[
             "pause",
@@ -351,8 +319,7 @@ class AutomationService:
     ) -> AutomationProjectionV1:
         self._validate_actor(actor)
         automation = self._require_automation(automation_id, for_update=True)
-        self._require_revision(automation, expected_revision)
-        self._require_versioned(automation)
+        self._require_current(automation)
         configuration = self._current_configuration(automation)
         current_state = automation.lifecycle_state
 
@@ -386,14 +353,11 @@ class AutomationService:
         automation.is_active = target_state == "active"
         automation.archived_at = now if target_state == "archived" else None
         automation.next_run_at = None
-        automation.revision += 1
         automation.updated_at = now
         snapshot = self._snapshot(automation, configuration)
-        return self._commit_revision(
+        return self._commit_current(
             automation,
             snapshot=snapshot,
-            operation=operation,
-            actor=actor,
         )
 
     def _validate_configuration(
@@ -475,7 +439,6 @@ class AutomationService:
     ) -> AutomationSnapshotV1:
         return AutomationSnapshotV1(
             automation_id=automation.id,
-            revision=automation.revision,
             lifecycle_state=automation.lifecycle_state,
             configuration=configuration,
             scope_review_reason=(
@@ -488,39 +451,13 @@ class AutomationService:
             archived_at=automation.archived_at,
         )
 
-    def _append_revision(
+    def _commit_current(
         self,
         automation: ScrapeSchedule,
         *,
         snapshot: AutomationSnapshotV1,
-        operation: str,
-        actor: str,
-    ) -> None:
-        self.repository.append_revision(
-            self.db,
-            automation_id=automation.id,
-            revision=automation.revision,
-            snapshot=snapshot.model_dump(mode="json"),
-            snapshot_fingerprint=snapshot.fingerprint,
-            operation=operation,
-            actor=actor,
-        )
-
-    def _commit_revision(
-        self,
-        automation: ScrapeSchedule,
-        *,
-        snapshot: AutomationSnapshotV1,
-        operation: str,
-        actor: str,
     ) -> AutomationProjectionV1:
         try:
-            self._append_revision(
-                automation,
-                snapshot=snapshot,
-                operation=operation,
-                actor=actor,
-            )
             self.db.commit()
             self.db.refresh(automation)
         except Exception:
@@ -533,16 +470,42 @@ class AutomationService:
         self,
         automation: ScrapeSchedule,
     ) -> AutomationConfigurationV1:
-        revision = self.repository.get_revision(
-            self.db,
-            automation_id=automation.id,
-            revision=automation.revision,
+        if automation.scope_contract is None:
+            raise AutomationTransitionInvalidError(
+                current_state="legacy",
+                operation="current_automation_required",
+            )
+        common = {
+            "crawl_mode": automation.crawl_mode,
+        }
+        if automation.crawl_phase == "listing":
+            listing_settings = {
+                **common,
+                "page_depth": automation.listing_page_depth,
+                "run_page_cap": automation.listing_run_page_cap,
+            }
+            detail_settings = None
+        else:
+            listing_settings = None
+            limit = {"kind": automation.detail_limit_kind}
+            if automation.detail_limit_kind == "stop_after":
+                limit["detail_run_cap"] = automation.detail_run_cap
+            detail_settings = {
+                **common,
+                "backlog_scope": automation.detail_backlog_scope,
+                "limit": limit,
+            }
+        return AutomationConfigurationV1.model_validate(
+            {
+                "name": automation.name,
+                "description": automation.description,
+                "cron_expression": automation.cron_expression,
+                "timezone": automation.timezone,
+                "scope": automation.scope_contract,
+                "listing_settings": listing_settings,
+                "detail_settings": detail_settings,
+            }
         )
-        if revision is None:
-            raise RuntimeError("Automation current revision snapshot is missing")
-        return AutomationSnapshotV1.model_validate(
-            revision.snapshot
-        ).configuration
 
     def _require_automation(
         self,
@@ -560,23 +523,11 @@ class AutomationService:
         return automation
 
     @staticmethod
-    def _require_versioned(automation: ScrapeSchedule) -> None:
+    def _require_current(automation: ScrapeSchedule) -> None:
         if automation.scope_contract is None:
             raise AutomationTransitionInvalidError(
                 current_state="legacy",
-                operation="versioned_automation_required",
-            )
-
-    @staticmethod
-    def _require_revision(
-        automation: ScrapeSchedule,
-        expected_revision: int,
-    ) -> None:
-        if automation.revision != expected_revision:
-            raise AutomationRevisionConflictError(
-                automation_id=automation.id,
-                expected_revision=expected_revision,
-                current_revision=automation.revision,
+                operation="current_automation_required",
             )
 
     @staticmethod

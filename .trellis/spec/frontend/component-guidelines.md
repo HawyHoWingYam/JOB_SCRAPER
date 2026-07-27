@@ -20,7 +20,7 @@ Questions to answer:
 
 ## Dashboard Skill Bucket Contract
 
-The `/api/v1/stats/skills` response includes a `dashboard_bucket` field. The
+The `/api/stats/skills` response includes a `dashboard_bucket` field. The
 backend may return taxonomy categories that are not present in the frontend's
 preferred display order. Consumers must preserve the preferred order for known
 buckets, register non-empty buckets dynamically, and append them after the
