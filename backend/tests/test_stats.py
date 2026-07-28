@@ -32,6 +32,9 @@ from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
 from app.models.manual_job import ManualJobEvidence
 from app.models.source_job_attributes import JobSourceAttributeProjection
+from app.services.classification_domain_adapters import (
+    JobTaxonomyClassificationAdapter,
+)
 
 
 @compiles(SQLAlchemyUUID, "sqlite")
@@ -96,11 +99,12 @@ def _job(
     enriched: bool = False,
     deleted: bool = False,
     ready: bool = False,
+    source_site: str = "jobsdb",
 ) -> Job:
     source_id = str(uuid4())
     job = Job(
-        job_id=f"jobsdb:{source_id}",
-        source_site="jobsdb",
+        job_id=f"{source_site}:{source_id}",
+        source_site=source_site,
         source_job_id=source_id,
         company_id=company.id,
         title=f"Stats Job {source_id}",
@@ -114,7 +118,7 @@ def _job(
         db.add(
             JobSourceAttributeProjection(
                 job_id=job.id,
-                source_site="jobsdb",
+                source_site=source_site,
                 evidence_hash="s" * 64,
             )
         )
@@ -338,6 +342,93 @@ async def test_dashboard_category_readiness_uses_accepted_assignment_semantics(
     assert payload["assigned_total"] == 1
     assert payload["unassigned_total"] == 1
     assert payload["classification_ready_unassigned_total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_dashboard_and_taxonomy_preview_share_the_ready_population(stats_db):
+    company = _company(stats_db)
+    stats_db.add_all(
+        [
+            _node("job", "domain", "Technology", "domain"),
+            _node(
+                "job",
+                "category",
+                "Engineering",
+                "category",
+                parent_code="domain",
+            ),
+            _node(
+                "job",
+                "accepted",
+                "Accepted",
+                "subcategory",
+                parent_code="category",
+                assignable=True,
+            ),
+            _node(
+                "job",
+                "inactive",
+                "Inactive",
+                "subcategory",
+                parent_code="category",
+                assignable=True,
+                active=False,
+            ),
+            _node(
+                "job",
+                "unassignable",
+                "Unassignable",
+                "subcategory",
+                parent_code="category",
+            ),
+        ]
+    )
+    stats_db.flush()
+
+    ready_jobsdb = _job(stats_db, company, ready=True)
+    ready_offertoday = _job(
+        stats_db,
+        company,
+        ready=True,
+        source_site="offertoday",
+    )
+    _job(stats_db, company)
+    _job(stats_db, company, ready=True, deleted=True)
+    accepted = _job(stats_db, company, ready=True)
+    stale_inactive = _job(stats_db, company, ready=True)
+    stale_unassignable = _job(stats_db, company, ready=True)
+    _assign_taxonomy(stats_db, accepted, "accepted")
+    _assign_taxonomy(stats_db, stale_inactive, "inactive")
+    _assign_taxonomy(stats_db, stale_unassignable, "unassignable")
+    stats_db.commit()
+
+    adapter = JobTaxonomyClassificationAdapter()
+    selected = adapter.select_candidates(stats_db, filters={}, limit=100)
+    dashboard = await get_dashboard_category_stats(stats_db)
+    expected_ids = {
+        str(ready_jobsdb.id),
+        str(ready_offertoday.id),
+        str(stale_inactive.id),
+        str(stale_unassignable.id),
+    }
+
+    assert {candidate.subject_id for candidate in selected} == expected_ids
+    assert dashboard["classification_ready_unassigned_total"] == len(selected)
+    assert {
+        candidate.subject_id
+        for candidate in adapter.select_candidates(
+            stats_db,
+            filters={"source_sites": ["offertoday"]},
+            limit=100,
+        )
+    } == {str(ready_offertoday.id)}
+    assert len(
+        adapter.select_candidates(
+            stats_db,
+            filters={"source_sites": ["jobsdb"]},
+            limit=1,
+        )
+    ) == 1
 
 
 @pytest.mark.asyncio

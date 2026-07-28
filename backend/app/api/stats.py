@@ -3,7 +3,7 @@
 from typing import Annotated, Any, Dict, List
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, case, desc, func
+from sqlalchemy import and_, case, desc, func, select
 from sqlalchemy.orm import Session, aliased
 
 from app.database import get_db
@@ -23,6 +23,9 @@ from app.schemas.stats import (
 )
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.services.enrichment_run_service import EnrichmentRunService
+from app.services.job_taxonomy_classification_readiness import (
+    job_taxonomy_classification_ready_jobs,
+)
 
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -83,42 +86,6 @@ def _percentage(numerator: int, denominator: int) -> int:
 def _dashboard_job_population_predicate():
     """Return the shared retained-corpus predicate for Dashboard Job metrics."""
     return Job.is_deleted.is_(False)
-
-
-def _accepted_job_taxonomy_assignment_job_ids(db: Session):
-    """Select Jobs whose current assignment points to an accepted Job leaf."""
-    subcategory = aliased(CurrentTaxonomyNodeRecord)
-    category = aliased(CurrentTaxonomyNodeRecord)
-    domain = aliased(CurrentTaxonomyNodeRecord)
-    return (
-        db.query(CurrentJobTaxonomyAssignment.job_id.label("job_id"))
-        .select_from(CurrentJobTaxonomyAssignment)
-        .join(
-            subcategory,
-            and_(
-                subcategory.taxonomy == "job",
-                subcategory.code == CurrentJobTaxonomyAssignment.taxonomy_code,
-                subcategory.is_active.is_(True),
-                subcategory.is_assignable.is_(True),
-            ),
-        )
-        .join(
-            category,
-            and_(
-                category.taxonomy == "job",
-                category.code == subcategory.parent_code,
-                category.is_active.is_(True),
-            ),
-        )
-        .join(
-            domain,
-            and_(
-                domain.taxonomy == "job",
-                domain.code == category.parent_code,
-                domain.is_active.is_(True),
-            ),
-        )
-    )
 
 
 def _current_job_category_rows(db: Session):
@@ -382,19 +349,14 @@ async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[st
         or 0
     )
     unassigned_total = max(population_total - assigned_total, 0)
-    accepted_assignments = _accepted_job_taxonomy_assignment_job_ids(db).subquery()
     classification_ready_unassigned_total = int(
-        db.query(func.count(Job.id))
-        .outerjoin(
-            accepted_assignments,
-            accepted_assignments.c.job_id == Job.id,
+        db.scalar(
+            select(func.count()).select_from(
+                job_taxonomy_classification_ready_jobs()
+                .with_only_columns(Job.id)
+                .subquery()
+            )
         )
-        .filter(
-            _dashboard_job_population_predicate(),
-            accepted_assignments.c.job_id.is_(None),
-            Job.source_attribute_projection.has(),
-        )
-        .scalar()
         or 0
     )
 

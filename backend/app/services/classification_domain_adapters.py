@@ -40,7 +40,6 @@ from app.models.company import Company
 from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
     CurrentJobSkillMention,
-    CurrentJobTaxonomyAssignment,
     CurrentSkillCandidate,
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
@@ -50,6 +49,9 @@ from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.services.classification_batch_runtime import (
     ClassificationCandidate,
     ClassificationCandidateSelection,
+)
+from app.services.job_taxonomy_classification_readiness import (
+    job_taxonomy_classification_ready_jobs,
 )
 from app.utils.time import utc_now
 
@@ -495,17 +497,7 @@ class JobTaxonomyClassificationAdapter:
         filters: dict[str, object],
         limit: int,
     ) -> tuple[ClassificationCandidate, ...]:
-        query = (
-            select(Job)
-            .outerjoin(
-                CurrentJobTaxonomyAssignment,
-                CurrentJobTaxonomyAssignment.job_id == Job.id,
-            )
-            .where(
-                Job.is_deleted.is_(False),
-                CurrentJobTaxonomyAssignment.job_id.is_(None),
-            )
-        )
+        query = job_taxonomy_classification_ready_jobs()
         source_sites = _string_filter(filters.get("source_sites"))
         if source_sites:
             query = query.where(Job.source_site.in_(source_sites))
