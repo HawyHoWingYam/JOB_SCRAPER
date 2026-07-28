@@ -20,6 +20,8 @@ batch start or define those routes.
 GET /api/stats/overview
 GET /api/stats/categories/dashboard
 GET /api/stats/skills?limit=<1..100>&category=<optional exact label>
+#jobs?canonical_subcategory_ids=<stable-code>
+#jobs?skill_ids=<stable-code>
 ```
 
 ```python
@@ -32,6 +34,11 @@ get_skill_stats(limit: int, category: str | None, db: Session) \
 
 The page boundary owns one Refresh coordinator. Each section keeps
 `data`, `loading`, `error`, `lastUpdated`, and one abort controller.
+
+```js
+parseJobsRoute(hash) -> { canonicalSubcategoryIds, skillIds }
+hashForJobsRoute({ canonicalSubcategoryIds, skillIds }) -> string
+```
 
 ### 3. Contracts
 
@@ -71,6 +78,16 @@ The page boundary owns one Refresh coordinator. Each section keeps
   independently. A failed refresh retains previous data only with an alert,
   stale label, unchanged last-successful timestamp, and retry action. An
   in-flight section with retained data remains visibly labelled refreshing.
+- Every concrete taxonomy and Skill row is a semantic Jobs drill-down action.
+  Navigation serializes only stable `code` values through the shared Jobs hash
+  route. Labels, breadcrumbs, counts, and `dashboard_bucket` never select Jobs.
+- The durable Jobs route accepts repeated `canonical_subcategory_ids` and
+  `skill_ids` query keys. It trims, validates, de-duplicates, and bounds stable
+  codes before `JobBrowser` creates one ordinary root search layer. Bare
+  `#jobs` remains the unfiltered route; same-view hash changes rehydrate the
+  scope for refresh and browser back/forward navigation.
+- The taxonomy `Other` aggregate has no route identity and remains an expansion
+  control. Its expanded concrete rows use their own stable codes.
 
 ### 4. Validation & Error Matrix
 
@@ -84,6 +101,10 @@ The page boundary owns one Refresh coordinator. Each section keeps
 | Initial section request fails | Show unavailable alert and section retry; render no fabricated data |
 | Refresh fails after prior success | Keep data, mark it stale, show its prior timestamp, and keep other successful updates |
 | Component unmounts or a newer request supersedes a request | Abort the old request and do not update state from it |
+| Jobs route value is blank, malformed, or longer than the stable-code bound | Drop that value; never resolve it from a label |
+| Jobs route contains duplicate stable codes | Preserve the first occurrence only |
+| Hash is bare `#jobs` or all route values are invalid | Load the ordinary unfiltered Jobs scope |
+| JobBrowser route hash changes while Jobs view remains mounted | Abort/supersede the old search and fetch the reconstructed scope |
 
 ### 5. Good / Base / Bad Cases
 
@@ -96,11 +117,17 @@ The page boundary owns one Refresh coordinator. Each section keeps
   with zero values and an accessible empty distribution.
 - **Base:** `Support & Operations` arrives as a new Skill bucket and renders
   after the preferred buckets without frontend enum changes.
+- **Good:** selecting Python writes `#jobs?skill_ids=<python-code>` and the Job
+  search body contains the same code in `structured_filters.skill_ids`.
+- **Base:** sharing or refreshing a canonical Subcategory route reconstructs
+  the same root scope; direct `#jobs` still loads all Jobs.
 - **Bad:** filter expired Jobs, divide Skill matches by all acquired Jobs,
   include Candidates in the canonical leaderboard, or treat any assignment row
   as accepted.
 - **Bad:** blank all cards when only Skills fail, show retained data as fresh,
   or label hidden rows as shown.
+- **Bad:** route by Skill name, taxonomy breadcrumb, Dashboard bucket, or one
+  synthetic `Other` value.
 
 ### 6. Tests Required
 
@@ -115,6 +142,14 @@ The page boundary owns one Refresh coordinator. Each section keeps
 - Dashboard tests assert four real response shapes, unified Refresh, request
   abort cleanup, partial stale retention, section retry, and independent
   successful updates.
+- Route tests assert bare Jobs compatibility, stable-code round-trip,
+  de-duplication, malformed-value fallback, deterministic serialization, and
+  top-level view resolution with a query string.
+- JobBrowser tests assert route hydration into `canonical_subcategory_ids` and
+  `skill_ids`, same-view route changes, and unchanged manual FilterPanel scope
+  submission. Chart tests assert pointer/keyboard activation and accessible
+  action names containing destination and Job count; `Other` itself is not a
+  Jobs drill-down.
 - Before completion run focused backend stats/current-taxonomy contracts, the
   full frontend suite, ESLint, production build, backend lint/format checks,
   and browser QA at desktop and narrow viewports.
@@ -158,3 +193,18 @@ grouped.get(bucket).push(skill);
 ```
 
 Grouping is for scanning; the backend remains ranking authority.
+
+#### Wrong: route from a presentation label
+
+```js
+window.location.hash = `#jobs?skill=${encodeURIComponent(skill.name)}`;
+```
+
+#### Correct: serialize the stable code through the shared route owner
+
+```js
+window.location.hash = hashForJobsRoute({ skillIds: [skill.code] });
+```
+
+The parser seeds the existing structured Job search filter; components do not
+privately interpret route strings or translate labels back into identities.

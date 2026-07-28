@@ -77,7 +77,8 @@ const skillData = {
 describe("SkillChart", () => {
   it("shows canonical coverage, prevalence, truthful visible counts, and expansion", async () => {
     const user = userEvent.setup();
-    render(<SkillChart data={skillData} />);
+    const onSelectSkill = vi.fn();
+    render(<SkillChart data={skillData} onSelectSkill={onSelectSkill} />);
 
     expect(
       screen.getByRole("heading", { name: "Top Matched Canonical Skills" }),
@@ -91,6 +92,10 @@ describe("SkillChart", () => {
     expect(screen.getByText("5 of 6 visible")).toBeInTheDocument();
     expect(screen.queryByText("Go")).not.toBeInTheDocument();
     expect(screen.getByText("40 Jobs · 40%")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "View 40 Jobs matched to Python" }),
+    );
+    expect(onSelectSkill).toHaveBeenCalledWith(skillData.skills[0]);
 
     const expand = screen.getByRole("button", { name: "Show 1 more" });
     expect(expand).toHaveAttribute("aria-expanded", "false");
@@ -137,8 +142,17 @@ describe("SkillChart", () => {
     render(<SkillChart data={rankedData} loading />);
 
     expect(
-      screen.getByRole("list").querySelectorAll("li")[0],
-    ).toHaveAccessibleName("Backend First: 10 Jobs, 10% prevalence");
+      screen.getByRole("button", {
+        name: "View 10 Jobs matched to Backend First",
+      }),
+    ).toBeInTheDocument();
+    const skillButtons = screen.getAllByRole("button", {
+      name: /Jobs matched to Backend/,
+    });
+    expect(skillButtons.map((button) => button.textContent)).toEqual([
+      "Backend First10 Jobs · 10%",
+      "Backend Second10 Jobs · 10%",
+    ]);
     expect(
       screen.getByLabelText("2 returned Skills in Backend"),
     ).toBeInTheDocument();

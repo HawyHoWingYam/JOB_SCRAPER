@@ -37,7 +37,7 @@ function formatUpdatedAt(value) {
   });
 }
 
-export default function Dashboard({ onNavigateToAI }) {
+export default function Dashboard({ onNavigateToAI, onNavigateToJobs }) {
   const [sections, setSections] = useState(initialSections);
   const controllersRef = useRef(new Map());
   const mountedRef = useRef(false);
@@ -387,12 +387,20 @@ export default function Dashboard({ onNavigateToAI }) {
           <SkillChart
             {...sections.skills}
             onRetry={() => loadSection("skills")}
+            onSelectSkill={(skill) =>
+              onNavigateToJobs?.({ skillIds: [skill.code] })
+            }
           />
         </div>
         <div className="chart-wrapper glass-panel dashboard-chart-panel">
           <CategoryChart
             {...sections.taxonomy}
             onRetry={() => loadSection("taxonomy")}
+            onSelectCategory={(category) =>
+              onNavigateToJobs?.({
+                canonicalSubcategoryIds: [category.code],
+              })
+            }
           />
         </div>
       </div>

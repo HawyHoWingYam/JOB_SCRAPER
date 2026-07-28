@@ -81,6 +81,8 @@ describe("Dashboard", () => {
   });
 
   it("renders real chart contracts and all four independently fetched sections", async () => {
+    const user = userEvent.setup();
+    const onNavigateToJobs = vi.fn();
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
       if (url.includes("/stats/overview")) return jsonResponse(stats);
@@ -91,7 +93,12 @@ describe("Dashboard", () => {
       return Promise.reject(new Error(`Unhandled request: ${url}`));
     });
 
-    render(<Dashboard onNavigateToAI={vi.fn()} />);
+    render(
+      <Dashboard
+        onNavigateToAI={vi.fn()}
+        onNavigateToJobs={onNavigateToJobs}
+      />,
+    );
 
     expect(await screen.findByText("Total Jobs Acquired")).toBeInTheDocument();
     expect(
@@ -107,6 +114,18 @@ describe("Dashboard", () => {
     ).not.toBeInTheDocument();
     expect(globalThis.fetch).toHaveBeenCalledTimes(4);
     expect(await screen.findByText(/last refreshed at/i)).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "View 4 Jobs matched to Python" }),
+    );
+    expect(onNavigateToJobs).toHaveBeenLastCalledWith({ skillIds: ["python"] });
+    await user.click(
+      screen.getByRole("button", {
+        name: /View 4 Jobs in Technology \/ Software Engineering \/ Backend Development/,
+      }),
+    );
+    expect(onNavigateToJobs).toHaveBeenLastCalledWith({
+      canonicalSubcategoryIds: ["backend"],
+    });
   });
 
   it("refreshes all sections while retaining and marking a failed section stale", async () => {

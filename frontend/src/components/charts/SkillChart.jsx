@@ -66,6 +66,7 @@ export default function SkillChart({
   error = null,
   lastUpdated = null,
   onRetry,
+  onSelectSkill,
 }) {
   const [expandedBuckets, setExpandedBuckets] = useState(() => new Set());
   const groups = useMemo(() => groupSkills(data?.skills), [data]);
@@ -197,20 +198,21 @@ export default function SkillChart({
 
                     <ul className="skill-chart-list">
                       {visibleSkills.map((skill) => (
-                        <li
-                          key={skill.code}
-                          className="skill-chart-row"
-                          aria-label={`${skill.name}: ${Number(
-                            skill.count || 0,
-                          ).toLocaleString()} Jobs, ${Number(
-                            skill.prevalence || 0,
-                          )}% prevalence`}
-                        >
-                          <span>{skill.name}</span>
-                          <strong>
-                            {Number(skill.count || 0).toLocaleString()} Jobs ·{" "}
-                            {Number(skill.prevalence || 0)}%
-                          </strong>
+                        <li key={skill.code}>
+                          <button
+                            type="button"
+                            className="skill-chart-row skill-chart-row-action"
+                            aria-label={`View ${Number(
+                              skill.count || 0,
+                            ).toLocaleString()} Jobs matched to ${skill.name}`}
+                            onClick={() => onSelectSkill?.(skill)}
+                          >
+                            <span>{skill.name}</span>
+                            <strong>
+                              {Number(skill.count || 0).toLocaleString()} Jobs ·{" "}
+                              {Number(skill.prevalence || 0)}%
+                            </strong>
+                          </button>
                         </li>
                       ))}
                     </ul>

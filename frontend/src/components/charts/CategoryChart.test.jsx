@@ -44,7 +44,7 @@ const categoryData = {
 
 describe("CategoryChart", () => {
   it("leads with assignment health and exposes full canonical paths", () => {
-    render(<CategoryChart data={categoryData} />);
+    render(<CategoryChart data={categoryData} onSelectCategory={vi.fn()} />);
 
     expect(
       screen.getByRole("heading", { name: "Jobs by Canonical Job Taxonomy" }),
@@ -63,9 +63,9 @@ describe("CategoryChart", () => {
       }),
     ).toHaveAttribute("aria-valuenow", "38");
     expect(
-      screen.getByLabelText(
-        "Technology / Software Engineering / Backend Development: 30 Jobs",
-      ),
+      screen.getByRole("button", {
+        name: "View 30 Jobs in Technology / Software Engineering / Backend Development",
+      }),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/source listings may have expired/i),
@@ -83,7 +83,13 @@ describe("CategoryChart", () => {
 
   it("expands Other into every counted canonical path", async () => {
     const user = userEvent.setup();
-    render(<CategoryChart data={categoryData} />);
+    const onSelectCategory = vi.fn();
+    render(
+      <CategoryChart
+        data={categoryData}
+        onSelectCategory={onSelectCategory}
+      />,
+    );
 
     const other = screen.getByRole("button", {
       name: /other.*50 jobs.*2 job subcategories/i,
@@ -100,6 +106,15 @@ describe("CategoryChart", () => {
     expect(
       screen.getByText("Technology / Operations / Technical Support"),
     ).toBeVisible();
+    await user.click(
+      screen.getByRole("button", {
+        name: "View 28 Jobs in Technology / Infrastructure / Cybersecurity",
+      }),
+    );
+    expect(onSelectCategory).toHaveBeenCalledWith(
+      categoryData.other_categories.items[0],
+    );
+    expect(other).toHaveAttribute("aria-expanded", "true");
   });
 
   it("retains stale data with an accessible error and retry", async () => {

@@ -280,6 +280,27 @@
   align-items: center;
 }
 
+.category-chart-row-action,
+.skill-chart-row-action {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.category-chart-row-action {
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.category-chart-row-action:hover,
+.category-chart-row-action:focus-visible,
+.skill-chart-row-action:hover,
+.skill-chart-row-action:focus-visible {
+  background: rgba(106, 165, 255, 0.08);
+}
+
 .category-chart-swatch {
   width: 12px;
   height: 12px;
@@ -383,7 +404,7 @@
   border-bottom: 1px solid var(--color-border);
 }
 
-.skill-chart-row:last-child {
+.skill-chart-list > li:last-child .skill-chart-row {
   border-bottom: 0;
 }
 

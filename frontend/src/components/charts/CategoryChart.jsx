@@ -19,38 +19,41 @@ function formatUpdatedAt(value) {
   });
 }
 
-function CategoryRow({ item, index }) {
+function CategoryRow({ item, index, onSelect }) {
   const color = CATEGORY_COLORS[index % CATEGORY_COLORS.length];
   const share = Number(item.share_of_assigned || 0);
+  const count = Number(item.count || 0);
 
   return (
-    <li className="category-chart-row">
-      <span
-        className="category-chart-swatch"
-        style={{ backgroundColor: color }}
-        aria-hidden="true"
-      />
-      <div className="category-chart-copy">
-        <strong>{item.label}</strong>
-        <small className="category-chart-path">{item.path}</small>
-        <div
-          className="category-chart-bar"
-          role="meter"
-          aria-label={`${item.path}: ${share}% of accepted assignments`}
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-valuenow={share}
-        >
-          <span style={{ width: `${share}%`, backgroundColor: color }} />
-        </div>
-        <small>{share}% of accepted assignments</small>
-      </div>
-      <span
-        className="category-chart-value"
-        aria-label={`${item.path}: ${Number(item.count || 0).toLocaleString()} Jobs`}
+    <li>
+      <button
+        type="button"
+        className="category-chart-row category-chart-row-action"
+        aria-label={`View ${count.toLocaleString()} Jobs in ${item.path}`}
+        onClick={() => onSelect?.(item)}
       >
-        {Number(item.count || 0).toLocaleString()}
-      </span>
+        <span
+          className="category-chart-swatch"
+          style={{ backgroundColor: color }}
+          aria-hidden="true"
+        />
+        <span className="category-chart-copy">
+          <strong>{item.label}</strong>
+          <small className="category-chart-path">{item.path}</small>
+          <span
+            className="category-chart-bar"
+            role="meter"
+            aria-label={`${item.path}: ${share}% of accepted assignments`}
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={share}
+          >
+            <span style={{ width: `${share}%`, backgroundColor: color }} />
+          </span>
+          <small>{share}% of accepted assignments</small>
+        </span>
+        <span className="category-chart-value">{count.toLocaleString()}</span>
+      </button>
     </li>
   );
 }
@@ -61,6 +64,7 @@ export default function CategoryChart({
   error = null,
   lastUpdated = null,
   onRetry,
+  onSelectCategory,
 }) {
   const [otherExpanded, setOtherExpanded] = useState(false);
   const topCategories = data?.top_categories || [];
@@ -171,7 +175,12 @@ export default function CategoryChart({
             ) : (
               <ul className="category-chart-list">
                 {topCategories.map((item, index) => (
-                  <CategoryRow key={item.code} item={item} index={index} />
+                  <CategoryRow
+                    key={item.code}
+                    item={item}
+                    index={index}
+                    onSelect={onSelectCategory}
+                  />
                 ))}
 
                 {Number(otherCategories.count || 0) > 0 ? (
@@ -197,6 +206,7 @@ export default function CategoryChart({
                             key={item.code}
                             item={item}
                             index={topCategories.length + index}
+                            onSelect={onSelectCategory}
                           />
                         ))}
                       </ul>
