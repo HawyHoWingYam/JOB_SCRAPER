@@ -22,11 +22,13 @@ GET /api/stats/categories/dashboard
 GET /api/stats/skills?limit=<1..100>&category=<optional exact label>
 #jobs?canonical_subcategory_ids=<stable-code>
 #jobs?skill_ids=<stable-code>
+#classification?target=<job_taxonomy|skill>
 ```
 
 ```python
 _dashboard_job_population_predicate() -> ColumnElement[bool]
-_accepted_job_taxonomy_assignment_job_ids(db: Session) -> Query
+accepted_job_taxonomy_assignment_job_ids() -> Select[tuple[UUID]]
+job_taxonomy_classification_ready_jobs() -> Select[tuple[Job]]
 get_dashboard_category_stats(db: Session) -> DashboardCategoryStatsSchema
 get_skill_stats(limit: int, category: str | None, db: Session) \
     -> DashboardSkillStatsSchema
@@ -38,6 +40,8 @@ The page boundary owns one Refresh coordinator. Each section keeps
 ```js
 parseJobsRoute(hash) -> { canonicalSubcategoryIds, skillIds }
 hashForJobsRoute({ canonicalSubcategoryIds, skillIds }) -> string
+parseClassificationRoute(hash) -> { target }
+hashForClassificationRoute(target) -> string
 ```
 
 ### 3. Contracts
@@ -51,7 +55,9 @@ hashForJobsRoute({ canonicalSubcategoryIds, skillIds }) -> string
 - `classification_ready_unassigned_total` applies the same accepted-assignment
   definition and additionally requires `Job.source_attribute_projection`.
   Merely having an assignment row to an inactive or unassignable node must not
-  remove a Job from this readiness cohort.
+  remove a Job from this readiness cohort. Dashboard counting and Job Taxonomy
+  Preview both consume `job_taxonomy_classification_ready_jobs()`; the adapter
+  adds optional Source filters, ordering, and limit afterward.
 - Taxonomy returns six concrete rows in `top_categories`. `other_categories`
   contains the summed count and every remaining concrete row. Concrete rows
   have stable `code`, visible `path`, `label`, `count`, and
@@ -88,6 +94,14 @@ hashForJobsRoute({ canonicalSubcategoryIds, skillIds }) -> string
   scope for refresh and browser back/forward navigation.
 - The taxonomy `Other` aggregate has no route identity and remains an expansion
   control. Its expanded concrete rows use their own stable codes.
+- The taxonomy Classification action is present only when
+  `classification_ready_unassigned_total > 0` and targets `job_taxonomy`. The
+  Skill Classification action is present only when `ready_candidate_total > 0`
+  and targets `skill`. Navigation changes the durable route and selected tab
+  only; it never previews, starts, retries, stops, or mutates a batch.
+- Bare `#classification` and invalid Classification targets safely resolve to
+  Job Taxonomy. Refresh and browser navigation preserve supported explicit
+  targets. Route strings remain owned by `appRoute.js`, not chart components.
 
 ### 4. Validation & Error Matrix
 
@@ -96,7 +110,7 @@ hashForJobsRoute({ canonicalSubcategoryIds, skillIds }) -> string
 | Skill `limit` is below 1 or above 100 | HTTP 422; do not clamp silently |
 | Population or processed denominator is zero | Coverage and prevalence are `0`; return valid empty summaries |
 | Job is deleted | Exclude it from population, assignments, matches, and Candidate backlog |
-| Assignment leaf or ancestor is inactive/unassignable | Treat the Job as unassigned for both coverage and readiness |
+| Assignment leaf is inactive/unassignable, or an ancestor is inactive | Treat the Job as unassigned for both coverage and readiness |
 | Skill bucket is unknown to the frontend | Append the non-empty bucket after preferred buckets; do not crash or remap it |
 | Initial section request fails | Show unavailable alert and section retry; render no fabricated data |
 | Refresh fails after prior success | Keep data, mark it stale, show its prior timestamp, and keep other successful updates |
@@ -105,6 +119,8 @@ hashForJobsRoute({ canonicalSubcategoryIds, skillIds }) -> string
 | Jobs route contains duplicate stable codes | Preserve the first occurrence only |
 | Hash is bare `#jobs` or all route values are invalid | Load the ordinary unfiltered Jobs scope |
 | JobBrowser route hash changes while Jobs view remains mounted | Abort/supersede the old search and fetch the reconstructed scope |
+| Dashboard taxonomy/Skill ready count is zero | Show the truthful zero; render no enabled Classification action |
+| Classification target is missing or invalid | Fall back to Job Taxonomy without a batch mutation request |
 
 ### 5. Good / Base / Bad Cases
 
@@ -121,6 +137,11 @@ hashForJobsRoute({ canonicalSubcategoryIds, skillIds }) -> string
   search body contains the same code in `structured_filters.skill_ids`.
 - **Base:** sharing or refreshing a canonical Subcategory route reconstructs
   the same root scope; direct `#jobs` still loads all Jobs.
+- **Good:** selecting 484 threshold-ready Skill Candidates writes
+  `#classification?target=skill`; refresh keeps Skills selected and does not
+  issue Preview or Start.
+- **Base:** `#classification?target=unknown` renders Job Taxonomy safely and
+  only reads run history.
 - **Bad:** filter expired Jobs, divide Skill matches by all acquired Jobs,
   include Candidates in the canonical leaderboard, or treat any assignment row
   as accepted.
@@ -150,6 +171,10 @@ hashForJobsRoute({ canonicalSubcategoryIds, skillIds }) -> string
   submission. Chart tests assert pointer/keyboard activation and accessible
   action names containing destination and Job count; `Other` itself is not a
   Jobs drill-down.
+- Classification route tests assert bare/default, both explicit targets,
+  invalid fallback, tab serialization, refresh/hash synchronization, and no
+  preview/start/retry calls caused by navigation. Dashboard/chart tests assert
+  count-specific accessible names and no action at zero backlog.
 - Before completion run focused backend stats/current-taxonomy contracts, the
   full frontend suite, ESLint, production build, backend lint/format checks,
   and browser QA at desktop and narrow viewports.
@@ -168,15 +193,12 @@ query.outerjoin(CurrentJobTaxonomyAssignment).filter(
 #### Correct: readiness rejects only Jobs with an accepted assignment
 
 ```python
-accepted = _accepted_job_taxonomy_assignment_job_ids(db).subquery()
-query.outerjoin(accepted, accepted.c.job_id == Job.id).filter(
-    accepted.c.job_id.is_(None),
-    Job.source_attribute_projection.has(),
-)
+query = job_taxonomy_classification_ready_jobs()
 ```
 
-The second form keeps assignment coverage and classification readiness on the
-same canonical-acceptance boundary.
+The shared query keeps assignment coverage, Dashboard readiness, and
+Classification Preview on the same canonical-acceptance and Source-evidence
+boundary.
 
 #### Wrong: re-rank a backend Top-N inside presentation buckets
 

@@ -25,6 +25,8 @@ ClassificationBatchRuntime(db, adapters).retry_failed(run_id)
 ClassificationDomainAdapter.select_candidates(db, filters, limit)
 ClassificationDomainAdapter.process_candidate(db, candidate)
 ClassificationRetryFilter.filter_retry_candidates(db, candidates)
+accepted_job_taxonomy_assignment_job_ids() -> Select[tuple[UUID]]
+job_taxonomy_classification_ready_jobs() -> Select[tuple[Job]]
 ```
 
 HTTP:
@@ -36,6 +38,14 @@ GET  /api/job-intelligence/classification-batches/runs?domain=...
 GET  /api/job-intelligence/classification-batches/runs/{run_id}
 POST /api/job-intelligence/classification-batches/runs/{run_id}/stop
 POST /api/job-intelligence/classification-batches/runs/{run_id}/retry-failed
+#classification?target=<job_taxonomy|skill>
+```
+
+Frontend route ownership:
+
+```js
+parseClassificationRoute(hash) -> { target }
+hashForClassificationRoute(target) -> string
 ```
 
 Request body:
@@ -58,9 +68,15 @@ Persistence uses `classification_batch_runs` and
   Skill may run independently.
 - Preview and start use the same adapter selection. Limit is `1..5000` and the
   stable item snapshot is persisted before background execution begins.
-- Job Taxonomy selects non-deleted unassigned Jobs and calls the existing
-  taxonomy-only AI interface. A non-selection is an item failure; no fallback
-  assignment is written.
+- Job Taxonomy selects non-deleted Jobs that have the required
+  `source_attribute_projection` and no accepted current assignment. An
+  accepted assignment points to an active, assignable Job leaf under active
+  Category and Domain ancestors. A stale row pointing to an inactive or
+  unassignable hierarchy remains effectively unassigned. The Dashboard ready
+  count and adapter Preview must both consume
+  `job_taxonomy_classification_ready_jobs()` before Source filters, ordering,
+  or limit. A non-selection is an item failure; no fallback assignment is
+  written.
 - Company Industry selects non-deleted unassigned Companies and accepts only a
   current Source Industry mapping supported by preserved Job evidence. JobsDB,
   OfferToday, and CTgoodjobs follow the same Source-qualified rule. A label is
@@ -93,6 +109,11 @@ Persistence uses `classification_batch_runs` and
 - The frontend exposes three tabs over the same lifecycle: preview, start,
   progress, Stop, failure detail, and retry-failed. It does not expose a
   Governance or per-item review queue.
+- Dashboard Classification actions navigate to validated durable targets:
+  `job_taxonomy` and `skill`. Bare `#classification` and invalid targets resolve
+  to `job_taxonomy`. Supported tab changes serialize through the same route
+  owner. Navigation may refresh run history, but it never previews, starts,
+  retries, stops, or otherwise mutates a batch.
 - Frontend Preview authority is the accepted `{result, inputs}` pair. `inputs`
   is one immutable normalized domain/filter/limit snapshot. Any material input
   change clears that authority, aborts the in-flight request, and advances a
@@ -107,6 +128,10 @@ Persistence uses `classification_batch_runs` and
 | Condition | Required result |
 |---|---|
 | Unknown domain or limit outside `1..5000` | `400`/`422`; no run |
+| Job is deleted, already has an accepted assignment, or lacks Source projection | Exclude it from Job Taxonomy Preview and Dashboard ready count |
+| Assignment points to an inactive/unassignable Job hierarchy | Treat it as unassigned; include it when all other readiness conditions hold |
+| Classification target is absent or invalid | Select Job Taxonomy safely; issue no batch mutation request |
+| Dashboard ready backlog is zero | Render the count but expose no enabled Classification action |
 | Active run already exists for the domain | `409`, code `active_classification_batch_exists`, existing run ID |
 | Preview selects zero items | Start remains disabled in the UI; direct start creates a terminal empty run |
 | Domain, applicable Source filter, or limit changes after Preview | Clear Preview immediately and disable Start until a fresh matching Preview succeeds |
@@ -138,6 +163,10 @@ Persistence uses `classification_batch_runs` and
   The count disappears and changing back to 25 still requires a fresh Preview.
 - **Good:** Sources are clicked in any order; Preview and Start share one
   deterministically ordered Source snapshot.
+- **Good:** a stale assignment points to an inactive Job leaf; the ready Job is
+  counted on Dashboard and selected by Preview through the same query.
+- **Base:** `#classification` or an invalid target opens Job Taxonomy and loads
+  run history without creating a Preview or run.
 - **Good:** an older run failed `項目管理`; after governed generic resolution,
   Retry omits it while preserving any other still-unresolved failed Candidate.
 - **Bad:** create `Other / Unknown / MysteryDB`, create a Review row, or mutate a
@@ -157,8 +186,10 @@ Persistence uses `classification_batch_runs` and
 - Skill tests assert threshold default/update, threshold selection, exact alias
   reuse, generic rejection, confirmed-path creation, affected Job reprojection,
   and uncertain failure with no fallback nodes.
-- Adapter tests assert unassigned/non-deleted selection and Source filters for
-  Job and Company domains.
+- Adapter tests assert Job readiness excludes deleted, accepted-assigned, and
+  missing-projection rows; stale invalid assignments remain ready; Dashboard
+  count equals unfiltered Preview; Source filters and limits apply afterward.
+  Company tests retain their non-deleted/unassigned contract.
 - Company adapter tests also assert limit-before-exclusion, readiness counts,
   mapped provenance writes, drift failures, explicit exclusion, and Retry
   omission.
@@ -167,6 +198,11 @@ Persistence uses `classification_batch_runs` and
 - Frontend tests assert preview gates Start, domain filters normalize correctly,
   progress is accessible, failed reasons render, retry targets the displayed
   run, and Skill does not show Source filters.
+- Classification route tests assert bare/default, both supported targets,
+  invalid fallback, refresh/hash synchronization, and that navigation issues no
+  preview/start/retry mutation. Dashboard/chart tests assert the taxonomy action
+  uses `classification_ready_unassigned_total`, the Skill action uses
+  `ready_candidate_total`, and zero backlog has no enabled action.
 - Frontend Preview tests also assert domain/Source/limit invalidation, no
   resurrection after restoring old values, request abort, late-response
   rejection, deterministic Source ordering, Start payload equality, and the
@@ -195,6 +231,24 @@ if decision.status != "create":
 The runtime records the item failure and `retry_failed` can try it again later.
 No taxonomy, Candidate, Mention, or Job projection mutation survives the failed
 item transaction.
+
+### Wrong: drift Dashboard readiness away from Preview
+
+```python
+dashboard_query = ready_jobs_with_projection()
+preview_query = jobs_without_any_assignment_row()
+```
+
+### Correct: share the complete readiness query
+
+```python
+query = job_taxonomy_classification_ready_jobs()
+# Dashboard counts this query; the adapter adds Source filters/order/limit.
+```
+
+The shared seam includes accepted-assignment semantics and required Source
+projection, so predictable item failures never enter Preview merely because
+the Dashboard used a different population.
 
 ### Wrong: mutable Preview confirmation
 
