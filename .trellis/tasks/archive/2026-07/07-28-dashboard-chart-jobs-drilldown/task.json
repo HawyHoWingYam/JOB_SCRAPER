@@ -1,0 +1,29 @@
+{
+  "id": "dashboard-chart-jobs-drilldown",
+  "name": "dashboard-chart-jobs-drilldown",
+  "title": "Add dashboard chart Jobs drill-down",
+  "description": "Open the Jobs browser from a concrete Dashboard taxonomy or Skill row with an exact, shareable canonical filter.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-28",
+  "completedAt": "2026-07-28",
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-27-audit-dashboard-taxonomy-skills",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 41,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/41"
+  }
+}
