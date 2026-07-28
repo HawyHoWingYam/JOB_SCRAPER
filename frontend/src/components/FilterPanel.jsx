@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { CalendarRange, FilterX } from 'lucide-react';
-import LazyCompanyIndustryFilter from './LazyCompanyIndustryFilter';
-import { formatCompanyIndustryNode } from './companies/companyIndustryDisplay';
+import {
+    CheckboxFacetSelector,
+    HierarchyFacetSelector,
+} from './FilterSelectorCard';
 
 const SOURCE_OPTIONS = [
     { value: '', label: 'All Sources' },
@@ -19,36 +21,65 @@ function formatSourceLabel(value) {
     return match?.label || value;
 }
 
-function selectedValues(event) {
-    return Array.from(event.target.selectedOptions, (option) => option.value);
-}
-
 function sourceClassificationLabel(option) {
     return `${formatSourceLabel(option.source)} · ${option.path || option.label}`;
 }
 
 function canonicalTaxonomyOptions(tree) {
+    if (Array.isArray(tree)) {
+        const byId = new Map(tree.map((option) => [option.id, option]));
+        const breadcrumbFor = (option) => {
+            const labels = [option.label];
+            const visited = new Set([option.id]);
+            let parent = byId.get(option.parent_id);
+            while (parent && !visited.has(parent.id)) {
+                visited.add(parent.id);
+                labels.unshift(parent.label);
+                parent = byId.get(parent.parent_id);
+            }
+            return labels.join(' / ');
+        };
+        const levelLabels = {
+            domain: 'Job Domain',
+            category: 'Job Category',
+            subcategory: 'Job Subcategory',
+        };
+        return tree.map((option) => {
+            const breadcrumb = breadcrumbFor(option);
+            return {
+                ...option,
+                label: `${levelLabels[option.level] || 'Job Taxonomy'} · ${breadcrumb}`,
+                chipLabel: breadcrumb,
+            };
+        });
+    }
     return (tree?.domains || []).flatMap((domain) => [
         {
             id: domain.id,
+            parent_id: null,
             level: 'domain',
             label: `Job Domain · ${domain.label}`,
             chipLabel: domain.label,
+            count: domain.count,
         },
         ...(domain.categories || []).flatMap((category) => [
             {
                 id: category.id,
+                parent_id: domain.id,
                 level: 'category',
                 label: `Job Category · ${domain.label} / ${category.label}`,
                 chipLabel: `${domain.label} / ${category.label}`,
+                count: category.count,
             },
             ...(category.subcategories || []).map((subcategory) => ({
                 id: subcategory.id,
+                parent_id: category.id,
                 level: 'subcategory',
                 label:
                     `Job Subcategory · ${domain.label} / ${category.label} / ${subcategory.label}`,
                 chipLabel:
                     `${domain.label} / ${category.label} / ${subcategory.label}`,
+                count: subcategory.count,
             })),
         ]),
     ]);
@@ -58,6 +89,7 @@ function normalizeEmploymentTypeOption(option) {
     if (typeof option === 'string') {
         return {
             key: `legacy:${option}`,
+            id: `legacy:${option}`,
             label: option,
             value: `legacy:${option}`,
             legacyLabel: option,
@@ -71,9 +103,11 @@ function normalizeEmploymentTypeOption(option) {
     ) {
         return {
             key: `code:${option.code}`,
+            id: option.id || option.code,
             label: option.label,
             value: option.code,
             code: option.code,
+            count: option.count,
         };
     }
     return null;
@@ -89,9 +123,7 @@ function FilterPanel({
     datePreset,
     validationError,
     pendingChangeCount,
-    loadCompanyIndustryChildren,
 }) {
-    const [companyIndustryLabels, setCompanyIndustryLabels] = useState({});
     const handleChange = (field, value) => {
         onFilterChange({
             ...filters,
@@ -102,33 +134,37 @@ function FilterPanel({
         .map(normalizeEmploymentTypeOption)
         .filter(Boolean);
     const taxonomyOptions = canonicalTaxonomyOptions(
-        filterOptions.canonical_taxonomy,
+        filterOptions.canonical_job_taxonomy?.length
+            ? filterOptions.canonical_job_taxonomy
+            : filterOptions.canonical_taxonomy,
     );
-    const companyIndustryRoots = filterOptions.company_industry_tree?.nodes || [];
+    const sourceOptions = filterOptions.sources?.length
+        ? [SOURCE_OPTIONS[0], ...filterOptions.sources.map((option) => ({
+            value: option.id,
+            label: `${option.label} (${option.count} jobs)`,
+            count: option.count,
+        }))]
+        : SOURCE_OPTIONS;
+    const sourceClassificationOptions = (
+        filterOptions.source_classifications || []
+    ).map((option) => ({
+        ...option,
+        displayLabel: sourceClassificationLabel(option),
+    }));
+    const companyIndustryOptions = (filterOptions.company_industries || []).map(
+        (option) => ({
+            ...option,
+            displayLabel: `${option.id} · ${option.label}`,
+        }),
+    );
+    const companyIndustryLabel = (nodeId) => (
+        companyIndustryOptions.find((option) => option.id === nodeId)
+            ?.displayLabel || nodeId
+    );
 
-    const rememberCompanyIndustryNodes = (nodes) => {
-        setCompanyIndustryLabels((current) => ({
-            ...current,
-            ...Object.fromEntries(
-                nodes.map((node) => [node.id, formatCompanyIndustryNode(node)]),
-            ),
-        }));
-    };
-
-    const companyIndustryLabel = (nodeId) => {
-        const root = companyIndustryRoots.find((node) => node.id === nodeId);
-        return root
-            ? formatCompanyIndustryNode(root)
-            : companyIndustryLabels[nodeId] || nodeId;
-    };
-
-    const handleEmploymentTypeChange = (event) => {
-        const selectedValues = Array.from(
-            event.target.selectedOptions,
-            (option) => option.value,
-        );
+    const handleEmploymentTypeChange = (selectedValues) => {
         const selectedOptions = employmentTypeOptions.filter((option) =>
-            selectedValues.includes(option.value),
+            selectedValues.includes(option.id),
         );
         onFilterChange({
             ...filters,
@@ -141,8 +177,7 @@ function FilterPanel({
         });
     };
 
-    const handleCanonicalTaxonomyChange = (event) => {
-        const selectedIds = selectedValues(event);
+    const handleCanonicalTaxonomyChange = (selectedIds) => {
         const selectedOptions = taxonomyOptions.filter((option) =>
             selectedIds.includes(option.id),
         );
@@ -265,77 +300,55 @@ function FilterPanel({
                             onChange={(e) => handleChange('source_site', e.target.value)}
                             disabled={isLoading}
                         >
-                            {SOURCE_OPTIONS.map((option) => (
-                                <option key={option.value || 'all'} value={option.value}>
+                            {sourceOptions.map((option) => (
+                                <option
+                                    key={option.value || 'all'}
+                                    value={option.value}
+                                    disabled={option.count === 0 && filters.source_site !== option.value}
+                                >
                                     {option.label}
                                 </option>
                             ))}
                         </select>
                     </label>
 
-                    <label className="filter-field">
-                        <span className="filter-label">Source Classification Paths</span>
-                        <select
-                            className="premium-select"
-                            multiple
-                            value={filters.source_classification_ids || []}
-                            onChange={(event) =>
-                                handleChange(
-                                    'source_classification_ids',
-                                    selectedValues(event),
-                                )
-                            }
-                            disabled={isLoading}
-                        >
-                            {(filterOptions.source_classifications || []).map((option) => (
-                                <option key={option.id} value={option.id}>
-                                    {sourceClassificationLabel(option)}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
+                    <HierarchyFacetSelector
+                        title="Source Classification Paths"
+                        options={sourceClassificationOptions}
+                        selectedIds={filters.source_classification_ids || []}
+                        onChange={(ids) => handleChange('source_classification_ids', ids)}
+                        disabled={isLoading}
+                        groupBySource
+                    />
 
-                    <label className="filter-field">
-                        <span className="filter-label">Employment Type</span>
-                        <select
-                            className="premium-select"
-                            multiple
-                            value={[
-                                ...(filters.employment_type_codes || []),
-                                ...(filters.employment_type
-                                    ? [`legacy:${filters.employment_type}`]
-                                    : []),
-                            ]}
-                            onChange={handleEmploymentTypeChange}
-                            disabled={isLoading}
-                        >
-                            {employmentTypeOptions.map((option) => (
-                                <option key={option.key} value={option.value}>{option.label}</option>
-                            ))}
-                        </select>
-                    </label>
+                    <CheckboxFacetSelector
+                        title="Employment Type"
+                        options={employmentTypeOptions}
+                        selectedIds={[
+                            ...(filters.employment_type_codes || []),
+                            ...(filters.employment_type
+                                ? [`legacy:${filters.employment_type}`]
+                                : []),
+                        ]}
+                        onChange={handleEmploymentTypeChange}
+                        disabled={isLoading}
+                    />
 
-                    <label className="filter-field">
-                        <span className="filter-label">Canonical Job Taxonomy</span>
-                        <select
-                            className="premium-select highlight-select"
-                            multiple
-                            value={[
-                                ...(filters.canonical_domain_ids || []),
-                                ...(filters.canonical_category_ids || []),
-                                ...(filters.canonical_subcategory_ids || []),
-                            ]}
-                            onChange={handleCanonicalTaxonomyChange}
-                            disabled={isLoading}
-                        >
-                            {taxonomyOptions.map((option) => (
-                                <option key={option.id} value={option.id}>{option.label}</option>
-                            ))}
-                        </select>
-                    </label>
+                    <HierarchyFacetSelector
+                        title="Canonical Job Taxonomy"
+                        options={taxonomyOptions}
+                        selectedIds={[
+                            ...(filters.canonical_domain_ids || []),
+                            ...(filters.canonical_category_ids || []),
+                            ...(filters.canonical_subcategory_ids || []),
+                        ]}
+                        onChange={handleCanonicalTaxonomyChange}
+                        disabled={isLoading}
+                    />
 
-                    <LazyCompanyIndustryFilter
-                        tree={filterOptions.company_industry_tree}
+                    <HierarchyFacetSelector
+                        title="Company Industry"
+                        options={companyIndustryOptions}
                         selectedIds={filters.company_industry_node_ids || []}
                         onChange={(nodeIds) =>
                             onFilterChange({
@@ -344,8 +357,6 @@ function FilterPanel({
                                 industry: '',
                             })
                         }
-                        loadChildren={loadCompanyIndustryChildren}
-                        onNodesSeen={rememberCompanyIndustryNodes}
                         disabled={isLoading}
                     />
 

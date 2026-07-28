@@ -1,6 +1,9 @@
 const EMPTY_QUERY = {
   search_query: '',
   source_site: '',
+  location: '',
+  region: '',
+  district: '',
   source_classification_ids: [],
   employment_type: '',
   employment_type_codes: [],
@@ -9,12 +12,19 @@ const EMPTY_QUERY = {
   canonical_category_ids: [],
   canonical_domain_ids: [],
   skill_ids: [],
+  skills: [],
+  technology_ids: [],
+  skill_category_ids: [],
   industry: '',
   company_industry_node_ids: [],
+  job_category_ids: [],
+  domain_ids: [],
   posted_date_from: '',
   posted_date_to: '',
   experience_years_from: '',
   experience_years_to: '',
+  salary_min: '',
+  salary_max: '',
 };
 
 const SUPPORTED_SOURCE_SITES = new Set(['jobsdb', 'ctgoodjobs', 'offertoday']);
@@ -92,6 +102,9 @@ export function normalizeQueryForSubmit(query) {
     ...query,
     search_query: normalizeDraftKeyword(query?.search_query || ''),
     source_site: normalizeSourceSite(query?.source_site),
+    location: normalizeValue(query?.location),
+    region: normalizeValue(query?.region),
+    district: normalizeValue(query?.district),
     source_classification_ids: normalizeIdArray(
       query?.source_classification_ids,
     ),
@@ -104,14 +117,21 @@ export function normalizeQueryForSubmit(query) {
     canonical_category_ids: normalizeIdArray(query?.canonical_category_ids),
     canonical_domain_ids: normalizeIdArray(query?.canonical_domain_ids),
     skill_ids: normalizeIdArray(query?.skill_ids),
+    skills: normalizeIdArray(query?.skills),
+    technology_ids: normalizeIdArray(query?.technology_ids),
+    skill_category_ids: normalizeIdArray(query?.skill_category_ids),
     industry: normalizeValue(query?.industry),
     company_industry_node_ids: normalizeIdArray(
       query?.company_industry_node_ids,
     ),
+    job_category_ids: normalizeIdArray(query?.job_category_ids),
+    domain_ids: normalizeIdArray(query?.domain_ids),
     posted_date_from: normalizeValue(query?.posted_date_from),
     posted_date_to: normalizeValue(query?.posted_date_to),
     experience_years_from: normalizeNumericString(query?.experience_years_from),
     experience_years_to: normalizeNumericString(query?.experience_years_to),
+    salary_min: normalizeNumericString(query?.salary_min),
+    salary_max: normalizeNumericString(query?.salary_max),
   };
 }
 

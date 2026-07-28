@@ -16,6 +16,7 @@ vi.mock('../api/capabilities', () => ({
 }));
 
 import JobBrowser from './JobBrowser';
+import { JOB_BROWSER_SESSION_KEY } from './jobBrowserSessionStorage';
 
 function createDeferredSearchResponse() {
   let resolve;
@@ -36,6 +37,7 @@ function createDeferredSearchResponse() {
 function searchPayloadWithTitle(title) {
   return {
     ...productFixture.job_search,
+    facets: searchFacets(),
     jobs: [{
       ...productFixture.job_search.jobs[0],
       id: title.toLowerCase().replaceAll(' ', '-'),
@@ -43,6 +45,73 @@ function searchPayloadWithTitle(title) {
     }],
     total: 1,
     total_pages: 1,
+  };
+}
+
+function searchFacets() {
+  const canonicalJobTaxonomy = [];
+  for (const domain of taxonomyFixture.job_tree.domains) {
+    canonicalJobTaxonomy.push({
+      id: domain.code,
+      label: domain.label,
+      parent_id: null,
+      level: 'domain',
+      count: 3,
+    });
+    for (const category of domain.categories) {
+      canonicalJobTaxonomy.push({
+        id: category.code,
+        label: category.label,
+        parent_id: domain.code,
+        level: 'category',
+        count: 2,
+      });
+      for (const subcategory of category.subcategories) {
+        canonicalJobTaxonomy.push({
+          id: subcategory.code,
+          label: subcategory.label,
+          parent_id: category.code,
+          level: 'subcategory',
+          count: 1,
+        });
+      }
+    }
+  }
+  const sourceClassifications = productFixture.job_filters.source_classifications.map(
+    (option, index) => ({
+      ...option,
+      parent_id: index === 0 ? null : 'jobsdb:6281',
+      count: index === 0 ? 3 : 2,
+    }),
+  );
+  return {
+    sources: [
+      { id: 'jobsdb', label: 'JobsDB', count: 3 },
+      { id: 'ctgoodjobs', label: 'CTGoodJobs', count: 0 },
+      { id: 'offertoday', label: 'OfferToday', count: 0 },
+    ],
+    employment_types: productFixture.job_filters.employment_types.map(
+      (option) => ({ ...option, id: option.code, count: 2 }),
+    ),
+    source_classifications: sourceClassifications,
+    canonical_job_taxonomy: canonicalJobTaxonomy,
+    company_industries: [
+      {
+        id: taxonomyFixture.company_tree.nodes[0].code,
+        label: taxonomyFixture.company_tree.nodes[0].labels.en,
+        parent_id: null,
+        level: taxonomyFixture.company_tree.nodes[0].level,
+        count: 2,
+      },
+    ],
+  };
+}
+
+function jobSearchPayload(overrides = {}) {
+  return {
+    ...productFixture.job_search,
+    facets: searchFacets(),
+    ...overrides,
   };
 }
 
@@ -98,6 +167,7 @@ function currentCompanyIndustryTree() {
 describe('JobBrowser governed filters', () => {
   beforeEach(() => {
     window.location.hash = '#jobs';
+    window.sessionStorage.clear();
     api.apiFetchJson.mockReset();
     api.fetchCapabilities.mockReset();
     api.fetchCapabilities.mockResolvedValue({
@@ -119,47 +189,57 @@ describe('JobBrowser governed filters', () => {
       }
       return Promise.reject(new Error(`Unexpected API read: ${path}`));
     });
-    globalThis.fetch = vi.fn(() => Promise.resolve({
-      ok: true,
-      json: () => Promise.resolve(productFixture.job_search),
-    }));
+    globalThis.fetch = vi.fn((_url, options) => {
+      if (!options?.body) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(productFixture.job_detail),
+        });
+      }
+      const request = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(jobSearchPayload({
+          applied_scope: request.scope,
+        })),
+      });
+    });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('combines backend-owned Source, canonical, and Company Industry options', async () => {
+  it('uses the atomic search facets for every governed selector', async () => {
+    const user = userEvent.setup();
     render(<JobBrowser />);
 
-    expect(
-      await screen.findByRole('option', { name: 'Full-time' }),
-    ).toHaveValue('full_time');
-    expect(
-      screen.getByRole('option', { name: 'Job Domain · Accounting' }),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByRole('checkbox', {
-        name: 'J · Information and communications',
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('option', {
-        name: 'JobsDB · Information Technology / Developers and Programmers',
-      }),
-    ).toHaveValue('jobsdb:6287');
+    await user.click(await screen.findByRole('button', {
+      name: 'Employment Type, 0 selected',
+    }));
+    expect(screen.getByRole('checkbox', {
+      name: 'Full-time (2 jobs)',
+    })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {
+      name: 'Canonical Job Taxonomy, 0 selected',
+    }));
+    expect(screen.getByRole('checkbox', {
+      name: 'Job Domain · Accounting (3 jobs)',
+    })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {
+      name: 'Company Industry, 0 selected',
+    }));
+    expect(screen.getByRole('checkbox', {
+      name: 'J · Information and communications (2 jobs)',
+    })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {
+      name: 'Source Classification Paths, 0 selected',
+    }));
+    expect(screen.getByRole('checkbox', {
+      name: 'JobsDB · Information Technology (3 jobs)',
+    })).toBeInTheDocument();
     expect(screen.queryByText('Legacy Software evidence')).not.toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(api.apiFetchJson).toHaveBeenCalledWith(
-        expect.stringContaining('/job-taxonomy/tree'),
-        expect.any(Object),
-      );
-      expect(api.apiFetchJson).toHaveBeenCalledWith(
-        expect.stringContaining('/company-industries/tree'),
-        expect.any(Object),
-      );
-    });
+    expect(api.apiFetchJson).not.toHaveBeenCalled();
   });
 
   it('renders governed Employment Types and Canonical Job Taxonomy without legacy fallback', async () => {
@@ -222,26 +302,34 @@ describe('JobBrowser governed filters', () => {
   it('submits every governed multi-value filter through the Job Browser scope', async () => {
     const user = userEvent.setup();
     const domain = taxonomyFixture.job_tree.domains[0];
-    const category = domain.categories[0];
-    const subcategory = category.subcategories[0];
     const industryNode = taxonomyFixture.company_tree.nodes[0];
 
     render(<JobBrowser />);
 
-    await user.selectOptions(
-      await screen.findByLabelText('Employment Type'),
-      ['full_time', 'permanent'],
-    );
-    await user.selectOptions(
-      screen.getByLabelText('Source Classification Paths'),
-      ['jobsdb:6281', 'jobsdb:6287'],
-    );
-    await user.selectOptions(
-      screen.getByLabelText('Canonical Job Taxonomy'),
-      [domain.code, category.code, subcategory.code],
-    );
+    const employmentTypes = await screen.findByRole('button', {
+      name: 'Employment Type, 0 selected',
+    });
+    await waitFor(() => expect(employmentTypes).toBeEnabled());
+    await user.click(employmentTypes);
+    await user.click(screen.getByRole('checkbox', { name: 'Full-time (2 jobs)' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Permanent (2 jobs)' }));
+    await user.click(screen.getByRole('button', {
+      name: 'Source Classification Paths, 0 selected',
+    }));
     await user.click(screen.getByRole('checkbox', {
-      name: 'J · Information and communications',
+      name: 'JobsDB · Information Technology (3 jobs)',
+    }));
+    await user.click(screen.getByRole('button', {
+      name: 'Canonical Job Taxonomy, 0 selected',
+    }));
+    await user.click(screen.getByRole('checkbox', {
+      name: 'Job Domain · Accounting (3 jobs)',
+    }));
+    await user.click(screen.getByRole('button', {
+      name: 'Company Industry, 0 selected',
+    }));
+    await user.click(screen.getByRole('checkbox', {
+      name: 'J · Information and communications (2 jobs)',
     }));
     await user.click(screen.getByRole('button', { name: 'Search all jobs' }));
 
@@ -251,10 +339,10 @@ describe('JobBrowser governed filters', () => {
     expect(submitted.scope.layers[0].structured_filters).toEqual(
       expect.objectContaining({
         employment_type_codes: ['full_time', 'permanent'],
-        source_classification_ids: ['jobsdb:6281', 'jobsdb:6287'],
+        source_classification_ids: ['jobsdb:6281'],
         canonical_domain_ids: [domain.code],
-        canonical_category_ids: [category.code],
-        canonical_subcategory_ids: [subcategory.code],
+        canonical_category_ids: [],
+        canonical_subcategory_ids: [],
         company_industry_node_ids: [industryNode.code],
         employment_type: '',
         industry: '',
@@ -264,6 +352,16 @@ describe('JobBrowser governed filters', () => {
   });
 
   it('hydrates exact canonical route filters and responds to in-place route changes', async () => {
+    window.sessionStorage.setItem(JOB_BROWSER_SESSION_KEY, JSON.stringify({
+      version: 1,
+      scope: {
+        layers: [{
+          client_id: 'restored',
+          text_expression: 'should not win',
+          structured_filters: {},
+        }],
+      },
+    }));
     globalThis.fetch = vi.fn((_url, options) => {
       const request = JSON.parse(options.body);
       return Promise.resolve({
@@ -291,6 +389,7 @@ describe('JobBrowser governed filters', () => {
         canonical_subcategory_ids: [],
       }),
     );
+    expect(request.scope.layers[0].text_expression).toBe('');
 
     rerender(
       <JobBrowser routeHash="#jobs?canonical_subcategory_ids=job.backend" />,
@@ -304,6 +403,118 @@ describe('JobBrowser governed filters', () => {
         canonical_subcategory_ids: ['job.backend'],
       }),
     );
+  });
+
+  it('restores the applied layered scope from the current tab at page one', async () => {
+    window.sessionStorage.setItem(JOB_BROWSER_SESSION_KEY, JSON.stringify({
+      version: 1,
+      scope: {
+        layers: [
+          {
+            client_id: 'root',
+            text_expression: 'platform',
+            structured_filters: { skill_ids: ['python'] },
+          },
+          {
+            client_id: 'refine-1',
+            text_expression: '',
+            structured_filters: { employment_type_codes: ['full_time'] },
+          },
+        ],
+      },
+    }));
+
+    render(<JobBrowser routeHash="#jobs" />);
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    const request = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(request.page).toBe(1);
+    expect(request.include_facets).toBe(true);
+    expect(request.scope.layers).toHaveLength(2);
+    expect(request.scope.layers[0]).toEqual(expect.objectContaining({
+      client_id: 'root',
+      text_expression: 'platform',
+    }));
+    expect(await screen.findByText('Layer 2')).toBeInTheDocument();
+  });
+
+  it('adds, edits, removes, and clears applied layers in place', async () => {
+    const user = userEvent.setup();
+    render(<JobBrowser />);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+
+    const searchInput = screen.getByPlaceholderText(
+      'Query titles, companies, or deep scan descriptions...',
+    );
+    await user.type(searchInput, 'platform');
+    await user.click(screen.getByRole('button', { name: 'Search all jobs' }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Text: platform')).toBeInTheDocument();
+
+    await user.type(searchInput, 'remote');
+    await user.click(screen.getByRole('button', { name: 'Refine current results' }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(3));
+    expect(screen.getByText('Layer 2')).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole('button', { name: 'Edit layer' })[0]);
+    expect(searchInput).toHaveValue('platform');
+    await user.clear(searchInput);
+    await user.type(searchInput, 'senior platform');
+    await user.click(screen.getByRole('button', { name: 'Save layer' }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(4));
+    let request = JSON.parse(globalThis.fetch.mock.calls[3][1].body);
+    expect(request.scope.layers.map((layer) => layer.client_id)).toEqual([
+      'root',
+      'refine-1',
+    ]);
+    expect(request.scope.layers[0].text_expression).toBe('senior platform');
+
+    await user.click(screen.getAllByRole('button', { name: 'Remove layer' })[1]);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(5));
+    request = JSON.parse(globalThis.fetch.mock.calls[4][1].body);
+    expect(request.scope.layers.map((layer) => layer.client_id)).toEqual(['root']);
+
+    await user.click(screen.getByRole('button', { name: 'Clear all layers' }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(6));
+    request = JSON.parse(globalThis.fetch.mock.calls[5][1].body);
+    expect(request.scope).toEqual({ layers: [] });
+    expect(window.sessionStorage.getItem(JOB_BROWSER_SESSION_KEY)).toBeNull();
+  });
+
+  it('discards a pending refinement without requesting jobs', async () => {
+    const user = userEvent.setup();
+    render(<JobBrowser />);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+
+    const searchInput = screen.getByPlaceholderText(
+      'Query titles, companies, or deep scan descriptions...',
+    );
+    await user.type(searchInput, 'unapplied');
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+
+    expect(searchInput).toHaveValue('');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits facets when only changing pages', async () => {
+    const user = userEvent.setup();
+    globalThis.fetch = vi.fn((_url, options) => {
+      const request = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(jobSearchPayload({
+          applied_scope: request.scope,
+          total: 30,
+          total_pages: 2,
+        })),
+      });
+    });
+    render(<JobBrowser />);
+    await user.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+    const request = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    expect(request.page).toBe(2);
+    expect(request.include_facets).toBe(false);
   });
 
   it('keeps the newest search response when an older request finishes later', async () => {

@@ -4,15 +4,9 @@ import SearchBar from './SearchBar';
 import FilterPanel from './FilterPanel';
 import PaginationControl from './PaginationControl';
 import JobDetailModal from './JobDetailModal';
-import { apiFetchJson } from '../api/client';
 import { API_BASE_URL, apiPath } from '../api/base';
 import { formatApiErrorDetail } from '../api/errors';
 import { fetchCapabilities } from '../api/capabilities';
-import {
-    fetchCanonicalTree,
-    fetchCompanyIndustryTree,
-} from '../api/jobIntelligence';
-import { createMonitoringId, logError } from '../monitoring';
 import { hashForJobsRoute, parseJobsRoute } from '../appRoute';
 import {
     createEmptyJobBrowserLayer,
@@ -21,11 +15,17 @@ import {
     hasPendingLayerChanges,
     normalizeLayerForSubmit,
     removeLayerFromScope,
+    replaceLayerInScope,
     replaceScopeWithLayer,
 } from './jobBrowserScopeUtils';
 import {
+    clearJobBrowserSession,
+    readJobBrowserSession,
+    writeJobBrowserSession,
+} from './jobBrowserSessionStorage';
+import { summarizeJobBrowserLayer } from './jobBrowserLayerSummary';
+import {
     countPendingQueryChanges,
-    createEmptyJobBrowserQuery,
     getDatePresetForQuery,
     getDatePresetRange,
     getDateValidationError,
@@ -168,6 +168,15 @@ function routeFiltersFromScope(scope) {
     };
 }
 
+function getJobBrowserSessionStorage() {
+    if (typeof window === 'undefined') return null;
+    try {
+        return window.sessionStorage;
+    } catch {
+        return null;
+    }
+}
+
 function JobBrowser({
     routeHash = typeof window === 'undefined' ? '#jobs' : window.location.hash,
 }) {
@@ -182,13 +191,14 @@ function JobBrowser({
     const [isExporting, setIsExporting] = useState(false);
     const [draftLayer, setDraftLayer] = useState(createEmptyJobBrowserLayer);
     const [activeScope, setActiveScope] = useState(createEmptyJobBrowserScope);
-    const [layerSummaries, setLayerSummaries] = useState([]);
+    const [editingLayerId, setEditingLayerId] = useState(null);
     const [filterOptions, setFilterOptions] = useState({
+        sources: [],
         employment_types: [],
         source_classifications: [],
+        canonical_job_taxonomy: [],
+        company_industries: [],
         canonical_taxonomy: { domains: [] },
-        company_industry_tree: { nodes: [] },
-        industries: [],
     });
     const [pagination, setPagination] = useState({
         page: 1,
@@ -201,8 +211,15 @@ function JobBrowser({
     const [capabilities, setCapabilities] = useState(null);
     const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
 
-    const hasPendingChanges = hasPendingLayerChanges(createEmptyJobBrowserLayer(), draftLayer);
-    const pendingChangeCount = countPendingQueryChanges(createEmptyJobBrowserQuery(), {
+    const draftBaselineLayer = editingLayerId
+        ? activeScope.layers.find((layer) => layer.client_id === editingLayerId)
+            || createEmptyJobBrowserLayer()
+        : createEmptyJobBrowserLayer();
+    const hasPendingChanges = hasPendingLayerChanges(draftBaselineLayer, draftLayer);
+    const pendingChangeCount = countPendingQueryChanges({
+        search_query: draftBaselineLayer.text_expression,
+        ...draftBaselineLayer.structured_filters,
+    }, {
         search_query: draftLayer.text_expression,
         ...draftLayer.structured_filters,
     });
@@ -226,6 +243,7 @@ function JobBrowser({
         pageSize,
         commitScope = false,
         clearDraft = false,
+        includeFacets = true,
     }) => {
         const requestSequence = searchRequestSequenceRef.current + 1;
         searchRequestSequenceRef.current = requestSequence;
@@ -253,6 +271,7 @@ function JobBrowser({
                     retrieval_mode: retrievalMode,
                     page,
                     page_size: pageSize,
+                    include_facets: includeFacets,
                 }),
             });
 
@@ -285,10 +304,17 @@ function JobBrowser({
                 total: data.total,
                 totalPages: data.total_pages
             }));
-            setLayerSummaries(data.layer_summaries || []);
+            if (data.facets) {
+                setFilterOptions(data.facets);
+            }
 
             if (commitScope) {
-                setActiveScope(data.applied_scope || scope);
+                const committedScope = data.applied_scope || scope;
+                setActiveScope(committedScope);
+                writeJobBrowserSession(
+                    getJobBrowserSessionStorage(),
+                    committedScope,
+                );
                 if (clearDraft) {
                     setDraftLayer(createEmptyJobBrowserLayer());
                 }
@@ -313,74 +339,11 @@ function JobBrowser({
     };
 
     useEffect(() => {
-        const fetchFilterOptions = async () => {
-            const filtersRequestId = createMonitoringId('req');
-            const canonicalTreeRequestId = createMonitoringId('req');
-            const companyIndustryTreeRequestId = createMonitoringId('req');
-            const [
-                filtersResult,
-                canonicalTreeResult,
-                companyIndustryTreeResult,
-            ] = await Promise.allSettled([
-                apiFetchJson(apiPath('/jobs/filters'), { requestId: filtersRequestId }),
-                fetchCanonicalTree({ requestId: canonicalTreeRequestId }),
-                fetchCompanyIndustryTree(
-                    {},
-                    { requestId: companyIndustryTreeRequestId },
-                ),
-            ]);
-
-            let hasFailure = false;
-
-            if (filtersResult.status === 'rejected') {
-                hasFailure = true;
-                logError('job_browser.filter_options_failed', {
-                    bootstrapTarget: 'filters',
-                    requestId: filtersRequestId,
-                    detail: filtersResult.reason instanceof Error ? filtersResult.reason.message : filtersResult.reason,
-                });
-            }
-
-            if (canonicalTreeResult.status === 'rejected') {
-                hasFailure = true;
-                logError('job_browser.filter_options_failed', {
-                    bootstrapTarget: 'canonical_job_taxonomy',
-                    requestId: canonicalTreeRequestId,
-                    detail: canonicalTreeResult.reason instanceof Error
-                        ? canonicalTreeResult.reason.message
-                        : canonicalTreeResult.reason,
-                });
-            }
-
-            if (companyIndustryTreeResult.status === 'rejected') {
-                hasFailure = true;
-                logError('job_browser.filter_options_failed', {
-                    bootstrapTarget: 'company_industry',
-                    requestId: companyIndustryTreeRequestId,
-                    detail: companyIndustryTreeResult.reason instanceof Error
-                        ? companyIndustryTreeResult.reason.message
-                        : companyIndustryTreeResult.reason,
-                });
-            }
-
-            if (hasFailure) {
-                return;
-            }
-
-            setFilterOptions({
-                ...filtersResult.value,
-                canonical_taxonomy: canonicalTreeResult.value,
-                company_industry_tree: companyIndustryTreeResult.value,
-            });
-        };
-
-        fetchFilterOptions();
         return () => {
             searchRequestSequenceRef.current += 1;
             searchAbortControllerRef.current?.abort();
             searchAbortControllerRef.current = null;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
@@ -390,8 +353,13 @@ function JobBrowser({
             return;
         }
 
-        const scope = createScopeFromRouteHash(normalizedRouteHash);
+        const routeScope = createScopeFromRouteHash(normalizedRouteHash);
+        const scope = routeScope.layers.length > 0
+            ? routeScope
+            : readJobBrowserSession(getJobBrowserSessionStorage())
+                || createEmptyJobBrowserScope();
         setSelectedJobId(null);
+        setEditingLayerId(null);
         setDraftLayer(createEmptyJobBrowserLayer());
         fetchJobs({
             scope,
@@ -451,6 +419,12 @@ function JobBrowser({
         setSearchError('');
     };
 
+    const handleDiscardDraft = () => {
+        setDraftLayer(createEmptyJobBrowserLayer());
+        setEditingLayerId(null);
+        setSearchError('');
+    };
+
     const handleDatePresetChange = (preset) => {
         if (preset === 'custom') {
             return;
@@ -492,9 +466,15 @@ function JobBrowser({
             return;
         }
 
+        let refinementIndex = activeScope.layers.length;
+        while (activeScope.layers.some(
+            (layer) => layer.client_id === `refine-${refinementIndex}`,
+        )) {
+            refinementIndex += 1;
+        }
         const scope = appendLayerToScope(activeScope, {
             ...draftLayer,
-            client_id: `refine-${activeScope.layers.length}`,
+            client_id: `refine-${refinementIndex}`,
         });
 
         const succeeded = await fetchJobs({
@@ -508,6 +488,10 @@ function JobBrowser({
     };
 
     const handleSubmit = () => {
+        if (editingLayerId) {
+            handleSaveLayer();
+            return;
+        }
         if (activeScope.layers.length > 0) {
             handleSearchWithinResults();
             return;
@@ -520,7 +504,40 @@ function JobBrowser({
             scope: activeScope,
             page: newPage,
             pageSize: pagination.pageSize,
+            includeFacets: false,
         });
+    };
+
+    const handleEditLayer = (clientId) => {
+        const layer = activeScope.layers.find(
+            (candidate) => candidate.client_id === clientId,
+        );
+        if (!layer) return;
+        setDraftLayer(normalizeLayerForSubmit(layer));
+        setEditingLayerId(clientId);
+        setSearchError('');
+    };
+
+    const handleSaveLayer = async () => {
+        if (!editingLayerId || dateValidationError || isLayerEmpty(draftLayer)) {
+            return;
+        }
+        const nextScope = replaceLayerInScope(
+            activeScope,
+            editingLayerId,
+            draftLayer,
+        );
+        const succeeded = await fetchJobs({
+            scope: nextScope,
+            page: 1,
+            pageSize: pagination.pageSize,
+            commitScope: true,
+            clearDraft: true,
+        });
+        if (succeeded) {
+            setEditingLayerId(null);
+            syncRouteToScope(nextScope);
+        }
     };
 
     const handleRemoveLayer = async (clientId) => {
@@ -531,7 +548,29 @@ function JobBrowser({
             pageSize: pagination.pageSize,
             commitScope: true,
         });
-        if (succeeded) syncRouteToScope(nextScope);
+        if (succeeded) {
+            if (editingLayerId === clientId) {
+                setEditingLayerId(null);
+                setDraftLayer(createEmptyJobBrowserLayer());
+            }
+            syncRouteToScope(nextScope);
+        }
+    };
+
+    const handleClearAllLayers = async () => {
+        const nextScope = createEmptyJobBrowserScope();
+        const succeeded = await fetchJobs({
+            scope: nextScope,
+            page: 1,
+            pageSize: pagination.pageSize,
+            commitScope: true,
+            clearDraft: true,
+        });
+        if (succeeded) {
+            setEditingLayerId(null);
+            clearJobBrowserSession(getJobBrowserSessionStorage());
+            syncRouteToScope(nextScope);
+        }
     };
 
     const handleExport = async () => {
@@ -629,22 +668,43 @@ function JobBrowser({
                         </div>
 
                         <div className="query-action-row">
-                            <button
-                                type="button"
-                                className="apply-filters-btn"
-                                onClick={handleSearchAllJobs}
-                                disabled={isLoading || Boolean(dateValidationError)}
-                            >
-                                Search all jobs
-                            </button>
-                            {activeScope.layers.length > 0 && (
+                            {editingLayerId ? (
+                                <button
+                                    type="button"
+                                    className="apply-filters-btn"
+                                    onClick={handleSaveLayer}
+                                    disabled={isLoading || Boolean(dateValidationError) || isLayerEmpty(draftLayer)}
+                                >
+                                    Save layer
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="apply-filters-btn"
+                                    onClick={handleSearchAllJobs}
+                                    disabled={isLoading || Boolean(dateValidationError)}
+                                >
+                                    Search all jobs
+                                </button>
+                            )}
+                            {!editingLayerId && activeScope.layers.length > 0 && (
                                 <button
                                     type="button"
                                     className="apply-filters-btn secondary"
                                     onClick={handleSearchWithinResults}
                                     disabled={isLoading || Boolean(dateValidationError) || isLayerEmpty(draftLayer)}
                                 >
-                                    Search within results
+                                    Refine current results
+                                </button>
+                            )}
+                            {(editingLayerId || hasPendingChanges) && (
+                                <button
+                                    type="button"
+                                    className="apply-filters-btn secondary"
+                                    onClick={handleDiscardDraft}
+                                    disabled={isLoading}
+                                >
+                                    Discard changes
                                 </button>
                             )}
                         </div>
@@ -694,27 +754,48 @@ function JobBrowser({
                     datePreset={draftDatePreset}
                     validationError={dateValidationError}
                     pendingChangeCount={pendingChangeCount}
-                    loadCompanyIndustryChildren={(parentId) =>
-                        fetchCompanyIndustryTree({ parentId })
-                    }
                 />
             </div>
 
             <div className="job-results-area">
                 {activeScope.layers.length > 0 && (
                     <div className="scope-trail glass-panel" aria-label="Active scope trail">
-                        {layerSummaries.map((summary) => (
-                            <div key={summary.client_id} className="scope-trail-item">
-                                <span>{summary.label}</span>
+                        {activeScope.layers.map((layer, index) => (
+                            <div key={layer.client_id} className="scope-trail-item">
+                                <div>
+                                    <strong>Layer {index + 1}</strong>
+                                    <ul>
+                                        {summarizeJobBrowserLayer(layer, filterOptions).map(
+                                            (summary) => <li key={summary}>{summary}</li>,
+                                        )}
+                                    </ul>
+                                </div>
                                 <button
                                     type="button"
                                     className="scope-remove-btn"
-                                    onClick={() => handleRemoveLayer(summary.client_id)}
+                                    onClick={() => handleEditLayer(layer.client_id)}
+                                    disabled={isLoading}
+                                >
+                                    Edit layer
+                                </button>
+                                <button
+                                    type="button"
+                                    className="scope-remove-btn"
+                                    onClick={() => handleRemoveLayer(layer.client_id)}
+                                    disabled={isLoading}
                                 >
                                     Remove layer
                                 </button>
                             </div>
                         ))}
+                        <button
+                            type="button"
+                            className="scope-remove-btn"
+                            onClick={handleClearAllLayers}
+                            disabled={isLoading}
+                        >
+                            Clear all layers
+                        </button>
                     </div>
                 )}
 

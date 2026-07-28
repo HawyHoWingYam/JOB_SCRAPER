@@ -61,8 +61,8 @@ describe("FilterPanel", () => {
         onFilterChange={onFilterChange}
         filterOptions={{
           employment_types: [
-            { code: "full_time", label: "Full-time", order: 10 },
-            { code: "permanent", label: "Permanent", order: 20 },
+            { id: "full_time", code: "full_time", label: "Full-time", count: 3, order: 10 },
+            { id: "permanent", code: "permanent", label: "Permanent", count: 2, order: 20 },
           ],
           source_classifications: [],
           canonical_taxonomy: { domains: [] },
@@ -73,18 +73,16 @@ describe("FilterPanel", () => {
       />,
     );
 
-    const employmentType = screen.getByLabelText("Employment Type");
-    expect(employmentType).toHaveAttribute("multiple");
-    expect(screen.getByRole("option", { name: "Full-time" })).toHaveValue(
-      "full_time",
-    );
-    expect(screen.getByRole("option", { name: "Permanent" })).toHaveValue(
-      "permanent",
-    );
+    const employmentType = screen.getByRole("button", {
+      name: "Employment Type, 0 selected",
+    });
+    expect(employmentType).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("Job Type")).not.toBeInTheDocument();
     expect(screen.queryByText("All Job Types")).not.toBeInTheDocument();
 
-    await user.selectOptions(employmentType, ["full_time", "permanent"]);
+    await user.click(employmentType);
+    await user.click(screen.getByRole("checkbox", { name: "Full-time (3 jobs)" }));
+    await user.click(screen.getByRole("checkbox", { name: "Permanent (2 jobs)" }));
 
     expect(onFilterChange).toHaveBeenCalledWith({
       ...EMPTY_FILTERS,
@@ -107,12 +105,16 @@ describe("FilterPanel", () => {
               source: "jobsdb",
               label: "Information Technology",
               path: "Information Technology",
+              parent_id: null,
+              count: 8,
             },
             {
               id: "jobsdb:6287",
               source: "jobsdb",
               label: "Developers and Programmers",
               path: "Information Technology / Developers and Programmers",
+              parent_id: "jobsdb:6281",
+              count: 5,
             },
           ],
           canonical_taxonomy: { domains: [] },
@@ -123,19 +125,20 @@ describe("FilterPanel", () => {
       />,
     );
 
-    const sourcePaths = screen.getByLabelText("Source Classification Paths");
-    expect(sourcePaths).toHaveAttribute("multiple");
-    expect(
-      screen.getByRole("option", {
-        name: "JobsDB · Information Technology / Developers and Programmers",
-      }),
-    ).toHaveValue("jobsdb:6287");
-
-    await user.selectOptions(sourcePaths, ["jobsdb:6281", "jobsdb:6287"]);
+    await user.click(screen.getByRole("button", {
+      name: "Source Classification Paths, 0 selected",
+    }));
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search Source Classification Paths" }),
+      "programmers",
+    );
+    await user.click(screen.getByRole("checkbox", {
+      name: "JobsDB · Information Technology / Developers and Programmers (5 jobs)",
+    }));
 
     expect(onFilterChange).toHaveBeenLastCalledWith({
       ...EMPTY_FILTERS,
-      source_classification_ids: ["jobsdb:6281", "jobsdb:6287"],
+      source_classification_ids: ["jobsdb:6287"],
     });
   });
 
@@ -143,8 +146,6 @@ describe("FilterPanel", () => {
     const user = userEvent.setup();
     const onFilterChange = vi.fn();
     const domain = taxonomyFixture.job_tree.domains[0];
-    const category = domain.categories[0];
-    const subcategory = category.subcategories[0];
 
     render(
       <FilterPanelHarness
@@ -160,62 +161,63 @@ describe("FilterPanel", () => {
       />,
     );
 
-    const taxonomy = screen.getByLabelText("Canonical Job Taxonomy");
-    expect(taxonomy).toHaveAttribute("multiple");
-    expect(
-      screen.getByRole("option", { name: "Job Domain · Accounting" }),
-    ).toHaveValue(domain.id);
-    expect(
-      screen.getByRole("option", {
-        name: "Job Category · Accounting / Financial Accounting",
-      }),
-    ).toHaveValue(category.id);
-    expect(
-      screen.getByRole("option", {
-        name: "Job Subcategory · Accounting / Financial Accounting / Accounts Payable",
-      }),
-    ).toHaveValue(subcategory.id);
-
-    await user.selectOptions(taxonomy, [domain.id, category.id, subcategory.id]);
+    await user.click(screen.getByRole("button", {
+      name: "Canonical Job Taxonomy, 0 selected",
+    }));
+    await user.click(screen.getByRole("checkbox", {
+      name: "Job Domain · Accounting",
+    }));
 
     expect(onFilterChange).toHaveBeenLastCalledWith({
       ...EMPTY_FILTERS,
       canonical_domain_ids: [domain.id],
-      canonical_category_ids: [category.id],
-      canonical_subcategory_ids: [subcategory.id],
+      canonical_category_ids: [],
+      canonical_subcategory_ids: [],
     });
   });
 
-  it("selects Company Industry ancestors and lazily browses descendants", async () => {
+  it("lets a selected Company Industry parent cover its descendants", async () => {
     const user = userEvent.setup();
     const onFilterChange = vi.fn();
     const root = taxonomyFixture.company_tree.nodes[0];
     const child = taxonomyFixture.company_child_tree.nodes[0];
-    const loadCompanyIndustryChildren = vi.fn().mockResolvedValue(
-      taxonomyFixture.company_child_tree,
-    );
 
     render(
       <FilterPanelHarness
         onFilterChange={onFilterChange}
-        loadCompanyIndustryChildren={loadCompanyIndustryChildren}
         filterOptions={{
           employment_types: [],
           source_classifications: [],
           canonical_taxonomy: { domains: [] },
           company_industry_tree: taxonomyFixture.company_tree,
+          company_industries: [
+            {
+              id: root.id,
+              label: root.labels.en,
+              parent_id: null,
+              level: root.level,
+              count: 4,
+            },
+            {
+              id: child.id,
+              label: child.labels.en,
+              parent_id: root.id,
+              level: child.level,
+              count: 2,
+            },
+          ],
           job_subcategories: [],
           industries: [],
         }}
       />,
     );
 
-    const companyIndustry = screen.getByRole("group", {
-      name: "Company Industry",
-    });
+    await user.click(screen.getByRole("button", {
+      name: "Company Industry, 0 selected",
+    }));
     await user.click(
       screen.getByRole("checkbox", {
-        name: "J · Information and communications",
+        name: "J · Information and communications (4 jobs)",
       }),
     );
     expect(onFilterChange).toHaveBeenLastCalledWith({
@@ -225,23 +227,16 @@ describe("FilterPanel", () => {
 
     await user.click(
       screen.getByRole("button", {
-        name: "Browse children of J · Information and communications",
+        name: "Show children of J · Information and communications",
       }),
     );
-    expect(loadCompanyIndustryChildren).toHaveBeenCalledWith(root.id);
-    const childCheckbox = await screen.findByRole("checkbox", {
-      name: "62 · Information technology service activities",
+    const childCheckbox = screen.getByRole("checkbox", {
+      name: "62 · Information technology service activities (2 jobs)",
     });
-    expect(companyIndustry).toContainElement(childCheckbox);
-
-    await user.click(childCheckbox);
-    expect(onFilterChange).toHaveBeenLastCalledWith({
-      ...EMPTY_FILTERS,
-      company_industry_node_ids: [root.id, child.id],
-    });
+    expect(childCheckbox).toBeDisabled();
     expect(
       screen.getByText(
-        "Company Industry: J · Information and communications, 62 · Information technology service activities",
+        "Company Industry: J · Information and communications",
       ),
     ).toBeInTheDocument();
   });

@@ -32,6 +32,14 @@ export function createEmptyJobBrowserScope() {
   return { layers: [] };
 }
 
+export function normalizeScopeForSubmit(scope) {
+  return {
+    layers: Array.isArray(scope?.layers)
+      ? scope.layers.map(normalizeLayerForSubmit)
+      : [],
+  };
+}
+
 export function normalizeLayerForSubmit(layer) {
   return {
     client_id: layer?.client_id || 'draft',
@@ -57,6 +65,19 @@ export function removeLayerFromScope(scope, clientId) {
     layers: (scope?.layers || [])
       .map(normalizeLayerForSubmit)
       .filter((layer) => layer.client_id !== clientId),
+  };
+}
+
+export function replaceLayerInScope(scope, clientId, replacementLayer) {
+  return {
+    layers: (scope?.layers || []).map((layer) => (
+      layer.client_id === clientId
+        ? normalizeLayerForSubmit({
+          ...replacementLayer,
+          client_id: clientId,
+        })
+        : normalizeLayerForSubmit(layer)
+    )),
   };
 }
 
