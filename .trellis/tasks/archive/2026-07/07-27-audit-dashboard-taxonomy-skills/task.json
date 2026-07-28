@@ -1,0 +1,32 @@
+{
+  "id": "audit-dashboard-taxonomy-skills",
+  "name": "audit-dashboard-taxonomy-skills",
+  "title": "Improve dashboard taxonomy and skills analytics",
+  "description": "Make dashboard taxonomy and skill metrics consistent, transparent, accessible, and test-covered.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-27",
+  "completedAt": "2026-07-28",
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-28-dashboard-chart-jobs-drilldown",
+    "07-28-dashboard-classification-actions"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 39,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/39"
+  }
+}
