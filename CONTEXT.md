@@ -96,6 +96,10 @@ _Avoid_: Source Subclassification, job type
 An accepted classification of one Job to an existing Job Subcategory, with recorded method and evidence.
 _Avoid_: AI Category, fallback path
 
+**Canonical Assignment Coverage**:
+The share of a stated Job population that has an accepted Canonical Taxonomy Assignment. It is a population-health measure, not Source-to-Canonical Job Mapping coverage.
+_Avoid_: Mapping coverage, taxonomy coverage
+
 **Source-to-Canonical Job Mapping**:
 An optional current mapping from one Source Classification identity to existing Canonical Job Taxonomy targets or one explicit non-mapping disposition. Missing mapping never blocks automated classification and the mapping never changes Crawl Scope.
 _Avoid_: Required coverage release, Source category alias, automatic name match
@@ -107,6 +111,10 @@ _Avoid_: Default category, fallback path
 **Unassigned Canonical Taxonomy**:
 The explicit state in which a Job has no acceptable Canonical Taxonomy Assignment.
 _Avoid_: General fallback, Unknown category
+
+**Classification-Ready Unassigned Job**:
+An unassigned Job that retains the source-attribute evidence required to attempt Canonical Job Taxonomy classification. Readiness means the prerequisites are present; it does not guarantee that classification will succeed.
+_Avoid_: Unassigned Job, guaranteed classification candidate
 
 **Classification Processing Batch**:
 A bounded automated run that assigns current Job Taxonomy, Company Industry, or Skill data, exposes progress and failures, and permits retry without requiring routine per-item human review.
@@ -172,6 +180,18 @@ _Avoid_: Skill, candidate
 An unresolved potential Skill aggregated from one or more Skill Mentions and awaiting a governance decision.
 _Avoid_: Provisional Skill, ungoverned Skill
 
+**Matched Canonical Skill**:
+A Skill attached to a Job after extracted evidence resolves to an active governed Skill. It excludes unresolved candidates, generic tags, and rejected mentions.
+_Avoid_: Requested Skill, extracted term, provisional Skill
+
+**Canonical Skill Match Coverage**:
+The share of successfully enriched Jobs in a stated population that have at least one Matched Canonical Skill. Jobs awaiting enrichment are outside this denominator rather than treated as failed matches.
+_Avoid_: Skill demand coverage, all-jobs Skill coverage
+
+**Canonical Skill Prevalence**:
+The share of successfully enriched Jobs in a stated population that have one particular Matched Canonical Skill. Because a Job may have multiple Skills, prevalence values are independent and do not form a 100% composition.
+_Avoid_: Skill share, market demand share
+
 **Unreviewed Skill Mention**:
 A Skill Mention that currently contributes to a Skill Candidate and has not yet received a governance decision.
 _Avoid_: Provisional Skill
@@ -181,6 +201,14 @@ A human using the trusted local product for occasional direct correction when au
 _Avoid_: Routine queue reviewer, release publisher
 
 ## Operations
+
+**Operations Dashboard**:
+The internal operator surface for observing collection, enrichment, and canonical-assignment health. Its taxonomy and Skill distributions describe the Published Job Corpus and are not labor-market trend analytics.
+_Avoid_: Labor market dashboard, market intelligence dashboard
+
+**Dashboard Corpus Snapshot**:
+A current operational summary of the retained Jobs in the Published Job Corpus, including source listings that may have expired. It excludes deleted Jobs and does not claim to represent the active labor market.
+_Avoid_: Active jobs, current openings, market sample
 
 **Job Intelligence Projection**:
 A rebuildable representation derived from preserved Job or Company evidence for classification, governed attributes, search, analytics, or recommendations.

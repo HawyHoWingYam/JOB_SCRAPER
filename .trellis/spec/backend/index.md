@@ -34,6 +34,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Ordinary Current Taxonomies](./ordinary-current-taxonomies.md) | Stable current Job, Company Industry, Skill, optional mapping, assignment, and evidence contracts without releases or review queues | Active |
 | [Automated Classification Batches](./automated-classification-batches.md) | Shared Job Taxonomy, Company Industry, and Skill preview/run/stop/retry lifecycle plus repeated-Skill auto-creation | Active |
 | [Job Intelligence Product Reads](./job-intelligence-product-surfaces.md) | Ordinary current composition, safe Job Detail serialization, bulk recommendations, and fixture contracts | Active |
+| [Dashboard Operational Statistics](./dashboard-operational-stats.md) | Retained-corpus taxonomy and Skill denominators, response contracts, refresh isolation, and accessibility | Active |
 | [Unversioned Sandbox Cutover](./job-intelligence-cutover.md) | Transient retention export, destructive rebuild, exact verification, and history removal | Active |
 
 ---

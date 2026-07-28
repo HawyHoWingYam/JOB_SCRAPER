@@ -29,6 +29,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Ordinary Current Taxonomies](../backend/ordinary-current-taxonomies.md) | Current taxonomy routes, stable-code reads, optional mappings, and no Governance workspace | Active |
 | [Automated Classification Batches](../backend/automated-classification-batches.md) | Three-domain preview/progress/stop/retry console and configurable repeated-Skill threshold | Active |
 | [Job Intelligence Product Reads](../backend/job-intelligence-product-surfaces.md) | Current Job/Company/Skill composition, bulk reads, and fixture parity | Active |
+| [Dashboard Operational Statistics](../backend/dashboard-operational-stats.md) | Retained-corpus taxonomy and Skill cards, dynamic buckets, accessible expansion, and partial refresh state | Active |
 
 ---
 
