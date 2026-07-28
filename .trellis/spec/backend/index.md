@@ -35,6 +35,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Automated Classification Batches](./automated-classification-batches.md) | Shared Job Taxonomy, Company Industry, and Skill preview/run/stop/retry lifecycle plus repeated-Skill auto-creation | Active |
 | [Job Intelligence Product Reads](./job-intelligence-product-surfaces.md) | Ordinary current composition, safe Job Detail serialization, bulk recommendations, and fixture contracts | Active |
 | [Dashboard Operational Statistics](./dashboard-operational-stats.md) | Retained-corpus taxonomy and Skill denominators, response contracts, refresh isolation, and accessibility | Active |
+| [Job Browser Search](./job-browser-search.md) | Layered scope, contextual facets, selectors, pagination, and same-tab restoration | Active |
 | [Unversioned Sandbox Cutover](./job-intelligence-cutover.md) | Transient retention export, destructive rebuild, exact verification, and history removal | Active |
 
 ---

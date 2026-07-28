@@ -1,0 +1,29 @@
+{
+  "id": "improve-job-filters",
+  "name": "improve-job-filters",
+  "title": "Improve job filters frontend and backend",
+  "description": "Redesign the Jobs filter workflow, layered-search management, contextual backend facets, and same-tab refresh restoration.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "full-stack",
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-28",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 43,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/43"
+  }
+}

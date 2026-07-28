@@ -30,6 +30,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Automated Classification Batches](../backend/automated-classification-batches.md) | Three-domain preview/progress/stop/retry console and configurable repeated-Skill threshold | Active |
 | [Job Intelligence Product Reads](../backend/job-intelligence-product-surfaces.md) | Current Job/Company/Skill composition, bulk reads, and fixture parity | Active |
 | [Dashboard Operational Statistics](../backend/dashboard-operational-stats.md) | Retained-corpus taxonomy and Skill cards, dynamic buckets, accessible expansion, and partial refresh state | Active |
+| [Job Browser Search](../backend/job-browser-search.md) | Layered scope, contextual facets, selector behavior, pagination, and same-tab restoration | Active |
 
 ---
 
